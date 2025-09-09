@@ -7,6 +7,8 @@ use std::sync::{mpsc, Arc};
 use rquickjs::{Runtime, Context, Function};
 use rquickjs::Value;
 
+pub mod repository;
+
 /// Handler returning a concrete response tuple for easier testing.
 pub async fn root() -> (StatusCode, &'static str) {
     (StatusCode::OK, "Hello from axum!")
@@ -25,8 +27,7 @@ struct WorkerRequest {
     resp: mpsc::Sender<Result<(u16, String), String>>,
 }
 
-fn spawn_js_worker(script_path: &str) -> anyhow::Result<mpsc::Sender<WorkerRequest>> {
-    let script = std::fs::read_to_string(script_path)?;
+fn spawn_js_worker(scripts: Vec<String>) -> anyhow::Result<mpsc::Sender<WorkerRequest>> {
     let (tx, rx) = mpsc::channel::<WorkerRequest>();
 
     std::thread::spawn(move || {
@@ -39,9 +40,12 @@ fn spawn_js_worker(script_path: &str) -> anyhow::Result<mpsc::Sender<WorkerReque
             Err(e) => { eprintln!("js context error: {}", e); return; }
         };
 
-    if let Err(e) = ctx.with(|ctx| ctx.eval::<(), _>(script.as_str())) {
-            eprintln!("script eval error: {}", e);
-            return;
+        // Evaluate all provided scripts in the JS context
+        for script in scripts.iter() {
+            if let Err(e) = ctx.with(|ctx| ctx.eval::<(), _>(script.as_str())) {
+                eprintln!("script eval error: {}", e);
+                return;
+            }
         }
 
         while let Ok(req) = rx.recv() {
@@ -79,7 +83,17 @@ fn spawn_js_worker(script_path: &str) -> anyhow::Result<mpsc::Sender<WorkerReque
 
 /// Start server on 0.0.0.0:4000 and load the JS script which can register paths.
 pub async fn start_server_with_script(script_path: &str) -> anyhow::Result<()> {
-    let tx = spawn_js_worker(script_path)?;
+    // gather scripts from repository and the provided local script
+    let mut scripts_vec: Vec<String> = Vec::new();
+    // fetch remote scripts
+    for (_uri, content) in repository::fetch_scripts().into_iter() {
+        scripts_vec.push(content);
+    }
+    // add local script file too
+    let local = std::fs::read_to_string(script_path)?;
+    scripts_vec.push(local);
+
+    let tx = spawn_js_worker(scripts_vec)?;
     let tx = Arc::new(tx);
 
     let app = Router::new().route("/*path", get(move |Path(path): Path<String>, req: Request<Body>| {
