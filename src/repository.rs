@@ -7,10 +7,10 @@ pub fn fetch_scripts() -> HashMap<String, String> {
     let mut m = HashMap::new();
     // embed scripts at compile time
     let core = include_str!("../scripts/core.js");
-    let helloworld = include_str!("../scripts/helloworld.js");
+    let debug = include_str!("../scripts/debug.js");
 
     m.insert("https://example.com/core".to_string(), core.to_string());
-    m.insert("https://example.com/helloworld".to_string(), helloworld.to_string());
+    m.insert("https://example.com/debug".to_string(), debug.to_string());
     // merge in any dynamically upserted scripts
     if let Some(store) = DYNAMIC_SCRIPTS.get() {
         let guard = store.lock().expect("dynamic scripts mutex poisoned");
@@ -35,7 +35,7 @@ pub fn fetch_script(uri: &str) -> Option<String> {
 
     match uri {
         "https://example.com/core" => Some(include_str!("../scripts/core.js").to_string()),
-        "https://example.com/helloworld" => Some(include_str!("../scripts/helloworld.js").to_string()),
+        "https://example.com/debug" => Some(include_str!("../scripts/debug.js").to_string()),
         _ => None,
     }
 }
