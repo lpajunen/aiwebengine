@@ -67,6 +67,44 @@ fn spawn_js_worker(scripts: Vec<String>) -> anyhow::Result<mpsc::Sender<WorkerRe
             )?;
             global.set("listLogs", list_fn)?;
 
+            // Script management host functions
+            let upsert_fn = Function::new(
+                ctx.clone(),
+                |_ctx: rquickjs::Ctx<'_>,
+                 uri: String,
+                 content: String|
+                 -> Result<(), rquickjs::Error> {
+                    repository::upsert_script(&uri, &content);
+                    Ok(())
+                },
+            )?;
+            global.set("upsertScript", upsert_fn)?;
+
+            let get_fn = Function::new(
+                ctx.clone(),
+                |_ctx: rquickjs::Ctx<'_>, uri: String| -> Result<Option<String>, rquickjs::Error> {
+                    Ok(repository::fetch_script(&uri))
+                },
+            )?;
+            global.set("getScript", get_fn)?;
+
+            let delete_fn = Function::new(
+                ctx.clone(),
+                |_ctx: rquickjs::Ctx<'_>, uri: String| -> Result<bool, rquickjs::Error> {
+                    Ok(repository::delete_script(&uri))
+                },
+            )?;
+            global.set("deleteScript", delete_fn)?;
+
+            let list_scripts_fn = Function::new(
+                ctx.clone(),
+                |_ctx: rquickjs::Ctx<'_>| -> Result<Vec<String>, rquickjs::Error> {
+                    let map = repository::fetch_scripts();
+                    Ok(map.keys().cloned().collect())
+                },
+            )?;
+            global.set("listScripts", list_scripts_fn)?;
+
             Ok(())
         }) {
             eprintln!("failed to install host functions: {:?}", e);
