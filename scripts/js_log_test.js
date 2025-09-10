@@ -1,31 +1,17 @@
 // JS test script: registers /js-log-test and uses writeLog
 
-function register(path, handler) {
-  globalThis._routes = globalThis._routes || new Map();
-  globalThis._routes.set(path, handler);
-}
-
-function handle(path, req) {
-  const h = globalThis._routes && globalThis._routes.get(path);
-  if (!h) return { status: 404, body: 'Not found' };
-  return h(req);
-}
-
-globalThis.register = register;
-globalThis.handle = handle;
-
-// register a route that writes a log entry when called
-register('/js-log-test', (req) => {
+function js_log_test_handler(req) {
   writeLog('js-log-test-called');
   return { status: 200, body: 'logged' };
-});
+}
+register('/js-log-test', 'js_log_test_handler');
 
-// register a route that returns the current logs using listLogs()
-register('/js-list', (req) => {
+function js_list_handler(req) {
   try {
     const logs = listLogs();
     return { status: 200, body: JSON.stringify(logs) };
   } catch (e) {
     return { status: 500, body: String(e) };
   }
-});
+}
+register('/js-list', 'js_list_handler');

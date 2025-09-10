@@ -1,31 +1,19 @@
 // JS script for testing script-management host functions
 
-function register(path, handler) {
-  globalThis._routes = globalThis._routes || new Map();
-  globalThis._routes.set(path, handler);
-}
-
-function handle(path, req) {
-  const h = globalThis._routes && globalThis._routes.get(path);
-  if (!h) return { status: 404, body: 'Not found' };
-  return h(req);
-}
-
-globalThis.register = register;
-globalThis.handle = handle;
+// rely on bootstrap-provided register/handle which supports handler name strings
 
 // upsert a script from JS
 try {
   upsertScript(
     'https://example.com/from_js',
-    "register('/from-js', (req) => ({ status: 200, body: 'from-js' }));"
+    "function from_js_handler(req) { return { status: 200, body: 'from-js' }; }\nregister('/from-js', 'from_js_handler');"
   );
 } catch (e) {
   // ignore errors when host function not available
 }
 
 // route that exercises getScript, listScripts, deleteScript
-register('/js-mgmt-check', (req) => {
+function js_mgmt_check(req) {
   try {
     const got = (typeof getScript === 'function') ? (getScript('https://example.com/from_js') ?? null) : null;
     const list = (typeof listScripts === 'function') ? (listScripts() ?? []) : [];
@@ -39,4 +27,5 @@ register('/js-mgmt-check', (req) => {
   } catch (e) {
     return { status: 500, body: String(e) };
   }
-});
+}
+register('/js-mgmt-check', 'js_mgmt_check');

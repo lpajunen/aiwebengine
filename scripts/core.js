@@ -1,5 +1,6 @@
 // core script: registers root handler
-register('/', (req) => ({ status: 200, body: 'Core handler: OK' }));
+function core_root(req) { return { status: 200, body: 'Core handler: OK' }; }
+register('/', 'core_root');
 
 // Log server start with timestamp if writeLog is available
 try {

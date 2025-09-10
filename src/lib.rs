@@ -27,7 +27,7 @@ struct WorkerRequest {
     resp: mpsc::Sender<Result<(u16, String), String>>,
 }
 
-fn spawn_js_worker(scripts: Vec<String>) -> anyhow::Result<mpsc::Sender<WorkerRequest>> {
+fn spawn_js_worker(scripts: Vec<(String, String)>) -> anyhow::Result<mpsc::Sender<WorkerRequest>> {
     let (tx, rx) = mpsc::channel::<WorkerRequest>();
 
     std::thread::spawn(move || {
@@ -112,7 +112,38 @@ fn spawn_js_worker(scripts: Vec<String>) -> anyhow::Result<mpsc::Sender<WorkerRe
         }
 
         // Evaluate all provided scripts in the JS context
-        for script in scripts.iter() {
+        // Install a small bootstrap that provides a register(path, handler|handlerName)
+        // helper and a handle(...) function usable by scripts. This is backward
+        // compatible: register accepts either a function or a string name which
+        // will be looked up on globalThis.
+        let bootstrap = r#"
+            globalThis._routes = globalThis._routes || new Map();
+            globalThis.register = function(path, handler) {
+                let h = handler;
+                if (typeof handler === 'string') {
+                    h = globalThis[handler];
+                }
+                globalThis._routes.set(path, h);
+            };
+            globalThis.handle = function(path, req) {
+                const h = globalThis._routes && globalThis._routes.get(path);
+                if (!h) return { status: 404, body: 'Not found' };
+                try {
+                    if (typeof h === 'function') return h(req);
+                    return { status: 500, body: 'handler not callable' };
+                } catch (e) {
+                    return { status: 500, body: String(e) };
+                }
+            };
+        "#;
+        let _ = ctx.with(|ctx| ctx.eval::<(), _>(bootstrap));
+        for (uri, script) in scripts.iter() {
+            // set current script uri visible to host register() if needed
+            let js_uri = serde_json::to_string(uri).unwrap_or("\"local\"".to_string());
+            let set_code = format!("globalThis.__CURRENT_SCRIPT_URI = {}", js_uri);
+            if let Err(e) = ctx.with(|ctx| ctx.eval::<(), _>(set_code.as_str())) {
+                eprintln!("failed to set __CURRENT_SCRIPT_URI: {:?}", e);
+            }
             if let Err(e) = ctx.with(|ctx| ctx.eval::<(), _>(script.as_str())) {
                 // print debug info and the script contents to help diagnose QuickJS exceptions
                 eprintln!(
@@ -121,6 +152,8 @@ fn spawn_js_worker(scripts: Vec<String>) -> anyhow::Result<mpsc::Sender<WorkerRe
                 );
                 return;
             }
+            // clear current script uri
+            let _ = ctx.with(|ctx| ctx.eval::<(), _>("globalThis.__CURRENT_SCRIPT_URI = undefined"));
         }
 
         while let Ok(req) = rx.recv() {
@@ -168,13 +201,13 @@ fn spawn_js_worker(scripts: Vec<String>) -> anyhow::Result<mpsc::Sender<WorkerRe
 pub async fn start_server_with_script(script_path: &str) -> anyhow::Result<()> {
     // gather scripts: evaluate the local bootstrap script first (it defines register/handle),
     // then evaluate repository scripts which call `register(...)`.
-    let mut scripts_vec: Vec<String> = Vec::new();
-    // add local script file first
+    let mut scripts_vec: Vec<(String, String)> = Vec::new();
+    // add local script file first, use the script_path as the URI for the local script
     let local = std::fs::read_to_string(script_path)?;
-    scripts_vec.push(local);
-    // fetch remote scripts and append
-    for (_uri, content) in repository::fetch_scripts().into_iter() {
-        scripts_vec.push(content);
+    scripts_vec.push((script_path.to_string(), local));
+    // fetch remote scripts and append as (uri, content)
+    for (uri, content) in repository::fetch_scripts().into_iter() {
+        scripts_vec.push((uri, content));
     }
 
     let tx = spawn_js_worker(scripts_vec)?;

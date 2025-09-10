@@ -5,7 +5,7 @@ use std::time::Duration;
 async fn js_registered_route_returns_expected() {
     // start server in background task
     tokio::spawn(async move {
-        let _ = start_server_with_script("scripts/example.js").await;
+        let _ = start_server_with_script("scripts/debug.js").await;
     });
 
     // give server a moment to start
