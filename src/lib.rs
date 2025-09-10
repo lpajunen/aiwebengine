@@ -61,7 +61,7 @@ fn spawn_js_worker(scripts: Vec<String>) -> anyhow::Result<mpsc::Sender<WorkerRe
 
             let list_fn = Function::new(
                 ctx.clone(),
-                |_ctx: rquickjs::Ctx<'_>, ()| -> Result<Vec<String>, rquickjs::Error> {
+                |_ctx: rquickjs::Ctx<'_>| -> Result<Vec<String>, rquickjs::Error> {
                     Ok(repository::fetch_log_messages())
                 },
             )?;
