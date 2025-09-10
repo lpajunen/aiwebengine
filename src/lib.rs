@@ -49,7 +49,8 @@ fn spawn_js_worker(scripts: Vec<String>) -> anyhow::Result<mpsc::Sender<WorkerRe
         // Evaluate all provided scripts in the JS context
         for script in scripts.iter() {
             if let Err(e) = ctx.with(|ctx| ctx.eval::<(), _>(script.as_str())) {
-                eprintln!("script eval error: {}", e);
+                // print debug info and the script contents to help diagnose QuickJS exceptions
+                eprintln!("script eval error: {:?}\n--- script start ---\n{}\n--- script end ---", e, script);
                 return;
             }
         }
@@ -84,7 +85,7 @@ fn spawn_js_worker(scripts: Vec<String>) -> anyhow::Result<mpsc::Sender<WorkerRe
                             .map_err(|e| format!("missing body: {}", e))?;
                         Ok((status as u16, body))
                     }
-                    Err(e) => Err(format!("call error: {}", e)),
+                    Err(e) => Err(format!("call error: {:?}", e)),
                 }
             });
 
@@ -97,15 +98,16 @@ fn spawn_js_worker(scripts: Vec<String>) -> anyhow::Result<mpsc::Sender<WorkerRe
 
 /// Start server on 0.0.0.0:4000 and load the JS script which can register paths.
 pub async fn start_server_with_script(script_path: &str) -> anyhow::Result<()> {
-    // gather scripts from repository and the provided local script
+    // gather scripts: evaluate the local bootstrap script first (it defines register/handle),
+    // then evaluate repository scripts which call `register(...)`.
     let mut scripts_vec: Vec<String> = Vec::new();
-    // fetch remote scripts
+    // add local script file first
+    let local = std::fs::read_to_string(script_path)?;
+    scripts_vec.push(local);
+    // fetch remote scripts and append
     for (_uri, content) in repository::fetch_scripts().into_iter() {
         scripts_vec.push(content);
     }
-    // add local script file too
-    let local = std::fs::read_to_string(script_path)?;
-    scripts_vec.push(local);
 
     let tx = spawn_js_worker(scripts_vec)?;
     let tx = Arc::new(tx);
