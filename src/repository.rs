@@ -42,6 +42,38 @@ pub fn fetch_script(uri: &str) -> Option<String> {
 
 static DYNAMIC_SCRIPTS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 
+// simple in-memory log store
+static DYNAMIC_LOGS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+
+/// Insert a log message into the in-memory log store.
+pub fn insert_log_message(msg: &str) {
+    let store = DYNAMIC_LOGS.get_or_init(|| Mutex::new(Vec::new()));
+    let mut guard = store.lock().expect("dynamic logs mutex poisoned");
+    guard.push(msg.to_string());
+}
+
+/// Fetch all log messages currently stored. Returns a vector of messages.
+pub fn fetch_log_messages() -> Vec<String> {
+    if let Some(store) = DYNAMIC_LOGS.get() {
+        let guard = store.lock().expect("dynamic logs mutex poisoned");
+        return guard.clone();
+    }
+    Vec::new()
+}
+
+/// Keep only the latest `limit` log messages (default 20) and remove older ones.
+pub fn prune_log_messages() {
+    const LIMIT: usize = 20;
+    if let Some(store) = DYNAMIC_LOGS.get() {
+        let mut guard = store.lock().expect("dynamic logs mutex poisoned");
+        if guard.len() > LIMIT {
+            let remove = guard.len() - LIMIT;
+            // remove older entries from the front
+            guard.drain(0..remove);
+        }
+    }
+}
+
 /// Insert or update a script dynamically at runtime.
 pub fn upsert_script(uri: &str, script_content: &str) {
     let store = DYNAMIC_SCRIPTS.get_or_init(|| Mutex::new(HashMap::new()));
