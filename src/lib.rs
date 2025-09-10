@@ -6,6 +6,7 @@ use axum::{extract::Path, response::IntoResponse};
 use rquickjs::Value;
 use rquickjs::{Context, Function, Runtime};
 use std::sync::{Arc, mpsc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 pub mod repository;
 
@@ -32,163 +33,241 @@ fn spawn_js_worker(scripts: Vec<(String, String)>) -> anyhow::Result<mpsc::Sende
 
     std::thread::spawn(move || {
         let rt = match Runtime::new() {
-            Ok(r) => r,
+            Ok(r) => std::rc::Rc::new(r),
             Err(e) => {
                 eprintln!("js runtime init error: {}", e);
                 return;
             }
         };
-        let ctx = match Context::full(&rt) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("js context error: {}", e);
+        // registrations: path -> (uri, handler_name)
+        let registrations: Rc<RefCell<HashMap<String, (String, String)>>> =
+            Rc::new(RefCell::new(HashMap::new()));
+
+        // contexts: uri -> Context
+        let contexts: Rc<RefCell<HashMap<String, Context>>> = Rc::new(RefCell::new(HashMap::new()));
+
+        // upsert job channel: host functions send (uri, content) here and the
+        // worker thread processes them outside of the JS callback to avoid
+        // nested QuickJS context borrows.
+        let (upsert_tx, upsert_rx) = std::sync::mpsc::channel::<(String, String)>();
+
+        // create a Context per script and evaluate it
+        for (uri, script) in scripts.iter() {
+            let uri = uri.clone();
+            let ctx_for_script = match Context::full(rt.as_ref()) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("js context error for {}: {}", uri, e);
+                    return;
+                }
+            };
+            if let Err(e) = ctx_for_script.with(|ctx| -> Result<(), rquickjs::Error> {
+                let global = ctx.globals();
+
+                let write_fn = Function::new(
+                    ctx.clone(),
+                    |_ctx: rquickjs::Ctx<'_>, msg: String| -> Result<(), rquickjs::Error> {
+                        repository::insert_log_message(&msg);
+                        Ok(())
+                    },
+                )?;
+                global.set("writeLog", write_fn)?;
+
+                let list_fn = Function::new(
+                    ctx.clone(),
+                    |_ctx: rquickjs::Ctx<'_>| -> Result<Vec<String>, rquickjs::Error> {
+                        Ok(repository::fetch_log_messages())
+                    },
+                )?;
+                global.set("listLogs", list_fn)?;
+
+                // register(path, handlerName) host function records mapping with this uri
+                let regs = registrations.clone();
+                let uri_for_reg = uri.clone();
+                let register_fn = Function::new(
+                    ctx.clone(),
+                    move |_ctx: rquickjs::Ctx<'_>,
+                          path: String,
+                          handler_name: String|
+                          -> Result<(), rquickjs::Error> {
+                        regs.borrow_mut()
+                            .insert(path, (uri_for_reg.clone(), handler_name));
+                        Ok(())
+                    },
+                )?;
+                global.set("register", register_fn)?;
+
+                // upsertScript enqueues a job; the worker will process jobs from
+                // `upsert_rx` later in the main loop.
+                let upsert_tx_cl = upsert_tx.clone();
+                let upsert_fn = Function::new(
+                    ctx.clone(),
+                    move |_ctx: rquickjs::Ctx<'_>,
+                          uri: String,
+                          content: String|
+                          -> Result<(), rquickjs::Error> {
+                        if let Err(e) = upsert_tx_cl.send((uri, content)) {
+                            eprintln!("failed to enqueue upsert job: {:?}", e);
+                        }
+                        Ok(())
+                    },
+                )?;
+                global.set("upsertScript", upsert_fn)?;
+
+                let get_fn = Function::new(
+                    ctx.clone(),
+                    |_ctx: rquickjs::Ctx<'_>,
+                     uri: String|
+                     -> Result<Option<String>, rquickjs::Error> {
+                        Ok(repository::fetch_script(&uri))
+                    },
+                )?;
+                global.set("getScript", get_fn)?;
+
+                let delete_fn = Function::new(
+                    ctx.clone(),
+                    |_ctx: rquickjs::Ctx<'_>, uri: String| -> Result<bool, rquickjs::Error> {
+                        Ok(repository::delete_script(&uri))
+                    },
+                )?;
+                global.set("deleteScript", delete_fn)?;
+
+                let list_scripts_fn = Function::new(
+                    ctx.clone(),
+                    |_ctx: rquickjs::Ctx<'_>| -> Result<Vec<String>, rquickjs::Error> {
+                        let map = repository::fetch_scripts();
+                        Ok(map.keys().cloned().collect())
+                    },
+                )?;
+                global.set("listScripts", list_scripts_fn)?;
+
+                Ok(())
+            }) {
+                eprintln!("failed to install host functions for {}: {:?}", uri, e);
                 return;
             }
-        };
 
-        // install host logging APIs into the JS global object before evaluating scripts
-        if let Err(e) = ctx.with(|ctx| -> Result<(), rquickjs::Error> {
-            let global = ctx.globals();
-
-            let write_fn = Function::new(
-                ctx.clone(),
-                |_ctx: rquickjs::Ctx<'_>, msg: String| -> Result<(), rquickjs::Error> {
-                    repository::insert_log_message(&msg);
-                    Ok(())
-                },
-            )?;
-            global.set("writeLog", write_fn)?;
-
-            let list_fn = Function::new(
-                ctx.clone(),
-                |_ctx: rquickjs::Ctx<'_>| -> Result<Vec<String>, rquickjs::Error> {
-                    Ok(repository::fetch_log_messages())
-                },
-            )?;
-            global.set("listLogs", list_fn)?;
-
-            // Script management host functions
-            let upsert_fn = Function::new(
-                ctx.clone(),
-                |_ctx: rquickjs::Ctx<'_>,
-                 uri: String,
-                 content: String|
-                 -> Result<(), rquickjs::Error> {
-                    repository::upsert_script(&uri, &content);
-                    Ok(())
-                },
-            )?;
-            global.set("upsertScript", upsert_fn)?;
-
-            let get_fn = Function::new(
-                ctx.clone(),
-                |_ctx: rquickjs::Ctx<'_>, uri: String| -> Result<Option<String>, rquickjs::Error> {
-                    Ok(repository::fetch_script(&uri))
-                },
-            )?;
-            global.set("getScript", get_fn)?;
-
-            let delete_fn = Function::new(
-                ctx.clone(),
-                |_ctx: rquickjs::Ctx<'_>, uri: String| -> Result<bool, rquickjs::Error> {
-                    Ok(repository::delete_script(&uri))
-                },
-            )?;
-            global.set("deleteScript", delete_fn)?;
-
-            let list_scripts_fn = Function::new(
-                ctx.clone(),
-                |_ctx: rquickjs::Ctx<'_>| -> Result<Vec<String>, rquickjs::Error> {
-                    let map = repository::fetch_scripts();
-                    Ok(map.keys().cloned().collect())
-                },
-            )?;
-            global.set("listScripts", list_scripts_fn)?;
-
-            Ok(())
-        }) {
-            eprintln!("failed to install host functions: {:?}", e);
-            return;
-        }
-
-        // Evaluate all provided scripts in the JS context
-        // Install a small bootstrap that provides a register(path, handler|handlerName)
-        // helper and a handle(...) function usable by scripts. This is backward
-        // compatible: register accepts either a function or a string name which
-        // will be looked up on globalThis.
-        let bootstrap = r#"
-            globalThis._routes = globalThis._routes || new Map();
-            globalThis.register = function(path, handler) {
-                let h = handler;
-                if (typeof handler === 'string') {
-                    h = globalThis[handler];
-                }
-                globalThis._routes.set(path, h);
-            };
-            globalThis.handle = function(path, req) {
-                const h = globalThis._routes && globalThis._routes.get(path);
-                if (!h) return { status: 404, body: 'Not found' };
-                try {
-                    if (typeof h === 'function') return h(req);
-                    return { status: 500, body: 'handler not callable' };
-                } catch (e) {
-                    return { status: 500, body: String(e) };
-                }
-            };
-        "#;
-        let _ = ctx.with(|ctx| ctx.eval::<(), _>(bootstrap));
-        for (uri, script) in scripts.iter() {
-            // set current script uri visible to host register() if needed
-            let js_uri = serde_json::to_string(uri).unwrap_or("\"local\"".to_string());
-            let set_code = format!("globalThis.__CURRENT_SCRIPT_URI = {}", js_uri);
-            if let Err(e) = ctx.with(|ctx| ctx.eval::<(), _>(set_code.as_str())) {
-                eprintln!("failed to set __CURRENT_SCRIPT_URI: {:?}", e);
-            }
-            if let Err(e) = ctx.with(|ctx| ctx.eval::<(), _>(script.as_str())) {
-                // print debug info and the script contents to help diagnose QuickJS exceptions
+            // Evaluate the script in its own context
+            if let Err(e) = ctx_for_script.with(|ctx| ctx.eval::<(), _>(script.as_str())) {
                 eprintln!(
-                    "script eval error: {:?}\n--- script start ---\n{}\n--- script end ---",
-                    e, script
+                    "script eval error for {}: {:?}\n--- script start ---\n{}\n--- script end ---",
+                    uri, e, script
                 );
                 return;
             }
-            // clear current script uri
-            let _ = ctx.with(|ctx| ctx.eval::<(), _>("globalThis.__CURRENT_SCRIPT_URI = undefined"));
+
+            // store the context for later invocation
+            contexts.borrow_mut().insert(uri.clone(), ctx_for_script);
         }
 
+        // dispatch loop: look up registration and invoke handler in owning context
         while let Ok(req) = rx.recv() {
-            let reply = ctx.with(|ctx| {
-                let global = ctx.globals();
-                let handle: Function = match global.get("handle") {
-                    Ok(h) => h,
-                    Err(e) => return Err(format!("no handle: {}", e)),
-                };
-                // call handle(path, { method: "GET" })
-                // create a small request object for the JS handler
-                let method = req.method.clone();
-                let res: Result<Value, rquickjs::Error> = handle.call((
-                    req.path.clone(),
-                    rquickjs::Object::new(ctx)
-                        .and_then(|o| o.set("method", method.clone()).map(|_| o)),
-                ));
-                match res {
-                    Ok(val) => {
-                        // convert to object and read properties
-                        let obj = match val.as_object() {
-                            Some(o) => o,
-                            None => return Err("expected object".to_string()),
-                        };
-                        let status: i32 = obj
-                            .get("status")
-                            .map_err(|e| format!("missing status: {}", e))?;
-                        let body: String = obj
-                            .get("body")
-                            .map_err(|e| format!("missing body: {}", e))?;
-                        Ok((status as u16, body))
+            // process pending upsert jobs first
+            while let Ok((u_uri, u_content)) = upsert_rx.try_recv() {
+                // evaluate new script in a fresh context and commit registrations
+                let new_ctx = match Context::full(rt.as_ref()) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!("failed to create context for upsert {}: {}", u_uri, e);
+                        continue;
                     }
-                    Err(e) => Err(format!("call error: {:?}", e)),
+                };
+                let collected: Rc<RefCell<Vec<(String, String)>>> =
+                    Rc::new(RefCell::new(Vec::new()));
+                let coll = collected.clone();
+                if let Err(e) = new_ctx.with(|inner_ctx| -> Result<(), rquickjs::Error> {
+                    let global = inner_ctx.globals();
+                    let write_fn = Function::new(
+                        inner_ctx.clone(),
+                        |_ctx: rquickjs::Ctx<'_>, msg: String| -> Result<(), rquickjs::Error> {
+                            repository::insert_log_message(&msg);
+                            Ok(())
+                        },
+                    )?;
+                    global.set("writeLog", write_fn)?;
+                    let list_fn = Function::new(
+                        inner_ctx.clone(),
+                        |_ctx: rquickjs::Ctx<'_>| -> Result<Vec<String>, rquickjs::Error> {
+                            Ok(repository::fetch_log_messages())
+                        },
+                    )?;
+                    global.set("listLogs", list_fn)?;
+                    let reg_fn = Function::new(
+                        inner_ctx.clone(),
+                        move |_ctx: rquickjs::Ctx<'_>,
+                              path: String,
+                              handler_name: String|
+                              -> Result<(), rquickjs::Error> {
+                            coll.borrow_mut().push((path, handler_name));
+                            Ok(())
+                        },
+                    )?;
+                    global.set("register", reg_fn)?;
+                    inner_ctx.eval::<(), _>(u_content.as_str())?;
+                    Ok(())
+                }) {
+                    eprintln!("error evaluating upsert {}: {:?}", u_uri, e);
+                    continue;
                 }
-            });
+                // commit collected registrations and store context
+                {
+                    let mut regs_mut = registrations.borrow_mut();
+                    regs_mut.retain(|_k, v| v.0 != u_uri);
+                    for (path, handler_name) in collected.borrow().iter() {
+                        regs_mut.insert(path.clone(), (u_uri.clone(), handler_name.clone()));
+                    }
+                }
+                contexts.borrow_mut().insert(u_uri.clone(), new_ctx);
+                repository::upsert_script(&u_uri, &u_content);
+            }
+            let registrations = registrations.clone();
+            let contexts = contexts.clone();
+            let reply = match registrations.borrow().get(&req.path).cloned() {
+                Some((owner_uri, handler_name)) => {
+                    // find owning context
+                    let ctx_opt = contexts.borrow().get(&owner_uri).cloned();
+                    match ctx_opt {
+                        Some(ctx_obj) => {
+                            // call handler_name in ctx_obj
+                            ctx_obj.with(|ctx| {
+                                let global = ctx.globals();
+                                let func: Function = match global
+                                    .get::<_, Function>(handler_name.clone())
+                                {
+                                    Ok(f) => f,
+                                    Err(e) => {
+                                        return Err(format!("no handler {}: {}", handler_name, e));
+                                    }
+                                };
+                                let method = req.method.clone();
+                                let res: Result<Value, rquickjs::Error> = func.call((
+                                    req.path.clone(),
+                                    rquickjs::Object::new(ctx)
+                                        .and_then(|o| o.set("method", method.clone()).map(|_| o)),
+                                ));
+                                match res {
+                                    Ok(val) => {
+                                        let obj = match val.as_object() {
+                                            Some(o) => o,
+                                            None => return Err("expected object".to_string()),
+                                        };
+                                        let status: i32 = obj
+                                            .get("status")
+                                            .map_err(|e| format!("missing status: {}", e))?;
+                                        let body: String = obj
+                                            .get("body")
+                                            .map_err(|e| format!("missing body: {}", e))?;
+                                        Ok((status as u16, body))
+                                    }
+                                    Err(e) => Err(format!("call error: {:?}", e)),
+                                }
+                            })
+                        }
+                        None => Err(format!("no context for uri {}", owner_uri)),
+                    }
+                }
+                None => Err("not found".to_string()),
+            };
 
             let _ = req.resp.send(reply);
         }

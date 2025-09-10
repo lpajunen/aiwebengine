@@ -78,6 +78,7 @@ pub fn prune_log_messages() {
 pub fn upsert_script(uri: &str, script_content: &str) {
     let store = DYNAMIC_SCRIPTS.get_or_init(|| Mutex::new(HashMap::new()));
     let mut guard = store.lock().expect("dynamic scripts mutex poisoned");
+    eprintln!("repository::upsert_script called for {}", uri);
     guard.insert(uri.to_string(), script_content.to_string());
 }
 
@@ -85,7 +86,12 @@ pub fn upsert_script(uri: &str, script_content: &str) {
 pub fn delete_script(uri: &str) -> bool {
     if let Some(store) = DYNAMIC_SCRIPTS.get() {
         let mut guard = store.lock().expect("dynamic scripts mutex poisoned");
-        return guard.remove(uri).is_some();
+        let existed = guard.remove(uri).is_some();
+        eprintln!(
+            "repository::delete_script called for {} -> existed={}",
+            uri, existed
+        );
+        return existed;
     }
     false
 }
