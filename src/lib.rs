@@ -46,6 +46,33 @@ fn spawn_js_worker(scripts: Vec<String>) -> anyhow::Result<mpsc::Sender<WorkerRe
             }
         };
 
+        // install host logging APIs into the JS global object before evaluating scripts
+        if let Err(e) = ctx.with(|ctx| -> Result<(), rquickjs::Error> {
+            let global = ctx.globals();
+
+            let write_fn = Function::new(
+                ctx.clone(),
+                |_ctx: rquickjs::Ctx<'_>, msg: String| -> Result<(), rquickjs::Error> {
+                    repository::insert_log_message(&msg);
+                    Ok(())
+                },
+            )?;
+            global.set("writeLog", write_fn)?;
+
+            let list_fn = Function::new(
+                ctx.clone(),
+                |_ctx: rquickjs::Ctx<'_>, ()| -> Result<Vec<String>, rquickjs::Error> {
+                    Ok(repository::fetch_log_messages())
+                },
+            )?;
+            global.set("listLogs", list_fn)?;
+
+            Ok(())
+        }) {
+            eprintln!("failed to install host functions: {:?}", e);
+            return;
+        }
+
         // Evaluate all provided scripts in the JS context
         for script in scripts.iter() {
             if let Err(e) = ctx.with(|ctx| ctx.eval::<(), _>(script.as_str())) {

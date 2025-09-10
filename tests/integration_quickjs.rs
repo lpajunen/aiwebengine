@@ -11,10 +11,10 @@ async fn js_registered_route_returns_expected() {
     // give server a moment to start
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // send request to /hello
-    let res = reqwest::get("http://127.0.0.1:4000/hello")
+    // send request to /debug
+    let res = reqwest::get("http://127.0.0.1:4000/debug")
         .await
         .expect("request failed");
     let body = res.text().await.expect("read body");
-    assert!(body.contains("Hello from JS!"));
+    assert!(body.contains("Debug handler active"));
 }
