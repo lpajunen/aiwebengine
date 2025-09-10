@@ -50,7 +50,10 @@ fn spawn_js_worker(scripts: Vec<String>) -> anyhow::Result<mpsc::Sender<WorkerRe
         for script in scripts.iter() {
             if let Err(e) = ctx.with(|ctx| ctx.eval::<(), _>(script.as_str())) {
                 // print debug info and the script contents to help diagnose QuickJS exceptions
-                eprintln!("script eval error: {:?}\n--- script start ---\n{}\n--- script end ---", e, script);
+                eprintln!(
+                    "script eval error: {:?}\n--- script start ---\n{}\n--- script end ---",
+                    e, script
+                );
                 return;
             }
         }
