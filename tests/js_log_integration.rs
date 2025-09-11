@@ -4,9 +4,15 @@ use std::time::Duration;
 
 #[tokio::test]
 async fn js_write_log_and_listlogs() {
+    // upsert the js_log_test script so it registers its routes
+    repository::upsert_script(
+        "https://example.com/js-log-test",
+        include_str!("../scripts/js_log_test.js"),
+    );
+
     // start server with the js_log_test script
     tokio::spawn(async move {
-        let _ = start_server_with_script("scripts/js_log_test.js").await;
+        let _ = start_server_with_script().await;
     });
 
     // allow server to start

@@ -4,8 +4,10 @@ use std::time::Duration;
 #[tokio::test]
 async fn js_registered_route_returns_expected() {
     // start server in background task
+    // ensure repository scripts are present (core/debug are included by default)
+    // start server in background task
     tokio::spawn(async move {
-        let _ = start_server_with_script("scripts/debug.js").await;
+        let _ = start_server_with_script().await;
     });
 
     // give server a moment to start

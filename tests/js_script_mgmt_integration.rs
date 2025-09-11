@@ -1,10 +1,17 @@
+use aiwebengine::repository;
 use aiwebengine::start_server_with_script;
 use std::time::Duration;
 
 #[tokio::test]
 async fn js_script_mgmt_functions_work() {
+    // upsert the management test script so it registers /js-mgmt-check and the upsert logic
+    repository::upsert_script(
+        "https://example.com/js-mgmt-test",
+        include_str!("../scripts/js_script_mgmt_test.js"),
+    );
+
     tokio::spawn(async move {
-        let _ = start_server_with_script("scripts/js_script_mgmt_test.js").await;
+        let _ = start_server_with_script().await;
     });
 
     tokio::time::sleep(Duration::from_millis(500)).await;
