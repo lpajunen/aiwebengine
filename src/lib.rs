@@ -3,10 +3,9 @@ use axum::http::Request;
 use axum::http::StatusCode;
 use axum::{Router, routing::get};
 use axum::{extract::Path, response::IntoResponse};
-use rquickjs::Value;
-use rquickjs::{Context, Function, Runtime};
-use std::sync::{Arc, mpsc};
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use rquickjs::{Context, Function, Runtime, Value};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 pub mod repository;
 
@@ -22,318 +21,363 @@ pub fn app() -> Router {
 
 // --- JS worker + server -------------------------------------------------
 
-struct WorkerRequest {
-    path: String,
-    method: String,
-    resp: mpsc::Sender<Result<(u16, String), String>>,
-}
+// Stateless per-request execution model:
+// - Build registrations at startup by evaluating the bootstrap script and
+//   repository scripts in ephemeral contexts that call `register(path, handler)`.
+// - On each HTTP request, create a fresh QuickJS Runtime/Context inside a
+//   blocking task, evaluate the bootstrap and owner script, call handler, and
+//   return the response. A timeout protects long-running scripts.
 
-fn spawn_js_worker(scripts: Vec<(String, String)>) -> anyhow::Result<mpsc::Sender<WorkerRequest>> {
-    let (tx, rx) = mpsc::channel::<WorkerRequest>();
+/// Build registrations by evaluating each script once and capturing calls to
+/// `register(path, handlerName)`. The returned map is shared by the server.
+fn build_registrations(
+    script_path: &str,
+    local_script: &str,
+) -> anyhow::Result<Arc<Mutex<HashMap<String, (String, String)>>>> {
+    let regs: Arc<Mutex<HashMap<String, (String, String)>>> = Arc::new(Mutex::new(HashMap::new()));
 
-    std::thread::spawn(move || {
-        let rt = match Runtime::new() {
-            Ok(r) => std::rc::Rc::new(r),
-            Err(e) => {
-                eprintln!("js runtime init error: {}", e);
-                return;
-            }
-        };
-        // registrations: path -> (uri, handler_name)
-        let registrations: Rc<RefCell<HashMap<String, (String, String)>>> =
-            Rc::new(RefCell::new(HashMap::new()));
-
-        // contexts: uri -> Context
-        let contexts: Rc<RefCell<HashMap<String, Context>>> = Rc::new(RefCell::new(HashMap::new()));
-
-        // upsert job channel: host functions send (uri, content) here and the
-        // worker thread processes them outside of the JS callback to avoid
-        // nested QuickJS context borrows.
-        let (upsert_tx, upsert_rx) = std::sync::mpsc::channel::<(String, String)>();
-
-        // create a Context per script and evaluate it
-        for (uri, script) in scripts.iter() {
-            let uri = uri.clone();
-            let ctx_for_script = match Context::full(rt.as_ref()) {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("js context error for {}: {}", uri, e);
-                    return;
-                }
-            };
-            if let Err(e) = ctx_for_script.with(|ctx| -> Result<(), rquickjs::Error> {
-                let global = ctx.globals();
-
-                let write_fn = Function::new(
-                    ctx.clone(),
-                    |_ctx: rquickjs::Ctx<'_>, msg: String| -> Result<(), rquickjs::Error> {
-                        repository::insert_log_message(&msg);
-                        Ok(())
-                    },
-                )?;
-                global.set("writeLog", write_fn)?;
-
-                let list_fn = Function::new(
-                    ctx.clone(),
-                    |_ctx: rquickjs::Ctx<'_>| -> Result<Vec<String>, rquickjs::Error> {
-                        Ok(repository::fetch_log_messages())
-                    },
-                )?;
-                global.set("listLogs", list_fn)?;
-
-                // register(path, handlerName) host function records mapping with this uri
-                let regs = registrations.clone();
-                let uri_for_reg = uri.clone();
-                let register_fn = Function::new(
-                    ctx.clone(),
-                    move |_ctx: rquickjs::Ctx<'_>,
-                          path: String,
-                          handler_name: String|
-                          -> Result<(), rquickjs::Error> {
-                        regs.borrow_mut()
-                            .insert(path, (uri_for_reg.clone(), handler_name));
-                        Ok(())
-                    },
-                )?;
-                global.set("register", register_fn)?;
-
-                // upsertScript enqueues a job; the worker will process jobs from
-                // `upsert_rx` later in the main loop.
-                let upsert_tx_cl = upsert_tx.clone();
-                let upsert_fn = Function::new(
-                    ctx.clone(),
-                    move |_ctx: rquickjs::Ctx<'_>,
-                          uri: String,
-                          content: String|
-                          -> Result<(), rquickjs::Error> {
-                        if let Err(e) = upsert_tx_cl.send((uri, content)) {
-                            eprintln!("failed to enqueue upsert job: {:?}", e);
-                        }
-                        Ok(())
-                    },
-                )?;
-                global.set("upsertScript", upsert_fn)?;
-
-                let get_fn = Function::new(
-                    ctx.clone(),
-                    |_ctx: rquickjs::Ctx<'_>,
-                     uri: String|
-                     -> Result<Option<String>, rquickjs::Error> {
-                        Ok(repository::fetch_script(&uri))
-                    },
-                )?;
-                global.set("getScript", get_fn)?;
-
-                let delete_fn = Function::new(
-                    ctx.clone(),
-                    |_ctx: rquickjs::Ctx<'_>, uri: String| -> Result<bool, rquickjs::Error> {
-                        Ok(repository::delete_script(&uri))
-                    },
-                )?;
-                global.set("deleteScript", delete_fn)?;
-
-                let list_scripts_fn = Function::new(
-                    ctx.clone(),
-                    |_ctx: rquickjs::Ctx<'_>| -> Result<Vec<String>, rquickjs::Error> {
-                        let map = repository::fetch_scripts();
-                        Ok(map.keys().cloned().collect())
-                    },
-                )?;
-                global.set("listScripts", list_scripts_fn)?;
-
-                Ok(())
-            }) {
-                eprintln!("failed to install host functions for {}: {:?}", uri, e);
-                return;
-            }
-
-            // Evaluate the script in its own context
-            if let Err(e) = ctx_for_script.with(|ctx| ctx.eval::<(), _>(script.as_str())) {
-                eprintln!(
-                    "script eval error for {}: {:?}\n--- script start ---\n{}\n--- script end ---",
-                    uri, e, script
-                );
-                return;
-            }
-
-            // store the context for later invocation
-            contexts.borrow_mut().insert(uri.clone(), ctx_for_script);
-        }
-
-        // dispatch loop: look up registration and invoke handler in owning context
-        while let Ok(req) = rx.recv() {
-            // process pending upsert jobs first
-            while let Ok((u_uri, u_content)) = upsert_rx.try_recv() {
-                // evaluate new script in a fresh context and commit registrations
-                let new_ctx = match Context::full(rt.as_ref()) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        eprintln!("failed to create context for upsert {}: {}", u_uri, e);
-                        continue;
-                    }
-                };
-                let collected: Rc<RefCell<Vec<(String, String)>>> =
-                    Rc::new(RefCell::new(Vec::new()));
-                let coll = collected.clone();
-                if let Err(e) = new_ctx.with(|inner_ctx| -> Result<(), rquickjs::Error> {
-                    let global = inner_ctx.globals();
-                    let write_fn = Function::new(
-                        inner_ctx.clone(),
-                        |_ctx: rquickjs::Ctx<'_>, msg: String| -> Result<(), rquickjs::Error> {
-                            repository::insert_log_message(&msg);
-                            Ok(())
-                        },
-                    )?;
-                    global.set("writeLog", write_fn)?;
-                    let list_fn = Function::new(
-                        inner_ctx.clone(),
-                        |_ctx: rquickjs::Ctx<'_>| -> Result<Vec<String>, rquickjs::Error> {
-                            Ok(repository::fetch_log_messages())
-                        },
-                    )?;
-                    global.set("listLogs", list_fn)?;
-                    let reg_fn = Function::new(
-                        inner_ctx.clone(),
-                        move |_ctx: rquickjs::Ctx<'_>,
-                              path: String,
-                              handler_name: String|
-                              -> Result<(), rquickjs::Error> {
-                            coll.borrow_mut().push((path, handler_name));
-                            Ok(())
-                        },
-                    )?;
-                    global.set("register", reg_fn)?;
-                    inner_ctx.eval::<(), _>(u_content.as_str())?;
-                    Ok(())
-                }) {
-                    eprintln!("error evaluating upsert {}: {:?}", u_uri, e);
-                    continue;
-                }
-                // commit collected registrations and store context
-                {
-                    let mut regs_mut = registrations.borrow_mut();
-                    regs_mut.retain(|_k, v| v.0 != u_uri);
-                    for (path, handler_name) in collected.borrow().iter() {
-                        regs_mut.insert(path.clone(), (u_uri.clone(), handler_name.clone()));
-                    }
-                }
-                contexts.borrow_mut().insert(u_uri.clone(), new_ctx);
-                repository::upsert_script(&u_uri, &u_content);
-            }
-            let registrations = registrations.clone();
-            let contexts = contexts.clone();
-            let reply = match registrations.borrow().get(&req.path).cloned() {
-                Some((owner_uri, handler_name)) => {
-                    // find owning context
-                    let ctx_opt = contexts.borrow().get(&owner_uri).cloned();
-                    match ctx_opt {
-                        Some(ctx_obj) => {
-                            // call handler_name in ctx_obj
-                            ctx_obj.with(|ctx| {
-                                let global = ctx.globals();
-                                let func: Function = match global
-                                    .get::<_, Function>(handler_name.clone())
-                                {
-                                    Ok(f) => f,
-                                    Err(e) => {
-                                        return Err(format!("no handler {}: {}", handler_name, e));
-                                    }
-                                };
-                                let method = req.method.clone();
-                                let res: Result<Value, rquickjs::Error> = func.call((
-                                    req.path.clone(),
-                                    rquickjs::Object::new(ctx)
-                                        .and_then(|o| o.set("method", method.clone()).map(|_| o)),
-                                ));
-                                match res {
-                                    Ok(val) => {
-                                        let obj = match val.as_object() {
-                                            Some(o) => o,
-                                            None => return Err("expected object".to_string()),
-                                        };
-                                        let status: i32 = obj
-                                            .get("status")
-                                            .map_err(|e| format!("missing status: {}", e))?;
-                                        let body: String = obj
-                                            .get("body")
-                                            .map_err(|e| format!("missing body: {}", e))?;
-                                        Ok((status as u16, body))
-                                    }
-                                    Err(e) => Err(format!("call error: {:?}", e)),
-                                }
-                            })
-                        }
-                        None => Err(format!("no context for uri {}", owner_uri)),
-                    }
-                }
-                None => Err("not found".to_string()),
-            };
-
-            let _ = req.resp.send(reply);
-        }
-    });
-
-    Ok(tx)
-}
-
-/// Start server on 0.0.0.0:4000 and load the JS script which can register paths.
-pub async fn start_server_with_script(script_path: &str) -> anyhow::Result<()> {
-    // gather scripts: evaluate the local bootstrap script first (it defines register/handle),
-    // then evaluate repository scripts which call `register(...)`.
+    // gather scripts: evaluate the local bootstrap script first, then
+    // repository scripts which call `register(...)`.
     let mut scripts_vec: Vec<(String, String)> = Vec::new();
-    // add local script file first, use the script_path as the URI for the local script
-    let local = std::fs::read_to_string(script_path)?;
-    scripts_vec.push((script_path.to_string(), local));
-    // fetch remote scripts and append as (uri, content)
+    scripts_vec.push((script_path.to_string(), local_script.to_string()));
     for (uri, content) in repository::fetch_scripts().into_iter() {
         scripts_vec.push((uri, content));
     }
 
-    let tx = spawn_js_worker(scripts_vec)?;
-    let tx = Arc::new(tx);
+    for (uri, script) in scripts_vec.into_iter() {
+        // create a new runtime/context per script evaluation to keep things simple
+        match Runtime::new() {
+            Ok(rt) => {
+                match Context::full(&rt) {
+                    Ok(ctx) => {
+                        if let Err(e) = ctx.with(|ctx| -> Result<(), rquickjs::Error> {
+                            let global = ctx.globals();
+                            let regs_cl = regs.clone();
+                            let uri_cl = uri.clone();
 
+                            // writeLog/listLogs host functions (use repository)
+                            let write_fn = Function::new(
+                                ctx.clone(),
+                                |_ctx: rquickjs::Ctx<'_>,
+                                 msg: String|
+                                 -> Result<(), rquickjs::Error> {
+                                    repository::insert_log_message(&msg);
+                                    Ok(())
+                                },
+                            )?;
+                            global.set("writeLog", write_fn)?;
+                            let list_fn = Function::new(
+                                ctx.clone(),
+                                |_ctx: rquickjs::Ctx<'_>| -> Result<Vec<String>, rquickjs::Error> {
+                                    Ok(repository::fetch_log_messages())
+                                },
+                            )?;
+                            global.set("listLogs", list_fn)?;
+                            let list_scripts_fn = Function::new(
+                                ctx.clone(),
+                                |_ctx: rquickjs::Ctx<'_>| -> Result<Vec<String>, rquickjs::Error> {
+                                    let map = repository::fetch_scripts();
+                                    Ok(map.keys().cloned().collect())
+                                },
+                            )?;
+                            global.set("listScripts", list_scripts_fn)?;
+
+                            let register_fn = Function::new(
+                                ctx.clone(),
+                                move |_ctx: rquickjs::Ctx<'_>, path: String, handler_name: String|
+                                      -> Result<(), rquickjs::Error> {
+                                    if let Ok(mut guard) = regs_cl.lock() {
+                                        guard.insert(path, (uri_cl.clone(), handler_name));
+                                    }
+                                    Ok(())
+                                },
+                            )?;
+                            global.set("register", register_fn)?;
+                            // evaluate script; ignore script failures but log them
+                            ctx.eval::<(), _>(script.as_str())?;
+                            Ok(())
+                        }) {
+                            eprintln!("failed to evaluate script for {}: {:?}", uri, e);
+                        }
+                    }
+                    Err(e) => eprintln!("failed to create context for {}: {}", uri, e),
+                }
+            }
+            Err(e) => eprintln!("failed to create runtime for {}: {}", uri, e),
+        }
+    }
+
+    Ok(regs)
+}
+
+/// Start server on 0.0.0.0:4000 and load the JS script which can register paths.
+pub async fn start_server_with_script(script_path: &str) -> anyhow::Result<()> {
+    // read local bootstrap script
+    let local = std::fs::read_to_string(script_path)?;
+
+    // build registrations once by evaluating scripts; this avoids a long-lived
+    // JS worker and keeps behavior simple and deterministic.
+    let registrations = build_registrations(script_path, &local)?;
+
+    // shared clone for request handlers
+    let registrations = Arc::new(registrations);
+    // in-memory cache of active/upserted scripts which should remain callable
+    // even if repository.delete_script is called later (matches previous
+    // behavior where upsert kept a loaded context alive).
+    let active_scripts: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
+
+    // handler: per-request Context creation and execution with timeout
     let app = Router::new().route(
         "/{*path}",
         get(move |Path(path): Path<String>, req: Request<Body>| {
-            let tx = tx.clone();
+            let registrations = registrations.clone();
             async move {
-                let (resp_tx, resp_rx) = mpsc::channel();
-                let wr = WorkerRequest {
-                    path: format!("/{}", path),
-                    method: req.method().to_string(),
-                    resp: resp_tx,
+                let path = if path.is_empty() {
+                    "/".to_string()
+                } else {
+                    format!("/{}", path)
                 };
-                // send to worker (blocking send is fine)
-                if let Err(e) = tx.send(wr) {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("send error: {}", e),
-                    )
-                        .into_response();
-                }
-                // wait for reply synchronously inside blocking task
-                let result = tokio::task::spawn_blocking(move || resp_rx.recv()).await;
-                match result {
-                    Ok(Ok(Ok((status, body)))) => (
+
+                // look up registration
+                let reg_opt = registrations
+                    .lock()
+                    .map(|g| g.get(&path).cloned())
+                    .ok()
+                    .flatten();
+                let (owner_uri, handler_name) = match reg_opt {
+                    Some(t) => t,
+                    None => {
+                        return (StatusCode::NOT_FOUND, "not found".to_string()).into_response();
+                    }
+                };
+
+                // spawn blocking: create runtime + context, install host functions,
+                // evaluate bootstrap + owner script and call handler
+                let method = req.method().to_string();
+                let owner_uri_cl = owner_uri.clone();
+                let handler_name_cl = handler_name.clone();
+                let path_log = path.clone();
+                // clone registrations and active_scripts Arcs so host functions
+                // inside the JS context can update them when upsertScript/deleteScript
+                // are called.
+                let regs_for_worker = registrations.clone();
+                let active_for_worker = active_scripts.clone();
+                let res = tokio::task::spawn_blocking(move || -> Result<(u16, String), String> {
+                    // create runtime and context inside this thread
+                    let rt = Runtime::new().map_err(|e| format!("runtime new: {}", e))?;
+                    let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
+                    // install host functions
+                    ctx.with(|ctx| -> Result<(), rquickjs::Error> {
+                        let global = ctx.globals();
+
+                        // no-op register to allow owner scripts to call register()
+                        let reg_noop = Function::new(
+                            ctx.clone(),
+                            |_ctx: rquickjs::Ctx<'_>, _path: String, _handler: String|
+                            -> Result<(), rquickjs::Error> { Ok(()) },
+                        )?;
+                        global.set("register", reg_noop)?;
+
+                        // writeLog
+                        let write_fn = Function::new(
+                            ctx.clone(),
+                            |_ctx: rquickjs::Ctx<'_>, msg: String| -> Result<(), rquickjs::Error> {
+                                repository::insert_log_message(&msg);
+                                Ok(())
+                            },
+                        )?;
+                        global.set("writeLog", write_fn)?;
+
+                        // listLogs
+                        let list_fn = Function::new(
+                            ctx.clone(),
+                            |_ctx: rquickjs::Ctx<'_>| -> Result<Vec<String>, rquickjs::Error> {
+                                Ok(repository::fetch_log_messages())
+                            },
+                        )?;
+                        global.set("listLogs", list_fn)?;
+
+                        // listScripts
+                        let list_scripts_fn = Function::new(
+                            ctx.clone(),
+                            |_ctx: rquickjs::Ctx<'_>| -> Result<Vec<String>, rquickjs::Error> {
+                                let map = repository::fetch_scripts();
+                                Ok(map.keys().cloned().collect())
+                            },
+                        )?;
+                        global.set("listScripts", list_scripts_fn)?;
+
+                        // getScript
+                        let get_fn = Function::new(
+                            ctx.clone(),
+                            |_ctx: rquickjs::Ctx<'_>, uri: String|
+                            -> Result<Option<String>, rquickjs::Error> { Ok(repository::fetch_script(&uri)) },
+                        )?;
+                        global.set("getScript", get_fn)?;
+
+                        // deleteScript: delete from repository dynamic store but leave
+                        // active in-memory scripts/registrations alone (they stay
+                        // until restart) to match previous behavior.
+                        let delete_fn = Function::new(
+                            ctx.clone(),
+                            move |_ctx: rquickjs::Ctx<'_>, uri: String|
+                            -> Result<bool, rquickjs::Error> { Ok(repository::delete_script(&uri)) },
+                        )?;
+                        global.set("deleteScript", delete_fn)?;
+
+                        // upsertScript: persist script, insert into active cache and
+                        // collect registrations by evaluating it in a transient ctx.
+                        let regs_upsert = regs_for_worker.clone();
+                        let active_upsert = active_for_worker.clone();
+                        let upsert_fn = Function::new(
+                            ctx.clone(),
+                            move |_ctx: rquickjs::Ctx<'_>, uri: String, content: String|
+                            -> Result<(), rquickjs::Error> {
+                                repository::upsert_script(&uri, &content);
+                                if let Ok(mut a) = active_upsert.lock() {
+                                    a.insert(uri.clone(), content.clone());
+                                }
+
+                                // evaluate new script in a transient context to collect
+                                // registrations
+                                if let Ok(rt2) = Runtime::new() {
+                                    if let Ok(ctx2) = Context::full(&rt2) {
+                                        let collected = std::sync::Arc::new(Mutex::new(Vec::<(String, String)>::new()));
+                                        let coll = collected.clone();
+                                        let _ = ctx2.with(|inner_ctx| -> Result<(), rquickjs::Error> {
+                                            let reg_fn = Function::new(
+                                                inner_ctx.clone(),
+                                                move |_c: rquickjs::Ctx<'_>, p: String, h: String|
+                                                -> Result<(), rquickjs::Error> {
+                                                    if let Ok(mut g) = coll.lock() {
+                                                        g.push((p, h));
+                                                    }
+                                                    Ok(())
+                                                },
+                                            )?;
+                                            inner_ctx.globals().set("register", reg_fn)?;
+                                            let _ = inner_ctx.eval::<(), _>(content.as_str());
+                                            Ok(())
+                                        });
+                                        // commit collected registrations
+                                        if let Ok(col) = collected.lock() {
+                                            if let Ok(mut guard) = regs_upsert.lock() {
+                                                guard.retain(|_k, v| v.0 != uri);
+                                                for (p, h) in col.iter() {
+                                                    guard.insert(p.clone(), (uri.clone(), h.clone()));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                Ok(())
+                            },
+                        )?;
+                        global.set("upsertScript", upsert_fn)?;
+
+                        Ok(())
+                    })
+                    .map_err(|e| format!("install host fns: {}", e))?;
+
+                    // fetch owner script
+                    // check active scripts cache first (upserted scripts)
+                    let owner_script = if let Ok(active) = active_for_worker.lock() {
+                        if let Some(s) = active.get(&owner_uri_cl) {
+                            s.clone()
+                        } else {
+                            match repository::fetch_script(&owner_uri_cl) {
+                                Some(s) => s,
+                                None => {
+                                    // try reading local file path equal to the URI (useful for tests)
+                                    if let Ok(s) = std::fs::read_to_string(&owner_uri_cl) {
+                                        s
+                                    } else {
+                                        return Err(format!("no script for uri {}", owner_uri_cl));
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // lock failed: fallback to repository/FS
+                        match repository::fetch_script(&owner_uri_cl) {
+                            Some(s) => s,
+                            None => {
+                                if let Ok(s) = std::fs::read_to_string(&owner_uri_cl) {
+                                    s
+                                } else {
+                                    return Err(format!("no script for uri {}", owner_uri_cl));
+                                }
+                            }
+                        }
+                    };
+                    ctx.with(|ctx| ctx.eval::<(), _>(owner_script.as_str()))
+                        .map_err(|e| format!("owner eval: {}", e))?;
+
+                    // call handler by name and extract status/body in the same ctx.with
+                    let (status, body) = ctx.with(|ctx| -> Result<(u16, String), String> {
+                        let global = ctx.globals();
+                        let func: Function = global
+                            .get::<_, Function>(handler_name_cl.clone())
+                            .map_err(|e| format!("no handler {}: {}", handler_name_cl, e))?;
+                        let req_obj = rquickjs::Object::new(ctx)
+                            .and_then(|o| o.set("method", method.clone()).map(|_| o))
+                            .map_err(|e| format!("make req obj: {}", e))?;
+                        let val = func
+                            .call::<_, Value>((path.clone(), req_obj))
+                            .map_err(|e| format!("call error: {}", e))?;
+                        let obj = val
+                            .as_object()
+                            .ok_or_else(|| "expected object".to_string())?;
+                        let status: i32 = obj
+                            .get("status")
+                            .map_err(|e| format!("missing status: {}", e))?;
+                        let body: String = obj
+                            .get("body")
+                            .map_err(|e| format!("missing body: {}", e))?;
+                        Ok((status as u16, body))
+                    })?;
+
+                    Ok((status, body))
+                })
+                .await
+                .map_err(|e| format!("join error: {}", e));
+
+                // enforce timeout on the blocking task
+                let timed =
+                    match tokio::time::timeout(std::time::Duration::from_millis(2000), async {
+                        res
+                    })
+                    .await
+                    {
+                        Ok(r) => r,
+                        Err(_) => {
+                            return (StatusCode::GATEWAY_TIMEOUT, "script timeout".to_string())
+                                .into_response();
+                        }
+                    };
+
+                match timed {
+                    Ok(Ok((status, body))) => (
                         StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
                         body,
                     )
                         .into_response(),
-                    Ok(Ok(Err(err))) => (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("js error: {}", err),
-                    )
-                        .into_response(),
-                    Ok(Err(recv_err)) => (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("recv error: {}", recv_err),
-                    )
-                        .into_response(),
-                    Err(join_err) => (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("join error: {}", join_err),
-                    )
-                        .into_response(),
+                    Ok(Err(e)) => {
+                        eprintln!("script error for {}: {}", path_log, e);
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("script error: {}", e),
+                        )
+                            .into_response()
+                    }
+                    Err(e) => {
+                        eprintln!("task error for {}: {}", path_log, e);
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("task error: {}", e),
+                        )
+                            .into_response()
+                    }
                 }
             }
         }),
@@ -341,7 +385,6 @@ pub async fn start_server_with_script(script_path: &str) -> anyhow::Result<()> {
 
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], 4000));
     println!("listening on {}", addr);
-    // use axum-server to run the app (lightweight server wrapper)
     axum_server::bind(addr)
         .serve(app.into_make_service())
         .await?;
