@@ -19,20 +19,10 @@ pub fn app() -> Router {
     Router::new().route("/", get(root))
 }
 
-fn build_registrations(
-    local_bootstrap: Option<(String, String)>,
-) -> anyhow::Result<Arc<Mutex<HashMap<String, (String, String)>>>> {
+fn build_registrations() -> anyhow::Result<Arc<Mutex<HashMap<String, (String, String)>>>> {
     let regs = Arc::new(Mutex::new(HashMap::new()));
 
-    let mut scripts: Vec<(String, String)> = Vec::new();
-    if let Some(b) = local_bootstrap {
-        scripts.push(b);
-    }
-    // include repository-provided scripts
-    for (u, c) in repository::fetch_scripts().into_iter() {
-        scripts.push((u, c));
-    }
-    // Do not load local filesystem scripts here; scripts must be provided via repository or upserted at runtime.
+    let scripts = repository::fetch_scripts();
 
     for (uri, content) in scripts.into_iter() {
         if let Ok(rt) = Runtime::new() {
@@ -66,14 +56,8 @@ fn build_registrations(
 
 pub async fn start_server(
     mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
-    bootstrap: Option<&str>,
 ) -> anyhow::Result<()> {
-    let local = if let Some(p) = bootstrap {
-        Some((p.to_string(), std::fs::read_to_string(p)?))
-    } else {
-        None
-    };
-    let registrations = Arc::new(build_registrations(local)?);
+    let registrations = Arc::new(build_registrations()?);
     let active_scripts: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
 
     let app = Router::new().route(
@@ -233,12 +217,7 @@ pub async fn start_server(
     Ok(())
 }
 
-pub async fn start_server_with_bootstrap(bootstrap: Option<&str>) -> anyhow::Result<()> {
+pub async fn start_server_without_shutdown() -> anyhow::Result<()> {
     let (_tx, rx) = tokio::sync::oneshot::channel::<()>();
-    // keep _tx alive so rx does not resolve; server will run until externally stopped
-    start_server(rx, bootstrap).await
-}
-
-pub async fn start_server_with_script() -> anyhow::Result<()> {
-    start_server_with_bootstrap(None).await
+    start_server(rx).await
 }

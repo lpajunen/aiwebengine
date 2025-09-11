@@ -1,5 +1,5 @@
 use aiwebengine::repository;
-use aiwebengine::start_server_with_script;
+use aiwebengine::start_server_without_shutdown;
 use std::time::Duration;
 
 #[tokio::test]
@@ -12,7 +12,7 @@ async fn js_write_log_and_listlogs() {
 
     // start server with the js_log_test script
     tokio::spawn(async move {
-        let _ = start_server_with_script().await;
+        let _ = start_server_without_shutdown().await;
     });
 
     // allow server to start

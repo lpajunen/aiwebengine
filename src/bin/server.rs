@@ -8,7 +8,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Spawn the server task that listens until shutdown_rx receives a value
     let server_task = tokio::spawn(async move {
-        if let Err(e) = start_server(shutdown_rx, None).await {
+        if let Err(e) = start_server(shutdown_rx).await {
             eprintln!("server error: {}", e);
         }
     });

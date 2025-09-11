@@ -1,4 +1,4 @@
-use aiwebengine::start_server_with_script;
+use aiwebengine::start_server_without_shutdown;
 use std::time::Duration;
 
 #[tokio::test]
@@ -7,7 +7,7 @@ async fn js_registered_route_returns_expected() {
     // ensure repository scripts are present (core/debug are included by default)
     // start server in background task
     tokio::spawn(async move {
-        let _ = start_server_with_script().await;
+        let _ = start_server_without_shutdown().await;
     });
 
     // give server a moment to start
