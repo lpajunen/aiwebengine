@@ -215,13 +215,19 @@ pub async fn start_server_with_script(script_path: &str) -> anyhow::Result<()> {
                         )?;
                         global.set("getScript", get_fn)?;
 
-                        // deleteScript: delete from repository dynamic store but leave
-                        // active in-memory scripts/registrations alone (they stay
-                        // until restart) to match previous behavior.
+                        // deleteScript: delete from repository dynamic store and
+                        // remove registrations that point to the URI immediately.
+                        let regs_del = regs_for_worker.clone();
                         let delete_fn = Function::new(
                             ctx.clone(),
                             move |_ctx: rquickjs::Ctx<'_>, uri: String|
-                            -> Result<bool, rquickjs::Error> { Ok(repository::delete_script(&uri)) },
+                            -> Result<bool, rquickjs::Error> {
+                                let existed = repository::delete_script(&uri);
+                                if let Ok(mut guard) = regs_del.lock() {
+                                    guard.retain(|_k, v| v.0 != uri);
+                                }
+                                Ok(existed)
+                            },
                         )?;
                         global.set("deleteScript", delete_fn)?;
 
