@@ -6,7 +6,7 @@
 try {
   upsertScript(
     'https://example.com/from_js',
-    "function from_js_handler(req) { return { status: 200, body: 'from-js' }; }\nregister('/from-js', 'from_js_handler');"
+    "function from_js_handler(req) { return { status: 200, body: 'from-js' }; }\nregister('/from-js', 'from_js_handler', 'GET');"
   );
 } catch (e) {
   // ignore errors when host function not available
@@ -28,4 +28,4 @@ function js_mgmt_check(req) {
     return { status: 500, body: String(e) };
   }
 }
-register('/js-mgmt-check', 'js_mgmt_check');
+register('/js-mgmt-check', 'js_mgmt_check', 'GET');

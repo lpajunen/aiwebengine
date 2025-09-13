@@ -1,7 +1,10 @@
 use axum::body::Body;
 use axum::http::Request;
 use axum::http::StatusCode;
-use axum::{Router, routing::get};
+use axum::{
+    Router,
+    routing::{any, get},
+};
 use axum::{extract::Path, response::IntoResponse};
 use axum_server::Server;
 use rquickjs::{Context, Function, Runtime, Value};
@@ -11,8 +14,8 @@ use std::sync::{Arc, Mutex};
 pub mod config;
 pub mod repository;
 
-/// Type alias for route registrations: path -> (script_uri, handler_name)
-type RouteRegistry = Arc<Mutex<HashMap<String, (String, String)>>>;
+/// Type alias for route registrations: (path, method) -> (script_uri, handler_name)
+type RouteRegistry = Arc<Mutex<HashMap<(String, String), (String, String)>>>;
 
 /// Simple health handler used by tests.
 pub async fn root() -> (StatusCode, &'static str) {
@@ -45,14 +48,16 @@ fn build_registrations() -> anyhow::Result<RouteRegistry> {
                         ctx.clone(),
                         move |_c: rquickjs::Ctx<'_>,
                               path: String,
-                              handler: String|
+                              handler: String,
+                              method: Option<String>|
                               -> Result<(), rquickjs::Error> {
+                            let method = method.unwrap_or_else(|| "GET".to_string());
                             println!(
-                                "DEBUG: Registering route {} -> {} for script {}",
-                                path, handler, uri_cl
+                                "DEBUG: Registering route {} {} -> {} for script {}",
+                                method, path, handler, uri_cl
                             );
                             if let Ok(mut g) = regs_cl.lock() {
-                                g.insert(path, (uri_cl.clone(), handler));
+                                g.insert((path, method), (uri_cl.clone(), handler));
                             }
                             Ok(())
                         },
@@ -103,19 +108,22 @@ pub async fn start_server_with_config(
     let app = Router::new()
         .route(
             "/",
-            get(move |req: Request<Body>| {
+            any(move |req: Request<Body>| {
                 let regs = Arc::clone(&registrations);
                 async move {
                     let path = "/";
-                    let reg = regs.lock().ok().and_then(|g| g.get(path).cloned());
+                    let request_method = req.method().to_string();
+                    let reg = regs
+                        .lock()
+                        .ok()
+                        .and_then(|g| g.get(&(path.to_string(), request_method.clone())).cloned());
                     let (owner_uri, handler_name) = match reg {
                         Some(t) => t,
                         None => {
-                            return (StatusCode::NOT_FOUND, "not found".to_string()).into_response();
+                            return (StatusCode::NOT_FOUND, "not found".to_string())
+                                .into_response();
                         }
                     };
-
-                    let method = req.method().to_string();
                     let owner_uri_cl = owner_uri.clone();
                     let handler_cl = handler_name.clone();
                     let path_log = path.to_string();
@@ -183,7 +191,7 @@ pub async fn start_server_with_config(
                                 .get::<_, Function>(handler_cl.clone())
                                 .map_err(|e| format!("no handler {}: {}", handler_cl, e))?;
                             let req_obj = rquickjs::Object::new(ctx)
-                                .and_then(|o| o.set("method", method.clone()).map(|_| o))
+                                .and_then(|o| o.set("method", request_method.clone()).map(|_| o))
                                 .map_err(|e| format!("make req obj: {}", e))?;
                             let val = func
                                 .call::<_, Value>((path.to_string(), req_obj))
@@ -249,7 +257,7 @@ pub async fn start_server_with_config(
         )
         .route(
             "/{*path}",
-            get(move |Path(path): Path<String>, req: Request<Body>| {
+            any(move |Path(path): Path<String>, req: Request<Body>| {
                 let regs = Arc::clone(&registrations_clone);
                 async move {
                     let full_path = if path.is_empty() {
@@ -257,15 +265,18 @@ pub async fn start_server_with_config(
                     } else {
                         format!("/{}", path)
                     };
-                    let reg = regs.lock().ok().and_then(|g| g.get(&full_path).cloned());
+                    let request_method = req.method().to_string();
+                    let reg = regs
+                        .lock()
+                        .ok()
+                        .and_then(|g| g.get(&(full_path.clone(), request_method.clone())).cloned());
                     let (owner_uri, handler_name) = match reg {
                         Some(t) => t,
                         None => {
-                            return (StatusCode::NOT_FOUND, "not found".to_string()).into_response();
+                            return (StatusCode::NOT_FOUND, "not found".to_string())
+                                .into_response();
                         }
                     };
-
-                    let method = req.method().to_string();
                     let owner_uri_cl = owner_uri.clone();
                     let handler_cl = handler_name.clone();
                     let path_log = full_path.clone();
@@ -333,7 +344,7 @@ pub async fn start_server_with_config(
                                 .get::<_, Function>(handler_cl.clone())
                                 .map_err(|e| format!("no handler {}: {}", handler_cl, e))?;
                             let req_obj = rquickjs::Object::new(ctx)
-                                .and_then(|o| o.set("method", method.clone()).map(|_| o))
+                                .and_then(|o| o.set("method", request_method.clone()).map(|_| o))
                                 .map_err(|e| format!("make req obj: {}", e))?;
                             let val = func
                                 .call::<_, Value>((full_path.clone(), req_obj))

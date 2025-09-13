@@ -7,4 +7,4 @@ function debug_handler(req) {
 		return { status: 500, body: String(e) };
 	}
 }
-register('/debug', 'debug_handler');
+register('/debug', 'debug_handler', 'GET');
