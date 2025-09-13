@@ -113,6 +113,14 @@ pub async fn start_server_with_config(
                 async move {
                     let path = "/";
                     let request_method = req.method().to_string();
+
+                    // Check if any route exists for this path
+                    let path_exists = regs
+                        .lock()
+                        .ok()
+                        .map(|g| g.keys().any(|(p, _)| p == path))
+                        .unwrap_or(false);
+
                     let reg = regs
                         .lock()
                         .ok()
@@ -120,8 +128,16 @@ pub async fn start_server_with_config(
                     let (owner_uri, handler_name) = match reg {
                         Some(t) => t,
                         None => {
-                            return (StatusCode::NOT_FOUND, "not found".to_string())
-                                .into_response();
+                            if path_exists {
+                                return (
+                                    StatusCode::METHOD_NOT_ALLOWED,
+                                    "method not allowed".to_string(),
+                                )
+                                    .into_response();
+                            } else {
+                                return (StatusCode::NOT_FOUND, "not found".to_string())
+                                    .into_response();
+                            }
                         }
                     };
                     let owner_uri_cl = owner_uri.clone();
@@ -266,6 +282,14 @@ pub async fn start_server_with_config(
                         format!("/{}", path)
                     };
                     let request_method = req.method().to_string();
+
+                    // Check if any route exists for this path
+                    let path_exists = regs
+                        .lock()
+                        .ok()
+                        .map(|g| g.keys().any(|(p, _)| p == &full_path))
+                        .unwrap_or(false);
+
                     let reg = regs
                         .lock()
                         .ok()
@@ -273,8 +297,16 @@ pub async fn start_server_with_config(
                     let (owner_uri, handler_name) = match reg {
                         Some(t) => t,
                         None => {
-                            return (StatusCode::NOT_FOUND, "not found".to_string())
-                                .into_response();
+                            if path_exists {
+                                return (
+                                    StatusCode::METHOD_NOT_ALLOWED,
+                                    "method not allowed".to_string(),
+                                )
+                                    .into_response();
+                            } else {
+                                return (StatusCode::NOT_FOUND, "not found".to_string())
+                                    .into_response();
+                            }
                         }
                     };
                     let owner_uri_cl = owner_uri.clone();
