@@ -1,4 +1,6 @@
 use aiwebengine::start_server_without_shutdown;
+use aiwebengine::{repository, root};
+use axum::http::StatusCode;
 use std::time::Duration;
 
 #[tokio::test]
@@ -11,7 +13,7 @@ async fn js_registered_route_returns_expected() {
     });
 
     // give server a moment to start
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_millis(1000)).await;
 
     // send request to /debug which now returns listLogs() as JSON
     let res = reqwest::get("http://127.0.0.1:4000/debug")
@@ -30,4 +32,61 @@ async fn js_registered_route_returns_expected() {
             "expected startup log in first entry"
         );
     }
+
+    // send request to `/` which should be registered by `scripts/core.js`.
+    // Retry a few times to avoid races while the server finishes startup.
+    let mut got = false;
+    let mut last_body = String::new();
+    for i in 0..10 {
+        println!(
+            "DEBUG: Test attempt {} - making request to http://127.0.0.1:4000/",
+            i
+        );
+        let res_root = reqwest::get("http://127.0.0.1:4000/").await;
+        match res_root {
+            Ok(res) => {
+                println!(
+                    "DEBUG: Test attempt {} - got response with status: {}",
+                    i,
+                    res.status()
+                );
+                if res.status() == reqwest::StatusCode::OK {
+                    let body_root = res.text().await.expect("read root body");
+                    println!("DEBUG: Test attempt {} - response body: '{}'", i, body_root);
+                    last_body = body_root.clone();
+                    if !body_root.is_empty() && body_root.contains("Core handler: OK") {
+                        got = true;
+                        break;
+                    }
+                } else {
+                    last_body = format!("HTTP {}", res.status());
+                }
+            }
+            Err(e) => {
+                println!("DEBUG: Test attempt {} - request failed: {}", i, e);
+                last_body = format!("Request failed: {}", e);
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert!(
+        got,
+        "expected / to return Core handler response, last body: {}",
+        last_body
+    );
+}
+
+#[tokio::test]
+async fn core_js_registers_root_and_root_returns_string() {
+    // ensure core.js contains a registration for '/'
+    let core = repository::fetch_script("https://example.com/core").expect("core script missing");
+    assert!(
+        core.contains("register('/") || core.contains("register(\"/\""),
+        "core.js must register '/' path"
+    );
+
+    // call the Rust root handler directly and ensure it returns a non-empty string
+    let (status, body) = root().await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!body.is_empty(), "root handler returned empty body");
 }
