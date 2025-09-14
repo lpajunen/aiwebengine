@@ -117,7 +117,7 @@ pub fn execute_script_for_request(
     path: &str,
     method: &str,
     query_params: Option<&std::collections::HashMap<String, String>>,
-) -> Result<(u16, String), String> {
+) -> Result<(u16, String, Option<String>), String> {
     let rt = Runtime::new().map_err(|e| format!("runtime new: {}", e))?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
@@ -169,50 +169,58 @@ pub fn execute_script_for_request(
     ctx.with(|ctx| ctx.eval::<(), _>(owner_script.as_str()))
         .map_err(|e| format!("owner eval: {}", e))?;
 
-    let (status, body) = ctx.with(|ctx| -> Result<(u16, String), String> {
-        let global = ctx.globals();
-        let func: Function = global
-            .get::<_, Function>(handler_name)
-            .map_err(|e| format!("no handler {}: {}", handler_name, e))?;
+    let (status, body, content_type) =
+        ctx.with(|ctx| -> Result<(u16, String, Option<String>), String> {
+            let global = ctx.globals();
+            let func: Function = global
+                .get::<_, Function>(handler_name)
+                .map_err(|e| format!("no handler {}: {}", handler_name, e))?;
 
-        let req_obj = rquickjs::Object::new(ctx.clone()).map_err(|e| format!("make req obj: {}", e))?;
+            let req_obj =
+                rquickjs::Object::new(ctx.clone()).map_err(|e| format!("make req obj: {}", e))?;
 
-        req_obj
-            .set("method", method)
-            .map_err(|e| format!("set method: {}", e))?;
-
-        req_obj
-            .set("path", path)
-            .map_err(|e| format!("set path: {}", e))?;
-
-        if let Some(qp) = query_params {
-            let query_obj = rquickjs::Object::new(ctx.clone()).map_err(|e| format!("make query obj: {}", e))?;
-            for (key, value) in qp {
-                query_obj.set(key, value).map_err(|e| format!("set query param {}: {}", key, e))?;
-            }
             req_obj
-                .set("query", query_obj)
-                .map_err(|e| format!("set query: {}", e))?;
-        }
+                .set("method", method)
+                .map_err(|e| format!("set method: {}", e))?;
 
-        let val = func
-            .call::<_, Value>((req_obj,))
-            .map_err(|e| format!("call error: {}", e))?;
+            req_obj
+                .set("path", path)
+                .map_err(|e| format!("set path: {}", e))?;
 
-        let obj = val
-            .as_object()
-            .ok_or_else(|| "expected object".to_string())?;
+            if let Some(qp) = query_params {
+                let query_obj = rquickjs::Object::new(ctx.clone())
+                    .map_err(|e| format!("make query obj: {}", e))?;
+                for (key, value) in qp {
+                    query_obj
+                        .set(key, value)
+                        .map_err(|e| format!("set query param {}: {}", key, e))?;
+                }
+                req_obj
+                    .set("query", query_obj)
+                    .map_err(|e| format!("set query: {}", e))?;
+            }
 
-        let status: i32 = obj
-            .get("status")
-            .map_err(|e| format!("missing status: {}", e))?;
+            let val = func
+                .call::<_, Value>((req_obj,))
+                .map_err(|e| format!("call error: {}", e))?;
 
-        let body: String = obj
-            .get("body")
-            .map_err(|e| format!("missing body: {}", e))?;
+            let obj = val
+                .as_object()
+                .ok_or_else(|| "expected object".to_string())?;
 
-        Ok((status as u16, body))
-    })?;
+            let status: i32 = obj
+                .get("status")
+                .map_err(|e| format!("missing status: {}", e))?;
 
-    Ok((status, body))
+            let body: String = obj
+                .get("body")
+                .map_err(|e| format!("missing body: {}", e))?;
+
+            // Extract optional contentType field
+            let content_type: Option<String> = obj.get("contentType").ok(); // This will be None if the field doesn't exist
+
+            Ok((status as u16, body, content_type))
+        })?;
+
+    Ok((status, body, content_type))
 }

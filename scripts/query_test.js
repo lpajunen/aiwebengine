@@ -12,7 +12,8 @@ function query_handler(req) {
 
     return {
         status: 200,
-        body: `Path: ${req.path}, Query: ${queryInfo}`
+        body: `Path: ${req.path}, Query: ${queryInfo}`,
+        contentType: "text/plain"
     };
 }
 

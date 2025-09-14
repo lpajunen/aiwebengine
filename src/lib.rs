@@ -79,198 +79,226 @@ pub async fn start_server_with_config(
 
     let registrations_clone = Arc::clone(&registrations);
 
-    let app =
-        Router::new()
-            .route(
-                "/",
-                any(move |req: Request<Body>| {
-                    let regs = Arc::clone(&registrations);
-                    async move {
-                        let path = "/";
-                        let request_method = req.method().to_string();
+    let app = Router::new()
+        .route(
+            "/",
+            any(move |req: Request<Body>| {
+                let regs = Arc::clone(&registrations);
+                async move {
+                    let path = "/";
+                    let request_method = req.method().to_string();
 
-                        // Check if any route exists for this path
-                        let path_exists = regs
-                            .lock()
-                            .ok()
-                            .map(|g| g.keys().any(|(p, _)| p == path))
-                            .unwrap_or(false);
+                    // Check if any route exists for this path
+                    let path_exists = regs
+                        .lock()
+                        .ok()
+                        .map(|g| g.keys().any(|(p, _)| p == path))
+                        .unwrap_or(false);
 
-                        let reg = regs.lock().ok().and_then(|g| {
-                            g.get(&(path.to_string(), request_method.clone())).cloned()
-                        });
-                        let (owner_uri, handler_name) = match reg {
-                            Some(t) => t,
-                            None => {
-                                if path_exists {
-                                    return (
-                                        StatusCode::METHOD_NOT_ALLOWED,
-                                        "method not allowed".to_string(),
-                                    )
-                                        .into_response();
-                                } else {
-                                    return (StatusCode::NOT_FOUND, "not found".to_string())
-                                        .into_response();
-                                }
-                            }
-                        };
-                        let owner_uri_cl = owner_uri.clone();
-                        let handler_cl = handler_name.clone();
-                        let path_log = path.to_string();
-                        let query_string = req.uri().query().map(|s| s.to_string()).unwrap_or_default();
-                        let query_params = parse_query_string(&query_string);
-
-                        let worker = move || -> Result<(u16, String), String> {
-                            js_engine::execute_script_for_request(
-                                &owner_uri_cl,
-                                &handler_cl,
-                                &path,
-                                &request_method,
-                                Some(&query_params),
-                            )
-                        };
-
-                        let join = tokio::task::spawn_blocking(worker)
-                            .await
-                            .map_err(|e| format!("join error: {}", e));
-
-                        let timed = match tokio::time::timeout(
-                            std::time::Duration::from_millis(config.script_timeout_ms),
-                            async { join },
-                        )
-                        .await
-                        {
-                            Ok(r) => r,
-                            Err(_) => {
-                                return (StatusCode::GATEWAY_TIMEOUT, "script timeout".to_string())
+                    let reg = regs
+                        .lock()
+                        .ok()
+                        .and_then(|g| g.get(&(path.to_string(), request_method.clone())).cloned());
+                    let (owner_uri, handler_name) = match reg {
+                        Some(t) => t,
+                        None => {
+                            if path_exists {
+                                return (
+                                    StatusCode::METHOD_NOT_ALLOWED,
+                                    "method not allowed".to_string(),
+                                )
+                                    .into_response();
+                            } else {
+                                return (StatusCode::NOT_FOUND, "not found".to_string())
                                     .into_response();
                             }
-                        };
+                        }
+                    };
+                    let owner_uri_cl = owner_uri.clone();
+                    let handler_cl = handler_name.clone();
+                    let path_log = path.to_string();
+                    let query_string = req.uri().query().map(|s| s.to_string()).unwrap_or_default();
+                    let query_params = parse_query_string(&query_string);
 
-                        match timed {
-                            Ok(Ok((status, body))) => (
+                    let worker = move || -> Result<(u16, String, Option<String>), String> {
+                        js_engine::execute_script_for_request(
+                            &owner_uri_cl,
+                            &handler_cl,
+                            &path,
+                            &request_method,
+                            Some(&query_params),
+                        )
+                    };
+
+                    let join = tokio::task::spawn_blocking(worker)
+                        .await
+                        .map_err(|e| format!("join error: {}", e));
+
+                    let timed = match tokio::time::timeout(
+                        std::time::Duration::from_millis(config.script_timeout_ms),
+                        async { join },
+                    )
+                    .await
+                    {
+                        Ok(r) => r,
+                        Err(_) => {
+                            return (StatusCode::GATEWAY_TIMEOUT, "script timeout".to_string())
+                                .into_response();
+                        }
+                    };
+
+                    match timed {
+                        Ok(Ok((status, body, content_type))) => {
+                            let mut response = (
                                 StatusCode::from_u16(status)
                                     .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
                                 body,
                             )
-                                .into_response(),
-                            Ok(Err(e)) => {
-                                eprintln!("script error for {}: {}", path_log, e);
-                                (
-                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                    format!("script error: {}", e),
-                                )
-                                    .into_response()
+                                .into_response();
+
+                            if let Some(ct) = content_type {
+                                response.headers_mut().insert(
+                                    axum::http::header::CONTENT_TYPE,
+                                    axum::http::HeaderValue::from_str(&ct).unwrap_or_else(|_| {
+                                        axum::http::HeaderValue::from_static("text/plain")
+                                    }),
+                                );
                             }
-                            Err(e) => {
-                                eprintln!("task error for {}: {}", path_log, e);
-                                (
-                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                    format!("task error: {}", e),
-                                )
-                                    .into_response()
-                            }
+
+                            response
+                        }
+                        .into_response(),
+                        Ok(Err(e)) => {
+                            eprintln!("script error for {}: {}", path_log, e);
+                            (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                format!("script error: {}", e),
+                            )
+                                .into_response()
+                        }
+                        Err(e) => {
+                            eprintln!("task error for {}: {}", path_log, e);
+                            (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                format!("task error: {}", e),
+                            )
+                                .into_response()
                         }
                     }
-                }),
-            )
-            .route(
-                "/{*path}",
-                any(move |Path(path): Path<String>, req: Request<Body>| {
-                    let regs = Arc::clone(&registrations_clone);
-                    async move {
-                        let full_path = if path.is_empty() {
-                            "/".to_string()
-                        } else {
-                            format!("/{}", path)
-                        };
-                        let request_method = req.method().to_string();
+                }
+            }),
+        )
+        .route(
+            "/{*path}",
+            any(move |Path(path): Path<String>, req: Request<Body>| {
+                let regs = Arc::clone(&registrations_clone);
+                async move {
+                    let full_path = if path.is_empty() {
+                        "/".to_string()
+                    } else {
+                        format!("/{}", path)
+                    };
+                    let request_method = req.method().to_string();
 
-                        // Check if any route exists for this path
-                        let path_exists = regs
-                            .lock()
-                            .ok()
-                            .map(|g| g.keys().any(|(p, _)| p == &full_path))
-                            .unwrap_or(false);
+                    // Check if any route exists for this path
+                    let path_exists = regs
+                        .lock()
+                        .ok()
+                        .map(|g| g.keys().any(|(p, _)| p == &full_path))
+                        .unwrap_or(false);
 
-                        let reg = regs.lock().ok().and_then(|g| {
-                            g.get(&(full_path.clone(), request_method.clone())).cloned()
-                        });
-                        let (owner_uri, handler_name) = match reg {
-                            Some(t) => t,
-                            None => {
-                                if path_exists {
-                                    return (
-                                        StatusCode::METHOD_NOT_ALLOWED,
-                                        "method not allowed".to_string(),
-                                    )
-                                        .into_response();
-                                } else {
-                                    return (StatusCode::NOT_FOUND, "not found".to_string())
-                                        .into_response();
-                                }
-                            }
-                        };
-                        let owner_uri_cl = owner_uri.clone();
-                        let handler_cl = handler_name.clone();
-                        let path_log = full_path.clone();
-                        let query_string = req.uri().query().map(|s| s.to_string()).unwrap_or_default();
-                        let query_params = parse_query_string(&query_string);
-
-                        let worker = move || -> Result<(u16, String), String> {
-                            js_engine::execute_script_for_request(
-                                &owner_uri_cl,
-                                &handler_cl,
-                                &full_path,
-                                &request_method,
-                                Some(&query_params),
-                            )
-                        };
-
-                        let join = tokio::task::spawn_blocking(worker)
-                            .await
-                            .map_err(|e| format!("join error: {}", e));
-
-                        let timed = match tokio::time::timeout(
-                            std::time::Duration::from_millis(config.script_timeout_ms),
-                            async { join },
-                        )
-                        .await
-                        {
-                            Ok(r) => r,
-                            Err(_) => {
-                                return (StatusCode::GATEWAY_TIMEOUT, "script timeout".to_string())
+                    let reg = regs
+                        .lock()
+                        .ok()
+                        .and_then(|g| g.get(&(full_path.clone(), request_method.clone())).cloned());
+                    let (owner_uri, handler_name) = match reg {
+                        Some(t) => t,
+                        None => {
+                            if path_exists {
+                                return (
+                                    StatusCode::METHOD_NOT_ALLOWED,
+                                    "method not allowed".to_string(),
+                                )
+                                    .into_response();
+                            } else {
+                                return (StatusCode::NOT_FOUND, "not found".to_string())
                                     .into_response();
                             }
-                        };
+                        }
+                    };
+                    let owner_uri_cl = owner_uri.clone();
+                    let handler_cl = handler_name.clone();
+                    let path_log = full_path.clone();
+                    let query_string = req.uri().query().map(|s| s.to_string()).unwrap_or_default();
+                    let query_params = parse_query_string(&query_string);
 
-                        match timed {
-                            Ok(Ok((status, body))) => (
+                    let worker = move || -> Result<(u16, String, Option<String>), String> {
+                        js_engine::execute_script_for_request(
+                            &owner_uri_cl,
+                            &handler_cl,
+                            &full_path,
+                            &request_method,
+                            Some(&query_params),
+                        )
+                    };
+
+                    let join = tokio::task::spawn_blocking(worker)
+                        .await
+                        .map_err(|e| format!("join error: {}", e));
+
+                    let timed = match tokio::time::timeout(
+                        std::time::Duration::from_millis(config.script_timeout_ms),
+                        async { join },
+                    )
+                    .await
+                    {
+                        Ok(r) => r,
+                        Err(_) => {
+                            return (StatusCode::GATEWAY_TIMEOUT, "script timeout".to_string())
+                                .into_response();
+                        }
+                    };
+
+                    match timed {
+                        Ok(Ok((status, body, content_type))) => {
+                            let mut response = (
                                 StatusCode::from_u16(status)
                                     .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
                                 body,
                             )
-                                .into_response(),
-                            Ok(Err(e)) => {
-                                eprintln!("script error for {}: {}", path_log, e);
-                                (
-                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                    format!("script error: {}", e),
-                                )
-                                    .into_response()
+                                .into_response();
+
+                            if let Some(ct) = content_type {
+                                response.headers_mut().insert(
+                                    axum::http::header::CONTENT_TYPE,
+                                    axum::http::HeaderValue::from_str(&ct).unwrap_or_else(|_| {
+                                        axum::http::HeaderValue::from_static("text/plain")
+                                    }),
+                                );
                             }
-                            Err(e) => {
-                                eprintln!("task error for {}: {}", path_log, e);
-                                (
-                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                    format!("task error: {}", e),
-                                )
-                                    .into_response()
-                            }
+
+                            response
+                        }
+                        Ok(Err(e)) => {
+                            eprintln!("script error for {}: {}", path_log, e);
+                            (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                format!("script error: {}", e),
+                            )
+                                .into_response()
+                        }
+                        Err(e) => {
+                            eprintln!("task error for {}: {}", path_log, e);
+                            (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                format!("task error: {}", e),
+                            )
+                                .into_response()
                         }
                     }
-                }),
-            );
+                }
+            }),
+        );
 
     let addr = config
         .server_addr()

@@ -59,9 +59,9 @@ async fn test_query_parameters() {
         body_with_query
     );
     assert!(
-        body_with_query.contains("Query:") &&
-        body_with_query.contains("id=123") &&
-        body_with_query.contains("name=test"),
+        body_with_query.contains("Query:")
+            && body_with_query.contains("id=123")
+            && body_with_query.contains("name=test"),
         "Response should contain parsed query parameters: {}",
         body_with_query
     );
