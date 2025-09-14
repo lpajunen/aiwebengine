@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 pub mod config;
+pub mod js_engine;
 pub mod repository;
 
 /// Type alias for route registrations: (path, method) -> (script_uri, handler_name)
@@ -16,7 +17,7 @@ type RouteRegistry = Arc<Mutex<HashMap<(String, String), (String, String)>>>;
 
 /// Builds the route registry by loading all scripts and collecting their route registrations.
 ///
-/// This function creates a QuickJS runtime for each script, evaluates it, and collects
+/// This function executes each script using the js_engine module and collects
 /// any routes registered via the `register(path, handler)` function exposed to JavaScript.
 fn build_registrations() -> anyhow::Result<RouteRegistry> {
     let regs = Arc::new(Mutex::new(HashMap::new()));
@@ -26,42 +27,22 @@ fn build_registrations() -> anyhow::Result<RouteRegistry> {
 
     for (uri, content) in scripts.into_iter() {
         println!("DEBUG: Loading script {}", uri);
-        if let Ok(rt) = Runtime::new() {
-            if let Ok(ctx) = Context::full(&rt) {
-                let regs_cl = regs.clone();
-                let uri_cl = uri.clone();
-                match ctx.with(|ctx| -> Result<(), rquickjs::Error> {
-                    let global = ctx.globals();
-                    let register = Function::new(
-                        ctx.clone(),
-                        move |_c: rquickjs::Ctx<'_>,
-                              path: String,
-                              handler: String,
-                              method: Option<String>|
-                              -> Result<(), rquickjs::Error> {
-                            let method = method.unwrap_or_else(|| "GET".to_string());
-                            println!(
-                                "DEBUG: Registering route {} {} -> {} for script {}",
-                                method, path, handler, uri_cl
-                            );
-                            if let Ok(mut g) = regs_cl.lock() {
-                                g.insert((path, method), (uri_cl.clone(), handler));
-                            }
-                            Ok(())
-                        },
-                    )?;
-                    global.set("register", register)?;
-                    ctx.eval::<(), _>(content.as_str())?;
-                    Ok(())
-                }) {
-                    Ok(_) => println!("DEBUG: Successfully loaded script {}", uri),
-                    Err(e) => eprintln!("Failed to evaluate script {}: {}", uri, e),
+
+        // Execute the script using the js_engine module
+        let result = js_engine::execute_script(&uri, &content);
+
+        if result.success {
+            // Merge the registrations from this script into the global registry
+            if let Ok(mut global_regs) = regs.lock() {
+                for ((path, method), handler) in result.registrations {
+                    global_regs.insert((path, method), (uri.clone(), handler));
                 }
-            } else {
-                eprintln!("Failed to create QuickJS context for script {}", uri);
             }
+            println!("DEBUG: Successfully loaded script {}", uri);
         } else {
-            eprintln!("Failed to create QuickJS runtime for script {}", uri);
+            if let Some(error) = result.error {
+                eprintln!("Failed to load script {}: {}", uri, error);
+            }
         }
     }
 
