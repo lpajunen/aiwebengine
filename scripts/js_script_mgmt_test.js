@@ -13,7 +13,7 @@ try {
 }
 
 // route that exercises getScript, listScripts, deleteScript
-function js_mgmt_check(path, req) {
+function js_mgmt_check(req) {
   try {
     const got = (typeof getScript === 'function') ? (getScript('https://example.com/from_js') ?? null) : null;
     const list = (typeof listScripts === 'function') ? (listScripts() ?? []) : [];

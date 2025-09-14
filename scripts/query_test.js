@@ -1,8 +1,8 @@
 // Test script for query parameter handling
-function query_handler(path, req) {
+function query_handler(req) {
     return {
         status: 200,
-        body: `Path: ${path}, Query: ${req.query || 'none'}`
+        body: `Path: ${req.path}, Query: ${req.query || 'none'}`
     };
 }
 

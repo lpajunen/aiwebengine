@@ -181,6 +181,10 @@ pub fn execute_script_for_request(
             .set("method", method)
             .map_err(|e| format!("set method: {}", e))?;
 
+        req_obj
+            .set("path", path)
+            .map_err(|e| format!("set path: {}", e))?;
+
         if let Some(qs) = query_string {
             req_obj
                 .set("query", qs)
@@ -188,7 +192,7 @@ pub fn execute_script_for_request(
         }
 
         let val = func
-            .call::<_, Value>((path.to_string(), req_obj))
+            .call::<_, Value>((req_obj,))
             .map_err(|e| format!("call error: {}", e))?;
 
         let obj = val

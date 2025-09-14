@@ -1,8 +1,6 @@
 // core script: registers root handler
-function core_root(path, req) {
+function core_root(req) {
 	writeLog('core-root-called');
-	writeLog('path: ' + path);
-	writeLog('req-method: ' + req.method);
 	writeLog('req: ' + JSON.stringify(req));
 	return { status: 200, body: 'Core handler: OK' };
 }

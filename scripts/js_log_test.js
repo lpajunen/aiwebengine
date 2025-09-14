@@ -1,12 +1,12 @@
 // JS test script: registers /js-log-test and uses writeLog
 
-function js_log_test_handler(path, req) {
+function js_log_test_handler(req) {
   writeLog('js-log-test-called');
   return { status: 200, body: 'logged' };
 }
 register('/js-log-test', 'js_log_test_handler', 'GET');
 
-function js_list_handler(path, req) {
+function js_list_handler(req) {
   try {
     const logs = listLogs();
     return { status: 200, body: JSON.stringify(logs) };
