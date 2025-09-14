@@ -11,6 +11,48 @@ pub mod config;
 pub mod js_engine;
 pub mod repository;
 
+/// Parses a query string into a HashMap of key-value pairs
+fn parse_query_string(query: &str) -> HashMap<String, String> {
+    let mut params = HashMap::new();
+    if query.is_empty() {
+        return params;
+    }
+
+    for pair in query.split('&') {
+        let mut parts = pair.splitn(2, '=');
+        if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
+            // URL decode the key and value (basic implementation)
+            let decoded_key = url_decode(key);
+            let decoded_value = url_decode(value);
+            params.insert(decoded_key, decoded_value);
+        }
+    }
+    params
+}
+
+/// Basic URL decoding function
+fn url_decode(input: &str) -> String {
+    let mut result = String::new();
+    let mut chars = input.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '%' {
+            if let (Some(h1), Some(h2)) = (chars.next(), chars.next()) {
+                if let (Some(d1), Some(d2)) = (h1.to_digit(16), h2.to_digit(16)) {
+                    let byte = (d1 * 16 + d2) as u8;
+                    result.push(byte as char);
+                    continue;
+                }
+            }
+        } else if ch == '+' {
+            result.push(' ');
+            continue;
+        }
+        result.push(ch);
+    }
+    result
+}
+
 /// Type alias for route registrations: (path, method) -> (script_uri, handler_name)
 type RouteRegistry = Arc<Mutex<HashMap<(String, String), (String, String)>>>;
 
@@ -111,7 +153,8 @@ pub async fn start_server_with_config(
                         let owner_uri_cl = owner_uri.clone();
                         let handler_cl = handler_name.clone();
                         let path_log = path.to_string();
-                        let query_string = req.uri().query().map(|s| s.to_string());
+                        let query_string = req.uri().query().map(|s| s.to_string()).unwrap_or_default();
+                        let query_params = parse_query_string(&query_string);
 
                         let worker = move || -> Result<(u16, String), String> {
                             js_engine::execute_script_for_request(
@@ -119,7 +162,7 @@ pub async fn start_server_with_config(
                                 &handler_cl,
                                 &path,
                                 &request_method,
-                                query_string.as_deref(),
+                                Some(&query_params),
                             )
                         };
 
@@ -207,7 +250,8 @@ pub async fn start_server_with_config(
                         let owner_uri_cl = owner_uri.clone();
                         let handler_cl = handler_name.clone();
                         let path_log = full_path.clone();
-                        let query_string = req.uri().query().map(|s| s.to_string());
+                        let query_string = req.uri().query().map(|s| s.to_string()).unwrap_or_default();
+                        let query_params = parse_query_string(&query_string);
 
                         let worker = move || -> Result<(u16, String), String> {
                             js_engine::execute_script_for_request(
@@ -215,7 +259,7 @@ pub async fn start_server_with_config(
                                 &handler_cl,
                                 &full_path,
                                 &request_method,
-                                query_string.as_deref(),
+                                Some(&query_params),
                             )
                         };
 

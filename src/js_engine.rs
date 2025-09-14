@@ -116,7 +116,7 @@ pub fn execute_script_for_request(
     handler_name: &str,
     path: &str,
     method: &str,
-    query_string: Option<&str>,
+    query_params: Option<&std::collections::HashMap<String, String>>,
 ) -> Result<(u16, String), String> {
     let rt = Runtime::new().map_err(|e| format!("runtime new: {}", e))?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
@@ -175,7 +175,7 @@ pub fn execute_script_for_request(
             .get::<_, Function>(handler_name)
             .map_err(|e| format!("no handler {}: {}", handler_name, e))?;
 
-        let req_obj = rquickjs::Object::new(ctx).map_err(|e| format!("make req obj: {}", e))?;
+        let req_obj = rquickjs::Object::new(ctx.clone()).map_err(|e| format!("make req obj: {}", e))?;
 
         req_obj
             .set("method", method)
@@ -185,9 +185,13 @@ pub fn execute_script_for_request(
             .set("path", path)
             .map_err(|e| format!("set path: {}", e))?;
 
-        if let Some(qs) = query_string {
+        if let Some(qp) = query_params {
+            let query_obj = rquickjs::Object::new(ctx.clone()).map_err(|e| format!("make query obj: {}", e))?;
+            for (key, value) in qp {
+                query_obj.set(key, value).map_err(|e| format!("set query param {}: {}", key, e))?;
+            }
             req_obj
-                .set("query", qs)
+                .set("query", query_obj)
                 .map_err(|e| format!("set query: {}", e))?;
         }
 
