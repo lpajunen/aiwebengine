@@ -143,6 +143,7 @@ pub async fn start_server_with_config(
                     let owner_uri_cl = owner_uri.clone();
                     let handler_cl = handler_name.clone();
                     let path_log = path.to_string();
+                    let query_string = req.uri().query().map(|s| s.to_string());
 
                     let worker = move || -> Result<(u16, String), String> {
                         let rt = Runtime::new().map_err(|e| format!("runtime new: {}", e))?;
@@ -207,8 +208,15 @@ pub async fn start_server_with_config(
                                 .get::<_, Function>(handler_cl.clone())
                                 .map_err(|e| format!("no handler {}: {}", handler_cl, e))?;
                             let req_obj = rquickjs::Object::new(ctx)
-                                .and_then(|o| o.set("method", request_method.clone()).map(|_| o))
                                 .map_err(|e| format!("make req obj: {}", e))?;
+                            req_obj
+                                .set("method", request_method.clone())
+                                .map_err(|e| format!("set method: {}", e))?;
+                            if let Some(qs) = &query_string {
+                                req_obj
+                                    .set("query", qs.clone())
+                                    .map_err(|e| format!("set query: {}", e))?;
+                            }
                             let val = func
                                 .call::<_, Value>((path.to_string(), req_obj))
                                 .map_err(|e| format!("call error: {}", e))?;
@@ -312,6 +320,7 @@ pub async fn start_server_with_config(
                     let owner_uri_cl = owner_uri.clone();
                     let handler_cl = handler_name.clone();
                     let path_log = full_path.clone();
+                    let query_string = req.uri().query().map(|s| s.to_string());
 
                     let worker = move || -> Result<(u16, String), String> {
                         let rt = Runtime::new().map_err(|e| format!("runtime new: {}", e))?;
@@ -376,8 +385,15 @@ pub async fn start_server_with_config(
                                 .get::<_, Function>(handler_cl.clone())
                                 .map_err(|e| format!("no handler {}: {}", handler_cl, e))?;
                             let req_obj = rquickjs::Object::new(ctx)
-                                .and_then(|o| o.set("method", request_method.clone()).map(|_| o))
                                 .map_err(|e| format!("make req obj: {}", e))?;
+                            req_obj
+                                .set("method", request_method.clone())
+                                .map_err(|e| format!("set method: {}", e))?;
+                            if let Some(qs) = &query_string {
+                                req_obj
+                                    .set("query", qs.clone())
+                                    .map_err(|e| format!("set query: {}", e))?;
+                            }
                             let val = func
                                 .call::<_, Value>((full_path.clone(), req_obj))
                                 .map_err(|e| format!("call error: {}", e))?;
