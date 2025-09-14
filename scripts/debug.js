@@ -1,5 +1,5 @@
 // debug script: registers /debug and returns current logs via listLogs()
-function debug_handler(req) {
+function debug_handler(path, req) {
 	try {
 		const logs = listLogs();
 		return { status: 200, body: JSON.stringify(logs) };
