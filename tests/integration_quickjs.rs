@@ -1,6 +1,5 @@
+use aiwebengine::repository;
 use aiwebengine::start_server_without_shutdown;
-use aiwebengine::{repository, root};
-use axum::http::StatusCode;
 use std::time::Duration;
 
 #[tokio::test]
@@ -77,16 +76,11 @@ async fn js_registered_route_returns_expected() {
 }
 
 #[tokio::test]
-async fn core_js_registers_root_and_root_returns_string() {
+async fn core_js_registers_root_path() {
     // ensure core.js contains a registration for '/'
     let core = repository::fetch_script("https://example.com/core").expect("core script missing");
     assert!(
         core.contains("register('/") || core.contains("register(\"/\""),
         "core.js must register '/' path"
     );
-
-    // call the Rust root handler directly and ensure it returns a non-empty string
-    let (status, body) = root().await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(!body.is_empty(), "root handler returned empty body");
 }

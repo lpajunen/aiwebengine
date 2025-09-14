@@ -1,10 +1,7 @@
 use axum::body::Body;
 use axum::http::Request;
 use axum::http::StatusCode;
-use axum::{
-    Router,
-    routing::{any, get},
-};
+use axum::{Router, routing::any};
 use axum::{extract::Path, response::IntoResponse};
 use axum_server::Server;
 use rquickjs::{Context, Function, Runtime, Value};
@@ -16,15 +13,6 @@ pub mod repository;
 
 /// Type alias for route registrations: (path, method) -> (script_uri, handler_name)
 type RouteRegistry = Arc<Mutex<HashMap<(String, String), (String, String)>>>;
-
-/// Simple health handler used by tests.
-pub async fn root() -> (StatusCode, &'static str) {
-    (StatusCode::OK, "Hello from axum!")
-}
-
-pub fn app() -> Router {
-    Router::new().route("/", get(root))
-}
 
 /// Builds the route registry by loading all scripts and collecting their route registrations.
 ///
