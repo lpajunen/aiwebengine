@@ -4,7 +4,6 @@ use axum::http::StatusCode;
 use axum::{Router, routing::any};
 use axum::{extract::Path, response::IntoResponse};
 use axum_server::Server;
-use rquickjs::{Context, Function, Runtime, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -74,357 +73,196 @@ pub async fn start_server_with_config(
 
     let registrations_clone = Arc::clone(&registrations);
 
-    let app = Router::new()
-        .route(
-            "/",
-            any(move |req: Request<Body>| {
-                let regs = Arc::clone(&registrations);
-                async move {
-                    let path = "/";
-                    let request_method = req.method().to_string();
+    let app =
+        Router::new()
+            .route(
+                "/",
+                any(move |req: Request<Body>| {
+                    let regs = Arc::clone(&registrations);
+                    async move {
+                        let path = "/";
+                        let request_method = req.method().to_string();
 
-                    // Check if any route exists for this path
-                    let path_exists = regs
-                        .lock()
-                        .ok()
-                        .map(|g| g.keys().any(|(p, _)| p == path))
-                        .unwrap_or(false);
+                        // Check if any route exists for this path
+                        let path_exists = regs
+                            .lock()
+                            .ok()
+                            .map(|g| g.keys().any(|(p, _)| p == path))
+                            .unwrap_or(false);
 
-                    let reg = regs
-                        .lock()
-                        .ok()
-                        .and_then(|g| g.get(&(path.to_string(), request_method.clone())).cloned());
-                    let (owner_uri, handler_name) = match reg {
-                        Some(t) => t,
-                        None => {
-                            if path_exists {
-                                return (
-                                    StatusCode::METHOD_NOT_ALLOWED,
-                                    "method not allowed".to_string(),
-                                )
-                                    .into_response();
-                            } else {
-                                return (StatusCode::NOT_FOUND, "not found".to_string())
-                                    .into_response();
+                        let reg = regs.lock().ok().and_then(|g| {
+                            g.get(&(path.to_string(), request_method.clone())).cloned()
+                        });
+                        let (owner_uri, handler_name) = match reg {
+                            Some(t) => t,
+                            None => {
+                                if path_exists {
+                                    return (
+                                        StatusCode::METHOD_NOT_ALLOWED,
+                                        "method not allowed".to_string(),
+                                    )
+                                        .into_response();
+                                } else {
+                                    return (StatusCode::NOT_FOUND, "not found".to_string())
+                                        .into_response();
+                                }
                             }
-                        }
-                    };
-                    let owner_uri_cl = owner_uri.clone();
-                    let handler_cl = handler_name.clone();
-                    let path_log = path.to_string();
-                    let query_string = req.uri().query().map(|s| s.to_string());
+                        };
+                        let owner_uri_cl = owner_uri.clone();
+                        let handler_cl = handler_name.clone();
+                        let path_log = path.to_string();
+                        let query_string = req.uri().query().map(|s| s.to_string());
 
-                    let worker = move || -> Result<(u16, String), String> {
-                        let rt = Runtime::new().map_err(|e| format!("runtime new: {}", e))?;
-                        let ctx =
-                            Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
+                        let worker = move || -> Result<(u16, String), String> {
+                            js_engine::execute_script_for_request(
+                                &owner_uri_cl,
+                                &handler_cl,
+                                &path,
+                                &request_method,
+                                query_string.as_deref(),
+                            )
+                        };
 
-                        ctx.with(|ctx| -> Result<(), rquickjs::Error> {
-                            let global = ctx.globals();
+                        let join = tokio::task::spawn_blocking(worker)
+                            .await
+                            .map_err(|e| format!("join error: {}", e));
 
-                            let reg_noop = Function::new(
-                                ctx.clone(),
-                                |_c: rquickjs::Ctx<'_>,
-                                 _p: String,
-                                 _h: String|
-                                 -> Result<(), rquickjs::Error> {
-                                    Ok(())
-                                },
-                            )?;
-                            global.set("register", reg_noop)?;
-
-                            let write = Function::new(
-                                ctx.clone(),
-                                |_c: rquickjs::Ctx<'_>,
-                                 msg: String|
-                                 -> Result<(), rquickjs::Error> {
-                                    repository::insert_log_message(&msg);
-                                    Ok(())
-                                },
-                            )?;
-                            global.set("writeLog", write)?;
-
-                            let list_logs = Function::new(
-                                ctx.clone(),
-                                |_c: rquickjs::Ctx<'_>| -> Result<Vec<String>, rquickjs::Error> {
-                                    Ok(repository::fetch_log_messages())
-                                },
-                            )?;
-                            global.set("listLogs", list_logs)?;
-
-                            let list_scripts = Function::new(
-                                ctx.clone(),
-                                |_c: rquickjs::Ctx<'_>| -> Result<Vec<String>, rquickjs::Error> {
-                                    let m = repository::fetch_scripts();
-                                    Ok(m.keys().cloned().collect())
-                                },
-                            )?;
-                            global.set("listScripts", list_scripts)?;
-
-                            Ok(())
-                        })
-                        .map_err(|e| format!("install host fns: {}", e))?;
-
-                        let owner_script = repository::fetch_script(&owner_uri_cl)
-                            .ok_or_else(|| format!("no script for uri {}", owner_uri_cl))?;
-
-                        ctx.with(|ctx| ctx.eval::<(), _>(owner_script.as_str()))
-                            .map_err(|e| format!("owner eval: {}", e))?;
-
-                        let (status, body) = ctx.with(|ctx| -> Result<(u16, String), String> {
-                            let global = ctx.globals();
-                            let func: Function = global
-                                .get::<_, Function>(handler_cl.clone())
-                                .map_err(|e| format!("no handler {}: {}", handler_cl, e))?;
-                            let req_obj = rquickjs::Object::new(ctx)
-                                .map_err(|e| format!("make req obj: {}", e))?;
-                            req_obj
-                                .set("method", request_method.clone())
-                                .map_err(|e| format!("set method: {}", e))?;
-                            if let Some(qs) = &query_string {
-                                req_obj
-                                    .set("query", qs.clone())
-                                    .map_err(|e| format!("set query: {}", e))?;
-                            }
-                            let val = func
-                                .call::<_, Value>((path.to_string(), req_obj))
-                                .map_err(|e| format!("call error: {}", e))?;
-                            let obj = val
-                                .as_object()
-                                .ok_or_else(|| "expected object".to_string())?;
-                            let status: i32 = obj
-                                .get("status")
-                                .map_err(|e| format!("missing status: {}", e))?;
-                            let body: String = obj
-                                .get("body")
-                                .map_err(|e| format!("missing body: {}", e))?;
-                            Ok((status as u16, body))
-                        })?;
-
-                        Ok((status, body))
-                    };
-
-                    let join = tokio::task::spawn_blocking(worker)
-                        .await
-                        .map_err(|e| format!("join error: {}", e));
-
-                    let timed = match tokio::time::timeout(
-                        std::time::Duration::from_millis(config.script_timeout_ms),
-                        async { join },
-                    )
-                    .await
-                    {
-                        Ok(r) => r,
-                        Err(_) => {
-                            return (StatusCode::GATEWAY_TIMEOUT, "script timeout".to_string())
-                                .into_response();
-                        }
-                    };
-
-                    match timed {
-                        Ok(Ok((status, body))) => (
-                            StatusCode::from_u16(status)
-                                .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-                            body,
+                        let timed = match tokio::time::timeout(
+                            std::time::Duration::from_millis(config.script_timeout_ms),
+                            async { join },
                         )
-                            .into_response(),
-                        Ok(Err(e)) => {
-                            eprintln!("script error for {}: {}", path_log, e);
-                            (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                format!("script error: {}", e),
+                        .await
+                        {
+                            Ok(r) => r,
+                            Err(_) => {
+                                return (StatusCode::GATEWAY_TIMEOUT, "script timeout".to_string())
+                                    .into_response();
+                            }
+                        };
+
+                        match timed {
+                            Ok(Ok((status, body))) => (
+                                StatusCode::from_u16(status)
+                                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                                body,
                             )
-                                .into_response()
-                        }
-                        Err(e) => {
-                            eprintln!("task error for {}: {}", path_log, e);
-                            (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                format!("task error: {}", e),
-                            )
-                                .into_response()
+                                .into_response(),
+                            Ok(Err(e)) => {
+                                eprintln!("script error for {}: {}", path_log, e);
+                                (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    format!("script error: {}", e),
+                                )
+                                    .into_response()
+                            }
+                            Err(e) => {
+                                eprintln!("task error for {}: {}", path_log, e);
+                                (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    format!("task error: {}", e),
+                                )
+                                    .into_response()
+                            }
                         }
                     }
-                }
-            }),
-        )
-        .route(
-            "/{*path}",
-            any(move |Path(path): Path<String>, req: Request<Body>| {
-                let regs = Arc::clone(&registrations_clone);
-                async move {
-                    let full_path = if path.is_empty() {
-                        "/".to_string()
-                    } else {
-                        format!("/{}", path)
-                    };
-                    let request_method = req.method().to_string();
+                }),
+            )
+            .route(
+                "/{*path}",
+                any(move |Path(path): Path<String>, req: Request<Body>| {
+                    let regs = Arc::clone(&registrations_clone);
+                    async move {
+                        let full_path = if path.is_empty() {
+                            "/".to_string()
+                        } else {
+                            format!("/{}", path)
+                        };
+                        let request_method = req.method().to_string();
 
-                    // Check if any route exists for this path
-                    let path_exists = regs
-                        .lock()
-                        .ok()
-                        .map(|g| g.keys().any(|(p, _)| p == &full_path))
-                        .unwrap_or(false);
+                        // Check if any route exists for this path
+                        let path_exists = regs
+                            .lock()
+                            .ok()
+                            .map(|g| g.keys().any(|(p, _)| p == &full_path))
+                            .unwrap_or(false);
 
-                    let reg = regs
-                        .lock()
-                        .ok()
-                        .and_then(|g| g.get(&(full_path.clone(), request_method.clone())).cloned());
-                    let (owner_uri, handler_name) = match reg {
-                        Some(t) => t,
-                        None => {
-                            if path_exists {
-                                return (
-                                    StatusCode::METHOD_NOT_ALLOWED,
-                                    "method not allowed".to_string(),
-                                )
-                                    .into_response();
-                            } else {
-                                return (StatusCode::NOT_FOUND, "not found".to_string())
-                                    .into_response();
+                        let reg = regs.lock().ok().and_then(|g| {
+                            g.get(&(full_path.clone(), request_method.clone())).cloned()
+                        });
+                        let (owner_uri, handler_name) = match reg {
+                            Some(t) => t,
+                            None => {
+                                if path_exists {
+                                    return (
+                                        StatusCode::METHOD_NOT_ALLOWED,
+                                        "method not allowed".to_string(),
+                                    )
+                                        .into_response();
+                                } else {
+                                    return (StatusCode::NOT_FOUND, "not found".to_string())
+                                        .into_response();
+                                }
                             }
-                        }
-                    };
-                    let owner_uri_cl = owner_uri.clone();
-                    let handler_cl = handler_name.clone();
-                    let path_log = full_path.clone();
-                    let query_string = req.uri().query().map(|s| s.to_string());
+                        };
+                        let owner_uri_cl = owner_uri.clone();
+                        let handler_cl = handler_name.clone();
+                        let path_log = full_path.clone();
+                        let query_string = req.uri().query().map(|s| s.to_string());
 
-                    let worker = move || -> Result<(u16, String), String> {
-                        let rt = Runtime::new().map_err(|e| format!("runtime new: {}", e))?;
-                        let ctx =
-                            Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
+                        let worker = move || -> Result<(u16, String), String> {
+                            js_engine::execute_script_for_request(
+                                &owner_uri_cl,
+                                &handler_cl,
+                                &full_path,
+                                &request_method,
+                                query_string.as_deref(),
+                            )
+                        };
 
-                        ctx.with(|ctx| -> Result<(), rquickjs::Error> {
-                            let global = ctx.globals();
+                        let join = tokio::task::spawn_blocking(worker)
+                            .await
+                            .map_err(|e| format!("join error: {}", e));
 
-                            let reg_noop = Function::new(
-                                ctx.clone(),
-                                |_c: rquickjs::Ctx<'_>,
-                                 _p: String,
-                                 _h: String|
-                                 -> Result<(), rquickjs::Error> {
-                                    Ok(())
-                                },
-                            )?;
-                            global.set("register", reg_noop)?;
-
-                            let write = Function::new(
-                                ctx.clone(),
-                                |_c: rquickjs::Ctx<'_>,
-                                 msg: String|
-                                 -> Result<(), rquickjs::Error> {
-                                    repository::insert_log_message(&msg);
-                                    Ok(())
-                                },
-                            )?;
-                            global.set("writeLog", write)?;
-
-                            let list_logs = Function::new(
-                                ctx.clone(),
-                                |_c: rquickjs::Ctx<'_>| -> Result<Vec<String>, rquickjs::Error> {
-                                    Ok(repository::fetch_log_messages())
-                                },
-                            )?;
-                            global.set("listLogs", list_logs)?;
-
-                            let list_scripts = Function::new(
-                                ctx.clone(),
-                                |_c: rquickjs::Ctx<'_>| -> Result<Vec<String>, rquickjs::Error> {
-                                    let m = repository::fetch_scripts();
-                                    Ok(m.keys().cloned().collect())
-                                },
-                            )?;
-                            global.set("listScripts", list_scripts)?;
-
-                            Ok(())
-                        })
-                        .map_err(|e| format!("install host fns: {}", e))?;
-
-                        let owner_script = repository::fetch_script(&owner_uri_cl)
-                            .ok_or_else(|| format!("no script for uri {}", owner_uri_cl))?;
-
-                        ctx.with(|ctx| ctx.eval::<(), _>(owner_script.as_str()))
-                            .map_err(|e| format!("owner eval: {}", e))?;
-
-                        let (status, body) = ctx.with(|ctx| -> Result<(u16, String), String> {
-                            let global = ctx.globals();
-                            let func: Function = global
-                                .get::<_, Function>(handler_cl.clone())
-                                .map_err(|e| format!("no handler {}: {}", handler_cl, e))?;
-                            let req_obj = rquickjs::Object::new(ctx)
-                                .map_err(|e| format!("make req obj: {}", e))?;
-                            req_obj
-                                .set("method", request_method.clone())
-                                .map_err(|e| format!("set method: {}", e))?;
-                            if let Some(qs) = &query_string {
-                                req_obj
-                                    .set("query", qs.clone())
-                                    .map_err(|e| format!("set query: {}", e))?;
-                            }
-                            let val = func
-                                .call::<_, Value>((full_path.clone(), req_obj))
-                                .map_err(|e| format!("call error: {}", e))?;
-                            let obj = val
-                                .as_object()
-                                .ok_or_else(|| "expected object".to_string())?;
-                            let status: i32 = obj
-                                .get("status")
-                                .map_err(|e| format!("missing status: {}", e))?;
-                            let body: String = obj
-                                .get("body")
-                                .map_err(|e| format!("missing body: {}", e))?;
-                            Ok((status as u16, body))
-                        })?;
-
-                        Ok((status, body))
-                    };
-
-                    let join = tokio::task::spawn_blocking(worker)
-                        .await
-                        .map_err(|e| format!("join error: {}", e));
-
-                    let timed = match tokio::time::timeout(
-                        std::time::Duration::from_millis(config.script_timeout_ms),
-                        async { join },
-                    )
-                    .await
-                    {
-                        Ok(r) => r,
-                        Err(_) => {
-                            return (StatusCode::GATEWAY_TIMEOUT, "script timeout".to_string())
-                                .into_response();
-                        }
-                    };
-
-                    match timed {
-                        Ok(Ok((status, body))) => (
-                            StatusCode::from_u16(status)
-                                .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-                            body,
+                        let timed = match tokio::time::timeout(
+                            std::time::Duration::from_millis(config.script_timeout_ms),
+                            async { join },
                         )
-                            .into_response(),
-                        Ok(Err(e)) => {
-                            eprintln!("script error for {}: {}", path_log, e);
-                            (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                format!("script error: {}", e),
+                        .await
+                        {
+                            Ok(r) => r,
+                            Err(_) => {
+                                return (StatusCode::GATEWAY_TIMEOUT, "script timeout".to_string())
+                                    .into_response();
+                            }
+                        };
+
+                        match timed {
+                            Ok(Ok((status, body))) => (
+                                StatusCode::from_u16(status)
+                                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                                body,
                             )
-                                .into_response()
-                        }
-                        Err(e) => {
-                            eprintln!("task error for {}: {}", path_log, e);
-                            (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                format!("task error: {}", e),
-                            )
-                                .into_response()
+                                .into_response(),
+                            Ok(Err(e)) => {
+                                eprintln!("script error for {}: {}", path_log, e);
+                                (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    format!("script error: {}", e),
+                                )
+                                    .into_response()
+                            }
+                            Err(e) => {
+                                eprintln!("task error for {}: {}", path_log, e);
+                                (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    format!("task error: {}", e),
+                                )
+                                    .into_response()
+                            }
                         }
                     }
-                }
-            }),
-        );
+                }),
+            );
 
     let addr = config
         .server_addr()
