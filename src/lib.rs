@@ -4,6 +4,7 @@ use axum::http::StatusCode;
 use axum::{Router, routing::any};
 use axum::{extract::Path, response::IntoResponse};
 use axum_server::Server;
+use serde_urlencoded;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -13,44 +14,7 @@ pub mod repository;
 
 /// Parses a query string into a HashMap of key-value pairs
 fn parse_query_string(query: &str) -> HashMap<String, String> {
-    let mut params = HashMap::new();
-    if query.is_empty() {
-        return params;
-    }
-
-    for pair in query.split('&') {
-        let mut parts = pair.splitn(2, '=');
-        if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
-            // URL decode the key and value (basic implementation)
-            let decoded_key = url_decode(key);
-            let decoded_value = url_decode(value);
-            params.insert(decoded_key, decoded_value);
-        }
-    }
-    params
-}
-
-/// Basic URL decoding function
-fn url_decode(input: &str) -> String {
-    let mut result = String::new();
-    let mut chars = input.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if ch == '%' {
-            if let (Some(h1), Some(h2)) = (chars.next(), chars.next()) {
-                if let (Some(d1), Some(d2)) = (h1.to_digit(16), h2.to_digit(16)) {
-                    let byte = (d1 * 16 + d2) as u8;
-                    result.push(byte as char);
-                    continue;
-                }
-            }
-        } else if ch == '+' {
-            result.push(' ');
-            continue;
-        }
-        result.push(ch);
-    }
-    result
+    serde_urlencoded::from_str(query).unwrap_or_default()
 }
 
 /// Type alias for route registrations: (path, method) -> (script_uri, handler_name)
@@ -334,4 +298,37 @@ pub async fn start_server_with_config(
 pub async fn start_server_without_shutdown() -> anyhow::Result<()> {
     let (_tx, rx) = tokio::sync::oneshot::channel::<()>();
     start_server(rx).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_query_string() {
+        // Test basic functionality
+        let result = parse_query_string("id=123&name=test");
+        assert_eq!(result.get("id"), Some(&"123".to_string()));
+        assert_eq!(result.get("name"), Some(&"test".to_string()));
+
+        // Test URL decoding
+        let result = parse_query_string("name=test%20with%20spaces");
+        assert_eq!(result.get("name"), Some(&"test with spaces".to_string()));
+
+        // Test plus to space conversion
+        let result = parse_query_string("name=test+with+plus");
+        assert_eq!(result.get("name"), Some(&"test with plus".to_string()));
+
+        // Test empty query
+        let result = parse_query_string("");
+        assert!(result.is_empty());
+
+        // Test empty value
+        let result = parse_query_string("empty=");
+        assert_eq!(result.get("empty"), Some(&"".to_string()));
+
+        // Test duplicate keys (last one wins)
+        let result = parse_query_string("key=first&key=second");
+        assert_eq!(result.get("key"), Some(&"second".to_string()));
+    }
 }
