@@ -160,6 +160,70 @@ pub fn execute_script_for_request(
         )?;
         global.set("listScripts", list_scripts)?;
 
+        let list_assets = Function::new(
+            ctx.clone(),
+            |_c: rquickjs::Ctx<'_>| -> Result<Vec<String>, rquickjs::Error> {
+                let m = repository::fetch_assets();
+                Ok(m.keys().cloned().collect())
+            },
+        )?;
+        global.set("listAssets", list_assets)?;
+
+        let fetch_asset = Function::new(
+            ctx.clone(),
+            move |_c: rquickjs::Ctx<'_>, public_path: String| -> Result<String, rquickjs::Error> {
+                if let Some(asset) = repository::fetch_asset(&public_path) {
+                    let content_b64 = base64::Engine::encode(
+                        &base64::engine::general_purpose::STANDARD,
+                        &asset.content,
+                    );
+                    let asset_json = serde_json::json!({
+                        "publicPath": asset.public_path,
+                        "mimetype": asset.mimetype,
+                        "content": content_b64
+                    });
+                    Ok(asset_json.to_string())
+                } else {
+                    Ok("null".to_string())
+                }
+            },
+        )?;
+        global.set("fetchAsset", fetch_asset)?;
+
+        let upsert_asset = Function::new(
+            ctx.clone(),
+            |_c: rquickjs::Ctx<'_>,
+             public_path: String,
+             mimetype: String,
+             content_b64: String|
+             -> Result<(), rquickjs::Error> {
+                match base64::Engine::decode(
+                    &base64::engine::general_purpose::STANDARD,
+                    &content_b64,
+                ) {
+                    Ok(content) => {
+                        let asset = repository::Asset {
+                            public_path,
+                            mimetype,
+                            content,
+                        };
+                        repository::upsert_asset(asset);
+                        Ok(())
+                    }
+                    Err(_) => Err(rquickjs::Error::Exception),
+                }
+            },
+        )?;
+        global.set("upsertAsset", upsert_asset)?;
+
+        let delete_asset = Function::new(
+            ctx.clone(),
+            |_c: rquickjs::Ctx<'_>, public_path: String| -> Result<bool, rquickjs::Error> {
+                Ok(repository::delete_asset(&public_path))
+            },
+        )?;
+        global.set("deleteAsset", delete_asset)?;
+
         Ok(())
     })
     .map_err(|e| format!("install host fns: {}", e))?;

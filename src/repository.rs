@@ -8,9 +8,14 @@ pub fn fetch_scripts() -> HashMap<String, String> {
     // embed scripts at compile time
     let core = include_str!("../scripts/core.js");
     let debug = include_str!("../scripts/debug.js");
+    let asset_mgmt = include_str!("../scripts/asset_mgmt.js");
 
     m.insert("https://example.com/core".to_string(), core.to_string());
     m.insert("https://example.com/debug".to_string(), debug.to_string());
+    m.insert(
+        "https://example.com/asset_mgmt".to_string(),
+        asset_mgmt.to_string(),
+    );
     // merge in any dynamically upserted scripts
     if let Some(store) = DYNAMIC_SCRIPTS.get() {
         let guard = store.lock().expect("dynamic scripts mutex poisoned");
@@ -36,6 +41,9 @@ pub fn fetch_script(uri: &str) -> Option<String> {
     match uri {
         "https://example.com/core" => Some(include_str!("../scripts/core.js").to_string()),
         "https://example.com/debug" => Some(include_str!("../scripts/debug.js").to_string()),
+        "https://example.com/asset_mgmt" => {
+            Some(include_str!("../scripts/asset_mgmt.js").to_string())
+        }
         _ => None,
     }
 }
@@ -94,4 +102,87 @@ pub fn delete_script(uri: &str) -> bool {
         return existed;
     }
     false
+}
+
+#[derive(Clone)]
+pub struct Asset {
+    pub public_path: String,
+    pub mimetype: String,
+    pub content: Vec<u8>,
+}
+
+static DYNAMIC_ASSETS: OnceLock<Mutex<HashMap<String, Asset>>> = OnceLock::new();
+
+/// Fetch all assets from the repository.
+/// Returns a HashMap of public_path to Asset, including static and dynamic assets.
+pub fn fetch_assets() -> HashMap<String, Asset> {
+    let mut m = get_static_assets();
+    // merge in any dynamically upserted assets
+    if let Some(store) = DYNAMIC_ASSETS.get() {
+        let guard = store.lock().expect("dynamic assets mutex poisoned");
+        for (k, v) in guard.iter() {
+            m.insert(k.clone(), v.clone());
+        }
+    }
+    m
+}
+
+/// Fetch a single asset by its public path.
+/// Returns `Some(asset)` when the path is known, otherwise `None`.
+pub fn fetch_asset(public_path: &str) -> Option<Asset> {
+    // check dynamic store first
+    if let Some(store) = DYNAMIC_ASSETS.get() {
+        let guard = store.lock().expect("dynamic assets mutex poisoned");
+        if let Some(v) = guard.get(public_path) {
+            return Some(v.clone());
+        }
+    }
+
+    // check static assets
+    match public_path {
+        "/logo.svg" => {
+            let content = include_bytes!("../assets/logo.svg").to_vec();
+            Some(Asset {
+                public_path: "/logo.svg".to_string(),
+                mimetype: "image/svg+xml".to_string(),
+                content,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Insert or update an asset dynamically at runtime.
+pub fn upsert_asset(asset: Asset) {
+    let store = DYNAMIC_ASSETS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = store.lock().expect("dynamic assets mutex poisoned");
+    eprintln!("repository::upsert_asset called for {}", asset.public_path);
+    guard.insert(asset.public_path.clone(), asset);
+}
+
+/// Delete a dynamically upserted asset. Returns true if an asset was removed.
+pub fn delete_asset(public_path: &str) -> bool {
+    if let Some(store) = DYNAMIC_ASSETS.get() {
+        let mut guard = store.lock().expect("dynamic assets mutex poisoned");
+        let existed = guard.remove(public_path).is_some();
+        eprintln!(
+            "repository::delete_asset called for {} -> existed={}",
+            public_path, existed
+        );
+        return existed;
+    }
+    false
+}
+
+/// Helper function to get static assets embedded at compile time.
+fn get_static_assets() -> HashMap<String, Asset> {
+    let mut m = HashMap::new();
+    let logo_content = include_bytes!("../assets/logo.svg").to_vec();
+    let logo = Asset {
+        public_path: "/logo.svg".to_string(),
+        mimetype: "image/svg+xml".to_string(),
+        content: logo_content,
+    };
+    m.insert("/logo.svg".to_string(), logo);
+    m
 }

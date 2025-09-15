@@ -115,6 +115,19 @@ pub async fn start_server_with_config(
                     let path = "/";
                     let request_method = req.method().to_string();
 
+                    // Check for assets first if it's a GET request
+                    if request_method == "GET" {
+                        if let Some(asset) = repository::fetch_asset(path) {
+                            let mut response = asset.content.into_response();
+                            response.headers_mut().insert(
+                                axum::http::header::CONTENT_TYPE,
+                                axum::http::HeaderValue::from_str(&asset.mimetype)
+                                    .unwrap_or(axum::http::HeaderValue::from_static("application/octet-stream")),
+                            );
+                            return response;
+                        }
+                    }
+
                     // Check if any route exists for this path
                     let path_exists = regs
                         .lock()
@@ -240,6 +253,19 @@ pub async fn start_server_with_config(
                         format!("/{}", path)
                     };
                     let request_method = req.method().to_string();
+
+                    // Check for assets first if it's a GET request
+                    if request_method == "GET" {
+                        if let Some(asset) = repository::fetch_asset(&full_path) {
+                            let mut response = asset.content.into_response();
+                            response.headers_mut().insert(
+                                axum::http::header::CONTENT_TYPE,
+                                axum::http::HeaderValue::from_str(&asset.mimetype)
+                                    .unwrap_or(axum::http::HeaderValue::from_static("application/octet-stream")),
+                            );
+                            return response;
+                        }
+                    }
 
                     // Check if any route exists for this path
                     let path_exists = regs
