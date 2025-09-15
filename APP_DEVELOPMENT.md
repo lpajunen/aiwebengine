@@ -11,6 +11,7 @@ Key features:
 - Support for query parameters and form data
 - Dynamic script loading and management
 - RESTful API support
+- Static asset serving and management
 
 ## Getting Started
 
@@ -210,6 +211,208 @@ function scriptsHandler(req) {
 register('/api/scripts', 'scriptsHandler', 'GET');
 ```
 
+## Asset Management
+
+aiwebengine provides built-in support for serving and managing static assets (images, CSS, JavaScript files, etc.). Assets can be served directly by the server or managed programmatically through JavaScript scripts.
+
+### Static Asset Serving
+
+The server automatically serves static assets for GET requests. Place your asset files in the `assets/` directory, and they will be available at their corresponding URLs:
+
+- `assets/logo.svg` → `GET /logo.svg`
+- `assets/style.css` → `GET /style.css`
+- `assets/app.js` → `GET /app.js`
+
+The server automatically sets the correct MIME type based on the file extension.
+
+### Programmatic Asset Management
+
+Use the asset management functions to create, read, update, and delete assets programmatically:
+
+#### Listing Assets
+
+```javascript
+function listAssetsHandler(req) {
+    const assetPaths = listAssets();
+    
+    return {
+        status: 200,
+        body: JSON.stringify({ assets: assetPaths }),
+        contentType: "application/json"
+    };
+}
+
+register('/api/assets', 'listAssetsHandler', 'GET');
+```
+
+#### Fetching Assets
+
+```javascript
+function getAssetHandler(req) {
+    // Extract asset path from URL (e.g., /api/assets/logo.svg -> /logo.svg)
+    const assetPath = req.path.replace('/api/assets', '');
+    
+    try {
+        const assetJson = fetchAsset(assetPath);
+        
+        if (assetJson === 'null') {
+            return {
+                status: 404,
+                body: JSON.stringify({ error: 'Asset not found' }),
+                contentType: "application/json"
+            };
+        }
+        
+        return {
+            status: 200,
+            body: assetJson,
+            contentType: "application/json"
+        };
+    } catch (error) {
+        return {
+            status: 500,
+            body: JSON.stringify({ error: error.message }),
+            contentType: "application/json"
+        };
+    }
+}
+
+register('/api/assets/*', 'getAssetHandler', 'GET');
+```
+
+#### Creating/Updating Assets
+
+```javascript
+function createAssetHandler(req) {
+    try {
+        const publicPath = req.form.publicPath; // e.g., "/my-image.png"
+        const mimetype = req.form.mimetype;     // e.g., "image/png"
+        const contentB64 = req.form.content;    // base64-encoded content
+        
+        if (!publicPath || !mimetype || !contentB64) {
+            return {
+                status: 400,
+                body: JSON.stringify({ 
+                    error: 'Missing required fields: publicPath, mimetype, content' 
+                }),
+                contentType: "application/json"
+            };
+        }
+        
+        upsertAsset(publicPath, mimetype, contentB64);
+        
+        return {
+            status: 201,
+            body: JSON.stringify({ message: 'Asset created/updated successfully' }),
+            contentType: "application/json"
+        };
+    } catch (error) {
+        return {
+            status: 500,
+            body: JSON.stringify({ error: error.message }),
+            contentType: "application/json"
+        };
+    }
+}
+
+register('/api/assets', 'createAssetHandler', 'POST');
+```
+
+#### Deleting Assets
+
+```javascript
+function deleteAssetHandler(req) {
+    // Extract asset path from URL
+    const assetPath = req.path.replace('/api/assets', '');
+    
+    try {
+        const deleted = deleteAsset(assetPath);
+        
+        if (deleted) {
+            return {
+                status: 200,
+                body: JSON.stringify({ message: 'Asset deleted successfully' }),
+                contentType: "application/json"
+            };
+        } else {
+            return {
+                status: 404,
+                body: JSON.stringify({ error: 'Asset not found' }),
+                contentType: "application/json"
+            };
+        }
+    } catch (error) {
+        return {
+            status: 500,
+            body: JSON.stringify({ error: error.message }),
+            contentType: "application/json"
+        };
+    }
+}
+
+register('/api/assets/*', 'deleteAssetHandler', 'DELETE');
+```
+
+### Asset API Examples
+
+#### Upload an Image via HTML Form
+
+```html
+<!DOCTYPE html>
+<html>
+<body>
+    <form action="/api/assets" method="POST" enctype="multipart/form-data">
+        <input type="text" name="publicPath" placeholder="/my-image.jpg" required>
+        <input type="text" name="mimetype" placeholder="image/jpeg" required>
+        <input type="file" name="content" accept="image/*" required>
+        <button type="submit">Upload Asset</button>
+    </form>
+</body>
+</html>
+```
+
+#### Create Asset via JavaScript
+
+```javascript
+function uploadAsset(file, publicPath) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            const contentB64 = e.target.result.split(',')[1]; // Remove data URL prefix
+            
+            // Determine MIME type
+            const mimetype = file.type || 'application/octet-stream';
+            
+            // This would typically be sent via fetch to your asset creation endpoint
+            const assetData = {
+                publicPath: publicPath,
+                mimetype: mimetype,
+                content: contentB64
+            };
+            
+            console.log('Asset data prepared:', assetData);
+            resolve(assetData);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
+}
+
+// Usage
+const fileInput = document.getElementById('fileInput');
+fileInput.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (file) {
+        try {
+            const assetData = await uploadAsset(file, `/uploads/${file.name}`);
+            // Send assetData to your server endpoint
+        } catch (error) {
+            console.error('Upload failed:', error);
+        }
+    }
+});
+```
+
 ## Complete Examples
 
 ### Simple API Endpoint
@@ -368,6 +571,10 @@ The server will automatically load all scripts and register their routes on star
 - `writeLog(message)`: Write a message to the log
 - `listLogs()`: Get all log messages
 - `listScripts()`: Get list of loaded scripts
+- `listAssets()`: Get list of available assets
+- `fetchAsset(publicPath)`: Get asset data as JSON string
+- `upsertAsset(publicPath, mimetype, contentB64)`: Create or update an asset
+- `deleteAsset(publicPath)`: Delete an asset
 
 ### Request Object
 

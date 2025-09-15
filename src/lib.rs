@@ -121,8 +121,11 @@ pub async fn start_server_with_config(
                             let mut response = asset.content.into_response();
                             response.headers_mut().insert(
                                 axum::http::header::CONTENT_TYPE,
-                                axum::http::HeaderValue::from_str(&asset.mimetype)
-                                    .unwrap_or(axum::http::HeaderValue::from_static("application/octet-stream")),
+                                axum::http::HeaderValue::from_str(&asset.mimetype).unwrap_or(
+                                    axum::http::HeaderValue::from_static(
+                                        "application/octet-stream",
+                                    ),
+                                ),
                             );
                             return response;
                         }
@@ -260,8 +263,11 @@ pub async fn start_server_with_config(
                             let mut response = asset.content.into_response();
                             response.headers_mut().insert(
                                 axum::http::header::CONTENT_TYPE,
-                                axum::http::HeaderValue::from_str(&asset.mimetype)
-                                    .unwrap_or(axum::http::HeaderValue::from_static("application/octet-stream")),
+                                axum::http::HeaderValue::from_str(&asset.mimetype).unwrap_or(
+                                    axum::http::HeaderValue::from_static(
+                                        "application/octet-stream",
+                                    ),
+                                ),
                             );
                             return response;
                         }
