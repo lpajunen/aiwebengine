@@ -1,4 +1,4 @@
-use axum::body::Body;
+use axum::body::{Body, to_bytes};
 use axum::http::Request;
 use axum::http::StatusCode;
 use axum::{Router, routing::any};
@@ -15,6 +15,33 @@ pub mod repository;
 /// Parses a query string into a HashMap of key-value pairs
 fn parse_query_string(query: &str) -> HashMap<String, String> {
     serde_urlencoded::from_str(query).unwrap_or_default()
+}
+
+/// Parses form data from request body based on content type
+async fn parse_form_data(
+    content_type: Option<&str>,
+    body: Body,
+) -> Option<HashMap<String, String>> {
+    if let Some(ct) = content_type {
+        if ct.starts_with("application/x-www-form-urlencoded") {
+            // Convert body to bytes and parse as URL-encoded form data
+            let bytes = match to_bytes(body, usize::MAX).await {
+                Ok(b) => b,
+                Err(_) => return None,
+            };
+            let body_str = String::from_utf8(bytes.to_vec()).ok()?;
+            Some(serde_urlencoded::from_str(&body_str).unwrap_or_default())
+        } else if ct.starts_with("multipart/form-data") {
+            // For multipart, we'd need to parse the boundary from content-type
+            // This is more complex and would require additional implementation
+            // For now, return empty map
+            Some(HashMap::new())
+        } else {
+            None
+        }
+    } else {
+        None
+    }
 }
 
 /// Type alias for route registrations: (path, method) -> (script_uri, handler_name)
@@ -120,6 +147,19 @@ pub async fn start_server_with_config(
                     let query_string = req.uri().query().map(|s| s.to_string()).unwrap_or_default();
                     let query_params = parse_query_string(&query_string);
 
+                    // Extract content type before consuming the request
+                    let content_type = req
+                        .headers()
+                        .get(axum::http::header::CONTENT_TYPE)
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_string());
+                    let body = req.into_body();
+                    let form_data = if let Some(ct) = content_type {
+                        parse_form_data(Some(&ct), body).await.unwrap_or_default()
+                    } else {
+                        parse_form_data(None, body).await.unwrap_or_default()
+                    };
+
                     let worker = move || -> Result<(u16, String, Option<String>), String> {
                         js_engine::execute_script_for_request(
                             &owner_uri_cl,
@@ -127,6 +167,7 @@ pub async fn start_server_with_config(
                             &path,
                             &request_method,
                             Some(&query_params),
+                            Some(&form_data),
                         )
                     };
 
@@ -232,6 +273,19 @@ pub async fn start_server_with_config(
                     let query_string = req.uri().query().map(|s| s.to_string()).unwrap_or_default();
                     let query_params = parse_query_string(&query_string);
 
+                    // Extract content type before consuming the request
+                    let content_type = req
+                        .headers()
+                        .get(axum::http::header::CONTENT_TYPE)
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_string());
+                    let body = req.into_body();
+                    let form_data = if let Some(ct) = content_type {
+                        parse_form_data(Some(&ct), body).await.unwrap_or_default()
+                    } else {
+                        parse_form_data(None, body).await.unwrap_or_default()
+                    };
+
                     let worker = move || -> Result<(u16, String, Option<String>), String> {
                         js_engine::execute_script_for_request(
                             &owner_uri_cl,
@@ -239,6 +293,7 @@ pub async fn start_server_with_config(
                             &full_path,
                             &request_method,
                             Some(&query_params),
+                            Some(&form_data),
                         )
                     };
 

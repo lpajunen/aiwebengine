@@ -6,6 +6,7 @@ function core_root(req) {
 }
 
 register('/', 'core_root', 'GET');
+register('/', 'core_root', 'POST');
 
 // Log server start with timestamp if writeLog is available
 try {

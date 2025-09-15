@@ -117,6 +117,7 @@ pub fn execute_script_for_request(
     path: &str,
     method: &str,
     query_params: Option<&std::collections::HashMap<String, String>>,
+    form_data: Option<&std::collections::HashMap<String, String>>,
 ) -> Result<(u16, String, Option<String>), String> {
     let rt = Runtime::new().map_err(|e| format!("runtime new: {}", e))?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
@@ -198,6 +199,19 @@ pub fn execute_script_for_request(
                 req_obj
                     .set("query", query_obj)
                     .map_err(|e| format!("set query: {}", e))?;
+            }
+
+            if let Some(fd) = form_data {
+                let form_obj = rquickjs::Object::new(ctx.clone())
+                    .map_err(|e| format!("make form obj: {}", e))?;
+                for (key, value) in fd {
+                    form_obj
+                        .set(key, value)
+                        .map_err(|e| format!("set form param {}: {}", key, e))?;
+                }
+                req_obj
+                    .set("form", form_obj)
+                    .map_err(|e| format!("set form: {}", e))?;
             }
 
             let val = func
