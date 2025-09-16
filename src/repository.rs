@@ -9,6 +9,10 @@ pub fn fetch_scripts() -> HashMap<String, String> {
     let core = include_str!("../scripts/core.js");
     let debug = include_str!("../scripts/debug.js");
     let asset_mgmt = include_str!("../scripts/asset_mgmt.js");
+    let editor = include_str!("../scripts/editor.js");
+    let test_editor = include_str!("../scripts/test_editor.js");
+
+    let test_editor_api = include_str!("../scripts/test_editor_api.js");
 
     m.insert("https://example.com/core".to_string(), core.to_string());
     m.insert("https://example.com/debug".to_string(), debug.to_string());
@@ -16,6 +20,9 @@ pub fn fetch_scripts() -> HashMap<String, String> {
         "https://example.com/asset_mgmt".to_string(),
         asset_mgmt.to_string(),
     );
+    m.insert("https://example.com/editor".to_string(), editor.to_string());
+    m.insert("https://example.com/test_editor".to_string(), test_editor.to_string());
+    m.insert("https://example.com/test_editor_api".to_string(), test_editor_api.to_string());
     // merge in any dynamically upserted scripts
     if let Some(store) = DYNAMIC_SCRIPTS.get() {
         let guard = store.lock().expect("dynamic scripts mutex poisoned");
@@ -44,6 +51,9 @@ pub fn fetch_script(uri: &str) -> Option<String> {
         "https://example.com/asset_mgmt" => {
             Some(include_str!("../scripts/asset_mgmt.js").to_string())
         }
+        "https://example.com/editor" => Some(include_str!("../scripts/editor.js").to_string()),
+        "https://example.com/test_editor" => Some(include_str!("../scripts/test_editor.js").to_string()),
+        "https://example.com/test_editor_api" => Some(include_str!("../scripts/test_editor_api.js").to_string()),
         _ => None,
     }
 }
@@ -148,6 +158,30 @@ pub fn fetch_asset(public_path: &str) -> Option<Asset> {
                 content,
             })
         }
+        "/editor.html" => {
+            let content = include_bytes!("../assets/editor.html").to_vec();
+            Some(Asset {
+                public_path: "/editor.html".to_string(),
+                mimetype: "text/html".to_string(),
+                content,
+            })
+        }
+        "/editor.css" => {
+            let content = include_bytes!("../assets/editor.css").to_vec();
+            Some(Asset {
+                public_path: "/editor.css".to_string(),
+                mimetype: "text/css".to_string(),
+                content,
+            })
+        }
+        "/editor.js" => {
+            let content = include_bytes!("../assets/editor.js").to_vec();
+            Some(Asset {
+                public_path: "/editor.js".to_string(),
+                mimetype: "application/javascript".to_string(),
+                content,
+            })
+        }
         _ => None,
     }
 }
@@ -177,6 +211,8 @@ pub fn delete_asset(public_path: &str) -> bool {
 /// Helper function to get static assets embedded at compile time.
 fn get_static_assets() -> HashMap<String, Asset> {
     let mut m = HashMap::new();
+
+    // Logo asset
     let logo_content = include_bytes!("../assets/logo.svg").to_vec();
     let logo = Asset {
         public_path: "/logo.svg".to_string(),
@@ -184,5 +220,31 @@ fn get_static_assets() -> HashMap<String, Asset> {
         content: logo_content,
     };
     m.insert("/logo.svg".to_string(), logo);
+
+    // Editor assets
+    let editor_html_content = include_bytes!("../assets/editor.html").to_vec();
+    let editor_html = Asset {
+        public_path: "/editor.html".to_string(),
+        mimetype: "text/html".to_string(),
+        content: editor_html_content,
+    };
+    m.insert("/editor.html".to_string(), editor_html);
+
+    let editor_css_content = include_bytes!("../assets/editor.css").to_vec();
+    let editor_css = Asset {
+        public_path: "/editor.css".to_string(),
+        mimetype: "text/css".to_string(),
+        content: editor_css_content,
+    };
+    m.insert("/editor.css".to_string(), editor_css);
+
+    let editor_js_content = include_bytes!("../assets/editor.js").to_vec();
+    let editor_js = Asset {
+        public_path: "/editor.js".to_string(),
+        mimetype: "application/javascript".to_string(),
+        content: editor_js_content,
+    };
+    m.insert("/editor.js".to_string(), editor_js);
+
     m
 }

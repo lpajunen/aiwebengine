@@ -118,6 +118,7 @@ pub fn execute_script_for_request(
     method: &str,
     query_params: Option<&std::collections::HashMap<String, String>>,
     form_data: Option<&std::collections::HashMap<String, String>>,
+    raw_body: Option<String>,
 ) -> Result<(u16, String, Option<String>), String> {
     let rt = Runtime::new().map_err(|e| format!("runtime new: {}", e))?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
@@ -224,6 +225,26 @@ pub fn execute_script_for_request(
         )?;
         global.set("deleteAsset", delete_asset)?;
 
+        let get_script = Function::new(
+            ctx.clone(),
+            |_c: rquickjs::Ctx<'_>, uri: String| -> Result<String, rquickjs::Error> {
+                match repository::fetch_script(&uri) {
+                    Some(content) => Ok(content),
+                    None => Ok("".to_string()),
+                }
+            },
+        )?;
+        global.set("getScript", get_script)?;
+
+        let upsert_script = Function::new(
+            ctx.clone(),
+            |_c: rquickjs::Ctx<'_>, uri: String, content: String| -> Result<(), rquickjs::Error> {
+                repository::upsert_script(&uri, &content);
+                Ok(())
+            },
+        )?;
+        global.set("upsertScript", upsert_script)?;
+
         Ok(())
     })
     .map_err(|e| format!("install host fns: {}", e))?;
@@ -276,6 +297,12 @@ pub fn execute_script_for_request(
                 req_obj
                     .set("form", form_obj)
                     .map_err(|e| format!("set form: {}", e))?;
+            }
+
+            if let Some(rb) = raw_body {
+                req_obj
+                    .set("body", rb)
+                    .map_err(|e| format!("set body: {}", e))?;
             }
 
             let val = func

@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>aiwebengine Editor</title>
+    <link rel="stylesheet" href="/editor.css">
+    <script src="https://unpkg.com/monaco-editor@0.45.0/min/vs/loader.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/handlebars.js/4.7.7/handlebars.min.js"></script>
+</head>
+<body>
+    <div class="editor-container">
+        <!-- Header -->
+        <header class="editor-header">
+            <div class="header-left">
+                <h1>aiwebengine Editor</h1>
+            </div>
+            <div class="header-right">
+                <span id="server-status" class="status-indicator">● Connected</span>
+            </div>
+        </header>
+
+        <!-- Navigation -->
+        <nav class="editor-nav">
+            <button class="nav-tab active" data-tab="scripts">
+                <span class="tab-icon">📄</span>
+                Scripts
+            </button>
+            <button class="nav-tab" data-tab="assets">
+                <span class="tab-icon">🖼️</span>
+                Assets
+            </button>
+            <button class="nav-tab" data-tab="logs">
+                <span class="tab-icon">📋</span>
+                Logs
+            </button>
+            <button class="nav-tab" data-tab="routes">
+                <span class="tab-icon">🔗</span>
+                Routes
+            </button>
+        </nav>
+
+        <!-- Main Content Area -->
+        <main class="editor-main">
+            <!-- Scripts Tab -->
+            <div id="scripts-tab" class="tab-content active">
+                <div class="scripts-container">
+                    <div class="scripts-sidebar">
+                        <div class="sidebar-header">
+                            <h3>Scripts</h3>
+                            <button id="new-script-btn" class="btn btn-primary btn-small">+ New</button>
+                        </div>
+                        <div id="scripts-list" class="scripts-list">
+                            <!-- Scripts will be loaded here -->
+                        </div>
+                    </div>
+                    <div class="scripts-editor">
+                        <div class="editor-toolbar">
+                            <span id="current-script-name" class="current-file">No script selected</span>
+                            <div class="toolbar-actions">
+                                <button id="save-script-btn" class="btn btn-success" disabled>Save</button>
+                                <button id="delete-script-btn" class="btn btn-danger" disabled>Delete</button>
+                            </div>
+                        </div>
+                        <div id="monaco-editor" class="monaco-container"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Assets Tab -->
+            <div id="assets-tab" class="tab-content">
+                <div class="assets-container">
+                    <div class="assets-header">
+                        <h3>Assets</h3>
+                        <div class="upload-area">
+                            <input type="file" id="asset-upload" multiple style="display: none;">
+                            <button id="upload-asset-btn" class="btn btn-primary">Upload Assets</button>
+                        </div>
+                    </div>
+                    <div id="assets-grid" class="assets-grid">
+                        <!-- Assets will be loaded here -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Logs Tab -->
+            <div id="logs-tab" class="tab-content">
+                <div class="logs-container">
+                    <div class="logs-header">
+                        <h3>Server Logs</h3>
+                        <div class="logs-controls">
+                            <button id="refresh-logs-btn" class="btn btn-secondary">Refresh</button>
+                            <button id="clear-logs-btn" class="btn btn-warning">Clear</button>
+                        </div>
+                    </div>
+                    <div id="logs-content" class="logs-content">
+                        <!-- Logs will be loaded here -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Routes Tab -->
+            <div id="routes-tab" class="tab-content">
+                <div class="routes-container">
+                    <div class="routes-header">
+                        <h3>Registered Routes</h3>
+                        <button id="refresh-routes-btn" class="btn btn-secondary">Refresh</button>
+                    </div>
+                    <div id="routes-list" class="routes-list">
+                        <!-- Routes will be loaded here -->
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Status Bar -->
+        <footer class="editor-footer">
+            <div class="status-info">
+                <span id="status-message">Ready</span>
+            </div>
+            <div class="status-actions">
+                <button id="test-endpoint-btn" class="btn btn-secondary btn-small">Test API</button>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Templates -->
+    <script id="script-item-template" type="text/x-handlebars-template">
+        <div class="script-item {{#if active}}active{{/if}}" data-script="{{name}}">
+            <div class="script-icon">📄</div>
+            <div class="script-info">
+                <div class="script-name">{{name}}</div>
+                <div class="script-meta">{{size}} bytes</div>
+            </div>
+        </div>
+    </script>
+
+    <script id="asset-item-template" type="text/x-handlebars-template">
+        <div class="asset-item" data-path="{{path}}">
+            <div class="asset-preview">
+                {{#if isImage}}
+                    <img src="/api/assets{{path}}" alt="{{name}}" loading="lazy">
+                {{else}}
+                    <div class="asset-icon">{{icon}}</div>
+                {{/if}}
+            </div>
+            <div class="asset-info">
+                <div class="asset-name">{{name}}</div>
+                <div class="asset-meta">{{size}} • {{type}}</div>
+            </div>
+            <div class="asset-actions">
+                <button class="btn btn-small btn-secondary download-btn" data-path="{{path}}">↓</button>
+                <button class="btn btn-small btn-danger delete-btn" data-path="{{path}}">×</button>
+            </div>
+        </div>
+    </script>
+
+    <script id="log-entry-template" type="text/x-handlebars-template">
+        <div class="log-entry log-{{level}}">
+            <span class="log-time">{{time}}</span>
+            <span class="log-level">{{level}}</span>
+            <span class="log-message">{{message}}</span>
+        </div>
+    </script>
+
+    <script id="route-item-template" type="text/x-handlebars-template">
+        <div class="route-item">
+            <div class="route-method {{method}}">{{method}}</div>
+            <div class="route-path">{{path}}</div>
+            <div class="route-handler">{{handler}}</div>
+            <div class="route-actions">
+                <button class="btn btn-small btn-secondary test-btn" data-path="{{path}}" data-method="{{method}}">Test</button>
+            </div>
+        </div>
+    </script>
+
+    <!-- Main JavaScript -->
+    <script src="/editor.js"></script>
+</body>
+</html>

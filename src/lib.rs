@@ -131,17 +131,51 @@ pub async fn start_server_with_config(
                         }
                     }
 
-                    // Check if any route exists for this path
+                    // Check if any route exists for this path (including wildcards)
                     let path_exists = regs
                         .lock()
                         .ok()
-                        .map(|g| g.keys().any(|(p, _)| p == path))
+                        .map(|g| {
+                            // Check for exact match
+                            if g.keys().any(|(p, _)| p == path) {
+                                return true;
+                            }
+
+                            // Check for wildcard matches
+                            for (pattern, _) in g.keys() {
+                                if pattern.ends_with("/*") {
+                                    let prefix = &pattern[..pattern.len() - 1]; // Remove the *
+                                    if path.starts_with(prefix) {
+                                        return true;
+                                    }
+                                }
+                            }
+
+                            false
+                        })
                         .unwrap_or(false);
 
                     let reg = regs
                         .lock()
                         .ok()
-                        .and_then(|g| g.get(&(path.to_string(), request_method.clone())).cloned());
+                        .and_then(|g| {
+                            // First try exact match
+                            if let Some(exact_match) = g.get(&(path.to_string(), request_method.clone())) {
+                                return Some(exact_match.clone());
+                            }
+
+                            // If no exact match, try wildcard matching
+                            for ((pattern, method), handler) in g.iter() {
+                                if method == &request_method && pattern.ends_with("/*") {
+                                    let prefix = &pattern[..pattern.len() - 1]; // Remove the *
+                                    if path.starts_with(prefix) {
+                                        return Some(handler.clone());
+                                    }
+                                }
+                            }
+
+                            None
+                        });
                     let (owner_uri, handler_name) = match reg {
                         Some(t) => t,
                         None => {
@@ -170,10 +204,31 @@ pub async fn start_server_with_config(
                         .and_then(|v| v.to_str().ok())
                         .map(|s| s.to_string());
                     let body = req.into_body();
-                    let form_data = if let Some(ct) = content_type {
-                        parse_form_data(Some(&ct), body).await.unwrap_or_default()
+
+                    // Always read the body as bytes first
+                    let body_bytes = match to_bytes(body, usize::MAX).await {
+                        Ok(bytes) => bytes,
+                        Err(_) => axum::body::Bytes::new(),
+                    };
+
+                    // For POST requests to editor API, use raw body
+                    let raw_body = if request_method == "POST" && path.starts_with("/api/scripts/") {
+                        Some(String::from_utf8(body_bytes.to_vec()).unwrap_or_default())
                     } else {
-                        parse_form_data(None, body).await.unwrap_or_default()
+                        None
+                    };
+
+                    let form_data = if raw_body.is_some() {
+                        // If we have raw body, don't parse as form data
+                        HashMap::new()
+                    } else {
+                        // Parse form data from the bytes
+                        let body = Body::from(body_bytes);
+                        if let Some(ct) = content_type {
+                            parse_form_data(Some(&ct), body).await.unwrap_or_default()
+                        } else {
+                            parse_form_data(None, body).await.unwrap_or_default()
+                        }
                     };
 
                     let worker = move || -> Result<(u16, String, Option<String>), String> {
@@ -184,6 +239,7 @@ pub async fn start_server_with_config(
                             &request_method,
                             Some(&query_params),
                             Some(&form_data),
+                            raw_body,
                         )
                     };
 
@@ -273,17 +329,51 @@ pub async fn start_server_with_config(
                         }
                     }
 
-                    // Check if any route exists for this path
+                    // Check if any route exists for this path (including wildcards)
                     let path_exists = regs
                         .lock()
                         .ok()
-                        .map(|g| g.keys().any(|(p, _)| p == &full_path))
+                        .map(|g| {
+                            // Check for exact match
+                            if g.keys().any(|(p, _)| p == &full_path) {
+                                return true;
+                            }
+
+                            // Check for wildcard matches
+                            for (pattern, _) in g.keys() {
+                                if pattern.ends_with("/*") {
+                                    let prefix = &pattern[..pattern.len() - 1]; // Remove the *
+                                    if full_path.starts_with(prefix) {
+                                        return true;
+                                    }
+                                }
+                            }
+
+                            false
+                        })
                         .unwrap_or(false);
 
                     let reg = regs
                         .lock()
                         .ok()
-                        .and_then(|g| g.get(&(full_path.clone(), request_method.clone())).cloned());
+                        .and_then(|g| {
+                            // First try exact match
+                            if let Some(exact_match) = g.get(&(full_path.clone(), request_method.clone())) {
+                                return Some(exact_match.clone());
+                            }
+
+                            // If no exact match, try wildcard matching
+                            for ((pattern, method), handler) in g.iter() {
+                                if method == &request_method && pattern.ends_with("/*") {
+                                    let prefix = &pattern[..pattern.len() - 1]; // Remove the *
+                                    if full_path.starts_with(prefix) {
+                                        return Some(handler.clone());
+                                    }
+                                }
+                            }
+
+                            None
+                        });
                     let (owner_uri, handler_name) = match reg {
                         Some(t) => t,
                         None => {
@@ -312,10 +402,31 @@ pub async fn start_server_with_config(
                         .and_then(|v| v.to_str().ok())
                         .map(|s| s.to_string());
                     let body = req.into_body();
-                    let form_data = if let Some(ct) = content_type {
-                        parse_form_data(Some(&ct), body).await.unwrap_or_default()
+
+                    // Always read the body as bytes first
+                    let body_bytes = match to_bytes(body, usize::MAX).await {
+                        Ok(bytes) => bytes,
+                        Err(_) => axum::body::Bytes::new(),
+                    };
+
+                    // For POST requests to editor API, use raw body
+                    let raw_body = if request_method == "POST" && full_path.starts_with("/api/scripts/") {
+                        Some(String::from_utf8(body_bytes.to_vec()).unwrap_or_default())
                     } else {
-                        parse_form_data(None, body).await.unwrap_or_default()
+                        None
+                    };
+
+                    let form_data = if raw_body.is_some() {
+                        // If we have raw body, don't parse as form data
+                        HashMap::new()
+                    } else {
+                        // Parse form data from the bytes
+                        let body = Body::from(body_bytes);
+                        if let Some(ct) = content_type {
+                            parse_form_data(Some(&ct), body).await.unwrap_or_default()
+                        } else {
+                            parse_form_data(None, body).await.unwrap_or_default()
+                        }
                     };
 
                     let worker = move || -> Result<(u16, String, Option<String>), String> {
@@ -326,6 +437,7 @@ pub async fn start_server_with_config(
                             &request_method,
                             Some(&query_params),
                             Some(&form_data),
+                            raw_body,
                         )
                     };
 
@@ -445,5 +557,29 @@ mod tests {
         // Test duplicate keys (last one wins)
         let result = parse_query_string("key=first&key=second");
         assert_eq!(result.get("key"), Some(&"second".to_string()));
+    }
+
+    #[test]
+    fn test_editor_script_execution() {
+        // Test that the editor script can be executed without errors
+        let result = js_engine::execute_script("https://example.com/editor", include_str!("../scripts/editor.js"));
+        assert!(result.success, "Editor script should execute successfully: {:?}", result.error);
+        assert!(!result.registrations.is_empty(), "Editor script should register routes");
+    }
+
+    #[test]
+    fn test_script_crud_operations() {
+        // Test script retrieval
+        let script_content = repository::fetch_script("https://example.com/core");
+        assert!(script_content.is_some(), "Core script should exist");
+        assert!(script_content.unwrap().contains("function"), "Core script should contain functions");
+
+        // Test script upsert and retrieval
+        let test_uri = "https://example.com/test_script";
+        let test_content = "// Test script\nfunction test() { return 'hello'; }";
+        repository::upsert_script(test_uri, test_content);
+
+        let retrieved = repository::fetch_script(test_uri);
+        assert_eq!(retrieved, Some(test_content.to_string()), "Script should be retrievable after upsert");
     }
 }
