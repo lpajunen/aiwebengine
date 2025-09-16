@@ -27,8 +27,8 @@ async fn test_editor_api_endpoints() {
     println!("Scripts list: {}", list_body);
 
     // Parse the JSON response
-    let scripts: Vec<serde_json::Value> = serde_json::from_str(&list_body)
-        .expect("Failed to parse scripts JSON");
+    let scripts: Vec<serde_json::Value> =
+        serde_json::from_str(&list_body).expect("Failed to parse scripts JSON");
 
     // Test GET /api/scripts/{name} - get specific script
     if !scripts.is_empty() {
@@ -44,7 +44,11 @@ async fn test_editor_api_endpoints() {
             .await
             .expect("Get script request failed");
 
-        println!("Response status for {}: {}", short_name, get_response.status());
+        println!(
+            "Response status for {}: {}",
+            short_name,
+            get_response.status()
+        );
 
         if get_response.status() == 200 {
             let get_body = get_response
@@ -61,10 +65,14 @@ async fn test_editor_api_endpoints() {
 
     // Test POST /api/scripts/{name} - save script
     let test_script_name = "test_script";
-    let test_content = "// Test script content\nfunction test() {\n    return 'Hello from test!';\n}";
+    let test_content =
+        "// Test script content\nfunction test() {\n    return 'Hello from test!';\n}";
 
     let save_response = client
-        .post(&format!("http://127.0.0.1:4000/api/scripts/{}", test_script_name))
+        .post(&format!(
+            "http://127.0.0.1:4000/api/scripts/{}",
+            test_script_name
+        ))
         .body(test_content.to_string())
         .send()
         .await
@@ -82,7 +90,10 @@ async fn test_editor_api_endpoints() {
 
     // Verify the script was saved by retrieving it
     let verify_response = client
-        .get(&format!("http://127.0.0.1:4000/api/scripts/{}", test_script_name))
+        .get(&format!(
+            "http://127.0.0.1:4000/api/scripts/{}",
+            test_script_name
+        ))
         .send()
         .await
         .expect("Verify script request failed");
@@ -97,7 +108,10 @@ async fn test_editor_api_endpoints() {
         println!("Retrieved content length: {}", verify_body.len());
         println!("Expected content length: {}", test_content.len());
         println!("Content matches: {}", verify_body == test_content);
-        assert_eq!(verify_body, test_content, "Retrieved script should match saved content");
+        assert_eq!(
+            verify_body, test_content,
+            "Retrieved script should match saved content"
+        );
     } else {
         let error_body = verify_response.text().await.unwrap_or_default();
         println!("Verify error: {}", error_body);

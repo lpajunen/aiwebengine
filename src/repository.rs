@@ -2,17 +2,15 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 /// Fetch scripts from a repository.
-/// For now this returns two hard-coded scripts.
+/// For now this returns hard-coded scripts, excluding test scripts unless in test mode.
 pub fn fetch_scripts() -> HashMap<String, String> {
     let mut m = HashMap::new();
-    // embed scripts at compile time
+
+    // Always include core functionality scripts
     let core = include_str!("../scripts/core.js");
     let debug = include_str!("../scripts/debug.js");
     let asset_mgmt = include_str!("../scripts/asset_mgmt.js");
     let editor = include_str!("../scripts/editor.js");
-    let test_editor = include_str!("../scripts/test_editor.js");
-
-    let test_editor_api = include_str!("../scripts/test_editor_api.js");
 
     m.insert("https://example.com/core".to_string(), core.to_string());
     m.insert("https://example.com/debug".to_string(), debug.to_string());
@@ -21,8 +19,16 @@ pub fn fetch_scripts() -> HashMap<String, String> {
         asset_mgmt.to_string(),
     );
     m.insert("https://example.com/editor".to_string(), editor.to_string());
-    m.insert("https://example.com/test_editor".to_string(), test_editor.to_string());
-    m.insert("https://example.com/test_editor_api".to_string(), test_editor_api.to_string());
+
+    // Only include test scripts when running tests or when explicitly requested
+    let include_test_scripts =
+        std::env::var("AIWEBENGINE_INCLUDE_TEST_SCRIPTS").is_ok() || cfg!(test);
+
+    if include_test_scripts {
+        // Note: test_editor.js and test_editor_api.js are now loaded dynamically via upsert_script
+        // in test setup functions rather than being included statically here
+    }
+
     // merge in any dynamically upserted scripts
     if let Some(store) = DYNAMIC_SCRIPTS.get() {
         let guard = store.lock().expect("dynamic scripts mutex poisoned");
@@ -52,8 +58,7 @@ pub fn fetch_script(uri: &str) -> Option<String> {
             Some(include_str!("../scripts/asset_mgmt.js").to_string())
         }
         "https://example.com/editor" => Some(include_str!("../scripts/editor.js").to_string()),
-        "https://example.com/test_editor" => Some(include_str!("../scripts/test_editor.js").to_string()),
-        "https://example.com/test_editor_api" => Some(include_str!("../scripts/test_editor_api.js").to_string()),
+        // Note: test_editor and test_editor_api are now loaded dynamically via upsert_script
         _ => None,
     }
 }
@@ -112,6 +117,25 @@ pub fn delete_script(uri: &str) -> bool {
         return existed;
     }
     false
+}
+
+/// Load test scripts dynamically using upsert_script.
+/// This function should only be called during tests to avoid loading test scripts in production.
+pub fn load_test_scripts() {
+    // Only load test scripts when running tests or when explicitly requested
+    let include_test_scripts =
+        std::env::var("AIWEBENGINE_INCLUDE_TEST_SCRIPTS").is_ok() || cfg!(test);
+
+    if include_test_scripts {
+        upsert_script(
+            "https://example.com/test_editor",
+            include_str!("../scripts/test_editor.js"),
+        );
+        upsert_script(
+            "https://example.com/test_editor_api",
+            include_str!("../scripts/test_editor_api.js"),
+        );
+    }
 }
 
 #[derive(Clone)]

@@ -10,7 +10,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            host: "0.0.0.0".to_string(),
+            host: "127.0.0.1".to_string(),
             port: 4000,
             script_timeout_ms: 2000,
             max_concurrent_requests: 100,
@@ -22,7 +22,7 @@ impl Config {
     /// Create config from environment variables
     pub fn from_env() -> Self {
         Self {
-            host: std::env::var("AIWEBENGINE_HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
+            host: std::env::var("AIWEBENGINE_HOST").unwrap_or_else(|_| "127.0.0.1".to_string()),
             port: std::env::var("AIWEBENGINE_PORT")
                 .ok()
                 .and_then(|p| p.parse().ok())

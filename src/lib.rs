@@ -1,8 +1,8 @@
 use axum::body::{Body, to_bytes};
 use axum::http::Request;
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::{Router, routing::any};
-use axum::{extract::Path, response::IntoResponse};
 use axum_server::Server;
 use serde_urlencoded;
 use std::collections::HashMap;
@@ -112,12 +112,12 @@ pub async fn start_server_with_config(
             any(move |req: Request<Body>| {
                 let regs = Arc::clone(&registrations);
                 async move {
-                    let path = "/";
+                    let path = req.uri().path().to_string();
                     let request_method = req.method().to_string();
 
                     // Check for assets first if it's a GET request
                     if request_method == "GET" {
-                        if let Some(asset) = repository::fetch_asset(path) {
+                        if let Some(asset) = repository::fetch_asset(&path) {
                             let mut response = asset.content.into_response();
                             response.headers_mut().insert(
                                 axum::http::header::CONTENT_TYPE,
@@ -137,7 +137,7 @@ pub async fn start_server_with_config(
                         .ok()
                         .map(|g| {
                             // Check for exact match
-                            if g.keys().any(|(p, _)| p == path) {
+                            if g.keys().any(|(p, _)| p == &path) {
                                 return true;
                             }
 
@@ -155,27 +155,24 @@ pub async fn start_server_with_config(
                         })
                         .unwrap_or(false);
 
-                    let reg = regs
-                        .lock()
-                        .ok()
-                        .and_then(|g| {
-                            // First try exact match
-                            if let Some(exact_match) = g.get(&(path.to_string(), request_method.clone())) {
-                                return Some(exact_match.clone());
-                            }
+                    let reg = regs.lock().ok().and_then(|g| {
+                        // First try exact match
+                        if let Some(exact_match) = g.get(&(path.clone(), request_method.clone())) {
+                            return Some(exact_match.clone());
+                        }
 
-                            // If no exact match, try wildcard matching
-                            for ((pattern, method), handler) in g.iter() {
-                                if method == &request_method && pattern.ends_with("/*") {
-                                    let prefix = &pattern[..pattern.len() - 1]; // Remove the *
-                                    if path.starts_with(prefix) {
-                                        return Some(handler.clone());
-                                    }
+                        // If no exact match, try wildcard matching
+                        for ((pattern, method), handler) in g.iter() {
+                            if method == &request_method && pattern.ends_with("/*") {
+                                let prefix = &pattern[..pattern.len() - 1]; // Remove the *
+                                if path.starts_with(prefix) {
+                                    return Some(handler.clone());
                                 }
                             }
+                        }
 
-                            None
-                        });
+                        None
+                    });
                     let (owner_uri, handler_name) = match reg {
                         Some(t) => t,
                         None => {
@@ -212,7 +209,8 @@ pub async fn start_server_with_config(
                     };
 
                     // For POST requests to editor API, use raw body
-                    let raw_body = if request_method == "POST" && path.starts_with("/api/scripts/") {
+                    let raw_body = if request_method == "POST" && path.starts_with("/api/scripts/")
+                    {
                         Some(String::from_utf8(body_bytes.to_vec()).unwrap_or_default())
                     } else {
                         None
@@ -280,7 +278,6 @@ pub async fn start_server_with_config(
 
                             response
                         }
-                        .into_response(),
                         Ok(Err(e)) => {
                             eprintln!("script error for {}: {}", path_log, e);
                             (
@@ -303,31 +300,11 @@ pub async fn start_server_with_config(
         )
         .route(
             "/{*path}",
-            any(move |Path(path): Path<String>, req: Request<Body>| {
+            any(move |req: Request<Body>| {
                 let regs = Arc::clone(&registrations_clone);
                 async move {
-                    let full_path = if path.is_empty() {
-                        "/".to_string()
-                    } else {
-                        format!("/{}", path)
-                    };
+                    let full_path = req.uri().path().to_string();
                     let request_method = req.method().to_string();
-
-                    // Check for assets first if it's a GET request
-                    if request_method == "GET" {
-                        if let Some(asset) = repository::fetch_asset(&full_path) {
-                            let mut response = asset.content.into_response();
-                            response.headers_mut().insert(
-                                axum::http::header::CONTENT_TYPE,
-                                axum::http::HeaderValue::from_str(&asset.mimetype).unwrap_or(
-                                    axum::http::HeaderValue::from_static(
-                                        "application/octet-stream",
-                                    ),
-                                ),
-                            );
-                            return response;
-                        }
-                    }
 
                     // Check if any route exists for this path (including wildcards)
                     let path_exists = regs
@@ -353,27 +330,26 @@ pub async fn start_server_with_config(
                         })
                         .unwrap_or(false);
 
-                    let reg = regs
-                        .lock()
-                        .ok()
-                        .and_then(|g| {
-                            // First try exact match
-                            if let Some(exact_match) = g.get(&(full_path.clone(), request_method.clone())) {
-                                return Some(exact_match.clone());
-                            }
+                    let reg = regs.lock().ok().and_then(|g| {
+                        // First try exact match
+                        if let Some(exact_match) =
+                            g.get(&(full_path.clone(), request_method.clone()))
+                        {
+                            return Some(exact_match.clone());
+                        }
 
-                            // If no exact match, try wildcard matching
-                            for ((pattern, method), handler) in g.iter() {
-                                if method == &request_method && pattern.ends_with("/*") {
-                                    let prefix = &pattern[..pattern.len() - 1]; // Remove the *
-                                    if full_path.starts_with(prefix) {
-                                        return Some(handler.clone());
-                                    }
+                        // If no exact match, try wildcard matching
+                        for ((pattern, method), handler) in g.iter() {
+                            if method == &request_method && pattern.ends_with("/*") {
+                                let prefix = &pattern[..pattern.len() - 1]; // Remove the *
+                                if full_path.starts_with(prefix) {
+                                    return Some(handler.clone());
                                 }
                             }
+                        }
 
-                            None
-                        });
+                        None
+                    });
                     let (owner_uri, handler_name) = match reg {
                         Some(t) => t,
                         None => {
@@ -410,11 +386,12 @@ pub async fn start_server_with_config(
                     };
 
                     // For POST requests to editor API, use raw body
-                    let raw_body = if request_method == "POST" && full_path.starts_with("/api/scripts/") {
-                        Some(String::from_utf8(body_bytes.to_vec()).unwrap_or_default())
-                    } else {
-                        None
-                    };
+                    let raw_body =
+                        if request_method == "POST" && full_path.starts_with("/api/scripts/") {
+                            Some(String::from_utf8(body_bytes.to_vec()).unwrap_or_default())
+                        } else {
+                            None
+                        };
 
                     let form_data = if raw_body.is_some() {
                         // If we have raw body, don't parse as form data
@@ -561,10 +538,45 @@ mod tests {
 
     #[test]
     fn test_editor_script_execution() {
+        // Load test scripts dynamically using upsert_script
+        repository::upsert_script(
+            "https://example.com/test_editor",
+            include_str!("../scripts/test_editor.js"),
+        );
+        repository::upsert_script(
+            "https://example.com/test_editor_api",
+            include_str!("../scripts/test_editor_api.js"),
+        );
+
         // Test that the editor script can be executed without errors
-        let result = js_engine::execute_script("https://example.com/editor", include_str!("../scripts/editor.js"));
-        assert!(result.success, "Editor script should execute successfully: {:?}", result.error);
-        assert!(!result.registrations.is_empty(), "Editor script should register routes");
+        let result = js_engine::execute_script(
+            "https://example.com/editor",
+            include_str!("../scripts/editor.js"),
+        );
+        assert!(
+            result.success,
+            "Editor script should execute successfully: {:?}",
+            result.error
+        );
+        assert!(
+            !result.registrations.is_empty(),
+            "Editor script should register routes"
+        );
+
+        // Test that the test_editor script can be executed without errors
+        let test_editor_result = js_engine::execute_script(
+            "https://example.com/test_editor",
+            include_str!("../scripts/test_editor.js"),
+        );
+        assert!(
+            test_editor_result.success,
+            "Test editor script should execute successfully: {:?}",
+            test_editor_result.error
+        );
+        assert!(
+            !test_editor_result.registrations.is_empty(),
+            "Test editor script should register routes"
+        );
     }
 
     #[test]
@@ -572,7 +584,10 @@ mod tests {
         // Test script retrieval
         let script_content = repository::fetch_script("https://example.com/core");
         assert!(script_content.is_some(), "Core script should exist");
-        assert!(script_content.unwrap().contains("function"), "Core script should contain functions");
+        assert!(
+            script_content.unwrap().contains("function"),
+            "Core script should contain functions"
+        );
 
         // Test script upsert and retrieval
         let test_uri = "https://example.com/test_script";
@@ -580,6 +595,10 @@ mod tests {
         repository::upsert_script(test_uri, test_content);
 
         let retrieved = repository::fetch_script(test_uri);
-        assert_eq!(retrieved, Some(test_content.to_string()), "Script should be retrievable after upsert");
+        assert_eq!(
+            retrieved,
+            Some(test_content.to_string()),
+            "Script should be retrievable after upsert"
+        );
     }
 }
