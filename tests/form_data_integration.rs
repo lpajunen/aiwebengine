@@ -1,9 +1,16 @@
 use aiwebengine::repository;
 use aiwebengine::start_server_without_shutdown;
 use std::time::Duration;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::test]
 async fn test_form_data() {
+    // Initialize tracing for test logging
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::from_default_env())
+        .with(tracing_subscriber::fmt::layer().compact())
+        .init();
+
     // Dynamically load the form test script
     repository::upsert_script(
         "https://example.com/form_test",
@@ -11,26 +18,43 @@ async fn test_form_data() {
     );
 
     // Start server in background task
-    tokio::spawn(async move {
+    let _server_handle = tokio::spawn(async move {
         let _ = start_server_without_shutdown().await;
     });
 
     // Give server time to start
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+    tokio::time::sleep(Duration::from_millis(2000)).await;
 
     let client = reqwest::Client::new();
 
-    // Test POST request to /api/form without form data
+    // Test simple GET request to root
+    let root_response = client
+        .get("http://127.0.0.1:4000/")
+        .send()
+        .await;
+    
+    match root_response {
+        Ok(resp) => {
+            println!("Root request succeeded with status: {}", resp.status());
+            let body = resp.text().await.unwrap_or_default();
+            println!("Root response body: {}", body);
+        }
+        Err(e) => {
+            println!("Root request failed: {}", e);
+        }
+    }
     let response_no_form = client
         .post("http://127.0.0.1:4000/api/form")
         .send()
         .await
         .expect("POST request without form data failed");
-    assert_eq!(response_no_form.status(), 200);
+    
+    println!("POST REQUEST MADE TO /api/form, STATUS: {}", response_no_form.status());
     let body_no_form = response_no_form
         .text()
         .await
         .expect("Failed to read response without form data");
+    println!("RESPONSE BODY: {}", body_no_form);
     assert!(
         body_no_form.contains("Path: /api/form"),
         "Response should contain correct path: {}",

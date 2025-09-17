@@ -7,6 +7,7 @@ use axum_server::Server;
 use serde_urlencoded;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use tracing::{debug, error, info};
 
 pub mod config;
 pub mod js_engine;
@@ -55,10 +56,10 @@ fn build_registrations() -> anyhow::Result<RouteRegistry> {
     let regs = Arc::new(Mutex::new(HashMap::new()));
 
     let scripts = repository::fetch_scripts();
-    println!("DEBUG: Found {} scripts to load", scripts.len());
+    debug!("Found {} scripts to load", scripts.len());
 
     for (uri, content) in scripts.into_iter() {
-        println!("DEBUG: Loading script {}", uri);
+        debug!("Loading script {}", uri);
 
         // Execute the script using the js_engine module
         let result = js_engine::execute_script(&uri, &content);
@@ -70,17 +71,17 @@ fn build_registrations() -> anyhow::Result<RouteRegistry> {
                     global_regs.insert((path, method), (uri.clone(), handler));
                 }
             }
-            println!("DEBUG: Successfully loaded script {}", uri);
+            debug!("Successfully loaded script {}", uri);
         } else {
             if let Some(error) = result.error {
-                eprintln!("Failed to load script {}: {}", uri, error);
+                error!("Failed to load script {}: {}", uri, error);
             }
         }
     }
 
     // Debug: print all registered routes
     if let Ok(regs_locked) = regs.lock() {
-        println!("DEBUG: Final route registry: {:?}", *regs_locked);
+        debug!("Final route registry: {:?}", *regs_locked);
     }
 
     Ok(regs)
@@ -279,7 +280,7 @@ pub async fn start_server_with_config(
                             response
                         }
                         Ok(Err(e)) => {
-                            eprintln!("script error for {}: {}", path_log, e);
+                            error!("script error for {}: {}", path_log, e);
                             (
                                 StatusCode::INTERNAL_SERVER_ERROR,
                                 format!("script error: {}", e),
@@ -287,7 +288,7 @@ pub async fn start_server_with_config(
                                 .into_response()
                         }
                         Err(e) => {
-                            eprintln!("task error for {}: {}", path_log, e);
+                            error!("task error for {}: {}", path_log, e);
                             (
                                 StatusCode::INTERNAL_SERVER_ERROR,
                                 format!("task error: {}", e),
@@ -456,7 +457,7 @@ pub async fn start_server_with_config(
                             response
                         }
                         Ok(Err(e)) => {
-                            eprintln!("script error for {}: {}", path_log, e);
+                            error!("script error for {}: {}", path_log, e);
                             (
                                 StatusCode::INTERNAL_SERVER_ERROR,
                                 format!("script error: {}", e),
@@ -464,7 +465,7 @@ pub async fn start_server_with_config(
                                 .into_response()
                         }
                         Err(e) => {
-                            eprintln!("task error for {}: {}", path_log, e);
+                            error!("task error for {}: {}", path_log, e);
                             (
                                 StatusCode::INTERNAL_SERVER_ERROR,
                                 format!("task error: {}", e),
@@ -483,9 +484,9 @@ pub async fn start_server_with_config(
 
     // record startup in logs so tests can observe server start
     repository::insert_log_message("server started");
-    println!("listening on {}", addr);
-    println!(
-        "DEBUG: Server configuration - host: {}, port: {}",
+    info!("listening on {}", addr);
+    debug!(
+        "Server configuration - host: {}, port: {}",
         config.host, config.port
     );
     let svc = app.into_make_service();

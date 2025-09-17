@@ -2,6 +2,7 @@ use rquickjs::{Context, Function, Runtime, Value};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use tracing::{debug, error};
 
 use crate::repository;
 
@@ -41,8 +42,8 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                               method: Option<String>|
                               -> Result<(), rquickjs::Error> {
                             let method = method.unwrap_or_else(|| "GET".to_string());
-                            println!(
-                                "DEBUG: Registering route {} {} -> {} for script {}",
+                            debug!(
+                                "Registering route {} {} -> {} for script {}",
                                 method, path, handler, uri_clone
                             );
                             if let Ok(mut regs) = regs_clone.try_borrow_mut() {
@@ -62,7 +63,7 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
 
                 match result {
                     Ok(_) => {
-                        println!("DEBUG: Successfully executed script {}", uri_owned);
+                        debug!("Successfully executed script {}", uri_owned);
                         let final_regs = registrations.borrow().clone();
                         ScriptExecutionResult {
                             registrations: final_regs,
@@ -71,7 +72,7 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                         }
                     }
                     Err(e) => {
-                        eprintln!("Failed to execute script {}: {}", uri_owned, e);
+                        error!("Failed to execute script {}: {}", uri_owned, e);
                         ScriptExecutionResult {
                             registrations: HashMap::new(),
                             success: false,
@@ -81,7 +82,7 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                 }
             }
             Err(e) => {
-                eprintln!(
+                error!(
                     "Failed to create QuickJS context for script {}: {}",
                     uri_owned, e
                 );
@@ -93,7 +94,7 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
             }
         },
         Err(e) => {
-            eprintln!(
+            error!(
                 "Failed to create QuickJS runtime for script {}: {}",
                 uri_owned, e
             );
@@ -138,6 +139,7 @@ pub fn execute_script_for_request(
         let write = Function::new(
             ctx.clone(),
             |_c: rquickjs::Ctx<'_>, msg: String| -> Result<(), rquickjs::Error> {
+                debug!("JavaScript called writeLog with message: {}", msg);
                 repository::insert_log_message(&msg);
                 Ok(())
             },
@@ -147,6 +149,7 @@ pub fn execute_script_for_request(
         let list_logs = Function::new(
             ctx.clone(),
             |_c: rquickjs::Ctx<'_>| -> Result<Vec<String>, rquickjs::Error> {
+                debug!("JavaScript called listLogs");
                 Ok(repository::fetch_log_messages())
             },
         )?;
@@ -155,6 +158,7 @@ pub fn execute_script_for_request(
         let list_scripts = Function::new(
             ctx.clone(),
             |_c: rquickjs::Ctx<'_>| -> Result<Vec<String>, rquickjs::Error> {
+                debug!("JavaScript called listScripts");
                 let m = repository::fetch_scripts();
                 Ok(m.keys().cloned().collect())
             },
@@ -164,6 +168,7 @@ pub fn execute_script_for_request(
         let list_assets = Function::new(
             ctx.clone(),
             |_c: rquickjs::Ctx<'_>| -> Result<Vec<String>, rquickjs::Error> {
+                debug!("JavaScript called listAssets");
                 let m = repository::fetch_assets();
                 Ok(m.keys().cloned().collect())
             },
@@ -173,6 +178,7 @@ pub fn execute_script_for_request(
         let fetch_asset = Function::new(
             ctx.clone(),
             move |_c: rquickjs::Ctx<'_>, public_path: String| -> Result<String, rquickjs::Error> {
+                debug!("JavaScript called fetchAsset with public_path: {}", public_path);
                 if let Some(asset) = repository::fetch_asset(&public_path) {
                     let content_b64 = base64::Engine::encode(
                         &base64::engine::general_purpose::STANDARD,
@@ -198,6 +204,8 @@ pub fn execute_script_for_request(
              mimetype: String,
              content_b64: String|
              -> Result<(), rquickjs::Error> {
+                debug!("JavaScript called upsertAsset with public_path: {}, mimetype: {}, content_b64 length: {}", 
+                       public_path, mimetype, content_b64.len());
                 match base64::Engine::decode(
                     &base64::engine::general_purpose::STANDARD,
                     &content_b64,
@@ -220,6 +228,7 @@ pub fn execute_script_for_request(
         let delete_asset = Function::new(
             ctx.clone(),
             |_c: rquickjs::Ctx<'_>, public_path: String| -> Result<bool, rquickjs::Error> {
+                debug!("JavaScript called deleteAsset with public_path: {}", public_path);
                 Ok(repository::delete_asset(&public_path))
             },
         )?;
@@ -228,6 +237,7 @@ pub fn execute_script_for_request(
         let get_script = Function::new(
             ctx.clone(),
             |_c: rquickjs::Ctx<'_>, uri: String| -> Result<String, rquickjs::Error> {
+                debug!("JavaScript called getScript with uri: {}", uri);
                 match repository::fetch_script(&uri) {
                     Some(content) => Ok(content),
                     None => Ok("".to_string()),
@@ -239,11 +249,21 @@ pub fn execute_script_for_request(
         let upsert_script = Function::new(
             ctx.clone(),
             |_c: rquickjs::Ctx<'_>, uri: String, content: String| -> Result<(), rquickjs::Error> {
+                debug!("JavaScript called upsertScript with uri: {}, content length: {}", uri, content.len());
                 repository::upsert_script(&uri, &content);
                 Ok(())
             },
         )?;
         global.set("upsertScript", upsert_script)?;
+
+        let delete_script = Function::new(
+            ctx.clone(),
+            |_c: rquickjs::Ctx<'_>, uri: String| -> Result<bool, rquickjs::Error> {
+                debug!("JavaScript called deleteScript with uri: {}", uri);
+                Ok(repository::delete_script(&uri))
+            },
+        )?;
+        global.set("deleteScript", delete_script)?;
 
         Ok(())
     })

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
+use tracing::debug;
 
 /// Fetch scripts from a repository.
 /// For now this returns hard-coded scripts, excluding test scripts unless in test mode.
@@ -101,7 +102,7 @@ pub fn prune_log_messages() {
 pub fn upsert_script(uri: &str, script_content: &str) {
     let store = DYNAMIC_SCRIPTS.get_or_init(|| Mutex::new(HashMap::new()));
     let mut guard = store.lock().expect("dynamic scripts mutex poisoned");
-    eprintln!("repository::upsert_script called for {}", uri);
+    debug!("repository::upsert_script called for {}", uri);
     guard.insert(uri.to_string(), script_content.to_string());
 }
 
@@ -110,7 +111,7 @@ pub fn delete_script(uri: &str) -> bool {
     if let Some(store) = DYNAMIC_SCRIPTS.get() {
         let mut guard = store.lock().expect("dynamic scripts mutex poisoned");
         let existed = guard.remove(uri).is_some();
-        eprintln!(
+        debug!(
             "repository::delete_script called for {} -> existed={}",
             uri, existed
         );
@@ -214,7 +215,7 @@ pub fn fetch_asset(public_path: &str) -> Option<Asset> {
 pub fn upsert_asset(asset: Asset) {
     let store = DYNAMIC_ASSETS.get_or_init(|| Mutex::new(HashMap::new()));
     let mut guard = store.lock().expect("dynamic assets mutex poisoned");
-    eprintln!("repository::upsert_asset called for {}", asset.public_path);
+    debug!("repository::upsert_asset called for {}", asset.public_path);
     guard.insert(asset.public_path.clone(), asset);
 }
 
@@ -223,7 +224,7 @@ pub fn delete_asset(public_path: &str) -> bool {
     if let Some(store) = DYNAMIC_ASSETS.get() {
         let mut guard = store.lock().expect("dynamic assets mutex poisoned");
         let existed = guard.remove(public_path).is_some();
-        eprintln!(
+        debug!(
             "repository::delete_asset called for {} -> existed={}",
             public_path, existed
         );
