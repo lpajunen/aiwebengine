@@ -28,11 +28,8 @@ async fn test_form_data() {
     let client = reqwest::Client::new();
 
     // Test simple GET request to root
-    let root_response = client
-        .get("http://127.0.0.1:4000/")
-        .send()
-        .await;
-    
+    let root_response = client.get("http://127.0.0.1:4000/").send().await;
+
     match root_response {
         Ok(resp) => {
             println!("Root request succeeded with status: {}", resp.status());
@@ -48,8 +45,11 @@ async fn test_form_data() {
         .send()
         .await
         .expect("POST request without form data failed");
-    
-    println!("POST REQUEST MADE TO /api/form, STATUS: {}", response_no_form.status());
+
+    println!(
+        "POST REQUEST MADE TO /api/form, STATUS: {}",
+        response_no_form.status()
+    );
     let body_no_form = response_no_form
         .text()
         .await
