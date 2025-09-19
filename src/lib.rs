@@ -1,6 +1,5 @@
 use axum::body::{Body, to_bytes};
-use axum::http::Request;
-use axum::http::StatusCode;
+use axum::http::{Request, StatusCode};
 use axum::response::IntoResponse;
 use axum::{Router, routing::any};
 use axum_server::Server;
@@ -10,7 +9,9 @@ use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info};
 
 pub mod config;
+pub mod error;
 pub mod js_engine;
+pub mod middleware;
 pub mod repository;
 
 /// Parses a query string into a HashMap of key-value pairs
@@ -177,15 +178,20 @@ pub async fn start_server_with_config(
                     let (owner_uri, handler_name) = match reg {
                         Some(t) => t,
                         None => {
+                            // Extract request ID from extensions
+                            let request_id = req.extensions()
+                                .get::<middleware::RequestId>()
+                                .map(|rid| rid.0.clone())
+                                .unwrap_or_else(|| "unknown".to_string());
+
                             if path_exists {
-                                return (
-                                    StatusCode::METHOD_NOT_ALLOWED,
-                                    "method not allowed".to_string(),
-                                )
-                                    .into_response();
+                                let error_response = error::errors::method_not_allowed(&path, &request_method, &request_id);
+                                return (StatusCode::from_u16(error_response.status).unwrap(), 
+                                       serde_json::to_string(&error_response).unwrap()).into_response();
                             } else {
-                                return (StatusCode::NOT_FOUND, "not found".to_string())
-                                    .into_response();
+                                let error_response = error::errors::not_found(&path, &request_id);
+                                return (StatusCode::from_u16(error_response.status).unwrap(), 
+                                       serde_json::to_string(&error_response).unwrap()).into_response();
                             }
                         }
                     };
@@ -194,6 +200,12 @@ pub async fn start_server_with_config(
                     let path_log = path.to_string();
                     let query_string = req.uri().query().map(|s| s.to_string()).unwrap_or_default();
                     let query_params = parse_query_string(&query_string);
+
+                    // Extract request ID from extensions before consuming the request
+                    let request_id = req.extensions()
+                        .get::<middleware::RequestId>()
+                        .map(|rid| rid.0.clone())
+                        .unwrap_or_else(|| "unknown".to_string());
 
                     // Extract content type before consuming the request
                     let content_type = req
@@ -230,11 +242,12 @@ pub async fn start_server_with_config(
                         }
                     };
 
+                    let path_clone = path.clone();
                     let worker = move || -> Result<(u16, String, Option<String>), String> {
                         js_engine::execute_script_for_request(
                             &owner_uri_cl,
                             &handler_cl,
-                            &path,
+                            &path_clone,
                             &request_method,
                             Some(&query_params),
                             Some(&form_data),
@@ -254,8 +267,9 @@ pub async fn start_server_with_config(
                     {
                         Ok(r) => r,
                         Err(_) => {
-                            return (StatusCode::GATEWAY_TIMEOUT, "script timeout".to_string())
-                                .into_response();
+                            let error_response = error::errors::script_timeout(&path, &request_id);
+                            return (StatusCode::from_u16(error_response.status).unwrap(), 
+                                   serde_json::to_string(&error_response).unwrap()).into_response();
                         }
                     };
 
@@ -281,19 +295,15 @@ pub async fn start_server_with_config(
                         }
                         Ok(Err(e)) => {
                             error!("script error for {}: {}", path_log, e);
-                            (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                format!("script error: {}", e),
-                            )
-                                .into_response()
+                            let error_response = error::errors::script_execution_failed(&path, &e, &request_id);
+                            (StatusCode::from_u16(error_response.status).unwrap(), 
+                             serde_json::to_string(&error_response).unwrap()).into_response()
                         }
                         Err(e) => {
                             error!("task error for {}: {}", path_log, e);
-                            (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                format!("task error: {}", e),
-                            )
-                                .into_response()
+                            let error_response = error::errors::internal_server_error(&path, &e, &request_id);
+                            (StatusCode::from_u16(error_response.status).unwrap(), 
+                             serde_json::to_string(&error_response).unwrap()).into_response()
                         }
                     }
                 }
@@ -354,15 +364,20 @@ pub async fn start_server_with_config(
                     let (owner_uri, handler_name) = match reg {
                         Some(t) => t,
                         None => {
+                            // Extract request ID from extensions
+                            let request_id = req.extensions()
+                                .get::<middleware::RequestId>()
+                                .map(|rid| rid.0.clone())
+                                .unwrap_or_else(|| "unknown".to_string());
+
                             if path_exists {
-                                return (
-                                    StatusCode::METHOD_NOT_ALLOWED,
-                                    "method not allowed".to_string(),
-                                )
-                                    .into_response();
+                                let error_response = error::errors::method_not_allowed(&full_path, &request_method, &request_id);
+                                return (StatusCode::from_u16(error_response.status).unwrap(), 
+                                       serde_json::to_string(&error_response).unwrap()).into_response();
                             } else {
-                                return (StatusCode::NOT_FOUND, "not found".to_string())
-                                    .into_response();
+                                let error_response = error::errors::not_found(&full_path, &request_id);
+                                return (StatusCode::from_u16(error_response.status).unwrap(), 
+                                       serde_json::to_string(&error_response).unwrap()).into_response();
                             }
                         }
                     };
@@ -371,6 +386,12 @@ pub async fn start_server_with_config(
                     let path_log = full_path.clone();
                     let query_string = req.uri().query().map(|s| s.to_string()).unwrap_or_default();
                     let query_params = parse_query_string(&query_string);
+
+                    // Extract request ID from extensions before consuming the request
+                    let request_id = req.extensions()
+                        .get::<middleware::RequestId>()
+                        .map(|rid| rid.0.clone())
+                        .unwrap_or_else(|| "unknown".to_string());
 
                     // Extract content type before consuming the request
                     let content_type = req
@@ -407,11 +428,12 @@ pub async fn start_server_with_config(
                         }
                     };
 
+                    let full_path_clone = full_path.clone();
                     let worker = move || -> Result<(u16, String, Option<String>), String> {
                         js_engine::execute_script_for_request(
                             &owner_uri_cl,
                             &handler_cl,
-                            &full_path,
+                            &full_path_clone,
                             &request_method,
                             Some(&query_params),
                             Some(&form_data),
@@ -431,8 +453,9 @@ pub async fn start_server_with_config(
                     {
                         Ok(r) => r,
                         Err(_) => {
-                            return (StatusCode::GATEWAY_TIMEOUT, "script timeout".to_string())
-                                .into_response();
+                            let error_response = error::errors::script_timeout(&full_path, &request_id);
+                            return (StatusCode::from_u16(error_response.status).unwrap(), 
+                                   serde_json::to_string(&error_response).unwrap()).into_response();
                         }
                     };
 
@@ -458,24 +481,21 @@ pub async fn start_server_with_config(
                         }
                         Ok(Err(e)) => {
                             error!("script error for {}: {}", path_log, e);
-                            (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                format!("script error: {}", e),
-                            )
-                                .into_response()
+                            let error_response = error::errors::script_execution_failed(&full_path, &e, &request_id);
+                            (StatusCode::from_u16(error_response.status).unwrap(), 
+                             serde_json::to_string(&error_response).unwrap()).into_response()
                         }
                         Err(e) => {
                             error!("task error for {}: {}", path_log, e);
-                            (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                format!("task error: {}", e),
-                            )
-                                .into_response()
+                            let error_response = error::errors::internal_server_error(&full_path, &e, &request_id);
+                            (StatusCode::from_u16(error_response.status).unwrap(), 
+                             serde_json::to_string(&error_response).unwrap()).into_response()
                         }
                     }
                 }
             }),
-        );
+        )
+        .layer(axum::middleware::from_fn(middleware::request_id_middleware));
 
     let addr = config
         .server_addr()
