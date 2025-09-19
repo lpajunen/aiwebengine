@@ -47,3 +47,54 @@ async fn js_script_mgmt_functions_work() {
     // The endpoint should now return 404 since the script was deleted
     assert_eq!(status, 404);
 }
+
+#[tokio::test]
+async fn test_upsert_script_endpoint() {
+    // Start server in background task
+    let _server_handle = tokio::spawn(async move {
+        let _ = start_server_without_shutdown().await;
+    });
+
+    // Give server time to start
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let client = reqwest::Client::new();
+
+    // Test the upsert_script endpoint
+    let test_script_content = r#"
+function test_endpoint_handler(req) {
+    return { status: 200, body: 'Test endpoint works!' };
+}
+register('/test-endpoint', 'test_endpoint_handler', 'GET');
+"#;
+
+    let response = client
+        .post("http://127.0.0.1:4000/upsert_script")
+        .form(&[
+            ("uri", "https://example.com/test-endpoint-script"),
+            ("content", test_script_content),
+        ])
+        .send()
+        .await
+        .expect("POST request to /upsert_script failed");
+
+    assert_eq!(response.status(), 200);
+
+    let body: serde_json::Value = response.json().await.expect("Failed to parse JSON response");
+    assert_eq!(body["success"], true);
+    assert_eq!(body["uri"], "https://example.com/test-endpoint-script");
+    assert!(body["contentLength"].as_u64().unwrap() > 0);
+
+    // Verify the script was actually upserted by calling the new endpoint
+    tokio::time::sleep(Duration::from_millis(100)).await; // Give time for script to be processed
+
+    let test_response = client
+        .get("http://127.0.0.1:4000/test-endpoint")
+        .send()
+        .await
+        .expect("GET request to test endpoint failed");
+
+    assert_eq!(test_response.status(), 200);
+    let test_body = test_response.text().await.expect("Failed to read test response");
+    assert_eq!(test_body, "Test endpoint works!");
+}

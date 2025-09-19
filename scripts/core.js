@@ -65,6 +65,81 @@ function health_check(req) {
 
 register('/health', 'health_check', 'GET');
 
+// Script management endpoint
+function upsert_script_handler(req) {
+	try {
+		// Extract parameters from form data (for POST requests)
+		let uri = null;
+		let content = null;
+		
+		if (req.form) {
+			uri = req.form.uri;
+			content = req.form.content;
+		}
+		
+		// Fallback to query parameters if form data is not available
+		if (!uri && req.query) {
+			uri = req.query.uri;
+		}
+		if (!content && req.query) {
+			content = req.query.content;
+		}
+		
+		// Validate required parameters
+		if (!uri) {
+			return {
+				status: 400,
+				body: JSON.stringify({
+					error: 'Missing required parameter: uri',
+					timestamp: new Date().toISOString()
+				}),
+				contentType: 'application/json'
+			};
+		}
+		
+		if (!content) {
+			return {
+				status: 400,
+				body: JSON.stringify({
+					error: 'Missing required parameter: content',
+					timestamp: new Date().toISOString()
+				}),
+				contentType: 'application/json'
+			};
+		}
+		
+		// Call the upsertScript function
+		upsertScript(uri, content);
+		
+		writeLog(`Script upserted: ${uri} (${content.length} characters)`);
+		
+		return {
+			status: 200,
+			body: JSON.stringify({
+				success: true,
+				message: 'Script upserted successfully',
+				uri: uri,
+				contentLength: content.length,
+				timestamp: new Date().toISOString()
+			}),
+			contentType: 'application/json'
+		};
+	} catch (error) {
+		writeLog(`Script upsert failed: ${error.message}`);
+		return {
+			status: 500,
+			body: JSON.stringify({
+				error: 'Failed to upsert script',
+				details: error.message,
+				timestamp: new Date().toISOString()
+			}),
+			contentType: 'application/json'
+		};
+	}
+}
+
+register('/upsert_script', 'upsert_script_handler', 'POST');
+
 // Log server start with timestamp if writeLog is available
 try {
 	if (typeof writeLog === 'function') {
