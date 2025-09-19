@@ -43,6 +43,7 @@ async fn js_script_mgmt_functions_work() {
     let res2 = reqwest::get("http://127.0.0.1:4000/from-js")
         .await
         .expect("request failed");
-    let body2 = res2.text().await.expect("read body");
-    assert!(!body2.contains("from-js"));
+    let status = res2.status();
+    // The endpoint should now return 404 since the script was deleted
+    assert_eq!(status, 404);
 }

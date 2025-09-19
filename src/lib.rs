@@ -5,7 +5,6 @@ use axum::{Router, routing::any};
 use axum_server::Server;
 use serde_urlencoded;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info};
 
 pub mod config;
@@ -46,55 +45,69 @@ async fn parse_form_data(
     }
 }
 
-/// Type alias for route registrations: (path, method) -> (script_uri, handler_name)
-type RouteRegistry = Arc<Mutex<HashMap<(String, String), (String, String)>>>;
-
-/// Builds the route registry by loading all scripts and collecting their route registrations.
-///
-/// This function executes each script using the js_engine module and collects
-/// any routes registered via the `register(path, handler)` function exposed to JavaScript.
-fn build_registrations() -> anyhow::Result<RouteRegistry> {
-    let regs = Arc::new(Mutex::new(HashMap::new()));
-
+/// Dynamically find a route handler by checking all current scripts
+fn find_route_handler(path: &str, method: &str) -> Option<(String, String)> {
     let scripts = repository::fetch_scripts();
-    debug!("Found {} scripts to load", scripts.len());
 
     for (uri, content) in scripts.into_iter() {
-        debug!("Loading script {}", uri);
-
-        // Execute the script using the js_engine module
+        // Execute the script to get its route registrations
         let result = js_engine::execute_script(&uri, &content);
 
         if result.success {
-            // Merge the registrations from this script into the global registry
-            if let Ok(mut global_regs) = regs.lock() {
-                for ((path, method), handler) in result.registrations {
-                    global_regs.insert((path, method), (uri.clone(), handler));
-                }
+            // Check for exact match
+            if let Some(handler) = result.registrations.get(&(path.to_string(), method.to_string())) {
+                return Some((uri, handler.clone()));
             }
-            debug!("Successfully loaded script {}", uri);
-        } else {
-            if let Some(error) = result.error {
-                error!("Failed to load script {}: {}", uri, error);
+
+            // Check for wildcard matches
+            for ((pattern, reg_method), handler) in &result.registrations {
+                if reg_method == method && pattern.ends_with("/*") {
+                    let prefix = &pattern[..pattern.len() - 1]; // Remove the *
+                    if path.starts_with(prefix) {
+                        return Some((uri.clone(), handler.clone()));
+                    }
+                }
             }
         }
     }
 
-    // Debug: print all registered routes
-    if let Ok(regs_locked) = regs.lock() {
-        debug!("Final route registry: {:?}", *regs_locked);
+    None
+}
+
+/// Check if any script registers a route for the given path (used for 405 responses)
+fn path_has_any_route(path: &str) -> bool {
+    let scripts = repository::fetch_scripts();
+
+    for (uri, content) in scripts.into_iter() {
+        let result = js_engine::execute_script(&uri, &content);
+
+        if result.success {
+            // Check for exact match
+            if result.registrations.keys().any(|(p, _)| p == path) {
+                return true;
+            }
+
+            // Check for wildcard matches
+            for (pattern, _) in result.registrations.keys() {
+                if pattern.ends_with("/*") {
+                    let prefix = &pattern[..pattern.len() - 1]; // Remove the *
+                    if path.starts_with(prefix) {
+                        return true;
+                    }
+                }
+            }
+        }
     }
 
-    Ok(regs)
+    false
 }
 
 /// Starts the web server with the given shutdown receiver.
 ///
 /// This function:
-/// 1. Builds the route registry from all available scripts
-/// 2. Sets up the Axum router with dynamic route handling
-/// 3. Starts the server on the configured address
-/// 4. Listens for shutdown signal
+/// 1. Sets up the Axum router with dynamic route handling
+/// 2. Starts the server on the configured address
+/// 3. Listens for shutdown signal
 pub async fn start_server(shutdown_rx: tokio::sync::oneshot::Receiver<()>) -> anyhow::Result<()> {
     start_server_with_config(config::Config::from_env(), shutdown_rx).await
 }
@@ -104,393 +117,307 @@ pub async fn start_server_with_config(
     config: config::Config,
     mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) -> anyhow::Result<()> {
-    let registrations = Arc::new(build_registrations()?);
-
-    let registrations_clone = Arc::clone(&registrations);
-
+    // Clone the timeout value to avoid borrow checker issues in async closures
+    let script_timeout_ms = config.script_timeout_ms;
+    
     let app = Router::new()
         .route(
             "/",
-            any(move |req: Request<Body>| {
-                let regs = Arc::clone(&registrations);
-                async move {
-                    let path = req.uri().path().to_string();
-                    let request_method = req.method().to_string();
+            any(move |req: Request<Body>| async move {
+                let path = req.uri().path().to_string();
+                let request_method = req.method().to_string();
 
-                    // Check for assets first if it's a GET request
-                    if request_method == "GET" {
-                        if let Some(asset) = repository::fetch_asset(&path) {
-                            let mut response = asset.content.into_response();
-                            response.headers_mut().insert(
-                                axum::http::header::CONTENT_TYPE,
-                                axum::http::HeaderValue::from_str(&asset.mimetype).unwrap_or(
-                                    axum::http::HeaderValue::from_static(
-                                        "application/octet-stream",
-                                    ),
+                // Check for assets first if it's a GET request
+                if request_method == "GET" {
+                    if let Some(asset) = repository::fetch_asset(&path) {
+                        let mut response = asset.content.into_response();
+                        response.headers_mut().insert(
+                            axum::http::header::CONTENT_TYPE,
+                            axum::http::HeaderValue::from_str(&asset.mimetype).unwrap_or(
+                                axum::http::HeaderValue::from_static(
+                                    "application/octet-stream",
                                 ),
-                            );
-                            return response;
-                        }
+                            ),
+                        );
+                        return response;
                     }
+                }
 
-                    // Check if any route exists for this path (including wildcards)
-                    let path_exists = regs
-                        .lock()
-                        .ok()
-                        .map(|g| {
-                            // Check for exact match
-                            if g.keys().any(|(p, _)| p == &path) {
-                                return true;
-                            }
+                // Check if any route exists for this path (including wildcards)
+                let path_exists = path_has_any_route(&path);
 
-                            // Check for wildcard matches
-                            for (pattern, _) in g.keys() {
-                                if pattern.ends_with("/*") {
-                                    let prefix = &pattern[..pattern.len() - 1]; // Remove the *
-                                    if path.starts_with(prefix) {
-                                        return true;
-                                    }
-                                }
-                            }
+                let reg = find_route_handler(&path, &request_method);
+                let (owner_uri, handler_name) = match reg {
+                    Some(t) => t,
+                    None => {
+                        // Extract request ID from extensions
+                        let request_id = req.extensions()
+                            .get::<middleware::RequestId>()
+                            .map(|rid| rid.0.clone())
+                            .unwrap_or_else(|| "unknown".to_string());
 
-                            false
-                        })
-                        .unwrap_or(false);
-
-                    let reg = regs.lock().ok().and_then(|g| {
-                        // First try exact match
-                        if let Some(exact_match) = g.get(&(path.clone(), request_method.clone())) {
-                            return Some(exact_match.clone());
-                        }
-
-                        // If no exact match, try wildcard matching
-                        for ((pattern, method), handler) in g.iter() {
-                            if method == &request_method && pattern.ends_with("/*") {
-                                let prefix = &pattern[..pattern.len() - 1]; // Remove the *
-                                if path.starts_with(prefix) {
-                                    return Some(handler.clone());
-                                }
-                            }
-                        }
-
-                        None
-                    });
-                    let (owner_uri, handler_name) = match reg {
-                        Some(t) => t,
-                        None => {
-                            // Extract request ID from extensions
-                            let request_id = req.extensions()
-                                .get::<middleware::RequestId>()
-                                .map(|rid| rid.0.clone())
-                                .unwrap_or_else(|| "unknown".to_string());
-
-                            if path_exists {
-                                let error_response = error::errors::method_not_allowed(&path, &request_method, &request_id);
-                                return (StatusCode::from_u16(error_response.status).unwrap(), 
-                                       serde_json::to_string(&error_response).unwrap()).into_response();
-                            } else {
-                                let error_response = error::errors::not_found(&path, &request_id);
-                                return (StatusCode::from_u16(error_response.status).unwrap(), 
-                                       serde_json::to_string(&error_response).unwrap()).into_response();
-                            }
-                        }
-                    };
-                    let owner_uri_cl = owner_uri.clone();
-                    let handler_cl = handler_name.clone();
-                    let path_log = path.to_string();
-                    let query_string = req.uri().query().map(|s| s.to_string()).unwrap_or_default();
-                    let query_params = parse_query_string(&query_string);
-
-                    // Extract request ID from extensions before consuming the request
-                    let request_id = req.extensions()
-                        .get::<middleware::RequestId>()
-                        .map(|rid| rid.0.clone())
-                        .unwrap_or_else(|| "unknown".to_string());
-
-                    // Extract content type before consuming the request
-                    let content_type = req
-                        .headers()
-                        .get(axum::http::header::CONTENT_TYPE)
-                        .and_then(|v| v.to_str().ok())
-                        .map(|s| s.to_string());
-                    let body = req.into_body();
-
-                    // Always read the body as bytes first
-                    let body_bytes = match to_bytes(body, usize::MAX).await {
-                        Ok(bytes) => bytes,
-                        Err(_) => axum::body::Bytes::new(),
-                    };
-
-                    // For POST requests to editor API, use raw body
-                    let raw_body = if request_method == "POST" && path.starts_with("/api/scripts/")
-                    {
-                        Some(String::from_utf8(body_bytes.to_vec()).unwrap_or_default())
-                    } else {
-                        None
-                    };
-
-                    let form_data = if raw_body.is_some() {
-                        // If we have raw body, don't parse as form data
-                        HashMap::new()
-                    } else {
-                        // Parse form data from the bytes
-                        let body = Body::from(body_bytes);
-                        if let Some(ct) = content_type {
-                            parse_form_data(Some(&ct), body).await.unwrap_or_default()
+                        if path_exists {
+                            let error_response = error::errors::method_not_allowed(&path, &request_method, &request_id);
+                            return (StatusCode::from_u16(error_response.status).unwrap(), 
+                                   serde_json::to_string(&error_response).unwrap()).into_response();
                         } else {
-                            parse_form_data(None, body).await.unwrap_or_default()
-                        }
-                    };
-
-                    let path_clone = path.clone();
-                    let worker = move || -> Result<(u16, String, Option<String>), String> {
-                        js_engine::execute_script_for_request(
-                            &owner_uri_cl,
-                            &handler_cl,
-                            &path_clone,
-                            &request_method,
-                            Some(&query_params),
-                            Some(&form_data),
-                            raw_body,
-                        )
-                    };
-
-                    let join = tokio::task::spawn_blocking(worker)
-                        .await
-                        .map_err(|e| format!("join error: {}", e));
-
-                    let timed = match tokio::time::timeout(
-                        std::time::Duration::from_millis(config.script_timeout_ms),
-                        async { join },
-                    )
-                    .await
-                    {
-                        Ok(r) => r,
-                        Err(_) => {
-                            let error_response = error::errors::script_timeout(&path, &request_id);
+                            let error_response = error::errors::not_found(&path, &request_id);
                             return (StatusCode::from_u16(error_response.status).unwrap(), 
                                    serde_json::to_string(&error_response).unwrap()).into_response();
                         }
-                    };
+                    }
+                };
+                let owner_uri_cl = owner_uri.clone();
+                let handler_cl = handler_name.clone();
+                let path_log = path.to_string();
+                let query_string = req.uri().query().map(|s| s.to_string()).unwrap_or_default();
+                let query_params = parse_query_string(&query_string);
 
-                    match timed {
-                        Ok(Ok((status, body, content_type))) => {
-                            let mut response = (
-                                StatusCode::from_u16(status)
-                                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-                                body,
-                            )
-                                .into_response();
+                // Extract request ID from extensions before consuming the request
+                let request_id = req.extensions()
+                    .get::<middleware::RequestId>()
+                    .map(|rid| rid.0.clone())
+                    .unwrap_or_else(|| "unknown".to_string());
 
-                            if let Some(ct) = content_type {
-                                response.headers_mut().insert(
-                                    axum::http::header::CONTENT_TYPE,
-                                    axum::http::HeaderValue::from_str(&ct).unwrap_or_else(|_| {
-                                        axum::http::HeaderValue::from_static("text/plain")
-                                    }),
-                                );
-                            }
+                // Extract content type before consuming the request
+                let content_type = req
+                    .headers()
+                    .get(axum::http::header::CONTENT_TYPE)
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string());
+                let body = req.into_body();
 
-                            response
+                // Always read the body as bytes first
+                let body_bytes = match to_bytes(body, usize::MAX).await {
+                    Ok(bytes) => bytes,
+                    Err(_) => axum::body::Bytes::new(),
+                };
+
+                // For POST requests to editor API, use raw body
+                let raw_body = if request_method == "POST" && path.starts_with("/api/scripts/") {
+                    Some(String::from_utf8(body_bytes.to_vec()).unwrap_or_default())
+                } else {
+                    None
+                };
+
+                let form_data = if raw_body.is_some() {
+                    // If we have raw body, don't parse as form data
+                    HashMap::new()
+                } else {
+                    // Parse form data from the bytes
+                    let body = Body::from(body_bytes);
+                    if let Some(ct) = content_type {
+                        parse_form_data(Some(&ct), body).await.unwrap_or_default()
+                    } else {
+                        parse_form_data(None, body).await.unwrap_or_default()
+                    }
+                };
+
+                let path_clone = path.clone();
+                let worker = move || -> Result<(u16, String, Option<String>), String> {
+                    js_engine::execute_script_for_request(
+                        &owner_uri_cl,
+                        &handler_cl,
+                        &path_clone,
+                        &request_method,
+                        Some(&query_params),
+                        Some(&form_data),
+                        raw_body,
+                    )
+                };
+
+                let join = tokio::task::spawn_blocking(worker)
+                    .await
+                    .map_err(|e| format!("join error: {}", e));
+
+                let timed = match tokio::time::timeout(
+                    std::time::Duration::from_millis(script_timeout_ms),
+                    async { join },
+                )
+                .await
+                {
+                    Ok(r) => r,
+                    Err(_) => {
+                        let error_response = error::errors::script_timeout(&path, &request_id);
+                        return (StatusCode::from_u16(error_response.status).unwrap(), 
+                               serde_json::to_string(&error_response).unwrap()).into_response();
+                    }
+                };
+
+                match timed {
+                    Ok(Ok((status, body, content_type))) => {
+                        let mut response = (
+                            StatusCode::from_u16(status)
+                                .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                            body,
+                        )
+                            .into_response();
+
+                        if let Some(ct) = content_type {
+                            response.headers_mut().insert(
+                                axum::http::header::CONTENT_TYPE,
+                                axum::http::HeaderValue::from_str(&ct).unwrap_or_else(|_| {
+                                    axum::http::HeaderValue::from_static("text/plain")
+                                }),
+                            );
                         }
-                        Ok(Err(e)) => {
-                            error!("script error for {}: {}", path_log, e);
-                            let error_response = error::errors::script_execution_failed(&path, &e, &request_id);
-                            (StatusCode::from_u16(error_response.status).unwrap(), 
-                             serde_json::to_string(&error_response).unwrap()).into_response()
-                        }
-                        Err(e) => {
-                            error!("task error for {}: {}", path_log, e);
-                            let error_response = error::errors::internal_server_error(&path, &e, &request_id);
-                            (StatusCode::from_u16(error_response.status).unwrap(), 
-                             serde_json::to_string(&error_response).unwrap()).into_response()
-                        }
+
+                        response
+                    }
+                    Ok(Err(e)) => {
+                        error!("script error for {}: {}", path_log, e);
+                        let error_response = error::errors::script_execution_failed(&path, &e, &request_id);
+                        (StatusCode::from_u16(error_response.status).unwrap(), 
+                         serde_json::to_string(&error_response).unwrap()).into_response()
+                    }
+                    Err(e) => {
+                        error!("task error for {}: {}", path_log, e);
+                        let error_response = error::errors::internal_server_error(&path, &e, &request_id);
+                        (StatusCode::from_u16(error_response.status).unwrap(), 
+                         serde_json::to_string(&error_response).unwrap()).into_response()
                     }
                 }
             }),
         )
         .route(
             "/{*path}",
-            any(move |req: Request<Body>| {
-                let regs = Arc::clone(&registrations_clone);
-                async move {
-                    let full_path = req.uri().path().to_string();
-                    let request_method = req.method().to_string();
+            any(move |req: Request<Body>| async move {
+                let full_path = req.uri().path().to_string();
+                let request_method = req.method().to_string();
 
-                    // Check if any route exists for this path (including wildcards)
-                    let path_exists = regs
-                        .lock()
-                        .ok()
-                        .map(|g| {
-                            // Check for exact match
-                            if g.keys().any(|(p, _)| p == &full_path) {
-                                return true;
-                            }
+                // Check if any route exists for this path (including wildcards)
+                let path_exists = path_has_any_route(&full_path);
 
-                            // Check for wildcard matches
-                            for (pattern, _) in g.keys() {
-                                if pattern.ends_with("/*") {
-                                    let prefix = &pattern[..pattern.len() - 1]; // Remove the *
-                                    if full_path.starts_with(prefix) {
-                                        return true;
-                                    }
-                                }
-                            }
+                let reg = find_route_handler(&full_path, &request_method);
+                let (owner_uri, handler_name) = match reg {
+                    Some(t) => t,
+                    None => {
+                        // Extract request ID from extensions
+                        let request_id = req.extensions()
+                            .get::<middleware::RequestId>()
+                            .map(|rid| rid.0.clone())
+                            .unwrap_or_else(|| "unknown".to_string());
 
-                            false
-                        })
-                        .unwrap_or(false);
-
-                    let reg = regs.lock().ok().and_then(|g| {
-                        // First try exact match
-                        if let Some(exact_match) =
-                            g.get(&(full_path.clone(), request_method.clone()))
-                        {
-                            return Some(exact_match.clone());
-                        }
-
-                        // If no exact match, try wildcard matching
-                        for ((pattern, method), handler) in g.iter() {
-                            if method == &request_method && pattern.ends_with("/*") {
-                                let prefix = &pattern[..pattern.len() - 1]; // Remove the *
-                                if full_path.starts_with(prefix) {
-                                    return Some(handler.clone());
-                                }
-                            }
-                        }
-
-                        None
-                    });
-                    let (owner_uri, handler_name) = match reg {
-                        Some(t) => t,
-                        None => {
-                            // Extract request ID from extensions
-                            let request_id = req.extensions()
-                                .get::<middleware::RequestId>()
-                                .map(|rid| rid.0.clone())
-                                .unwrap_or_else(|| "unknown".to_string());
-
-                            if path_exists {
-                                let error_response = error::errors::method_not_allowed(&full_path, &request_method, &request_id);
-                                return (StatusCode::from_u16(error_response.status).unwrap(), 
-                                       serde_json::to_string(&error_response).unwrap()).into_response();
-                            } else {
-                                let error_response = error::errors::not_found(&full_path, &request_id);
-                                return (StatusCode::from_u16(error_response.status).unwrap(), 
-                                       serde_json::to_string(&error_response).unwrap()).into_response();
-                            }
-                        }
-                    };
-                    let owner_uri_cl = owner_uri.clone();
-                    let handler_cl = handler_name.clone();
-                    let path_log = full_path.clone();
-                    let query_string = req.uri().query().map(|s| s.to_string()).unwrap_or_default();
-                    let query_params = parse_query_string(&query_string);
-
-                    // Extract request ID from extensions before consuming the request
-                    let request_id = req.extensions()
-                        .get::<middleware::RequestId>()
-                        .map(|rid| rid.0.clone())
-                        .unwrap_or_else(|| "unknown".to_string());
-
-                    // Extract content type before consuming the request
-                    let content_type = req
-                        .headers()
-                        .get(axum::http::header::CONTENT_TYPE)
-                        .and_then(|v| v.to_str().ok())
-                        .map(|s| s.to_string());
-                    let body = req.into_body();
-
-                    // Always read the body as bytes first
-                    let body_bytes = match to_bytes(body, usize::MAX).await {
-                        Ok(bytes) => bytes,
-                        Err(_) => axum::body::Bytes::new(),
-                    };
-
-                    // For POST requests to editor API, use raw body
-                    let raw_body =
-                        if request_method == "POST" && full_path.starts_with("/api/scripts/") {
-                            Some(String::from_utf8(body_bytes.to_vec()).unwrap_or_default())
+                        if path_exists {
+                            let error_response = error::errors::method_not_allowed(&full_path, &request_method, &request_id);
+                            return (StatusCode::from_u16(error_response.status).unwrap(), 
+                                   serde_json::to_string(&error_response).unwrap()).into_response();
                         } else {
-                            None
-                        };
-
-                    let form_data = if raw_body.is_some() {
-                        // If we have raw body, don't parse as form data
-                        HashMap::new()
-                    } else {
-                        // Parse form data from the bytes
-                        let body = Body::from(body_bytes);
-                        if let Some(ct) = content_type {
-                            parse_form_data(Some(&ct), body).await.unwrap_or_default()
-                        } else {
-                            parse_form_data(None, body).await.unwrap_or_default()
-                        }
-                    };
-
-                    let full_path_clone = full_path.clone();
-                    let worker = move || -> Result<(u16, String, Option<String>), String> {
-                        js_engine::execute_script_for_request(
-                            &owner_uri_cl,
-                            &handler_cl,
-                            &full_path_clone,
-                            &request_method,
-                            Some(&query_params),
-                            Some(&form_data),
-                            raw_body,
-                        )
-                    };
-
-                    let join = tokio::task::spawn_blocking(worker)
-                        .await
-                        .map_err(|e| format!("join error: {}", e));
-
-                    let timed = match tokio::time::timeout(
-                        std::time::Duration::from_millis(config.script_timeout_ms),
-                        async { join },
-                    )
-                    .await
-                    {
-                        Ok(r) => r,
-                        Err(_) => {
-                            let error_response = error::errors::script_timeout(&full_path, &request_id);
+                            let error_response = error::errors::not_found(&full_path, &request_id);
                             return (StatusCode::from_u16(error_response.status).unwrap(), 
                                    serde_json::to_string(&error_response).unwrap()).into_response();
                         }
+                    }
+                };
+                let owner_uri_cl = owner_uri.clone();
+                let handler_cl = handler_name.clone();
+                let path_log = full_path.clone();
+                let query_string = req.uri().query().map(|s| s.to_string()).unwrap_or_default();
+                let query_params = parse_query_string(&query_string);
+
+                // Extract request ID from extensions before consuming the request
+                let request_id = req.extensions()
+                    .get::<middleware::RequestId>()
+                    .map(|rid| rid.0.clone())
+                    .unwrap_or_else(|| "unknown".to_string());
+
+                // Extract content type before consuming the request
+                let content_type = req
+                    .headers()
+                    .get(axum::http::header::CONTENT_TYPE)
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string());
+                let body = req.into_body();
+
+                // Always read the body as bytes first
+                let body_bytes = match to_bytes(body, usize::MAX).await {
+                    Ok(bytes) => bytes,
+                    Err(_) => axum::body::Bytes::new(),
+                };
+
+                // For POST requests to editor API, use raw body
+                let raw_body =
+                    if request_method == "POST" && full_path.starts_with("/api/scripts/") {
+                        Some(String::from_utf8(body_bytes.to_vec()).unwrap_or_default())
+                    } else {
+                        None
                     };
 
-                    match timed {
-                        Ok(Ok((status, body, content_type))) => {
-                            let mut response = (
-                                StatusCode::from_u16(status)
-                                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-                                body,
-                            )
-                                .into_response();
+                let form_data = if raw_body.is_some() {
+                    // If we have raw body, don't parse as form data
+                    HashMap::new()
+                } else {
+                    // Parse form data from the bytes
+                    let body = Body::from(body_bytes);
+                    if let Some(ct) = content_type {
+                        parse_form_data(Some(&ct), body).await.unwrap_or_default()
+                    } else {
+                        parse_form_data(None, body).await.unwrap_or_default()
+                    }
+                };
 
-                            if let Some(ct) = content_type {
-                                response.headers_mut().insert(
-                                    axum::http::header::CONTENT_TYPE,
-                                    axum::http::HeaderValue::from_str(&ct).unwrap_or_else(|_| {
-                                        axum::http::HeaderValue::from_static("text/plain")
-                                    }),
-                                );
-                            }
+                let full_path_clone = full_path.clone();
+                let worker = move || -> Result<(u16, String, Option<String>), String> {
+                    js_engine::execute_script_for_request(
+                        &owner_uri_cl,
+                        &handler_cl,
+                        &full_path_clone,
+                        &request_method,
+                        Some(&query_params),
+                        Some(&form_data),
+                        raw_body,
+                    )
+                };
 
-                            response
+                let join = tokio::task::spawn_blocking(worker)
+                    .await
+                    .map_err(|e| format!("join error: {}", e));
+
+                let timed = match tokio::time::timeout(
+                    std::time::Duration::from_millis(script_timeout_ms),
+                    async { join },
+                )
+                .await
+                {
+                    Ok(r) => r,
+                    Err(_) => {
+                        let error_response = error::errors::script_timeout(&full_path, &request_id);
+                        return (StatusCode::from_u16(error_response.status).unwrap(), 
+                               serde_json::to_string(&error_response).unwrap()).into_response();
+                    }
+                };
+
+                match timed {
+                    Ok(Ok((status, body, content_type))) => {
+                        let mut response = (
+                            StatusCode::from_u16(status)
+                                .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                            body,
+                        )
+                            .into_response();
+
+                        if let Some(ct) = content_type {
+                            response.headers_mut().insert(
+                                axum::http::header::CONTENT_TYPE,
+                                axum::http::HeaderValue::from_str(&ct).unwrap_or_else(|_| {
+                                    axum::http::HeaderValue::from_static("text/plain")
+                                }),
+                            );
                         }
-                        Ok(Err(e)) => {
-                            error!("script error for {}: {}", path_log, e);
-                            let error_response = error::errors::script_execution_failed(&full_path, &e, &request_id);
-                            (StatusCode::from_u16(error_response.status).unwrap(), 
-                             serde_json::to_string(&error_response).unwrap()).into_response()
-                        }
-                        Err(e) => {
-                            error!("task error for {}: {}", path_log, e);
-                            let error_response = error::errors::internal_server_error(&full_path, &e, &request_id);
-                            (StatusCode::from_u16(error_response.status).unwrap(), 
-                             serde_json::to_string(&error_response).unwrap()).into_response()
-                        }
+
+                        response
+                    }
+                    Ok(Err(e)) => {
+                        error!("script error for {}: {}", path_log, e);
+                        let error_response = error::errors::script_execution_failed(&full_path, &e, &request_id);
+                        (StatusCode::from_u16(error_response.status).unwrap(), 
+                         serde_json::to_string(&error_response).unwrap()).into_response()
+                    }
+                    Err(e) => {
+                        error!("task error for {}: {}", path_log, e);
+                        let error_response = error::errors::internal_server_error(&full_path, &e, &request_id);
+                        (StatusCode::from_u16(error_response.status).unwrap(), 
+                         serde_json::to_string(&error_response).unwrap()).into_response()
                     }
                 }
             }),
