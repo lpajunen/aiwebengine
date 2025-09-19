@@ -140,6 +140,77 @@ function upsert_script_handler(req) {
 
 register('/upsert_script', 'upsert_script_handler', 'POST');
 
+// Script deletion endpoint
+function delete_script_handler(req) {
+	try {
+		// Extract uri parameter from form data (for POST requests)
+		let uri = null;
+		
+		if (req.form) {
+			uri = req.form.uri;
+		}
+		
+		// Fallback to query parameters if form data is not available
+		if (!uri && req.query) {
+			uri = req.query.uri;
+		}
+		
+		// Validate required parameter
+		if (!uri) {
+			return {
+				status: 400,
+				body: JSON.stringify({
+					error: 'Missing required parameter: uri',
+					timestamp: new Date().toISOString()
+				}),
+				contentType: 'application/json'
+			};
+		}
+		
+		// Call the deleteScript function
+		const deleted = deleteScript(uri);
+		
+		if (deleted) {
+			writeLog(`Script deleted: ${uri}`);
+			return {
+				status: 200,
+				body: JSON.stringify({
+					success: true,
+					message: 'Script deleted successfully',
+					uri: uri,
+					timestamp: new Date().toISOString()
+				}),
+				contentType: 'application/json'
+			};
+		} else {
+			writeLog(`Script not found for deletion: ${uri}`);
+			return {
+				status: 404,
+				body: JSON.stringify({
+					error: 'Script not found',
+					message: 'No script with the specified URI was found',
+					uri: uri,
+					timestamp: new Date().toISOString()
+				}),
+				contentType: 'application/json'
+			};
+		}
+	} catch (error) {
+		writeLog(`Script deletion failed: ${error.message}`);
+		return {
+			status: 500,
+			body: JSON.stringify({
+				error: 'Failed to delete script',
+				details: error.message,
+				timestamp: new Date().toISOString()
+			}),
+			contentType: 'application/json'
+		};
+	}
+}
+
+register('/delete_script', 'delete_script_handler', 'POST');
+
 // Log server start with timestamp if writeLog is available
 try {
 	if (typeof writeLog === 'function') {

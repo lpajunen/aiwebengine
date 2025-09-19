@@ -80,7 +80,10 @@ register('/test-endpoint', 'test_endpoint_handler', 'GET');
 
     assert_eq!(response.status(), 200);
 
-    let body: serde_json::Value = response.json().await.expect("Failed to parse JSON response");
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .expect("Failed to parse JSON response");
     assert_eq!(body["success"], true);
     assert_eq!(body["uri"], "https://example.com/test-endpoint-script");
     assert!(body["contentLength"].as_u64().unwrap() > 0);
@@ -95,6 +98,96 @@ register('/test-endpoint', 'test_endpoint_handler', 'GET');
         .expect("GET request to test endpoint failed");
 
     assert_eq!(test_response.status(), 200);
-    let test_body = test_response.text().await.expect("Failed to read test response");
+    let test_body = test_response
+        .text()
+        .await
+        .expect("Failed to read test response");
     assert_eq!(test_body, "Test endpoint works!");
+}
+
+#[tokio::test]
+async fn test_delete_script_endpoint() {
+    // Start server in background task
+    let _server_handle = tokio::spawn(async move {
+        let _ = start_server_without_shutdown().await;
+    });
+
+    // Give server time to start
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let client = reqwest::Client::new();
+
+    // First, upsert a test script
+    let test_script_content = r#"
+function delete_test_handler(req) {
+    return { status: 200, body: 'Delete test endpoint works!' };
+}
+register('/delete-test-endpoint', 'delete_test_handler', 'GET');
+"#;
+
+    let upsert_response = client
+        .post("http://127.0.0.1:4000/upsert_script")
+        .form(&[
+            ("uri", "https://example.com/delete-test-script"),
+            ("content", test_script_content),
+        ])
+        .send()
+        .await
+        .expect("POST request to /upsert_script failed");
+
+    assert_eq!(upsert_response.status(), 200);
+
+    // Verify the script was upserted
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let test_response = client
+        .get("http://127.0.0.1:4000/delete-test-endpoint")
+        .send()
+        .await
+        .expect("GET request to delete test endpoint failed");
+
+    assert_eq!(test_response.status(), 200);
+
+    // Now test the delete_script endpoint
+    let delete_response = client
+        .post("http://127.0.0.1:4000/delete_script")
+        .form(&[("uri", "https://example.com/delete-test-script")])
+        .send()
+        .await
+        .expect("POST request to /delete_script failed");
+
+    assert_eq!(delete_response.status(), 200);
+
+    let delete_body: serde_json::Value = delete_response
+        .json()
+        .await
+        .expect("Failed to parse JSON response");
+    assert_eq!(delete_body["success"], true);
+    assert_eq!(delete_body["uri"], "https://example.com/delete-test-script");
+
+    // Verify the script was actually deleted by checking the endpoint returns 404
+    tokio::time::sleep(Duration::from_millis(100)).await; // Give time for script to be deleted
+
+    let after_delete_response = client
+        .get("http://127.0.0.1:4000/delete-test-endpoint")
+        .send()
+        .await
+        .expect("GET request to delete test endpoint after deletion failed");
+
+    assert_eq!(after_delete_response.status(), 404);
+
+    // Test deleting a non-existent script
+    let nonexistent_delete_response = client
+        .post("http://127.0.0.1:4000/delete_script")
+        .form(&[("uri", "https://example.com/nonexistent-script")])
+        .send()
+        .await
+        .expect("POST request to /delete_script for nonexistent script failed");
+
+    assert_eq!(nonexistent_delete_response.status(), 404);
+
+    let nonexistent_body: serde_json::Value = nonexistent_delete_response
+        .json()
+        .await
+        .expect("Failed to parse JSON response");
+    assert_eq!(nonexistent_body["error"], "Script not found");
 }

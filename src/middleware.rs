@@ -1,9 +1,4 @@
-use axum::{
-    extract::Request,
-    http::HeaderMap,
-    middleware::Next,
-    response::Response,
-};
+use axum::{extract::Request, http::HeaderMap, middleware::Next, response::Response};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::debug;
 
@@ -19,7 +14,9 @@ pub async fn request_id_middleware(request: Request, next: Next) -> Response {
 
     // Add request ID to request extensions for use in handlers
     let mut request = request;
-    request.extensions_mut().insert(RequestId(request_id.clone()));
+    request
+        .extensions_mut()
+        .insert(RequestId(request_id.clone()));
 
     // Add request ID to response headers
     let mut response = next.run(request).await;
