@@ -483,6 +483,56 @@ pub async fn start_server_with_config(
     const MAX_PORT_ATTEMPTS: u16 = 100; // Try up to 100 ports
 
     loop {
+        // Handle automatic port assignment (port 0)
+        if config.port == 0 {
+            // Bind to port 0 to let OS assign a free port
+            let test_bind = std::net::TcpListener::bind(actual_addr);
+            match test_bind {
+                Ok(listener) => {
+                    // Get the actual port assigned by the OS
+                    let actual_port = listener.local_addr()
+                        .map_err(|e| anyhow::anyhow!("Failed to get local address: {}", e))?
+                        .port();
+                    drop(listener);
+
+                    let actual_addr = format!("{}:{}", config.host, actual_port)
+                        .parse()
+                        .map_err(|e| anyhow::anyhow!("Invalid server address: {}", e))?;
+
+                    info!("Auto-assigned port: {}", actual_port);
+
+                    // record startup in logs so tests can observe server start
+                    repository::insert_log_message("server started");
+                    debug!(
+                        "Server configuration - host: {}, requested port: {}, actual port: {}",
+                        config.host, config.port, actual_port
+                    );
+
+                    let svc = app.into_make_service();
+                    let server = Server::bind(actual_addr).serve(svc);
+
+                    // Spawn the server in a background task so we can return immediately
+                    tokio::spawn(async move {
+                        tokio::select! {
+                            res = server => {
+                                if let Err(e) = res {
+                                    eprintln!("Server error: {:?}", e);
+                                }
+                            },
+                            _ = &mut shutdown_rx => {
+                                /* graceful shutdown: stop accepting new connections */
+                            }
+                        }
+                    });
+
+                    return Ok(actual_port);
+                }
+                Err(e) => {
+                    return Err(anyhow::anyhow!("Failed to bind to auto-assigned port: {}", e));
+                }
+            }
+        }
+
         // First check if the port is available using TcpListener
         let test_bind = std::net::TcpListener::bind(actual_addr);
         match test_bind {
@@ -507,10 +557,17 @@ pub async fn start_server_with_config(
                 let svc = app.into_make_service();
                 let server = Server::bind(actual_addr).serve(svc);
 
-                tokio::select! {
-                    res = server => { res? },
-                    _ = &mut shutdown_rx => { /* graceful shutdown: stop accepting new connections */ }
-                }
+                // Spawn the server in a background task so we can return immediately
+                tokio::spawn(async move {
+                    tokio::select! {
+                        res = server => {
+                            if let Err(e) = res {
+                                eprintln!("Server error: {:?}", e);
+                            }
+                        },
+                        _ = &mut shutdown_rx => { /* graceful shutdown: stop accepting new connections */ }
+                    }
+                });
 
                 return Ok(current_port);
             }
@@ -546,8 +603,13 @@ pub async fn start_server_with_config(
 }
 
 pub async fn start_server_without_shutdown() -> anyhow::Result<u16> {
-    let (_tx, rx) = tokio::sync::oneshot::channel::<()>();
-    start_server(rx).await
+    let mut config = config::Config::from_env();
+    config.port = 0; // Use port 0 for automatic port assignment
+    // Create a channel that will never receive a shutdown signal
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    // Leak the sender so it never gets dropped and the channel never closes
+    Box::leak(Box::new(tx));
+    start_server_with_config(config, rx).await
 }
 
 pub async fn start_server_without_shutdown_with_config(config: config::Config) -> anyhow::Result<u16> {
