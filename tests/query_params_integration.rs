@@ -11,8 +11,10 @@ async fn test_query_parameters() {
     );
 
     // Start server in background task
+    let port = start_server_without_shutdown().await.expect("server failed to start");
     tokio::spawn(async move {
-        let _ = start_server_without_shutdown().await;
+        // Server is already started, just keep it running
+        tokio::time::sleep(Duration::from_secs(10)).await;
     });
 
     // Give server time to start
@@ -22,7 +24,7 @@ async fn test_query_parameters() {
 
     // Test GET request to /api/query without query parameters
     let response_no_query = client
-        .get("http://127.0.0.1:4000/api/query")
+        .get(format!("http://127.0.0.1:{}/api/query", port))
         .send()
         .await
         .expect("GET request without query failed");
@@ -44,7 +46,7 @@ async fn test_query_parameters() {
 
     // Test GET request to /api/query with query parameters
     let response_with_query = client
-        .get("http://127.0.0.1:4000/api/query?id=123&name=test")
+        .get(format!("http://127.0.0.1:{}/api/query?id=123&name=test", port))
         .send()
         .await
         .expect("GET request with query failed");

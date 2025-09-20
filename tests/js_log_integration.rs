@@ -11,15 +11,17 @@ async fn js_write_log_and_listlogs() {
     );
 
     // start server with the js_log_test script
+    let port = start_server_without_shutdown().await.expect("server failed to start");
     tokio::spawn(async move {
-        let _ = start_server_without_shutdown().await;
+        // Server is already started, just keep it running
+        tokio::time::sleep(Duration::from_secs(10)).await;
     });
 
     // allow server to start
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // call the route which should call writeLog
-    let res = reqwest::get("http://127.0.0.1:4000/js-log-test")
+    let res = reqwest::get(format!("http://127.0.0.1:{}/js-log-test", port))
         .await
         .expect("request failed");
     let body = res.text().await.expect("read body");

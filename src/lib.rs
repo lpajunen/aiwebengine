@@ -111,7 +111,7 @@ fn path_has_any_route(path: &str) -> bool {
 /// 1. Sets up the Axum router with dynamic route handling
 /// 2. Starts the server on the configured address
 /// 3. Listens for shutdown signal
-pub async fn start_server(shutdown_rx: tokio::sync::oneshot::Receiver<()>) -> anyhow::Result<()> {
+pub async fn start_server(shutdown_rx: tokio::sync::oneshot::Receiver<()>) -> anyhow::Result<u16> {
     start_server_with_config(config::Config::from_env(), shutdown_rx).await
 }
 
@@ -119,7 +119,7 @@ pub async fn start_server(shutdown_rx: tokio::sync::oneshot::Receiver<()>) -> an
 pub async fn start_server_with_config(
     config: config::Config,
     mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<u16> {
     // Clone the timeout value to avoid borrow checker issues in async closures
     let script_timeout_ms = config.script_timeout_ms;
 
@@ -491,12 +491,17 @@ pub async fn start_server_with_config(
         _ = &mut shutdown_rx => { /* graceful shutdown: stop accepting new connections */ }
     }
 
-    Ok(())
+    Ok(config.port)
 }
 
-pub async fn start_server_without_shutdown() -> anyhow::Result<()> {
+pub async fn start_server_without_shutdown() -> anyhow::Result<u16> {
     let (_tx, rx) = tokio::sync::oneshot::channel::<()>();
     start_server(rx).await
+}
+
+pub async fn start_server_without_shutdown_with_config(config: config::Config) -> anyhow::Result<u16> {
+    let (_tx, rx) = tokio::sync::oneshot::channel::<()>();
+    start_server_with_config(config, rx).await
 }
 
 #[cfg(test)]

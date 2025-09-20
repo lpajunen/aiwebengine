@@ -11,8 +11,10 @@ async fn test_different_http_methods() {
     );
 
     // Start server in background task
+    let port = start_server_without_shutdown().await.expect("server failed to start");
     tokio::spawn(async move {
-        let _ = start_server_without_shutdown().await;
+        // Server is already started, just keep it running
+        tokio::time::sleep(Duration::from_secs(10)).await;
     });
 
     // Give server time to start
@@ -22,7 +24,7 @@ async fn test_different_http_methods() {
 
     // Test GET request to /api/test
     let get_response = client
-        .get("http://127.0.0.1:4000/api/test")
+        .get(format!("http://127.0.0.1:{}/api/test", port))
         .send()
         .await
         .expect("GET request failed");
@@ -39,7 +41,7 @@ async fn test_different_http_methods() {
 
     // Test POST request to /api/test
     let post_response = client
-        .post("http://127.0.0.1:4000/api/test")
+        .post(format!("http://127.0.0.1:{}/api/test", port))
         .send()
         .await
         .expect("POST request failed");
@@ -61,7 +63,7 @@ async fn test_different_http_methods() {
 
     // Test PUT request to /api/test
     let put_response = client
-        .put("http://127.0.0.1:4000/api/test")
+        .put(format!("http://127.0.0.1:{}/api/test", port))
         .send()
         .await
         .expect("PUT request failed");
@@ -78,7 +80,7 @@ async fn test_different_http_methods() {
 
     // Test DELETE request to /api/test
     let delete_response = client
-        .delete("http://127.0.0.1:4000/api/test")
+        .delete(format!("http://127.0.0.1:{}/api/test", port))
         .send()
         .await
         .expect("DELETE request failed");
@@ -87,7 +89,7 @@ async fn test_different_http_methods() {
     // Test method validation - wrong method should return 405 Method Not Allowed
     // Try PATCH on a path that only has GET/POST/PUT/DELETE registered
     let patch_response = client
-        .patch("http://127.0.0.1:4000/api/test")
+        .patch(format!("http://127.0.0.1:{}/api/test", port))
         .send()
         .await
         .expect("PATCH request failed");
@@ -95,7 +97,7 @@ async fn test_different_http_methods() {
 
     // Test unregistered path returns 404
     let not_found_response = client
-        .get("http://127.0.0.1:4000/api/nonexistent")
+        .get(format!("http://127.0.0.1:{}/api/nonexistent", port))
         .send()
         .await
         .expect("Request to nonexistent path failed");

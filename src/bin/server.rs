@@ -15,8 +15,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Spawn the server task that listens until shutdown_rx receives a value
     let server_task = tokio::spawn(async move {
-        if let Err(e) = start_server(shutdown_rx).await {
-            tracing::error!("server error: {}", e);
+        match start_server(shutdown_rx).await {
+            Ok(port) => tracing::info!("server started on port {}", port),
+            Err(e) => tracing::error!("server error: {}", e),
         }
     });
 

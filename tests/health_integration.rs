@@ -11,8 +11,10 @@ async fn test_health_endpoint() {
     );
 
     // Start server in background task
+    let port = start_server_without_shutdown().await.expect("server failed to start");
     tokio::spawn(async move {
-        let _ = start_server_without_shutdown().await;
+        // Server is already started, just keep it running
+        tokio::time::sleep(Duration::from_secs(10)).await;
     });
 
     // Give server time to start
@@ -22,7 +24,7 @@ async fn test_health_endpoint() {
 
     // Test health endpoint
     let health_response = client
-        .get("http://127.0.0.1:4000/health")
+        .get(format!("http://127.0.0.1:{}/health", port))
         .send()
         .await
         .expect("Health check request failed");
@@ -61,8 +63,10 @@ async fn test_health_endpoint_content_type() {
     );
 
     // Start server
+    let port = start_server_without_shutdown().await.expect("server failed to start");
     tokio::spawn(async move {
-        let _ = start_server_without_shutdown().await;
+        // Server is already started, just keep it running
+        tokio::time::sleep(Duration::from_secs(10)).await;
     });
 
     tokio::time::sleep(Duration::from_millis(1000)).await;
@@ -71,7 +75,7 @@ async fn test_health_endpoint_content_type() {
 
     // Test that the health endpoint returns correct content type
     let response = client
-        .get("http://127.0.0.1:4000/health")
+        .get(format!("http://127.0.0.1:{}/health", port))
         .send()
         .await
         .expect("Health request failed");

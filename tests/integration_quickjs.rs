@@ -7,15 +7,17 @@ async fn js_registered_route_returns_expected() {
     // start server in background task
     // ensure repository scripts are present (core/debug are included by default)
     // start server in background task
+    let port = start_server_without_shutdown().await.expect("server failed to start");
     tokio::spawn(async move {
-        let _ = start_server_without_shutdown().await;
+        // Server is already started, just keep it running
+        tokio::time::sleep(Duration::from_secs(10)).await;
     });
 
     // give server a moment to start
     tokio::time::sleep(Duration::from_millis(1000)).await;
 
     // send request to /debug which now returns listLogs() as JSON
-    let res = reqwest::get("http://127.0.0.1:4000/debug")
+    let res = reqwest::get(format!("http://127.0.0.1:{}/debug", port))
         .await
         .expect("request failed");
     let body = res.text().await.expect("read body");
@@ -38,10 +40,10 @@ async fn js_registered_route_returns_expected() {
     let mut last_body = String::new();
     for i in 0..10 {
         println!(
-            "DEBUG: Test attempt {} - making request to http://127.0.0.1:4000/",
-            i
+            "DEBUG: Test attempt {} - making request to http://127.0.0.1:{}/",
+            i, port
         );
-        let res_root = reqwest::get("http://127.0.0.1:4000/").await;
+        let res_root = reqwest::get(format!("http://127.0.0.1:{}/", port)).await;
         match res_root {
             Ok(res) => {
                 println!(

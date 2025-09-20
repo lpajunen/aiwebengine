@@ -22,6 +22,7 @@ async fn test_test_editor_api_endpoints() {
 
     // Start server with custom config
     let (_tx, rx) = oneshot::channel();
+    let port = test_config.port;
     tokio::spawn(async move {
         let _ = start_server_with_config(test_config, rx).await;
     });
@@ -35,7 +36,7 @@ async fn test_test_editor_api_endpoints() {
     // Try multiple times to connect to ensure server is ready
     let mut server_ready = false;
     for attempt in 1..=5 {
-        match client.get("http://127.0.0.1:4001/").send().await {
+        match client.get(format!("http://127.0.0.1:{}/", port)).send().await {
             Ok(resp) => {
                 if resp.status().is_success() {
                     server_ready = true;
@@ -56,7 +57,7 @@ async fn test_test_editor_api_endpoints() {
 
     // Test the root endpoint first
     let root_response = client
-        .get("http://127.0.0.1:4001/")
+        .get(format!("http://127.0.0.1:{}/", port))
         .send()
         .await
         .expect("Root request failed");
@@ -67,7 +68,7 @@ async fn test_test_editor_api_endpoints() {
     // Now test the /test-editor-api endpoint
     println!("Making request to /test-editor-api...");
     let test_api_response = client
-        .get("http://127.0.0.1:4001/test-editor-api")
+        .get(format!("http://127.0.0.1:{}/test-editor-api", port))
         .send()
         .await
         .expect("Test editor API request failed");
@@ -108,6 +109,7 @@ async fn test_test_editor_functionality() {
 
     // Start server with custom config
     let (_tx, rx) = oneshot::channel();
+    let port = test_config.port;
     tokio::spawn(async move {
         let _ = start_server_with_config(test_config, rx).await;
     });
@@ -119,7 +121,7 @@ async fn test_test_editor_functionality() {
 
     // Test that the scripts list API includes the test scripts
     let scripts_response = client
-        .get("http://127.0.0.1:4002/api/scripts")
+        .get(format!("http://127.0.0.1:{}/api/scripts", port))
         .send()
         .await
         .expect("Scripts list request failed");
@@ -147,7 +149,7 @@ async fn test_test_editor_functionality() {
 
     // Test retrieving the test_editor script content
     let test_editor_response = client
-        .get("http://127.0.0.1:4002/api/scripts/https://example.com/test_editor")
+        .get(format!("http://127.0.0.1:{}/api/scripts/https://example.com/test_editor", port))
         .send()
         .await
         .expect("Test editor script request failed");

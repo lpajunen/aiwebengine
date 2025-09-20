@@ -4,8 +4,10 @@ use std::time::Duration;
 #[tokio::test]
 async fn test_editor_api_endpoints() {
     // Start server in background task
+    let port = start_server_without_shutdown().await.expect("server failed to start");
     tokio::spawn(async move {
-        let _ = start_server_without_shutdown().await;
+        // Server is already started, just keep it running
+        tokio::time::sleep(Duration::from_secs(10)).await;
     });
 
     // Give server time to start
@@ -15,7 +17,7 @@ async fn test_editor_api_endpoints() {
 
     // Test GET /api/scripts - list scripts
     let list_response = client
-        .get("http://127.0.0.1:4000/api/scripts")
+        .get(format!("http://127.0.0.1:{}/api/scripts", port))
         .send()
         .await
         .expect("List scripts request failed");
@@ -39,7 +41,7 @@ async fn test_editor_api_endpoints() {
         // Try with just the short name first
         let short_name = "core";
         let get_response = client
-            .get(&format!("http://127.0.0.1:4000/api/scripts/{}", short_name))
+            .get(&format!("http://127.0.0.1:{}/api/scripts/{}", port, short_name))
             .send()
             .await
             .expect("Get script request failed");
@@ -70,8 +72,8 @@ async fn test_editor_api_endpoints() {
 
     let save_response = client
         .post(&format!(
-            "http://127.0.0.1:4000/api/scripts/{}",
-            test_script_name
+            "http://127.0.0.1:{}/api/scripts/{}",
+            port, test_script_name
         ))
         .body(test_content.to_string())
         .send()
@@ -91,8 +93,8 @@ async fn test_editor_api_endpoints() {
     // Verify the script was saved by retrieving it
     let verify_response = client
         .get(&format!(
-            "http://127.0.0.1:4000/api/scripts/{}",
-            test_script_name
+            "http://127.0.0.1:{}/api/scripts/{}",
+            port, test_script_name
         ))
         .send()
         .await

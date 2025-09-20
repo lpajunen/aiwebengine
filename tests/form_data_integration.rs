@@ -18,8 +18,10 @@ async fn test_form_data() {
     );
 
     // Start server in background task
+    let port = start_server_without_shutdown().await.expect("server failed to start");
     let _server_handle = tokio::spawn(async move {
-        let _ = start_server_without_shutdown().await;
+        // Server is already started, just keep it running
+        tokio::time::sleep(Duration::from_secs(10)).await;
     });
 
     // Give server time to start
@@ -28,7 +30,7 @@ async fn test_form_data() {
     let client = reqwest::Client::new();
 
     // Test simple GET request to root
-    let root_response = client.get("http://127.0.0.1:4000/").send().await;
+    let root_response = client.get(format!("http://127.0.0.1:{}/", port)).send().await;
 
     match root_response {
         Ok(resp) => {
@@ -41,7 +43,7 @@ async fn test_form_data() {
         }
     }
     let response_no_form = client
-        .post("http://127.0.0.1:4000/api/form")
+        .post(format!("http://127.0.0.1:{}/api/form", port))
         .send()
         .await
         .expect("POST request without form data failed");
@@ -73,7 +75,7 @@ async fn test_form_data() {
 
     // Test POST request to /api/form with form data
     let response_with_form = client
-        .post("http://127.0.0.1:4000/api/form")
+        .post(format!("http://127.0.0.1:{}/api/form", port))
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body("id=456&name=form_test&email=test@example.com")
         .send()
