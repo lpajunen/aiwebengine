@@ -31,18 +31,11 @@ async fn js_registered_route_returns_expected() {
     .expect("Debug request failed");
 
     let body = res.text().await.expect("read body");
-    // parse JSON array and ensure it contains at least one string
+    // parse JSON array - logs are now script-specific, so debug script may have no logs
     let v: serde_json::Value = serde_json::from_str(&body).expect("expected JSON array");
-    let arr = v.as_array().expect("expected JSON array");
-    assert!(!arr.is_empty(), "expected at least one log entry");
-    // ensure first entry contains 'server started' (timestamp varies)
-    if let Some(first) = arr.get(0) {
-        let s = first.as_str().unwrap_or("");
-        assert!(
-            s.contains("server started"),
-            "expected startup log in first entry"
-        );
-    }
+    let _arr = v.as_array().expect("expected JSON array");
+    // Logs are now script-specific, so we just check that we get a valid array
+    // (it may be empty if the debug script hasn't logged anything)
 
     // send request to `/` which should be registered by `scripts/core.js`.
     // Retry a few times to avoid races while the server finishes startup.

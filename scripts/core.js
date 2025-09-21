@@ -271,6 +271,60 @@ function read_script_handler(req) {
 }
 
 register('/read_script', 'read_script_handler', 'GET');
+
+// Script logs endpoint
+function script_logs_handler(req) {
+	try {
+		// Extract uri parameter from query string
+		let uri = null;
+		
+		if (req.query) {
+			uri = req.query.uri;
+		}
+		
+		// Validate required parameter
+		if (!uri) {
+			return {
+				status: 400,
+				body: JSON.stringify({
+					error: 'Missing required parameter: uri',
+					timestamp: new Date().toISOString()
+				}),
+				contentType: 'application/json'
+			};
+		}
+		
+		// Call the listLogsForUri function
+		const logs = listLogsForUri(uri);
+		
+		writeLog(`Retrieved ${logs.length} log entries for script: ${uri}`);
+		
+		return {
+			status: 200,
+			body: JSON.stringify({
+				uri: uri,
+				logs: logs,
+				count: logs.length,
+				timestamp: new Date().toISOString()
+			}),
+			contentType: 'application/json'
+		};
+	} catch (error) {
+		writeLog(`Script logs retrieval failed: ${error.message}`);
+		return {
+			status: 500,
+			body: JSON.stringify({
+				error: 'Failed to retrieve script logs',
+				details: error.message,
+				timestamp: new Date().toISOString()
+			}),
+			contentType: 'application/json'
+		};
+	}
+}
+
+register('/script_logs', 'script_logs_handler', 'GET');
+
 try {
 	if (typeof writeLog === 'function') {
 		writeLog(`server started ${new Date().toISOString()}`);

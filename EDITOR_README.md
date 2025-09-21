@@ -78,6 +78,8 @@ The editor provides the following REST API endpoints:
 
 ### Logs
 - `GET /api/logs` - Get recent logs
+- `GET /script_logs?uri=<script-uri>` - Get logs for a specific script
+
 
 ## Technical Details
 

@@ -175,7 +175,7 @@ function myHandler(req) {
 
 ### Retrieving Logs
 
-Use `listLogs()` to retrieve recent log messages:
+Use `listLogs()` to retrieve recent log messages for the current script:
 
 ```javascript
 function logsHandler(req) {
@@ -189,6 +189,23 @@ function logsHandler(req) {
 }
 
 register('/api/logs', 'logsHandler', 'GET');
+```
+
+You can also retrieve logs for a specific script URI using `listLogsForUri(uri)`:
+
+```javascript
+function logsForUriHandler(req) {
+    const uri = req.query.uri; // Get URI from query parameter
+    const logs = listLogsForUri(uri);
+    
+    return {
+        status: 200,
+        body: JSON.stringify(logs),
+        contentType: "application/json"
+    };
+}
+
+register('/api/logs-for-uri', 'logsForUriHandler', 'GET');
 ```
 
 ## Script Management
@@ -569,7 +586,8 @@ The server will automatically load all scripts and register their routes on star
 
 - `register(path, handler, method)`: Register a route
 - `writeLog(message)`: Write a message to the log
-- `listLogs()`: Get all log messages
+- `listLogs()`: Get all log messages for the current script
+- `listLogsForUri(uri)`: Get all log messages for a specific script URI
 - `listScripts()`: Get list of loaded scripts
 - `listAssets()`: Get list of available assets
 - `fetchAsset(publicPath)`: Get asset data as JSON string

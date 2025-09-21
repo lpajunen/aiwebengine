@@ -67,33 +67,40 @@ pub fn fetch_script(uri: &str) -> Option<String> {
 static DYNAMIC_SCRIPTS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 
 // simple in-memory log store
-static DYNAMIC_LOGS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+static DYNAMIC_LOGS: OnceLock<Mutex<HashMap<String, Vec<String>>>> = OnceLock::new();
 
-/// Insert a log message into the in-memory log store.
-pub fn insert_log_message(msg: &str) {
-    let store = DYNAMIC_LOGS.get_or_init(|| Mutex::new(Vec::new()));
+/// Insert a log message into the in-memory log store for a specific script URI.
+pub fn insert_log_message(uri: &str, msg: &str) {
+    let store = DYNAMIC_LOGS.get_or_init(|| Mutex::new(HashMap::new()));
     let mut guard = store.lock().expect("dynamic logs mutex poisoned");
-    guard.push(msg.to_string());
+    guard
+        .entry(uri.to_string())
+        .or_insert_with(Vec::new)
+        .push(msg.to_string());
 }
 
-/// Fetch all log messages currently stored. Returns a vector of messages.
-pub fn fetch_log_messages() -> Vec<String> {
+/// Fetch all log messages currently stored for a specific script URI. Returns a vector of messages.
+pub fn fetch_log_messages(uri: &str) -> Vec<String> {
     if let Some(store) = DYNAMIC_LOGS.get() {
         let guard = store.lock().expect("dynamic logs mutex poisoned");
-        return guard.clone();
+        if let Some(logs) = guard.get(uri) {
+            return logs.clone();
+        }
     }
     Vec::new()
 }
 
-/// Keep only the latest `limit` log messages (default 20) and remove older ones.
+/// Keep only the latest `limit` log messages (default 20) for each script URI and remove older ones.
 pub fn prune_log_messages() {
     const LIMIT: usize = 20;
     if let Some(store) = DYNAMIC_LOGS.get() {
         let mut guard = store.lock().expect("dynamic logs mutex poisoned");
-        if guard.len() > LIMIT {
-            let remove = guard.len() - LIMIT;
-            // remove older entries from the front
-            guard.drain(0..remove);
+        for logs in guard.values_mut() {
+            if logs.len() > LIMIT {
+                let remove = logs.len() - LIMIT;
+                // remove older entries from the front
+                logs.drain(0..remove);
+            }
         }
     }
 }

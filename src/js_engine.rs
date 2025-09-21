@@ -121,6 +121,7 @@ pub fn execute_script_for_request(
     form_data: Option<&std::collections::HashMap<String, String>>,
     raw_body: Option<String>,
 ) -> Result<(u16, String, Option<String>), String> {
+    let script_uri_owned = script_uri.to_string();
     let rt = Runtime::new().map_err(|e| format!("runtime new: {}", e))?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
@@ -136,24 +137,35 @@ pub fn execute_script_for_request(
         )?;
         global.set("register", reg_noop)?;
 
+        let script_uri_clone1 = script_uri_owned.clone();
         let write = Function::new(
             ctx.clone(),
-            |_c: rquickjs::Ctx<'_>, msg: String| -> Result<(), rquickjs::Error> {
+            move |_c: rquickjs::Ctx<'_>, msg: String| -> Result<(), rquickjs::Error> {
                 debug!("JavaScript called writeLog with message: {}", msg);
-                repository::insert_log_message(&msg);
+                repository::insert_log_message(&script_uri_clone1, &msg);
                 Ok(())
             },
         )?;
         global.set("writeLog", write)?;
 
+        let script_uri_clone2 = script_uri_owned.clone();
         let list_logs = Function::new(
             ctx.clone(),
-            |_c: rquickjs::Ctx<'_>| -> Result<Vec<String>, rquickjs::Error> {
+            move |_c: rquickjs::Ctx<'_>| -> Result<Vec<String>, rquickjs::Error> {
                 debug!("JavaScript called listLogs");
-                Ok(repository::fetch_log_messages())
+                Ok(repository::fetch_log_messages(&script_uri_clone2))
             },
         )?;
         global.set("listLogs", list_logs)?;
+
+        let list_logs_for_uri = Function::new(
+            ctx.clone(),
+            |_c: rquickjs::Ctx<'_>, uri: String| -> Result<Vec<String>, rquickjs::Error> {
+                debug!("JavaScript called listLogsForUri with uri: {}", uri);
+                Ok(repository::fetch_log_messages(&uri))
+            },
+        )?;
+        global.set("listLogsForUri", list_logs_for_uri)?;
 
         let list_scripts = Function::new(
             ctx.clone(),
