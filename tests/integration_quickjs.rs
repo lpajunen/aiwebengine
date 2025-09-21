@@ -4,24 +4,35 @@ use std::time::Duration;
 
 #[tokio::test]
 async fn js_registered_route_returns_expected() {
-    // start server in background task
     // ensure repository scripts are present (core/debug are included by default)
     // start server in background task
-    let port = start_server_without_shutdown()
-        .await
-        .expect("server failed to start");
-    tokio::spawn(async move {
-        // Server is already started, just keep it running
-        tokio::time::sleep(Duration::from_secs(10)).await;
-    });
+    let port = tokio::time::timeout(
+        Duration::from_secs(5),
+        start_server_without_shutdown()
+    )
+    .await
+    .expect("Server startup timed out")
+    .expect("Server failed to start");
 
-    // give server a moment to start
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+    // Wait for server to be ready to accept connections
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("Failed to create HTTP client");
 
     // send request to /debug which now returns listLogs() as JSON
-    let res = reqwest::get(format!("http://127.0.0.1:{}/debug", port))
-        .await
-        .expect("request failed");
+    let res = tokio::time::timeout(
+        Duration::from_secs(5),
+        client
+            .get(format!("http://127.0.0.1:{}/debug", port))
+            .send()
+    )
+    .await
+    .expect("Debug request timed out")
+    .expect("Debug request failed");
+
     let body = res.text().await.expect("read body");
     // parse JSON array and ensure it contains at least one string
     let v: serde_json::Value = serde_json::from_str(&body).expect("expected JSON array");
@@ -45,9 +56,16 @@ async fn js_registered_route_returns_expected() {
             "DEBUG: Test attempt {} - making request to http://127.0.0.1:{}/",
             i, port
         );
-        let res_root = reqwest::get(format!("http://127.0.0.1:{}/", port)).await;
+        let res_root = tokio::time::timeout(
+            Duration::from_secs(5),
+            client
+                .get(format!("http://127.0.0.1:{}/", port))
+                .send()
+        )
+        .await;
+
         match res_root {
-            Ok(res) => {
+            Ok(Ok(res)) => {
                 println!(
                     "DEBUG: Test attempt {} - got response with status: {}",
                     i,
@@ -65,9 +83,13 @@ async fn js_registered_route_returns_expected() {
                     last_body = format!("HTTP {}", res.status());
                 }
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 println!("DEBUG: Test attempt {} - request failed: {}", i, e);
                 last_body = format!("Request failed: {}", e);
+            }
+            Err(_) => {
+                println!("DEBUG: Test attempt {} - request timed out", i);
+                last_body = "Request timed out".to_string();
             }
         }
         tokio::time::sleep(Duration::from_millis(200)).await;

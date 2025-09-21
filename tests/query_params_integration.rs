@@ -10,26 +10,34 @@ async fn test_query_parameters() {
         include_str!("../scripts/query_test.js"),
     );
 
-    // Start server in background task
-    let port = start_server_without_shutdown()
-        .await
-        .expect("server failed to start");
-    tokio::spawn(async move {
-        // Server is already started, just keep it running
-        tokio::time::sleep(Duration::from_secs(10)).await;
-    });
+    // Start server with timeout
+    let port = tokio::time::timeout(
+        Duration::from_secs(5),
+        start_server_without_shutdown()
+    )
+    .await
+    .expect("Server startup timed out")
+    .expect("Server failed to start");
 
-    // Give server time to start
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+    // Wait for server to be ready to accept connections
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("Failed to create HTTP client");
 
     // Test GET request to /api/query without query parameters
-    let response_no_query = client
-        .get(format!("http://127.0.0.1:{}/api/query", port))
-        .send()
-        .await
-        .expect("GET request without query failed");
+    let response_no_query = tokio::time::timeout(
+        Duration::from_secs(5),
+        client
+            .get(format!("http://127.0.0.1:{}/api/query", port))
+            .send()
+    )
+    .await
+    .expect("GET request without query timed out")
+    .expect("GET request without query failed");
+
     assert_eq!(response_no_query.status(), 200);
     let body_no_query = response_no_query
         .text()
@@ -47,14 +55,19 @@ async fn test_query_parameters() {
     );
 
     // Test GET request to /api/query with query parameters
-    let response_with_query = client
-        .get(format!(
-            "http://127.0.0.1:{}/api/query?id=123&name=test",
-            port
-        ))
-        .send()
-        .await
-        .expect("GET request with query failed");
+    let response_with_query = tokio::time::timeout(
+        Duration::from_secs(5),
+        client
+            .get(format!(
+                "http://127.0.0.1:{}/api/query?id=123&name=test",
+                port
+            ))
+            .send()
+    )
+    .await
+    .expect("GET request with query timed out")
+    .expect("GET request with query failed");
+
     assert_eq!(response_with_query.status(), 200);
     let body_with_query = response_with_query
         .text()

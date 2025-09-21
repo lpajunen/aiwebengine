@@ -10,26 +10,34 @@ async fn test_different_http_methods() {
         include_str!("../scripts/method_test.js"),
     );
 
-    // Start server in background task
-    let port = start_server_without_shutdown()
-        .await
-        .expect("server failed to start");
-    tokio::spawn(async move {
-        // Server is already started, just keep it running
-        tokio::time::sleep(Duration::from_secs(10)).await;
-    });
+    // Start server with timeout
+    let port = tokio::time::timeout(
+        Duration::from_secs(5),
+        start_server_without_shutdown()
+    )
+    .await
+    .expect("Server startup timed out")
+    .expect("Server failed to start");
 
-    // Give server time to start
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+    // Wait for server to be ready to accept connections
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("Failed to create HTTP client");
 
     // Test GET request to /api/test
-    let get_response = client
-        .get(format!("http://127.0.0.1:{}/api/test", port))
-        .send()
-        .await
-        .expect("GET request failed");
+    let get_response = tokio::time::timeout(
+        Duration::from_secs(5),
+        client
+            .get(format!("http://127.0.0.1:{}/api/test", port))
+            .send()
+    )
+    .await
+    .expect("GET request timed out")
+    .expect("GET request failed");
+
     assert_eq!(get_response.status(), 200);
     let get_body = get_response
         .text()
@@ -42,11 +50,16 @@ async fn test_different_http_methods() {
     );
 
     // Test POST request to /api/test
-    let post_response = client
-        .post(format!("http://127.0.0.1:{}/api/test", port))
-        .send()
-        .await
-        .expect("POST request failed");
+    let post_response = tokio::time::timeout(
+        Duration::from_secs(5),
+        client
+            .post(format!("http://127.0.0.1:{}/api/test", port))
+            .send()
+    )
+    .await
+    .expect("POST request timed out")
+    .expect("POST request failed");
+
     assert_eq!(post_response.status(), 201);
     let post_body = post_response
         .text()
@@ -64,11 +77,16 @@ async fn test_different_http_methods() {
     );
 
     // Test PUT request to /api/test
-    let put_response = client
-        .put(format!("http://127.0.0.1:{}/api/test", port))
-        .send()
-        .await
-        .expect("PUT request failed");
+    let put_response = tokio::time::timeout(
+        Duration::from_secs(5),
+        client
+            .put(format!("http://127.0.0.1:{}/api/test", port))
+            .send()
+    )
+    .await
+    .expect("PUT request timed out")
+    .expect("PUT request failed");
+
     assert_eq!(put_response.status(), 200);
     let put_body = put_response
         .text()
@@ -81,27 +99,42 @@ async fn test_different_http_methods() {
     );
 
     // Test DELETE request to /api/test
-    let delete_response = client
-        .delete(format!("http://127.0.0.1:{}/api/test", port))
-        .send()
-        .await
-        .expect("DELETE request failed");
+    let delete_response = tokio::time::timeout(
+        Duration::from_secs(5),
+        client
+            .delete(format!("http://127.0.0.1:{}/api/test", port))
+            .send()
+    )
+    .await
+    .expect("DELETE request timed out")
+    .expect("DELETE request failed");
+
     assert_eq!(delete_response.status(), 204);
 
     // Test method validation - wrong method should return 405 Method Not Allowed
     // Try PATCH on a path that only has GET/POST/PUT/DELETE registered
-    let patch_response = client
-        .patch(format!("http://127.0.0.1:{}/api/test", port))
-        .send()
-        .await
-        .expect("PATCH request failed");
+    let patch_response = tokio::time::timeout(
+        Duration::from_secs(5),
+        client
+            .patch(format!("http://127.0.0.1:{}/api/test", port))
+            .send()
+    )
+    .await
+    .expect("PATCH request timed out")
+    .expect("PATCH request failed");
+
     assert_eq!(patch_response.status(), 405);
 
     // Test unregistered path returns 404
-    let not_found_response = client
-        .get(format!("http://127.0.0.1:{}/api/nonexistent", port))
-        .send()
-        .await
-        .expect("Request to nonexistent path failed");
+    let not_found_response = tokio::time::timeout(
+        Duration::from_secs(5),
+        client
+            .get(format!("http://127.0.0.1:{}/api/nonexistent", port))
+            .send()
+    )
+    .await
+    .expect("Request to nonexistent path timed out")
+    .expect("Request to nonexistent path failed");
+
     assert_eq!(not_found_response.status(), 404);
 }

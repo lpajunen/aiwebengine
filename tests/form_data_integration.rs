@@ -17,41 +17,58 @@ async fn test_form_data() {
         include_str!("../scripts/form_test.js"),
     );
 
-    // Start server in background task
-    let port = start_server_without_shutdown()
-        .await
-        .expect("server failed to start");
+    // Start server with timeout
+    let port = tokio::time::timeout(
+        Duration::from_secs(5),
+        start_server_without_shutdown()
+    )
+    .await
+    .expect("Server startup timed out")
+    .expect("Server failed to start");
+
+    // Spawn server in background to keep it running
     let _server_handle = tokio::spawn(async move {
-        // Server is already started, just keep it running
-        tokio::time::sleep(Duration::from_secs(10)).await;
+        // Keep server running for test duration
+        tokio::time::sleep(Duration::from_secs(30)).await;
     });
 
-    // Give server time to start
-    tokio::time::sleep(Duration::from_millis(2000)).await;
-
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("Failed to create HTTP client");
 
     // Test simple GET request to root
-    let root_response = client
-        .get(format!("http://127.0.0.1:{}/", port))
-        .send()
-        .await;
+    let root_response = tokio::time::timeout(
+        Duration::from_secs(5),
+        client
+            .get(format!("http://127.0.0.1:{}/", port))
+            .send()
+    )
+    .await;
 
     match root_response {
-        Ok(resp) => {
+        Ok(Ok(resp)) => {
             println!("Root request succeeded with status: {}", resp.status());
             let body = resp.text().await.unwrap_or_default();
             println!("Root response body: {}", body);
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             println!("Root request failed: {}", e);
         }
+        Err(_) => {
+            println!("Root request timed out");
+        }
     }
-    let response_no_form = client
-        .post(format!("http://127.0.0.1:{}/api/form", port))
-        .send()
-        .await
-        .expect("POST request without form data failed");
+
+    let response_no_form = tokio::time::timeout(
+        Duration::from_secs(5),
+        client
+            .post(format!("http://127.0.0.1:{}/api/form", port))
+            .send()
+    )
+    .await
+    .expect("POST request without form data timed out")
+    .expect("POST request without form data failed");
 
     println!(
         "POST REQUEST MADE TO /api/form, STATUS: {}",
@@ -79,13 +96,18 @@ async fn test_form_data() {
     );
 
     // Test POST request to /api/form with form data
-    let response_with_form = client
-        .post(format!("http://127.0.0.1:{}/api/form", port))
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .body("id=456&name=form_test&email=test@example.com")
-        .send()
-        .await
-        .expect("POST request with form data failed");
+    let response_with_form = tokio::time::timeout(
+        Duration::from_secs(5),
+        client
+            .post(format!("http://127.0.0.1:{}/api/form", port))
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body("id=456&name=form_test&email=test@example.com")
+            .send()
+    )
+    .await
+    .expect("POST request with form data timed out")
+    .expect("POST request with form data failed");
+
     assert_eq!(response_with_form.status(), 200);
     let body_with_form = response_with_form
         .text()
