@@ -19,24 +19,6 @@ async fn js_registered_route_returns_expected() {
         .build()
         .expect("Failed to create HTTP client");
 
-    // send request to /debug which now returns listLogs() as JSON
-    let res = tokio::time::timeout(
-        Duration::from_secs(5),
-        client
-            .get(format!("http://127.0.0.1:{}/debug", port))
-            .send(),
-    )
-    .await
-    .expect("Debug request timed out")
-    .expect("Debug request failed");
-
-    let body = res.text().await.expect("read body");
-    // parse JSON array - logs are now script-specific, so debug script may have no logs
-    let v: serde_json::Value = serde_json::from_str(&body).expect("expected JSON array");
-    let _arr = v.as_array().expect("expected JSON array");
-    // Logs are now script-specific, so we just check that we get a valid array
-    // (it may be empty if the debug script hasn't logged anything)
-
     // send request to `/` which should be registered by `scripts/core.js`.
     // Retry a few times to avoid races while the server finishes startup.
     let mut got = false;

@@ -5,7 +5,6 @@ fn dynamic_script_lifecycle() {
     // initial static scripts
     let scripts = repository::fetch_scripts();
     assert!(scripts.contains_key("https://example.com/core"));
-    assert!(scripts.contains_key("https://example.com/debug"));
 
     // upsert a dynamic script
     repository::upsert_script(

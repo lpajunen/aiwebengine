@@ -9,12 +9,10 @@ pub fn fetch_scripts() -> HashMap<String, String> {
 
     // Always include core functionality scripts
     let core = include_str!("../scripts/core.js");
-    let debug = include_str!("../scripts/debug.js");
     let asset_mgmt = include_str!("../scripts/asset_mgmt.js");
     let editor = include_str!("../scripts/editor.js");
 
     m.insert("https://example.com/core".to_string(), core.to_string());
-    m.insert("https://example.com/debug".to_string(), debug.to_string());
     m.insert(
         "https://example.com/asset_mgmt".to_string(),
         asset_mgmt.to_string(),
@@ -54,7 +52,6 @@ pub fn fetch_script(uri: &str) -> Option<String> {
 
     match uri {
         "https://example.com/core" => Some(include_str!("../scripts/core.js").to_string()),
-        "https://example.com/debug" => Some(include_str!("../scripts/debug.js").to_string()),
         "https://example.com/asset_mgmt" => {
             Some(include_str!("../scripts/asset_mgmt.js").to_string())
         }
