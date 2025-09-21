@@ -124,7 +124,20 @@ pub async fn start_server_with_config(
     // Clone the timeout value to avoid borrow checker issues in async closures
     let script_timeout_ms = config.script_timeout_ms;
 
-    // Create GraphQL schema
+    // Execute all scripts at startup to populate GraphQL registry
+    info!("Executing all scripts at startup to populate GraphQL registry...");
+    let scripts = repository::fetch_scripts();
+    for (uri, content) in scripts.iter() {
+        info!("Executing script: {}", uri);
+        let result = js_engine::execute_script(uri, content);
+        if !result.success {
+            error!("Failed to execute script {}: {:?}", uri, result.error);
+        } else {
+            info!("Successfully executed script: {}", uri);
+        }
+    }
+
+    // Create GraphQL schema after scripts have been executed
     let schema = match graphql::build_schema() {
         Ok(schema) => schema,
         Err(e) => {
