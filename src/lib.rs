@@ -12,6 +12,7 @@ pub mod error;
 pub mod js_engine;
 pub mod middleware;
 pub mod repository;
+pub mod graphql;
 
 /// Parses a query string into a HashMap of key-value pairs
 fn parse_query_string(query: &str) -> HashMap<String, String> {
