@@ -124,7 +124,59 @@ pub async fn start_server_with_config(
     // Clone the timeout value to avoid borrow checker issues in async closures
     let script_timeout_ms = config.script_timeout_ms;
 
+    // Create GraphQL schema
+    let schema = match graphql::build_schema() {
+        Ok(schema) => schema,
+        Err(e) => {
+            error!("Failed to build GraphQL schema: {:?}", e);
+            // Return a minimal dynamic schema if building fails
+            async_graphql::dynamic::Schema::build("Query", None, None)
+                .register(async_graphql::dynamic::Object::new("Query")
+                    .field(async_graphql::dynamic::Field::new(
+                        "error",
+                        async_graphql::dynamic::TypeRef::named(async_graphql::dynamic::TypeRef::STRING),
+                        |_| async_graphql::dynamic::FieldFuture::new(async {
+                            Ok(Some(async_graphql::Value::String("Schema build failed".to_string())))
+                        }),
+                    ))
+                )
+                .finish()
+                .unwrap_or_else(|_| panic!("Failed to build fallback schema"))
+        }
+    };
+
+    // GraphQL GET handler - serves GraphiQL
+    async fn graphql_get() -> impl IntoResponse {
+        axum::response::Html(async_graphql::http::GraphiQLSource::build().endpoint("/graphql").finish())
+    }
+
+    // GraphQL POST handler - executes queries
+    async fn graphql_post(
+        schema: async_graphql::dynamic::Schema,
+        req: axum::http::Request<axum::body::Body>,
+    ) -> impl IntoResponse {
+        let (_parts, body) = req.into_parts();
+        let body_bytes = match axum::body::to_bytes(body, usize::MAX).await {
+            Ok(bytes) => bytes,
+            Err(_) => return axum::response::Json(serde_json::json!({"error": "Failed to read request body"})),
+        };
+
+        let request: async_graphql::Request = match serde_json::from_slice(&body_bytes) {
+            Ok(req) => req,
+            Err(e) => return axum::response::Json(serde_json::json!({"error": format!("Invalid JSON: {}", e)})),
+        };
+
+        let response = schema.execute(request).await;
+        axum::response::Json(serde_json::to_value(response).unwrap_or(serde_json::Value::Null))
+    }
+
+    // Clone schema for handlers
+    let schema_for_post = schema.clone();
+
     let app = Router::new()
+        // GraphQL endpoints
+        .route("/graphql", axum::routing::get(graphql_get))
+        .route("/graphql", axum::routing::post(move |req| graphql_post(schema_for_post, req)))
         .route(
             "/",
             any(move |req: Request<Body>| async move {
