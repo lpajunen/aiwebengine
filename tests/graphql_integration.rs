@@ -98,6 +98,35 @@ async fn test_graphql_endpoints() {
     assert!(query_json["data"].is_object());
     assert!(query_json["data"]["hello"].is_string());
 
+    // Test script management GraphQL operations
+    // Test listing scripts (currently returns placeholder since JS resolver calling not implemented)
+    let list_scripts_query = r#"{ scripts }"#;
+    let list_response = client
+        .post(format!("http://127.0.0.1:{}/graphql", port))
+        .header("Content-Type", "application/json")
+        .body(format!(r#"{{"query": "{}"}}"#, list_scripts_query))
+        .send()
+        .await
+        .expect("GraphQL list scripts request failed");
+
+    assert_eq!(list_response.status(), 200);
+
+    let list_body = list_response
+        .text()
+        .await
+        .expect("Failed to read list scripts response");
+
+    let list_json: serde_json::Value =
+        serde_json::from_str(&list_body).expect("Failed to parse list scripts response");
+
+    if let Some(errors) = list_json.get("errors") {
+        panic!("GraphQL scripts query failed with errors: {:?}", errors);
+    }
+
+    // Should return data (placeholder for now)
+    assert!(list_json["data"]["scripts"].is_string());
+    assert!(list_json["data"]["scripts"].as_str().unwrap().contains("scriptsQuery"));
+
     // Test GraphQL SSE endpoint (basic connectivity test)
     let sse_response = client
         .post(format!("http://127.0.0.1:{}/graphql/sse", port))
