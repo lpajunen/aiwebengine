@@ -11,7 +11,9 @@ async fn test_health_endpoint() {
     );
 
     // Start server in background task
-    let port = start_server_without_shutdown().await.expect("server failed to start");
+    let port = start_server_without_shutdown()
+        .await
+        .expect("server failed to start");
     tokio::spawn(async move {
         // Server is already started, just keep it running
         tokio::time::sleep(Duration::from_secs(10)).await;
@@ -63,7 +65,9 @@ async fn test_health_endpoint_content_type() {
     );
 
     // Start server
-    let port = start_server_without_shutdown().await.expect("server failed to start");
+    let port = start_server_without_shutdown()
+        .await
+        .expect("server failed to start");
     tokio::spawn(async move {
         // Server is already started, just keep it running
         tokio::time::sleep(Duration::from_secs(10)).await;

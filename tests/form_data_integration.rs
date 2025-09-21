@@ -18,7 +18,9 @@ async fn test_form_data() {
     );
 
     // Start server in background task
-    let port = start_server_without_shutdown().await.expect("server failed to start");
+    let port = start_server_without_shutdown()
+        .await
+        .expect("server failed to start");
     let _server_handle = tokio::spawn(async move {
         // Server is already started, just keep it running
         tokio::time::sleep(Duration::from_secs(10)).await;
@@ -30,7 +32,10 @@ async fn test_form_data() {
     let client = reqwest::Client::new();
 
     // Test simple GET request to root
-    let root_response = client.get(format!("http://127.0.0.1:{}/", port)).send().await;
+    let root_response = client
+        .get(format!("http://127.0.0.1:{}/", port))
+        .send()
+        .await;
 
     match root_response {
         Ok(resp) => {

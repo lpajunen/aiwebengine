@@ -490,7 +490,8 @@ pub async fn start_server_with_config(
             match test_bind {
                 Ok(listener) => {
                     // Get the actual port assigned by the OS
-                    let actual_port = listener.local_addr()
+                    let actual_port = listener
+                        .local_addr()
                         .map_err(|e| anyhow::anyhow!("Failed to get local address: {}", e))?
                         .port();
                     drop(listener);
@@ -528,7 +529,10 @@ pub async fn start_server_with_config(
                     return Ok(actual_port);
                 }
                 Err(e) => {
-                    return Err(anyhow::anyhow!("Failed to bind to auto-assigned port: {}", e));
+                    return Err(anyhow::anyhow!(
+                        "Failed to bind to auto-assigned port: {}",
+                        e
+                    ));
                 }
             }
         }
@@ -542,7 +546,10 @@ pub async fn start_server_with_config(
 
                 // Successfully found an available port
                 if current_port != config.port {
-                    info!("Requested port {} was in use, using port {} instead", config.port, current_port);
+                    info!(
+                        "Requested port {} was in use, using port {} instead",
+                        config.port, current_port
+                    );
                 } else {
                     info!("listening on {}", actual_addr);
                 }
@@ -574,15 +581,17 @@ pub async fn start_server_with_config(
             Err(e) => {
                 // Check if it's an "Address already in use" error
                 let error_msg = e.to_string().to_lowercase();
-                if error_msg.contains("address already in use") ||
-                   error_msg.contains("address in use") ||
-                   error_msg.contains("eaddrinuse") ||
-                   e.kind() == std::io::ErrorKind::AddrInUse {
+                if error_msg.contains("address already in use")
+                    || error_msg.contains("address in use")
+                    || error_msg.contains("eaddrinuse")
+                    || e.kind() == std::io::ErrorKind::AddrInUse
+                {
                     attempts += 1;
                     if attempts >= MAX_PORT_ATTEMPTS {
                         return Err(anyhow::anyhow!(
                             "Could not find an available port after trying {} ports starting from {}",
-                            MAX_PORT_ATTEMPTS, config.port
+                            MAX_PORT_ATTEMPTS,
+                            config.port
                         ));
                     }
 
@@ -592,10 +601,18 @@ pub async fn start_server_with_config(
                         .parse()
                         .map_err(|e| anyhow::anyhow!("Invalid server address: {}", e))?;
 
-                    debug!("Port {} in use, trying port {}", current_port - 1, current_port);
+                    debug!(
+                        "Port {} in use, trying port {}",
+                        current_port - 1,
+                        current_port
+                    );
                 } else {
                     // Some other error, return it
-                    return Err(anyhow::anyhow!("Failed to bind to address {}: {}", actual_addr, e));
+                    return Err(anyhow::anyhow!(
+                        "Failed to bind to address {}: {}",
+                        actual_addr,
+                        e
+                    ));
                 }
             }
         }
@@ -612,7 +629,9 @@ pub async fn start_server_without_shutdown() -> anyhow::Result<u16> {
     start_server_with_config(config, rx).await
 }
 
-pub async fn start_server_without_shutdown_with_config(config: config::Config) -> anyhow::Result<u16> {
+pub async fn start_server_without_shutdown_with_config(
+    config: config::Config,
+) -> anyhow::Result<u16> {
     let (_tx, rx) = tokio::sync::oneshot::channel::<()>();
     start_server_with_config(config, rx).await
 }

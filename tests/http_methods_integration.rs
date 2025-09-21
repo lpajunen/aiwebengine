@@ -11,7 +11,9 @@ async fn test_different_http_methods() {
     );
 
     // Start server in background task
-    let port = start_server_without_shutdown().await.expect("server failed to start");
+    let port = start_server_without_shutdown()
+        .await
+        .expect("server failed to start");
     tokio::spawn(async move {
         // Server is already started, just keep it running
         tokio::time::sleep(Duration::from_secs(10)).await;

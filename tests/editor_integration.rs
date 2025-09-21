@@ -4,7 +4,9 @@ use std::time::Duration;
 #[tokio::test]
 async fn test_editor_api_endpoints() {
     // Start server in background task
-    let port = start_server_without_shutdown().await.expect("server failed to start");
+    let port = start_server_without_shutdown()
+        .await
+        .expect("server failed to start");
     tokio::spawn(async move {
         // Server is already started, just keep it running
         tokio::time::sleep(Duration::from_secs(10)).await;
@@ -41,7 +43,10 @@ async fn test_editor_api_endpoints() {
         // Try with just the short name first
         let short_name = "core";
         let get_response = client
-            .get(&format!("http://127.0.0.1:{}/api/scripts/{}", port, short_name))
+            .get(&format!(
+                "http://127.0.0.1:{}/api/scripts/{}",
+                port, short_name
+            ))
             .send()
             .await
             .expect("Get script request failed");

@@ -14,7 +14,9 @@ async fn js_script_mgmt_functions_work() {
         include_str!("../scripts/js_script_mgmt_test.js"),
     );
 
-    let port = start_server_without_shutdown_with_config(test_config).await.expect("server failed to start");
+    let port = start_server_without_shutdown_with_config(test_config)
+        .await
+        .expect("server failed to start");
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -57,7 +59,9 @@ async fn test_upsert_script_endpoint() {
     test_config.port = 4002;
 
     // Start server in background task
-    let port = start_server_without_shutdown_with_config(test_config).await.expect("server failed to start");
+    let port = start_server_without_shutdown_with_config(test_config)
+        .await
+        .expect("server failed to start");
     let _server_handle = tokio::spawn(async move {
         // Server is already started, just keep it running
         tokio::time::sleep(Duration::from_secs(10)).await;
@@ -120,7 +124,9 @@ async fn test_delete_script_endpoint() {
     test_config.port = 4003;
 
     // Start server in background task
-    let port = start_server_without_shutdown_with_config(test_config).await.expect("server failed to start");
+    let port = start_server_without_shutdown_with_config(test_config)
+        .await
+        .expect("server failed to start");
     let _server_handle = tokio::spawn(async move {
         // Server is already started, just keep it running
         tokio::time::sleep(Duration::from_secs(10)).await;
@@ -213,7 +219,9 @@ async fn test_script_lifecycle_via_http_api() {
     test_config.port = 4004;
 
     // Start server in background task
-    let port = start_server_without_shutdown_with_config(test_config).await.expect("server failed to start");
+    let port = start_server_without_shutdown_with_config(test_config)
+        .await
+        .expect("server failed to start");
     let _server_handle = tokio::spawn(async move {
         // Server is already started, just keep it running
         tokio::time::sleep(Duration::from_secs(10)).await;
@@ -254,7 +262,10 @@ register('/lifecycle-test', 'lifecycle_test_handler', 'GET');
         .expect("Failed to test script endpoint");
 
     assert_eq!(test_response.status(), 200);
-    let test_body = test_response.text().await.expect("Failed to read test response");
+    let test_body = test_response
+        .text()
+        .await
+        .expect("Failed to read test response");
     assert_eq!(test_body, "Lifecycle test successful!");
 
     // 3. Delete script via HTTP API

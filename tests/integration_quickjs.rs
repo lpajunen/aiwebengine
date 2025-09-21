@@ -7,7 +7,9 @@ async fn js_registered_route_returns_expected() {
     // start server in background task
     // ensure repository scripts are present (core/debug are included by default)
     // start server in background task
-    let port = start_server_without_shutdown().await.expect("server failed to start");
+    let port = start_server_without_shutdown()
+        .await
+        .expect("server failed to start");
     tokio::spawn(async move {
         // Server is already started, just keep it running
         tokio::time::sleep(Duration::from_secs(10)).await;

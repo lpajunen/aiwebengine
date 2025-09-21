@@ -36,7 +36,11 @@ async fn test_test_editor_api_endpoints() {
     // Try multiple times to connect to ensure server is ready
     let mut server_ready = false;
     for attempt in 1..=5 {
-        match client.get(format!("http://127.0.0.1:{}/", port)).send().await {
+        match client
+            .get(format!("http://127.0.0.1:{}/", port))
+            .send()
+            .await
+        {
             Ok(resp) => {
                 if resp.status().is_success() {
                     server_ready = true;
@@ -149,7 +153,10 @@ async fn test_test_editor_functionality() {
 
     // Test retrieving the test_editor script content
     let test_editor_response = client
-        .get(format!("http://127.0.0.1:{}/api/scripts/https://example.com/test_editor", port))
+        .get(format!(
+            "http://127.0.0.1:{}/api/scripts/https://example.com/test_editor",
+            port
+        ))
         .send()
         .await
         .expect("Test editor script request failed");

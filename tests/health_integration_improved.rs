@@ -20,7 +20,7 @@ async fn test_health_endpoint_improved() {
         Ok(Ok(port)) => {
             println!("Server started on port: {}", port);
             port
-        },
+        }
         Ok(Err(e)) => panic!("Server failed to start: {:?}", e),
         Err(_) => panic!("Server startup timed out"),
     };
@@ -81,7 +81,7 @@ async fn test_multiple_endpoints_same_server() {
         Ok(Ok(port)) => {
             println!("Server started on port: {}", port);
             port
-        },
+        }
         Ok(Err(e)) => panic!("Server failed to start: {:?}", e),
         Err(_) => panic!("Server startup timed out"),
     };
@@ -105,7 +105,12 @@ async fn test_multiple_endpoints_same_server() {
             Err(_) => panic!("Request to {} timed out", endpoint),
         };
 
-        assert!(response.status().is_success(), "Endpoint {} returned status {}", endpoint, response.status());
+        assert!(
+            response.status().is_success(),
+            "Endpoint {} returned status {}",
+            endpoint,
+            response.status()
+        );
         println!("✓ {} returned status {}", endpoint, response.status());
     }
 }
