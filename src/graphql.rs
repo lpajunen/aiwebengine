@@ -1,5 +1,5 @@
 use async_graphql::{
-    EmptyMutation, EmptySubscription, Object, Schema,
+    dynamic::*,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -123,18 +123,116 @@ pub fn register_graphql_subscription(name: String, sdl: String, resolver_functio
 }
 
 /// Build a dynamic GraphQL schema from registered operations
-pub fn build_schema() -> Schema<Query, EmptyMutation, EmptySubscription> {
-    // For now, return a basic schema - dynamic schema building will be implemented later
-    Schema::new(Query, EmptyMutation, EmptySubscription)
-}
+pub fn build_schema() -> Result<Schema, async_graphql::Error> {
+    let registry_arc = get_registry();
+    let registry_guard = registry_arc.read().map_err(|e| {
+        async_graphql::Error::new(format!("Failed to read GraphQL registry: {}", e))
+    })?;
 
-// Placeholder root types for basic schema
-#[derive(Default)]
-pub struct Query;
+    // Collect the data we need before creating closures
+    let queries: Vec<(String, GraphQLOperation)> = registry_guard.get_queries().clone().into_iter().collect();
+    let mutations: Vec<(String, GraphQLOperation)> = registry_guard.get_mutations().clone().into_iter().collect();
+    let subscriptions: Vec<(String, GraphQLOperation)> = registry_guard.get_subscriptions().clone().into_iter().collect();
 
-#[Object]
-impl Query {
-    async fn placeholder(&self) -> String {
-        "GraphQL schema is being built dynamically".to_string()
+    // Check if we have queries before building
+    let has_queries = !queries.is_empty();
+    let has_mutations = !mutations.is_empty();
+    let has_subscriptions = !subscriptions.is_empty();
+
+    // Drop the guard so we don't have borrowing issues
+    drop(registry_guard);
+
+    let mut builder = Schema::build("Query", None, None);
+
+    // Build Query type
+    let mut query_builder = Object::new("Query");
+
+    // Add registered queries
+    for (name, operation) in queries {
+        // For now, create a simple string field - we'll enhance this to parse SDL and call JS resolvers
+        let field_name = name.clone();
+        let resolver_uri = operation.script_uri.clone();
+        let resolver_fn = operation.resolver_function.clone();
+
+        query_builder = query_builder.field(Field::new(
+            field_name,
+            TypeRef::named(TypeRef::STRING),
+            move |_ctx| {
+                let uri = resolver_uri.clone();
+                let func = resolver_fn.clone();
+                FieldFuture::new(async move {
+                    // TODO: Call JavaScript resolver function
+                    // For now, return a placeholder
+                    Ok(Some(async_graphql::Value::String(format!("Resolver {}::{} called", uri, func))))
+                })
+            },
+        ));
     }
+
+    // If no queries registered, add a placeholder
+    if !has_queries {
+        query_builder = query_builder.field(Field::new(
+            "placeholder",
+            TypeRef::named(TypeRef::STRING),
+            |_| FieldFuture::new(async {
+                Ok(Some(async_graphql::Value::String("No queries registered yet".to_string())))
+            }),
+        ));
+    }
+
+    builder = builder.register(query_builder);
+
+    // Build Mutation type if mutations exist
+    if has_mutations {
+        let mut mutation_builder = Object::new("Mutation");
+
+        for (name, operation) in mutations {
+            let field_name = name.clone();
+            let resolver_uri = operation.script_uri.clone();
+            let resolver_fn = operation.resolver_function.clone();
+
+            mutation_builder = mutation_builder.field(Field::new(
+                field_name,
+                TypeRef::named(TypeRef::STRING),
+                move |_ctx| {
+                    let uri = resolver_uri.clone();
+                    let func = resolver_fn.clone();
+                    FieldFuture::new(async move {
+                        // TODO: Call JavaScript resolver function
+                        Ok(Some(async_graphql::Value::String(format!("Mutation {}::{} called", uri, func))))
+                    })
+                },
+            ));
+        }
+
+        builder = builder.register(mutation_builder);
+    }
+
+    // Build Subscription type if subscriptions exist
+    if has_subscriptions {
+        let mut subscription_builder = Object::new("Subscription");
+
+        for (name, operation) in subscriptions {
+            let field_name = name.clone();
+            let resolver_uri = operation.script_uri.clone();
+            let resolver_fn = operation.resolver_function.clone();
+
+            subscription_builder = subscription_builder.field(Field::new(
+                field_name,
+                TypeRef::named_nn(TypeRef::STRING), // Non-null for subscriptions
+                move |_ctx| {
+                    let uri = resolver_uri.clone();
+                    let func = resolver_fn.clone();
+                    FieldFuture::new(async move {
+                        // TODO: Call JavaScript resolver function for streaming
+                        Ok(Some(async_graphql::Value::String(format!("Subscription {}::{} started", uri, func))))
+                    })
+                },
+            ));
+        }
+
+        builder = builder.register(subscription_builder);
+    }
+
+    builder.finish().map_err(|e| async_graphql::Error::new(format!("Schema build error: {}", e)))
 }
