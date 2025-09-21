@@ -170,13 +170,60 @@ pub async fn start_server_with_config(
         axum::response::Json(serde_json::to_value(response).unwrap_or(serde_json::Value::Null))
     }
 
+    // GraphQL SSE handler - handles subscriptions over Server-Sent Events
+    async fn graphql_sse(
+        schema: async_graphql::dynamic::Schema,
+        req: axum::http::Request<axum::body::Body>,
+    ) -> impl IntoResponse {
+        let (_parts, body) = req.into_parts();
+        let body_bytes = match axum::body::to_bytes(body, usize::MAX).await {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                return axum::response::Response::builder()
+                    .status(400)
+                    .header("content-type", "text/plain")
+                    .body(axum::body::Body::from("Failed to read request body"))
+                    .unwrap();
+            },
+        };
+
+        let request: async_graphql::Request = match serde_json::from_slice(&body_bytes) {
+            Ok(req) => req,
+            Err(e) => {
+                return axum::response::Response::builder()
+                    .status(400)
+                    .header("content-type", "text/plain")
+                    .body(axum::body::Body::from(format!("Invalid JSON: {}", e)))
+                    .unwrap();
+            },
+        };
+
+        // For now, execute as a regular query and return as SSE format
+        // Full streaming implementation would require proper async streaming
+        let response = schema.execute(request).await;
+        let json_data = serde_json::to_string(&response).unwrap_or_else(|_| "{}".to_string());
+
+        // Return SSE formatted response
+        let sse_data = format!("data: {}\n\n", json_data);
+        axum::response::Response::builder()
+            .header("content-type", "text/event-stream")
+            .header("cache-control", "no-cache")
+            .header("connection", "keep-alive")
+            .header("access-control-allow-origin", "*")
+            .header("access-control-allow-headers", "content-type")
+            .body(axum::body::Body::from(sse_data))
+            .unwrap()
+    }
+
     // Clone schema for handlers
     let schema_for_post = schema.clone();
+    let schema_for_sse = schema.clone();
 
     let app = Router::new()
         // GraphQL endpoints
         .route("/graphql", axum::routing::get(graphql_get))
         .route("/graphql", axum::routing::post(move |req| graphql_post(schema_for_post, req)))
+        .route("/graphql/sse", axum::routing::post(move |req| graphql_sse(schema_for_sse, req)))
         .route(
             "/",
             any(move |req: Request<Body>| async move {
