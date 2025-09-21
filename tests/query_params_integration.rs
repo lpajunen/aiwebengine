@@ -11,13 +11,10 @@ async fn test_query_parameters() {
     );
 
     // Start server with timeout
-    let port = tokio::time::timeout(
-        Duration::from_secs(5),
-        start_server_without_shutdown()
-    )
-    .await
-    .expect("Server startup timed out")
-    .expect("Server failed to start");
+    let port = tokio::time::timeout(Duration::from_secs(5), start_server_without_shutdown())
+        .await
+        .expect("Server startup timed out")
+        .expect("Server failed to start");
 
     // Wait for server to be ready to accept connections
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -32,7 +29,7 @@ async fn test_query_parameters() {
         Duration::from_secs(5),
         client
             .get(format!("http://127.0.0.1:{}/api/query", port))
-            .send()
+            .send(),
     )
     .await
     .expect("GET request without query timed out")
@@ -62,7 +59,7 @@ async fn test_query_parameters() {
                 "http://127.0.0.1:{}/api/query?id=123&name=test",
                 port
             ))
-            .send()
+            .send(),
     )
     .await
     .expect("GET request with query timed out")

@@ -15,13 +15,10 @@ async fn test_test_editor_api_endpoints() {
     );
 
     // Start server with timeout
-    let port = tokio::time::timeout(
-        Duration::from_secs(5),
-        start_server_without_shutdown()
-    )
-    .await
-    .expect("Server startup timed out")
-    .expect("Server failed to start");
+    let port = tokio::time::timeout(Duration::from_secs(5), start_server_without_shutdown())
+        .await
+        .expect("Server startup timed out")
+        .expect("Server failed to start");
 
     // Spawn server in background to keep it running
     tokio::spawn(async move {
@@ -37,9 +34,7 @@ async fn test_test_editor_api_endpoints() {
     // Test the root endpoint first
     let root_response = tokio::time::timeout(
         Duration::from_secs(5),
-        client
-            .get(format!("http://127.0.0.1:{}/", port))
-            .send()
+        client.get(format!("http://127.0.0.1:{}/", port)).send(),
     )
     .await;
 
@@ -63,7 +58,7 @@ async fn test_test_editor_api_endpoints() {
         Duration::from_secs(5),
         client
             .get(format!("http://127.0.0.1:{}/test-editor-api", port))
-            .send()
+            .send(),
     )
     .await
     .expect("Test editor API request timed out")
@@ -99,13 +94,10 @@ async fn test_test_editor_functionality() {
     );
 
     // Start server with timeout
-    let port = tokio::time::timeout(
-        Duration::from_secs(5),
-        start_server_without_shutdown()
-    )
-    .await
-    .expect("Server startup timed out")
-    .expect("Server failed to start");
+    let port = tokio::time::timeout(Duration::from_secs(5), start_server_without_shutdown())
+        .await
+        .expect("Server startup timed out")
+        .expect("Server failed to start");
 
     // Wait for server to be ready to accept connections
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -120,7 +112,7 @@ async fn test_test_editor_functionality() {
         Duration::from_secs(5),
         client
             .get(format!("http://127.0.0.1:{}/api/scripts", port))
-            .send()
+            .send(),
     )
     .await
     .expect("Scripts list request timed out")
@@ -155,7 +147,7 @@ async fn test_test_editor_functionality() {
                 "http://127.0.0.1:{}/api/scripts/https://example.com/test_editor",
                 port
             ))
-            .send()
+            .send(),
     )
     .await
     .expect("Test editor script request timed out")

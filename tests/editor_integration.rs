@@ -4,13 +4,10 @@ use std::time::Duration;
 #[tokio::test]
 async fn test_editor_api_endpoints() {
     // Start server with timeout
-    let port = tokio::time::timeout(
-        Duration::from_secs(5),
-        start_server_without_shutdown()
-    )
-    .await
-    .expect("Server startup timed out")
-    .expect("Server failed to start");
+    let port = tokio::time::timeout(Duration::from_secs(5), start_server_without_shutdown())
+        .await
+        .expect("Server startup timed out")
+        .expect("Server failed to start");
 
     // Wait for server to be ready to accept connections
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -25,7 +22,7 @@ async fn test_editor_api_endpoints() {
         Duration::from_secs(5),
         client
             .get(format!("http://127.0.0.1:{}/api/scripts", port))
-            .send()
+            .send(),
     )
     .await
     .expect("List scripts request timed out")
@@ -57,7 +54,7 @@ async fn test_editor_api_endpoints() {
                     "http://127.0.0.1:{}/api/scripts/{}",
                     port, short_name
                 ))
-                .send()
+                .send(),
         )
         .await
         .expect("Get script request timed out")
@@ -95,7 +92,7 @@ async fn test_editor_api_endpoints() {
                 port, test_script_name
             ))
             .body(test_content.to_string())
-            .send()
+            .send(),
     )
     .await
     .expect("Save script request timed out")
@@ -119,7 +116,7 @@ async fn test_editor_api_endpoints() {
                 "http://127.0.0.1:{}/api/scripts/{}",
                 port, test_script_name
             ))
-            .send()
+            .send(),
     )
     .await
     .expect("Verify script request timed out")

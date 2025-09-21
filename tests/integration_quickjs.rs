@@ -6,13 +6,10 @@ use std::time::Duration;
 async fn js_registered_route_returns_expected() {
     // ensure repository scripts are present (core/debug are included by default)
     // start server in background task
-    let port = tokio::time::timeout(
-        Duration::from_secs(5),
-        start_server_without_shutdown()
-    )
-    .await
-    .expect("Server startup timed out")
-    .expect("Server failed to start");
+    let port = tokio::time::timeout(Duration::from_secs(5), start_server_without_shutdown())
+        .await
+        .expect("Server startup timed out")
+        .expect("Server failed to start");
 
     // Wait for server to be ready to accept connections
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -27,7 +24,7 @@ async fn js_registered_route_returns_expected() {
         Duration::from_secs(5),
         client
             .get(format!("http://127.0.0.1:{}/debug", port))
-            .send()
+            .send(),
     )
     .await
     .expect("Debug request timed out")
@@ -58,9 +55,7 @@ async fn js_registered_route_returns_expected() {
         );
         let res_root = tokio::time::timeout(
             Duration::from_secs(5),
-            client
-                .get(format!("http://127.0.0.1:{}/", port))
-                .send()
+            client.get(format!("http://127.0.0.1:{}/", port)).send(),
         )
         .await;
 

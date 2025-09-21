@@ -18,13 +18,10 @@ async fn test_form_data() {
     );
 
     // Start server with timeout
-    let port = tokio::time::timeout(
-        Duration::from_secs(5),
-        start_server_without_shutdown()
-    )
-    .await
-    .expect("Server startup timed out")
-    .expect("Server failed to start");
+    let port = tokio::time::timeout(Duration::from_secs(5), start_server_without_shutdown())
+        .await
+        .expect("Server startup timed out")
+        .expect("Server failed to start");
 
     // Spawn server in background to keep it running
     let _server_handle = tokio::spawn(async move {
@@ -40,9 +37,7 @@ async fn test_form_data() {
     // Test simple GET request to root
     let root_response = tokio::time::timeout(
         Duration::from_secs(5),
-        client
-            .get(format!("http://127.0.0.1:{}/", port))
-            .send()
+        client.get(format!("http://127.0.0.1:{}/", port)).send(),
     )
     .await;
 
@@ -64,7 +59,7 @@ async fn test_form_data() {
         Duration::from_secs(5),
         client
             .post(format!("http://127.0.0.1:{}/api/form", port))
-            .send()
+            .send(),
     )
     .await
     .expect("POST request without form data timed out")
@@ -102,7 +97,7 @@ async fn test_form_data() {
             .post(format!("http://127.0.0.1:{}/api/form", port))
             .header("Content-Type", "application/x-www-form-urlencoded")
             .body("id=456&name=form_test&email=test@example.com")
-            .send()
+            .send(),
     )
     .await
     .expect("POST request with form data timed out")

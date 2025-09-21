@@ -49,17 +49,30 @@ async fn js_script_mgmt_functions_work() {
     // got may be null or a string
     assert!(obj.contains_key("got"), "Response missing 'got' field");
     assert!(obj.contains_key("list"), "Response missing 'list' field");
-    assert!(obj.contains_key("deleted_before"), "Response missing 'deleted_before' field");
-    assert!(obj.contains_key("deleted"), "Response missing 'deleted' field");
+    assert!(
+        obj.contains_key("deleted_before"),
+        "Response missing 'deleted_before' field"
+    );
+    assert!(
+        obj.contains_key("deleted"),
+        "Response missing 'deleted' field"
+    );
     assert!(obj.contains_key("after"), "Response missing 'after' field");
 
     // list should be an array containing some known URIs
-    let list = obj.get("list").unwrap().as_array().expect("list should be an array");
-    assert!(list.iter().any(|v| {
-        v.as_str()
-            .map(|s| s.contains("example.com/core"))
-            .unwrap_or(false)
-    }), "Expected core script in list");
+    let list = obj
+        .get("list")
+        .unwrap()
+        .as_array()
+        .expect("list should be an array");
+    assert!(
+        list.iter().any(|v| {
+            v.as_str()
+                .map(|s| s.contains("example.com/core"))
+                .unwrap_or(false)
+        }),
+        "Expected core script in list"
+    );
 
     // verify the upserted script was deleted via deleteScript and is no longer callable
     let delete_check_request = client
@@ -74,7 +87,11 @@ async fn js_script_mgmt_functions_work() {
 
     let status = res2.status();
     // The endpoint should now return 404 since the script was deleted
-    assert_eq!(status, 404, "Expected 404 for deleted script endpoint, got {}", status);
+    assert_eq!(
+        status, 404,
+        "Expected 404 for deleted script endpoint, got {}",
+        status
+    );
 }
 
 #[tokio::test]
@@ -116,7 +133,11 @@ register('/test-endpoint', 'test_endpoint_handler', 'GET');
         Err(_) => panic!("POST request to /upsert_script timed out"),
     };
 
-    assert_eq!(response.status(), 200, "Expected 200 status for upsert_script");
+    assert_eq!(
+        response.status(),
+        200,
+        "Expected 200 status for upsert_script"
+    );
 
     let body: serde_json::Value = match timeout(Duration::from_secs(5), response.json()).await {
         Ok(Ok(json)) => json,
@@ -125,8 +146,14 @@ register('/test-endpoint', 'test_endpoint_handler', 'GET');
     };
 
     assert_eq!(body["success"], true, "Expected success=true in response");
-    assert_eq!(body["uri"], "https://example.com/test-endpoint-script", "Expected correct URI in response");
-    assert!(body["contentLength"].as_u64().unwrap() > 0, "Expected contentLength > 0");
+    assert_eq!(
+        body["uri"], "https://example.com/test-endpoint-script",
+        "Expected correct URI in response"
+    );
+    assert!(
+        body["contentLength"].as_u64().unwrap() > 0,
+        "Expected contentLength > 0"
+    );
 
     // Verify the script was actually upserted by calling the new endpoint
     tokio::time::sleep(Duration::from_millis(100)).await; // Give time for script to be processed
@@ -141,7 +168,11 @@ register('/test-endpoint', 'test_endpoint_handler', 'GET');
         Err(_) => panic!("GET request to test endpoint timed out"),
     };
 
-    assert_eq!(test_response.status(), 200, "Expected 200 status for test endpoint");
+    assert_eq!(
+        test_response.status(),
+        200,
+        "Expected 200 status for test endpoint"
+    );
 
     let test_body = match timeout(Duration::from_secs(5), test_response.text()).await {
         Ok(Ok(text)) => text,
@@ -149,7 +180,10 @@ register('/test-endpoint', 'test_endpoint_handler', 'GET');
         Err(_) => panic!("Reading test response timed out"),
     };
 
-    assert_eq!(test_body, "Test endpoint works!", "Expected correct response body");
+    assert_eq!(
+        test_body, "Test endpoint works!",
+        "Expected correct response body"
+    );
 }
 
 #[tokio::test]
@@ -191,7 +225,11 @@ register('/delete-test-endpoint', 'delete_test_handler', 'GET');
         Err(_) => panic!("POST request to /upsert_script timed out"),
     };
 
-    assert_eq!(upsert_response.status(), 200, "Expected 200 status for upsert_script");
+    assert_eq!(
+        upsert_response.status(),
+        200,
+        "Expected 200 status for upsert_script"
+    );
 
     // Verify the script was upserted
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -206,7 +244,11 @@ register('/delete-test-endpoint', 'delete_test_handler', 'GET');
         Err(_) => panic!("GET request to delete test endpoint timed out"),
     };
 
-    assert_eq!(test_response.status(), 200, "Expected 200 status for upserted endpoint");
+    assert_eq!(
+        test_response.status(),
+        200,
+        "Expected 200 status for upserted endpoint"
+    );
 
     // Now test the delete_script endpoint
     let delete_request = client
@@ -220,16 +262,27 @@ register('/delete-test-endpoint', 'delete_test_handler', 'GET');
         Err(_) => panic!("POST request to /delete_script timed out"),
     };
 
-    assert_eq!(delete_response.status(), 200, "Expected 200 status for delete_script");
+    assert_eq!(
+        delete_response.status(),
+        200,
+        "Expected 200 status for delete_script"
+    );
 
-    let delete_body: serde_json::Value = match timeout(Duration::from_secs(5), delete_response.json()).await {
-        Ok(Ok(json)) => json,
-        Ok(Err(e)) => panic!("Failed to parse JSON response: {:?}", e),
-        Err(_) => panic!("Reading JSON response timed out"),
-    };
+    let delete_body: serde_json::Value =
+        match timeout(Duration::from_secs(5), delete_response.json()).await {
+            Ok(Ok(json)) => json,
+            Ok(Err(e)) => panic!("Failed to parse JSON response: {:?}", e),
+            Err(_) => panic!("Reading JSON response timed out"),
+        };
 
-    assert_eq!(delete_body["success"], true, "Expected success=true in delete response");
-    assert_eq!(delete_body["uri"], "https://example.com/delete-test-script", "Expected correct URI in delete response");
+    assert_eq!(
+        delete_body["success"], true,
+        "Expected success=true in delete response"
+    );
+    assert_eq!(
+        delete_body["uri"], "https://example.com/delete-test-script",
+        "Expected correct URI in delete response"
+    );
 
     // Verify the script was actually deleted by checking the endpoint returns 404
     tokio::time::sleep(Duration::from_millis(100)).await; // Give time for script to be deleted
@@ -240,11 +293,18 @@ register('/delete-test-endpoint', 'delete_test_handler', 'GET');
 
     let after_delete_response = match timeout(Duration::from_secs(5), after_delete_request).await {
         Ok(Ok(response)) => response,
-        Ok(Err(e)) => panic!("GET request to delete test endpoint after deletion failed: {:?}", e),
+        Ok(Err(e)) => panic!(
+            "GET request to delete test endpoint after deletion failed: {:?}",
+            e
+        ),
         Err(_) => panic!("GET request to delete test endpoint after deletion timed out"),
     };
 
-    assert_eq!(after_delete_response.status(), 404, "Expected 404 for deleted script endpoint");
+    assert_eq!(
+        after_delete_response.status(),
+        404,
+        "Expected 404 for deleted script endpoint"
+    );
 
     // Test deleting a non-existent script
     let nonexistent_delete_request = client
@@ -252,21 +312,33 @@ register('/delete-test-endpoint', 'delete_test_handler', 'GET');
         .form(&[("uri", "https://example.com/nonexistent-script")])
         .send();
 
-    let nonexistent_delete_response = match timeout(Duration::from_secs(5), nonexistent_delete_request).await {
-        Ok(Ok(response)) => response,
-        Ok(Err(e)) => panic!("POST request to /delete_script for nonexistent script failed: {:?}", e),
-        Err(_) => panic!("POST request to /delete_script for nonexistent script timed out"),
-    };
+    let nonexistent_delete_response =
+        match timeout(Duration::from_secs(5), nonexistent_delete_request).await {
+            Ok(Ok(response)) => response,
+            Ok(Err(e)) => panic!(
+                "POST request to /delete_script for nonexistent script failed: {:?}",
+                e
+            ),
+            Err(_) => panic!("POST request to /delete_script for nonexistent script timed out"),
+        };
 
-    assert_eq!(nonexistent_delete_response.status(), 404, "Expected 404 for nonexistent script deletion");
+    assert_eq!(
+        nonexistent_delete_response.status(),
+        404,
+        "Expected 404 for nonexistent script deletion"
+    );
 
-    let nonexistent_body: serde_json::Value = match timeout(Duration::from_secs(5), nonexistent_delete_response.json()).await {
-        Ok(Ok(json)) => json,
-        Ok(Err(e)) => panic!("Failed to parse JSON response: {:?}", e),
-        Err(_) => panic!("Reading JSON response timed out"),
-    };
+    let nonexistent_body: serde_json::Value =
+        match timeout(Duration::from_secs(5), nonexistent_delete_response.json()).await {
+            Ok(Ok(json)) => json,
+            Ok(Err(e)) => panic!("Failed to parse JSON response: {:?}", e),
+            Err(_) => panic!("Reading JSON response timed out"),
+        };
 
-    assert_eq!(nonexistent_body["error"], "Script not found", "Expected 'Script not found' error");
+    assert_eq!(
+        nonexistent_body["error"], "Script not found",
+        "Expected 'Script not found' error"
+    );
 }
 
 #[tokio::test]
@@ -309,7 +381,11 @@ register('/lifecycle-test', 'lifecycle_test_handler', 'GET');
         Err(_) => panic!("Create script request timed out"),
     };
 
-    assert_eq!(create_response.status(), 200, "Expected 200 status for script creation");
+    assert_eq!(
+        create_response.status(),
+        200,
+        "Expected 200 status for script creation"
+    );
 
     // 2. Verify script works
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -324,7 +400,11 @@ register('/lifecycle-test', 'lifecycle_test_handler', 'GET');
         Err(_) => panic!("Test script request timed out"),
     };
 
-    assert_eq!(test_response.status(), 200, "Expected 200 status for lifecycle test");
+    assert_eq!(
+        test_response.status(),
+        200,
+        "Expected 200 status for lifecycle test"
+    );
 
     let test_body = match timeout(Duration::from_secs(5), test_response.text()).await {
         Ok(Ok(text)) => text,
@@ -332,7 +412,10 @@ register('/lifecycle-test', 'lifecycle_test_handler', 'GET');
         Err(_) => panic!("Reading test response timed out"),
     };
 
-    assert_eq!(test_body, "Lifecycle test successful!", "Expected correct lifecycle test response");
+    assert_eq!(
+        test_body, "Lifecycle test successful!",
+        "Expected correct lifecycle test response"
+    );
 
     // 3. Delete script via HTTP API
     let delete_request = client
@@ -346,7 +429,11 @@ register('/lifecycle-test', 'lifecycle_test_handler', 'GET');
         Err(_) => panic!("Delete script request timed out"),
     };
 
-    assert_eq!(delete_response.status(), 200, "Expected 200 status for script deletion");
+    assert_eq!(
+        delete_response.status(),
+        200,
+        "Expected 200 status for script deletion"
+    );
 
     // 4. Verify script is gone
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -361,5 +448,156 @@ register('/lifecycle-test', 'lifecycle_test_handler', 'GET');
         Err(_) => panic!("Check deleted script request timed out"),
     };
 
-    assert_eq!(after_delete_response.status(), 404, "Expected 404 for deleted script endpoint");
+    assert_eq!(
+        after_delete_response.status(),
+        404,
+        "Expected 404 for deleted script endpoint"
+    );
+}
+
+#[tokio::test]
+async fn test_read_script_endpoint() {
+    // Start server with timeout
+    let server_future = start_server_without_shutdown();
+    let port = match timeout(Duration::from_secs(5), server_future).await {
+        Ok(Ok(port)) => port,
+        Ok(Err(e)) => panic!("Server failed to start: {:?}", e),
+        Err(_) => panic!("Server startup timed out"),
+    };
+
+    println!("Server started on port: {}", port);
+
+    // Wait for server to be ready to accept connections
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let client = reqwest::Client::new();
+
+    // First, upsert a test script
+    let test_script_content = r#"
+function read_test_handler(req) {
+    return { status: 200, body: 'Read test endpoint works!' };
+}
+register('/read-test-endpoint', 'read_test_handler', 'GET');
+"#;
+
+    let upsert_request = client
+        .post(format!("http://127.0.0.1:{}/upsert_script", port))
+        .form(&[
+            ("uri", "https://example.com/read-test-script"),
+            ("content", test_script_content),
+        ])
+        .send();
+
+    let upsert_response = match timeout(Duration::from_secs(5), upsert_request).await {
+        Ok(Ok(response)) => response,
+        Ok(Err(e)) => panic!("POST request to /upsert_script failed: {:?}", e),
+        Err(_) => panic!("POST request to /upsert_script timed out"),
+    };
+
+    assert_eq!(
+        upsert_response.status(),
+        200,
+        "Expected 200 status for upsert_script"
+    );
+
+    // Now test the read_script endpoint
+    let read_request = client
+        .get(format!(
+            "http://127.0.0.1:{}/read_script?uri=https://example.com/read-test-script",
+            port
+        ))
+        .send();
+
+    let read_response = match timeout(Duration::from_secs(5), read_request).await {
+        Ok(Ok(response)) => response,
+        Ok(Err(e)) => panic!("GET request to /read_script failed: {:?}", e),
+        Err(_) => panic!("GET request to /read_script timed out"),
+    };
+
+    assert_eq!(
+        read_response.status(),
+        200,
+        "Expected 200 status for read_script"
+    );
+
+    let read_body = match timeout(Duration::from_secs(5), read_response.text()).await {
+        Ok(Ok(text)) => text,
+        Ok(Err(e)) => panic!("Failed to read response body: {:?}", e),
+        Err(_) => panic!("Reading response body timed out"),
+    };
+
+    // The response should contain the script content
+    assert!(
+        read_body.contains("function read_test_handler"),
+        "Expected script content in response"
+    );
+    assert!(
+        read_body.contains("Read test endpoint works!"),
+        "Expected script content in response"
+    );
+
+    // Test reading a non-existent script
+    let nonexistent_read_request = client
+        .get(format!(
+            "http://127.0.0.1:{}/read_script?uri=https://example.com/nonexistent-script",
+            port
+        ))
+        .send();
+
+    let nonexistent_read_response =
+        match timeout(Duration::from_secs(5), nonexistent_read_request).await {
+            Ok(Ok(response)) => response,
+            Ok(Err(e)) => panic!(
+                "GET request to /read_script for nonexistent script failed: {:?}",
+                e
+            ),
+            Err(_) => panic!("GET request to /read_script for nonexistent script timed out"),
+        };
+
+    assert_eq!(
+        nonexistent_read_response.status(),
+        404,
+        "Expected 404 for nonexistent script"
+    );
+
+    let nonexistent_body: serde_json::Value =
+        match timeout(Duration::from_secs(5), nonexistent_read_response.json()).await {
+            Ok(Ok(json)) => json,
+            Ok(Err(e)) => panic!("Failed to parse JSON response: {:?}", e),
+            Err(_) => panic!("Reading JSON response timed out"),
+        };
+
+    assert_eq!(
+        nonexistent_body["error"], "Script not found",
+        "Expected 'Script not found' error"
+    );
+
+    // Test missing uri parameter
+    let missing_uri_request = client
+        .get(format!("http://127.0.0.1:{}/read_script", port))
+        .send();
+
+    let missing_uri_response = match timeout(Duration::from_secs(5), missing_uri_request).await {
+        Ok(Ok(response)) => response,
+        Ok(Err(e)) => panic!("GET request to /read_script without uri failed: {:?}", e),
+        Err(_) => panic!("GET request to /read_script without uri timed out"),
+    };
+
+    assert_eq!(
+        missing_uri_response.status(),
+        400,
+        "Expected 400 for missing uri parameter"
+    );
+
+    let missing_uri_body: serde_json::Value =
+        match timeout(Duration::from_secs(5), missing_uri_response.json()).await {
+            Ok(Ok(json)) => json,
+            Ok(Err(e)) => panic!("Failed to parse JSON response: {:?}", e),
+            Err(_) => panic!("Reading JSON response timed out"),
+        };
+
+    assert_eq!(
+        missing_uri_body["error"], "Missing required parameter: uri",
+        "Expected 'Missing required parameter: uri' error"
+    );
 }

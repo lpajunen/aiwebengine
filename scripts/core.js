@@ -211,7 +211,66 @@ function delete_script_handler(req) {
 
 register('/delete_script', 'delete_script_handler', 'POST');
 
-// Log server start with timestamp if writeLog is available
+// Script reading endpoint
+function read_script_handler(req) {
+	try {
+		// Extract uri parameter from query string
+		let uri = null;
+		
+		if (req.query) {
+			uri = req.query.uri;
+		}
+		
+		// Validate required parameter
+		if (!uri) {
+			return {
+				status: 400,
+				body: JSON.stringify({
+					error: 'Missing required parameter: uri',
+					timestamp: new Date().toISOString()
+				}),
+				contentType: 'application/json'
+			};
+		}
+		
+		// Call the getScript function
+		const content = getScript(uri);
+		
+		if (content) {
+			writeLog(`Script retrieved: ${uri} (${content.length} characters)`);
+			return {
+				status: 200,
+				body: content,
+				contentType: 'application/javascript'
+			};
+		} else {
+			writeLog(`Script not found: ${uri}`);
+			return {
+				status: 404,
+				body: JSON.stringify({
+					error: 'Script not found',
+					message: 'No script with the specified URI was found',
+					uri: uri,
+					timestamp: new Date().toISOString()
+				}),
+				contentType: 'application/json'
+			};
+		}
+	} catch (error) {
+		writeLog(`Script read failed: ${error.message}`);
+		return {
+			status: 500,
+			body: JSON.stringify({
+				error: 'Failed to read script',
+				details: error.message,
+				timestamp: new Date().toISOString()
+			}),
+			contentType: 'application/json'
+		};
+	}
+}
+
+register('/read_script', 'read_script_handler', 'GET');
 try {
 	if (typeof writeLog === 'function') {
 		writeLog(`server started ${new Date().toISOString()}`);
