@@ -277,10 +277,19 @@ This document outlines potential enhancements and missing features that could ma
 
 ### 27. GraphQL Support
 
-- **Description**: GraphQL query language support
-- **Benefits**: Flexible API queries, reduced over-fetching
-- **Implementation**: GraphQL server integration
-- **Priority**: Low
+- **Description**: GraphQL query language support with dynamic JavaScript registration
+- **Benefits**: Flexible API queries, reduced over-fetching, real-time subscriptions
+- **Implementation Plan**:
+  1. **Add async-graphql dependencies** - Update Cargo.toml with async-graphql, async-graphql-axum, and related crates for GraphQL support
+  2. **Create GraphQL module** - Add src/graphql.rs with basic schema structure and dynamic registration support
+  3. **Implement dynamic schema builder** - Build schema dynamically from JavaScript-registered queries/mutations/subscriptions
+  4. **Add GraphQL HTTP endpoints** - Implement /graphql GET (GraphiQL) and POST (execution) endpoints
+  5. **Implement SSE subscription endpoint** - Add /graphql/sse for real-time subscriptions using Server-Sent Events
+  6. **Add JavaScript registration functions** - Create registerGraphQLQuery, registerGraphQLMutation, registerGraphQLSubscription
+  7. **Update JavaScript engine for GraphQL** - Modify js_engine.rs to capture GraphQL registrations during script execution
+  8. **Integrate GraphiQL with dynamic schema** - Ensure GraphiQL can introspect and display registered operations
+  9. **Add tests and validation** - Create integration tests for GraphQL endpoints and JavaScript registration
+- **Priority**: Medium
 
 ### 28. Template Engine
 
