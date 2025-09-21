@@ -82,7 +82,7 @@ pub fn register_graphql_query(name: String, sdl: String, resolver_function: Stri
     let operation = GraphQLOperation {
         sdl,
         resolver_function,
-        script_uri,
+        script_uri: script_uri.clone(),
     };
 
     if let Ok(mut registry) = get_registry().write() {
@@ -97,7 +97,7 @@ pub fn register_graphql_mutation(name: String, sdl: String, resolver_function: S
     let operation = GraphQLOperation {
         sdl,
         resolver_function,
-        script_uri,
+        script_uri: script_uri.clone(),
     };
 
     if let Ok(mut registry) = get_registry().write() {
@@ -112,7 +112,7 @@ pub fn register_graphql_subscription(name: String, sdl: String, resolver_functio
     let operation = GraphQLOperation {
         sdl,
         resolver_function,
-        script_uri,
+        script_uri: script_uri.clone(),
     };
 
     if let Ok(mut registry) = get_registry().write() {

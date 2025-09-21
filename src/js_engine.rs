@@ -55,6 +55,52 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
 
                     global.set("register", register)?;
 
+                    // GraphQL registration functions
+                    let uri_clone1 = uri_owned.clone();
+                    let register_graphql_query = Function::new(
+                        ctx.clone(),
+                        move |_c: rquickjs::Ctx<'_>,
+                             name: String,
+                             sdl: String,
+                             resolver_function: String|
+                             -> Result<(), rquickjs::Error> {
+                            debug!("JavaScript called registerGraphQLQuery with name: {}, sdl length: {}", name, sdl.len());
+                            crate::graphql::register_graphql_query(name, sdl, resolver_function, uri_clone1.clone());
+                            Ok(())
+                        },
+                    )?;
+                    global.set("registerGraphQLQuery", register_graphql_query)?;
+
+                    let uri_clone2 = uri_owned.clone();
+                    let register_graphql_mutation = Function::new(
+                        ctx.clone(),
+                        move |_c: rquickjs::Ctx<'_>,
+                             name: String,
+                             sdl: String,
+                             resolver_function: String|
+                             -> Result<(), rquickjs::Error> {
+                            debug!("JavaScript called registerGraphQLMutation with name: {}, sdl length: {}", name, sdl.len());
+                            crate::graphql::register_graphql_mutation(name, sdl, resolver_function, uri_clone2.clone());
+                            Ok(())
+                        },
+                    )?;
+                    global.set("registerGraphQLMutation", register_graphql_mutation)?;
+
+                    let uri_clone3 = uri_owned.clone();
+                    let register_graphql_subscription = Function::new(
+                        ctx.clone(),
+                        move |_c: rquickjs::Ctx<'_>,
+                             name: String,
+                             sdl: String,
+                             resolver_function: String|
+                             -> Result<(), rquickjs::Error> {
+                            debug!("JavaScript called registerGraphQLSubscription with name: {}, sdl length: {}", name, sdl.len());
+                            crate::graphql::register_graphql_subscription(name, sdl, resolver_function, uri_clone3.clone());
+                            Ok(())
+                        },
+                    )?;
+                    global.set("registerGraphQLSubscription", register_graphql_subscription)?;
+
                     // Execute the script
                     ctx.eval::<(), _>(content)?;
 
