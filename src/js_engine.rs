@@ -55,26 +55,155 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
 
                     global.set("register", register)?;
 
-                    // GraphQL registration functions are only available during startup, not during request execution
-                    let register_graphql_noop = Function::new(
+                    // GraphQL registration functions
+                    let uri_clone1 = uri_owned.clone();
+                    let register_graphql_query = Function::new(
                         ctx.clone(),
-                        |_c: rquickjs::Ctx<'_>,
-                         _name: String,
-                         _sdl: String,
-                         _resolver_function: String|
-                         -> Result<(), rquickjs::Error> {
-                            // No-op during request execution
+                        move |_c: rquickjs::Ctx<'_>,
+                             name: String,
+                             sdl: String,
+                             resolver_function: String|
+                             -> Result<(), rquickjs::Error> {
+                            debug!("JavaScript called registerGraphQLQuery with name: {}, sdl length: {}", name, sdl.len());
+                            crate::graphql::register_graphql_query(name, sdl, resolver_function, uri_clone1.clone());
                             Ok(())
                         },
                     )?;
-                    global.set("registerGraphQLQuery", register_graphql_noop.clone())?;
-                    global.set("registerGraphQLMutation", register_graphql_noop.clone())?;
-                    global.set("registerGraphQLSubscription", register_graphql_noop)?;
+                    global.set("registerGraphQLQuery", register_graphql_query)?;
 
-                    // Execute the script
-                    ctx.eval::<(), _>(content)?;
+                    let uri_clone2 = uri_owned.clone();
+                    let register_graphql_mutation = Function::new(
+                        ctx.clone(),
+                        move |_c: rquickjs::Ctx<'_>,
+                             name: String,
+                             sdl: String,
+                             resolver_function: String|
+                             -> Result<(), rquickjs::Error> {
+                            debug!("JavaScript called registerGraphQLMutation with name: {}, sdl length: {}", name, sdl.len());
+                            crate::graphql::register_graphql_mutation(name, sdl, resolver_function, uri_clone2.clone());
+                            Ok(())
+                        },
+                    )?;
+                    global.set("registerGraphQLMutation", register_graphql_mutation)?;
 
-                    Ok(())
+                    let uri_clone3 = uri_owned.clone();
+                    let register_graphql_subscription = Function::new(
+                        ctx.clone(),
+                        move |_c: rquickjs::Ctx<'_>,
+                             name: String,
+                             sdl: String,
+                             resolver_function: String|
+                             -> Result<(), rquickjs::Error> {
+                            debug!("JavaScript called registerGraphQLSubscription with name: {}, sdl length: {}", name, sdl.len());
+                            crate::graphql::register_graphql_subscription(name, sdl, resolver_function, uri_clone3.clone());
+                            Ok(())
+                        },
+                    )?;
+                    global.set("registerGraphQLSubscription", register_graphql_subscription)?;
+
+                    // Set up host functions
+                    let script_uri_clone1 = uri_owned.clone();
+                    let write = Function::new(
+                        ctx.clone(),
+                        move |_c: rquickjs::Ctx<'_>, msg: String| -> Result<(), rquickjs::Error> {
+                            debug!("JavaScript called writeLog with message: {}", msg);
+                            repository::insert_log_message(&script_uri_clone1, &msg);
+                            Ok(())
+                        },
+                    )?;
+                    global.set("writeLog", write)?;
+
+                    let script_uri_clone2 = uri_owned.clone();
+                    let list_logs = Function::new(
+                        ctx.clone(),
+                        move |_c: rquickjs::Ctx<'_>| -> Result<Vec<String>, rquickjs::Error> {
+                            debug!("JavaScript called listLogs");
+                            Ok(repository::fetch_log_messages(&script_uri_clone2))
+                        },
+                    )?;
+                    global.set("listLogs", list_logs)?;
+
+                    let list_logs_for_uri = Function::new(
+                        ctx.clone(),
+                        |_c: rquickjs::Ctx<'_>, uri: String| -> Result<Vec<String>, rquickjs::Error> {
+                            debug!("JavaScript called listLogsForUri with uri: {}", uri);
+                            Ok(repository::fetch_log_messages(&uri))
+                        },
+                    )?;
+                    global.set("listLogsForUri", list_logs_for_uri)?;
+
+                    let list_scripts = Function::new(
+                        ctx.clone(),
+                        |_c: rquickjs::Ctx<'_>| -> Result<Vec<String>, rquickjs::Error> {
+                            debug!("JavaScript called listScripts");
+                            let m = repository::fetch_scripts();
+                            Ok(m.keys().cloned().collect())
+                        },
+                    )?;
+                    global.set("listScripts", list_scripts)?;
+
+                    let list_assets = Function::new(
+                        ctx.clone(),
+                        |_c: rquickjs::Ctx<'_>| -> Result<Vec<String>, rquickjs::Error> {
+                            debug!("JavaScript called listAssets");
+                            let m = repository::fetch_assets();
+                            Ok(m.keys().cloned().collect())
+                        },
+                    )?;
+                    global.set("listAssets", list_assets)?;
+
+                    let fetch_asset = Function::new(
+                        ctx.clone(),
+                        move |_c: rquickjs::Ctx<'_>, public_path: String| -> Result<String, rquickjs::Error> {
+                            debug!("JavaScript called fetchAsset with public_path: {}", public_path);
+                            if let Some(asset) = repository::fetch_asset(&public_path) {
+                                let content_b64 = base64::Engine::encode(
+                                    &base64::engine::general_purpose::STANDARD,
+                                    &asset.content,
+                                );
+                                let asset_json = serde_json::json!({
+                                    "publicPath": asset.public_path,
+                                    "mimetype": asset.mimetype,
+                                    "content": content_b64
+                                });
+                                Ok(asset_json.to_string())
+                            } else {
+                                Ok("null".to_string())
+                            }
+                        },
+                    )?;
+                    global.set("fetchAsset", fetch_asset)?;
+
+                    let upsert_asset = Function::new(
+                        ctx.clone(),
+                        |_c: rquickjs::Ctx<'_>,
+                         public_path: String,
+                         mimetype: String,
+                         content_b64: String|
+                         -> Result<(), rquickjs::Error> {
+                            debug!("JavaScript called upsertAsset with public_path: {}, mimetype: {}, content_b64 length: {}", 
+                                   public_path, mimetype, content_b64.len());
+                            match base64::Engine::decode(
+                                &base64::engine::general_purpose::STANDARD,
+                                &content_b64,
+                            ) {
+                                Ok(content) => {
+                                    let asset = repository::Asset {
+                                        public_path,
+                                        mimetype,
+                                        content,
+                                    };
+                                    repository::upsert_asset(asset);
+                                    Ok(())
+                                }
+                                Err(_) => Err(rquickjs::Error::Exception),
+                            }
+                        },
+                    )?;
+                    global.set("upsertAsset", upsert_asset)?;
+
+                // Execute the script
+                ctx.eval::<(), _>(content)?;                    Ok(())
                 });
 
                 match result {
@@ -292,6 +421,46 @@ pub fn execute_script_for_request(
             },
         )?;
         global.set("deleteScript", delete_script)?;
+
+        // GraphQL registration functions (no-ops for request handling)
+        let register_graphql_query_noop = Function::new(
+            ctx.clone(),
+            |_c: rquickjs::Ctx<'_>,
+             _name: String,
+             _sdl: String,
+             _resolver_function: String|
+             -> Result<(), rquickjs::Error> {
+                // No-op for request handling
+                Ok(())
+            },
+        )?;
+        global.set("registerGraphQLQuery", register_graphql_query_noop)?;
+
+        let register_graphql_mutation_noop = Function::new(
+            ctx.clone(),
+            |_c: rquickjs::Ctx<'_>,
+             _name: String,
+             _sdl: String,
+             _resolver_function: String|
+             -> Result<(), rquickjs::Error> {
+                // No-op for request handling
+                Ok(())
+            },
+        )?;
+        global.set("registerGraphQLMutation", register_graphql_mutation_noop)?;
+
+        let register_graphql_subscription_noop = Function::new(
+            ctx.clone(),
+            |_c: rquickjs::Ctx<'_>,
+             _name: String,
+             _sdl: String,
+             _resolver_function: String|
+             -> Result<(), rquickjs::Error> {
+                // No-op for request handling
+                Ok(())
+            },
+        )?;
+        global.set("registerGraphQLSubscription", register_graphql_subscription_noop)?;
 
         Ok(())
     })

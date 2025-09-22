@@ -93,7 +93,11 @@ pub fn register_graphql_query(
 
     if let Ok(mut registry) = get_registry().write() {
         registry.register_query(name.clone(), operation);
-        debug!("Successfully registered GraphQL query: {}", name);
+        debug!(
+            "Successfully registered GraphQL query: {} - total queries: {}",
+            name,
+            registry.get_queries().len()
+        );
     } else {
         error!("Failed to acquire write lock on GraphQL registry");
     }
@@ -257,10 +261,10 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
 
     builder = builder.register(query_builder);
 
-    // Build Mutation type if mutations exist
-    if has_mutations {
-        let mut mutation_builder = Object::new("Mutation");
+    // Build Mutation type (always create it, even if empty)
+    let mut mutation_builder = Object::new("Mutation");
 
+    if has_mutations {
         for (name, operation) in mutations {
             let field_name = name.clone();
             let resolver_uri = operation.script_uri.clone();
@@ -366,9 +370,22 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
                 ));
             }
         }
-
-        builder = builder.register(mutation_builder);
+    } else {
+        // Add a placeholder mutation if no mutations are registered
+        mutation_builder = mutation_builder.field(Field::new(
+            "placeholder",
+            TypeRef::named(TypeRef::STRING),
+            |_| {
+                FieldFuture::new(async {
+                    Ok(Some(async_graphql::Value::String(
+                        "No mutations registered yet".to_string(),
+                    )))
+                })
+            },
+        ));
     }
+
+    builder = builder.register(mutation_builder);
 
     // Build Subscription type if subscriptions exist
     if has_subscriptions {

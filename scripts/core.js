@@ -287,7 +287,66 @@ function script_logs_handler(req) {
 
 register('/script_logs', 'script_logs_handler', 'GET');
 
-// GraphQL operations are now handled in a separate script
+// GraphQL operations for script management
+registerGraphQLQuery("scripts", "type Query { scripts: String }", "scriptsQuery");
+registerGraphQLQuery("script", "type Query { script(uri: String!): String }", "scriptQuery");
+registerGraphQLMutation("upsertScript", "type Mutation { upsertScript(uri: String!, content: String!): String }", "upsertScriptMutation");
+registerGraphQLMutation("deleteScript", "type Mutation { deleteScript(uri: String!): String }", "deleteScriptMutation");
+
+// GraphQL resolvers
+function scriptsQuery() {
+	try {
+		const scripts = listScripts();
+		const scriptList = Object.keys(scripts).map(uri => `${uri}: ${scripts[uri].length} chars`).join('\n');
+		return scriptList || 'No scripts found';
+	} catch (error) {
+		writeLog(`Scripts query failed: ${error.message}`);
+		return `Error: Failed to list scripts: ${error.message}`;
+	}
+}
+
+function scriptQuery(args) {
+	try {
+		const content = getScript(args.uri);
+		if (content) {
+			return JSON.stringify({
+				uri: args.uri,
+				content: content,
+				contentLength: content.length
+			});
+		}
+		return null;
+	} catch (error) {
+		writeLog(`Script query failed: ${error.message}`);
+		return null;
+	}
+}
+
+function upsertScriptMutation(args) {
+	try {
+		upsertScript(args.uri, args.content);
+		writeLog(`Script upserted via GraphQL: ${args.uri} (${args.content.length} characters)`);
+		return `Script upserted successfully: ${args.uri} (${args.content.length} characters)`;
+	} catch (error) {
+		writeLog(`Script upsert mutation failed: ${error.message}`);
+		return `Error: Failed to upsert script: ${error.message}`;
+	}
+}
+
+function deleteScriptMutation(args) {
+	try {
+		const deleted = deleteScript(args.uri);
+		if (deleted) {
+			writeLog(`Script deleted via GraphQL: ${args.uri}`);
+			return `Script deleted successfully: ${args.uri}`;
+		} else {
+			return `Script not found: ${args.uri}`;
+		}
+	} catch (error) {
+		writeLog(`Script delete mutation failed: ${error.message}`);
+		return `Error: Failed to delete script: ${error.message}`;
+	}
+}
 
 // GraphQL resolvers are now handled in a separate script
 
