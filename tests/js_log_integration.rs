@@ -8,7 +8,7 @@ async fn js_write_log_and_listlogs() {
     // upsert the js_log_test script so it registers its routes
     repository::upsert_script(
         "https://example.com/js-log-test",
-        include_str!("../scripts/js_log_test.js"),
+        include_str!("../scripts/test_scripts/js_log_test.js"),
     );
 
     // Start server with timeout
@@ -124,7 +124,7 @@ async fn js_list_logs_for_uri() {
     // upsert the js_log_test_uri script so it registers its routes
     repository::upsert_script(
         "https://example.com/js-log-test-uri-script",
-        include_str!("../scripts/js_log_test_uri.js"),
+        include_str!("../scripts/test_scripts/js_log_test_uri.js"),
     );
 
     // Start server with timeout

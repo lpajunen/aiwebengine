@@ -810,17 +810,17 @@ mod tests {
         // Load test scripts dynamically using upsert_script
         repository::upsert_script(
             "https://example.com/test_editor",
-            include_str!("../scripts/test_editor.js"),
+            include_str!("../scripts/test_scripts/test_editor.js"),
         );
         repository::upsert_script(
             "https://example.com/test_editor_api",
-            include_str!("../scripts/test_editor_api.js"),
+            include_str!("../scripts/test_scripts/test_editor_api.js"),
         );
 
         // Test that the editor script can be executed without errors
         let result = js_engine::execute_script(
             "https://example.com/editor",
-            include_str!("../scripts/editor.js"),
+            include_str!("../scripts/feature_scripts/editor.js"),
         );
         assert!(
             result.success,
@@ -835,7 +835,7 @@ mod tests {
         // Test that the test_editor script can be executed without errors
         let test_editor_result = js_engine::execute_script(
             "https://example.com/test_editor",
-            include_str!("../scripts/test_editor.js"),
+            include_str!("../scripts/test_scripts/test_editor.js"),
         );
         assert!(
             test_editor_result.success,

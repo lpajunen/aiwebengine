@@ -8,9 +8,9 @@ pub fn fetch_scripts() -> HashMap<String, String> {
     let mut m = HashMap::new();
 
     // Always include core functionality scripts
-    let core = include_str!("../scripts/core.js");
-    let asset_mgmt = include_str!("../scripts/asset_mgmt.js");
-    let editor = include_str!("../scripts/editor.js");
+    let core = include_str!("../scripts/feature_scripts/core.js");
+    let asset_mgmt = include_str!("../scripts/feature_scripts/asset_mgmt.js");
+    let editor = include_str!("../scripts/feature_scripts/editor.js");
 
     m.insert("https://example.com/core".to_string(), core.to_string());
     m.insert(
@@ -25,7 +25,7 @@ pub fn fetch_scripts() -> HashMap<String, String> {
 
     if include_test_scripts {
         // Include GraphQL test script for testing GraphiQL integration
-        let graphql_test = include_str!("../scripts/graphql_test.js");
+        let graphql_test = include_str!("../scripts/test_scripts/graphql_test.js");
         m.insert(
             "https://example.com/graphql_test".to_string(),
             graphql_test.to_string(),
@@ -58,11 +58,11 @@ pub fn fetch_script(uri: &str) -> Option<String> {
     }
 
     match uri {
-        "https://example.com/core" => Some(include_str!("../scripts/core.js").to_string()),
+        "https://example.com/core" => Some(include_str!("../scripts/feature_scripts/core.js").to_string()),
         "https://example.com/asset_mgmt" => {
-            Some(include_str!("../scripts/asset_mgmt.js").to_string())
+            Some(include_str!("../scripts/feature_scripts/asset_mgmt.js").to_string())
         }
-        "https://example.com/editor" => Some(include_str!("../scripts/editor.js").to_string()),
+        "https://example.com/editor" => Some(include_str!("../scripts/feature_scripts/editor.js").to_string()),
         // Note: test_editor and test_editor_api are now loaded dynamically via upsert_script
         _ => None,
     }
@@ -141,11 +141,11 @@ pub fn load_test_scripts() {
     if include_test_scripts {
         upsert_script(
             "https://example.com/test_editor",
-            include_str!("../scripts/test_editor.js"),
+            include_str!("../scripts/test_scripts/test_editor.js"),
         );
         upsert_script(
             "https://example.com/test_editor_api",
-            include_str!("../scripts/test_editor_api.js"),
+            include_str!("../scripts/test_scripts/test_editor_api.js"),
         );
     }
 }

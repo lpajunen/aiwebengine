@@ -7,7 +7,7 @@ async fn test_query_parameters() {
     // Dynamically load the query test script
     repository::upsert_script(
         "https://example.com/query_test",
-        include_str!("../scripts/query_test.js"),
+        include_str!("../scripts/test_scripts/query_test.js"),
     );
 
     // Start server with timeout

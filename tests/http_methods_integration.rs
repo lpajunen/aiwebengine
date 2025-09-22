@@ -7,7 +7,7 @@ async fn test_different_http_methods() {
     // Dynamically load the method test script
     repository::upsert_script(
         "https://example.com/method_test",
-        include_str!("../scripts/method_test.js"),
+        include_str!("../scripts/test_scripts/method_test.js"),
     );
 
     // Start server with timeout

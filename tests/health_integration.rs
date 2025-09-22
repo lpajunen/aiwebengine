@@ -7,7 +7,7 @@ async fn test_health_endpoint() {
     // Load the core script which contains the health endpoint
     repository::upsert_script(
         "https://example.com/core",
-        include_str!("../scripts/core.js"),
+        include_str!("../scripts/feature_scripts/core.js"),
     );
 
     // Start server in background task
@@ -61,7 +61,7 @@ async fn test_health_endpoint_content_type() {
     // Load the core script
     repository::upsert_script(
         "https://example.com/core",
-        include_str!("../scripts/core.js"),
+        include_str!("../scripts/feature_scripts/core.js"),
     );
 
     // Start server
@@ -99,7 +99,7 @@ async fn test_script_logs_endpoint() {
     // Load the core script which contains the script_logs endpoint
     repository::upsert_script(
         "https://example.com/core",
-        include_str!("../scripts/core.js"),
+        include_str!("../scripts/feature_scripts/core.js"),
     );
 
     // Insert some test log messages for a specific URI
