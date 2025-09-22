@@ -161,9 +161,14 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
                 let uri = resolver_uri.clone();
                 let func = resolver_fn.clone();
                 FieldFuture::new(async move {
-                    // TODO: Call JavaScript resolver function
-                    // For now, return a placeholder
-                    Ok(Some(async_graphql::Value::String(format!("Resolver {}::{} called", uri, func))))
+                    // Call JavaScript resolver function
+                    match crate::js_engine::execute_graphql_resolver(&uri, &func, None) {
+                        Ok(result) => Ok(Some(async_graphql::Value::String(result))),
+                        Err(e) => {
+                            error!("GraphQL resolver error for {}::{}: {}", uri, func, e);
+                            Ok(Some(async_graphql::Value::String(format!("Error: {}", e))))
+                        }
+                    }
                 })
             },
         ));
@@ -198,8 +203,14 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
                     let uri = resolver_uri.clone();
                     let func = resolver_fn.clone();
                     FieldFuture::new(async move {
-                        // TODO: Call JavaScript resolver function
-                        Ok(Some(async_graphql::Value::String(format!("Mutation {}::{} called", uri, func))))
+                        // Call JavaScript resolver function
+                        match crate::js_engine::execute_graphql_resolver(&uri, &func, None) {
+                            Ok(result) => Ok(Some(async_graphql::Value::String(result))),
+                            Err(e) => {
+                                error!("GraphQL resolver error for {}::{}: {}", uri, func, e);
+                                Ok(Some(async_graphql::Value::String(format!("Error: {}", e))))
+                            }
+                        }
                     })
                 },
             ));
@@ -224,8 +235,14 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
                     let uri = resolver_uri.clone();
                     let func = resolver_fn.clone();
                     FieldFuture::new(async move {
-                        // TODO: Call JavaScript resolver function for streaming
-                        Ok(Some(async_graphql::Value::String(format!("Subscription {}::{} started", uri, func))))
+                        // Call JavaScript resolver function for streaming
+                        match crate::js_engine::execute_graphql_resolver(&uri, &func, None) {
+                            Ok(result) => Ok(Some(async_graphql::Value::String(result))),
+                            Err(e) => {
+                                error!("GraphQL resolver error for {}::{}: {}", uri, func, e);
+                                Ok(Some(async_graphql::Value::String(format!("Error: {}", e))))
+                            }
+                        }
                     })
                 },
             ));
