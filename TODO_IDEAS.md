@@ -427,3 +427,7 @@ maybe refactor ja api:
 - registerGraphQLSubscription -> registerSubscriptionHandler
 - registerMCPTool -> registerToolHandler
 - registerMCPPrompt -> registerPromptHandler
+
+Authentication / authorization
+
+Support for groups and roles
