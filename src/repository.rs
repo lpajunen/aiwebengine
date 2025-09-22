@@ -26,7 +26,10 @@ pub fn fetch_scripts() -> HashMap<String, String> {
     if include_test_scripts {
         // Include GraphQL test script for testing GraphiQL integration
         let graphql_test = include_str!("../scripts/graphql_test.js");
-        m.insert("https://example.com/graphql_test".to_string(), graphql_test.to_string());
+        m.insert(
+            "https://example.com/graphql_test".to_string(),
+            graphql_test.to_string(),
+        );
 
         // Note: test_editor.js and test_editor_api.js are now loaded dynamically via upsert_script
         // in test setup functions rather than being included statically here

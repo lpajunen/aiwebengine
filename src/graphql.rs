@@ -1,6 +1,4 @@
-use async_graphql::{
-    dynamic::*,
-};
+use async_graphql::dynamic::*;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tracing::{debug, error};
@@ -67,7 +65,6 @@ impl GraphQLRegistry {
     }
 }
 
-/// Global GraphQL registry instance
 lazy_static::lazy_static! {
     pub static ref GRAPHQL_REGISTRY: Arc<RwLock<GraphQLRegistry>> = Arc::new(RwLock::new(GraphQLRegistry::new()));
 }
@@ -78,8 +75,16 @@ pub fn get_registry() -> Arc<RwLock<GraphQLRegistry>> {
 }
 
 /// Register a GraphQL query from JavaScript
-pub fn register_graphql_query(name: String, sdl: String, resolver_function: String, script_uri: String) {
-    debug!("Registering GraphQL query: {} with resolver: {} from script: {}", name, resolver_function, script_uri);
+pub fn register_graphql_query(
+    name: String,
+    sdl: String,
+    resolver_function: String,
+    script_uri: String,
+) {
+    debug!(
+        "Registering GraphQL query: {} with resolver: {} from script: {}",
+        name, resolver_function, script_uri
+    );
     let operation = GraphQLOperation {
         sdl,
         resolver_function,
@@ -95,7 +100,12 @@ pub fn register_graphql_query(name: String, sdl: String, resolver_function: Stri
 }
 
 /// Register a GraphQL mutation from JavaScript
-pub fn register_graphql_mutation(name: String, sdl: String, resolver_function: String, script_uri: String) {
+pub fn register_graphql_mutation(
+    name: String,
+    sdl: String,
+    resolver_function: String,
+    script_uri: String,
+) {
     let operation = GraphQLOperation {
         sdl,
         resolver_function,
@@ -110,7 +120,12 @@ pub fn register_graphql_mutation(name: String, sdl: String, resolver_function: S
 }
 
 /// Register a GraphQL subscription from JavaScript
-pub fn register_graphql_subscription(name: String, sdl: String, resolver_function: String, script_uri: String) {
+pub fn register_graphql_subscription(
+    name: String,
+    sdl: String,
+    resolver_function: String,
+    script_uri: String,
+) {
     let operation = GraphQLOperation {
         sdl,
         resolver_function,
@@ -132,12 +147,22 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
     })?;
 
     // Collect the data we need before creating closures
-    let queries: Vec<(String, GraphQLOperation)> = registry_guard.get_queries().clone().into_iter().collect();
-    let mutations: Vec<(String, GraphQLOperation)> = registry_guard.get_mutations().clone().into_iter().collect();
-    let subscriptions: Vec<(String, GraphQLOperation)> = registry_guard.get_subscriptions().clone().into_iter().collect();
+    let queries: Vec<(String, GraphQLOperation)> =
+        registry_guard.get_queries().clone().into_iter().collect();
+    let mutations: Vec<(String, GraphQLOperation)> =
+        registry_guard.get_mutations().clone().into_iter().collect();
+    let subscriptions: Vec<(String, GraphQLOperation)> = registry_guard
+        .get_subscriptions()
+        .clone()
+        .into_iter()
+        .collect();
 
-    debug!("Building GraphQL schema with {} queries, {} mutations, {} subscriptions", 
-           queries.len(), mutations.len(), subscriptions.len());
+    debug!(
+        "Building GraphQL schema with {} queries, {} mutations, {} subscriptions",
+        queries.len(),
+        mutations.len(),
+        subscriptions.len()
+    );
 
     // Check if we have queries before building
     let has_queries = !queries.is_empty();
@@ -161,10 +186,8 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
 
         // For now, handle the script query specially since it has arguments
         if field_name == "script" {
-            let mut script_field = Field::new(
-                field_name,
-                TypeRef::named(TypeRef::STRING),
-                move |ctx| {
+            let mut script_field =
+                Field::new(field_name, TypeRef::named(TypeRef::STRING), move |ctx| {
                     let uri = resolver_uri.clone();
                     let func = resolver_fn.clone();
                     FieldFuture::new(async move {
@@ -189,9 +212,9 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
                             }
                         }
                     })
-                },
-            );
-            script_field = script_field.argument(InputValue::new("uri", TypeRef::named_nn(TypeRef::STRING)));
+                });
+            script_field =
+                script_field.argument(InputValue::new("uri", TypeRef::named_nn(TypeRef::STRING)));
             query_builder = query_builder.field(script_field);
             debug!("Added script field to query builder");
         } else {
@@ -222,9 +245,13 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
         query_builder = query_builder.field(Field::new(
             "placeholder",
             TypeRef::named(TypeRef::STRING),
-            |_| FieldFuture::new(async {
-                Ok(Some(async_graphql::Value::String("No queries registered yet".to_string())))
-            }),
+            |_| {
+                FieldFuture::new(async {
+                    Ok(Some(async_graphql::Value::String(
+                        "No queries registered yet".to_string(),
+                    )))
+                })
+            },
         ));
     }
 
@@ -251,9 +278,16 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
                             // Extract uri and content arguments
                             let uri_arg = ctx.args.get("uri");
                             let content_arg = ctx.args.get("content");
-                            let args = if let (Some(uri_accessor), Some(content_accessor)) = (uri_arg, content_arg) {
-                                if let (Ok(uri_val), Ok(content_val)) = (uri_accessor.deserialize::<String>(), content_accessor.deserialize::<String>()) {
-                                    Some(serde_json::json!({ "uri": uri_val, "content": content_val }))
+                            let args = if let (Some(uri_accessor), Some(content_accessor)) =
+                                (uri_arg, content_arg)
+                            {
+                                if let (Ok(uri_val), Ok(content_val)) = (
+                                    uri_accessor.deserialize::<String>(),
+                                    content_accessor.deserialize::<String>(),
+                                ) {
+                                    Some(
+                                        serde_json::json!({ "uri": uri_val, "content": content_val }),
+                                    )
                                 } else {
                                     None
                                 }
@@ -272,14 +306,16 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
                         })
                     },
                 );
-                mutation_field = mutation_field.argument(InputValue::new("uri", TypeRef::named_nn(TypeRef::STRING)));
-                mutation_field = mutation_field.argument(InputValue::new("content", TypeRef::named_nn(TypeRef::STRING)));
+                mutation_field = mutation_field
+                    .argument(InputValue::new("uri", TypeRef::named_nn(TypeRef::STRING)));
+                mutation_field = mutation_field.argument(InputValue::new(
+                    "content",
+                    TypeRef::named_nn(TypeRef::STRING),
+                ));
                 mutation_builder = mutation_builder.field(mutation_field);
             } else if field_name == "deleteScript" {
-                let mut mutation_field = Field::new(
-                    field_name,
-                    TypeRef::named(TypeRef::STRING),
-                    move |ctx| {
+                let mut mutation_field =
+                    Field::new(field_name, TypeRef::named(TypeRef::STRING), move |ctx| {
                         let uri = resolver_uri.clone();
                         let func = resolver_fn.clone();
                         FieldFuture::new(async move {
@@ -304,9 +340,9 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
                                 }
                             }
                         })
-                    },
-                );
-                mutation_field = mutation_field.argument(InputValue::new("uri", TypeRef::named_nn(TypeRef::STRING)));
+                    });
+                mutation_field = mutation_field
+                    .argument(InputValue::new("uri", TypeRef::named_nn(TypeRef::STRING)));
                 mutation_builder = mutation_builder.field(mutation_field);
             } else {
                 // Handle mutations without special argument handling
@@ -366,5 +402,7 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
         builder = builder.register(subscription_builder);
     }
 
-    builder.finish().map_err(|e| async_graphql::Error::new(format!("Schema build error: {}", e)))
+    builder
+        .finish()
+        .map_err(|e| async_graphql::Error::new(format!("Schema build error: {}", e)))
 }

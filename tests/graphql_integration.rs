@@ -65,7 +65,10 @@ async fn test_graphql_endpoints() {
 
     // Check if there are errors
     if let Some(errors) = graphql_json.get("errors") {
-        panic!("GraphQL introspection query failed with errors: {:?}", errors);
+        panic!(
+            "GraphQL introspection query failed with errors: {:?}",
+            errors
+        );
     }
 
     // Verify the schema contains our registered operations
@@ -73,7 +76,13 @@ async fn test_graphql_endpoints() {
 
     // Check Query type has our registered query
     let query_fields = &schema["queryType"]["fields"];
-    assert!(query_fields.as_array().unwrap().iter().any(|field| field["name"] == "hello"));
+    assert!(
+        query_fields
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|field| field["name"] == "hello")
+    );
 
     // Test executing a registered query
     let query_response = client

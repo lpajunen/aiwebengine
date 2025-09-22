@@ -9,10 +9,10 @@ use tracing::{debug, error, info};
 
 pub mod config;
 pub mod error;
+pub mod graphql;
 pub mod js_engine;
 pub mod middleware;
 pub mod repository;
-pub mod graphql;
 
 /// Parses a query string into a HashMap of key-value pairs
 fn parse_query_string(query: &str) -> HashMap<String, String> {
@@ -144,15 +144,21 @@ pub async fn start_server_with_config(
             error!("Failed to build GraphQL schema: {:?}", e);
             // Return a minimal dynamic schema if building fails
             async_graphql::dynamic::Schema::build("Query", None, None)
-                .register(async_graphql::dynamic::Object::new("Query")
-                    .field(async_graphql::dynamic::Field::new(
+                .register(async_graphql::dynamic::Object::new("Query").field(
+                    async_graphql::dynamic::Field::new(
                         "error",
-                        async_graphql::dynamic::TypeRef::named(async_graphql::dynamic::TypeRef::STRING),
-                        |_| async_graphql::dynamic::FieldFuture::new(async {
-                            Ok(Some(async_graphql::Value::String("Schema build failed".to_string())))
-                        }),
-                    ))
-                )
+                        async_graphql::dynamic::TypeRef::named(
+                            async_graphql::dynamic::TypeRef::STRING,
+                        ),
+                        |_| {
+                            async_graphql::dynamic::FieldFuture::new(async {
+                                Ok(Some(async_graphql::Value::String(
+                                    "Schema build failed".to_string(),
+                                )))
+                            })
+                        },
+                    ),
+                ))
                 .finish()
                 .unwrap_or_else(|_| panic!("Failed to build fallback schema"))
         }
@@ -160,7 +166,11 @@ pub async fn start_server_with_config(
 
     // GraphQL GET handler - serves GraphiQL
     async fn graphql_get() -> impl IntoResponse {
-        axum::response::Html(async_graphql::http::GraphiQLSource::build().endpoint("/graphql").finish())
+        axum::response::Html(
+            async_graphql::http::GraphiQLSource::build()
+                .endpoint("/graphql")
+                .finish(),
+        )
     }
 
     // GraphQL POST handler - executes queries
@@ -171,12 +181,20 @@ pub async fn start_server_with_config(
         let (_parts, body) = req.into_parts();
         let body_bytes = match axum::body::to_bytes(body, usize::MAX).await {
             Ok(bytes) => bytes,
-            Err(_) => return axum::response::Json(serde_json::json!({"error": "Failed to read request body"})),
+            Err(_) => {
+                return axum::response::Json(
+                    serde_json::json!({"error": "Failed to read request body"}),
+                );
+            }
         };
 
         let request: async_graphql::Request = match serde_json::from_slice(&body_bytes) {
             Ok(req) => req,
-            Err(e) => return axum::response::Json(serde_json::json!({"error": format!("Invalid JSON: {}", e)})),
+            Err(e) => {
+                return axum::response::Json(
+                    serde_json::json!({"error": format!("Invalid JSON: {}", e)}),
+                );
+            }
         };
 
         let response = schema.execute(request).await;
@@ -197,7 +215,7 @@ pub async fn start_server_with_config(
                     .header("content-type", "text/plain")
                     .body(axum::body::Body::from("Failed to read request body"))
                     .unwrap();
-            },
+            }
         };
 
         let request: async_graphql::Request = match serde_json::from_slice(&body_bytes) {
@@ -208,7 +226,7 @@ pub async fn start_server_with_config(
                     .header("content-type", "text/plain")
                     .body(axum::body::Body::from(format!("Invalid JSON: {}", e)))
                     .unwrap();
-            },
+            }
         };
 
         // For now, execute as a regular query and return as SSE format
@@ -235,8 +253,14 @@ pub async fn start_server_with_config(
     let app = Router::new()
         // GraphQL endpoints
         .route("/graphql", axum::routing::get(graphql_get))
-        .route("/graphql", axum::routing::post(move |req| graphql_post(schema_for_post, req)))
-        .route("/graphql/sse", axum::routing::post(move |req| graphql_sse(schema_for_sse, req)))
+        .route(
+            "/graphql",
+            axum::routing::post(move |req| graphql_post(schema_for_post, req)),
+        )
+        .route(
+            "/graphql/sse",
+            axum::routing::post(move |req| graphql_sse(schema_for_sse, req)),
+        )
         .route(
             "/",
             any(move |req: Request<Body>| async move {
