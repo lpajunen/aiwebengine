@@ -79,6 +79,7 @@ pub fn get_registry() -> Arc<RwLock<GraphQLRegistry>> {
 
 /// Register a GraphQL query from JavaScript
 pub fn register_graphql_query(name: String, sdl: String, resolver_function: String, script_uri: String) {
+    debug!("Registering GraphQL query: {} with resolver: {} from script: {}", name, resolver_function, script_uri);
     let operation = GraphQLOperation {
         sdl,
         resolver_function,
@@ -86,7 +87,8 @@ pub fn register_graphql_query(name: String, sdl: String, resolver_function: Stri
     };
 
     if let Ok(mut registry) = get_registry().write() {
-        registry.register_query(name, operation);
+        registry.register_query(name.clone(), operation);
+        debug!("Successfully registered GraphQL query: {}", name);
     } else {
         error!("Failed to acquire write lock on GraphQL registry");
     }
@@ -134,6 +136,9 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
     let mutations: Vec<(String, GraphQLOperation)> = registry_guard.get_mutations().clone().into_iter().collect();
     let subscriptions: Vec<(String, GraphQLOperation)> = registry_guard.get_subscriptions().clone().into_iter().collect();
 
+    debug!("Building GraphQL schema with {} queries, {} mutations, {} subscriptions", 
+           queries.len(), mutations.len(), subscriptions.len());
+
     // Check if we have queries before building
     let has_queries = !queries.is_empty();
     let has_mutations = !mutations.is_empty();
@@ -142,39 +147,77 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
     // Drop the guard so we don't have borrowing issues
     drop(registry_guard);
 
-    let mut builder = Schema::build("Query", None, None);
+    let mut builder = Schema::build("Query", Some("Mutation"), None);
 
     // Build Query type
     let mut query_builder = Object::new("Query");
 
     // Add registered queries
     for (name, operation) in queries {
-        // For now, create a simple string field - we'll enhance this to parse SDL and call JS resolvers
         let field_name = name.clone();
+        debug!("Adding query field: {}", field_name);
         let resolver_uri = operation.script_uri.clone();
         let resolver_fn = operation.resolver_function.clone();
 
-        query_builder = query_builder.field(Field::new(
-            field_name,
-            TypeRef::named(TypeRef::STRING),
-            move |_ctx| {
-                let uri = resolver_uri.clone();
-                let func = resolver_fn.clone();
-                FieldFuture::new(async move {
-                    // Call JavaScript resolver function
-                    match crate::js_engine::execute_graphql_resolver(&uri, &func, None) {
-                        Ok(result) => Ok(Some(async_graphql::Value::String(result))),
-                        Err(e) => {
-                            error!("GraphQL resolver error for {}::{}: {}", uri, func, e);
-                            Ok(Some(async_graphql::Value::String(format!("Error: {}", e))))
-                        }
-                    }
-                })
-            },
-        ));
-    }
+        // For now, handle the script query specially since it has arguments
+        if field_name == "script" {
+            let mut script_field = Field::new(
+                field_name,
+                TypeRef::named(TypeRef::STRING),
+                move |ctx| {
+                    let uri = resolver_uri.clone();
+                    let func = resolver_fn.clone();
+                    FieldFuture::new(async move {
+                        // Extract uri argument
+                        let uri_arg = ctx.args.get("uri");
+                        let args = if let Some(accessor) = uri_arg {
+                            if let Ok(uri_val) = accessor.deserialize::<String>() {
+                                Some(serde_json::json!({ "uri": uri_val }))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
 
-    // If no queries registered, add a placeholder
+                        // Call JavaScript resolver function
+                        match crate::js_engine::execute_graphql_resolver(&uri, &func, args) {
+                            Ok(result) => Ok(Some(async_graphql::Value::String(result))),
+                            Err(e) => {
+                                error!("GraphQL resolver error for {}::{}: {}", uri, func, e);
+                                Ok(Some(async_graphql::Value::String(format!("Error: {}", e))))
+                            }
+                        }
+                    })
+                },
+            );
+            script_field = script_field.argument(InputValue::new("uri", TypeRef::named_nn(TypeRef::STRING)));
+            query_builder = query_builder.field(script_field);
+            debug!("Added script field to query builder");
+        } else {
+            // Handle queries without arguments
+            let field = Field::new(
+                field_name.clone(),
+                TypeRef::named(TypeRef::STRING),
+                move |_ctx| {
+                    let uri = resolver_uri.clone();
+                    let func = resolver_fn.clone();
+                    FieldFuture::new(async move {
+                        // Call JavaScript resolver function
+                        match crate::js_engine::execute_graphql_resolver(&uri, &func, None) {
+                            Ok(result) => Ok(Some(async_graphql::Value::String(result))),
+                            Err(e) => {
+                                error!("GraphQL resolver error for {}::{}: {}", uri, func, e);
+                                Ok(Some(async_graphql::Value::String(format!("Error: {}", e))))
+                            }
+                        }
+                    })
+                },
+            );
+            query_builder = query_builder.field(field);
+            debug!("Added field {} to query builder", field_name);
+        }
+    }
     if !has_queries {
         query_builder = query_builder.field(Field::new(
             "placeholder",
@@ -196,24 +239,96 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
             let resolver_uri = operation.script_uri.clone();
             let resolver_fn = operation.resolver_function.clone();
 
-            mutation_builder = mutation_builder.field(Field::new(
-                field_name,
-                TypeRef::named(TypeRef::STRING),
-                move |_ctx| {
-                    let uri = resolver_uri.clone();
-                    let func = resolver_fn.clone();
-                    FieldFuture::new(async move {
-                        // Call JavaScript resolver function
-                        match crate::js_engine::execute_graphql_resolver(&uri, &func, None) {
-                            Ok(result) => Ok(Some(async_graphql::Value::String(result))),
-                            Err(e) => {
-                                error!("GraphQL resolver error for {}::{}: {}", uri, func, e);
-                                Ok(Some(async_graphql::Value::String(format!("Error: {}", e))))
+            // Handle mutations with arguments
+            if field_name == "upsertScript" {
+                let mut mutation_field = Field::new(
+                    field_name,
+                    TypeRef::named(TypeRef::STRING),
+                    move |ctx| {
+                        let uri = resolver_uri.clone();
+                        let func = resolver_fn.clone();
+                        FieldFuture::new(async move {
+                            // Extract uri and content arguments
+                            let uri_arg = ctx.args.get("uri");
+                            let content_arg = ctx.args.get("content");
+                            let args = if let (Some(uri_accessor), Some(content_accessor)) = (uri_arg, content_arg) {
+                                if let (Ok(uri_val), Ok(content_val)) = (uri_accessor.deserialize::<String>(), content_accessor.deserialize::<String>()) {
+                                    Some(serde_json::json!({ "uri": uri_val, "content": content_val }))
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+
+                            // Call JavaScript resolver function
+                            match crate::js_engine::execute_graphql_resolver(&uri, &func, args) {
+                                Ok(result) => Ok(Some(async_graphql::Value::String(result))),
+                                Err(e) => {
+                                    error!("GraphQL resolver error for {}::{}: {}", uri, func, e);
+                                    Ok(Some(async_graphql::Value::String(format!("Error: {}", e))))
+                                }
                             }
-                        }
-                    })
-                },
-            ));
+                        })
+                    },
+                );
+                mutation_field = mutation_field.argument(InputValue::new("uri", TypeRef::named_nn(TypeRef::STRING)));
+                mutation_field = mutation_field.argument(InputValue::new("content", TypeRef::named_nn(TypeRef::STRING)));
+                mutation_builder = mutation_builder.field(mutation_field);
+            } else if field_name == "deleteScript" {
+                let mut mutation_field = Field::new(
+                    field_name,
+                    TypeRef::named(TypeRef::STRING),
+                    move |ctx| {
+                        let uri = resolver_uri.clone();
+                        let func = resolver_fn.clone();
+                        FieldFuture::new(async move {
+                            // Extract uri argument
+                            let uri_arg = ctx.args.get("uri");
+                            let args = if let Some(accessor) = uri_arg {
+                                if let Ok(uri_val) = accessor.deserialize::<String>() {
+                                    Some(serde_json::json!({ "uri": uri_val }))
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+
+                            // Call JavaScript resolver function
+                            match crate::js_engine::execute_graphql_resolver(&uri, &func, args) {
+                                Ok(result) => Ok(Some(async_graphql::Value::String(result))),
+                                Err(e) => {
+                                    error!("GraphQL resolver error for {}::{}: {}", uri, func, e);
+                                    Ok(Some(async_graphql::Value::String(format!("Error: {}", e))))
+                                }
+                            }
+                        })
+                    },
+                );
+                mutation_field = mutation_field.argument(InputValue::new("uri", TypeRef::named_nn(TypeRef::STRING)));
+                mutation_builder = mutation_builder.field(mutation_field);
+            } else {
+                // Handle mutations without special argument handling
+                mutation_builder = mutation_builder.field(Field::new(
+                    field_name,
+                    TypeRef::named(TypeRef::STRING),
+                    move |_ctx| {
+                        let uri = resolver_uri.clone();
+                        let func = resolver_fn.clone();
+                        FieldFuture::new(async move {
+                            // Call JavaScript resolver function
+                            match crate::js_engine::execute_graphql_resolver(&uri, &func, None) {
+                                Ok(result) => Ok(Some(async_graphql::Value::String(result))),
+                                Err(e) => {
+                                    error!("GraphQL resolver error for {}::{}: {}", uri, func, e);
+                                    Ok(Some(async_graphql::Value::String(format!("Error: {}", e))))
+                                }
+                            }
+                        })
+                    },
+                ));
+            }
         }
 
         builder = builder.register(mutation_builder);

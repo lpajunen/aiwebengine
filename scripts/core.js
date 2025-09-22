@@ -340,10 +340,10 @@ register('/script_logs', 'script_logs_handler', 'GET');
 // GraphQL operations for script management
 
 // Query to list all scripts
-registerGraphQLQuery("scripts", "type Script { uri: String!, content: String!, contentLength: Int! } type Query { scripts: [Script!]! }", "scriptsQuery");
+registerGraphQLQuery("scripts", "type Query { scripts: String }", "scriptsQuery");
 
 // Query to get a specific script
-registerGraphQLQuery("script", "type Query { script(uri: String!): Script }", "scriptQuery");
+registerGraphQLQuery("script", "type Query { script(uri: String!): String }", "scriptQuery");
 
 // Mutation to upsert a script
 registerGraphQLMutation("upsertScript", "type ScriptMutationResult { success: Boolean!, message: String!, uri: String!, contentLength: Int, timestamp: String! } type Mutation { upsertScript(uri: String!, content: String!): ScriptMutationResult! }", "upsertScriptMutation");
@@ -367,12 +367,16 @@ function scriptQuery(args) {
 	try {
 		const content = getScript(args.uri);
 		if (content) {
-			return content;
+			return JSON.stringify({
+				uri: args.uri,
+				content: content,
+				contentLength: content.length
+			});
 		}
-		return `Script not found: ${args.uri}`;
+		return null;
 	} catch (error) {
 		writeLog(`Script query failed: ${error.message}`);
-		return `Error: Failed to get script: ${error.message}`;
+		return null;
 	}
 }
 

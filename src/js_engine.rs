@@ -613,12 +613,23 @@ pub fn execute_graphql_resolver(
         let resolver_result: rquickjs::Value = ctx.globals().get(&resolver_function_owned)?;
         let resolver_func = resolver_result.as_function().ok_or_else(|| rquickjs::Error::new_from_js("Function", "not found"))?;
 
-        let result = if args_value.is_undefined() {
-            resolver_func.call::<_, String>(())?
+        let result_value = if args_value.is_undefined() {
+            resolver_func.call::<_, rquickjs::Value>(())?
         } else {
-            resolver_func.call::<_, String>((args_value,))?
+            resolver_func.call::<_, rquickjs::Value>((args_value,))?
         };
 
-        Ok(result)
+                // Convert the result to a JSON string
+        let result_string: String = if result_value.is_string() {
+            result_value.as_string().unwrap().to_string()?
+        } else {
+            // Use JavaScript's JSON.stringify to convert any value to JSON
+            let json_obj: rquickjs::Object = ctx.globals().get("JSON")?;
+            let json_stringify: rquickjs::Function = json_obj.get("stringify")?;
+            let json_str: String = json_stringify.call((result_value,))?;
+            json_str
+        };
+
+        Ok(result_string)
     }).map_err(|e| format!("JavaScript execution error: {}", e))
 }
