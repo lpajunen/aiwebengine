@@ -21,3 +21,5 @@ chrono = { version = "0.4", features = ["serde"] }
 async-graphql = { version = "7.0", features = ["graphiql", "dynamic-schema"] }
 async-graphql-axum = "7.0"
 lazy_static = "1.4"
+clap = { version = "4.0", features = ["derive"] }
+notify = "8.2"
