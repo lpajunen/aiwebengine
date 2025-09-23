@@ -383,22 +383,6 @@ This roadmap provides a path to evolve aiwebengine into a more complete web fram
 
 all assets, logs, templates should be under script
 
-scripts folder should be divided into subdirectories:
-
-- feature_scripts
-- test_scripts
-- example_scripts
-
-there should be another executable: deployer that monitors a directory for changes and deploys to aiwebengine
-
-- this would be a separate Rust project in the same workspace
-
-there should be docs for app developers:
-
-- local development setup with hot reloading using deployer
-- remote development using web based editor (monaco or codemirror)
-- javascript API reference
-
 there should be docs for aiwebengine developers:
 
 - architecture overview
@@ -412,7 +396,6 @@ cloud deployment and containerization
 
 - dockerfile
 - docker-compose setup
-- kubernetes manifests
 
 similar to graphql there should be support for MCP (model-context-protocol) to allow easy integration with AI models
 

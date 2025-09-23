@@ -19,6 +19,7 @@ This page showcases practical examples of aiwebengine scripts that demonstrate c
    - Save and test
 
 3. **Or use the deployer tool**:
+
    ```bash
    cargo run --bin deployer \
      --uri "https://example.com/blog" \
@@ -34,6 +35,7 @@ This page showcases practical examples of aiwebengine scripts that demonstrate c
 **Description**: A sample blog post showcasing aiwebengine capabilities with modern HTML/CSS styling.
 
 **Features**:
+
 - HTML templating with embedded CSS
 - Feature showcase with code examples
 - Responsive design
@@ -42,6 +44,7 @@ This page showcases practical examples of aiwebengine scripts that demonstrate c
 **Try it**: Visit `http://localhost:3000/blog` after uploading.
 
 **Code Highlights**:
+
 ```javascript
 function blogHandler(req) {
     const html = `
@@ -80,6 +83,7 @@ register('/blog', 'blogHandler', 'GET');
 **Description**: A complete feedback form with rating system and submission handling.
 
 **Features**:
+
 - GET handler for displaying the form
 - POST handler for processing submissions
 - Form validation and data processing
@@ -87,10 +91,12 @@ register('/blog', 'blogHandler', 'GET');
 - Logging of submitted data
 
 **Try it**:
+
 - Visit `http://localhost:3000/feedback` to see the form
 - Submit feedback to test POST handling
 
 **Code Highlights**:
+
 ```javascript
 function feedbackFormHandler(req) {
     const form = `

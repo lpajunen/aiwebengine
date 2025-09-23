@@ -117,19 +117,6 @@ cargo run --bin deployer --uri "https://example.com/my-script" --file "my-script
 ```
 
 ### Command Line Options
-```
-
-### Basic Usage
-
-```bash
-# Deploy a script once
-cargo run --bin deployer --uri "https://example.com/my-script" --file "my-script.js"
-
-# Deploy and watch for changes
-cargo run --bin deployer --uri "https://example.com/my-script" --file "my-script.js" --watch
-```
-
-### Command Line Options
 
 - `-u, --uri <URI>`: Script URI (required)
 - `-f, --file <FILE>`: Path to JavaScript file (required)
