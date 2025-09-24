@@ -648,7 +648,9 @@ pub async fn start_server_with_config(
                     repository::insert_log_message("server", "server started");
                     debug!(
                         "Server configuration - host: {}, requested port: {}, actual port: {}",
-                        config.host(), config.port(), actual_port
+                        config.host(),
+                        config.port(),
+                        actual_port
                     );
 
                     let svc = app.into_make_service();
@@ -690,7 +692,8 @@ pub async fn start_server_with_config(
                 if current_port != config.port() {
                     info!(
                         "Requested port {} was in use, using port {} instead",
-                        config.port(), current_port
+                        config.port(),
+                        current_port
                     );
                 } else {
                     info!("listening on {}", actual_addr);
@@ -700,7 +703,9 @@ pub async fn start_server_with_config(
                 repository::insert_log_message("server", "server started");
                 debug!(
                     "Server configuration - host: {}, requested port: {}, actual port: {}",
-                    config.host(), config.port(), current_port
+                    config.host(),
+                    config.port(),
+                    current_port
                 );
 
                 let svc = app.into_make_service();

@@ -121,7 +121,10 @@ mod tests {
     #[test]
     fn test_extract_or_generate_request_id_with_existing_header() {
         let mut headers = HeaderMap::new();
-        headers.insert(REQUEST_ID_HEADER, HeaderValue::from_static("existing-req-123"));
+        headers.insert(
+            REQUEST_ID_HEADER,
+            HeaderValue::from_static("existing-req-123"),
+        );
 
         let id = extract_or_generate_request_id(&headers);
         assert_eq!(id, "existing-req-123");
@@ -208,10 +211,10 @@ mod tests {
         // Test that generated request IDs can be converted to valid header values
         let id = generate_request_id();
         let header_value_result = axum::http::HeaderValue::from_str(&id);
-        
+
         // Should successfully create header value from generated ID
         assert!(header_value_result.is_ok());
-        
+
         let header_value = header_value_result.unwrap();
         let converted_back = header_value.to_str().unwrap();
         assert_eq!(converted_back, id);
@@ -222,10 +225,10 @@ mod tests {
         // Test that concurrent request ID generation produces unique IDs
         use std::sync::{Arc, Mutex};
         use std::thread;
-        
+
         let ids = Arc::new(Mutex::new(Vec::new()));
         let mut handles = vec![];
-        
+
         // Spawn multiple threads generating request IDs
         for _ in 0..10 {
             let ids_clone = ids.clone();
@@ -235,15 +238,15 @@ mod tests {
             });
             handles.push(handle);
         }
-        
+
         // Wait for all threads to complete
         for handle in handles {
             handle.join().unwrap();
         }
-        
+
         let final_ids = ids.lock().unwrap();
         assert_eq!(final_ids.len(), 10);
-        
+
         // Check that all IDs are unique
         let mut unique_ids = final_ids.clone();
         unique_ids.sort();

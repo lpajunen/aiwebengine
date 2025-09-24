@@ -144,10 +144,9 @@ pub fn register_graphql_subscription(
 }
 
 /// Parse SDL to extract type definitions
-#[allow(dead_code)]
 fn parse_types_from_sdl(sdl: &str) -> Vec<Object> {
     let mut types = Vec::new();
-    
+
     // Simple regex-based parsing for type definitions
     // This is a basic implementation - a full SDL parser would be more robust
     if let Some(captures) = regex::Regex::new(r"type\s+(\w+)\s*\{([^}]+)\}")
@@ -156,18 +155,18 @@ fn parse_types_from_sdl(sdl: &str) -> Vec<Object> {
     {
         let type_name = &captures[1];
         let fields_str = &captures[2];
-        
+
         if type_name != "Query" && type_name != "Mutation" && type_name != "Subscription" {
             let mut object_builder = Object::new(type_name);
-            
-            // Parse fields
+
+            // Parse fields and create resolvers that extract from the parent object
             for field_match in regex::Regex::new(r"(\w+):\s*(\[?\w+!?\]?!?)")
                 .unwrap()
                 .captures_iter(fields_str)
             {
                 let field_name = &field_match[1];
                 let field_type = &field_match[2];
-                
+
                 let type_ref = match field_type {
                     "String!" => TypeRef::named_nn(TypeRef::STRING),
                     "String" => TypeRef::named(TypeRef::STRING),
@@ -175,23 +174,38 @@ fn parse_types_from_sdl(sdl: &str) -> Vec<Object> {
                     "Int" => TypeRef::named(TypeRef::INT),
                     _ => TypeRef::named(TypeRef::STRING), // Default to String for unknown types
                 };
-                
-                object_builder = object_builder.field(Field::new(
-                    field_name,
-                    type_ref,
-                    |_| FieldFuture::new(async { Ok(Some(async_graphql::Value::Null)) })
-                ));
+
+                // Create a field resolver that extracts the field value from the parent context
+                // We need to access the field value from the JSON object that was passed as parent
+                let field_name_owned = field_name.to_string();
+                object_builder =
+                    object_builder.field(Field::new(field_name, type_ref, move |ctx| {
+                        let field_name = field_name_owned.clone();
+                        FieldFuture::new(async move {
+                            // Try to access the field from the parent value
+                            // The parent should be a JSON object with the field data
+                            if let Ok(parent_map) = ctx.parent_value.try_to_value() {
+                                if let async_graphql::Value::Object(obj) = parent_map {
+                                    if let Some(field_value) =
+                                        obj.get(&async_graphql::Name::new(&field_name))
+                                    {
+                                        return Ok(Some(field_value.clone()));
+                                    }
+                                }
+                            }
+                            Ok(Some(async_graphql::Value::Null))
+                        })
+                    }));
             }
-            
+
             types.push(object_builder);
         }
     }
-    
+
     types
 }
 
 /// Extract return type from SDL field definition
-#[allow(dead_code)]
 fn extract_return_type(sdl: &str, field_name: &str) -> TypeRef {
     let pattern = format!(r"{}\s*:\s*(\[?\w+!?\]?!?)", regex::escape(field_name));
     if let Some(captures) = regex::Regex::new(&pattern).unwrap().captures(sdl) {
@@ -205,7 +219,7 @@ fn extract_return_type(sdl: &str, field_name: &str) -> TypeRef {
                 // Handle array types like [ScriptInfo!]!
                 let inner_type = s.trim_matches(|c| c == '[' || c == ']' || c == '!');
                 TypeRef::named_nn_list_nn(inner_type)
-            },
+            }
             _ => {
                 // Check if it's a custom type
                 if regex::Regex::new(r"type\s+").unwrap().is_match(sdl) {
@@ -224,7 +238,7 @@ fn extract_return_type(sdl: &str, field_name: &str) -> TypeRef {
 /// Parse JSON result to appropriate GraphQL value
 fn parse_json_to_graphql_value(json_str: &str) -> Result<async_graphql::Value, serde_json::Error> {
     let json_value: serde_json::Value = serde_json::from_str(json_str)?;
-    
+
     fn convert_json_value(value: serde_json::Value) -> async_graphql::Value {
         match value {
             serde_json::Value::Null => async_graphql::Value::Null,
@@ -238,14 +252,13 @@ fn parse_json_to_graphql_value(json_str: &str) -> Result<async_graphql::Value, s
                 } else {
                     async_graphql::Value::String(n.to_string())
                 }
-            },
+            }
             serde_json::Value::String(s) => async_graphql::Value::String(s),
             serde_json::Value::Array(arr) => {
-                let graphql_array: Vec<async_graphql::Value> = arr.into_iter()
-                    .map(convert_json_value)
-                    .collect();
+                let graphql_array: Vec<async_graphql::Value> =
+                    arr.into_iter().map(convert_json_value).collect();
                 async_graphql::Value::List(graphql_array)
-            },
+            }
             serde_json::Value::Object(obj) => {
                 let mut graphql_object = indexmap::IndexMap::new();
                 for (k, v) in obj {
@@ -255,7 +268,7 @@ fn parse_json_to_graphql_value(json_str: &str) -> Result<async_graphql::Value, s
             }
         }
     }
-    
+
     Ok(convert_json_value(json_value))
 }
 
@@ -294,7 +307,17 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
 
     let mut builder = Schema::build("Query", Some("Mutation"), None);
 
-    // Custom type registration disabled for now - using dynamic JSON parsing instead
+    // Register custom types from all SDL definitions
+    let mut registered_types = std::collections::HashSet::new();
+    for (_, operation) in &queries {
+        for custom_type in parse_types_from_sdl(&operation.sdl) {
+            let type_name = custom_type.type_name().to_string();
+            if !registered_types.contains(&type_name) {
+                builder = builder.register(custom_type);
+                registered_types.insert(type_name);
+            }
+        }
+    }
 
     // Build Query type
     let mut query_builder = Object::new("Query");
@@ -341,43 +364,42 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
             debug!("Added script field to query builder");
         } else {
             // Handle queries without arguments
-            // For now, always use String type but parse JSON dynamically in the resolver
-            let return_type = TypeRef::named(TypeRef::STRING);
+            let return_type = extract_return_type(&operation.sdl, &field_name);
             let sdl_for_closure = operation.sdl.clone();
-            
-            let field = Field::new(
-                field_name.clone(),
-                return_type,
-                move |_ctx| {
-                    let uri = resolver_uri.clone();
-                    let func = resolver_fn.clone();
-                    let _sdl_clone = sdl_for_closure.clone();
-                    FieldFuture::new(async move {
-                        // Call JavaScript resolver function
-                        match crate::js_engine::execute_graphql_resolver(&uri, &func, None) {
-                            Ok(result) => {
-                                // Special handling for JSON responses - parse and return as GraphQL value
-                                if result.trim().starts_with('[') || result.trim().starts_with('{') {
-                                    debug!("Parsing JSON result from GraphQL resolver: {}", &result);
-                                    match parse_json_to_graphql_value(&result) {
-                                        Ok(json_value) => Ok(Some(json_value)),
-                                        Err(e) => {
-                                            error!("Failed to parse JSON from resolver: {}", e);
-                                            Ok(Some(async_graphql::Value::String(result)))
-                                        }
+
+            let field = Field::new(field_name.clone(), return_type, move |_ctx| {
+                let uri = resolver_uri.clone();
+                let func = resolver_fn.clone();
+                let _sdl_clone = sdl_for_closure.clone();
+                FieldFuture::new(async move {
+                    // Call JavaScript resolver function
+                    match crate::js_engine::execute_graphql_resolver(&uri, &func, None) {
+                        Ok(result) => {
+                            debug!("GraphQL resolver result: {}", &result);
+                            // Special handling for JSON responses - parse and return as GraphQL value
+                            if result.trim().starts_with('[') || result.trim().starts_with('{') {
+                                debug!("Parsing JSON result from GraphQL resolver: {}", &result);
+                                match parse_json_to_graphql_value(&result) {
+                                    Ok(json_value) => {
+                                        debug!("Successfully parsed JSON value: {:?}", json_value);
+                                        Ok(Some(json_value))
                                     }
-                                } else {
-                                    Ok(Some(async_graphql::Value::String(result)))
+                                    Err(e) => {
+                                        error!("Failed to parse JSON from resolver: {}", e);
+                                        Ok(Some(async_graphql::Value::String(result)))
+                                    }
                                 }
-                            },
-                            Err(e) => {
-                                error!("GraphQL resolver error for {}::{}: {}", uri, func, e);
-                                Ok(Some(async_graphql::Value::String(format!("Error: {}", e))))
+                            } else {
+                                Ok(Some(async_graphql::Value::String(result)))
                             }
                         }
-                    })
-                },
-            );
+                        Err(e) => {
+                            error!("GraphQL resolver error for {}::{}: {}", uri, func, e);
+                            Ok(Some(async_graphql::Value::String(format!("Error: {}", e))))
+                        }
+                    }
+                })
+            });
             query_builder = query_builder.field(field);
             debug!("Added field {} to query builder", field_name);
         }

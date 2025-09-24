@@ -108,8 +108,8 @@ async fn test_graphql_endpoints() {
     assert!(query_json["data"]["hello"].is_string());
 
     // Test script management GraphQL operations
-    // Test listing scripts (currently returns placeholder since JS resolver calling not implemented)
-    let list_scripts_query = r#"{ scripts }"#;
+    // Test listing scripts - now requires subfield selection since scripts returns ScriptInfo objects
+    let list_scripts_query = r#"{ scripts { uri chars } }"#;
     let list_response = client
         .post(format!("http://127.0.0.1:{}/graphql", port))
         .header("Content-Type", "application/json")
@@ -136,13 +136,19 @@ async fn test_graphql_endpoints() {
     assert!(list_json["data"]["scripts"].is_array());
     let scripts_array = list_json["data"]["scripts"].as_array().unwrap();
     assert!(!scripts_array.is_empty());
-    
+
     // Should contain script objects with uri and chars properties
     let has_core_script = scripts_array.iter().any(|script| {
-        script["uri"].as_str().unwrap_or("").contains("https://example.com/core") &&
-        script["chars"].is_number()
+        script["uri"]
+            .as_str()
+            .unwrap_or("")
+            .contains("https://example.com/core")
+            && script["chars"].is_number()
     });
-    assert!(has_core_script, "Should contain core script with uri and chars properties");
+    assert!(
+        has_core_script,
+        "Should contain core script with uri and chars properties"
+    );
 
     // Test GraphQL SSE endpoint (basic connectivity test)
     let sse_response = client

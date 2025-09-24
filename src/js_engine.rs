@@ -782,14 +782,16 @@ mod tests {
         let content = r#"
             register("/test", "handler_function", "GET");
         "#;
-        
+
         let result = execute_script("test-script", content);
-        
+
         assert!(result.success, "Script execution should succeed");
         assert!(result.error.is_none(), "Should not have error");
         assert_eq!(result.registrations.len(), 1);
         assert_eq!(
-            result.registrations.get(&("/test".to_string(), "GET".to_string())),
+            result
+                .registrations
+                .get(&("/test".to_string(), "GET".to_string())),
             Some(&"handler_function".to_string())
         );
     }
@@ -801,14 +803,26 @@ mod tests {
             register("/api/users", "createUser", "POST");
             register("/api/users/:id", "updateUser", "PUT");
         "#;
-        
+
         let result = execute_script("multi-script", content);
-        
+
         assert!(result.success);
         assert_eq!(result.registrations.len(), 3);
-        assert!(result.registrations.contains_key(&("/api/users".to_string(), "GET".to_string())));
-        assert!(result.registrations.contains_key(&("/api/users".to_string(), "POST".to_string())));
-        assert!(result.registrations.contains_key(&("/api/users/:id".to_string(), "PUT".to_string())));
+        assert!(
+            result
+                .registrations
+                .contains_key(&("/api/users".to_string(), "GET".to_string()))
+        );
+        assert!(
+            result
+                .registrations
+                .contains_key(&("/api/users".to_string(), "POST".to_string()))
+        );
+        assert!(
+            result
+                .registrations
+                .contains_key(&("/api/users/:id".to_string(), "PUT".to_string()))
+        );
     }
 
     #[test]
@@ -816,15 +830,21 @@ mod tests {
         let content = r#"
             register("/default-method", "handler", "GET");
         "#;
-        
+
         let result = execute_script("default-method-script", content);
-        
+
         if !result.success {
             println!("Default method test failed with error: {:?}", result.error);
         }
-        assert!(result.success, "Script execution failed: {:?}", result.error);
+        assert!(
+            result.success,
+            "Script execution failed: {:?}",
+            result.error
+        );
         assert_eq!(
-            result.registrations.get(&("/default-method".to_string(), "GET".to_string())),
+            result
+                .registrations
+                .get(&("/default-method".to_string(), "GET".to_string())),
             Some(&"handler".to_string())
         );
     }
@@ -835,12 +855,15 @@ mod tests {
             register("/test", "handler"
             // Missing closing parenthesis - syntax error
         "#;
-        
+
         let result = execute_script("error-script", content);
-        
+
         assert!(!result.success, "Script with syntax error should fail");
         assert!(result.error.is_some(), "Should have error message");
-        assert!(result.registrations.is_empty(), "Should not have registrations on error");
+        assert!(
+            result.registrations.is_empty(),
+            "Should not have registrations on error"
+        );
     }
 
     #[test]
@@ -848,9 +871,9 @@ mod tests {
         let content = r#"
             throw new Error("Runtime error test");
         "#;
-        
+
         let result = execute_script("runtime-error-script", content);
-        
+
         assert!(!result.success);
         assert!(result.error.is_some());
         assert!(result.registrations.is_empty());
@@ -866,19 +889,31 @@ mod tests {
             
             setupRoutes();
         "#;
-        
+
         let result = execute_script("complex-script", content);
-        
-        assert!(result.success, "Complex JavaScript should execute successfully. Error: {:?}", result.error);
+
+        assert!(
+            result.success,
+            "Complex JavaScript should execute successfully. Error: {:?}",
+            result.error
+        );
         assert_eq!(result.registrations.len(), 2);
-        assert!(result.registrations.contains_key(&("/api/health".to_string(), "GET".to_string())));
-        assert!(result.registrations.contains_key(&("/api/status".to_string(), "GET".to_string())));
+        assert!(
+            result
+                .registrations
+                .contains_key(&("/api/health".to_string(), "GET".to_string()))
+        );
+        assert!(
+            result
+                .registrations
+                .contains_key(&("/api/status".to_string(), "GET".to_string()))
+        );
     }
 
     #[test]
     fn test_execute_script_empty_content() {
         let result = execute_script("empty-script", "");
-        
+
         assert!(result.success, "Empty script should succeed");
         assert!(result.error.is_none());
         assert!(result.registrations.is_empty());
@@ -889,9 +924,9 @@ mod tests {
         let content = r#"
             register("/logged", "loggedHandler", "GET");
         "#;
-        
+
         let result = execute_script("console-script", content);
-        
+
         // Should succeed even with console.log (which may not be available)
         // The important thing is it doesn't crash
         // Console.log may fail, so the script might not succeed, but it shouldn't crash
@@ -911,15 +946,15 @@ mod tests {
                 return "Hello World";
             }
         "#;
-        
+
         // Store the script in repository first
         match repository::upsert_script("test-resolver", script_content) {
-            Ok(_) => {},
+            Ok(_) => {}
             Err(_) => {} // Ignore errors for test
         }
-        
+
         let result = execute_graphql_resolver("test-resolver", "testResolver", None);
-        
+
         assert!(result.is_ok(), "Simple resolver should succeed");
         let json_result = result.unwrap();
         assert!(json_result == "Hello World" || json_result == "\"Hello World\""); // Handle both cases
@@ -932,13 +967,13 @@ mod tests {
                 return "Hello " + args.name + "!";
             }
         "#;
-        
+
         // Store the script
         let _ = repository::upsert_script("greet-resolver", script_content);
-        
+
         let args = serde_json::json!({"name": "Alice"});
         let result = execute_graphql_resolver("greet-resolver", "greetUser", Some(args));
-        
+
         assert!(result.is_ok(), "Resolver with args should succeed");
         let json_result = result.unwrap();
         assert!(json_result == "Hello Alice!" || json_result == "\"Hello Alice!\"");
@@ -955,10 +990,10 @@ mod tests {
                 };
             }
         "#;
-        
+
         let _ = repository::upsert_script("user-resolver", script_content);
         let result = execute_graphql_resolver("user-resolver", "getUserInfo", None);
-        
+
         assert!(result.is_ok(), "Resolver returning object should succeed");
         let json_result = result.unwrap();
         assert!(json_result.contains("John Doe"));
@@ -968,7 +1003,7 @@ mod tests {
     #[test]
     fn test_execute_graphql_resolver_nonexistent_script() {
         let result = execute_graphql_resolver("nonexistent-script", "someFunction", None);
-        
+
         assert!(result.is_err(), "Should fail when script doesn't exist");
     }
 
@@ -979,10 +1014,11 @@ mod tests {
                 return "test";
             }
         "#;
-        
+
         let _ = repository::upsert_script("missing-function-resolver", script_content);
-        let result = execute_graphql_resolver("missing-function-resolver", "nonExistentFunction", None);
-        
+        let result =
+            execute_graphql_resolver("missing-function-resolver", "nonExistentFunction", None);
+
         assert!(result.is_err(), "Should fail when function doesn't exist");
         assert!(result.unwrap_err().contains("not found"));
     }
@@ -994,25 +1030,31 @@ mod tests {
                 throw new Error("Something went wrong");
             }
         "#;
-        
+
         let _ = repository::upsert_script("throwing-resolver", script_content);
         let result = execute_graphql_resolver("throwing-resolver", "throwingResolver", None);
-        
-        assert!(result.is_err(), "Should fail when resolver throws exception");
+
+        assert!(
+            result.is_err(),
+            "Should fail when resolver throws exception"
+        );
         assert!(result.unwrap_err().contains("execution error"));
     }
 
     #[test]
     fn test_script_execution_result_debug_format() {
         let mut registrations = HashMap::new();
-        registrations.insert(("/test".to_string(), "GET".to_string()), "handler".to_string());
-        
+        registrations.insert(
+            ("/test".to_string(), "GET".to_string()),
+            "handler".to_string(),
+        );
+
         let result = ScriptExecutionResult {
             registrations,
             success: true,
             error: None,
         };
-        
+
         let debug_str = format!("{:?}", result);
         assert!(debug_str.contains("ScriptExecutionResult"));
         assert!(debug_str.contains("/test"));
@@ -1022,16 +1064,19 @@ mod tests {
     #[test]
     fn test_script_execution_result_clone() {
         let mut registrations = HashMap::new();
-        registrations.insert(("/api".to_string(), "POST".to_string()), "handler".to_string());
-        
+        registrations.insert(
+            ("/api".to_string(), "POST".to_string()),
+            "handler".to_string(),
+        );
+
         let original = ScriptExecutionResult {
             registrations,
             success: false,
             error: Some("Test error".to_string()),
         };
-        
+
         let cloned = original.clone();
-        
+
         assert_eq!(original.success, cloned.success);
         assert_eq!(original.error, cloned.error);
         assert_eq!(original.registrations.len(), cloned.registrations.len());

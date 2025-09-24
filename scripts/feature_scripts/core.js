@@ -288,7 +288,7 @@ function script_logs_handler(req) {
 register('/script_logs', 'script_logs_handler', 'GET');
 
 // GraphQL operations for script management  
-registerGraphQLQuery("scripts", "type Query { scripts: String }", "scriptsQuery");
+registerGraphQLQuery("scripts", "type ScriptInfo { uri: String!, chars: Int! } type Query { scripts: [ScriptInfo!]! }", "scriptsQuery");
 registerGraphQLQuery("script", "type Query { script(uri: String!): String }", "scriptQuery");
 registerGraphQLMutation("upsertScript", "type Mutation { upsertScript(uri: String!, content: String!): String }", "upsertScriptMutation");
 registerGraphQLMutation("deleteScript", "type Mutation { deleteScript(uri: String!): String }", "deleteScriptMutation");

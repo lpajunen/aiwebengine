@@ -213,8 +213,7 @@ mod tests {
 
     #[test]
     fn test_error_response_builder_basic() {
-        let error = ErrorResponseBuilder::new(ErrorCode::NotFound, "Test error")
-            .build();
+        let error = ErrorResponseBuilder::new(ErrorCode::NotFound, "Test error").build();
 
         assert_eq!(error.status, 404);
         assert_eq!(error.error.message, "Test error");
@@ -231,7 +230,10 @@ mod tests {
             .build();
 
         assert_eq!(error.status, 400);
-        assert_eq!(error.error.details, Some("Field 'name' is required".to_string()));
+        assert_eq!(
+            error.error.details,
+            Some("Field 'name' is required".to_string())
+        );
     }
 
     #[test]
@@ -268,7 +270,7 @@ mod tests {
     #[test]
     fn test_code_to_status_mapping() {
         let builder = ErrorResponseBuilder::new(ErrorCode::BadRequest, "test");
-        
+
         // Test client errors
         assert_eq!(builder.code_to_status(&ErrorCode::BadRequest), 400);
         assert_eq!(builder.code_to_status(&ErrorCode::Unauthorized), 401);
@@ -287,7 +289,10 @@ mod tests {
         assert_eq!(builder.code_to_status(&ErrorCode::GatewayTimeout), 504);
 
         // Test application specific errors
-        assert_eq!(builder.code_to_status(&ErrorCode::ScriptExecutionFailed), 500);
+        assert_eq!(
+            builder.code_to_status(&ErrorCode::ScriptExecutionFailed),
+            500
+        );
         assert_eq!(builder.code_to_status(&ErrorCode::ScriptTimeout), 504);
         assert_eq!(builder.code_to_status(&ErrorCode::ScriptNotFound), 404);
         assert_eq!(builder.code_to_status(&ErrorCode::ValidationError), 400);
@@ -319,7 +324,7 @@ mod tests {
     #[test]
     fn test_helper_functions_not_found() {
         let error = errors::not_found("/api/users/123", "req-789");
-        
+
         assert_eq!(error.status, 404);
         assert_eq!(error.error.message, "Resource not found");
         assert_eq!(error.error.path, "/api/users/123");
@@ -330,7 +335,7 @@ mod tests {
     #[test]
     fn test_helper_functions_method_not_allowed() {
         let error = errors::method_not_allowed("/api/users", "DELETE", "req-101");
-        
+
         assert_eq!(error.status, 405);
         assert_eq!(error.error.message, "Method not allowed");
         assert_eq!(error.error.path, "/api/users");
@@ -341,11 +346,15 @@ mod tests {
 
     #[test]
     fn test_helper_functions_script_execution_failed() {
-        let error = errors::script_execution_failed("/api/script", "Syntax error on line 5", "req-202");
-        
+        let error =
+            errors::script_execution_failed("/api/script", "Syntax error on line 5", "req-202");
+
         assert_eq!(error.status, 500);
         assert_eq!(error.error.message, "Script execution failed");
-        assert_eq!(error.error.details, Some("Syntax error on line 5".to_string()));
+        assert_eq!(
+            error.error.details,
+            Some("Syntax error on line 5".to_string())
+        );
         assert_eq!(error.error.path, "/api/script");
         assert_eq!(error.error.request_id, "req-202");
         assert!(matches!(error.error.code, ErrorCode::ScriptExecutionFailed));
@@ -354,7 +363,7 @@ mod tests {
     #[test]
     fn test_helper_functions_script_timeout() {
         let error = errors::script_timeout("/api/long-script", "req-303");
-        
+
         assert_eq!(error.status, 504);
         assert_eq!(error.error.message, "Script execution timeout");
         assert_eq!(error.error.path, "/api/long-script");
@@ -365,7 +374,7 @@ mod tests {
     #[test]
     fn test_helper_functions_internal_server_error() {
         let error = errors::internal_server_error("/api/database", "Connection refused", "req-404");
-        
+
         assert_eq!(error.status, 500);
         assert_eq!(error.error.message, "Internal server error");
         assert_eq!(error.error.details, Some("Connection refused".to_string()));
@@ -394,8 +403,7 @@ mod tests {
 
     #[test]
     fn test_empty_context_serialization() {
-        let error = ErrorResponseBuilder::new(ErrorCode::BadRequest, "Test")
-            .build();
+        let error = ErrorResponseBuilder::new(ErrorCode::BadRequest, "Test").build();
 
         let serialized = serde_json::to_string(&error).unwrap();
         // Empty context should be omitted from serialization
@@ -404,8 +412,7 @@ mod tests {
 
     #[test]
     fn test_none_details_serialization() {
-        let error = ErrorResponseBuilder::new(ErrorCode::BadRequest, "Test")
-            .build();
+        let error = ErrorResponseBuilder::new(ErrorCode::BadRequest, "Test").build();
 
         let serialized = serde_json::to_string(&error).unwrap();
         // None details should be omitted from serialization
