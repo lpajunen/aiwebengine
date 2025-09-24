@@ -24,3 +24,6 @@ async-graphql-axum = "7.0"
 lazy_static = "1.4"
 clap = { version = "4.0", features = ["derive"] }
 notify = "8.2"
+config = "0.14"
+toml = "0.8"
+figment = { version = "0.10", features = ["toml", "yaml", "env"] }

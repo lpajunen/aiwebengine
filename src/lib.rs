@@ -127,7 +127,7 @@ pub async fn start_server_with_config(
     mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) -> anyhow::Result<u16> {
     // Clone the timeout value to avoid borrow checker issues in async closures
-    let script_timeout_ms = config.script_timeout_ms;
+    let script_timeout_ms = config.script_timeout_ms();
 
     // Execute all scripts at startup to populate GraphQL registry
     info!("Executing all scripts at startup to populate GraphQL registry...");
@@ -619,14 +619,14 @@ pub async fn start_server_with_config(
         .map_err(|e| anyhow::anyhow!("Invalid server address: {}", e))?;
 
     // Try to find an available port starting from the configured port
-    let mut current_port = config.port;
+    let mut current_port = config.port();
     let mut actual_addr = addr;
     let mut attempts = 0;
     const MAX_PORT_ATTEMPTS: u16 = 100; // Try up to 100 ports
 
     loop {
         // Handle automatic port assignment (port 0)
-        if config.port == 0 {
+        if config.port() == 0 {
             // Bind to port 0 to let OS assign a free port
             let test_bind = std::net::TcpListener::bind(actual_addr);
             match test_bind {
@@ -638,7 +638,7 @@ pub async fn start_server_with_config(
                         .port();
                     drop(listener);
 
-                    let actual_addr = format!("{}:{}", config.host, actual_port)
+                    let actual_addr = format!("{}:{}", config.host(), actual_port)
                         .parse()
                         .map_err(|e| anyhow::anyhow!("Invalid server address: {}", e))?;
 
@@ -648,7 +648,7 @@ pub async fn start_server_with_config(
                     repository::insert_log_message("server", "server started");
                     debug!(
                         "Server configuration - host: {}, requested port: {}, actual port: {}",
-                        config.host, config.port, actual_port
+                        config.host(), config.port(), actual_port
                     );
 
                     let svc = app.into_make_service();
@@ -687,10 +687,10 @@ pub async fn start_server_with_config(
                 drop(test_bind);
 
                 // Successfully found an available port
-                if current_port != config.port {
+                if current_port != config.port() {
                     info!(
                         "Requested port {} was in use, using port {} instead",
-                        config.port, current_port
+                        config.port(), current_port
                     );
                 } else {
                     info!("listening on {}", actual_addr);
@@ -700,7 +700,7 @@ pub async fn start_server_with_config(
                 repository::insert_log_message("server", "server started");
                 debug!(
                     "Server configuration - host: {}, requested port: {}, actual port: {}",
-                    config.host, config.port, current_port
+                    config.host(), config.port(), current_port
                 );
 
                 let svc = app.into_make_service();
@@ -733,13 +733,13 @@ pub async fn start_server_with_config(
                         return Err(anyhow::anyhow!(
                             "Could not find an available port after trying {} ports starting from {}",
                             MAX_PORT_ATTEMPTS,
-                            config.port
+                            config.port()
                         ));
                     }
 
                     // Try the next port
                     current_port += 1;
-                    actual_addr = format!("{}:{}", config.host, current_port)
+                    actual_addr = format!("{}:{}", config.host(), current_port)
                         .parse()
                         .map_err(|e| anyhow::anyhow!("Invalid server address: {}", e))?;
 
@@ -763,7 +763,7 @@ pub async fn start_server_with_config(
 
 pub async fn start_server_without_shutdown() -> anyhow::Result<u16> {
     let mut config = config::Config::from_env();
-    config.port = 0; // Use port 0 for automatic port assignment
+    config.server.port = 0; // Use port 0 for automatic port assignment
     // Create a channel that will never receive a shutdown signal
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
     // Leak the sender so it never gets dropped and the channel never closes

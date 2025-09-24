@@ -1,14 +1,107 @@
-use aiwebengine::start_server;
+use aiwebengine::{config::AppConfig, start_server};
+use clap::{Arg, Command};
 use tokio::sync::oneshot;
+use tracing::Level;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Initialize tracing subscriber for structured logging
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::from_default_env())
-        .with(tracing_subscriber::fmt::layer().json())
-        .init();
+    // Parse command line arguments
+    let matches = Command::new("aiwebengine-server")
+        .version("0.1.0")
+        .about("AIWebEngine Server - JavaScript execution engine with web API")
+        .arg(
+            Arg::new("config")
+                .short('c')
+                .long("config")
+                .value_name("FILE")
+                .help("Configuration file path")
+                .action(clap::ArgAction::Set)
+        )
+        .arg(
+            Arg::new("validate")
+                .long("validate-config")
+                .help("Validate configuration and exit")
+                .action(clap::ArgAction::SetTrue)
+        )
+        .get_matches();
+
+    // Load configuration
+    let config = if let Some(config_path) = matches.get_one::<String>("config") {
+        tracing::info!("Loading configuration from: {}", config_path);
+        AppConfig::load_from_file(config_path)?
+    } else {
+        tracing::info!("Loading configuration from environment and default sources");
+        AppConfig::load().unwrap_or_else(|e| {
+            eprintln!("Warning: Failed to load configuration: {}. Using defaults.", e);
+            AppConfig::default()
+        })
+    };
+
+    // Validate configuration if requested
+    if matches.get_flag("validate") {
+        match config.validate() {
+            Ok(()) => {
+                println!("✓ Configuration is valid");
+                println!("Server would start on: {}", config.server_addr());
+                println!("Log level: {}", config.logging.level);
+                println!("JavaScript timeout: {}ms", config.javascript.execution_timeout_ms);
+                println!("Storage type: {}", config.repository.storage_type);
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("✗ Configuration validation failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // Validate configuration during startup
+    if let Err(e) = config.validate() {
+        eprintln!("Configuration error: {}", e);
+        std::process::exit(1);
+    }
+
+    // Initialize logging based on configuration
+    let log_level = match config.logging.level.as_str() {
+        "trace" => Level::TRACE,
+        "debug" => Level::DEBUG,
+        "info" => Level::INFO,
+        "warn" => Level::WARN,
+        "error" => Level::ERROR,
+        _ => Level::INFO, // Default fallback
+    };
+
+    // Initialize logging based on configuration
+    match config.logging.format.as_str() {
+        "json" => {
+            tracing_subscriber::registry()
+                .with(tracing_subscriber::EnvFilter::from_default_env().add_directive(log_level.into()))
+                .with(tracing_subscriber::fmt::layer().json())
+                .init();
+        }
+        "compact" => {
+            tracing_subscriber::registry()
+                .with(tracing_subscriber::EnvFilter::from_default_env().add_directive(log_level.into()))
+                .with(tracing_subscriber::fmt::layer().compact())
+                .init();
+        }
+        _ => { // "pretty" or default
+            tracing_subscriber::registry()
+                .with(tracing_subscriber::EnvFilter::from_default_env().add_directive(log_level.into()))
+                .with(tracing_subscriber::fmt::layer().pretty())
+                .init();
+        }
+    }
+
+    tracing::info!("Starting AIWebEngine Server");
+    tracing::info!("Configuration loaded successfully");
+    tracing::info!("Server address: {}", config.server_addr());
+    tracing::info!("JavaScript timeout: {}ms", config.javascript.execution_timeout_ms);
+    tracing::info!("Max memory per script: {} bytes", config.javascript.max_memory_bytes);
+    tracing::info!("Storage type: {}", config.repository.storage_type);
+    tracing::info!("CORS enabled: {}", config.security.enable_cors);
+    tracing::info!("Rate limiting: {} requests/minute", config.security.rate_limit_per_minute);
 
     // Create a one-shot channel for graceful shutdown signaling
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -16,23 +109,30 @@ async fn main() -> anyhow::Result<()> {
     // Spawn the server task that listens until shutdown_rx receives a value
     let server_task = tokio::spawn(async move {
         match start_server(shutdown_rx).await {
-            Ok(port) => tracing::info!("server started on port {}", port),
-            Err(e) => tracing::error!("server error: {}", e),
+            Ok(port) => tracing::info!("Server started successfully on port {}", port),
+            Err(e) => tracing::error!("Server error: {}", e),
         }
     });
 
     // Wait for Ctrl-C in the main task
     tokio::signal::ctrl_c().await?;
-    tracing::info!("shutdown requested, stopping server...");
+    tracing::info!("Shutdown signal received, stopping server...");
 
     // Signal the server to start graceful shutdown. Ignore send errors if the
     // server already exited.
     let _ = shutdown_tx.send(());
 
-    // Wait for server task to finish; give it a short timeout if you want to
-    // bound shutdown time. Here we wait until it finishes naturally.
-    let _ = server_task.await;
+    // Wait for server task to finish with timeout if graceful shutdown is enabled
+    if config.server.graceful_shutdown {
+        let timeout = tokio::time::Duration::from_secs(config.server.shutdown_timeout_secs);
+        match tokio::time::timeout(timeout, server_task).await {
+            Ok(_) => tracing::info!("Server stopped gracefully"),
+            Err(_) => tracing::warn!("Server shutdown timed out after {}s", config.server.shutdown_timeout_secs),
+        }
+    } else {
+        let _ = server_task.await;
+        tracing::info!("Server stopped");
+    }
 
-    tracing::info!("server stopped");
     Ok(())
 }

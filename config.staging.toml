@@ -1,0 +1,52 @@
+# Staging Configuration  
+# This configuration bridges development and production for testing
+
+[server]
+host = "0.0.0.0"
+port = 8080
+request_timeout_ms = 15000
+max_body_size_mb = 5
+
+[logging]
+# Info level for staging debugging
+level = "info"
+structured = true
+targets = ["console", "file"]
+file_path = "./logs/aiwebengine-staging.log"
+rotation = "daily"
+retention_days = 14
+
+[javascript]
+max_memory_mb = 64
+execution_timeout_ms = 5000
+max_stack_size = 131072
+# Allow console in staging for debugging
+enable_console = true
+# Full API access in staging for testing
+allowed_apis = ["fetch", "database", "logging", "filesystem"]
+
+[repository]
+database_type = "postgresql"
+database_url = "postgresql://username:password@localhost/aiwebengine_staging"
+max_connections = 20
+connection_timeout_ms = 5000
+# Allow auto-migrate in staging for testing
+auto_migrate = true
+
+[security]
+enable_cors = true
+# Allow staging and development origins
+cors_origins = ["https://staging.yourdomain.com", "http://localhost:3000"]
+# Moderate rate limiting for staging
+rate_limit_per_minute = 500
+api_key = "${STAGING_API_KEY}"
+# HTTPS preferred but not required in staging
+require_https = false
+allowed_content_types = ["application/json", "application/x-www-form-urlencoded", "multipart/form-data"]
+
+[performance]
+cache_size_mb = 128
+cache_ttl_seconds = 1800
+enable_compression = true
+worker_pool_size = 4
+max_request_queue_size = 200

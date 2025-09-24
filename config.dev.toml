@@ -1,0 +1,73 @@
+# Development Configuration
+# This configuration is optimized for local development with verbose logging and relaxed security
+
+[server]
+# Use localhost for development
+host = "127.0.0.1"
+port = 3000
+# Short timeout for quick feedback during development
+request_timeout_ms = 5000
+# Small body limit for development testing
+max_body_size_mb = 1
+
+[logging]
+# Verbose logging for development debugging
+level = "debug"
+# Enable structured logging for better development experience
+structured = true
+# Log to both console and file in development
+targets = ["console", "file"]
+file_path = "./logs/aiwebengine-dev.log"
+# Rotate logs daily in development
+rotation = "daily"
+# Keep logs for 7 days in development
+retention_days = 7
+
+[javascript]
+# Small memory limit for development testing
+max_memory_mb = 16
+# Short execution timeout for quick feedback
+execution_timeout_ms = 1000
+# Small stack size for development
+max_stack_size = 65536
+# Enable console for development debugging
+enable_console = true
+# Enable all APIs for development experimentation
+allowed_apis = ["fetch", "database", "logging", "filesystem"]
+
+[repository]
+# Use SQLite for simple development setup
+database_type = "sqlite"
+database_url = "./dev-database.db"
+# Small connection limits for development
+max_connections = 5
+# Short timeout for development
+connection_timeout_ms = 2000
+# Enable migrations for development schema changes
+auto_migrate = true
+
+[security]
+# Relaxed security for development
+enable_cors = true
+# Allow all origins in development
+cors_origins = ["*"]
+# No rate limiting in development
+rate_limit_per_minute = 0
+# Simple API key for development
+api_key = "dev-api-key-12345"
+# No HTTPS required in development
+require_https = false
+# Allow all content types in development
+allowed_content_types = ["application/json", "application/x-www-form-urlencoded", "multipart/form-data", "text/plain"]
+
+[performance]
+# Small cache for development
+cache_size_mb = 10
+# Short cache TTL for development
+cache_ttl_seconds = 60
+# No compression in development for easier debugging
+enable_compression = false
+# Small worker pool for development
+worker_pool_size = 2
+# Small request queue for development
+max_request_queue_size = 50

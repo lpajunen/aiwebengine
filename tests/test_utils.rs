@@ -11,8 +11,7 @@ pub struct TestServer {
 impl TestServer {
     /// Start a test server with automatic port selection
     pub async fn start() -> anyhow::Result<Self> {
-        let mut test_config = config::Config::from_env();
-        test_config.port = 0; // Use port 0 for automatic port selection
+        let test_config = config::AppConfig::test_config_with_port(0); // Use port 0 for automatic port selection
 
         let port = start_server_without_shutdown_with_config(test_config).await?;
 
