@@ -86,3 +86,208 @@ impl HasRequestId for &str {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::{HeaderMap, HeaderValue};
+
+    #[test]
+    fn test_generate_request_id() {
+        let id1 = generate_request_id();
+        let id2 = generate_request_id();
+
+        // Should generate different IDs
+        assert_ne!(id1, id2);
+
+        // Should follow the format "req_{timestamp}_{counter}"
+        assert!(id1.starts_with("req_"));
+        assert!(id2.starts_with("req_"));
+
+        // Should have at least 3 parts when split by underscore
+        let parts1: Vec<&str> = id1.split('_').collect();
+        let parts2: Vec<&str> = id2.split('_').collect();
+        assert_eq!(parts1.len(), 3);
+        assert_eq!(parts2.len(), 3);
+        assert_eq!(parts1[0], "req");
+        assert_eq!(parts2[0], "req");
+
+        // Counter should increase (may not be sequential due to parallel tests)
+        let counter1: u64 = parts1[2].parse().unwrap();
+        let counter2: u64 = parts2[2].parse().unwrap();
+        assert!(counter2 > counter1);
+    }
+
+    #[test]
+    fn test_extract_or_generate_request_id_with_existing_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(REQUEST_ID_HEADER, HeaderValue::from_static("existing-req-123"));
+
+        let id = extract_or_generate_request_id(&headers);
+        assert_eq!(id, "existing-req-123");
+    }
+
+    #[test]
+    fn test_extract_or_generate_request_id_without_header() {
+        let headers = HeaderMap::new();
+        let id = extract_or_generate_request_id(&headers);
+
+        // Should generate a new ID
+        assert!(id.starts_with("req_"));
+    }
+
+    #[test]
+    fn test_extract_or_generate_request_id_with_invalid_header() {
+        let mut headers = HeaderMap::new();
+        // Insert invalid UTF-8 header value
+        headers.insert(
+            REQUEST_ID_HEADER,
+            HeaderValue::from_bytes(&[0xff, 0xfe]).unwrap(),
+        );
+
+        let id = extract_or_generate_request_id(&headers);
+        // Should generate new ID when header is invalid UTF-8
+        assert!(id.starts_with("req_"));
+    }
+
+    #[test]
+    fn test_request_id_struct() {
+        let request_id = RequestId("test-123".to_string());
+        assert_eq!(request_id.0, "test-123");
+
+        let cloned = request_id.clone();
+        assert_eq!(cloned.0, request_id.0);
+
+        // Test Debug trait
+        let debug_str = format!("{:?}", request_id);
+        assert!(debug_str.contains("test-123"));
+    }
+
+    #[test]
+    fn test_has_request_id_trait_implementations() {
+        // Test RequestId implementation
+        let request_id = RequestId("test-456".to_string());
+        assert_eq!(request_id.request_id(), "test-456");
+
+        // Test &RequestId implementation
+        let request_id_ref = &request_id;
+        assert_eq!(request_id_ref.request_id(), "test-456");
+
+        // Test String implementation
+        let string_id = "test-789".to_string();
+        assert_eq!(string_id.request_id(), "test-789");
+
+        // Test &str implementation
+        let str_id = "test-abc";
+        assert_eq!(str_id.request_id(), "test-abc");
+    }
+
+    #[test]
+    fn test_request_counter_increments() {
+        let id1 = generate_request_id();
+        let id2 = generate_request_id();
+        let id3 = generate_request_id();
+
+        // Extract counters from IDs
+        let counter1: u64 = id1.split('_').nth(2).unwrap().parse().unwrap();
+        let counter2: u64 = id2.split('_').nth(2).unwrap().parse().unwrap();
+        let counter3: u64 = id3.split('_').nth(2).unwrap().parse().unwrap();
+
+        // Counters should increase (order preserved within single thread)
+        assert!(counter2 > counter1);
+        assert!(counter3 > counter2);
+    }
+
+    #[test]
+    fn test_request_id_header_constant() {
+        assert_eq!(REQUEST_ID_HEADER, "x-request-id");
+    }
+
+    #[test]
+    fn test_request_id_header_value_creation() {
+        // Test that generated request IDs can be converted to valid header values
+        let id = generate_request_id();
+        let header_value_result = axum::http::HeaderValue::from_str(&id);
+        
+        // Should successfully create header value from generated ID
+        assert!(header_value_result.is_ok());
+        
+        let header_value = header_value_result.unwrap();
+        let converted_back = header_value.to_str().unwrap();
+        assert_eq!(converted_back, id);
+    }
+
+    #[test]
+    fn test_request_id_concurrent_generation() {
+        // Test that concurrent request ID generation produces unique IDs
+        use std::sync::{Arc, Mutex};
+        use std::thread;
+        
+        let ids = Arc::new(Mutex::new(Vec::new()));
+        let mut handles = vec![];
+        
+        // Spawn multiple threads generating request IDs
+        for _ in 0..10 {
+            let ids_clone = ids.clone();
+            let handle = thread::spawn(move || {
+                let id = generate_request_id();
+                ids_clone.lock().unwrap().push(id);
+            });
+            handles.push(handle);
+        }
+        
+        // Wait for all threads to complete
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        
+        let final_ids = ids.lock().unwrap();
+        assert_eq!(final_ids.len(), 10);
+        
+        // Check that all IDs are unique
+        let mut unique_ids = final_ids.clone();
+        unique_ids.sort();
+        unique_ids.dedup();
+        assert_eq!(unique_ids.len(), final_ids.len());
+    }
+
+    #[test]
+    fn test_request_id_format_consistency() {
+        // Generate multiple IDs and verify they all follow the same format
+        let ids: Vec<String> = (0..10).map(|_| generate_request_id()).collect();
+
+        for id in &ids {
+            assert!(id.starts_with("req_"));
+            let parts: Vec<&str> = id.split('_').collect();
+            assert_eq!(parts.len(), 3);
+            assert_eq!(parts[0], "req");
+
+            // Timestamp should be parseable as u128
+            let timestamp: u128 = parts[1].parse().expect("Invalid timestamp format");
+            assert!(timestamp > 0);
+
+            // Counter should be parseable as u64
+            let _counter: u64 = parts[2].parse().expect("Invalid counter format");
+        }
+
+        // All IDs should be unique
+        let mut unique_ids = ids.clone();
+        unique_ids.sort();
+        unique_ids.dedup();
+        assert_eq!(unique_ids.len(), ids.len());
+    }
+
+    #[test]
+    fn test_multiple_extract_calls_same_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(REQUEST_ID_HEADER, HeaderValue::from_static("stable-id-123"));
+
+        let id1 = extract_or_generate_request_id(&headers);
+        let id2 = extract_or_generate_request_id(&headers);
+
+        // Should return same ID when header is present
+        assert_eq!(id1, "stable-id-123");
+        assert_eq!(id2, "stable-id-123");
+        assert_eq!(id1, id2);
+    }
+}
