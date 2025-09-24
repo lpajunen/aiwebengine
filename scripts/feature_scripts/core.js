@@ -287,7 +287,7 @@ function script_logs_handler(req) {
 
 register('/script_logs', 'script_logs_handler', 'GET');
 
-// GraphQL operations for script management
+// GraphQL operations for script management  
 registerGraphQLQuery("scripts", "type Query { scripts: String }", "scriptsQuery");
 registerGraphQLQuery("script", "type Query { script(uri: String!): String }", "scriptQuery");
 registerGraphQLMutation("upsertScript", "type Mutation { upsertScript(uri: String!, content: String!): String }", "upsertScriptMutation");
@@ -297,11 +297,14 @@ registerGraphQLMutation("deleteScript", "type Mutation { deleteScript(uri: Strin
 function scriptsQuery() {
 	try {
 		const scripts = listScripts();
-		const scriptList = Object.keys(scripts).map(uri => `${uri}: ${scripts[uri].length} chars`).join('\n');
-		return scriptList || 'No scripts found';
+		const scriptArray = Object.keys(scripts).map(uri => ({
+			uri: uri,
+			chars: scripts[uri].length
+		}));
+		return JSON.stringify(scriptArray);
 	} catch (error) {
 		writeLog(`Scripts query failed: ${error.message}`);
-		return `Error: Failed to list scripts: ${error.message}`;
+		return JSON.stringify([]);
 	}
 }
 

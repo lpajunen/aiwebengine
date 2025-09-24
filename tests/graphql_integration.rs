@@ -132,12 +132,17 @@ async fn test_graphql_endpoints() {
         panic!("GraphQL scripts query failed with errors: {:?}", errors);
     }
 
-    // Should return actual script data from JavaScript resolver
-    assert!(list_json["data"]["scripts"].is_string());
-    let scripts_response = list_json["data"]["scripts"].as_str().unwrap();
-    // Should contain script URIs and character counts
-    assert!(scripts_response.contains("https://example.com/core"));
-    assert!(scripts_response.contains("chars"));
+    // Should return actual script data from JavaScript resolver as an array of objects
+    assert!(list_json["data"]["scripts"].is_array());
+    let scripts_array = list_json["data"]["scripts"].as_array().unwrap();
+    assert!(!scripts_array.is_empty());
+    
+    // Should contain script objects with uri and chars properties
+    let has_core_script = scripts_array.iter().any(|script| {
+        script["uri"].as_str().unwrap_or("").contains("https://example.com/core") &&
+        script["chars"].is_number()
+    });
+    assert!(has_core_script, "Should contain core script with uri and chars properties");
 
     // Test GraphQL SSE endpoint (basic connectivity test)
     let sse_response = client
