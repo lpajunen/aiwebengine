@@ -11,8 +11,13 @@ pub mod config;
 pub mod error;
 pub mod graphql;
 pub mod js_engine;
+pub mod js_engine_safe;
 pub mod middleware;
-pub mod repository;
+pub mod repository_safe;
+pub mod safe_helpers;
+
+// Use the safe repository implementation internally
+pub use repository_safe as repository;
 
 /// Parses a query string into a HashMap of key-value pairs
 fn parse_query_string(query: &str) -> HashMap<String, String> {
@@ -808,11 +813,11 @@ mod tests {
     #[test]
     fn test_editor_script_execution() {
         // Load test scripts dynamically using upsert_script
-        repository::upsert_script(
+        let _ = repository::upsert_script(
             "https://example.com/test_editor",
             include_str!("../scripts/test_scripts/test_editor.js"),
         );
-        repository::upsert_script(
+        let _ = repository::upsert_script(
             "https://example.com/test_editor_api",
             include_str!("../scripts/test_scripts/test_editor_api.js"),
         );
@@ -861,7 +866,7 @@ mod tests {
         // Test script upsert and retrieval
         let test_uri = "https://example.com/test_script";
         let test_content = "// Test script\nfunction test() { return 'hello'; }";
-        repository::upsert_script(test_uri, test_content);
+        let _ = repository::upsert_script(test_uri, test_content);
 
         let retrieved = repository::fetch_script(test_uri);
         assert_eq!(

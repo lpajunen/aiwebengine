@@ -28,7 +28,12 @@ struct Args {
     watch: bool,
 }
 
-fn deploy_script(client: &Client, server_url: &str, uri: &str, file_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn deploy_script(
+    client: &Client,
+    server_url: &str,
+    uri: &str,
+    file_path: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     // Read the file content
     let content = fs::read_to_string(file_path)?;
 
@@ -38,15 +43,16 @@ fn deploy_script(client: &Client, server_url: &str, uri: &str, file_path: &str) 
     println!("🚀 Deploying {} to {}", file_path, api_url);
 
     // Send the POST request with the file content as body
-    let response = client
-        .post(&api_url)
-        .body(content)
-        .send()?;
+    let response = client.post(&api_url).body(content).send()?;
 
     if response.status().is_success() {
         println!("✅ Successfully deployed script: {}", uri);
     } else {
-        println!("❌ Failed to deploy script: {} (Status: {})", uri, response.status());
+        println!(
+            "❌ Failed to deploy script: {} (Status: {})",
+            uri,
+            response.status()
+        );
         if let Ok(error_text) = response.text() {
             println!("Error details: {}", error_text);
         }
@@ -65,9 +71,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Create HTTP client
-    let client = Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()?;
+    let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
 
     // Initial deployment
     if let Err(e) = deploy_script(&client, &args.server, &args.uri, &args.file) {
@@ -104,7 +108,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // Small delay to ensure file is fully written
                             thread::sleep(Duration::from_millis(100));
 
-                            if let Err(e) = deploy_script(&client, &args.server, &args.uri, &args.file) {
+                            if let Err(e) =
+                                deploy_script(&client, &args.server, &args.uri, &args.file)
+                            {
                                 eprintln!("❌ Redeployment failed: {}", e);
                             }
                         }

@@ -5,7 +5,7 @@ use std::time::Duration;
 #[tokio::test]
 async fn test_health_endpoint() {
     // Load the core script which contains the health endpoint
-    repository::upsert_script(
+    let _ = repository::upsert_script(
         "https://example.com/core",
         include_str!("../scripts/feature_scripts/core.js"),
     );
@@ -59,7 +59,7 @@ async fn test_health_endpoint() {
 #[tokio::test]
 async fn test_health_endpoint_content_type() {
     // Load the core script
-    repository::upsert_script(
+    let _ = repository::upsert_script(
         "https://example.com/core",
         include_str!("../scripts/feature_scripts/core.js"),
     );
@@ -97,7 +97,7 @@ async fn test_health_endpoint_content_type() {
 #[tokio::test]
 async fn test_script_logs_endpoint() {
     // Load the core script which contains the script_logs endpoint
-    repository::upsert_script(
+    let _ = repository::upsert_script(
         "https://example.com/core",
         include_str!("../scripts/feature_scripts/core.js"),
     );

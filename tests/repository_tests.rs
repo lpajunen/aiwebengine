@@ -7,7 +7,7 @@ fn dynamic_script_lifecycle() {
     assert!(scripts.contains_key("https://example.com/core"));
 
     // upsert a dynamic script
-    repository::upsert_script(
+    let _ = repository::upsert_script(
         "https://example.com/dyn",
         "register('/dyn', (req) => ({ status: 200, body: 'dyn' }));",
     );
@@ -34,13 +34,13 @@ fn upsert_overwrites_existing_script() {
     let content_v2 = "register('/dyn2', (req) => ({ status: 200, body: 'v2' }));";
 
     // upsert v1 and verify
-    repository::upsert_script(uri, content_v1);
+    let _ = repository::upsert_script(uri, content_v1);
     let got = repository::fetch_script(uri);
     assert!(got.is_some());
     assert!(got.unwrap().contains("v1"));
 
     // upsert v2 and verify update
-    repository::upsert_script(uri, content_v2);
+    let _ = repository::upsert_script(uri, content_v2);
     let got2 = repository::fetch_script(uri);
     assert!(got2.is_some());
     assert!(got2.unwrap().contains("v2"));
@@ -75,7 +75,7 @@ fn prune_keeps_latest_20_logs() {
         repository::insert_log_message("test", &format!("prune-test-{}", i));
     }
 
-    repository::prune_log_messages();
+    let _ = repository::prune_log_messages();
     let msgs = repository::fetch_log_messages("test");
     assert!(msgs.len() <= 20, "prune should keep at most 20 messages");
 

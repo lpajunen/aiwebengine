@@ -5,11 +5,11 @@ use std::time::Duration;
 #[tokio::test]
 async fn test_test_editor_api_endpoints() {
     // Load test scripts dynamically using upsert_script
-    repository::upsert_script(
+    let _ = repository::upsert_script(
         "https://example.com/test_editor",
         include_str!("../scripts/test_scripts/test_editor.js"),
     );
-    repository::upsert_script(
+    let _ = repository::upsert_script(
         "https://example.com/test_editor_api",
         include_str!("../scripts/test_scripts/test_editor_api.js"),
     );
@@ -84,11 +84,11 @@ async fn test_test_editor_api_endpoints() {
 #[tokio::test]
 async fn test_test_editor_functionality() {
     // Load test scripts dynamically using upsert_script
-    repository::upsert_script(
+    let _ = repository::upsert_script(
         "https://example.com/test_editor",
         include_str!("../scripts/test_scripts/test_editor.js"),
     );
-    repository::upsert_script(
+    let _ = repository::upsert_script(
         "https://example.com/test_editor_api",
         include_str!("../scripts/test_scripts/test_editor_api.js"),
     );

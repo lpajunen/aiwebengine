@@ -5,7 +5,7 @@ use std::time::Duration;
 #[tokio::test]
 async fn test_graphql_endpoints() {
     // Load the GraphQL test script
-    repository::upsert_script(
+    let _ = repository::upsert_script(
         "https://example.com/graphql_test",
         include_str!("../scripts/test_scripts/graphql_test.js"),
     );

@@ -6,7 +6,7 @@ use tokio::time::timeout;
 #[tokio::test]
 async fn js_write_log_and_listlogs() {
     // upsert the js_log_test script so it registers its routes
-    repository::upsert_script(
+    let _ = repository::upsert_script(
         "https://example.com/js-log-test",
         include_str!("../scripts/test_scripts/js_log_test.js"),
     );
@@ -122,7 +122,7 @@ async fn js_list_logs_for_uri() {
     repository::insert_log_message("https://example.com/other-script", "other-message");
 
     // upsert the js_log_test_uri script so it registers its routes
-    repository::upsert_script(
+    let _ = repository::upsert_script(
         "https://example.com/js-log-test-uri-script",
         include_str!("../scripts/test_scripts/js_log_test_uri.js"),
     );

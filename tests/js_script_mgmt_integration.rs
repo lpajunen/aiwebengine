@@ -6,7 +6,7 @@ use tokio::time::timeout;
 #[tokio::test]
 async fn js_script_mgmt_functions_work() {
     // upsert the management test script so it registers /js-mgmt-check and the upsert logic
-    repository::upsert_script(
+    let _ = repository::upsert_script(
         "https://example.com/js-mgmt-test",
         include_str!("../scripts/test_scripts/js_script_mgmt_test.js"),
     );

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use tracing::{debug, error};
 
-use crate::repository;
+use crate::repository_safe as repository;
 
 /// Represents the result of executing a JavaScript script
 #[derive(Debug, Clone)]
@@ -193,7 +193,7 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                                         mimetype,
                                         content,
                                     };
-                                    repository::upsert_asset(asset);
+                                    let _ = repository::upsert_asset(asset);
                                     Ok(())
                                 }
                                 Err(_) => Err(rquickjs::Error::Exception),
@@ -373,7 +373,7 @@ pub fn execute_script_for_request(
                             mimetype,
                             content,
                         };
-                        repository::upsert_asset(asset);
+                        let _ = repository::upsert_asset(asset);
                         Ok(())
                     }
                     Err(_) => Err(rquickjs::Error::Exception),
@@ -407,7 +407,7 @@ pub fn execute_script_for_request(
             ctx.clone(),
             |_c: rquickjs::Ctx<'_>, uri: String, content: String| -> Result<(), rquickjs::Error> {
                 debug!("JavaScript called upsertScript with uri: {}, content length: {}", uri, content.len());
-                repository::upsert_script(&uri, &content);
+                let _ = repository::upsert_script(&uri, &content);
                 Ok(())
             },
         )?;
@@ -640,7 +640,7 @@ pub fn execute_graphql_resolver(
                     content: content.into_bytes(),
                     mimetype: mime_type,
                 };
-                repository::upsert_asset(asset);
+                let _ = repository::upsert_asset(asset);
                 Ok(())
             },
         )?;
@@ -668,7 +668,7 @@ pub fn execute_graphql_resolver(
             ctx.clone(),
             move |_c: rquickjs::Ctx<'_>, uri: String, content: String| -> Result<(), rquickjs::Error> {
                 debug!("JavaScript called upsertScript with uri: {}", uri);
-                repository::upsert_script(&uri, &content);
+                let _ = repository::upsert_script(&uri, &content);
                 Ok(())
             },
         )?;

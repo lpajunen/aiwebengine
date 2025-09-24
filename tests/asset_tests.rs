@@ -21,7 +21,7 @@ fn test_asset_management() {
         mimetype: "text/plain".to_string(),
         content: test_content.clone(),
     };
-    repository::upsert_asset(test_asset);
+    let _ = repository::upsert_asset(test_asset);
 
     let fetched = repository::fetch_asset("/test.txt");
     assert!(fetched.is_some());

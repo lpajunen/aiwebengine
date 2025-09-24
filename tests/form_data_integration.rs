@@ -12,7 +12,7 @@ async fn test_form_data() {
         .init();
 
     // Dynamically load the form test script
-    repository::upsert_script(
+    let _ = repository::upsert_script(
         "https://example.com/form_test",
         include_str!("../scripts/test_scripts/form_test.js"),
     );

@@ -5,7 +5,7 @@ use std::time::Duration;
 #[tokio::test]
 async fn test_query_parameters() {
     // Dynamically load the query test script
-    repository::upsert_script(
+    let _ = repository::upsert_script(
         "https://example.com/query_test",
         include_str!("../scripts/test_scripts/query_test.js"),
     );
