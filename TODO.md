@@ -627,3 +627,198 @@ Support for groups and roles
 - Built-in debugging tools and script inspector
 - Interactive REPL for testing scripts
 - VS Code extension for syntax highlighting and debugging
+
+---
+
+## 🚧 **Remaining Quality Improvements (Technical Debt)**
+
+*Note: Some quality improvements have been completed (testing framework, error handling, middleware). This section tracks remaining items to maintain production-ready code quality while adding new features.*
+
+### 🔴 **Critical Quality Issues - Must Address Before v1.0**
+
+#### **Testing Coverage Completion**
+
+**Status**: 🟡 **Partially Complete** - 70% coverage achieved, but gaps remain
+
+**Completed**: ✅ js_engine.rs (16 tests), ✅ error.rs (16 tests), ✅ middleware.rs (12 tests)
+
+**Remaining Work**:
+- [ ] **graphql.rs module**: Add 15+ unit tests for GraphQL resolvers, schema building, and JavaScript registration
+- [ ] **Untested binaries**: Add tests for main.rs, deployer.rs, server.rs (currently 0% coverage)
+- [ ] **Integration test gaps**: Add tests for asset management, configuration loading, and error scenarios
+- [ ] **Property-based tests**: Add for URL parsing, script validation, and data serialization
+- [ ] **Load testing framework**: Implement performance benchmarks for HTTP endpoints and JS execution
+- [ ] **Contract testing**: Ensure JavaScript API compatibility across versions
+
+**Target**: 85% line coverage, 90% function coverage across all modules
+
+#### **Error Handling Robustness**
+
+**Status**: 🟡 **Partially Complete** - Structured errors implemented, but resilience gaps remain
+
+**Completed**: ✅ Structured error responses, ✅ Request ID propagation, ✅ Error classification
+
+**Remaining Work**:
+- [ ] **Eliminate unwrap()/expect()**: Replace remaining instances (~15+) with proper Result handling
+- [ ] **JavaScript execution timeouts**: Add configurable timeouts to prevent hanging scripts
+- [ ] **Mutex poisoning recovery**: Implement graceful recovery for poisoned mutexes
+- [ ] **Circuit breaker pattern**: Add for external dependencies and resource-intensive operations
+- [ ] **Retry mechanisms**: Implement exponential backoff for transient failures
+- [ ] **Error correlation**: Add distributed tracing for error propagation across modules
+
+**Target**: Zero panics in production, graceful degradation under all failure modes
+
+#### **Security Hardening**
+
+**Status**: 🔴 **Not Started** - Critical security gaps exist
+
+**Remaining Work**:
+- [ ] **Input validation**: Comprehensive sanitization for all user inputs (scripts, paths, parameters)
+- [ ] **JavaScript sandbox**: Implement resource limits (memory, CPU, network access restrictions)
+- [ ] **Security headers**: Add CORS, CSP, HSTS, X-Frame-Options middleware
+- [ ] **Rate limiting**: Per-IP and per-endpoint request throttling
+- [ ] **Authentication framework**: JWT-based auth with role-based access control (RBAC)
+- [ ] **Audit logging**: Security event logging for monitoring and compliance
+- [ ] **Secrets management**: Secure handling of API keys, database credentials
+
+**Target**: OWASP Top 10 compliance, production security standards
+
+### 🟠 **Important Quality Issues - Address During Feature Development**
+
+#### **Performance Optimization**
+
+**Status**: 🔴 **Not Started** - Basic performance, no optimization
+
+**Remaining Work**:
+- [ ] **Script compilation caching**: Cache compiled JavaScript to avoid re-parsing
+- [ ] **Connection pooling**: Database and HTTP client connection pools
+- [ ] **Memory optimization**: Implement proper resource limits and garbage collection
+- [ ] **Route lookup optimization**: Use trie or radix tree for faster routing
+- [ ] **Response caching**: HTTP response caching with TTL and invalidation
+- [ ] **Concurrent JS execution**: Multi-threaded JavaScript execution with worker pools
+- [ ] **Memory profiling**: Add memory usage monitoring and leak detection
+
+**Target**: <100ms p95 response time, <50MB memory usage under normal load
+
+#### **Configuration Management Enhancement**
+
+**Status**: 🟡 **Basic Complete** - Environment variables work, but limited
+
+**Completed**: ✅ Basic TOML configuration files
+
+**Remaining Work**:
+- [ ] **Configuration validation**: Comprehensive validation with detailed error messages
+- [ ] **Environment profiles**: Dev/staging/prod configuration profiles with inheritance
+- [ ] **Hot reloading**: Runtime configuration updates without restart
+- [ ] **Secrets integration**: Integration with HashiCorp Vault, AWS Secrets Manager
+- [ ] **Configuration schema**: JSON Schema for configuration validation and IDE support
+- [ ] **Default value documentation**: Comprehensive documentation of all configuration options
+
+**Target**: Production-ready configuration management with validation
+
+#### **Observability and Monitoring**
+
+**Status**: 🟡 **Basic Complete** - Health checks exist, but limited observability
+
+**Completed**: ✅ Basic health endpoints, ✅ Request ID logging
+
+**Remaining Work**:
+- [ ] **Metrics collection**: Prometheus metrics for requests, errors, performance
+- [ ] **Distributed tracing**: OpenTelemetry integration for request tracing
+- [ ] **Structured logging**: Consistent JSON logging across all modules
+- [ ] **Application metrics**: Custom business metrics from JavaScript execution
+- [ ] **Dashboards**: Grafana dashboards for operational monitoring
+- [ ] **Alerting rules**: Proactive alerting for error rates, performance degradation
+- [ ] **Log aggregation**: Integration with ELK stack or similar solutions
+
+**Target**: Full production observability with proactive monitoring
+
+### 🟡 **Enhancement Quality Issues - Future Improvements**
+
+#### **Code Architecture Refinement**
+
+**Status**: 🟡 **Good Foundation** - Modular design exists, but can be improved
+
+**Remaining Work**:
+- [ ] **Dependency injection**: Implement DI container for better testability
+- [ ] **Plugin architecture**: Extensible plugin system for third-party integrations  
+- [ ] **API consistency**: Standardize naming conventions across all modules
+- [ ] **Documentation generation**: Auto-generate API docs from code comments
+- [ ] **Code quality gates**: Pre-commit hooks, linting rules, formatting standards
+- [ ] **Architectural Decision Records**: Document design decisions and trade-offs
+
+**Target**: Enterprise-grade code organization and extensibility
+
+#### **Developer Experience**
+
+**Status**: 🔴 **Basic** - Functional but could be much better
+
+**Remaining Work**:
+- [ ] **Hot reloading**: Development server with automatic script reloading
+- [ ] **Debug tooling**: Built-in JavaScript debugger and inspector
+- [ ] **VS Code extension**: Syntax highlighting, debugging, and IntelliSense
+- [ ] **Interactive REPL**: Command-line interface for testing scripts
+- [ ] **Error reporting**: Enhanced error messages with suggestions and context
+- [ ] **Performance profiling**: Built-in profiling tools for JavaScript execution
+
+**Target**: Best-in-class developer experience
+
+#### **Production Operations**
+
+**Status**: 🔴 **Not Started** - No production tooling
+
+**Remaining Work**:
+- [ ] **Container support**: Official Docker images with multi-stage builds
+- [ ] **Kubernetes deployment**: Helm charts and k8s manifests
+- [ ] **Database migrations**: Schema migration system for data persistence
+- [ ] **Backup/restore**: Automated backup procedures for scripts and data
+- [ ] **Blue/green deployment**: Zero-downtime deployment strategies
+- [ ] **Health check improvements**: Deep health checks for dependencies
+- [ ] **Graceful shutdown**: Proper cleanup during server shutdown
+
+**Target**: Production-ready deployment and operations tooling
+
+### 📋 **Quality Tracking Checklist**
+
+Use this checklist to track progress while adding new features:
+
+#### **Per-Feature Quality Gates**
+- [ ] Unit tests added with >90% coverage for new code
+- [ ] Integration tests cover main user workflows  
+- [ ] Error handling follows established patterns
+- [ ] Input validation implemented for all user inputs
+- [ ] Documentation updated (API docs, README, examples)
+- [ ] Performance impact assessed and acceptable
+- [ ] Security implications reviewed and addressed
+- [ ] Breaking changes documented with migration guide
+
+#### **Before Each Release**
+- [ ] All critical quality issues addressed
+- [ ] Overall test coverage >85%
+- [ ] Security audit completed
+- [ ] Performance benchmarks met
+- [ ] Documentation complete and accurate
+- [ ] Deployment tested in staging environment
+- [ ] Monitoring and alerting configured
+- [ ] Rollback procedures tested
+
+#### **Monthly Quality Review**
+- [ ] Review and update quality issue priorities
+- [ ] Analyze test coverage reports and address gaps
+- [ ] Review security updates and apply patches
+- [ ] Assess performance trends and optimize bottlenecks
+- [ ] Update documentation for new features
+- [ ] Review and improve development processes
+
+---
+
+## 💡 **Implementation Strategy**
+
+**Recommendation**: Address quality issues incrementally while adding features:
+
+1. **Critical Issues First**: Complete security hardening and testing coverage before major feature additions
+2. **Feature-Driven**: When adding a feature, also address related quality issues in the same area
+3. **Regular Sprints**: Dedicate 20-30% of development time to quality improvements
+4. **Measurement**: Track progress with automated metrics (coverage, performance, security scans)
+
+**Next Recommended Quality Focus**: Complete GraphQL module testing and eliminate remaining unwrap()/expect() calls before adding major new features.
