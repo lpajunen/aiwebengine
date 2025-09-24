@@ -289,7 +289,7 @@ register('/script_logs', 'script_logs_handler', 'GET');
 
 // GraphQL operations for script management  
 registerGraphQLQuery("scripts", "type ScriptInfo { uri: String!, chars: Int! } type Query { scripts: [ScriptInfo!]! }", "scriptsQuery");
-registerGraphQLQuery("script", "type Query { script(uri: String!): String }", "scriptQuery");
+registerGraphQLQuery("script", "type ScriptDetail { uri: String!, content: String!, contentLength: Int! } type Query { script(uri: String!): ScriptDetail }", "scriptQuery");
 registerGraphQLMutation("upsertScript", "type Mutation { upsertScript(uri: String!, content: String!): String }", "upsertScriptMutation");
 registerGraphQLMutation("deleteScript", "type Mutation { deleteScript(uri: String!): String }", "deleteScriptMutation");
 
@@ -317,11 +317,21 @@ function scriptQuery(args) {
 				content: content,
 				contentLength: content.length
 			});
+		} else {
+			// Return null if script doesn't exist
+			return JSON.stringify({
+				uri: args.uri,
+				content: null,
+				contentLength: 0
+			});
 		}
-		return null;
 	} catch (error) {
 		writeLog(`Script query failed: ${error.message}`);
-		return null;
+		return JSON.stringify({
+			uri: args.uri,
+			content: null,
+			contentLength: 0
+		});
 	}
 }
 

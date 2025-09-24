@@ -144,14 +144,16 @@ pub fn register_graphql_subscription(
 }
 
 /// Parse SDL to extract type definitions
-fn parse_types_from_sdl(sdl: &str) -> Vec<Object> {
-    let mut types = Vec::new();
+fn parse_types_from_sdl(sdl: &str) -> HashMap<String, Object> {
+    let mut types = HashMap::new();
+    debug!("Parsing SDL for types: {}", sdl);
 
     // Simple regex-based parsing for type definitions
     // This is a basic implementation - a full SDL parser would be more robust
-    if let Some(captures) = regex::Regex::new(r"type\s+(\w+)\s*\{([^}]+)\}")
+    // Use captures_iter to find all type definitions in the SDL
+    for captures in regex::Regex::new(r"type\s+(\w+)\s*\{([^}]+)\}")
         .unwrap()
-        .captures(sdl)
+        .captures_iter(sdl)
     {
         let type_name = &captures[1];
         let fields_str = &captures[2];
@@ -198,7 +200,7 @@ fn parse_types_from_sdl(sdl: &str) -> Vec<Object> {
                     }));
             }
 
-            types.push(object_builder);
+            types.insert(type_name.to_string(), object_builder);
         }
     }
 
@@ -207,25 +209,44 @@ fn parse_types_from_sdl(sdl: &str) -> Vec<Object> {
 
 /// Extract return type from SDL field definition
 fn extract_return_type(sdl: &str, field_name: &str) -> TypeRef {
-    let pattern = format!(r"{}\s*:\s*(\[?\w+!?\]?!?)", regex::escape(field_name));
+    debug!(
+        "Extracting return type for field '{}' from SDL: {}",
+        field_name, sdl
+    );
+    let pattern = format!(
+        r"{}\s*(?:\([^)]*\))?\s*:\s*(\[?\w+!?\]?!?)",
+        regex::escape(field_name)
+    );
     if let Some(captures) = regex::Regex::new(&pattern).unwrap().captures(sdl) {
         let type_str = &captures[1];
+        debug!("Found type string: '{}'", type_str);
         match type_str {
             "String!" => TypeRef::named_nn(TypeRef::STRING),
             "String" => TypeRef::named(TypeRef::STRING),
             "Int!" => TypeRef::named_nn(TypeRef::INT),
             "Int" => TypeRef::named(TypeRef::INT),
-            s if s.starts_with('[') && s.ends_with(']') => {
-                // Handle array types like [ScriptInfo!]!
+            s if s.starts_with('[') && s.contains(']') => {
+                // Handle array types like [ScriptInfo!]! or [ScriptInfo]
                 let inner_type = s.trim_matches(|c| c == '[' || c == ']' || c == '!');
+                debug!("Detected array type with inner type: '{}'", inner_type);
                 TypeRef::named_nn_list_nn(inner_type)
             }
             _ => {
                 // Check if it's a custom type
+                debug!(
+                    "Checking if SDL contains type definitions: {}",
+                    regex::Regex::new(r"type\s+").unwrap().is_match(sdl)
+                );
                 if regex::Regex::new(r"type\s+").unwrap().is_match(sdl) {
                     let clean_type = type_str.trim_matches(|c| c == '[' || c == ']' || c == '!');
-                    TypeRef::named_nn_list_nn(clean_type)
+                    debug!("Using custom type: '{}'", clean_type);
+                    if type_str.ends_with('!') {
+                        TypeRef::named_nn(clean_type)
+                    } else {
+                        TypeRef::named(clean_type)
+                    }
                 } else {
+                    debug!("Falling back to String type");
                     TypeRef::named(TypeRef::STRING)
                 }
             }
@@ -310,11 +331,14 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
     // Register custom types from all SDL definitions
     let mut registered_types = std::collections::HashSet::new();
     for (_, operation) in &queries {
-        for custom_type in parse_types_from_sdl(&operation.sdl) {
-            let type_name = custom_type.type_name().to_string();
+        for (type_name, custom_type) in parse_types_from_sdl(&operation.sdl) {
+            debug!("Registering custom type: '{}'", type_name);
             if !registered_types.contains(&type_name) {
                 builder = builder.register(custom_type);
-                registered_types.insert(type_name);
+                registered_types.insert(type_name.clone());
+                debug!("Successfully registered type: '{}'", type_name);
+            } else {
+                debug!("Type '{}' already registered", type_name);
             }
         }
     }
@@ -331,33 +355,39 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
 
         // For now, handle the script query specially since it has arguments
         if field_name == "script" {
-            let mut script_field =
-                Field::new(field_name, TypeRef::named(TypeRef::STRING), move |ctx| {
-                    let uri = resolver_uri.clone();
-                    let func = resolver_fn.clone();
-                    FieldFuture::new(async move {
-                        // Extract uri argument
-                        let uri_arg = ctx.args.get("uri");
-                        let args = if let Some(accessor) = uri_arg {
-                            if let Ok(uri_val) = accessor.deserialize::<String>() {
-                                Some(serde_json::json!({ "uri": uri_val }))
-                            } else {
-                                None
-                            }
+            let return_type = extract_return_type(&operation.sdl, &field_name);
+            let mut script_field = Field::new(field_name, return_type, move |ctx| {
+                let uri = resolver_uri.clone();
+                let func = resolver_fn.clone();
+                FieldFuture::new(async move {
+                    // Extract uri argument
+                    let uri_arg = ctx.args.get("uri");
+                    let args = if let Some(accessor) = uri_arg {
+                        if let Ok(uri_val) = accessor.deserialize::<String>() {
+                            Some(serde_json::json!({ "uri": uri_val }))
                         } else {
                             None
-                        };
-
-                        // Call JavaScript resolver function
-                        match crate::js_engine::execute_graphql_resolver(&uri, &func, args) {
-                            Ok(result) => Ok(Some(async_graphql::Value::String(result))),
-                            Err(e) => {
-                                error!("GraphQL resolver error for {}::{}: {}", uri, func, e);
-                                Ok(Some(async_graphql::Value::String(format!("Error: {}", e))))
-                            }
                         }
-                    })
-                });
+                    } else {
+                        None
+                    };
+
+                    // Call JavaScript resolver function
+                    match crate::js_engine::execute_graphql_resolver(&uri, &func, args) {
+                        Ok(result) => match parse_json_to_graphql_value(&result) {
+                            Ok(graphql_value) => Ok(Some(graphql_value)),
+                            Err(e) => {
+                                error!("Failed to parse JSON result: {}", e);
+                                Ok(Some(async_graphql::Value::String(result)))
+                            }
+                        },
+                        Err(e) => {
+                            error!("GraphQL resolver error for {}::{}: {}", uri, func, e);
+                            Ok(Some(async_graphql::Value::String(format!("Error: {}", e))))
+                        }
+                    }
+                })
+            });
             script_field =
                 script_field.argument(InputValue::new("uri", TypeRef::named_nn(TypeRef::STRING)));
             query_builder = query_builder.field(script_field);

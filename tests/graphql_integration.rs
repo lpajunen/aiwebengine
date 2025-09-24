@@ -10,6 +10,12 @@ async fn test_graphql_endpoints() {
         include_str!("../scripts/test_scripts/graphql_test.js"),
     );
 
+    // Load the core script to get script management GraphQL operations
+    let _ = repository::upsert_script(
+        "https://example.com/core",
+        include_str!("../scripts/feature_scripts/core.js"),
+    );
+
     // Start server in background task
     let port = start_server_without_shutdown()
         .await
@@ -138,16 +144,57 @@ async fn test_graphql_endpoints() {
     assert!(!scripts_array.is_empty());
 
     // Should contain script objects with uri and chars properties
-    let has_core_script = scripts_array.iter().any(|script| {
-        script["uri"]
+    let has_test_script = scripts_array.iter().any(|script| {
+        (script["uri"]
             .as_str()
             .unwrap_or("")
-            .contains("https://example.com/core")
+            .contains("https://example.com/graphql_test")
+            || script["uri"]
+                .as_str()
+                .unwrap_or("")
+                .contains("https://example.com/core"))
             && script["chars"].is_number()
     });
     assert!(
-        has_core_script,
-        "Should contain core script with uri and chars properties"
+        has_test_script,
+        "Should contain test script with uri and chars properties"
+    );
+
+    // Test script query - should return ScriptDetail object instead of string
+    let script_query = r#"{ script(uri: \"https://example.com/graphql_test\") { uri } }"#;
+    let script_response = client
+        .post(format!("http://127.0.0.1:{}/graphql", port))
+        .header("Content-Type", "application/json")
+        .body(format!(r#"{{"query": "{}"}}"#, script_query))
+        .send()
+        .await
+        .expect("GraphQL script query request failed");
+
+    assert_eq!(script_response.status(), 200);
+
+    let script_body = script_response
+        .text()
+        .await
+        .expect("Failed to read script query response");
+
+    let script_json: serde_json::Value =
+        serde_json::from_str(&script_body).expect("Failed to parse script query response");
+
+    if let Some(errors) = script_json.get("errors") {
+        panic!("GraphQL script query failed with errors: {:?}", errors);
+    }
+
+    // Should return a ScriptDetail object with uri field - this proves it's an object, not a string
+    assert!(script_json["data"]["script"].is_object());
+    let script_obj = &script_json["data"]["script"];
+
+    // Verify the object has the uri field
+    assert!(script_obj["uri"].is_string());
+
+    // Verify the uri field matches what we requested
+    assert_eq!(
+        script_obj["uri"].as_str().unwrap(),
+        "https://example.com/graphql_test"
     );
 
     // Test GraphQL SSE endpoint (basic connectivity test)
