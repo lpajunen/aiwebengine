@@ -289,7 +289,7 @@ register('/script_logs', 'script_logs_handler', 'GET');
 
 // GraphQL operations for script management  
 registerGraphQLQuery("scripts", "type ScriptInfo { uri: String!, chars: Int! } type Query { scripts: [ScriptInfo!]! }", "scriptsQuery");
-registerGraphQLQuery("script", "type ScriptDetail { uri: String!, content: String!, contentLength: Int! } type Query { script(uri: String!): ScriptDetail }", "scriptQuery");
+registerGraphQLQuery("script", "type ScriptDetail { uri: String!, content: String!, contentLength: Int!, logs: [String!]! } type Query { script(uri: String!): ScriptDetail }", "scriptQuery");
 registerGraphQLMutation("upsertScript", "type UpsertScriptResponse { message: String!, uri: String!, chars: Int!, success: Boolean! } type Mutation { upsertScript(uri: String!, content: String!): UpsertScriptResponse! }", "upsertScriptMutation");
 registerGraphQLMutation("deleteScript", "type DeleteScriptResponse { message: String!, uri: String!, success: Boolean! } type Mutation { deleteScript(uri: String!): DeleteScriptResponse! }", "deleteScriptMutation");
 
@@ -311,18 +311,22 @@ function scriptsQuery() {
 function scriptQuery(args) {
 	try {
 		const content = getScript(args.uri);
+		const logs = listLogsForUri(args.uri);
+		
 		if (content) {
 			return JSON.stringify({
 				uri: args.uri,
 				content: content,
-				contentLength: content.length
+				contentLength: content.length,
+				logs: logs
 			});
 		} else {
 			// Return null if script doesn't exist
 			return JSON.stringify({
 				uri: args.uri,
 				content: null,
-				contentLength: 0
+				contentLength: 0,
+				logs: logs
 			});
 		}
 	} catch (error) {
@@ -330,7 +334,8 @@ function scriptQuery(args) {
 		return JSON.stringify({
 			uri: args.uri,
 			content: null,
-			contentLength: 0
+			contentLength: 0,
+			logs: []
 		});
 	}
 }

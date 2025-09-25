@@ -279,7 +279,12 @@ async fn test_graphql_script_mutations() {
     assert_eq!(upsert_result["uri"].as_str().unwrap(), "http://test/script");
     assert_eq!(upsert_result["chars"].as_u64().unwrap(), 20); // "console.log('test');" is 20 characters
     assert_eq!(upsert_result["success"].as_bool().unwrap(), true);
-    assert!(upsert_result["message"].as_str().unwrap().contains("Script upserted successfully"));
+    assert!(
+        upsert_result["message"]
+            .as_str()
+            .unwrap()
+            .contains("Script upserted successfully")
+    );
 
     // Test deleteScript mutation - should return structured DeleteScriptResponse object
     let delete_mutation_body = serde_json::json!({
@@ -321,7 +326,12 @@ async fn test_graphql_script_mutations() {
     // Verify field values
     assert_eq!(delete_result["uri"].as_str().unwrap(), "http://test/script");
     assert_eq!(delete_result["success"].as_bool().unwrap(), true);
-    assert!(delete_result["message"].as_str().unwrap().contains("Script deleted successfully"));
+    assert!(
+        delete_result["message"]
+            .as_str()
+            .unwrap()
+            .contains("Script deleted successfully")
+    );
 
     // Test deleteScript with non-existent script - should return success: false
     let delete_nonexistent_mutation_body = serde_json::json!({
@@ -343,12 +353,15 @@ async fn test_graphql_script_mutations() {
         .await
         .expect("Failed to read delete nonexistent mutation response");
 
-    let delete_nonexistent_json: serde_json::Value =
-        serde_json::from_str(&delete_nonexistent_body).expect("Failed to parse delete nonexistent mutation response");
+    let delete_nonexistent_json: serde_json::Value = serde_json::from_str(&delete_nonexistent_body)
+        .expect("Failed to parse delete nonexistent mutation response");
 
     // Check for errors
     if let Some(errors) = delete_nonexistent_json.get("errors") {
-        panic!("GraphQL delete nonexistent mutation failed with errors: {:?}", errors);
+        panic!(
+            "GraphQL delete nonexistent mutation failed with errors: {:?}",
+            errors
+        );
     }
 
     // Verify the response structure for non-existent script
@@ -361,7 +374,18 @@ async fn test_graphql_script_mutations() {
     assert!(delete_nonexistent_result["success"].is_boolean());
 
     // Verify field values for non-existent script
-    assert_eq!(delete_nonexistent_result["uri"].as_str().unwrap(), "http://test/nonexistent");
-    assert_eq!(delete_nonexistent_result["success"].as_bool().unwrap(), false);
-    assert!(delete_nonexistent_result["message"].as_str().unwrap().contains("Script not found"));
+    assert_eq!(
+        delete_nonexistent_result["uri"].as_str().unwrap(),
+        "http://test/nonexistent"
+    );
+    assert_eq!(
+        delete_nonexistent_result["success"].as_bool().unwrap(),
+        false
+    );
+    assert!(
+        delete_nonexistent_result["message"]
+            .as_str()
+            .unwrap()
+            .contains("Script not found")
+    );
 }

@@ -526,17 +526,26 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
                                             match async_graphql::Value::from_json(json_value) {
                                                 Ok(graphql_value) => Ok(Some(graphql_value)),
                                                 Err(e) => {
-                                                    error!("Failed to convert JSON to GraphQL value: {}", e);
-                                                    Ok(Some(async_graphql::Value::String(format!("Error: Failed to parse response: {}", e))))
+                                                    error!(
+                                                        "Failed to convert JSON to GraphQL value: {}",
+                                                        e
+                                                    );
+                                                    Ok(Some(async_graphql::Value::String(format!(
+                                                        "Error: Failed to parse response: {}",
+                                                        e
+                                                    ))))
                                                 }
                                             }
-                                        },
+                                        }
                                         Err(e) => {
                                             error!("Failed to parse JSON response: {}", e);
-                                            Ok(Some(async_graphql::Value::String(format!("Error: Invalid JSON response: {}", e))))
+                                            Ok(Some(async_graphql::Value::String(format!(
+                                                "Error: Invalid JSON response: {}",
+                                                e
+                                            ))))
                                         }
                                     }
-                                },
+                                }
                                 Err(e) => {
                                     error!("GraphQL resolver error for {}::{}: {}", uri, func, e);
                                     Ok(Some(async_graphql::Value::String(format!("Error: {}", e))))
@@ -553,8 +562,10 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
                 ));
                 mutation_builder = mutation_builder.field(mutation_field);
             } else if field_name == "deleteScript" {
-                let mut mutation_field =
-                    Field::new(field_name, TypeRef::named("DeleteScriptResponse"), move |ctx| {
+                let mut mutation_field = Field::new(
+                    field_name,
+                    TypeRef::named("DeleteScriptResponse"),
+                    move |ctx| {
                         let uri = resolver_uri.clone();
                         let func = resolver_fn.clone();
                         FieldFuture::new(async move {
@@ -580,24 +591,34 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
                                             match async_graphql::Value::from_json(json_value) {
                                                 Ok(graphql_value) => Ok(Some(graphql_value)),
                                                 Err(e) => {
-                                                    error!("Failed to convert JSON to GraphQL value: {}", e);
-                                                    Ok(Some(async_graphql::Value::String(format!("Error: Failed to parse response: {}", e))))
+                                                    error!(
+                                                        "Failed to convert JSON to GraphQL value: {}",
+                                                        e
+                                                    );
+                                                    Ok(Some(async_graphql::Value::String(format!(
+                                                        "Error: Failed to parse response: {}",
+                                                        e
+                                                    ))))
                                                 }
                                             }
-                                        },
+                                        }
                                         Err(e) => {
                                             error!("Failed to parse JSON response: {}", e);
-                                            Ok(Some(async_graphql::Value::String(format!("Error: Invalid JSON response: {}", e))))
+                                            Ok(Some(async_graphql::Value::String(format!(
+                                                "Error: Invalid JSON response: {}",
+                                                e
+                                            ))))
                                         }
                                     }
-                                },
+                                }
                                 Err(e) => {
                                     error!("GraphQL resolver error for {}::{}: {}", uri, func, e);
                                     Ok(Some(async_graphql::Value::String(format!("Error: {}", e))))
                                 }
                             }
                         })
-                    });
+                    },
+                );
                 mutation_field = mutation_field
                     .argument(InputValue::new("uri", TypeRef::named_nn(TypeRef::STRING)));
                 mutation_builder = mutation_builder.field(mutation_field);
