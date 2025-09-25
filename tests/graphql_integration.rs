@@ -215,3 +215,153 @@ async fn test_graphql_endpoints() {
     let cache_control = sse_response.headers().get("cache-control").unwrap();
     assert_eq!(cache_control, "no-cache");
 }
+
+#[tokio::test]
+async fn test_graphql_script_mutations() {
+    // Load the core script to get script management GraphQL operations
+    let _ = repository::upsert_script(
+        "https://example.com/core",
+        include_str!("../scripts/feature_scripts/core.js"),
+    );
+
+    // Start server in background task
+    let port = start_server_without_shutdown()
+        .await
+        .expect("server failed to start");
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(10)).await;
+    });
+
+    // Give server time to start
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+
+    let client = reqwest::Client::new();
+
+    // Test upsertScript mutation - should return structured UpsertScriptResponse object
+    let upsert_mutation_body = serde_json::json!({
+        "query": "mutation { upsertScript(uri: \"http://test/script\", content: \"console.log('test');\") { message uri chars success } }"
+    });
+
+    let upsert_response = client
+        .post(format!("http://127.0.0.1:{}/graphql", port))
+        .header("Content-Type", "application/json")
+        .body(upsert_mutation_body.to_string())
+        .send()
+        .await
+        .expect("GraphQL upsert mutation request failed");
+
+    assert_eq!(upsert_response.status(), 200);
+
+    let upsert_body = upsert_response
+        .text()
+        .await
+        .expect("Failed to read upsert mutation response");
+
+    let upsert_json: serde_json::Value =
+        serde_json::from_str(&upsert_body).expect("Failed to parse upsert mutation response");
+
+    // Check for errors
+    if let Some(errors) = upsert_json.get("errors") {
+        panic!("GraphQL upsert mutation failed with errors: {:?}", errors);
+    }
+
+    // Verify the response structure
+    assert!(upsert_json["data"]["upsertScript"].is_object());
+    let upsert_result = &upsert_json["data"]["upsertScript"];
+
+    // Check all required fields are present and have correct types
+    assert!(upsert_result["message"].is_string());
+    assert!(upsert_result["uri"].is_string());
+    assert!(upsert_result["chars"].is_number());
+    assert!(upsert_result["success"].is_boolean());
+
+    // Verify field values
+    assert_eq!(upsert_result["uri"].as_str().unwrap(), "http://test/script");
+    assert_eq!(upsert_result["chars"].as_u64().unwrap(), 20); // "console.log('test');" is 20 characters
+    assert_eq!(upsert_result["success"].as_bool().unwrap(), true);
+    assert!(upsert_result["message"].as_str().unwrap().contains("Script upserted successfully"));
+
+    // Test deleteScript mutation - should return structured DeleteScriptResponse object
+    let delete_mutation_body = serde_json::json!({
+        "query": "mutation { deleteScript(uri: \"http://test/script\") { message uri success } }"
+    });
+
+    let delete_response = client
+        .post(format!("http://127.0.0.1:{}/graphql", port))
+        .header("Content-Type", "application/json")
+        .body(delete_mutation_body.to_string())
+        .send()
+        .await
+        .expect("GraphQL delete mutation request failed");
+
+    assert_eq!(delete_response.status(), 200);
+
+    let delete_body = delete_response
+        .text()
+        .await
+        .expect("Failed to read delete mutation response");
+
+    let delete_json: serde_json::Value =
+        serde_json::from_str(&delete_body).expect("Failed to parse delete mutation response");
+
+    // Check for errors
+    if let Some(errors) = delete_json.get("errors") {
+        panic!("GraphQL delete mutation failed with errors: {:?}", errors);
+    }
+
+    // Verify the response structure
+    assert!(delete_json["data"]["deleteScript"].is_object());
+    let delete_result = &delete_json["data"]["deleteScript"];
+
+    // Check all required fields are present and have correct types
+    assert!(delete_result["message"].is_string());
+    assert!(delete_result["uri"].is_string());
+    assert!(delete_result["success"].is_boolean());
+
+    // Verify field values
+    assert_eq!(delete_result["uri"].as_str().unwrap(), "http://test/script");
+    assert_eq!(delete_result["success"].as_bool().unwrap(), true);
+    assert!(delete_result["message"].as_str().unwrap().contains("Script deleted successfully"));
+
+    // Test deleteScript with non-existent script - should return success: false
+    let delete_nonexistent_mutation_body = serde_json::json!({
+        "query": "mutation { deleteScript(uri: \"http://test/nonexistent\") { message uri success } }"
+    });
+
+    let delete_nonexistent_response = client
+        .post(format!("http://127.0.0.1:{}/graphql", port))
+        .header("Content-Type", "application/json")
+        .body(delete_nonexistent_mutation_body.to_string())
+        .send()
+        .await
+        .expect("GraphQL delete nonexistent mutation request failed");
+
+    assert_eq!(delete_nonexistent_response.status(), 200);
+
+    let delete_nonexistent_body = delete_nonexistent_response
+        .text()
+        .await
+        .expect("Failed to read delete nonexistent mutation response");
+
+    let delete_nonexistent_json: serde_json::Value =
+        serde_json::from_str(&delete_nonexistent_body).expect("Failed to parse delete nonexistent mutation response");
+
+    // Check for errors
+    if let Some(errors) = delete_nonexistent_json.get("errors") {
+        panic!("GraphQL delete nonexistent mutation failed with errors: {:?}", errors);
+    }
+
+    // Verify the response structure for non-existent script
+    assert!(delete_nonexistent_json["data"]["deleteScript"].is_object());
+    let delete_nonexistent_result = &delete_nonexistent_json["data"]["deleteScript"];
+
+    // Check all required fields are present and have correct types
+    assert!(delete_nonexistent_result["message"].is_string());
+    assert!(delete_nonexistent_result["uri"].is_string());
+    assert!(delete_nonexistent_result["success"].is_boolean());
+
+    // Verify field values for non-existent script
+    assert_eq!(delete_nonexistent_result["uri"].as_str().unwrap(), "http://test/nonexistent");
+    assert_eq!(delete_nonexistent_result["success"].as_bool().unwrap(), false);
+    assert!(delete_nonexistent_result["message"].as_str().unwrap().contains("Script not found"));
+}

@@ -174,6 +174,8 @@ fn parse_types_from_sdl(sdl: &str) -> HashMap<String, Object> {
                     "String" => TypeRef::named(TypeRef::STRING),
                     "Int!" => TypeRef::named_nn(TypeRef::INT),
                     "Int" => TypeRef::named(TypeRef::INT),
+                    "Boolean!" => TypeRef::named_nn(TypeRef::BOOLEAN),
+                    "Boolean" => TypeRef::named(TypeRef::BOOLEAN),
                     _ => TypeRef::named(TypeRef::STRING), // Default to String for unknown types
                 };
 
@@ -332,7 +334,33 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
     let mut registered_types = std::collections::HashSet::new();
     for (_, operation) in &queries {
         for (type_name, custom_type) in parse_types_from_sdl(&operation.sdl) {
-            debug!("Registering custom type: '{}'", type_name);
+            debug!("Registering custom type from query: '{}'", type_name);
+            if !registered_types.contains(&type_name) {
+                builder = builder.register(custom_type);
+                registered_types.insert(type_name.clone());
+                debug!("Successfully registered type: '{}'", type_name);
+            } else {
+                debug!("Type '{}' already registered", type_name);
+            }
+        }
+    }
+    // Also register custom types from mutations
+    for (_, operation) in &mutations {
+        for (type_name, custom_type) in parse_types_from_sdl(&operation.sdl) {
+            debug!("Registering custom type from mutation: '{}'", type_name);
+            if !registered_types.contains(&type_name) {
+                builder = builder.register(custom_type);
+                registered_types.insert(type_name.clone());
+                debug!("Successfully registered type: '{}'", type_name);
+            } else {
+                debug!("Type '{}' already registered", type_name);
+            }
+        }
+    }
+    // Also register custom types from subscriptions
+    for (_, operation) in &subscriptions {
+        for (type_name, custom_type) in parse_types_from_sdl(&operation.sdl) {
+            debug!("Registering custom type from subscription: '{}'", type_name);
             if !registered_types.contains(&type_name) {
                 builder = builder.register(custom_type);
                 registered_types.insert(type_name.clone());
@@ -463,7 +491,7 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
             if field_name == "upsertScript" {
                 let mut mutation_field = Field::new(
                     field_name,
-                    TypeRef::named(TypeRef::STRING),
+                    TypeRef::named("UpsertScriptResponse"),
                     move |ctx| {
                         let uri = resolver_uri.clone();
                         let func = resolver_fn.clone();
@@ -490,7 +518,25 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
 
                             // Call JavaScript resolver function
                             match crate::js_engine::execute_graphql_resolver(&uri, &func, args) {
-                                Ok(result) => Ok(Some(async_graphql::Value::String(result))),
+                                Ok(result) => {
+                                    // Parse the JSON response from JavaScript
+                                    match serde_json::from_str::<serde_json::Value>(&result) {
+                                        Ok(json_value) => {
+                                            // Convert serde_json::Value to async_graphql::Value
+                                            match async_graphql::Value::from_json(json_value) {
+                                                Ok(graphql_value) => Ok(Some(graphql_value)),
+                                                Err(e) => {
+                                                    error!("Failed to convert JSON to GraphQL value: {}", e);
+                                                    Ok(Some(async_graphql::Value::String(format!("Error: Failed to parse response: {}", e))))
+                                                }
+                                            }
+                                        },
+                                        Err(e) => {
+                                            error!("Failed to parse JSON response: {}", e);
+                                            Ok(Some(async_graphql::Value::String(format!("Error: Invalid JSON response: {}", e))))
+                                        }
+                                    }
+                                },
                                 Err(e) => {
                                     error!("GraphQL resolver error for {}::{}: {}", uri, func, e);
                                     Ok(Some(async_graphql::Value::String(format!("Error: {}", e))))
@@ -508,7 +554,7 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
                 mutation_builder = mutation_builder.field(mutation_field);
             } else if field_name == "deleteScript" {
                 let mut mutation_field =
-                    Field::new(field_name, TypeRef::named(TypeRef::STRING), move |ctx| {
+                    Field::new(field_name, TypeRef::named("DeleteScriptResponse"), move |ctx| {
                         let uri = resolver_uri.clone();
                         let func = resolver_fn.clone();
                         FieldFuture::new(async move {
@@ -526,7 +572,25 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
 
                             // Call JavaScript resolver function
                             match crate::js_engine::execute_graphql_resolver(&uri, &func, args) {
-                                Ok(result) => Ok(Some(async_graphql::Value::String(result))),
+                                Ok(result) => {
+                                    // Parse the JSON response from JavaScript
+                                    match serde_json::from_str::<serde_json::Value>(&result) {
+                                        Ok(json_value) => {
+                                            // Convert serde_json::Value to async_graphql::Value
+                                            match async_graphql::Value::from_json(json_value) {
+                                                Ok(graphql_value) => Ok(Some(graphql_value)),
+                                                Err(e) => {
+                                                    error!("Failed to convert JSON to GraphQL value: {}", e);
+                                                    Ok(Some(async_graphql::Value::String(format!("Error: Failed to parse response: {}", e))))
+                                                }
+                                            }
+                                        },
+                                        Err(e) => {
+                                            error!("Failed to parse JSON response: {}", e);
+                                            Ok(Some(async_graphql::Value::String(format!("Error: Invalid JSON response: {}", e))))
+                                        }
+                                    }
+                                },
                                 Err(e) => {
                                     error!("GraphQL resolver error for {}::{}: {}", uri, func, e);
                                     Ok(Some(async_graphql::Value::String(format!("Error: {}", e))))

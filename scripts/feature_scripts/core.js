@@ -290,8 +290,8 @@ register('/script_logs', 'script_logs_handler', 'GET');
 // GraphQL operations for script management  
 registerGraphQLQuery("scripts", "type ScriptInfo { uri: String!, chars: Int! } type Query { scripts: [ScriptInfo!]! }", "scriptsQuery");
 registerGraphQLQuery("script", "type ScriptDetail { uri: String!, content: String!, contentLength: Int! } type Query { script(uri: String!): ScriptDetail }", "scriptQuery");
-registerGraphQLMutation("upsertScript", "type Mutation { upsertScript(uri: String!, content: String!): String }", "upsertScriptMutation");
-registerGraphQLMutation("deleteScript", "type Mutation { deleteScript(uri: String!): String }", "deleteScriptMutation");
+registerGraphQLMutation("upsertScript", "type UpsertScriptResponse { message: String!, uri: String!, chars: Int!, success: Boolean! } type Mutation { upsertScript(uri: String!, content: String!): UpsertScriptResponse! }", "upsertScriptMutation");
+registerGraphQLMutation("deleteScript", "type DeleteScriptResponse { message: String!, uri: String!, success: Boolean! } type Mutation { deleteScript(uri: String!): DeleteScriptResponse! }", "deleteScriptMutation");
 
 // GraphQL resolvers
 function scriptsQuery() {
@@ -339,10 +339,20 @@ function upsertScriptMutation(args) {
 	try {
 		upsertScript(args.uri, args.content);
 		writeLog(`Script upserted via GraphQL: ${args.uri} (${args.content.length} characters)`);
-		return `Script upserted successfully: ${args.uri} (${args.content.length} characters)`;
+		return JSON.stringify({
+			message: `Script upserted successfully: ${args.uri} (${args.content.length} characters)`,
+			uri: args.uri,
+			chars: args.content.length,
+			success: true
+		});
 	} catch (error) {
 		writeLog(`Script upsert mutation failed: ${error.message}`);
-		return `Error: Failed to upsert script: ${error.message}`;
+		return JSON.stringify({
+			message: `Error: Failed to upsert script: ${error.message}`,
+			uri: args.uri,
+			chars: args.content ? args.content.length : 0,
+			success: false
+		});
 	}
 }
 
@@ -351,13 +361,25 @@ function deleteScriptMutation(args) {
 		const deleted = deleteScript(args.uri);
 		if (deleted) {
 			writeLog(`Script deleted via GraphQL: ${args.uri}`);
-			return `Script deleted successfully: ${args.uri}`;
+			return JSON.stringify({
+				message: `Script deleted successfully: ${args.uri}`,
+				uri: args.uri,
+				success: true
+			});
 		} else {
-			return `Script not found: ${args.uri}`;
+			return JSON.stringify({
+				message: `Script not found: ${args.uri}`,
+				uri: args.uri,
+				success: false
+			});
 		}
 	} catch (error) {
 		writeLog(`Script delete mutation failed: ${error.message}`);
-		return `Error: Failed to delete script: ${error.message}`;
+		return JSON.stringify({
+			message: `Error: Failed to delete script: ${error.message}`,
+			uri: args.uri,
+			success: false
+		});
 	}
 }
 
