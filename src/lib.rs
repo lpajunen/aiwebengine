@@ -16,6 +16,7 @@ pub mod middleware;
 pub mod repository_safe;
 pub mod safe_helpers;
 pub mod stream_registry;
+pub mod stream_manager;
 
 // Use the safe repository implementation internally
 pub use repository_safe as repository;
