@@ -822,3 +822,143 @@ Use this checklist to track progress while adding new features:
 4. **Measurement**: Track progress with automated metrics (coverage, performance, security scans)
 
 **Next Recommended Quality Focus**: Complete GraphQL module testing and eliminate remaining unwrap()/expect() calls before adding major new features.
+
+---
+
+## 📡 **JavaScript Web Streaming Implementation Plan**
+
+### **Objective**
+Add real-time streaming capabilities to aiwebengine through JavaScript APIs, enabling Server-Sent Events (SSE) for live data updates.
+
+### **New JavaScript API Functions**
+- `registerWebStream(path)`: Register a path for SSE streaming
+- `sendStreamMessage(object)`: Broadcast JSON messages to connected clients
+
+### **Implementation Tasks**
+
+#### **1. Design Stream Registry Architecture**
+- **Description**: Create a global registry to track active streams, their paths, and associated connections
+- **Requirements**: 
+  - Thread-safe using `Arc<Mutex<HashMap>>`
+  - Track stream path registrations (which JavaScript script owns each stream path)
+  - Track active client connections per stream path
+  - Store connection metadata (connection time, client info)
+- **Priority**: High
+- **Files**: New module `src/stream_registry.rs`
+
+#### **2. Implement registerWebStream JavaScript Function**
+- **Description**: Add registerWebStream(path) function to JavaScript engine
+- **Requirements**:
+  - Add to JavaScript engine's host functions in `js_engine.rs`
+  - Function signature: `registerWebStream(path)`
+  - Register the path in the stream registry
+  - Similar pattern to existing `register()` function but for streaming endpoints
+- **Priority**: High
+- **Files**: `src/js_engine.rs`, `src/js_engine_safe.rs`
+
+#### **3. Create Stream Connection Management**
+- **Description**: Implement connection tracking for active stream clients
+- **Requirements**:
+  - Handle multiple clients connecting to the same stream path
+  - Proper cleanup when connections are closed
+  - Use `tokio::sync::broadcast` channels for efficient message distribution
+  - Connection lifecycle management
+- **Priority**: High
+- **Files**: `src/stream_manager.rs`
+
+#### **4. Implement sendStreamMessage JavaScript Function**
+- **Description**: Add sendStreamMessage(object) function for broadcasting
+- **Requirements**:
+  - Add to JavaScript engine host functions
+  - Function signature: `sendStreamMessage(object)`
+  - Serialize the object to JSON and broadcast to all connected stream clients
+  - Handle broadcasting failures gracefully
+- **Priority**: High
+- **Files**: `src/js_engine.rs`, `src/js_engine_safe.rs`
+
+#### **5. Add Stream Request Handling to Server**
+- **Description**: Modify the main request handler to detect registered stream paths
+- **Requirements**:
+  - Modify `find_route_handler()` to check for registered stream paths
+  - Detect GET requests to registered stream paths in main request handler
+  - Return proper SSE response with headers:
+    - `Content-Type: text/event-stream`
+    - `Cache-Control: no-cache`
+    - `Connection: keep-alive`
+    - Appropriate CORS headers
+- **Priority**: High
+- **Files**: `src/lib.rs`
+
+#### **6. Implement Stream Cleanup and Error Handling**
+- **Description**: Add proper connection cleanup and error handling
+- **Requirements**:
+  - Cleanup when clients disconnect (detect broken pipes)
+  - Graceful handling of JavaScript errors during message sending
+  - Timeout handling for slow clients
+  - Memory management for connection tracking
+  - Graceful shutdown of streams
+- **Priority**: Medium
+- **Files**: `src/stream_manager.rs`, `src/stream_registry.rs`
+
+#### **7. Create Test Script and Integration Tests**
+- **Description**: Develop comprehensive tests for streaming functionality
+- **Requirements**:
+  - JavaScript test script demonstrating the new streaming functions
+  - Integration tests to verify:
+    - Stream registration works correctly
+    - Multiple clients can connect to streams
+    - Messages are properly broadcasted
+    - Cleanup happens correctly
+- **Priority**: Medium
+- **Files**: `scripts/test_scripts/stream_test.js`, `tests/stream_integration.rs`
+
+#### **8. Update Documentation**
+- **Description**: Add documentation for the new streaming functions
+- **Requirements**:
+  - Add API documentation for new functions
+  - Update `docs/javascript-apis.md` with streaming examples
+  - Include best practices and limitations
+  - Add example use cases
+- **Priority**: Low
+- **Files**: `docs/javascript-apis.md`, `docs/examples.md`, `README.md`
+
+### **Technical Architecture**
+
+#### **Stream State Management**
+Since JavaScript executions create new runtime contexts each time, the stream registry needs to be global and persistent across JavaScript executions.
+
+#### **Connection Lifecycle**
+SSE connections are long-lived, requiring robust connection tracking and cleanup mechanisms.
+
+#### **Broadcasting Efficiency**
+Use Tokio's broadcast channels for efficient message distribution to multiple clients.
+
+#### **Integration Points**
+- Leverage existing route registration system
+- Integrate with current request handling pipeline
+- Build on existing SSE implementation for GraphQL
+
+### **Example Usage**
+```javascript
+// Register a stream endpoint
+registerWebStream('/events');
+
+// In any handler, send messages to all connected clients
+function sendUpdate(req) {
+    sendStreamMessage({
+        type: 'update',
+        timestamp: new Date().toISOString(),
+        data: { message: 'Hello from stream!' }
+    });
+    return { status: 200, body: 'Message sent' };
+}
+
+register('/send-update', 'sendUpdate', 'POST');
+```
+
+### **Benefits**
+- Real-time data updates for web applications
+- Server-sent events for live notifications
+- Efficient broadcasting to multiple clients
+- Simple JavaScript API for developers
+- Builds on existing aiwebengine architecture
