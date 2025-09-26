@@ -133,6 +133,27 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                     )?;
                     global.set("registerWebStream", register_web_stream)?;
 
+                    // Stream message sending function
+                    let send_stream_message = Function::new(
+                        ctx.clone(),
+                        move |_c: rquickjs::Ctx<'_>, json_string: String| -> Result<(), rquickjs::Error> {
+                            debug!("JavaScript called sendStreamMessage with message: {}", json_string);
+                            
+                            // Broadcast to all registered streams
+                            match crate::stream_registry::GLOBAL_STREAM_REGISTRY.broadcast_to_all_streams(&json_string) {
+                                Ok(count) => {
+                                    debug!("Successfully broadcast message to {} connections", count);
+                                    Ok(())
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to broadcast message: {}", e);
+                                    Err(rquickjs::Error::Exception)
+                                }
+                            }
+                        },
+                    )?;
+                    global.set("sendStreamMessage", send_stream_message)?;
+
                     // Set up host functions
                     let script_uri_clone1 = uri_owned.clone();
                     let write = Function::new(
@@ -822,6 +843,7 @@ pub fn execute_graphql_resolver(
     }).map_err(|e| format!("JavaScript execution error: {}", e))
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1190,6 +1212,86 @@ mod tests {
         assert!(
             !stream_registry::GLOBAL_STREAM_REGISTRY.is_stream_registered("invalid-path-test"),
             "Invalid stream should not be registered"
+        );
+    }
+
+    #[test]
+    fn test_send_stream_message_function() {
+        let script_content = r#"
+            // Register a stream first
+            registerWebStream('/test-message-stream');
+            
+            // Send a message to all streams
+            sendStreamMessage('{"type": "test", "data": "Hello World"}');
+            
+            writeLog('Message sent successfully');
+        "#;
+
+        let _ = repository::upsert_script("stream-message-test", script_content);
+        let result = execute_script("stream-message-test", script_content);
+
+        assert!(result.success, "Script should execute successfully: {:?}", result.error);
+        
+        // Small delay to ensure the message is processed
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        
+        // Verify the stream was registered
+        assert!(
+            stream_registry::GLOBAL_STREAM_REGISTRY.is_stream_registered("/test-message-stream"),
+            "Stream should be registered"
+        );
+        
+        // Check that logs were written (indicating successful execution)
+        let logs = repository::fetch_log_messages("stream-message-test");
+        assert!(
+            logs.iter().any(|log| log.contains("Message sent successfully")),
+            "Should have logged successful message sending"
+        );
+    }
+
+    #[test]
+    fn test_send_stream_message_json_object() {
+        let script_content = r#"
+            // Register a stream first
+            registerWebStream('/test-json-stream');
+            
+            // Send a complex JSON message
+            var messageObj = {
+                type: "notification",
+                user: "testUser",
+                data: {
+                    id: 123,
+                    text: "Hello from JavaScript",
+                    timestamp: new Date().getTime()
+                },
+                metadata: ["tag1", "tag2"]
+            };
+            
+            // JavaScript must stringify the object before sending
+            sendStreamMessage(JSON.stringify(messageObj));
+            
+            writeLog('Complex JSON message sent');
+        "#;
+
+        let _ = repository::upsert_script("stream-json-test", script_content);
+        let result = execute_script("stream-json-test", script_content);
+
+        assert!(result.success, "Script should execute successfully: {:?}", result.error);
+        
+        // Small delay to ensure the message is processed
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        
+        // Verify the stream was registered
+        assert!(
+            stream_registry::GLOBAL_STREAM_REGISTRY.is_stream_registered("/test-json-stream"),
+            "Stream should be registered"
+        );
+        
+        // Check that logs were written (indicating successful execution)
+        let logs = repository::fetch_log_messages("stream-json-test");
+        assert!(
+            logs.iter().any(|log| log.contains("Complex JSON message sent")),
+            "Should have logged successful JSON message sending"
         );
     }
 }

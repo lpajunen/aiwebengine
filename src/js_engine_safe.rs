@@ -334,6 +334,27 @@ impl SafeJsEngine {
         )?;
         global.set("registerWebStream", register_web_stream)?;
 
+        // Safe sendStreamMessage function
+        let send_stream_message = Function::new(
+            ctx.clone(),
+            move |_c: rquickjs::Ctx<'_>, json_string: String| -> Result<(), rquickjs::Error> {
+                debug!("JavaScript called sendStreamMessage with message: {}", json_string);
+                
+                // Broadcast to all registered streams
+                match crate::stream_registry::GLOBAL_STREAM_REGISTRY.broadcast_to_all_streams(&json_string) {
+                    Ok(count) => {
+                        debug!("Successfully broadcast message to {} connections", count);
+                        Ok(())
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to broadcast message: {}", e);
+                        Err(rquickjs::Error::Exception)
+                    }
+                }
+            },
+        )?;
+        global.set("sendStreamMessage", send_stream_message)?;
+
         Ok(())
     }
 }
