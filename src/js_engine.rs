@@ -524,6 +524,27 @@ pub fn execute_script_for_request(
         )?;
         global.set("registerWebStream", register_web_stream_noop)?;
 
+        // Stream message sending function for request handling
+        let send_stream_message = Function::new(
+            ctx.clone(),
+            move |_c: rquickjs::Ctx<'_>, json_string: String| -> Result<(), rquickjs::Error> {
+                debug!("JavaScript called sendStreamMessage (request context) with message: {}", json_string);
+                
+                // Broadcast to all registered streams
+                match crate::stream_registry::GLOBAL_STREAM_REGISTRY.broadcast_to_all_streams(&json_string) {
+                    Ok(count) => {
+                        debug!("Successfully broadcast message to {} connections (request context)", count);
+                        Ok(())
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to broadcast message (request context): {}", e);
+                        Err(rquickjs::Error::Exception)
+                    }
+                }
+            },
+        )?;
+        global.set("sendStreamMessage", send_stream_message)?;
+
         Ok(())
     })
     .map_err(|e| format!("install host fns: {}", e))?;

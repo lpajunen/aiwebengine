@@ -1,10 +1,11 @@
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response, Sse, sse::Event};
 use axum::{Router, routing::any};
 use axum_server::Server;
 use serde_urlencoded;
 use std::collections::HashMap;
+use tokio_stream::{wrappers::BroadcastStream, StreamExt};
 use tracing::{debug, error, info};
 
 pub mod config;
@@ -51,6 +52,56 @@ async fn parse_form_data(
     } else {
         None
     }
+}
+
+/// Handle Server-Sent Events stream requests
+async fn handle_stream_request(path: String) -> Response {
+    info!("Handling stream request for path: {}", path);
+    
+    // Create a connection with the stream manager
+    let connection = match stream_manager::StreamConnectionManager::new()
+        .create_connection(&path, None).await
+    {
+        Ok(conn) => conn,
+        Err(e) => {
+            error!("Failed to create stream connection for '{}': {}", path, e);
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header("content-type", "text/plain")
+                .body(Body::from(format!("Failed to create stream connection: {}", e)))
+                .unwrap();
+        }
+    };
+
+    let connection_id = connection.connection_id.clone();
+    info!("Created stream connection {} for path '{}'", connection_id, path);
+
+    // Convert broadcast receiver to tokio stream
+    let receiver_stream = BroadcastStream::new(connection.receiver);
+    
+    // Clone connection_id for use in the closure
+    let connection_id_for_stream = connection_id.clone();
+    
+    // Convert to SSE events, handling both messages and errors
+    let sse_stream = receiver_stream.map(move |result| {
+        match result {
+            Ok(msg) => {
+                debug!("Sending SSE message to connection {}: {}", connection_id_for_stream, msg);
+                Ok::<Event, std::convert::Infallible>(Event::default().data(msg))
+            }
+            Err(e) => {
+                error!("Broadcast receiver error for connection {}: {}", connection_id_for_stream, e);
+                Ok::<Event, std::convert::Infallible>(Event::default().data(format!("{{\"error\": \"Stream error: {}\"}}", e)))
+            }
+        }
+    });
+
+    // Create SSE response
+    let sse = Sse::new(sse_stream)
+        .keep_alive(axum::response::sse::KeepAlive::default());
+
+    // Return the SSE response
+    sse.into_response()
 }
 
 /// Dynamically find a route handler by checking all current scripts
@@ -288,6 +339,17 @@ pub async fn start_server_with_config(
                     }
                 }
 
+                // Check if this is a request to a registered stream path
+                let is_get = request_method == "GET";
+                let is_stream_registered = stream_registry::GLOBAL_STREAM_REGISTRY.is_stream_registered(&path);
+                info!("Stream check - method: {}, is_get: {}, path: '{}', is_registered: {}", 
+                      request_method, is_get, path, is_stream_registered);
+                
+                if is_get && is_stream_registered {
+                    info!("Routing to stream handler for path: {}", path);
+                    return handle_stream_request(path).await;
+                }
+
                 // Check if any route exists for this path (including wildcards)
                 let path_exists = path_has_any_route(&path);
 
@@ -452,6 +514,31 @@ pub async fn start_server_with_config(
             any(move |req: Request<Body>| async move {
                 let full_path = req.uri().path().to_string();
                 let request_method = req.method().to_string();
+
+                // Check for assets first if it's a GET request
+                if request_method == "GET" {
+                    if let Some(asset) = repository::fetch_asset(&full_path) {
+                        let mut response = asset.content.into_response();
+                        response.headers_mut().insert(
+                            axum::http::header::CONTENT_TYPE,
+                            axum::http::HeaderValue::from_str(&asset.mimetype).unwrap_or(
+                                axum::http::HeaderValue::from_static("application/octet-stream"),
+                            ),
+                        );
+                        return response;
+                    }
+                }
+
+                // Check if this is a request to a registered stream path
+                let is_get = request_method == "GET";
+                let is_stream_registered = stream_registry::GLOBAL_STREAM_REGISTRY.is_stream_registered(&full_path);
+                info!("Stream check (wildcard) - method: {}, is_get: {}, path: '{}', is_registered: {}", 
+                      request_method, is_get, full_path, is_stream_registered);
+                
+                if is_get && is_stream_registered {
+                    info!("Routing to stream handler for path: {}", full_path);
+                    return handle_stream_request(full_path).await;
+                }
 
                 // Check if any route exists for this path (including wildcards)
                 let path_exists = path_has_any_route(&full_path);
