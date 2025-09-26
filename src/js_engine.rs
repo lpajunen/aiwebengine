@@ -101,6 +101,38 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                     )?;
                     global.set("registerGraphQLSubscription", register_graphql_subscription)?;
 
+                    // Stream registration function
+                    let uri_clone_stream = uri_owned.clone();
+                    let register_web_stream = Function::new(
+                        ctx.clone(),
+                        move |_c: rquickjs::Ctx<'_>, path: String| -> Result<(), rquickjs::Error> {
+                            debug!("JavaScript called registerWebStream with path: {}", path);
+                            
+                            // Validate path format
+                            if path.is_empty() || !path.starts_with('/') {
+                                tracing::error!("Invalid stream path '{}': must start with '/' and not be empty", path);
+                                return Err(rquickjs::Error::Exception);
+                            }
+                            
+                            if path.len() > 200 {
+                                tracing::error!("Invalid stream path '{}': too long (max 200 characters)", path);
+                                return Err(rquickjs::Error::Exception);
+                            }
+                            
+                            match crate::stream_registry::GLOBAL_STREAM_REGISTRY.register_stream(&path, &uri_clone_stream) {
+                                Ok(()) => {
+                                    debug!("Successfully registered stream path '{}' for script '{}'", path, uri_clone_stream);
+                                    Ok(())
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to register stream path '{}': {}", path, e);
+                                    Err(rquickjs::Error::Exception)
+                                }
+                            }
+                        },
+                    )?;
+                    global.set("registerWebStream", register_web_stream)?;
+
                     // Set up host functions
                     let script_uri_clone1 = uri_owned.clone();
                     let write = Function::new(
@@ -462,6 +494,15 @@ pub fn execute_script_for_request(
         )?;
         global.set("registerGraphQLSubscription", register_graphql_subscription_noop)?;
 
+        let register_web_stream_noop = Function::new(
+            ctx.clone(),
+            |_c: rquickjs::Ctx<'_>, _path: String| -> Result<(), rquickjs::Error> {
+                // No-op for request handling - streams are registered during script execution, not during request handling
+                Ok(())
+            },
+        )?;
+        global.set("registerWebStream", register_web_stream_noop)?;
+
         Ok(())
     })
     .map_err(|e| format!("install host fns: {}", e))?;
@@ -708,6 +749,14 @@ pub fn execute_graphql_resolver(
         )?;
         global.set("registerGraphQLSubscription", reg_graphql_subscription_noop)?;
 
+        let reg_web_stream_noop = Function::new(
+            ctx.clone(),
+            |_c: rquickjs::Ctx<'_>, _path: String| -> Result<(), rquickjs::Error> {
+                Ok(())
+            },
+        )?;
+        global.set("registerWebStream", reg_web_stream_noop)?;
+
         // Load and execute the script
         let script_content = repository::fetch_script(&script_uri_owned)
             .ok_or_else(|| rquickjs::Error::new_from_js("Script", "not found"))?;
@@ -776,6 +825,7 @@ pub fn execute_graphql_resolver(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stream_registry;
 
     #[test]
     fn test_execute_script_simple_registration() {
@@ -1080,5 +1130,66 @@ mod tests {
         assert_eq!(original.success, cloned.success);
         assert_eq!(original.error, cloned.error);
         assert_eq!(original.registrations.len(), cloned.registrations.len());
+    }
+
+    #[test]
+    fn test_register_web_stream_function() {
+        use std::sync::Once;
+        static INIT: Once = Once::new();
+        
+        // Ensure we clear streams only once per test run
+        INIT.call_once(|| {
+            let _ = stream_registry::GLOBAL_STREAM_REGISTRY.clear_all_streams();
+        });
+
+        let script_content = r#"
+            registerWebStream('/test-stream-func');
+            writeLog('Stream registered successfully');
+        "#;
+
+        let _ = repository::upsert_script("stream-test-func", script_content);
+        let result = execute_script("stream-test-func", script_content);
+
+        assert!(result.success, "Script should execute successfully");
+        assert!(result.error.is_none(), "Should not have any errors");
+
+        // Small delay to ensure registration is complete
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        
+        // Verify the stream was registered
+        assert!(
+            stream_registry::GLOBAL_STREAM_REGISTRY.is_stream_registered("/test-stream-func"),
+            "Stream should be registered"
+        );
+
+        // Verify the correct script URI is associated
+        let script_uri = stream_registry::GLOBAL_STREAM_REGISTRY.get_stream_script_uri("/test-stream-func");
+        assert_eq!(script_uri, Some("stream-test-func".to_string()));
+    }
+
+    #[test]
+    fn test_register_web_stream_invalid_path() {
+        let script_content = r#"
+            try {
+                registerWebStream('invalid-path-test');
+                writeLog('ERROR: Should have failed');
+            } catch (e) {
+                writeLog('Expected error: ' + String(e));
+            }
+        "#;
+
+        let _ = repository::upsert_script("stream-invalid-test", script_content);
+        let result = execute_script("stream-invalid-test", script_content);
+
+        assert!(result.success, "Script should execute successfully even with caught exception");
+        
+        // Small delay to ensure any registration attempts are complete
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        
+        // Verify the invalid stream was NOT registered
+        assert!(
+            !stream_registry::GLOBAL_STREAM_REGISTRY.is_stream_registered("invalid-path-test"),
+            "Invalid stream should not be registered"
+        );
     }
 }

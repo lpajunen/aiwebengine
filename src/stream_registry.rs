@@ -1,0 +1,678 @@
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::broadcast;
+use tracing::{debug, error, info, warn};
+use uuid::Uuid;
+
+/// Represents a single stream connection
+#[derive(Debug, Clone)]
+pub struct StreamConnection {
+    /// Unique identifier for this connection
+    pub connection_id: String,
+    /// Timestamp when the connection was established
+    pub connected_at: u64,
+    /// The broadcast sender for this connection
+    pub sender: broadcast::Sender<String>,
+    /// Optional metadata about the client
+    pub metadata: Option<HashMap<String, String>>,
+}
+
+impl StreamConnection {
+    /// Create a new stream connection
+    pub fn new() -> Self {
+        let (sender, _) = broadcast::channel(1000); // Buffer up to 1000 messages
+        Self {
+            connection_id: Uuid::new_v4().to_string(),
+            connected_at: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            sender,
+            metadata: None,
+        }
+    }
+
+    /// Create a new stream connection with metadata
+    pub fn with_metadata(metadata: HashMap<String, String>) -> Self {
+        let mut conn = Self::new();
+        conn.metadata = Some(metadata);
+        conn
+    }
+
+    /// Send a message to this connection
+    pub fn send_message(&self, message: &str) -> Result<usize, broadcast::error::SendError<String>> {
+        self.sender.send(message.to_string())
+    }
+
+    /// Get a receiver for this connection
+    pub fn subscribe(&self) -> broadcast::Receiver<String> {
+        self.sender.subscribe()
+    }
+
+    /// Get connection age in seconds
+    pub fn age_seconds(&self) -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .saturating_sub(self.connected_at)
+    }
+}
+
+/// Information about a registered stream path
+#[derive(Debug, Clone)]
+pub struct StreamRegistration {
+    /// The path pattern for this stream
+    pub path: String,
+    /// The script URI that registered this stream
+    pub script_uri: String,
+    /// Timestamp when the stream was registered
+    pub registered_at: u64,
+    /// Active connections for this stream path
+    pub connections: HashMap<String, StreamConnection>,
+}
+
+impl StreamRegistration {
+    /// Create a new stream registration
+    pub fn new(path: String, script_uri: String) -> Self {
+        Self {
+            path,
+            script_uri,
+            registered_at: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            connections: HashMap::new(),
+        }
+    }
+
+    /// Add a new connection to this stream
+    pub fn add_connection(&mut self, connection: StreamConnection) -> String {
+        let connection_id = connection.connection_id.clone();
+        self.connections.insert(connection_id.clone(), connection);
+        debug!(
+            "Added connection {} to stream path {}. Total connections: {}",
+            connection_id,
+            self.path,
+            self.connections.len()
+        );
+        connection_id
+    }
+
+    /// Remove a connection from this stream
+    pub fn remove_connection(&mut self, connection_id: &str) -> bool {
+        let removed = self.connections.remove(connection_id).is_some();
+        if removed {
+            debug!(
+                "Removed connection {} from stream path {}. Remaining connections: {}",
+                connection_id,
+                self.path,
+                self.connections.len()
+            );
+        }
+        removed
+    }
+
+    /// Broadcast a message to all connections in this stream
+    pub fn broadcast_message(&self, message: &str) -> usize {
+        let mut successful_sends = 0;
+        let mut failed_connections = Vec::new();
+
+        for (connection_id, connection) in &self.connections {
+            match connection.send_message(message) {
+                Ok(_) => {
+                    successful_sends += 1;
+                    debug!("Sent message to connection {} on path {}", connection_id, self.path);
+                }
+                Err(broadcast::error::SendError(_)) => {
+                    warn!(
+                        "Failed to send message to connection {} on path {} (no receivers)",
+                        connection_id, self.path
+                    );
+                    failed_connections.push(connection_id.clone());
+                }
+            }
+        }
+
+        if !failed_connections.is_empty() {
+            debug!(
+                "Broadcast to path {}: {} successful, {} failed connections: {:?}",
+                self.path,
+                successful_sends,
+                failed_connections.len(),
+                failed_connections
+            );
+        }
+
+        successful_sends
+    }
+
+    /// Get the number of active connections
+    pub fn connection_count(&self) -> usize {
+        self.connections.len()
+    }
+
+    /// Clean up stale connections (older than max_age_seconds)
+    pub fn cleanup_stale_connections(&mut self, max_age_seconds: u64) -> usize {
+        let initial_count = self.connections.len();
+        self.connections.retain(|connection_id, connection| {
+            let should_keep = connection.age_seconds() <= max_age_seconds;
+            if !should_keep {
+                debug!(
+                    "Removing stale connection {} (age: {}s) from path {}",
+                    connection_id,
+                    connection.age_seconds(),
+                    self.path
+                );
+            }
+            should_keep
+        });
+        initial_count - self.connections.len()
+    }
+}
+
+/// Global registry for managing stream paths and connections
+#[derive(Debug)]
+pub struct StreamRegistry {
+    /// Map of stream paths to their registrations
+    streams: Arc<Mutex<HashMap<String, StreamRegistration>>>,
+}
+
+impl StreamRegistry {
+    /// Create a new stream registry
+    pub fn new() -> Self {
+        Self {
+            streams: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Register a new stream path
+    pub fn register_stream(&self, path: &str, script_uri: &str) -> Result<(), String> {
+        match self.streams.lock() {
+            Ok(mut streams) => {
+                if streams.contains_key(path) {
+                    warn!(
+                        "Stream path '{}' already registered, replacing with new registration from script '{}'",
+                        path, script_uri
+                    );
+                }
+                
+                let registration = StreamRegistration::new(path.to_string(), script_uri.to_string());
+                streams.insert(path.to_string(), registration);
+                info!("Registered stream path '{}' for script '{}'", path, script_uri);
+                Ok(())
+            }
+            Err(e) => {
+                error!("Failed to acquire stream registry lock: {}", e);
+                Err("Failed to register stream: registry lock error".to_string())
+            }
+        }
+    }
+
+    /// Unregister a stream path
+    pub fn unregister_stream(&self, path: &str) -> Result<bool, String> {
+        match self.streams.lock() {
+            Ok(mut streams) => {
+                let removed = streams.remove(path).is_some();
+                if removed {
+                    info!("Unregistered stream path '{}'", path);
+                } else {
+                    debug!("Attempted to unregister non-existent stream path '{}'", path);
+                }
+                Ok(removed)
+            }
+            Err(e) => {
+                error!("Failed to acquire stream registry lock: {}", e);
+                Err("Failed to unregister stream: registry lock error".to_string())
+            }
+        }
+    }
+
+    /// Check if a path is registered as a stream
+    pub fn is_stream_registered(&self, path: &str) -> bool {
+        match self.streams.lock() {
+            Ok(streams) => streams.contains_key(path),
+            Err(e) => {
+                error!("Failed to acquire stream registry lock for path check: {}", e);
+                false
+            }
+        }
+    }
+
+    /// Get the script URI that registered a stream path
+    pub fn get_stream_script_uri(&self, path: &str) -> Option<String> {
+        match self.streams.lock() {
+            Ok(streams) => streams.get(path).map(|reg| reg.script_uri.clone()),
+            Err(e) => {
+                error!("Failed to acquire stream registry lock: {}", e);
+                None
+            }
+        }
+    }
+
+    /// Add a connection to a stream path
+    pub fn add_connection(&self, path: &str, connection: StreamConnection) -> Result<String, String> {
+        match self.streams.lock() {
+            Ok(mut streams) => {
+                match streams.get_mut(path) {
+                    Some(registration) => {
+                        let connection_id = registration.add_connection(connection);
+                        Ok(connection_id)
+                    }
+                    None => {
+                        error!("Attempted to add connection to unregistered stream path '{}'", path);
+                        Err(format!("Stream path '{}' not registered", path))
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to acquire stream registry lock: {}", e);
+                Err("Failed to add connection: registry lock error".to_string())
+            }
+        }
+    }
+
+    /// Remove a connection from a stream path
+    pub fn remove_connection(&self, path: &str, connection_id: &str) -> Result<bool, String> {
+        match self.streams.lock() {
+            Ok(mut streams) => {
+                match streams.get_mut(path) {
+                    Some(registration) => Ok(registration.remove_connection(connection_id)),
+                    None => {
+                        debug!("Attempted to remove connection from unregistered stream path '{}'", path);
+                        Ok(false)
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to acquire stream registry lock: {}", e);
+                Err("Failed to remove connection: registry lock error".to_string())
+            }
+        }
+    }
+
+    /// Get a connection receiver for a specific stream path
+    pub fn get_connection_receiver(&self, path: &str) -> Result<Option<broadcast::Receiver<String>>, String> {
+        match self.streams.lock() {
+            Ok(streams) => {
+                match streams.get(path) {
+                    Some(_registration) => {
+                        // Create a new connection and return its receiver
+                        let connection = StreamConnection::new();
+                        let receiver = connection.subscribe();
+                        // Note: We don't add this connection to the registry yet,
+                        // that should be done separately via add_connection
+                        Ok(Some(receiver))
+                    }
+                    None => Ok(None)
+                }
+            }
+            Err(e) => {
+                error!("Failed to acquire stream registry lock: {}", e);
+                Err("Failed to get connection receiver: registry lock error".to_string())
+            }
+        }
+    }
+
+    /// Broadcast a message to all connections on all stream paths
+    pub fn broadcast_to_all_streams(&self, message: &str) -> Result<usize, String> {
+        match self.streams.lock() {
+            Ok(streams) => {
+                let mut total_sent = 0;
+                for (path, registration) in streams.iter() {
+                    let sent = registration.broadcast_message(message);
+                    total_sent += sent;
+                    if sent > 0 {
+                        debug!("Broadcasted message to {} connections on path '{}'", sent, path);
+                    }
+                }
+                Ok(total_sent)
+            }
+            Err(e) => {
+                error!("Failed to acquire stream registry lock: {}", e);
+                Err("Failed to broadcast: registry lock error".to_string())
+            }
+        }
+    }
+
+    /// Broadcast a message to all connections on a specific stream path
+    pub fn broadcast_to_stream(&self, path: &str, message: &str) -> Result<usize, String> {
+        match self.streams.lock() {
+            Ok(streams) => {
+                match streams.get(path) {
+                    Some(registration) => {
+                        let sent = registration.broadcast_message(message);
+                        debug!("Broadcasted message to {} connections on path '{}'", sent, path);
+                        Ok(sent)
+                    }
+                    None => {
+                        debug!("Attempted to broadcast to unregistered stream path '{}'", path);
+                        Ok(0)
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to acquire stream registry lock: {}", e);
+                Err("Failed to broadcast to stream: registry lock error".to_string())
+            }
+        }
+    }
+
+    /// Get statistics about all registered streams
+    pub fn get_stream_stats(&self) -> Result<HashMap<String, serde_json::Value>, String> {
+        match self.streams.lock() {
+            Ok(streams) => {
+                let mut stats = HashMap::new();
+                for (path, registration) in streams.iter() {
+                    let stream_stat = serde_json::json!({
+                        "path": registration.path,
+                        "script_uri": registration.script_uri,
+                        "registered_at": registration.registered_at,
+                        "connection_count": registration.connection_count(),
+                        "connections": registration.connections.keys().collect::<Vec<_>>()
+                    });
+                    stats.insert(path.clone(), stream_stat);
+                }
+                Ok(stats)
+            }
+            Err(e) => {
+                error!("Failed to acquire stream registry lock: {}", e);
+                Err("Failed to get stream stats: registry lock error".to_string())
+            }
+        }
+    }
+
+    /// Clean up stale connections across all streams
+    pub fn cleanup_stale_connections(&self, max_age_seconds: u64) -> Result<usize, String> {
+        match self.streams.lock() {
+            Ok(mut streams) => {
+                let mut total_removed = 0;
+                for (path, registration) in streams.iter_mut() {
+                    let removed = registration.cleanup_stale_connections(max_age_seconds);
+                    if removed > 0 {
+                        info!("Cleaned up {} stale connections from stream path '{}'", removed, path);
+                    }
+                    total_removed += removed;
+                }
+                Ok(total_removed)
+            }
+            Err(e) => {
+                error!("Failed to acquire stream registry lock: {}", e);
+                Err("Failed to cleanup stale connections: registry lock error".to_string())
+            }
+        }
+    }
+
+    /// Get a list of all registered stream paths
+    pub fn list_stream_paths(&self) -> Result<Vec<String>, String> {
+        match self.streams.lock() {
+            Ok(streams) => Ok(streams.keys().cloned().collect()),
+            Err(e) => {
+                error!("Failed to acquire stream registry lock: {}", e);
+                Err("Failed to list stream paths: registry lock error".to_string())
+            }
+        }
+    }
+
+    /// Clear all streams (useful for testing or shutdown)
+    pub fn clear_all_streams(&self) -> Result<(), String> {
+        match self.streams.lock() {
+            Ok(mut streams) => {
+                let count = streams.len();
+                streams.clear();
+                info!("Cleared all {} stream registrations", count);
+                Ok(())
+            }
+            Err(e) => {
+                error!("Failed to acquire stream registry lock: {}", e);
+                Err("Failed to clear streams: registry lock error".to_string())
+            }
+        }
+    }
+}
+
+impl Default for StreamRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// Global instance for the stream registry
+lazy_static::lazy_static! {
+    /// Global stream registry instance
+    pub static ref GLOBAL_STREAM_REGISTRY: StreamRegistry = StreamRegistry::new();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::thread;
+    use std::time::Duration;
+
+    #[test]
+    fn test_stream_connection_creation() {
+        let conn = StreamConnection::new();
+        assert!(!conn.connection_id.is_empty());
+        assert!(conn.connected_at > 0);
+        assert!(conn.metadata.is_none());
+    }
+
+    #[test]
+    fn test_stream_connection_with_metadata() {
+        let mut metadata = HashMap::new();
+        metadata.insert("user_id".to_string(), "123".to_string());
+        metadata.insert("session_id".to_string(), "abc".to_string());
+        
+        let conn = StreamConnection::with_metadata(metadata.clone());
+        assert_eq!(conn.metadata.unwrap(), metadata);
+    }
+
+    #[test]
+    fn test_stream_connection_messaging() {
+        let conn = StreamConnection::new();
+        let mut receiver = conn.subscribe();
+        
+        // Send a message
+        let result = conn.send_message("test message");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 1); // One receiver
+        
+        // Receive the message
+        let received = receiver.try_recv();
+        assert!(received.is_ok());
+        assert_eq!(received.unwrap(), "test message");
+    }
+
+    #[test]
+    fn test_stream_registration_creation() {
+        let reg = StreamRegistration::new("/test".to_string(), "test_script.js".to_string());
+        assert_eq!(reg.path, "/test");
+        assert_eq!(reg.script_uri, "test_script.js");
+        assert!(reg.registered_at > 0);
+        assert_eq!(reg.connections.len(), 0);
+    }
+
+    #[test]
+    fn test_stream_registration_add_remove_connections() {
+        let mut reg = StreamRegistration::new("/test".to_string(), "test_script.js".to_string());
+        
+        // Add a connection
+        let conn = StreamConnection::new();
+        let conn_id = conn.connection_id.clone();
+        let added_id = reg.add_connection(conn);
+        assert_eq!(added_id, conn_id);
+        assert_eq!(reg.connection_count(), 1);
+        
+        // Remove the connection
+        let removed = reg.remove_connection(&conn_id);
+        assert!(removed);
+        assert_eq!(reg.connection_count(), 0);
+        
+        // Try to remove non-existent connection
+        let removed = reg.remove_connection("non-existent");
+        assert!(!removed);
+    }
+
+    #[test]
+    fn test_stream_registration_broadcast() {
+        let mut reg = StreamRegistration::new("/test".to_string(), "test_script.js".to_string());
+        
+        // Add multiple connections
+        let conn1 = StreamConnection::new();
+        let conn2 = StreamConnection::new();
+        let mut receiver1 = conn1.subscribe();
+        let mut receiver2 = conn2.subscribe();
+        
+        reg.add_connection(conn1);
+        reg.add_connection(conn2);
+        
+        // Broadcast a message
+        let sent = reg.broadcast_message("broadcast test");
+        assert_eq!(sent, 2);
+        
+        // Verify both receivers got the message
+        assert_eq!(receiver1.try_recv().unwrap(), "broadcast test");
+        assert_eq!(receiver2.try_recv().unwrap(), "broadcast test");
+    }
+
+    #[test]
+    fn test_stream_registry_basic_operations() {
+        let registry = StreamRegistry::new();
+        
+        // Register a stream
+        let result = registry.register_stream("/test", "test_script.js");
+        assert!(result.is_ok());
+        
+        // Check if registered
+        assert!(registry.is_stream_registered("/test"));
+        assert!(!registry.is_stream_registered("/nonexistent"));
+        
+        // Get script URI
+        let script_uri = registry.get_stream_script_uri("/test");
+        assert_eq!(script_uri.unwrap(), "test_script.js");
+        
+        // Unregister
+        let result = registry.unregister_stream("/test");
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+        
+        // Check if unregistered
+        assert!(!registry.is_stream_registered("/test"));
+    }
+
+    #[test]
+    fn test_stream_registry_connection_management() {
+        let registry = StreamRegistry::new();
+        
+        // Register a stream
+        registry.register_stream("/test", "test_script.js").unwrap();
+        
+        // Add a connection
+        let conn = StreamConnection::new();
+        let conn_id = conn.connection_id.clone();
+        let result = registry.add_connection("/test", conn);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), conn_id);
+        
+        // Remove the connection
+        let result = registry.remove_connection("/test", &conn_id);
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+        
+        // Try to add connection to non-existent stream
+        let conn2 = StreamConnection::new();
+        let result = registry.add_connection("/nonexistent", conn2);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_stream_registry_broadcasting() {
+        let registry = StreamRegistry::new();
+        
+        // Register multiple streams
+        registry.register_stream("/stream1", "script1.js").unwrap();
+        registry.register_stream("/stream2", "script2.js").unwrap();
+        
+        // Add connections
+        let conn1 = StreamConnection::new();
+        let conn2 = StreamConnection::new();
+        let mut receiver1 = conn1.subscribe();
+        let mut receiver2 = conn2.subscribe();
+        
+        registry.add_connection("/stream1", conn1).unwrap();
+        registry.add_connection("/stream2", conn2).unwrap();
+        
+        // Broadcast to specific stream
+        let result = registry.broadcast_to_stream("/stream1", "message1");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 1);
+        
+        // Broadcast to all streams
+        let result = registry.broadcast_to_all_streams("message2");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 2);
+        
+        // Verify messages received
+        assert_eq!(receiver1.try_recv().unwrap(), "message1");
+        assert_eq!(receiver1.try_recv().unwrap(), "message2");
+        assert_eq!(receiver2.try_recv().unwrap(), "message2");
+    }
+
+    #[test]
+    fn test_stream_registry_stats() {
+        let registry = StreamRegistry::new();
+        
+        // Register a stream and add connection
+        registry.register_stream("/test", "test_script.js").unwrap();
+        let conn = StreamConnection::new();
+        let conn_id = conn.connection_id.clone();
+        registry.add_connection("/test", conn).unwrap();
+        
+        // Get stats
+        let stats = registry.get_stream_stats().unwrap();
+        assert_eq!(stats.len(), 1);
+        
+        let stream_stat = stats.get("/test").unwrap();
+        assert_eq!(stream_stat["path"], "/test");
+        assert_eq!(stream_stat["script_uri"], "test_script.js");
+        assert_eq!(stream_stat["connection_count"], 1);
+        
+        let connections = stream_stat["connections"].as_array().unwrap();
+        assert_eq!(connections.len(), 1);
+        assert_eq!(connections[0].as_str().unwrap(), conn_id);
+    }
+
+    #[test]
+    fn test_stream_registry_cleanup() {
+        let registry = StreamRegistry::new();
+        
+        // Register a stream
+        registry.register_stream("/test", "test_script.js").unwrap();
+        
+        // Create an old connection (simulate by creating and waiting)
+        let conn = StreamConnection::new();
+        registry.add_connection("/test", conn).unwrap();
+        
+        // Cleanup with very short max age (should remove the connection)
+        thread::sleep(Duration::from_millis(10));
+        let result = registry.cleanup_stale_connections(0);
+        assert!(result.is_ok());
+        
+        // Clear all streams
+        let result = registry.clear_all_streams();
+        assert!(result.is_ok());
+        assert!(registry.list_stream_paths().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_stream_connection_age() {
+        let conn = StreamConnection::new();
+        let initial_age = conn.age_seconds();
+        assert!(initial_age <= 1); // Should be 0 or 1 second old at most
+        
+        thread::sleep(Duration::from_millis(10));
+        let later_age = conn.age_seconds();
+        assert!(later_age >= initial_age); // Age should not decrease
+    }
+}

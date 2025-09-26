@@ -288,7 +288,7 @@ impl SafeJsEngine {
         global.set("writeLog", write_log)?;
 
         // Safe listLogs function
-        let script_uri_clone2 = uri_owned;
+        let script_uri_clone2 = uri_owned.clone();
         let list_logs = Function::new(
             ctx.clone(),
             move |_c: rquickjs::Ctx<'_>| -> Result<Vec<String>, rquickjs::Error> {
@@ -303,6 +303,36 @@ impl SafeJsEngine {
             },
         )?;
         global.set("listLogs", list_logs)?;
+
+        // Safe registerWebStream function
+        let script_uri_stream = uri_owned;
+        let register_web_stream = Function::new(
+            ctx.clone(),
+            move |_c: rquickjs::Ctx<'_>, path: String| -> Result<(), rquickjs::Error> {
+                debug!("JavaScript called registerWebStream with path: {}", path);
+                
+                // Validate path format (basic security check)
+                if path.is_empty() || !path.starts_with('/') {
+                    return Err(rquickjs::Error::new_from_js("Stream", "Stream path must start with '/' and not be empty"));
+                }
+                
+                if path.len() > 200 {
+                    return Err(rquickjs::Error::new_from_js("Stream", "Stream path too long (max 200 characters)"));
+                }
+                
+                match crate::stream_registry::GLOBAL_STREAM_REGISTRY.register_stream(&path, &script_uri_stream) {
+                    Ok(()) => {
+                        debug!("Successfully registered stream path '{}' for script '{}'", path, script_uri_stream);
+                        Ok(())
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to register stream path '{}': {}", path, e);
+                        Err(rquickjs::Error::Exception)
+                    }
+                }
+            },
+        )?;
+        global.set("registerWebStream", register_web_stream)?;
 
         Ok(())
     }
