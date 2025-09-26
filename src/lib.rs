@@ -15,6 +15,7 @@ pub mod js_engine_safe;
 pub mod middleware;
 pub mod repository_safe;
 pub mod safe_helpers;
+pub mod stream_registry;
 
 // Use the safe repository implementation internally
 pub use repository_safe as repository;
