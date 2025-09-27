@@ -12,11 +12,11 @@ async fn test_basic_streaming_functionality() {
         registerWebStream('/test_stream');
         
         function test_send_message(req) {
-            sendStreamMessage({
+            sendStreamMessageToPath('/test_stream', JSON.stringify({
                 type: 'test_message',
                 content: 'Hello from test!',
                 timestamp: new Date().toISOString()
-            });
+            }));
             
             return {
                 status: 200,
@@ -121,11 +121,11 @@ async fn test_direct_stream_message() {
         registerWebStream('/direct_test');
         
         // Send a message directly
-        sendStreamMessage({
+        sendStreamMessageToPath('/direct_test', JSON.stringify({
             type: 'direct_message',
             content: 'Direct test message',
             timestamp: new Date().toISOString()
-        });
+        }));
     "#;
 
     info!("Testing direct stream message sending");
@@ -160,11 +160,11 @@ async fn test_direct_stream_message() {
     let result2 = js_engine::execute_script(
         "test_direct2.js",
         r#"
-        sendStreamMessage({
+        sendStreamMessageToPath('/direct_test', JSON.stringify({
             type: 'second_direct_message',
             content: 'Second direct test message',
             timestamp: new Date().toISOString()
-        });
+        }));
     "#,
     );
     assert!(

@@ -18,8 +18,8 @@ async fn test_script_update_streaming_integration() {
 
     // First, let's create the core.js script that includes the streaming functionality
     let core_script_content = r#"
-        // Register script updates stream endpoint
-        registerWebStream('/script_updates');
+        // Register script updates stream endpoint for test 1
+        registerWebStream('/script_updates_test1');
 
         // Helper function to broadcast script update messages
         function broadcastScriptUpdate(uri, action, details = {}) {
@@ -32,7 +32,7 @@ async fn test_script_update_streaming_integration() {
                     ...details
                 };
                 
-                sendStreamMessage(message);
+                sendStreamMessageToPath('/script_updates_test1', JSON.stringify(message));
                 writeLog(`Broadcasted script update: ${action} ${uri}`);
             } catch (error) {
                 writeLog(`Failed to broadcast script update: ${error.message}`);
@@ -94,13 +94,13 @@ async fn test_script_update_streaming_integration() {
 
     // Verify the stream was registered
     assert!(
-        GLOBAL_STREAM_REGISTRY.is_stream_registered("/script_updates"),
+        GLOBAL_STREAM_REGISTRY.is_stream_registered("/script_updates_test1"),
         "Script updates stream should be registered"
     );
 
     // Create a connection to the stream
     let connection = aiwebengine::stream_manager::StreamConnectionManager::new()
-        .create_connection("/script_updates", None)
+        .create_connection("/script_updates_test1", None)
         .await
         .expect("Failed to create stream connection");
 
@@ -212,7 +212,7 @@ async fn test_script_update_message_format() {
     // Test that the script update message format is correct and contains all expected fields
 
     let core_script_content = r#"
-        registerWebStream('/script_updates');
+        registerWebStream('/script_updates_test2');
 
         function broadcastScriptUpdate(uri, action, details = {}) {
             const message = {
@@ -223,7 +223,7 @@ async fn test_script_update_message_format() {
                 ...details
             };
             
-            sendStreamMessage(message);
+            sendStreamMessageToPath('/script_updates_test2', JSON.stringify(message));
         }
 
         function test_message_format(req) {
@@ -261,7 +261,7 @@ async fn test_script_update_message_format() {
 
     // Create connection and trigger the test
     let connection = aiwebengine::stream_manager::StreamConnectionManager::new()
-        .create_connection("/script_updates", None)
+        .create_connection("/script_updates_test2", None)
         .await
         .expect("Failed to create connection");
 

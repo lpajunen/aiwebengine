@@ -137,6 +137,7 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                     let send_stream_message = Function::new(
                         ctx.clone(),
                         move |_c: rquickjs::Ctx<'_>, json_string: String| -> Result<(), rquickjs::Error> {
+
                             debug!("JavaScript called sendStreamMessage with message: {}", json_string);
 
                             // Broadcast to all registered streams
@@ -158,6 +159,33 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                         },
                     )?;
                     global.set("sendStreamMessage", send_stream_message)?;
+
+                    // Stream message sending function for specific path
+                    let send_stream_message_to_path = Function::new(
+                        ctx.clone(),
+                        move |_c: rquickjs::Ctx<'_>, path: String, json_string: String| -> Result<(), rquickjs::Error> {
+
+                            debug!("JavaScript called sendStreamMessageToPath with path: {} and message: {}", path, json_string);
+
+                            // Broadcast to specific stream path
+                            match crate::stream_registry::GLOBAL_STREAM_REGISTRY.broadcast_to_stream(&path, &json_string) {
+                                Ok(result) => {
+                                    if result.is_fully_successful() {
+                                        debug!("Successfully sent message to {} connections on path '{}'", result.successful_sends, path);
+                                    } else {
+                                        warn!("Broadcast to path '{}' partially failed: {} successful, {} failed out of {} total connections", 
+                                              path, result.successful_sends, result.failed_connections.len(), result.total_connections);
+                                    }
+                                    Ok(())
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to broadcast message to path '{}': {}", path, e);
+                                    Err(rquickjs::Error::Exception)
+                                }
+                            }
+                        },
+                    )?;
+                    global.set("sendStreamMessageToPath", send_stream_message_to_path)?;
 
                     // Set up host functions
                     let script_uri_clone1 = uri_owned.clone();
@@ -533,6 +561,7 @@ pub fn execute_script_for_request(
         let send_stream_message = Function::new(
             ctx.clone(),
             move |_c: rquickjs::Ctx<'_>, json_string: String| -> Result<(), rquickjs::Error> {
+
                 debug!("JavaScript called sendStreamMessage (request context) with message: {}", json_string);
 
                 // Broadcast to all registered streams
@@ -554,6 +583,33 @@ pub fn execute_script_for_request(
             },
         )?;
         global.set("sendStreamMessage", send_stream_message)?;
+
+        // Stream message sending function for specific path (request handling)
+        let send_stream_message_to_path = Function::new(
+            ctx.clone(),
+            move |_c: rquickjs::Ctx<'_>, path: String, json_string: String| -> Result<(), rquickjs::Error> {
+
+                debug!("JavaScript called sendStreamMessageToPath (request context) with path: {} and message: {}", path, json_string);
+
+                // Broadcast to specific stream path
+                match crate::stream_registry::GLOBAL_STREAM_REGISTRY.broadcast_to_stream(&path, &json_string) {
+                    Ok(result) => {
+                        if result.is_fully_successful() {
+                            debug!("Successfully sent message to {} connections on path '{}' (request context)", result.successful_sends, path);
+                        } else {
+                            warn!("Broadcast to path '{}' partially failed (request context): {} successful, {} failed out of {} total connections", 
+                                  path, result.successful_sends, result.failed_connections.len(), result.total_connections);
+                        }
+                        Ok(())
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to broadcast message to path '{}' (request context): {}", path, e);
+                        Err(rquickjs::Error::Exception)
+                    }
+                }
+            },
+        )?;
+        global.set("sendStreamMessageToPath", send_stream_message_to_path)?;
 
         Ok(())
     })

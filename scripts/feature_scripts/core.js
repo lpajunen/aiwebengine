@@ -33,18 +33,24 @@ registerWebStream('/script_updates');
 // Helper function to broadcast script update messages
 function broadcastScriptUpdate(uri, action, details = {}) {
 	try {
-		const message = {
+		var message = {
 			type: 'script_update',
 			uri: uri,
 			action: action, // 'inserted', 'updated', 'removed'
-			timestamp: new Date().toISOString(),
-			...details
+			timestamp: new Date().toISOString()
 		};
 		
-		sendStreamMessage(message);
-		writeLog(`Broadcasted script update: ${action} ${uri}`);
+		// Add details to the message
+		for (var key in details) {
+			if (details.hasOwnProperty(key)) {
+				message[key] = details[key];
+			}
+		}
+		
+		sendStreamMessageToPath('/script_updates', JSON.stringify(message));
+		writeLog('Broadcasted script update: ' + action + ' ' + uri);
 	} catch (error) {
-		writeLog(`Failed to broadcast script update: ${error.message}`);
+		writeLog('Failed to broadcast script update: ' + error.message);
 	}
 }
 
