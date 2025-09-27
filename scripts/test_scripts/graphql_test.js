@@ -13,5 +13,22 @@ function createUserResolver(args) {
 }
 
 function userUpdatesResolver() {
-    return "User update notification";
+    writeLog("User subscribed to userUpdates");
+    return "User updates subscription initialized";
+}
+
+// Add a mutation to trigger user updates
+registerGraphQLMutation("triggerUserUpdate", "type Mutation { triggerUserUpdate(userId: String!): String }", "triggerUserUpdateResolver");
+
+function triggerUserUpdateResolver(args) {
+    const updateData = {
+        userId: args.userId,
+        action: "profile_updated",
+        timestamp: new Date().toISOString()
+    };
+    
+    writeLog(`Triggering user update for: ${args.userId}`);
+    sendSubscriptionMessage("userUpdates", JSON.stringify(updateData));
+    
+    return `User update triggered for ${args.userId}`;
 }

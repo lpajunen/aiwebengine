@@ -130,14 +130,42 @@ pub fn register_graphql_subscription(
     resolver_function: String,
     script_uri: String,
 ) {
+    debug!(
+        "Registering GraphQL subscription: {} with resolver: {} from script: {}",
+        name, resolver_function, script_uri
+    );
+
     let operation = GraphQLOperation {
         sdl,
         resolver_function,
         script_uri: script_uri.clone(),
     };
 
+    // Auto-register a corresponding stream path for this subscription
+    let stream_path = format!("/graphql/subscription/{}", name);
+    match crate::stream_registry::GLOBAL_STREAM_REGISTRY.register_stream(&stream_path, &script_uri)
+    {
+        Ok(()) => {
+            debug!(
+                "Auto-registered stream path '{}' for GraphQL subscription '{}'",
+                stream_path, name
+            );
+        }
+        Err(e) => {
+            error!(
+                "Failed to auto-register stream path '{}' for subscription '{}': {}",
+                stream_path, name, e
+            );
+        }
+    }
+
     if let Ok(mut registry) = get_registry().write() {
-        registry.register_subscription(name, operation);
+        registry.register_subscription(name.clone(), operation);
+        debug!(
+            "Successfully registered GraphQL subscription: {} - total subscriptions: {}",
+            name,
+            registry.get_subscriptions().len()
+        );
     } else {
         error!("Failed to acquire write lock on GraphQL registry");
     }
@@ -666,28 +694,45 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
         let mut subscription_builder = Object::new("Subscription");
 
         for (name, operation) in subscriptions {
+            let subscription_name = name.clone();
             let field_name = name.clone();
             let resolver_uri = operation.script_uri.clone();
             let resolver_fn = operation.resolver_function.clone();
 
-            subscription_builder = subscription_builder.field(Field::new(
-                field_name,
+            // For now, create a simple subscription field that returns a message
+            // The actual streaming will be handled by the SSE endpoint connecting to the stream path
+            let subscription_field = Field::new(
+                field_name.clone(),
                 TypeRef::named_nn(TypeRef::STRING), // Non-null for subscriptions
                 move |_ctx| {
+                    let subscription_name = subscription_name.clone();
                     let uri = resolver_uri.clone();
                     let func = resolver_fn.clone();
+
                     FieldFuture::new(async move {
-                        // Call JavaScript resolver function for streaming
+                        // Initialize the subscription by calling the JavaScript resolver
+                        // This allows the resolver to set up any initial state or start emitting messages
                         match crate::js_engine::execute_graphql_resolver(&uri, &func, None) {
-                            Ok(result) => Ok(Some(async_graphql::Value::String(result))),
+                            Ok(result) => {
+                                debug!(
+                                    "Subscription '{}' initialized: {}",
+                                    subscription_name, result
+                                );
+                                Ok(Some(async_graphql::Value::String(result)))
+                            }
                             Err(e) => {
-                                error!("GraphQL resolver error for {}::{}: {}", uri, func, e);
+                                error!(
+                                    "Failed to initialize subscription '{}': {}",
+                                    subscription_name, e
+                                );
                                 Ok(Some(async_graphql::Value::String(format!("Error: {}", e))))
                             }
                         }
                     })
                 },
-            ));
+            );
+
+            subscription_builder = subscription_builder.field(subscription_field);
         }
 
         builder = builder.register(subscription_builder);

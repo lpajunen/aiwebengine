@@ -31,3 +31,5 @@ figment = { version = "0.10", features = ["toml", "yaml", "env"] }
 regex = "1.5"
 indexmap = "2.0"
 uuid = { version = "1.0", features = ["v4", "serde"] }
+futures = "0.3.31"
+async-stream = "0.3.6"

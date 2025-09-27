@@ -10,6 +10,7 @@ This guide covers aiwebengine's real-time streaming capabilities using Server-Se
 - [API Reference](#api-reference)
 - [Client Integration](#client-integration)
 - [Use Cases](#use-cases)
+- [GraphQL Subscriptions](#graphql-subscriptions)
 - [Best Practices](#best-practices)
 - [Troubleshooting](#troubleshooting)
 
@@ -664,9 +665,61 @@ function webhookHandler(req) {
 register('/webhook/github', 'webhookHandler', 'POST');
 ```
 
+## GraphQL Subscriptions
+
+aiwebengine supports GraphQL subscriptions using the same SSE streaming infrastructure. When you register a GraphQL subscription, a corresponding stream path is automatically created.
+
+### Quick Example
+
+```javascript
+// Register a GraphQL subscription
+registerGraphQLSubscription(
+    "liveEvents", 
+    "type Subscription { liveEvents: String }", 
+    "liveEventsResolver"
+);
+
+// Subscription resolver
+function liveEventsResolver() {
+    return "Live events subscription active";
+}
+
+// Send messages to subscribers
+function triggerEvent() {
+    sendSubscriptionMessage("liveEvents", JSON.stringify({
+        event: "user_joined",
+        timestamp: new Date().toISOString()
+    }));
+}
+```
+
+### Client Connection
+
+```javascript
+// Connect via GraphQL subscription
+const subscriptionQuery = {
+    query: `subscription { liveEvents }`
+};
+
+fetch('/graphql/sse', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(subscriptionQuery)
+})
+.then(response => {
+    // Handle SSE stream...
+});
+
+// Or connect directly to the auto-registered stream path
+const eventSource = new EventSource('/graphql/subscription/liveEvents');
+```
+
+For complete GraphQL subscription documentation, see [GraphQL Subscriptions Guide](graphql-subscriptions.md).
+
 ## Next Steps
 
 - Check out the [Examples](examples.md) for complete streaming applications
+- Read the [GraphQL Subscriptions Guide](graphql-subscriptions.md) for subscription-specific features
 - Review the [JavaScript APIs](javascript-apis.md) for detailed API documentation
 - Learn about [Local Development](local-development.md) workflows for testing streams
 - Explore the streaming test scripts in the `scripts/test_scripts/` directory

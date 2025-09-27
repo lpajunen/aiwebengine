@@ -293,6 +293,18 @@ pub async fn start_server_with_config(
         schema: async_graphql::dynamic::Schema,
         req: axum::http::Request<axum::body::Body>,
     ) -> impl IntoResponse {
+        // Helper function to extract subscription name from GraphQL query
+        fn extract_subscription_name(query: &str) -> Option<String> {
+            // Basic regex to extract subscription field name
+            // This is a simple implementation - a full GraphQL parser would be more robust
+            if let Ok(re) = regex::Regex::new(r"subscription\s*\{\s*(\w+)") {
+                if let Some(captures) = re.captures(query) {
+                    return Some(captures[1].to_string());
+                }
+            }
+            None
+        }
+
         let (_parts, body) = req.into_parts();
         let body_bytes = match axum::body::to_bytes(body, usize::MAX).await {
             Ok(bytes) => bytes,
@@ -316,21 +328,97 @@ pub async fn start_server_with_config(
             }
         };
 
-        // For now, execute as a regular query and return as SSE format
-        // Full streaming implementation would require proper async streaming
-        let response = schema.execute(request).await;
-        let json_data = serde_json::to_string(&response).unwrap_or_else(|_| "{}".to_string());
+        // Check if this is a subscription operation
+        let is_subscription = request.query.trim_start().starts_with("subscription");
 
-        // Return SSE formatted response
-        let sse_data = format!("data: {}\n\n", json_data);
-        axum::response::Response::builder()
-            .header("content-type", "text/event-stream")
-            .header("cache-control", "no-cache")
-            .header("connection", "keep-alive")
-            .header("access-control-allow-origin", "*")
-            .header("access-control-allow-headers", "content-type")
-            .body(axum::body::Body::from(sse_data))
-            .unwrap()
+        if is_subscription {
+            // For GraphQL subscriptions, we need to:
+            // 1. Execute the subscription to initialize it (call the resolver)
+            // 2. Extract the subscription name from the query
+            // 3. Connect to the corresponding stream path that was auto-registered
+
+            // Try to extract subscription name from the query (basic parsing)
+            let subscription_name = extract_subscription_name(&request.query);
+
+            // Execute the subscription to initialize it
+            let initial_response = schema.execute(request).await;
+
+            if let Some(sub_name) = subscription_name {
+                let stream_path = format!("/graphql/subscription/{}", sub_name);
+
+                // Create a connection to the stream for this subscription
+                match crate::stream_manager::StreamConnectionManager::new()
+                    .create_connection(&stream_path, None)
+                    .await
+                {
+                    Ok(connection) => {
+                        let mut receiver = connection.receiver;
+
+                        // Create an SSE stream that sends the initial response and then listens for updates
+                        let initial_json = serde_json::to_string(&initial_response)
+                            .unwrap_or_else(|_| "{}".to_string());
+                        let initial_sse = format!("data: {}\n\n", initial_json);
+
+                        // Create a stream that starts with the initial response and then streams updates
+                        let stream = async_stream::stream! {
+                            // Send initial response
+                            yield Ok::<String, std::convert::Infallible>(initial_sse);
+
+                            // Then stream updates
+                            while let Ok(message) = receiver.recv().await {
+                                let sse_data = format!("data: {}\n\n", message);
+                                yield Ok::<String, std::convert::Infallible>(sse_data);
+                            }
+                        };
+
+                        let body = axum::body::Body::from_stream(stream);
+
+                        return axum::response::Response::builder()
+                            .header("content-type", "text/event-stream")
+                            .header("cache-control", "no-cache")
+                            .header("connection", "keep-alive")
+                            .header("access-control-allow-origin", "*")
+                            .header("access-control-allow-headers", "content-type")
+                            .body(body)
+                            .unwrap();
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "Failed to create stream connection for subscription: {}",
+                            e
+                        );
+                    }
+                }
+            }
+
+            // Fallback: return initial response only
+            let json_data =
+                serde_json::to_string(&initial_response).unwrap_or_else(|_| "{}".to_string());
+            let sse_data = format!("data: {}\n\n", json_data);
+            axum::response::Response::builder()
+                .header("content-type", "text/event-stream")
+                .header("cache-control", "no-cache")
+                .header("connection", "keep-alive")
+                .header("access-control-allow-origin", "*")
+                .header("access-control-allow-headers", "content-type")
+                .body(axum::body::Body::from(sse_data))
+                .unwrap()
+        } else {
+            // Handle regular queries/mutations as single response
+            let response = schema.execute(request).await;
+            let json_data = serde_json::to_string(&response).unwrap_or_else(|_| "{}".to_string());
+
+            // Return SSE formatted response
+            let sse_data = format!("data: {}\n\n", json_data);
+            axum::response::Response::builder()
+                .header("content-type", "text/event-stream")
+                .header("cache-control", "no-cache")
+                .header("connection", "keep-alive")
+                .header("access-control-allow-origin", "*")
+                .header("access-control-allow-headers", "content-type")
+                .body(axum::body::Body::from(sse_data))
+                .unwrap()
+        }
     }
 
     // Clone schema for handlers

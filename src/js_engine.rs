@@ -187,6 +187,34 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                     )?;
                     global.set("sendStreamMessageToPath", send_stream_message_to_path)?;
 
+                    // GraphQL Subscription message sending function (convenience wrapper)
+                    let send_subscription_message = Function::new(
+                        ctx.clone(),
+                        move |_c: rquickjs::Ctx<'_>, subscription_name: String, json_string: String| -> Result<(), rquickjs::Error> {
+                            debug!("JavaScript called sendSubscriptionMessage for '{}' with message: {}", subscription_name, json_string);
+                            
+                            // Send to the auto-registered stream path for this subscription
+                            let stream_path = format!("/graphql/subscription/{}", subscription_name);
+                            
+                            match crate::stream_registry::GLOBAL_STREAM_REGISTRY.broadcast_to_stream(&stream_path, &json_string) {
+                                Ok(result) => {
+                                    if result.is_fully_successful() {
+                                        debug!("Successfully broadcast subscription message to {} connections", result.successful_sends);
+                                    } else {
+                                        warn!("Subscription broadcast partially failed: {} successful, {} failed out of {} total connections", 
+                                              result.successful_sends, result.failed_connections.len(), result.total_connections);
+                                    }
+                                    Ok(())
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to broadcast subscription message for '{}': {}", subscription_name, e);
+                                    Err(rquickjs::Error::Exception)
+                                }
+                            }
+                        },
+                    )?;
+                    global.set("sendSubscriptionMessage", send_subscription_message)?;
+
                     // Set up host functions
                     let script_uri_clone1 = uri_owned.clone();
                     let write = Function::new(
@@ -611,6 +639,34 @@ pub fn execute_script_for_request(
         )?;
         global.set("sendStreamMessageToPath", send_stream_message_to_path)?;
 
+        // GraphQL Subscription message sending function for request context (convenience wrapper)
+        let send_subscription_message = Function::new(
+            ctx.clone(),
+            move |_c: rquickjs::Ctx<'_>, subscription_name: String, json_string: String| -> Result<(), rquickjs::Error> {
+                debug!("JavaScript called sendSubscriptionMessage (request context) for '{}' with message: {}", subscription_name, json_string);
+                
+                // Send to the auto-registered stream path for this subscription
+                let stream_path = format!("/graphql/subscription/{}", subscription_name);
+                
+                match crate::stream_registry::GLOBAL_STREAM_REGISTRY.broadcast_to_stream(&stream_path, &json_string) {
+                    Ok(result) => {
+                        if result.is_fully_successful() {
+                            debug!("Successfully broadcast subscription message to {} connections (request context)", result.successful_sends);
+                        } else {
+                            warn!("Subscription broadcast partially failed (request context): {} successful, {} failed out of {} total connections", 
+                                  result.successful_sends, result.failed_connections.len(), result.total_connections);
+                        }
+                        Ok(())
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to broadcast subscription message for '{}' (request context): {}", subscription_name, e);
+                        Err(rquickjs::Error::Exception)
+                    }
+                }
+            },
+        )?;
+        global.set("sendSubscriptionMessage", send_subscription_message)?;
+
         Ok(())
     })
     .map_err(|e| format!("install host fns: {}", e))?;
@@ -864,6 +920,34 @@ pub fn execute_graphql_resolver(
             },
         )?;
         global.set("registerWebStream", reg_web_stream_noop)?;
+
+        // Add subscription message sending function for GraphQL resolver context
+        let send_subscription_message = Function::new(
+            ctx.clone(),
+            move |_c: rquickjs::Ctx<'_>, subscription_name: String, json_string: String| -> Result<(), rquickjs::Error> {
+                debug!("JavaScript called sendSubscriptionMessage (GraphQL resolver context) for '{}' with message: {}", subscription_name, json_string);
+                
+                // Send to the auto-registered stream path for this subscription
+                let stream_path = format!("/graphql/subscription/{}", subscription_name);
+                
+                match crate::stream_registry::GLOBAL_STREAM_REGISTRY.broadcast_to_stream(&stream_path, &json_string) {
+                    Ok(result) => {
+                        if result.is_fully_successful() {
+                            debug!("Successfully broadcast subscription message to {} connections (GraphQL resolver context)", result.successful_sends);
+                        } else {
+                            warn!("Subscription broadcast partially failed (GraphQL resolver context): {} successful, {} failed out of {} total connections", 
+                                  result.successful_sends, result.failed_connections.len(), result.total_connections);
+                        }
+                        Ok(())
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to broadcast subscription message for '{}' (GraphQL resolver context): {}", subscription_name, e);
+                        Err(rquickjs::Error::Exception)
+                    }
+                }
+            },
+        )?;
+        global.set("sendSubscriptionMessage", send_subscription_message)?;
 
         // Load and execute the script
         let script_content = repository::fetch_script(&script_uri_owned)
