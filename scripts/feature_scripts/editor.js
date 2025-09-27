@@ -600,7 +600,30 @@ function apiSaveScript(req) {
         }
 
         if (typeof upsertScript === 'function') {
+            // Check if script already exists to determine action
+            const existingScript = getScript ? getScript(fullUri) : null;
+            const action = existingScript ? 'updated' : 'inserted';
+            
             upsertScript(fullUri, req.body);
+            
+            // Broadcast the script update notification
+            if (typeof sendStreamMessageToPath === 'function') {
+                try {
+                    const message = {
+                        type: 'script_update',
+                        uri: fullUri,
+                        action: action,
+                        timestamp: new Date().toISOString(),
+                        contentLength: req.body.length,
+                        previousExists: !!existingScript,
+                        via: 'editor'
+                    };
+                    sendStreamMessageToPath('/script_updates', JSON.stringify(message));
+                    writeLog('Broadcasted script update from editor: ' + action + ' ' + fullUri);
+                } catch (broadcastError) {
+                    writeLog('Failed to broadcast script update from editor: ' + broadcastError.message);
+                }
+            }
         }
 
         return {

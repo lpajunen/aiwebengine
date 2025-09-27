@@ -233,9 +233,24 @@ impl StreamRegistry {
     pub fn register_stream(&self, path: &str, script_uri: &str) -> Result<(), String> {
         match self.streams.lock() {
             Ok(mut streams) => {
-                if streams.contains_key(path) {
-                    warn!(
-                        "Stream path '{}' already registered, replacing with new registration from script '{}'",
+                if let Some(existing_registration) = streams.get(path) {
+                    // If the stream is already registered and has active connections, preserve them
+                    let connection_count = existing_registration.connection_count();
+                    if connection_count > 0 {
+                        info!(
+                            "Stream path '{}' already registered with {} active connections, keeping existing registration from script '{}'",
+                            path, connection_count, existing_registration.script_uri
+                        );
+                        return Ok(());
+                    } else {
+                        warn!(
+                            "Stream path '{}' already registered with no active connections, replacing with new registration from script '{}'",
+                            path, script_uri
+                        );
+                    }
+                } else {
+                    info!(
+                        "Registering new stream path '{}' for script '{}'",
                         path, script_uri
                     );
                 }
@@ -243,10 +258,6 @@ impl StreamRegistry {
                 let registration =
                     StreamRegistration::new(path.to_string(), script_uri.to_string());
                 streams.insert(path.to_string(), registration);
-                info!(
-                    "Registered stream path '{}' for script '{}'",
-                    path, script_uri
-                );
                 Ok(())
             }
             Err(e) => {
