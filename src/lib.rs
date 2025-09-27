@@ -373,7 +373,7 @@ pub async fn start_server_with_config(
                 let is_stream_registered = stream_registry::GLOBAL_STREAM_REGISTRY.is_stream_registered(&path);
                 info!("Stream check - method: {}, is_get: {}, path: '{}', is_registered: {}", 
                       request_method, is_get, path, is_stream_registered);
-                
+
                 if is_get && is_stream_registered {
                     info!("Routing to stream handler for path: {}", path);
                     return handle_stream_request(path).await;
@@ -563,7 +563,7 @@ pub async fn start_server_with_config(
                 let is_stream_registered = stream_registry::GLOBAL_STREAM_REGISTRY.is_stream_registered(&full_path);
                 info!("Stream check (wildcard) - method: {}, is_get: {}, path: '{}', is_registered: {}", 
                       request_method, is_get, full_path, is_stream_registered);
-                
+
                 if is_get && is_stream_registered {
                     info!("Routing to stream handler for path: {}", full_path);
                     return handle_stream_request(full_path).await;
