@@ -27,6 +27,27 @@ function health_check(req) {
 
 register('/health', 'health_check', 'GET');
 
+// Register script updates stream endpoint
+registerWebStream('/script_updates');
+
+// Helper function to broadcast script update messages
+function broadcastScriptUpdate(uri, action, details = {}) {
+	try {
+		const message = {
+			type: 'script_update',
+			uri: uri,
+			action: action, // 'inserted', 'updated', 'removed'
+			timestamp: new Date().toISOString(),
+			...details
+		};
+		
+		sendStreamMessage(message);
+		writeLog(`Broadcasted script update: ${action} ${uri}`);
+	} catch (error) {
+		writeLog(`Failed to broadcast script update: ${error.message}`);
+	}
+}
+
 // Script management endpoint
 function upsert_script_handler(req) {
 	try {
@@ -70,8 +91,18 @@ function upsert_script_handler(req) {
 			};
 		}
 		
+		// Check if script already exists to determine action
+		const existingScript = getScript(uri);
+		const action = existingScript ? 'updated' : 'inserted';
+		
 		// Call the upsertScript function
 		upsertScript(uri, content);
+		
+		// Broadcast the script update
+		broadcastScriptUpdate(uri, action, {
+			contentLength: content.length,
+			previousExists: !!existingScript
+		});
 		
 		writeLog(`Script upserted: ${uri} (${content.length} characters)`);
 		
@@ -133,6 +164,9 @@ function delete_script_handler(req) {
 		const deleted = deleteScript(uri);
 		
 		if (deleted) {
+			// Broadcast the script removal
+			broadcastScriptUpdate(uri, 'removed');
+			
 			writeLog(`Script deleted: ${uri}`);
 			return {
 				status: 200,
@@ -342,7 +376,19 @@ function scriptQuery(args) {
 
 function upsertScriptMutation(args) {
 	try {
+		// Check if script already exists to determine action
+		const existingScript = getScript(args.uri);
+		const action = existingScript ? 'updated' : 'inserted';
+		
 		upsertScript(args.uri, args.content);
+		
+		// Broadcast the script update
+		broadcastScriptUpdate(args.uri, action, {
+			contentLength: args.content.length,
+			previousExists: !!existingScript,
+			via: 'graphql'
+		});
+		
 		writeLog(`Script upserted via GraphQL: ${args.uri} (${args.content.length} characters)`);
 		return JSON.stringify({
 			message: `Script upserted successfully: ${args.uri} (${args.content.length} characters)`,
@@ -365,6 +411,11 @@ function deleteScriptMutation(args) {
 	try {
 		const deleted = deleteScript(args.uri);
 		if (deleted) {
+			// Broadcast the script removal
+			broadcastScriptUpdate(args.uri, 'removed', {
+				via: 'graphql'
+			});
+			
 			writeLog(`Script deleted via GraphQL: ${args.uri}`);
 			return JSON.stringify({
 				message: `Script deleted successfully: ${args.uri}`,
