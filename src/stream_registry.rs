@@ -190,11 +190,16 @@ impl StreamRegistration {
         self.connections.len()
     }
 
-    /// Clean up stale connections (older than max_age_seconds)
+    /// Clean up stale connections (older than max_age_seconds, or all if max_age_seconds is 0)
     pub fn cleanup_stale_connections(&mut self, max_age_seconds: u64) -> usize {
         let initial_count = self.connections.len();
         self.connections.retain(|connection_id, connection| {
-            let should_keep = connection.age_seconds() <= max_age_seconds;
+            // Special case: if max_age_seconds is 0, clean up all connections
+            let should_keep = if max_age_seconds == 0 {
+                false
+            } else {
+                connection.age_seconds() < max_age_seconds
+            };
             if !should_keep {
                 debug!(
                     "Removing stale connection {} (age: {}s) from path {}",
