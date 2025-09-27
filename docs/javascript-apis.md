@@ -41,6 +41,125 @@ function myHandler(req) {
 }
 ```
 
+### registerWebStream(path)
+
+Registers a Server-Sent Events (SSE) stream endpoint that clients can connect to for real-time updates.
+
+**Parameters:**
+
+- `path` (string): Stream path to register (must start with `/`, max 200 characters)
+
+**Example:**
+
+```javascript
+// Register a stream for live notifications
+registerWebStream('/notifications');
+
+// Register a stream for chat messages
+registerWebStream('/chat/room1');
+```
+
+**Notes:**
+
+- Stream paths must be unique
+- Multiple clients can connect to the same stream
+- Streams persist until the server restarts or the script is reloaded
+- Use meaningful, descriptive paths for better organization
+
+### sendStreamMessage(data)
+
+Broadcasts a message to all clients connected to registered streams.
+
+**Parameters:**
+
+- `data` (object): Data object to send (will be JSON serialized)
+
+**Example:**
+
+```javascript
+function notifyHandler(req) {
+    // Send notification to all connected streams
+    sendStreamMessage({
+        type: 'notification',
+        message: 'New update available',
+        timestamp: new Date().toISOString(),
+        priority: 'high'
+    });
+
+    return { status: 200, body: 'Notification sent' };
+}
+
+// Register the handler
+register('/notify', 'notifyHandler', 'POST');
+```
+
+**Real-time Chat Example:**
+
+```javascript
+// Register a chat stream
+registerWebStream('/chat');
+
+function sendMessage(req) {
+    const { user, message } = req.form;
+    
+    if (!user || !message) {
+        return { status: 400, body: 'Missing user or message' };
+    }
+
+    // Broadcast to all connected chat clients
+    sendStreamMessage({
+        type: 'chat_message',
+        user: user,
+        message: message,
+        timestamp: new Date().toISOString()
+    });
+
+    return { status: 200, body: 'Message sent' };
+}
+
+register('/chat/send', 'sendMessage', 'POST');
+```
+
+## Streaming Connections
+
+### Client-Side Connection
+
+Clients connect to streams using the standard EventSource API:
+
+```javascript
+// Connect to a stream from the browser
+const eventSource = new EventSource('/notifications');
+
+eventSource.onmessage = function(event) {
+    const data = JSON.parse(event.data);
+    console.log('Received:', data);
+    
+    // Handle different message types
+    if (data.type === 'notification') {
+        showNotification(data.message);
+    }
+};
+
+eventSource.onerror = function(event) {
+    console.error('Stream connection error:', event);
+};
+```
+
+### Stream Lifecycle
+
+1. **Registration**: Use `registerWebStream()` to create a stream endpoint
+2. **Connection**: Clients connect using EventSource or compatible SSE clients
+3. **Broadcasting**: Use `sendStreamMessage()` to send data to all connected clients
+4. **Cleanup**: Connections are automatically cleaned up when clients disconnect
+
+### Best Practices for Streaming
+
+- **Register streams early**: Call `registerWebStream()` when your script loads
+- **Structure your data**: Use consistent message formats with `type` fields
+- **Handle disconnections**: Clients should implement reconnection logic
+- **Limit message frequency**: Avoid overwhelming clients with too many messages
+- **Use meaningful paths**: Organize streams logically (e.g., `/chat/room1`, `/notifications/user123`)
+
 ## Request Object
 
 The `req` parameter passed to handler functions contains information about the HTTP request.

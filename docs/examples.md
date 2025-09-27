@@ -217,6 +217,375 @@ register('/contact', 'contactHandler', 'GET');
 register('/contact', 'contactHandler', 'POST');
 ```
 
+## Streaming Examples
+
+### Real-Time Notifications
+
+**Description**: Demonstrates server-sent events for push notifications.
+
+```javascript
+// Register a notifications stream
+registerWebStream('/notifications');
+
+// Handler to display the notification page
+function notificationPage(req) {
+    const html = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Real-Time Notifications</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 40px; }
+            .notification { 
+                background: #e3f2fd; 
+                border-left: 4px solid #2196f3; 
+                padding: 15px; 
+                margin: 10px 0; 
+                border-radius: 4px; 
+            }
+            .controls { margin: 20px 0; }
+            button { 
+                background: #2196f3; 
+                color: white; 
+                border: none; 
+                padding: 10px 20px; 
+                border-radius: 4px; 
+                cursor: pointer; 
+            }
+            button:hover { background: #1976d2; }
+        </style>
+    </head>
+    <body>
+        <h1>Real-Time Notifications</h1>
+        <div class="controls">
+            <button onclick="sendTestNotification()">Send Test Notification</button>
+        </div>
+        <div id="notifications"></div>
+        
+        <script>
+            const eventSource = new EventSource('/notifications');
+            const container = document.getElementById('notifications');
+            
+            eventSource.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                const div = document.createElement('div');
+                div.className = 'notification';
+                div.innerHTML = \`
+                    <strong>\${data.type.toUpperCase()}</strong><br>
+                    \${data.message}<br>
+                    <small>\${new Date(data.timestamp).toLocaleString()}</small>
+                \`;
+                container.insertBefore(div, container.firstChild);
+            };
+            
+            function sendTestNotification() {
+                fetch('/send-notification', { method: 'POST' });
+            }
+        </script>
+    </body>
+    </html>`;
+    
+    return { status: 200, body: html, contentType: "text/html" };
+}
+
+// Handler to send notifications
+function sendNotification(req) {
+    sendStreamMessage({
+        type: 'info',
+        message: 'This is a test notification from the server!',
+        timestamp: new Date().toISOString()
+    });
+    
+    return { status: 200, body: 'Notification sent' };
+}
+
+register('/notifications-demo', 'notificationPage', 'GET');
+register('/send-notification', 'sendNotification', 'POST');
+```
+
+### Live Chat System
+
+**Description**: A complete chat system with real-time messaging.
+
+```javascript
+// Register a chat stream
+registerWebStream('/chat');
+
+// Chat page handler
+function chatPage(req) {
+    const html = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Live Chat</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+            #chat-container { 
+                max-width: 600px; 
+                margin: 0 auto; 
+                border: 1px solid #ddd; 
+                border-radius: 8px; 
+                overflow: hidden; 
+            }
+            #messages { 
+                height: 400px; 
+                overflow-y: scroll; 
+                padding: 20px; 
+                background: #f9f9f9; 
+            }
+            .message { 
+                margin: 10px 0; 
+                padding: 8px 12px; 
+                background: white; 
+                border-radius: 6px; 
+                box-shadow: 0 1px 3px rgba(0,0,0,0.1); 
+            }
+            .message .user { 
+                font-weight: bold; 
+                color: #2196f3; 
+            }
+            .message .time { 
+                font-size: 0.8em; 
+                color: #666; 
+                float: right; 
+            }
+            #chat-form { 
+                padding: 20px; 
+                background: white; 
+                display: flex; 
+                gap: 10px; 
+            }
+            #user-input, #message-input { 
+                padding: 10px; 
+                border: 1px solid #ddd; 
+                border-radius: 4px; 
+            }
+            #user-input { width: 150px; }
+            #message-input { flex: 1; }
+            button { 
+                background: #4caf50; 
+                color: white; 
+                border: none; 
+                padding: 10px 20px; 
+                border-radius: 4px; 
+                cursor: pointer; 
+            }
+        </style>
+    </head>
+    <body>
+        <div id="chat-container">
+            <div id="messages"></div>
+            <form id="chat-form">
+                <input type="text" id="user-input" placeholder="Your name" required>
+                <input type="text" id="message-input" placeholder="Type a message..." required>
+                <button type="submit">Send</button>
+            </form>
+        </div>
+        
+        <script>
+            const eventSource = new EventSource('/chat');
+            const messages = document.getElementById('messages');
+            const form = document.getElementById('chat-form');
+            const userInput = document.getElementById('user-input');
+            const messageInput = document.getElementById('message-input');
+            
+            eventSource.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                if (data.type === 'chat_message') {
+                    addMessage(data.user, data.message, data.timestamp);
+                }
+            };
+            
+            function addMessage(user, message, timestamp) {
+                const div = document.createElement('div');
+                div.className = 'message';
+                div.innerHTML = \`
+                    <span class="time">\${new Date(timestamp).toLocaleTimeString()}</span>
+                    <div class="user">\${user}:</div>
+                    <div>\${message}</div>
+                \`;
+                messages.appendChild(div);
+                messages.scrollTop = messages.scrollHeight;
+            }
+            
+            form.addEventListener('submit', function(e) {
+                e.preventDefault();
+                const formData = new FormData();
+                formData.append('user', userInput.value);
+                formData.append('message', messageInput.value);
+                
+                fetch('/chat/send', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                messageInput.value = '';
+            });
+        </script>
+    </body>
+    </html>`;
+    
+    return { status: 200, body: html, contentType: "text/html" };
+}
+
+// Send message handler
+function sendChatMessage(req) {
+    const { user, message } = req.form;
+    
+    if (!user || !message) {
+        return { status: 400, body: 'Missing user or message' };
+    }
+    
+    sendStreamMessage({
+        type: 'chat_message',
+        user: user,
+        message: message,
+        timestamp: new Date().toISOString()
+    });
+    
+    return { status: 200, body: 'Message sent' };
+}
+
+register('/chat-demo', 'chatPage', 'GET');
+register('/chat/send', 'sendChatMessage', 'POST');
+```
+
+### System Status Dashboard
+
+**Description**: Real-time system status updates using streams.
+
+```javascript
+// Register a status stream
+registerWebStream('/status');
+
+// Status dashboard page
+function statusDashboard(req) {
+    const html = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>System Status Dashboard</title>
+        <style>
+            body { 
+                font-family: 'Segoe UI', sans-serif; 
+                margin: 0; 
+                padding: 20px; 
+                background: #f5f5f5; 
+            }
+            .dashboard { 
+                max-width: 800px; 
+                margin: 0 auto; 
+            }
+            .status-card { 
+                background: white; 
+                border-radius: 8px; 
+                padding: 20px; 
+                margin: 15px 0; 
+                box-shadow: 0 2px 10px rgba(0,0,0,0.1); 
+                display: flex; 
+                align-items: center; 
+                justify-content: space-between; 
+            }
+            .status-indicator { 
+                width: 12px; 
+                height: 12px; 
+                border-radius: 50%; 
+                margin-right: 10px; 
+            }
+            .status-online { background: #4caf50; }
+            .status-warning { background: #ff9800; }
+            .status-offline { background: #f44336; }
+            .last-update { 
+                font-size: 0.9em; 
+                color: #666; 
+            }
+            h1 { color: #333; text-align: center; }
+            button { 
+                background: #2196f3; 
+                color: white; 
+                border: none; 
+                padding: 8px 16px; 
+                border-radius: 4px; 
+                cursor: pointer; 
+            }
+        </style>
+    </head>
+    <body>
+        <div class="dashboard">
+            <h1>System Status Dashboard</h1>
+            <button onclick="triggerUpdate()">Trigger Status Update</button>
+            <div id="status-container"></div>
+        </div>
+        
+        <script>
+            const eventSource = new EventSource('/status');
+            const container = document.getElementById('status-container');
+            const services = {};
+            
+            eventSource.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                if (data.type === 'status_update') {
+                    updateServiceStatus(data.service, data.status, data.timestamp);
+                }
+            };
+            
+            function updateServiceStatus(service, status, timestamp) {
+                const statusClass = \`status-\${status}\`;
+                const html = \`
+                    <div class="status-card">
+                        <div style="display: flex; align-items: center;">
+                            <div class="status-indicator \${statusClass}"></div>
+                            <strong>\${service}</strong>
+                        </div>
+                        <div>
+                            <div>\${status.toUpperCase()}</div>
+                            <div class="last-update">Updated: \${new Date(timestamp).toLocaleString()}</div>
+                        </div>
+                    </div>
+                \`;
+                
+                if (services[service]) {
+                    services[service].innerHTML = html;
+                } else {
+                    const div = document.createElement('div');
+                    div.innerHTML = html;
+                    services[service] = div;
+                    container.appendChild(div);
+                }
+            }
+            
+            function triggerUpdate() {
+                fetch('/trigger-status', { method: 'POST' });
+            }
+        </script>
+    </body>
+    </html>`;
+    
+    return { status: 200, body: html, contentType: "text/html" };
+}
+
+// Trigger status updates
+function triggerStatusUpdate(req) {
+    const services = ['Database', 'API Server', 'Cache', 'Message Queue'];
+    const statuses = ['online', 'warning', 'offline'];
+    
+    services.forEach(service => {
+        const status = statuses[Math.floor(Math.random() * statuses.length)];
+        sendStreamMessage({
+            type: 'status_update',
+            service: service,
+            status: status,
+            timestamp: new Date().toISOString()
+        });
+    });
+    
+    return { status: 200, body: 'Status updates sent' };
+}
+
+register('/status-dashboard', 'statusDashboard', 'GET');
+register('/trigger-status', 'triggerStatusUpdate', 'POST');
+```
+
 ## Best Practices from Examples
 
 1. **Separate concerns**: Use different handlers for different HTTP methods

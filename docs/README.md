@@ -40,17 +40,74 @@ The core concept is that you create JavaScript scripts that define how your web 
 
 3. **Access your endpoint**: Visit `http://localhost:3000/hello?name=User`
 
+## Quick Start: Real-Time Streaming
+
+Want to add real-time features? Here's how to create a live notification system:
+
+1. **Create a streaming script** (e.g., `scripts/notifications.js`):
+
+   ```javascript
+   // Register a stream endpoint for real-time notifications
+   registerWebStream('/notifications');
+
+   // Page that displays notifications in real-time
+   function notificationPage(req) {
+       return {
+           status: 200,
+           body: `
+           <!DOCTYPE html>
+           <html>
+           <head><title>Live Notifications</title></head>
+           <body>
+               <h1>Live Notifications</h1>
+               <button onclick="sendTest()">Send Test Notification</button>
+               <div id="messages"></div>
+               <script>
+                   const eventSource = new EventSource('/notifications');
+                   eventSource.onmessage = function(event) {
+                       const data = JSON.parse(event.data);
+                       document.getElementById('messages').innerHTML += 
+                           '<p><strong>' + data.type + ':</strong> ' + data.message + '</p>';
+                   };
+                   function sendTest() {
+                       fetch('/send-notification', { method: 'POST' });
+                   }
+               </script>
+           </body>
+           </html>`,
+           contentType: "text/html"
+       };
+   }
+
+   // Handler to send notifications to all connected clients
+   function sendNotification(req) {
+       sendStreamMessage({
+           type: 'info',
+           message: 'Hello from the server! ' + new Date().toLocaleTimeString()
+       });
+       return { status: 200, body: 'Notification sent!' };
+   }
+
+   register('/live-notifications', 'notificationPage', 'GET');
+   register('/send-notification', 'sendNotification', 'POST');
+   ```
+
+2. **Access your streaming app**: Visit `http://localhost:3000/live-notifications`
+3. **Click "Send Test Notification"** to see real-time updates in action!
+
 ## Documentation Sections
 
 - **[Local Development](local-development.md)**: Setting up your development environment and using the deployer tool
 - **[Remote Development](remote-development.md)**: Using the built-in web editor for script management
 - **[JavaScript APIs](javascript-apis.md)**: Complete reference for available JavaScript functions and objects
+- **[Real-Time Streaming](streaming.md)**: Guide to building live, interactive applications with Server-Sent Events
 - **[Examples](examples.md)**: Sample scripts demonstrating common patterns and use cases
 
 ## Getting Help
 
 - Check the [examples](examples.md) for common patterns
 - Review the [JavaScript APIs](javascript-apis.md) for available functions
+- Learn about [real-time streaming](streaming.md) for interactive features
 - See [local development](local-development.md) for development workflows
 - Use the [remote editor](remote-development.md) for quick prototyping
 

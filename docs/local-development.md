@@ -161,6 +161,8 @@ Your scripts have access to several built-in functions:
 
 - `register(path, handlerFunction, method)`: Register a route
 - `writeLog(message)`: Write to the server log
+- `registerWebStream(path)`: Register a Server-Sent Events stream endpoint
+- `sendStreamMessage(data)`: Send real-time messages to connected stream clients
 - `JSON.stringify(obj)`: Convert objects to JSON
 
 ## Debugging
@@ -168,6 +170,116 @@ Your scripts have access to several built-in functions:
 - Use `writeLog()` to output debug information
 - Check server logs for errors
 - The deployer provides feedback on deployment success/failure
+
+## Testing Streaming Endpoints
+
+aiwebengine supports real-time streaming using Server-Sent Events (SSE). Here's how to test streaming functionality during development.
+
+### Creating a Streaming Script
+
+Create a script with streaming capabilities:
+
+```javascript
+// Register a stream endpoint
+registerWebStream('/test-stream');
+
+// Page to test the stream
+function streamTestPage(req) {
+    return {
+        status: 200,
+        body: `
+        <!DOCTYPE html>
+        <html>
+        <head><title>Stream Test</title></head>
+        <body>
+            <h1>Stream Test</h1>
+            <button onclick="sendTest()">Send Test Message</button>
+            <div id="messages"></div>
+            <script>
+                const eventSource = new EventSource('/test-stream');
+                eventSource.onmessage = function(event) {
+                    const data = JSON.parse(event.data);
+                    document.getElementById('messages').innerHTML += 
+                        '<p>' + data.message + ' at ' + data.timestamp + '</p>';
+                };
+                function sendTest() {
+                    fetch('/send-test', { method: 'POST' });
+                }
+            </script>
+        </body>
+        </html>`,
+        contentType: "text/html"
+    };
+}
+
+// Handler to send test messages
+function sendTestMessage(req) {
+    sendStreamMessage({
+        type: 'test',
+        message: 'Hello from stream!',
+        timestamp: new Date().toISOString()
+    });
+    return { status: 200, body: 'Message sent' };
+}
+
+register('/stream-test', 'streamTestPage', 'GET');
+register('/send-test', 'sendTestMessage', 'POST');
+```
+
+### Testing with Browser
+
+1. **Deploy the streaming script**:
+
+   ```bash
+   cargo run --bin deployer --uri "test-stream" --file "stream-test.js" --watch
+   ```
+
+2. **Open the test page** in your browser:
+
+   ```text
+   http://localhost:3000/stream-test
+   ```
+
+3. **Click "Send Test Message"** to see real-time updates
+
+### Testing with curl
+
+You can also test streams from the command line:
+
+```bash
+# Connect to the stream (will keep connection open)
+curl -N -H "Accept: text/event-stream" http://localhost:3000/test-stream
+
+# In another terminal, trigger a message
+curl -X POST http://localhost:3000/send-test
+```
+
+### Debugging Streaming Issues
+
+Common issues and solutions:
+
+1. **Stream not receiving messages**:
+   - Check that `registerWebStream()` is called in your script
+   - Verify the stream path matches your EventSource URL
+   - Look for JavaScript errors in browser console
+
+2. **Connection issues**:
+   - Ensure proper `text/event-stream` content type
+   - Check browser Network tab for connection status
+   - Verify server is running and accessible
+
+3. **Message format problems**:
+   - Use `writeLog()` to debug message content
+   - Ensure `sendStreamMessage()` receives valid objects
+   - Check JSON parsing on client side
+
+### Stream Development Tips
+
+- **Use unique stream paths** for different features
+- **Test reconnection** by stopping/starting the server
+- **Monitor browser DevTools** Network tab for SSE connections
+- **Use meaningful message types** for easier debugging
+- **Add error handling** on both server and client sides
 
 ## Next Steps
 
