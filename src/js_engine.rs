@@ -2,7 +2,7 @@ use rquickjs::{Context, Function, Runtime, Value};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use crate::repository_safe as repository;
 
@@ -141,8 +141,13 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                             
                             // Broadcast to all registered streams
                             match crate::stream_registry::GLOBAL_STREAM_REGISTRY.broadcast_to_all_streams(&json_string) {
-                                Ok(count) => {
-                                    debug!("Successfully broadcast message to {} connections", count);
+                                Ok(result) => {
+                                    if result.is_fully_successful() {
+                                        debug!("Successfully broadcast message to {} connections", result.successful_sends);
+                                    } else {
+                                        warn!("Broadcast partially failed: {} successful, {} failed out of {} total connections", 
+                                              result.successful_sends, result.failed_connections.len(), result.total_connections);
+                                    }
                                     Ok(())
                                 }
                                 Err(e) => {
@@ -532,8 +537,13 @@ pub fn execute_script_for_request(
                 
                 // Broadcast to all registered streams
                 match crate::stream_registry::GLOBAL_STREAM_REGISTRY.broadcast_to_all_streams(&json_string) {
-                    Ok(count) => {
-                        debug!("Successfully broadcast message to {} connections (request context)", count);
+                    Ok(result) => {
+                        if result.is_fully_successful() {
+                            debug!("Successfully broadcast message to {} connections (request context)", result.successful_sends);
+                        } else {
+                            warn!("Broadcast partially failed (request context): {} successful, {} failed out of {} total connections", 
+                                  result.successful_sends, result.failed_connections.len(), result.total_connections);
+                        }
                         Ok(())
                     }
                     Err(e) => {
@@ -864,7 +874,6 @@ pub fn execute_graphql_resolver(
     }).map_err(|e| format!("JavaScript execution error: {}", e))
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1179,7 +1188,7 @@ mod tests {
     fn test_register_web_stream_function() {
         use std::sync::Once;
         static INIT: Once = Once::new();
-        
+
         // Ensure we clear streams only once per test run
         INIT.call_once(|| {
             let _ = stream_registry::GLOBAL_STREAM_REGISTRY.clear_all_streams();
@@ -1198,7 +1207,7 @@ mod tests {
 
         // Small delay to ensure registration is complete
         std::thread::sleep(std::time::Duration::from_millis(10));
-        
+
         // Verify the stream was registered
         assert!(
             stream_registry::GLOBAL_STREAM_REGISTRY.is_stream_registered("/test-stream-func"),
@@ -1206,7 +1215,8 @@ mod tests {
         );
 
         // Verify the correct script URI is associated
-        let script_uri = stream_registry::GLOBAL_STREAM_REGISTRY.get_stream_script_uri("/test-stream-func");
+        let script_uri =
+            stream_registry::GLOBAL_STREAM_REGISTRY.get_stream_script_uri("/test-stream-func");
         assert_eq!(script_uri, Some("stream-test-func".to_string()));
     }
 
@@ -1224,11 +1234,14 @@ mod tests {
         let _ = repository::upsert_script("stream-invalid-test", script_content);
         let result = execute_script("stream-invalid-test", script_content);
 
-        assert!(result.success, "Script should execute successfully even with caught exception");
-        
+        assert!(
+            result.success,
+            "Script should execute successfully even with caught exception"
+        );
+
         // Small delay to ensure any registration attempts are complete
         std::thread::sleep(std::time::Duration::from_millis(10));
-        
+
         // Verify the invalid stream was NOT registered
         assert!(
             !stream_registry::GLOBAL_STREAM_REGISTRY.is_stream_registered("invalid-path-test"),
@@ -1251,21 +1264,26 @@ mod tests {
         let _ = repository::upsert_script("stream-message-test", script_content);
         let result = execute_script("stream-message-test", script_content);
 
-        assert!(result.success, "Script should execute successfully: {:?}", result.error);
-        
+        assert!(
+            result.success,
+            "Script should execute successfully: {:?}",
+            result.error
+        );
+
         // Small delay to ensure the message is processed
         std::thread::sleep(std::time::Duration::from_millis(10));
-        
+
         // Verify the stream was registered
         assert!(
             stream_registry::GLOBAL_STREAM_REGISTRY.is_stream_registered("/test-message-stream"),
             "Stream should be registered"
         );
-        
+
         // Check that logs were written (indicating successful execution)
         let logs = repository::fetch_log_messages("stream-message-test");
         assert!(
-            logs.iter().any(|log| log.contains("Message sent successfully")),
+            logs.iter()
+                .any(|log| log.contains("Message sent successfully")),
             "Should have logged successful message sending"
         );
     }
@@ -1297,21 +1315,26 @@ mod tests {
         let _ = repository::upsert_script("stream-json-test", script_content);
         let result = execute_script("stream-json-test", script_content);
 
-        assert!(result.success, "Script should execute successfully: {:?}", result.error);
-        
+        assert!(
+            result.success,
+            "Script should execute successfully: {:?}",
+            result.error
+        );
+
         // Small delay to ensure the message is processed
         std::thread::sleep(std::time::Duration::from_millis(10));
-        
+
         // Verify the stream was registered
         assert!(
             stream_registry::GLOBAL_STREAM_REGISTRY.is_stream_registered("/test-json-stream"),
             "Stream should be registered"
         );
-        
+
         // Check that logs were written (indicating successful execution)
         let logs = repository::fetch_log_messages("stream-json-test");
         assert!(
-            logs.iter().any(|log| log.contains("Complex JSON message sent")),
+            logs.iter()
+                .any(|log| log.contains("Complex JSON message sent")),
             "Should have logged successful JSON message sending"
         );
     }

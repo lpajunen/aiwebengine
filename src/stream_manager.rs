@@ -5,7 +5,7 @@ use tokio::sync::broadcast;
 use tracing::{debug, error, info};
 use uuid::Uuid;
 
-use crate::stream_registry::{StreamConnection, GLOBAL_STREAM_REGISTRY};
+use crate::stream_registry::{GLOBAL_STREAM_REGISTRY, StreamConnection};
 
 /// Represents an active SSE connection with its management data
 #[derive(Debug)]
@@ -55,7 +55,7 @@ impl ActiveConnection {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        
+
         self.last_ping = now;
         self.is_healthy = true;
     }
@@ -66,7 +66,7 @@ impl ActiveConnection {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        
+
         now.saturating_sub(self.connected_at)
     }
 
@@ -76,7 +76,7 @@ impl ActiveConnection {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        
+
         now.saturating_sub(self.last_ping) > max_idle_seconds
     }
 }
@@ -100,7 +100,7 @@ impl Default for ConnectionManagerConfig {
             max_connections_per_stream: 100,
             max_total_connections: 1000,
             connection_idle_timeout: 300, // 5 minutes
-            cleanup_interval: 60, // 1 minute
+            cleanup_interval: 60,         // 1 minute
         }
     }
 }
@@ -121,7 +121,7 @@ pub struct ConnectionStats {
 }
 
 /// Manages active stream connections with health tracking and cleanup
-/// 
+///
 /// This simplified version stores connection metadata separately from receivers
 /// to avoid the Clone trait issues with broadcast::Receiver
 pub struct StreamConnectionManager {
@@ -174,19 +174,24 @@ impl StreamConnectionManager {
 
             loop {
                 interval.tick().await;
-                
+
                 if let Err(e) = Self::cleanup_stale_connections_internal(
                     &connection_metadata,
                     &connections_by_stream,
                     max_idle,
-                ).await {
+                )
+                .await
+                {
                     error!("Failed to cleanup stale connections: {}", e);
                 }
             }
         });
 
         self.cleanup_handle = Some(handle);
-        info!("Stream connection manager started with cleanup interval: {}s", cleanup_interval);
+        info!(
+            "Stream connection manager started with cleanup interval: {}s",
+            cleanup_interval
+        );
     }
 
     /// Stop the connection manager
@@ -225,11 +230,8 @@ impl StreamConnectionManager {
         // Add the connection to the registry
         match GLOBAL_STREAM_REGISTRY.add_connection(stream_path, stream_connection) {
             Ok(_) => {
-                let active_conn = ActiveConnection::new(
-                    stream_path.to_string(),
-                    receiver,
-                    client_metadata,
-                );
+                let active_conn =
+                    ActiveConnection::new(stream_path.to_string(), receiver, client_metadata);
 
                 // Track the connection in our manager
                 self.track_connection(&active_conn).await?;
@@ -243,7 +245,10 @@ impl StreamConnectionManager {
 
                 Ok(active_conn)
             }
-            Err(e) => Err(format!("Failed to add connection to stream registry: {}", e)),
+            Err(e) => Err(format!(
+                "Failed to add connection to stream registry: {}",
+                e
+            )),
         }
     }
 
@@ -279,7 +284,10 @@ impl StreamConnectionManager {
                 }
             }
 
-            info!("Removed connection {} from stream '{}'", connection_id, path);
+            info!(
+                "Removed connection {} from stream '{}'",
+                connection_id, path
+            );
             Ok(true)
         } else {
             debug!("Connection {} not found for removal", connection_id);
@@ -298,7 +306,7 @@ impl StreamConnectionManager {
     /// Get all connection info for a specific stream
     pub async fn get_connections_for_stream(&self, stream_path: &str) -> Vec<ConnectionMetadata> {
         let mut connections = Vec::new();
-        
+
         if let Ok(metadata) = self.connection_metadata.lock() {
             for conn_meta in metadata.values() {
                 if conn_meta.stream_path == stream_path {
@@ -306,7 +314,7 @@ impl StreamConnectionManager {
                 }
             }
         }
-        
+
         connections
     }
 
@@ -319,7 +327,7 @@ impl StreamConnectionManager {
                         .duration_since(UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_secs();
-                    
+
                     conn_meta.last_ping = now;
                     conn_meta.is_healthy = true;
                     Ok(())
@@ -352,10 +360,12 @@ impl StreamConnectionManager {
         ) {
             (Ok(metadata), Ok(conn_by_stream)) => {
                 stats.total_connections = metadata.len();
-                
+
                 // Count connections per stream
                 for (stream_path, conn_ids) in conn_by_stream.iter() {
-                    stats.connections_per_stream.insert(stream_path.clone(), conn_ids.len());
+                    stats
+                        .connections_per_stream
+                        .insert(stream_path.clone(), conn_ids.len());
                 }
 
                 // Calculate age and health statistics
@@ -364,29 +374,35 @@ impl StreamConnectionManager {
                         .duration_since(UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_secs();
-                    
+
                     let mut total_age = 0u64;
                     for conn_meta in metadata.values() {
                         let age = now.saturating_sub(conn_meta.connected_at);
                         total_age += age;
-                        
+
                         let is_stale = now.saturating_sub(conn_meta.last_ping) > stale_threshold;
-                        
+
                         if conn_meta.is_healthy && !is_stale {
                             stats.healthy_connections += 1;
                         } else {
                             stats.stale_connections += 1;
                         }
                     }
-                    
+
                     stats.average_age_seconds = total_age as f64 / metadata.len() as f64;
                 }
             }
             (Err(e), _) => {
-                error!("Failed to acquire metadata lock for stats calculation: {}", e);
+                error!(
+                    "Failed to acquire metadata lock for stats calculation: {}",
+                    e
+                );
             }
             (_, Err(e)) => {
-                error!("Failed to acquire connections by stream lock for stats calculation: {}", e);
+                error!(
+                    "Failed to acquire connections by stream lock for stats calculation: {}",
+                    e
+                );
             }
         }
 
@@ -399,7 +415,8 @@ impl StreamConnectionManager {
             &self.connection_metadata,
             &self.connections_by_stream,
             self.config.connection_idle_timeout,
-        ).await
+        )
+        .await
     }
 
     /// Internal cleanup function (static to avoid borrowing issues)
@@ -442,7 +459,10 @@ impl StreamConnectionManager {
                     if metadata.remove(conn_id).is_some() {
                         // Also remove from registry
                         let _ = GLOBAL_STREAM_REGISTRY.remove_connection(stream_path, conn_id);
-                        debug!("Removed stale connection {} from stream '{}'", conn_id, stream_path);
+                        debug!(
+                            "Removed stale connection {} from stream '{}'",
+                            conn_id, stream_path
+                        );
                     }
                 }
             }
@@ -473,7 +493,7 @@ impl StreamConnectionManager {
                 // Check total connections limit
                 if metadata.len() >= self.config.max_total_connections {
                     return Err(format!(
-                        "Maximum total connections reached ({})", 
+                        "Maximum total connections reached ({})",
                         self.config.max_total_connections
                     ));
                 }
@@ -482,9 +502,8 @@ impl StreamConnectionManager {
                 if let Some(stream_connections) = conn_by_stream.get(stream_path) {
                     if stream_connections.len() >= self.config.max_connections_per_stream {
                         return Err(format!(
-                            "Maximum connections per stream reached for '{}' ({})", 
-                            stream_path,
-                            self.config.max_connections_per_stream
+                            "Maximum connections per stream reached for '{}' ({})",
+                            stream_path, self.config.max_connections_per_stream
                         ));
                     }
                 }
@@ -496,7 +515,10 @@ impl StreamConnectionManager {
                 Err("Limit check failed: metadata lock error".to_string())
             }
             (_, Err(e)) => {
-                error!("Failed to acquire connections by stream lock for limit check: {}", e);
+                error!(
+                    "Failed to acquire connections by stream lock for limit check: {}",
+                    e
+                );
                 Err("Limit check failed: connections by stream lock error".to_string())
             }
         }
@@ -564,7 +586,7 @@ mod tests {
     async fn test_connection_manager_creation() {
         let manager = StreamConnectionManager::new();
         let stats = manager.get_stats().await;
-        
+
         assert_eq!(stats.total_connections, 0);
         assert!(stats.connections_per_stream.is_empty());
     }
@@ -577,7 +599,7 @@ mod tests {
             connection_idle_timeout: 120,
             cleanup_interval: 30,
         };
-        
+
         let manager = StreamConnectionManager::with_config(config.clone());
         assert_eq!(manager.config.max_connections_per_stream, 50);
         assert_eq!(manager.config.max_total_connections, 500);
@@ -591,9 +613,9 @@ mod tests {
             connection_idle_timeout: 300,
             cleanup_interval: 60,
         };
-        
+
         let manager = StreamConnectionManager::with_config(config);
-        
+
         // This should pass with no connections
         assert!(manager.check_connection_limits("/test").await.is_ok());
     }
@@ -602,7 +624,7 @@ mod tests {
     async fn test_connection_stats() {
         let manager = StreamConnectionManager::new();
         let stats = manager.get_stats().await;
-        
+
         assert_eq!(stats.total_connections, 0);
         assert_eq!(stats.healthy_connections, 0);
         assert_eq!(stats.stale_connections, 0);
@@ -613,9 +635,9 @@ mod tests {
     async fn test_active_connection_creation() {
         let (_tx, rx) = broadcast::channel(32);
         let metadata = Some([("client_id".to_string(), "test123".to_string())].into());
-        
+
         let conn = ActiveConnection::new("/test".to_string(), rx, metadata.clone());
-        
+
         assert_eq!(conn.stream_path, "/test");
         assert_eq!(conn.client_metadata, metadata);
         assert!(conn.is_healthy);
@@ -626,10 +648,10 @@ mod tests {
     async fn test_connection_ping_update() {
         let (_tx, rx) = broadcast::channel(32);
         let mut conn = ActiveConnection::new("/test".to_string(), rx, None);
-        
+
         let initial_ping = conn.last_ping;
         sleep(Duration::from_millis(10)).await;
-        
+
         conn.update_ping();
         assert!(conn.last_ping >= initial_ping);
         assert!(conn.is_healthy);
@@ -639,14 +661,14 @@ mod tests {
     async fn test_connection_staleness() {
         let (_tx, rx) = broadcast::channel(32);
         let mut conn = ActiveConnection::new("/test".to_string(), rx, None);
-        
+
         // Connection should not be stale immediately
         assert!(!conn.is_stale(300));
-        
+
         // Manually set last_ping to an old time to test staleness
         conn.last_ping = 0; // Very old timestamp
-        
-        // Connection should be stale with current threshold 
+
+        // Connection should be stale with current threshold
         assert!(conn.is_stale(1));
     }
 
@@ -654,9 +676,9 @@ mod tests {
     async fn test_connection_age() {
         let (_tx, rx) = broadcast::channel(32);
         let conn = ActiveConnection::new("/test".to_string(), rx, None);
-        
+
         sleep(Duration::from_millis(10)).await;
-        
+
         let age = conn.age_seconds();
         // Age should be at least 0 (removing the useless comparison warning)
         assert!(age < 60); // Should be less than 60 seconds for this test

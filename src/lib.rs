@@ -5,7 +5,7 @@ use axum::{Router, routing::any};
 use axum_server::Server;
 use serde_urlencoded;
 use std::collections::HashMap;
-use tokio_stream::{wrappers::BroadcastStream, StreamExt};
+use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 use tracing::{debug, error, info};
 
 pub mod config;
@@ -16,8 +16,8 @@ pub mod js_engine_safe;
 pub mod middleware;
 pub mod repository_safe;
 pub mod safe_helpers;
-pub mod stream_registry;
 pub mod stream_manager;
+pub mod stream_registry;
 
 // Use the safe repository implementation internally
 pub use repository_safe as repository;
@@ -57,10 +57,11 @@ async fn parse_form_data(
 /// Handle Server-Sent Events stream requests
 async fn handle_stream_request(path: String) -> Response {
     info!("Handling stream request for path: {}", path);
-    
+
     // Create a connection with the stream manager
     let connection = match stream_manager::StreamConnectionManager::new()
-        .create_connection(&path, None).await
+        .create_connection(&path, None)
+        .await
     {
         Ok(conn) => conn,
         Err(e) => {
@@ -68,37 +69,65 @@ async fn handle_stream_request(path: String) -> Response {
             return Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .header("content-type", "text/plain")
-                .body(Body::from(format!("Failed to create stream connection: {}", e)))
+                .body(Body::from(format!(
+                    "Failed to create stream connection: {}",
+                    e
+                )))
                 .unwrap();
         }
     };
 
     let connection_id = connection.connection_id.clone();
-    info!("Created stream connection {} for path '{}'", connection_id, path);
+    info!(
+        "Created stream connection {} for path '{}'",
+        connection_id, path
+    );
 
     // Convert broadcast receiver to tokio stream
     let receiver_stream = BroadcastStream::new(connection.receiver);
-    
+
     // Clone connection_id for use in the closure
     let connection_id_for_stream = connection_id.clone();
-    
+
     // Convert to SSE events, handling both messages and errors
+    let path_for_cleanup = path.clone();
     let sse_stream = receiver_stream.map(move |result| {
         match result {
             Ok(msg) => {
-                debug!("Sending SSE message to connection {}: {}", connection_id_for_stream, msg);
+                debug!(
+                    "Sending SSE message to connection {}: {}",
+                    connection_id_for_stream, msg
+                );
                 Ok::<Event, std::convert::Infallible>(Event::default().data(msg))
             }
             Err(e) => {
-                error!("Broadcast receiver error for connection {}: {}", connection_id_for_stream, e);
-                Ok::<Event, std::convert::Infallible>(Event::default().data(format!("{{\"error\": \"Stream error: {}\"}}", e)))
+                error!(
+                    "Broadcast receiver error for connection {}: {}",
+                    connection_id_for_stream, e
+                );
+                // This indicates the connection has failed, we should clean it up
+                if let Err(cleanup_err) = stream_registry::GLOBAL_STREAM_REGISTRY
+                    .remove_connection(&path_for_cleanup, &connection_id_for_stream)
+                {
+                    error!(
+                        "Failed to cleanup failed connection {}: {}",
+                        connection_id_for_stream, cleanup_err
+                    );
+                } else {
+                    debug!(
+                        "Cleaned up failed connection {} from stream {}",
+                        connection_id_for_stream, path_for_cleanup
+                    );
+                }
+                Ok::<Event, std::convert::Infallible>(
+                    Event::default().data(format!("{{\"error\": \"Stream error: {}\"}}", e)),
+                )
             }
         }
     });
 
     // Create SSE response
-    let sse = Sse::new(sse_stream)
-        .keep_alive(axum::response::sse::KeepAlive::default());
+    let sse = Sse::new(sse_stream).keep_alive(axum::response::sse::KeepAlive::default());
 
     // Return the SSE response
     sse.into_response()

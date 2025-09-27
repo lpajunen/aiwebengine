@@ -310,19 +310,30 @@ impl SafeJsEngine {
             ctx.clone(),
             move |_c: rquickjs::Ctx<'_>, path: String| -> Result<(), rquickjs::Error> {
                 debug!("JavaScript called registerWebStream with path: {}", path);
-                
+
                 // Validate path format (basic security check)
                 if path.is_empty() || !path.starts_with('/') {
-                    return Err(rquickjs::Error::new_from_js("Stream", "Stream path must start with '/' and not be empty"));
+                    return Err(rquickjs::Error::new_from_js(
+                        "Stream",
+                        "Stream path must start with '/' and not be empty",
+                    ));
                 }
-                
+
                 if path.len() > 200 {
-                    return Err(rquickjs::Error::new_from_js("Stream", "Stream path too long (max 200 characters)"));
+                    return Err(rquickjs::Error::new_from_js(
+                        "Stream",
+                        "Stream path too long (max 200 characters)",
+                    ));
                 }
-                
-                match crate::stream_registry::GLOBAL_STREAM_REGISTRY.register_stream(&path, &script_uri_stream) {
+
+                match crate::stream_registry::GLOBAL_STREAM_REGISTRY
+                    .register_stream(&path, &script_uri_stream)
+                {
                     Ok(()) => {
-                        debug!("Successfully registered stream path '{}' for script '{}'", path, script_uri_stream);
+                        debug!(
+                            "Successfully registered stream path '{}' for script '{}'",
+                            path, script_uri_stream
+                        );
                         Ok(())
                     }
                     Err(e) => {
@@ -338,12 +349,20 @@ impl SafeJsEngine {
         let send_stream_message = Function::new(
             ctx.clone(),
             move |_c: rquickjs::Ctx<'_>, json_string: String| -> Result<(), rquickjs::Error> {
-                debug!("JavaScript called sendStreamMessage with message: {}", json_string);
-                
+                debug!(
+                    "JavaScript called sendStreamMessage with message: {}",
+                    json_string
+                );
+
                 // Broadcast to all registered streams
-                match crate::stream_registry::GLOBAL_STREAM_REGISTRY.broadcast_to_all_streams(&json_string) {
-                    Ok(count) => {
-                        debug!("Successfully broadcast message to {} connections", count);
+                match crate::stream_registry::GLOBAL_STREAM_REGISTRY
+                    .broadcast_to_all_streams(&json_string)
+                {
+                    Ok(result) => {
+                        debug!(
+                            "Successfully broadcast message to {} connections",
+                            result.successful_sends
+                        );
                         Ok(())
                     }
                     Err(e) => {

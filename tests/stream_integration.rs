@@ -1,6 +1,6 @@
-use aiwebengine::{repository, js_engine, start_server_without_shutdown, stream_registry};
+use aiwebengine::{js_engine, repository, start_server_without_shutdown, stream_registry};
 use reqwest::Client;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 #[tokio::test]
 async fn test_stream_endpoints() {
@@ -32,7 +32,7 @@ async fn test_stream_endpoints() {
 
     // Upsert the test script
     let _ = repository::upsert_script("stream-test", script_content);
-    
+
     // Execute the script to register the endpoints
     let result = js_engine::execute_script("stream-test", script_content);
     println!("Script execution result: {:?}", result);
@@ -40,13 +40,14 @@ async fn test_stream_endpoints() {
 
     // Give a moment for registration to complete
     sleep(Duration::from_millis(50)).await;
-    
+
     // Check script logs
     let logs = repository::fetch_log_messages("stream-test");
     println!("Script logs: {:?}", logs);
-    
+
     // Check if stream is registered
-    let is_registered = stream_registry::GLOBAL_STREAM_REGISTRY.is_stream_registered("/test-stream");
+    let is_registered =
+        stream_registry::GLOBAL_STREAM_REGISTRY.is_stream_registered("/test-stream");
     println!("Is /test-stream registered: {}", is_registered);
 
     let client = Client::new();
@@ -57,12 +58,12 @@ async fn test_stream_endpoints() {
         .send()
         .await
         .expect("Failed to send regular request");
-    
+
     println!("Regular endpoint response status: {}", response.status());
     let status = response.status();
     let body = response.text().await.expect("Failed to read response body");
     println!("Regular endpoint response body: {}", body);
-    
+
     assert_eq!(status, 200);
     assert!(body.contains("This is a regular endpoint"));
 
@@ -72,20 +73,17 @@ async fn test_stream_endpoints() {
         .send()
         .await
         .expect("Failed to send stream request");
-    
+
     println!("Stream endpoint response status: {}", response.status());
     println!("Stream endpoint response headers: {:?}", response.headers());
     let status = response.status();
-    
+
     assert_eq!(status, 200);
     assert_eq!(
         response.headers().get("content-type").unwrap(),
         "text/event-stream"
     );
-    assert_eq!(
-        response.headers().get("cache-control").unwrap(),
-        "no-cache"
-    );
+    assert_eq!(response.headers().get("cache-control").unwrap(), "no-cache");
     // Note: connection: keep-alive is not required for SSE (transfer-encoding: chunked is used instead)
 
     // Test 3: Non-existent stream should return 404
@@ -94,7 +92,7 @@ async fn test_stream_endpoints() {
         .send()
         .await
         .expect("Failed to send request to non-existent stream");
-    
+
     assert_eq!(response.status(), 404);
 }
 
@@ -156,7 +154,7 @@ async fn test_stream_messaging() {
 
     // Upsert the test script
     let _ = repository::upsert_script("notification-test", script_content);
-    
+
     // Test sendStreamMessage in isolation first
     let minimal_test = r#"
         writeLog('Testing sendStreamMessage in isolation');
@@ -167,12 +165,12 @@ async fn test_stream_messaging() {
             writeLog('sendStreamMessage isolation test ERROR: ' + error.toString());
         }
     "#;
-    
+
     let minimal_result = js_engine::execute_script("minimal-test", minimal_test);
     println!("Minimal test result: {:?}", minimal_result);
     let minimal_logs = repository::fetch_log_messages("minimal-test");
     println!("Minimal test logs: {:?}", minimal_logs);
-    
+
     // Execute the script to register the endpoints
     let result = js_engine::execute_script("notification-test", script_content);
     println!("Notification script execution result: {:?}", result);
@@ -185,22 +183,25 @@ async fn test_stream_messaging() {
 
     // Start listening to the stream (this would normally be done in a separate task)
     // For this test, we'll just verify the endpoints are working
-    
+
     // Test: Send notification endpoint via GET should work
     let response = client
         .get(&format!("{}/send-notification", base_url))
         .send()
         .await
         .expect("Failed to send GET notification request");
-    
-    println!("GET Send notification response status: {}", response.status());
+
+    println!(
+        "GET Send notification response status: {}",
+        response.status()
+    );
     let status = response.status();
     let body = response.text().await.expect("Failed to read response body");
     println!("GET Send notification response body: {}", body);
-    
+
     assert_eq!(status, 200);
     assert!(body.contains("GET Message sent"));
-    
+
     // Verify logs were written
     let logs = repository::fetch_log_messages("notification-test");
     assert!(
