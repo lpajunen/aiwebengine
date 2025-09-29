@@ -689,54 +689,8 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
 
     builder = builder.register(mutation_builder);
 
-    // Build Subscription type if subscriptions exist
-    if has_subscriptions {
-        let mut subscription_builder = Object::new("Subscription");
-
-        for (name, operation) in subscriptions {
-            let subscription_name = name.clone();
-            let field_name = name.clone();
-            let resolver_uri = operation.script_uri.clone();
-            let resolver_fn = operation.resolver_function.clone();
-
-            // For now, create a simple subscription field that returns a message
-            // The actual streaming will be handled by the SSE endpoint connecting to the stream path
-            let subscription_field = Field::new(
-                field_name.clone(),
-                TypeRef::named_nn(TypeRef::STRING), // Non-null for subscriptions
-                move |_ctx| {
-                    let subscription_name = subscription_name.clone();
-                    let uri = resolver_uri.clone();
-                    let func = resolver_fn.clone();
-
-                    FieldFuture::new(async move {
-                        // Initialize the subscription by calling the JavaScript resolver
-                        // This allows the resolver to set up any initial state or start emitting messages
-                        match crate::js_engine::execute_graphql_resolver(&uri, &func, None) {
-                            Ok(result) => {
-                                debug!(
-                                    "Subscription '{}' initialized: {}",
-                                    subscription_name, result
-                                );
-                                Ok(Some(async_graphql::Value::String(result)))
-                            }
-                            Err(e) => {
-                                error!(
-                                    "Failed to initialize subscription '{}': {}",
-                                    subscription_name, e
-                                );
-                                Ok(Some(async_graphql::Value::String(format!("Error: {}", e))))
-                            }
-                        }
-                    })
-                },
-            );
-
-            subscription_builder = subscription_builder.field(subscription_field);
-        }
-
-        builder = builder.register(subscription_builder);
-    }
+    // Note: We handle subscriptions through SSE and stream paths instead of GraphQL schema
+    // This is because async-graphql dynamic schema has limited subscription support
 
     builder
         .finish()

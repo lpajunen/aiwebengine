@@ -30,6 +30,19 @@ register('/health', 'health_check', 'GET');
 // Register script updates stream endpoint
 registerWebStream('/script_updates');
 
+// Register GraphQL subscription for script updates
+registerGraphQLSubscription(
+	"scriptUpdates", 
+	"type Subscription { scriptUpdates: String }", 
+	"scriptUpdatesResolver"
+);
+
+// GraphQL subscription resolver for script updates
+function scriptUpdatesResolver() {
+	writeLog("Client subscribed to scriptUpdates GraphQL subscription");
+	return "Script updates subscription initialized";
+}
+
 // Helper function to broadcast script update messages
 function broadcastScriptUpdate(uri, action, details = {}) {
 	try {
@@ -48,6 +61,10 @@ function broadcastScriptUpdate(uri, action, details = {}) {
 		}
 		
 		sendStreamMessageToPath('/script_updates', JSON.stringify(message));
+		
+		// Also send to GraphQL subscription
+		sendSubscriptionMessage("scriptUpdates", JSON.stringify(message));
+		
 		writeLog('Broadcasted script update: ' + action + ' ' + uri);
 	} catch (error) {
 		writeLog('Failed to broadcast script update: ' + error.message);
