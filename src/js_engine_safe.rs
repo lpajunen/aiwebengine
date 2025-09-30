@@ -20,6 +20,28 @@ pub struct ScriptExecutionResult {
     pub execution_time_ms: u64,
 }
 
+impl ScriptExecutionResult {
+    /// Create a failed execution result with error message
+    fn failed(error_message: String, execution_time_ms: u64) -> Self {
+        Self {
+            registrations: HashMap::new(),
+            success: false,
+            error: Some(error_message),
+            execution_time_ms,
+        }
+    }
+
+    /// Create a successful execution result
+    fn success(registrations: HashMap<(String, String), String>, execution_time_ms: u64) -> Self {
+        Self {
+            registrations,
+            success: true,
+            error: None,
+            execution_time_ms,
+        }
+    }
+}
+
 /// Resource limits for JavaScript execution
 #[derive(Debug, Clone)]
 pub struct ExecutionLimits {
@@ -94,24 +116,14 @@ impl SafeJsEngine {
 
         // Validate script size and basic safety
         if let Err(e) = self.validate_script(content) {
-            return ScriptExecutionResult {
-                registrations: HashMap::new(),
-                success: false,
-                error: Some(e),
-                execution_time_ms: start_time.elapsed().as_millis() as u64,
-            };
+            return ScriptExecutionResult::failed(e, start_time.elapsed().as_millis() as u64);
         }
 
         // Check execution limits
         let _guard = match self.start_execution() {
             Ok(guard) => guard,
             Err(e) => {
-                return ScriptExecutionResult {
-                    registrations: HashMap::new(),
-                    success: false,
-                    error: Some(e),
-                    execution_time_ms: start_time.elapsed().as_millis() as u64,
-                };
+                return ScriptExecutionResult::failed(e, start_time.elapsed().as_millis() as u64);
             }
         };
 
@@ -130,36 +142,24 @@ impl SafeJsEngine {
         {
             Ok(Ok(result)) => {
                 let execution_time = start_time.elapsed().as_millis() as u64;
-                ScriptExecutionResult {
-                    registrations: result.registrations,
-                    success: result.success,
-                    error: result.error,
-                    execution_time_ms: execution_time,
-                }
+                ScriptExecutionResult::success(result.registrations, execution_time)
             }
             Ok(Err(e)) => {
                 error!("Script execution task failed for {}: {}", uri, e);
-                ScriptExecutionResult {
-                    registrations: HashMap::new(),
-                    success: false,
-                    error: Some(format!("Task execution error: {}", e)),
-                    execution_time_ms: start_time.elapsed().as_millis() as u64,
-                }
+                ScriptExecutionResult::failed(
+                    format!("Task execution error: {}", e),
+                    start_time.elapsed().as_millis() as u64,
+                )
             }
             Err(_) => {
                 error!(
                     "Script execution timeout for {}: {}ms",
                     uri, self.limits.timeout_ms
                 );
-                ScriptExecutionResult {
-                    registrations: HashMap::new(),
-                    success: false,
-                    error: Some(format!(
-                        "Execution timeout after {}ms",
-                        self.limits.timeout_ms
-                    )),
-                    execution_time_ms: self.limits.timeout_ms,
-                }
+                ScriptExecutionResult::failed(
+                    format!("Execution timeout after {}ms", self.limits.timeout_ms),
+                    self.limits.timeout_ms,
+                )
             }
         }
     }
@@ -168,33 +168,23 @@ impl SafeJsEngine {
     fn execute_script_blocking(uri: &str, content: &str) -> ScriptExecutionResult {
         let registrations = Arc::new(Mutex::new(HashMap::new()));
 
-        let rt = match Runtime::new() {
+        let runtime = match Runtime::new() {
             Ok(rt) => rt,
             Err(e) => {
                 error!("Failed to create QuickJS runtime for {}: {}", uri, e);
-                return ScriptExecutionResult {
-                    registrations: HashMap::new(),
-                    success: false,
-                    error: Some(format!("Runtime creation error: {}", e)),
-                    execution_time_ms: 0,
-                };
+                return ScriptExecutionResult::failed(format!("Runtime creation error: {}", e), 0);
             }
         };
 
-        let ctx = match Context::full(&rt) {
+        let context = match Context::full(&runtime) {
             Ok(ctx) => ctx,
             Err(e) => {
                 error!("Failed to create QuickJS context for {}: {}", uri, e);
-                return ScriptExecutionResult {
-                    registrations: HashMap::new(),
-                    success: false,
-                    error: Some(format!("Context creation error: {}", e)),
-                    execution_time_ms: 0,
-                };
+                return ScriptExecutionResult::failed(format!("Context creation error: {}", e), 0);
             }
         };
 
-        let result = ctx.with(|ctx| -> Result<(), rquickjs::Error> {
+        let result = context.with(|ctx| -> Result<(), rquickjs::Error> {
             let global = ctx.globals();
 
             // Set up the register function with thread-safe storage
@@ -234,7 +224,7 @@ impl SafeJsEngine {
         match result {
             Ok(_) => {
                 debug!("Successfully executed script {}", uri);
-                let final_regs = match registrations.lock() {
+                let final_registrations = match registrations.lock() {
                     Ok(regs) => regs.clone(),
                     Err(_) => {
                         error!("Failed to access final registrations for {}", uri);
@@ -242,21 +232,11 @@ impl SafeJsEngine {
                     }
                 };
 
-                ScriptExecutionResult {
-                    registrations: final_regs,
-                    success: true,
-                    error: None,
-                    execution_time_ms: 0,
-                }
+                ScriptExecutionResult::success(final_registrations, 0)
             }
             Err(e) => {
                 error!("Failed to execute script {}: {}", uri, e);
-                ScriptExecutionResult {
-                    registrations: HashMap::new(),
-                    success: false,
-                    error: Some(format!("Script evaluation error: {}", e)),
-                    execution_time_ms: 0,
-                }
+                ScriptExecutionResult::failed(format!("Script evaluation error: {}", e), 0)
             }
         }
     }
@@ -398,7 +378,7 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
     let engine = SafeJsEngine::new(ExecutionLimits::default(), 10);
 
     // Since this is a sync function, we need to handle the async execution
-    let rt = match tokio::runtime::Handle::try_current() {
+    let tokio_runtime = match tokio::runtime::Handle::try_current() {
         Ok(handle) => {
             return handle.block_on(engine.execute_script_safe(uri, content));
         }
@@ -408,18 +388,16 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                 Ok(rt) => rt,
                 Err(e) => {
                     error!("Failed to create Tokio runtime: {}", e);
-                    return ScriptExecutionResult {
-                        registrations: HashMap::new(),
-                        success: false,
-                        error: Some(format!("Runtime creation error: {}", e)),
-                        execution_time_ms: 0,
-                    };
+                    return ScriptExecutionResult::failed(
+                        format!("Runtime creation error: {}", e),
+                        0,
+                    );
                 }
             }
         }
     };
 
-    rt.block_on(engine.execute_script_safe(uri, content))
+    tokio_runtime.block_on(engine.execute_script_safe(uri, content))
 }
 
 // Export the safe engine for use in main application
@@ -459,6 +437,11 @@ mod tests {
             .await;
         assert!(!result.success);
         assert!(result.error.is_some());
-        assert!(result.error.unwrap().contains("too large"));
+        assert!(
+            result
+                .error
+                .expect("Error should be present for oversized script")
+                .contains("too large")
+        );
     }
 }

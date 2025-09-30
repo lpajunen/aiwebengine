@@ -113,8 +113,8 @@ mod tests {
         assert_eq!(parts2[0], "req");
 
         // Counter should increase (may not be sequential due to parallel tests)
-        let counter1: u64 = parts1[2].parse().unwrap();
-        let counter2: u64 = parts2[2].parse().unwrap();
+        let counter1: u64 = parts1[2].parse().expect("Test data should be valid");
+        let counter2: u64 = parts2[2].parse().expect("Test data should be valid");
         assert!(counter2 > counter1);
     }
 
@@ -145,7 +145,7 @@ mod tests {
         // Insert invalid UTF-8 header value
         headers.insert(
             REQUEST_ID_HEADER,
-            HeaderValue::from_bytes(&[0xff, 0xfe]).unwrap(),
+            HeaderValue::from_bytes(&[0xff, 0xfe]).expect("Test setup should work"),
         );
 
         let id = extract_or_generate_request_id(&headers);
@@ -192,9 +192,24 @@ mod tests {
         let id3 = generate_request_id();
 
         // Extract counters from IDs
-        let counter1: u64 = id1.split('_').nth(2).unwrap().parse().unwrap();
-        let counter2: u64 = id2.split('_').nth(2).unwrap().parse().unwrap();
-        let counter3: u64 = id3.split('_').nth(2).unwrap().parse().unwrap();
+        let counter1: u64 = id1
+            .split('_')
+            .nth(2)
+            .expect("Generated ID should have proper format")
+            .parse()
+            .expect("Counter should be valid u64");
+        let counter2: u64 = id2
+            .split('_')
+            .nth(2)
+            .expect("Generated ID should have proper format")
+            .parse()
+            .expect("Counter should be valid u64");
+        let counter3: u64 = id3
+            .split('_')
+            .nth(2)
+            .expect("Generated ID should have proper format")
+            .parse()
+            .expect("Counter should be valid u64");
 
         // Counters should increase (order preserved within single thread)
         assert!(counter2 > counter1);
@@ -215,8 +230,11 @@ mod tests {
         // Should successfully create header value from generated ID
         assert!(header_value_result.is_ok());
 
-        let header_value = header_value_result.unwrap();
-        let converted_back = header_value.to_str().unwrap();
+        let header_value =
+            header_value_result.expect("Generated request ID should be valid header value");
+        let converted_back = header_value
+            .to_str()
+            .expect("Header value should convert back to string");
         assert_eq!(converted_back, id);
     }
 
@@ -234,17 +252,20 @@ mod tests {
             let ids_clone = ids.clone();
             let handle = thread::spawn(move || {
                 let id = generate_request_id();
-                ids_clone.lock().unwrap().push(id);
+                ids_clone
+                    .lock()
+                    .expect("Test mutex should not be poisoned")
+                    .push(id);
             });
             handles.push(handle);
         }
 
         // Wait for all threads to complete
         for handle in handles {
-            handle.join().unwrap();
+            handle.join().expect("Thread should complete successfully");
         }
 
-        let final_ids = ids.lock().unwrap();
+        let final_ids = ids.lock().expect("Test mutex should not be poisoned");
         assert_eq!(final_ids.len(), 10);
 
         // Check that all IDs are unique

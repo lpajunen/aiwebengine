@@ -373,8 +373,6 @@ impl StreamRegistry {
                         // Create a new connection and return its receiver
                         let connection = StreamConnection::new();
                         let receiver = connection.subscribe();
-                        // Note: We don't add this connection to the registry yet,
-                        // that should be done separately via add_connection
                         Ok(Some(receiver))
                     }
                     None => Ok(None),

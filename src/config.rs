@@ -597,8 +597,7 @@ mod tests {
 
         // Test CORS origins validation
         config.security.cors_allowed_origins = vec!["invalid-origin".to_string()];
-        // Note: We're not currently validating CORS origin format, but we could add this
-        assert!(config.validate().is_ok()); // Currently passes, could be enhanced
+        assert!(config.validate().is_ok());
 
         // Test rate limiting validation - zero rate limit should fail
         config.security.rate_limit_per_minute = 0;
