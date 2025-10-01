@@ -33,3 +33,21 @@ indexmap = "2.0"
 uuid = { version = "1.0", features = ["v4", "serde"] }
 futures = "0.3.31"
 async-stream = "0.3.6"
+
+# Optimize test builds for faster compilation and execution
+[profile.test]
+opt-level = 1          # Basic optimizations for tests
+debug = 1              # Reduced debug info
+codegen-units = 4      # Faster parallel compilation
+incremental = true     # Enable incremental compilation
+
+# Even faster for CI/release testing
+[profile.test-opt]
+inherits = "test"
+opt-level = 2
+lto = "thin"
+
+# Test-only dependencies
+[dev-dependencies]
+tokio-test = "0.4"
+mockall = "0.12"
