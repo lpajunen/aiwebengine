@@ -1,4 +1,4 @@
-use aiwebengine::{js_engine, repository_safe, stream_registry::GLOBAL_STREAM_REGISTRY};
+use aiwebengine::{js_engine, repository, stream_registry::GLOBAL_STREAM_REGISTRY};
 use std::time::Duration;
 use tokio::time::{sleep, timeout};
 use tracing::info;
@@ -15,7 +15,7 @@ async fn test_core_js_script_streaming() {
     info!("Testing core.js script streaming functionality");
 
     // Store and execute the core script
-    let _ = repository_safe::upsert_script("core.js", &core_script_content);
+    let _ = repository::upsert_script("core.js", &core_script_content);
     let result = js_engine::execute_script("core.js", &core_script_content);
     assert!(
         result.success,
@@ -162,7 +162,7 @@ async fn test_script_stream_health_and_stats() {
         std::fs::read_to_string(core_js_path).expect("Failed to read core.js file");
 
     // Execute core script to register the stream
-    let _ = repository_safe::upsert_script("core_health.js", &core_script_content);
+    let _ = repository::upsert_script("core_health.js", &core_script_content);
     let result = js_engine::execute_script("core_health.js", &core_script_content);
     assert!(result.success, "Core script execution failed");
 

@@ -14,13 +14,10 @@ pub mod graphql;
 pub mod js_engine;
 pub mod js_engine_safe;
 pub mod middleware;
-pub mod repository_safe;
+pub mod repository;
 pub mod safe_helpers;
 pub mod stream_manager;
 pub mod stream_registry;
-
-// Use the safe repository implementation internally
-pub use repository_safe as repository;
 
 /// Parses a query string into a HashMap of key-value pairs
 fn parse_query_string(query: &str) -> HashMap<String, String> {

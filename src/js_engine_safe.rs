@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use tokio::time::timeout;
 use tracing::{debug, error, warn};
 
-use crate::repository_safe as repository;
+use crate::repository;
 
 /// Represents the result of executing a JavaScript script
 #[derive(Debug, Clone)]

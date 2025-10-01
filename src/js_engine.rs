@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use tracing::{debug, error, warn};
 
-use crate::repository_safe as repository;
+use crate::repository;
 
 /// Represents the result of executing a JavaScript script
 #[derive(Debug, Clone)]

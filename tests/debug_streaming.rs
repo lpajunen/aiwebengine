@@ -31,7 +31,7 @@ async fn test_basic_streaming_functionality() {
     info!("Testing basic streaming functionality");
 
     // Store and execute the test script
-    let _ = aiwebengine::repository_safe::upsert_script("test_basic_streaming.js", test_script);
+    let _ = aiwebengine::repository::upsert_script("test_basic_streaming.js", test_script);
     let result = js_engine::execute_script("test_basic_streaming.js", test_script);
     assert!(
         result.success,

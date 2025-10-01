@@ -1,4 +1,4 @@
-use aiwebengine::{repository_safe, stream_registry::GLOBAL_STREAM_REGISTRY};
+use aiwebengine::{repository, stream_registry::GLOBAL_STREAM_REGISTRY};
 use serde_json::json;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -83,7 +83,7 @@ async fn test_script_update_streaming_integration() {
     "#;
 
     // Store the core script in the repository and execute it to register the stream and endpoints
-    aiwebengine::repository_safe::upsert_script("test_streaming_core.js", core_script_content);
+    let _ = aiwebengine::repository::upsert_script("test_streaming_core.js", core_script_content);
     let result =
         aiwebengine::js_engine::execute_script("test_streaming_core.js", core_script_content);
     assert!(
@@ -250,7 +250,7 @@ async fn test_script_update_message_format() {
     "#;
 
     // Store the script in the repository and execute it
-    aiwebengine::repository_safe::upsert_script("test_message_format.js", core_script_content);
+    let _ = aiwebengine::repository::upsert_script("test_message_format.js", core_script_content);
     let result =
         aiwebengine::js_engine::execute_script("test_message_format.js", core_script_content);
     assert!(
