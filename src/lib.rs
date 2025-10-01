@@ -12,7 +12,6 @@ pub mod config;
 pub mod error;
 pub mod graphql;
 pub mod js_engine;
-pub mod js_engine_safe;
 pub mod middleware;
 pub mod repository;
 pub mod safe_helpers;

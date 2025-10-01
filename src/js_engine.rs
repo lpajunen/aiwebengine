@@ -2,9 +2,46 @@ use rquickjs::{Context, Function, Runtime, Value};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::time::Instant;
 use tracing::{debug, error, warn};
 
 use crate::repository;
+
+/// Resource limits for JavaScript execution
+#[derive(Debug, Clone)]
+pub struct ExecutionLimits {
+    pub timeout_ms: u64,
+    pub max_memory_mb: usize,
+    pub max_script_size_bytes: usize,
+}
+
+impl Default for ExecutionLimits {
+    fn default() -> Self {
+        Self {
+            timeout_ms: 2000,
+            max_memory_mb: 50,
+            max_script_size_bytes: 1_000_000, // 1MB
+        }
+    }
+}
+
+/// Validates a script before execution
+fn validate_script(content: &str, limits: &ExecutionLimits) -> Result<(), String> {
+    if content.len() > limits.max_script_size_bytes {
+        return Err(format!(
+            "Script too large: {} bytes (max: {})",
+            content.len(),
+            limits.max_script_size_bytes
+        ));
+    }
+
+    // Basic syntax validation - check for obviously problematic patterns
+    if content.contains("while(true)") || content.contains("while (true)") {
+        warn!("Script contains potentially infinite loop pattern");
+    }
+
+    Ok(())
+}
 
 /// Represents the result of executing a JavaScript script
 #[derive(Debug, Clone)]
@@ -15,6 +52,30 @@ pub struct ScriptExecutionResult {
     pub success: bool,
     /// Error message if execution failed
     pub error: Option<String>,
+    /// Execution time in milliseconds
+    pub execution_time_ms: u64,
+}
+
+impl ScriptExecutionResult {
+    /// Create a failed execution result with error message
+    fn failed(error_message: String, execution_time_ms: u64) -> Self {
+        Self {
+            registrations: HashMap::new(),
+            success: false,
+            error: Some(error_message),
+            execution_time_ms,
+        }
+    }
+
+    /// Create a successful execution result
+    fn success(registrations: HashMap<(String, String), String>, execution_time_ms: u64) -> Self {
+        Self {
+            registrations,
+            success: true,
+            error: None,
+            execution_time_ms,
+        }
+    }
 }
 
 /// Executes a JavaScript script and captures any register() method calls
@@ -22,6 +83,14 @@ pub struct ScriptExecutionResult {
 /// This function creates a QuickJS runtime, sets up the register function,
 /// executes the script, and returns information about the registrations made.
 pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
+    let start_time = Instant::now();
+
+    // Validate script using default limits
+    let limits = ExecutionLimits::default();
+    if let Err(e) = validate_script(content, &limits) {
+        return ScriptExecutionResult::failed(e, start_time.elapsed().as_millis() as u64);
+    }
+
     let registrations = Rc::new(RefCell::new(HashMap::new()));
     let uri_owned = uri.to_string();
 
@@ -324,19 +393,15 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                     Ok(_) => {
                         debug!("Successfully executed script {}", uri_owned);
                         let final_regs = registrations.borrow().clone();
-                        ScriptExecutionResult {
-                            registrations: final_regs,
-                            success: true,
-                            error: None,
-                        }
+                        let execution_time = start_time.elapsed().as_millis() as u64;
+                        ScriptExecutionResult::success(final_regs, execution_time)
                     }
                     Err(e) => {
                         error!("Failed to execute script {}: {}", uri_owned, e);
-                        ScriptExecutionResult {
-                            registrations: HashMap::new(),
-                            success: false,
-                            error: Some(format!("Script evaluation error: {}", e)),
-                        }
+                        ScriptExecutionResult::failed(
+                            format!("Script evaluation error: {}", e),
+                            start_time.elapsed().as_millis() as u64,
+                        )
                     }
                 }
             }
@@ -345,11 +410,10 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                     "Failed to create QuickJS context for script {}: {}",
                     uri_owned, e
                 );
-                ScriptExecutionResult {
-                    registrations: HashMap::new(),
-                    success: false,
-                    error: Some(format!("Context creation error: {}", e)),
-                }
+                ScriptExecutionResult::failed(
+                    format!("Context creation error: {}", e),
+                    start_time.elapsed().as_millis() as u64,
+                )
             }
         },
         Err(e) => {
@@ -357,11 +421,10 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                 "Failed to create QuickJS runtime for script {}: {}",
                 uri_owned, e
             );
-            ScriptExecutionResult {
-                registrations: HashMap::new(),
-                success: false,
-                error: Some(format!("Runtime creation error: {}", e)),
-            }
+            ScriptExecutionResult::failed(
+                format!("Runtime creation error: {}", e),
+                start_time.elapsed().as_millis() as u64,
+            )
         }
     }
 }
@@ -1295,6 +1358,7 @@ mod tests {
             registrations,
             success: true,
             error: None,
+            execution_time_ms: 100,
         };
 
         let debug_str = format!("{:?}", result);
@@ -1315,6 +1379,7 @@ mod tests {
             registrations,
             success: false,
             error: Some("Test error".to_string()),
+            execution_time_ms: 200,
         };
 
         let cloned = original.clone();
@@ -1477,5 +1542,32 @@ mod tests {
                 .any(|log| log.contains("Complex JSON message sent")),
             "Should have logged successful JSON message sending"
         );
+    }
+
+    #[test]
+    fn test_script_size_validation() {
+        // Test with a script that exceeds the default 1MB limit
+        let large_script = "// ".repeat(600_000) + "register('/test', 'handler');";
+        assert!(large_script.len() > 1_000_000);
+
+        let result = execute_script("test-large-script", &large_script);
+
+        assert!(!result.success);
+        assert!(result.error.is_some());
+        assert!(result.error.unwrap().contains("Script too large"));
+        // Execution time is always recorded
+        println!("Validation took {} ms", result.execution_time_ms);
+    }
+
+    #[test]
+    fn test_script_validation_infinite_loop_warning() {
+        let script_with_infinite_loop = "while(true) { console.log('infinite'); }";
+
+        // This should still execute (just warn), but we can test that the validation function works
+        let limits = ExecutionLimits::default();
+        let validation_result = validate_script(script_with_infinite_loop, &limits);
+
+        // Should pass validation (just warning), but our logs would show the warning
+        assert!(validation_result.is_ok());
     }
 }
