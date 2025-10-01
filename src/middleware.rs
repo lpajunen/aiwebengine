@@ -45,10 +45,10 @@ pub fn generate_request_id() -> String {
 
 /// Extract request ID from request headers or generate a new one
 pub fn extract_or_generate_request_id(headers: &HeaderMap) -> String {
-    if let Some(request_id) = headers.get(REQUEST_ID_HEADER) {
-        if let Ok(id) = request_id.to_str() {
-            return id.to_string();
-        }
+    if let Some(request_id) = headers.get(REQUEST_ID_HEADER)
+        && let Ok(id) = request_id.to_str()
+    {
+        return id.to_string();
     }
 
     generate_request_id()

@@ -179,10 +179,10 @@ fn parse_types_from_sdl(sdl: &str) -> HashMap<String, Object> {
     // Simple regex-based parsing for type definitions
     // This is a basic implementation - a full SDL parser would be more robust
     // Use captures_iter to find all type definitions in the SDL
-    for captures in regex::Regex::new(r"type\s+(\w+)\s*\{([^}]+)\}")
-        .unwrap()
-        .captures_iter(sdl)
-    {
+    let type_regex = regex::Regex::new(r"type\s+(\w+)\s*\{([^}]+)\}").unwrap();
+    let field_regex = regex::Regex::new(r"(\w+):\s*(\[?\w+!?\]?!?)").unwrap();
+
+    for captures in type_regex.captures_iter(sdl) {
         let type_name = &captures[1];
         let fields_str = &captures[2];
 
@@ -190,10 +190,7 @@ fn parse_types_from_sdl(sdl: &str) -> HashMap<String, Object> {
             let mut object_builder = Object::new(type_name);
 
             // Parse fields and create resolvers that extract from the parent object
-            for field_match in regex::Regex::new(r"(\w+):\s*(\[?\w+!?\]?!?)")
-                .unwrap()
-                .captures_iter(fields_str)
-            {
+            for field_match in field_regex.captures_iter(fields_str) {
                 let field_name = &field_match[1];
                 let field_type = &field_match[2];
 
@@ -216,14 +213,12 @@ fn parse_types_from_sdl(sdl: &str) -> HashMap<String, Object> {
                         FieldFuture::new(async move {
                             // Try to access the field from the parent value
                             // The parent should be a JSON object with the field data
-                            if let Ok(parent_map) = ctx.parent_value.try_to_value() {
-                                if let async_graphql::Value::Object(obj) = parent_map {
-                                    if let Some(field_value) =
-                                        obj.get(&async_graphql::Name::new(&field_name))
-                                    {
-                                        return Ok(Some(field_value.clone()));
-                                    }
-                                }
+                            if let Ok(parent_map) = ctx.parent_value.try_to_value()
+                                && let async_graphql::Value::Object(obj) = parent_map
+                                && let Some(field_value) =
+                                    obj.get(&async_graphql::Name::new(&field_name))
+                            {
+                                return Ok(Some(field_value.clone()));
                             }
                             Ok(Some(async_graphql::Value::Null))
                         })

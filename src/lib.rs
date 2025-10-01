@@ -3,7 +3,6 @@ use axum::http::{Request, StatusCode};
 use axum::response::{IntoResponse, Response, Sse, sse::Event};
 use axum::{Router, routing::any};
 use axum_server::Server;
-use serde_urlencoded;
 use std::collections::HashMap;
 use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 use tracing::{debug, error, info};
@@ -293,10 +292,10 @@ pub async fn start_server_with_config(
         fn extract_subscription_name(query: &str) -> Option<String> {
             // Basic regex to extract subscription field name
             // This is a simple implementation - a full GraphQL parser would be more robust
-            if let Ok(re) = regex::Regex::new(r"subscription\s*\{\s*(\w+)") {
-                if let Some(captures) = re.captures(query) {
-                    return Some(captures[1].to_string());
-                }
+            if let Ok(re) = regex::Regex::new(r"subscription\s*\{\s*(\w+)")
+                && let Some(captures) = re.captures(query)
+            {
+                return Some(captures[1].to_string());
             }
             None
         }
@@ -439,8 +438,8 @@ pub async fn start_server_with_config(
                 let request_method = req.method().to_string();
 
                 // Check for assets first if it's a GET request
-                if request_method == "GET" {
-                    if let Some(asset) = repository::fetch_asset(&path) {
+                if request_method == "GET"
+                    && let Some(asset) = repository::fetch_asset(&path) {
                         let mut response = asset.content.into_response();
                         response.headers_mut().insert(
                             axum::http::header::CONTENT_TYPE,
@@ -450,7 +449,6 @@ pub async fn start_server_with_config(
                         );
                         return response;
                     }
-                }
 
                 // Check if this is a request to a registered stream path
                 let is_get = request_method == "GET";
@@ -629,8 +627,8 @@ pub async fn start_server_with_config(
                 let request_method = req.method().to_string();
 
                 // Check for assets first if it's a GET request
-                if request_method == "GET" {
-                    if let Some(asset) = repository::fetch_asset(&full_path) {
+                if request_method == "GET"
+                    && let Some(asset) = repository::fetch_asset(&full_path) {
                         let mut response = asset.content.into_response();
                         response.headers_mut().insert(
                             axum::http::header::CONTENT_TYPE,
@@ -640,7 +638,6 @@ pub async fn start_server_with_config(
                         );
                         return response;
                     }
-                }
 
                 // Check if this is a request to a registered stream path
                 let is_get = request_method == "GET";

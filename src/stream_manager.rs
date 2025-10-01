@@ -146,6 +146,12 @@ pub struct ConnectionMetadata {
     pub last_ping: u64,
 }
 
+impl Default for StreamConnectionManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StreamConnectionManager {
     /// Create a new connection manager with default configuration
     pub fn new() -> Self {
@@ -214,9 +220,7 @@ impl StreamConnectionManager {
         }
 
         // Check connection limits
-        if let Err(e) = self.check_connection_limits(stream_path).await {
-            return Err(e);
-        }
+        self.check_connection_limits(stream_path).await?;
 
         // Create a stream connection in the registry
         let stream_connection = if let Some(metadata) = &client_metadata {
@@ -275,12 +279,12 @@ impl StreamConnectionManager {
             let _ = GLOBAL_STREAM_REGISTRY.remove_connection(&path, connection_id);
 
             // Update connections by stream
-            if let Ok(mut conn_by_stream) = self.connections_by_stream.lock() {
-                if let Some(conn_ids) = conn_by_stream.get_mut(&path) {
-                    conn_ids.retain(|id| id != connection_id);
-                    if conn_ids.is_empty() {
-                        conn_by_stream.remove(&path);
-                    }
+            if let Ok(mut conn_by_stream) = self.connections_by_stream.lock()
+                && let Some(conn_ids) = conn_by_stream.get_mut(&path)
+            {
+                conn_ids.retain(|id| id != connection_id);
+                if conn_ids.is_empty() {
+                    conn_by_stream.remove(&path);
                 }
             }
 
@@ -499,13 +503,13 @@ impl StreamConnectionManager {
                 }
 
                 // Check per-stream limit
-                if let Some(stream_connections) = conn_by_stream.get(stream_path) {
-                    if stream_connections.len() >= self.config.max_connections_per_stream {
-                        return Err(format!(
-                            "Maximum connections per stream reached for '{}' ({})",
-                            stream_path, self.config.max_connections_per_stream
-                        ));
-                    }
+                if let Some(stream_connections) = conn_by_stream.get(stream_path)
+                    && stream_connections.len() >= self.config.max_connections_per_stream
+                {
+                    return Err(format!(
+                        "Maximum connections per stream reached for '{}' ({})",
+                        stream_path, self.config.max_connections_per_stream
+                    ));
                 }
 
                 Ok(())

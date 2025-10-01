@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 /// Application configuration with comprehensive settings for all components
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppConfig {
     /// Server configuration
     pub server: ServerConfig,
@@ -182,19 +182,6 @@ pub struct PerformanceConfig {
 
     /// Metrics collection interval in seconds
     pub metrics_interval_secs: u64,
-}
-
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            server: ServerConfig::default(),
-            logging: LoggingConfig::default(),
-            javascript: JavaScriptConfig::default(),
-            repository: RepositoryConfig::default(),
-            security: SecurityConfig::default(),
-            performance: PerformanceConfig::default(),
-        }
-    }
 }
 
 impl Default for ServerConfig {

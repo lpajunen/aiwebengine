@@ -305,10 +305,10 @@ pub fn fetch_assets() -> HashMap<String, Asset> {
 /// Fetch single asset with error handling (dynamic first, then static)
 pub fn fetch_asset(public_path: &str) -> Option<Asset> {
     // Check dynamic assets first
-    if let Ok(guard) = safe_lock_assets() {
-        if let Some(asset) = guard.get(public_path) {
-            return Some(asset.clone());
-        }
+    if let Ok(guard) = safe_lock_assets()
+        && let Some(asset) = guard.get(public_path)
+    {
+        return Some(asset.clone());
     }
 
     // Check static assets

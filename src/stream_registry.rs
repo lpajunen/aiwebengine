@@ -42,6 +42,12 @@ pub struct StreamConnection {
     pub metadata: Option<HashMap<String, String>>,
 }
 
+impl Default for StreamConnection {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StreamConnection {
     /// Create a new stream connection
     pub fn new() -> Self {

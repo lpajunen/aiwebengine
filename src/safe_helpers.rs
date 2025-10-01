@@ -15,9 +15,7 @@ pub fn safe_status_code(status: u16) -> StatusCode {
 pub fn safe_error_json(error_response: &ErrorResponse) -> String {
     serde_json::to_string(error_response).unwrap_or_else(|e| {
         error!("Failed to serialize error response: {}. Using fallback.", e);
-        format!(
-            r#"{{"error":{{"code":"INTERNAL_SERVER_ERROR","message":"Serialization error occurred","status":500}}}}"#
-        )
+        r#"{"error":{"code":"INTERNAL_SERVER_ERROR","message":"Serialization error occurred","status":500}}"#.to_string()
     })
 }
 
