@@ -351,9 +351,9 @@ pub async fn start_server_with_config(
             });
 
             let receiver_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-            return Sse::new(receiver_stream)
+            Sse::new(receiver_stream)
                 .keep_alive(axum::response::sse::KeepAlive::default())
-                .into_response();
+                .into_response()
         } else {
             // Handle regular queries/mutations as single response
             let response = schema.execute(request).await;
