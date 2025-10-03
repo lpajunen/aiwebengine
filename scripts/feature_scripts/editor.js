@@ -590,6 +590,9 @@ function apiSaveScript(req) {
         // Extract the script name from the path
         let scriptName = req.path.replace('/api/scripts/', '');
 
+        // URL decode the script name in case it contains encoded characters
+        scriptName = decodeURIComponent(scriptName);
+
         // If it's already a full URI, use it as-is
         // If it's just a short name, convert it to full URI
         let fullUri;

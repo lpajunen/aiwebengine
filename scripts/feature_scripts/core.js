@@ -62,8 +62,8 @@ function broadcastScriptUpdate(uri, action, details = {}) {
 		
 		sendStreamMessageToPath('/script_updates', JSON.stringify(message));
 		
-		// Also send to GraphQL subscription
-		sendSubscriptionMessage("scriptUpdates", JSON.stringify(message));
+		// Send to GraphQL subscription using modern approach
+		sendStreamMessageToPath('/graphql/subscription/scriptUpdates', JSON.stringify(message));
 		
 		writeLog('Broadcasted script update: ' + action + ' ' + uri);
 	} catch (error) {
