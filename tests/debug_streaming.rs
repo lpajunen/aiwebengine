@@ -131,7 +131,7 @@ async fn test_direct_stream_message() {
     info!("Testing direct stream message sending");
 
     // Create a connection first
-    let connection = aiwebengine::stream_manager::StreamConnectionManager::new()
+    let _connection = aiwebengine::stream_manager::StreamConnectionManager::new()
         .create_connection("/direct_test", None)
         .await;
 

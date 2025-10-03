@@ -1,8 +1,7 @@
-use aiwebengine::{repository, stream_registry::GLOBAL_STREAM_REGISTRY};
-use serde_json::json;
+use aiwebengine::stream_registry::GLOBAL_STREAM_REGISTRY;
 use std::time::Duration;
 use tokio::time::sleep;
-use tracing::{debug, error, info, warn};
+use tracing::info;
 
 #[tokio::test]
 async fn test_script_update_streaming_integration() {

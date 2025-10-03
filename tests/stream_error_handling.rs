@@ -1,9 +1,7 @@
 use aiwebengine::stream_registry::{
     BroadcastResult, GLOBAL_STREAM_REGISTRY, StreamConnection, StreamRegistry,
 };
-use std::time::Duration;
-use tokio::time::timeout;
-use tracing::{debug, error, info, warn};
+use tracing::info;
 
 #[tokio::test]
 async fn test_broadcast_result_structure() {
@@ -52,8 +50,6 @@ async fn test_automatic_failed_connection_cleanup() {
     // Create connections
     let conn1 = StreamConnection::new();
     let conn2 = StreamConnection::new();
-    let conn1_id = conn1.connection_id.clone();
-    let conn2_id = conn2.connection_id.clone();
 
     // Add connections to the registry
     registry.add_connection("/test_cleanup", conn1).unwrap();
