@@ -1,4 +1,5 @@
 use async_graphql::dynamic::*;
+use async_stream;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tracing::{debug, error};
@@ -141,12 +142,24 @@ pub fn register_graphql_subscription(
         script_uri: script_uri.clone(),
     };
 
-    // NOTE: With execute_stream approach, we no longer need to auto-register stream paths
-    // The GraphQL subscription lifecycle is handled natively by async-graphql
-    debug!(
-        "GraphQL subscription '{}' registered for execute_stream (no manual stream path needed)",
-        name
-    );
+    // With execute_stream, we still need stream paths for sendSubscriptionMessage compatibility
+    // This ensures existing JavaScript APIs continue to work
+    let stream_path = format!("/graphql/subscription/{}", name);
+    match crate::stream_registry::GLOBAL_STREAM_REGISTRY.register_stream(&stream_path, &script_uri)
+    {
+        Ok(()) => {
+            debug!(
+                "Registered compatibility stream path '{}' for GraphQL subscription '{}'",
+                stream_path, name
+            );
+        }
+        Err(e) => {
+            error!(
+                "Failed to register compatibility stream path '{}' for subscription '{}': {}",
+                stream_path, name, e
+            );
+        }
+    }
 
     if let Ok(mut registry) = get_registry().write() {
         registry.register_subscription(name.clone(), operation);
@@ -340,7 +353,19 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
     // Drop the guard so we don't have borrowing issues
     drop(registry_guard);
 
-    let mut builder = Schema::build("Query", Some("Mutation"), None);
+    let mut builder = Schema::build(
+        "Query",
+        if has_mutations {
+            Some("Mutation")
+        } else {
+            None
+        },
+        if has_subscriptions {
+            Some("Subscription")
+        } else {
+            None
+        },
+    );
 
     // Register custom types from all SDL definitions
     let mut registered_types = std::collections::HashSet::new();
@@ -675,7 +700,7 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
 
     // Build Subscription type if subscriptions exist
     if has_subscriptions {
-        let mut subscription_builder = Object::new("Subscription");
+        let mut subscription_builder = Subscription::new("Subscription");
 
         for (name, operation) in subscriptions {
             let subscription_name = name.clone();
@@ -683,9 +708,8 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
             let resolver_uri = operation.script_uri.clone();
             let resolver_fn = operation.resolver_function.clone();
 
-            // For now, create a simple subscription field that returns a message
-            // The actual streaming will be handled by the SSE endpoint connecting to the stream path
-            let subscription_field = Field::new(
+            // Create a proper streaming subscription field for execute_stream
+            let subscription_field = SubscriptionField::new(
                 field_name.clone(),
                 TypeRef::named_nn(TypeRef::STRING), // Non-null for subscriptions
                 move |_ctx| {
@@ -693,25 +717,69 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
                     let uri = resolver_uri.clone();
                     let func = resolver_fn.clone();
 
-                    FieldFuture::new(async move {
+                    // Return a SubscriptionFieldFuture directly
+                    SubscriptionFieldFuture::new(async move {
                         // Initialize the subscription by calling the JavaScript resolver
-                        // This allows the resolver to set up any initial state or start emitting messages
-                        match crate::js_engine::execute_graphql_resolver(&uri, &func, None) {
-                            Ok(result) => {
-                                debug!(
-                                    "Subscription '{}' initialized: {}",
-                                    subscription_name, result
-                                );
-                                Ok(Some(async_graphql::Value::String(result)))
-                            }
-                            Err(e) => {
-                                error!(
-                                    "Failed to initialize subscription '{}': {}",
-                                    subscription_name, e
-                                );
-                                Ok(Some(async_graphql::Value::String(format!("Error: {}", e))))
-                            }
-                        }
+                        let initial_result =
+                            match crate::js_engine::execute_graphql_resolver(&uri, &func, None) {
+                                Ok(result) => {
+                                    debug!(
+                                        "Subscription '{}' initialized: {}",
+                                        subscription_name, result
+                                    );
+                                    result
+                                }
+                                Err(e) => {
+                                    error!(
+                                        "Failed to initialize subscription '{}': {}",
+                                        subscription_name, e
+                                    );
+                                    format!("Error: {}", e)
+                                }
+                            };
+
+                        // For execute_stream compatibility, we need to maintain the legacy bridge
+                        // where sendSubscriptionMessage still works via the stream registry
+                        let stream_path = format!("/graphql/subscription/{}", subscription_name);
+
+                        // Create a unified stream using boxed trait objects
+                        use std::pin::Pin;
+
+                        let stream: Pin<
+                            Box<
+                                dyn futures::Stream<
+                                        Item = Result<async_graphql::Value, async_graphql::Error>,
+                                    > + Send,
+                            >,
+                        > = if let Ok(connection) =
+                            crate::stream_manager::StreamConnectionManager::new()
+                                .create_connection(&stream_path, None)
+                                .await
+                        {
+                            let mut receiver = connection.receiver;
+                            let stream = async_stream::stream! {
+                                // Yield initial result
+                                yield Ok(async_graphql::Value::String(initial_result));
+
+                                // Then listen for broadcast messages from sendSubscriptionMessage
+                                while let Ok(message) = receiver.recv().await {
+                                    yield Ok(async_graphql::Value::String(message));
+                                }
+                            };
+                            Box::pin(stream)
+                        } else {
+                            error!(
+                                "Failed to create connection for subscription '{}'",
+                                subscription_name
+                            );
+                            // Fallback: just emit the initial value
+                            let stream = async_stream::stream! {
+                                yield Ok(async_graphql::Value::String(initial_result));
+                            };
+                            Box::pin(stream)
+                        };
+
+                        Ok(stream)
                     })
                 },
             );

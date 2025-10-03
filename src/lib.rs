@@ -3,9 +3,9 @@ use axum::http::{Request, StatusCode};
 use axum::response::{IntoResponse, Response, Sse, sse::Event};
 use axum::{Router, routing::any};
 use axum_server::Server;
+use futures::StreamExt as FuturesStreamExt;
 use std::collections::HashMap;
 use tokio_stream::wrappers::BroadcastStream;
-use futures::StreamExt as FuturesStreamExt;
 use tracing::{debug, error, info};
 
 pub mod config;
@@ -322,7 +322,7 @@ pub async fn start_server_with_config(
 
             tokio::spawn(async move {
                 let stream = schema.execute_stream(request);
-                
+
                 // Convert each GraphQL response to SSE event and send via channel
                 let mut stream = std::pin::pin!(stream);
                 while let Some(response) = FuturesStreamExt::next(&mut stream).await {
@@ -336,12 +336,14 @@ pub async fn start_server_with_config(
                         let error_json = serde_json::json!({
                             "errors": response.errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
                         });
-                        Ok::<Event, std::convert::Infallible>(Event::default().data(error_json.to_string()))
+                        Ok::<Event, std::convert::Infallible>(
+                            Event::default().data(error_json.to_string()),
+                        )
                     } else {
                         // Send empty data
                         Ok::<Event, std::convert::Infallible>(Event::default().data("{}"))
                     };
-                    
+
                     if tx.send(event).await.is_err() {
                         break; // Receiver dropped, stop streaming
                     }
