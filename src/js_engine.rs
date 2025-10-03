@@ -994,6 +994,32 @@ pub fn execute_graphql_resolver(
         )?;
         global.set("registerWebStream", reg_web_stream_noop)?;
 
+        // Stream message sending function for specific path (GraphQL resolver context)
+        let send_stream_message_to_path = Function::new(
+            ctx.clone(),
+            move |_c: rquickjs::Ctx<'_>, path: String, json_string: String| -> Result<(), rquickjs::Error> {
+                debug!("JavaScript called sendStreamMessageToPath (GraphQL resolver context) with path: {} and message: {}", path, json_string);
+
+                // Broadcast to specific stream path
+                match crate::stream_registry::GLOBAL_STREAM_REGISTRY.broadcast_to_stream(&path, &json_string) {
+                    Ok(result) => {
+                        if result.is_fully_successful() {
+                            debug!("Successfully sent message to {} connections on path '{}' (GraphQL resolver context)", result.successful_sends, path);
+                        } else {
+                            warn!("Broadcast to path '{}' partially failed (GraphQL resolver context): {} successful, {} failed out of {} total connections",
+                                  path, result.successful_sends, result.failed_connections.len(), result.total_connections);
+                        }
+                        Ok(())
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to broadcast message to path '{}' (GraphQL resolver context): {}", path, e);
+                        Err(rquickjs::Error::Exception)
+                    }
+                }
+            },
+        )?;
+        global.set("sendStreamMessageToPath", send_stream_message_to_path)?;
+
         // Add subscription message sending function for GraphQL resolver context (execute_stream compatible)
         let send_subscription_message = Function::new(
             ctx.clone(),
