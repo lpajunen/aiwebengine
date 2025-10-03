@@ -2,6 +2,46 @@
 
 This document outlines potential enhancements and missing features that could make aiwebengine more robust and feature-complete for production use.
 
+## 🔥 ACTIVE IMPLEMENTATION: GraphQL execute_stream Integration
+
+### Execute_stream Implementation Plan
+**Priority**: IMMEDIATE - IN PROGRESS
+
+Migrating GraphQL subscriptions from manual stream path management to native `schema.execute_stream` approach for better standards compliance and simplified architecture.
+
+#### **Phase 1: Basic execute_stream Integration** ⏳ IN PROGRESS
+- **Goal**: Replace current SSE subscription handler with `execute_stream`
+- **Changes**:
+  - Modify `graphql_sse` function in `src/lib.rs` to use `schema.execute_stream(request)`
+  - Remove manual subscription name extraction and stream path mapping
+  - Implement native GraphQL response stream to SSE conversion
+  - Better error handling with proper GraphQL error objects
+- **Benefits**: 
+  - Reduces code complexity from ~100 lines to ~30 lines
+  - Native GraphQL subscription lifecycle management
+  - Standards-compliant GraphQL subscription handling
+  - Improved error propagation
+
+#### **Phase 2: Enhanced Subscription Integration** 📋 PLANNED
+- **Goal**: Update subscription registration to work directly with execute_stream
+- **Changes**:
+  - Remove auto-registration of `/graphql/subscription/{name}` stream paths
+  - Simplify `register_graphql_subscription` function in `src/graphql.rs`
+  - Update JavaScript `sendSubscriptionMessage` to work with GraphQL streams
+- **Benefits**: Cleaner architecture, no manual stream path management
+
+#### **Phase 3: Update Scripts and Documentation** 📋 PLANNED
+- **Goal**: Update all existing scripts to work with new approach
+- **Changes**:
+  - Update example scripts in `scripts/example_scripts/graphql_subscription_demo.js`
+  - Update documentation in `docs/graphql-subscriptions.md`
+  - Remove references to manual stream paths in examples
+- **Benefits**: Consistent usage patterns, up-to-date documentation
+
+**Breaking Changes**: All existing GraphQL subscription scripts must be updated to use new approach (no backward compatibility bridge)
+
+---
+
 ## Core Infrastructure
 
 ### 1. Middleware System ✅ COMPLETED

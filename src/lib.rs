@@ -4,7 +4,8 @@ use axum::response::{IntoResponse, Response, Sse, sse::Event};
 use axum::{Router, routing::any};
 use axum_server::Server;
 use std::collections::HashMap;
-use tokio_stream::{StreamExt, wrappers::BroadcastStream};
+use tokio_stream::wrappers::BroadcastStream;
+use futures::StreamExt as FuturesStreamExt;
 use tracing::{debug, error, info};
 
 pub mod config;
@@ -86,7 +87,7 @@ async fn handle_stream_request(path: String) -> Response {
 
     // Convert to SSE events, handling both messages and errors
     let path_for_cleanup = path.clone();
-    let sse_stream = receiver_stream.map(move |result| {
+    let sse_stream = tokio_stream::StreamExt::map(receiver_stream, move |result| {
         match result {
             Ok(msg) => {
                 debug!(
@@ -283,23 +284,11 @@ pub async fn start_server_with_config(
         axum::response::Json(serde_json::to_value(response).unwrap_or(serde_json::Value::Null))
     }
 
-    // GraphQL SSE handler - handles subscriptions over Server-Sent Events
+    // GraphQL SSE handler - handles subscriptions over Server-Sent Events using execute_stream
     async fn graphql_sse(
         schema: async_graphql::dynamic::Schema,
         req: axum::http::Request<axum::body::Body>,
     ) -> impl IntoResponse {
-        // Helper function to extract subscription name from GraphQL query
-        fn extract_subscription_name(query: &str) -> Option<String> {
-            // Basic regex to extract subscription field name
-            // This is a simple implementation - a full GraphQL parser would be more robust
-            if let Ok(re) = regex::Regex::new(r"subscription\s*\{\s*(\w+)")
-                && let Some(captures) = re.captures(query)
-            {
-                return Some(captures[1].to_string());
-            }
-            None
-        }
-
         let (_parts, body) = req.into_parts();
         let body_bytes = match axum::body::to_bytes(body, usize::MAX).await {
             Ok(bytes) => bytes,
@@ -327,83 +316,48 @@ pub async fn start_server_with_config(
         let is_subscription = request.query.trim_start().starts_with("subscription");
 
         if is_subscription {
-            // For GraphQL subscriptions, we need to:
-            // 1. Execute the subscription to initialize it (call the resolver)
-            // 2. Extract the subscription name from the query
-            // 3. Connect to the corresponding stream path that was auto-registered
+            // Use execute_stream for subscriptions - this provides native GraphQL subscription lifecycle
+            // We need to move the schema into a spawn to handle the lifetime requirements
+            let (tx, rx) = tokio::sync::mpsc::channel(100);
 
-            // Try to extract subscription name from the query (basic parsing)
-            let subscription_name = extract_subscription_name(&request.query);
-
-            // Execute the subscription to initialize it
-            let initial_response = schema.execute(request).await;
-
-            if let Some(sub_name) = subscription_name {
-                let stream_path = format!("/graphql/subscription/{}", sub_name);
-
-                // Create a connection to the stream for this subscription
-                match crate::stream_manager::StreamConnectionManager::new()
-                    .create_connection(&stream_path, None)
-                    .await
-                {
-                    Ok(connection) => {
-                        let mut receiver = connection.receiver;
-
-                        // Create an SSE stream that sends the initial response and then listens for updates
-                        let initial_json = serde_json::to_string(&initial_response)
+            tokio::spawn(async move {
+                let stream = schema.execute_stream(request);
+                
+                // Convert each GraphQL response to SSE event and send via channel
+                let mut stream = std::pin::pin!(stream);
+                while let Some(response) = FuturesStreamExt::next(&mut stream).await {
+                    let event = if response.data != async_graphql::Value::Null {
+                        // Send data as SSE event
+                        let json_data = serde_json::to_string(&response.data)
                             .unwrap_or_else(|_| "{}".to_string());
-                        let initial_sse = format!("data: {}\n\n", initial_json);
-
-                        // Create a stream that starts with the initial response and then streams updates
-                        let stream = async_stream::stream! {
-                            // Send initial response
-                            yield Ok::<String, std::convert::Infallible>(initial_sse);
-
-                            // Then stream updates
-                            while let Ok(message) = receiver.recv().await {
-                                let sse_data = format!("data: {}\n\n", message);
-                                yield Ok::<String, std::convert::Infallible>(sse_data);
-                            }
-                        };
-
-                        let body = axum::body::Body::from_stream(stream);
-
-                        return axum::response::Response::builder()
-                            .header("content-type", "text/event-stream")
-                            .header("cache-control", "no-cache")
-                            .header("connection", "keep-alive")
-                            .header("access-control-allow-origin", "*")
-                            .header("access-control-allow-headers", "content-type")
-                            .body(body)
-                            .unwrap();
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            "Failed to create stream connection for subscription: {}",
-                            e
-                        );
+                        Ok::<Event, std::convert::Infallible>(Event::default().data(json_data))
+                    } else if !response.errors.is_empty() {
+                        // Send errors as SSE event
+                        let error_json = serde_json::json!({
+                            "errors": response.errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+                        });
+                        Ok::<Event, std::convert::Infallible>(Event::default().data(error_json.to_string()))
+                    } else {
+                        // Send empty data
+                        Ok::<Event, std::convert::Infallible>(Event::default().data("{}"))
+                    };
+                    
+                    if tx.send(event).await.is_err() {
+                        break; // Receiver dropped, stop streaming
                     }
                 }
-            }
+            });
 
-            // Fallback: return initial response only
-            let json_data =
-                serde_json::to_string(&initial_response).unwrap_or_else(|_| "{}".to_string());
-            let sse_data = format!("data: {}\n\n", json_data);
-            axum::response::Response::builder()
-                .header("content-type", "text/event-stream")
-                .header("cache-control", "no-cache")
-                .header("connection", "keep-alive")
-                .header("access-control-allow-origin", "*")
-                .header("access-control-allow-headers", "content-type")
-                .body(axum::body::Body::from(sse_data))
-                .unwrap()
+            let receiver_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+            return Sse::new(receiver_stream)
+                .keep_alive(axum::response::sse::KeepAlive::default())
+                .into_response();
         } else {
             // Handle regular queries/mutations as single response
             let response = schema.execute(request).await;
             let json_data = serde_json::to_string(&response).unwrap_or_else(|_| "{}".to_string());
 
-            // Return SSE formatted response
+            // Return SSE formatted response for consistency
             let sse_data = format!("data: {}\n\n", json_data);
             axum::response::Response::builder()
                 .header("content-type", "text/event-stream")

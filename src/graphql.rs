@@ -141,23 +141,12 @@ pub fn register_graphql_subscription(
         script_uri: script_uri.clone(),
     };
 
-    // Auto-register a corresponding stream path for this subscription
-    let stream_path = format!("/graphql/subscription/{}", name);
-    match crate::stream_registry::GLOBAL_STREAM_REGISTRY.register_stream(&stream_path, &script_uri)
-    {
-        Ok(()) => {
-            debug!(
-                "Auto-registered stream path '{}' for GraphQL subscription '{}'",
-                stream_path, name
-            );
-        }
-        Err(e) => {
-            error!(
-                "Failed to auto-register stream path '{}' for subscription '{}': {}",
-                stream_path, name, e
-            );
-        }
-    }
+    // NOTE: With execute_stream approach, we no longer need to auto-register stream paths
+    // The GraphQL subscription lifecycle is handled natively by async-graphql
+    debug!(
+        "GraphQL subscription '{}' registered for execute_stream (no manual stream path needed)",
+        name
+    );
 
     if let Ok(mut registry) = get_registry().write() {
         registry.register_subscription(name.clone(), operation);

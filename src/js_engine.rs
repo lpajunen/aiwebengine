@@ -256,13 +256,18 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                     )?;
                     global.set("sendStreamMessageToPath", send_stream_message_to_path)?;
 
-                    // GraphQL Subscription message sending function (convenience wrapper)
+                    // GraphQL Subscription message sending function (execute_stream compatible)
                     let send_subscription_message = Function::new(
                         ctx.clone(),
                         move |_c: rquickjs::Ctx<'_>, subscription_name: String, json_string: String| -> Result<(), rquickjs::Error> {
                             debug!("JavaScript called sendSubscriptionMessage for '{}' with message: {}", subscription_name, json_string);
                             
-                            // Send to the auto-registered stream path for this subscription
+                            // TODO: With execute_stream approach, subscription messages should be generated
+                            // from within the subscription resolvers themselves. This is a temporary
+                            // compatibility bridge that still uses the stream registry approach.
+                            warn!("sendSubscriptionMessage is using legacy stream approach. Consider moving message generation to subscription resolvers.");
+                            
+                            // Send to the auto-registered stream path for this subscription (legacy compatibility)
                             let stream_path = format!("/graphql/subscription/{}", subscription_name);
                             
                             match crate::stream_registry::GLOBAL_STREAM_REGISTRY.broadcast_to_stream(&stream_path, &json_string) {
@@ -702,13 +707,18 @@ pub fn execute_script_for_request(
         )?;
         global.set("sendStreamMessageToPath", send_stream_message_to_path)?;
 
-        // GraphQL Subscription message sending function for request context (convenience wrapper)
+        // GraphQL Subscription message sending function for request context (execute_stream compatible)
         let send_subscription_message = Function::new(
             ctx.clone(),
             move |_c: rquickjs::Ctx<'_>, subscription_name: String, json_string: String| -> Result<(), rquickjs::Error> {
                 debug!("JavaScript called sendSubscriptionMessage (request context) for '{}' with message: {}", subscription_name, json_string);
                 
-                // Send to the auto-registered stream path for this subscription
+                // TODO: With execute_stream approach, subscription messages should be generated
+                // from within the subscription resolvers themselves. This is a temporary
+                // compatibility bridge that still uses the stream registry approach.
+                warn!("sendSubscriptionMessage (request context) is using legacy stream approach. Consider moving message generation to subscription resolvers.");
+                
+                // Send to the auto-registered stream path for this subscription (legacy compatibility)
                 let stream_path = format!("/graphql/subscription/{}", subscription_name);
                 
                 match crate::stream_registry::GLOBAL_STREAM_REGISTRY.broadcast_to_stream(&stream_path, &json_string) {
@@ -984,13 +994,18 @@ pub fn execute_graphql_resolver(
         )?;
         global.set("registerWebStream", reg_web_stream_noop)?;
 
-        // Add subscription message sending function for GraphQL resolver context
+        // Add subscription message sending function for GraphQL resolver context (execute_stream compatible)
         let send_subscription_message = Function::new(
             ctx.clone(),
             move |_c: rquickjs::Ctx<'_>, subscription_name: String, json_string: String| -> Result<(), rquickjs::Error> {
                 debug!("JavaScript called sendSubscriptionMessage (GraphQL resolver context) for '{}' with message: {}", subscription_name, json_string);
                 
-                // Send to the auto-registered stream path for this subscription
+                // TODO: With execute_stream approach, subscription messages should be generated
+                // from within the subscription resolvers themselves. This is a temporary
+                // compatibility bridge that still uses the stream registry approach.
+                warn!("sendSubscriptionMessage (GraphQL resolver context) is using legacy stream approach. Consider moving message generation to subscription resolvers.");
+                
+                // Send to the auto-registered stream path for this subscription (legacy compatibility)
                 let stream_path = format!("/graphql/subscription/{}", subscription_name);
                 
                 match crate::stream_registry::GLOBAL_STREAM_REGISTRY.broadcast_to_stream(&stream_path, &json_string) {
