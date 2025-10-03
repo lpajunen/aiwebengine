@@ -215,7 +215,7 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                                     if result.is_fully_successful() {
                                         debug!("Successfully broadcast message to {} connections", result.successful_sends);
                                     } else {
-                                        warn!("Broadcast partially failed: {} successful, {} failed out of {} total connections", 
+                                        warn!("Broadcast partially failed: {} successful, {} failed out of {} total connections",
                                               result.successful_sends, result.failed_connections.len(), result.total_connections);
                                     }
                                     Ok(())
@@ -242,7 +242,7 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                                     if result.is_fully_successful() {
                                         debug!("Successfully sent message to {} connections on path '{}'", result.successful_sends, path);
                                     } else {
-                                        warn!("Broadcast to path '{}' partially failed: {} successful, {} failed out of {} total connections", 
+                                        warn!("Broadcast to path '{}' partially failed: {} successful, {} failed out of {} total connections",
                                               path, result.successful_sends, result.failed_connections.len(), result.total_connections);
                                     }
                                     Ok(())
@@ -261,21 +261,21 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                         ctx.clone(),
                         move |_c: rquickjs::Ctx<'_>, subscription_name: String, json_string: String| -> Result<(), rquickjs::Error> {
                             debug!("JavaScript called sendSubscriptionMessage for '{}' with message: {}", subscription_name, json_string);
-                            
+
                             // TODO: With execute_stream approach, subscription messages should be generated
                             // from within the subscription resolvers themselves. This is a temporary
                             // compatibility bridge that still uses the stream registry approach.
                             warn!("sendSubscriptionMessage is using legacy stream approach. Consider moving message generation to subscription resolvers.");
-                            
+
                             // Send to the auto-registered stream path for this subscription (legacy compatibility)
                             let stream_path = format!("/graphql/subscription/{}", subscription_name);
-                            
+
                             match crate::stream_registry::GLOBAL_STREAM_REGISTRY.broadcast_to_stream(&stream_path, &json_string) {
                                 Ok(result) => {
                                     if result.is_fully_successful() {
                                         debug!("Successfully broadcast subscription message to {} connections", result.successful_sends);
                                     } else {
-                                        warn!("Subscription broadcast partially failed: {} successful, {} failed out of {} total connections", 
+                                        warn!("Subscription broadcast partially failed: {} successful, {} failed out of {} total connections",
                                               result.successful_sends, result.failed_connections.len(), result.total_connections);
                                     }
                                     Ok(())
@@ -369,7 +369,7 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                          mimetype: String,
                          content_b64: String|
                          -> Result<(), rquickjs::Error> {
-                            debug!("JavaScript called upsertAsset with public_path: {}, mimetype: {}, content_b64 length: {}", 
+                            debug!("JavaScript called upsertAsset with public_path: {}, mimetype: {}, content_b64 length: {}",
                                    public_path, mimetype, content_b64.len());
                             match base64::Engine::decode(
                                 &base64::engine::general_purpose::STANDARD,
@@ -543,7 +543,7 @@ pub fn execute_script_for_request(
              mimetype: String,
              content_b64: String|
              -> Result<(), rquickjs::Error> {
-                debug!("JavaScript called upsertAsset with public_path: {}, mimetype: {}, content_b64 length: {}", 
+                debug!("JavaScript called upsertAsset with public_path: {}, mimetype: {}, content_b64 length: {}",
                        public_path, mimetype, content_b64.len());
                 match base64::Engine::decode(
                     &base64::engine::general_purpose::STANDARD,
@@ -666,7 +666,7 @@ pub fn execute_script_for_request(
                         if result.is_fully_successful() {
                             debug!("Successfully broadcast message to {} connections (request context)", result.successful_sends);
                         } else {
-                            warn!("Broadcast partially failed (request context): {} successful, {} failed out of {} total connections", 
+                            warn!("Broadcast partially failed (request context): {} successful, {} failed out of {} total connections",
                                   result.successful_sends, result.failed_connections.len(), result.total_connections);
                         }
                         Ok(())
@@ -693,7 +693,7 @@ pub fn execute_script_for_request(
                         if result.is_fully_successful() {
                             debug!("Successfully sent message to {} connections on path '{}' (request context)", result.successful_sends, path);
                         } else {
-                            warn!("Broadcast to path '{}' partially failed (request context): {} successful, {} failed out of {} total connections", 
+                            warn!("Broadcast to path '{}' partially failed (request context): {} successful, {} failed out of {} total connections",
                                   path, result.successful_sends, result.failed_connections.len(), result.total_connections);
                         }
                         Ok(())
@@ -712,21 +712,21 @@ pub fn execute_script_for_request(
             ctx.clone(),
             move |_c: rquickjs::Ctx<'_>, subscription_name: String, json_string: String| -> Result<(), rquickjs::Error> {
                 debug!("JavaScript called sendSubscriptionMessage (request context) for '{}' with message: {}", subscription_name, json_string);
-                
+
                 // TODO: With execute_stream approach, subscription messages should be generated
                 // from within the subscription resolvers themselves. This is a temporary
                 // compatibility bridge that still uses the stream registry approach.
                 warn!("sendSubscriptionMessage (request context) is using legacy stream approach. Consider moving message generation to subscription resolvers.");
-                
+
                 // Send to the auto-registered stream path for this subscription (legacy compatibility)
                 let stream_path = format!("/graphql/subscription/{}", subscription_name);
-                
+
                 match crate::stream_registry::GLOBAL_STREAM_REGISTRY.broadcast_to_stream(&stream_path, &json_string) {
                     Ok(result) => {
                         if result.is_fully_successful() {
                             debug!("Successfully broadcast subscription message to {} connections (request context)", result.successful_sends);
                         } else {
-                            warn!("Subscription broadcast partially failed (request context): {} successful, {} failed out of {} total connections", 
+                            warn!("Subscription broadcast partially failed (request context): {} successful, {} failed out of {} total connections",
                                   result.successful_sends, result.failed_connections.len(), result.total_connections);
                         }
                         Ok(())
@@ -999,21 +999,21 @@ pub fn execute_graphql_resolver(
             ctx.clone(),
             move |_c: rquickjs::Ctx<'_>, subscription_name: String, json_string: String| -> Result<(), rquickjs::Error> {
                 debug!("JavaScript called sendSubscriptionMessage (GraphQL resolver context) for '{}' with message: {}", subscription_name, json_string);
-                
+
                 // TODO: With execute_stream approach, subscription messages should be generated
                 // from within the subscription resolvers themselves. This is a temporary
                 // compatibility bridge that still uses the stream registry approach.
                 warn!("sendSubscriptionMessage (GraphQL resolver context) is using legacy stream approach. Consider moving message generation to subscription resolvers.");
-                
+
                 // Send to the auto-registered stream path for this subscription (legacy compatibility)
                 let stream_path = format!("/graphql/subscription/{}", subscription_name);
-                
+
                 match crate::stream_registry::GLOBAL_STREAM_REGISTRY.broadcast_to_stream(&stream_path, &json_string) {
                     Ok(result) => {
                         if result.is_fully_successful() {
                             debug!("Successfully broadcast subscription message to {} connections (GraphQL resolver context)", result.successful_sends);
                         } else {
-                            warn!("Subscription broadcast partially failed (GraphQL resolver context): {} successful, {} failed out of {} total connections", 
+                            warn!("Subscription broadcast partially failed (GraphQL resolver context): {} successful, {} failed out of {} total connections",
                                   result.successful_sends, result.failed_connections.len(), result.total_connections);
                         }
                         Ok(())
@@ -1206,7 +1206,7 @@ mod tests {
                 register("/api/health", "healthCheck", "GET");
                 register("/api/status", "statusCheck", "GET");
             }
-            
+
             setupRoutes();
         "#;
 
@@ -1474,10 +1474,10 @@ mod tests {
         let script_content = r#"
             // Register a stream first
             registerWebStream('/test-message-stream');
-            
+
             // Send a message to all streams
             sendStreamMessage('{"type": "test", "data": "Hello World"}');
-            
+
             writeLog('Message sent successfully');
         "#;
 
@@ -1513,7 +1513,7 @@ mod tests {
         let script_content = r#"
             // Register a stream first
             registerWebStream('/test-json-stream');
-            
+
             // Send a complex JSON message
             var messageObj = {
                 type: "notification",
@@ -1525,10 +1525,10 @@ mod tests {
                 },
                 metadata: ["tag1", "tag2"]
             };
-            
+
             // JavaScript must stringify the object before sending
             sendStreamMessage(JSON.stringify(messageObj));
-            
+
             writeLog('Complex JSON message sent');
         "#;
 
