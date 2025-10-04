@@ -93,6 +93,7 @@ pub trait HasRequestId {
 #### Async/Await Patterns
 
 ✅ **DO**: Use structured concurrency patterns
+
 ```rust
 pub async fn process_concurrent_requests(requests: Vec<Request>) -> Result<Vec<Response>, ProcessingError> {
     let futures = requests.into_iter().map(process_single_request);
@@ -156,6 +157,7 @@ Our testing strategy follows a comprehensive pyramid approach:
 #### 1. Unit Tests (Foundation - 70% of tests)
 
 ✅ **Requirements**:
+
 - **Coverage Target**: >80% line coverage, >90% function coverage
 - **Test Structure**: Use descriptive test names that explain behavior
 - **Isolation**: Each test should be independent and repeatable

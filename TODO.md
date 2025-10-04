@@ -42,31 +42,6 @@ Migrating GraphQL subscriptions from manual stream path management to native `sc
 
 ---
 
-## Core Infrastructure
-
-### 1. Middleware System ✅ COMPLETED
-
-- **Description**: Implement a middleware pipeline for request/response processing
-- **Benefits**: Cross-cutting concerns like logging, authentication, compression
-- **Implementation**: Request ID middleware implemented with proper pipeline support
-- **Status**: ✅ Implemented - Request ID generation and propagation middleware in place
-- **Priority**: High
-
-### 2. Configuration Management ✅ COMPLETED
-
-- **Description**: Environment-based configuration system
-- **Benefits**: Support for dev/staging/prod environments, secrets management
-- **Implementation**: TOML/YAML configuration files with environment-specific profiles (dev/staging/prod)
-- **Status**: ✅ Implemented - Full configuration system with validation and multiple format support
-- **Priority**: High
-
-### 3. Plugin/Extension System
-
-- **Description**: Allow third-party extensions and plugins
-- **Benefits**: Community contributions, modular architecture
-- **Implementation**: Define plugin interfaces and loading mechanism
-- **Priority**: Medium
-
 ## Security & Authentication
 
 ### 4. Authentication Framework
@@ -115,32 +90,12 @@ Migrating GraphQL subscriptions from manual stream path management to native `sc
 
 ## HTTP Features
 
-### 10. Static File Serving ✅ COMPLETED
-
-- **Description**: Built-in static file handling with programmatic asset management
-- **Benefits**: Serve CSS, JS, images, and other assets with full CRUD operations
-- **Implementation**:
-  - Automatic serving of files from `assets/` directory
-  - JavaScript API for asset management (`listAssets`, `fetchAsset`, `upsertAsset`, `deleteAsset`)
-  - Base64 encoding for binary content transfer
-  - Proper MIME type handling
-- **Status**: ✅ Implemented in v0.1.0
-- **Priority**: High
-
 ### 11. CORS Support
 
 - **Description**: Cross-Origin Resource Sharing configuration
 - **Benefits**: Enable cross-domain API access
 - **Implementation**: CORS middleware with configurable origins
 - **Priority**: High
-
-### 12. WebSocket Support ✅ COMPLETED (Server-Sent Events)
-
-- **Description**: Real-time bidirectional communication via Server-Sent Events
-- **Benefits**: Chat apps, live updates, real-time features
-- **Implementation**: SSE streaming with JavaScript APIs (sendStreamMessage, sendStreamMessageToPath) and stream registry management
-- **Status**: ✅ Implemented - Full SSE streaming support with JavaScript integration
-- **Priority**: Medium
 
 ### 13. File Upload Handling
 
@@ -150,21 +105,6 @@ Migrating GraphQL subscriptions from manual stream path management to native `sc
 - **Priority**: Medium
 
 ## Development Experience
-
-### 14. Hot Reloading
-
-- **Description**: Automatic script reloading on changes
-- **Benefits**: Faster development cycle
-- **Implementation**: File watcher with script recompilation
-- **Priority**: Medium
-
-### 15. Testing Framework ✅ COMPLETED
-
-- **Description**: Built-in testing utilities and runners
-- **Benefits**: Automated testing support
-- **Implementation**: Comprehensive test suite with 91 unit tests, integration tests, and test utilities
-- **Status**: ✅ Implemented - Full testing framework with good coverage
-- **Priority**: Medium
 
 ### 16. Package Management
 
@@ -190,39 +130,6 @@ Migrating GraphQL subscriptions from manual stream path management to native `sc
 - **Priority**: Low
 
 ## Production Readiness
-
-### 19. Error Handling & Monitoring
-
-- **Description**: Structured error responses and monitoring
-- **Benefits**: Better debugging and observability
-- **Implementation**: Error middleware, health checks, metrics
-- **Status**: ✅ Phase 1 Complete - Core Infrastructure Implemented
-- **Priority**: High
-
-**Phase 1 Implementation Details:**
-
-- ✅ Structured error response types with JSON serialization
-- ✅ Request ID generation and propagation middleware
-- ✅ Error classification system with proper HTTP status codes
-- ✅ Updated all existing error handling to use structured format
-- ✅ Request correlation IDs for better debugging
-
-**Current Error Response Format:**
-
-```json
-{
-  "error": {
-    "code": "SCRIPT_EXECUTION_FAILED",
-    "message": "Script execution failed",
-    "details": "Error details here",
-    "request_id": "req_1234567890",
-    "timestamp": "2025-01-18T10:30:00Z",
-    "path": "/api/endpoint",
-    "method": "POST"
-  },
-  "status": 500
-}
-```
 
 #### Phase 2: Advanced Error Recovery & Resilience
 
@@ -261,22 +168,6 @@ Migrating GraphQL subscriptions from manual stream path management to native `sc
   - Integration with external monitoring tools
 - **Priority**: Low
 - **Estimated Effort**: 4-6 weeks
-
-### 20. Logging Aggregation ✅ COMPLETED
-
-- **Description**: Structured logging with levels and formatting
-- **Benefits**: Better log analysis and debugging
-- **Implementation**: Configurable log levels, structured output
-- **Status**: ✅ Implemented in v0.1.0
-- **Priority**: Medium
-
-### 21. Health Checks ✅ COMPLETED
-
-- **Description**: Application health monitoring
-- **Benefits**: Service monitoring and load balancer integration
-- **Implementation**: Health check endpoints
-- **Status**: ✅ Implemented in v0.1.0
-- **Priority**: Medium
 
 ## Performance & Scalability
 
@@ -319,14 +210,6 @@ Migrating GraphQL subscriptions from manual stream path management to native `sc
 
 ## Advanced Features
 
-### 27. GraphQL Support ✅ COMPLETED
-
-- **Description**: GraphQL query language support with dynamic JavaScript registration
-- **Benefits**: Flexible API queries, reduced over-fetching, real-time subscriptions
-- **Implementation**: Full GraphQL support with dynamic schema building, SSE subscriptions, and JavaScript registration functions (registerGraphQLQuery, registerGraphQLMutation, registerGraphQLSubscription)
-- **Status**: ✅ Implemented - Complete GraphQL implementation with dynamic registration
-- **Priority**: Medium
-
 ### 28. Template Engine
 
 - **Description**: Server-side template rendering
@@ -352,9 +235,6 @@ Migrating GraphQL subscriptions from manual stream path management to native `sc
 
 ### High Priority (Essential for Production)
 
-1. ✅ Static File Serving (COMPLETED)
-2. ✅ Middleware System (COMPLETED)
-3. ✅ Configuration Management (COMPLETED)
 4. Authentication Framework
 5. Security Middleware
 6. Database Integration
@@ -364,14 +244,11 @@ Migrating GraphQL subscriptions from manual stream path management to native `sc
 ### Medium Priority (Important for Usability)
 
 1. Hot Reloading
-2. ✅ Testing Framework (COMPLETED)
 3. API Documentation Generation
-4. ✅ WebSocket Support (COMPLETED - SSE implementation)
 5. File Upload Handling
 6. Caching Layer
 7. Session Management
 8. Logging Aggregation
-9. Health Checks
 10. Development Server
 
 ### Low Priority (Nice-to-Have)
@@ -380,7 +257,6 @@ Migrating GraphQL subscriptions from manual stream path management to native `sc
 2. API Versioning
 3. Background Job Processing
 4. CLI Tools
-5. ✅ GraphQL Support (COMPLETED)
 6. Template Engine
 7. Email Support
 8. Internationalization
@@ -389,7 +265,6 @@ Migrating GraphQL subscriptions from manual stream path management to native `sc
 
 When implementing these features:
 
-1. Maintain backward compatibility where possible
 2. Add comprehensive tests
 3. Update documentation
 4. Consider performance implications
@@ -404,7 +279,6 @@ aiwebengine currently excels at:
 - Basic HTTP request handling
 - Lightweight footprint
 - Easy deployment
-- ✅ Static asset serving and management (NEW)
 
 But lacks:
 
@@ -419,6 +293,8 @@ This roadmap provides a path to evolve aiwebengine into a more complete web fram
 
 all assets, logs, templates should be under script
 
+## Developer Documentation
+
 there should be docs for aiwebengine developers:
 
 - architecture overview
@@ -428,15 +304,21 @@ there should be docs for aiwebengine developers:
 - testing guidelines
 - release process
 
+## Cloud & DevOps
+
 cloud deployment and containerization
 
 - dockerfile
 - docker-compose setup
 
+## Model context protocol support
+
 similar to graphql there should be support for MCP (model-context-protocol) to allow easy integration with AI models
 
 - registerMCPTool
 - registerMCPPrompt
+
+## API Naming Consistency
 
 maybe refactor ja api:
 
@@ -447,11 +329,9 @@ maybe refactor ja api:
 - registerMCPTool -> registerToolHandler
 - registerMCPPrompt -> registerPromptHandler
 
-Authentication / authorization
+## User Management
 
 Support for groups and roles
-
----
 
 ## Senior Architect Review - Critical Improvements Needed
 
