@@ -708,10 +708,13 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
             let resolver_uri = operation.script_uri.clone();
             let resolver_fn = operation.resolver_function.clone();
 
+            // Extract return type from SDL
+            let return_type = extract_return_type(&operation.sdl, &field_name);
+
             // Create a proper streaming subscription field for execute_stream
             let subscription_field = SubscriptionField::new(
                 field_name.clone(),
-                TypeRef::named_nn(TypeRef::STRING), // Non-null for subscriptions
+                return_type, // Use dynamic return type from SDL
                 move |_ctx| {
                     let subscription_name = subscription_name.clone();
                     let uri = resolver_uri.clone();
@@ -727,14 +730,18 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
                                         "Subscription '{}' initialized: {}",
                                         subscription_name, result
                                     );
-                                    result
+                                    // Try to parse as JSON object, fallback to string
+                                    match parse_json_to_graphql_value(&result) {
+                                        Ok(graphql_value) => graphql_value,
+                                        Err(_) => async_graphql::Value::String(result),
+                                    }
                                 }
                                 Err(e) => {
                                     error!(
                                         "Failed to initialize subscription '{}': {}",
                                         subscription_name, e
                                     );
-                                    format!("Error: {}", e)
+                                    async_graphql::Value::String(format!("Error: {}", e))
                                 }
                             };
 
@@ -759,11 +766,16 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
                             let mut receiver = connection.receiver;
                             let stream = async_stream::stream! {
                                 // Yield initial result
-                                yield Ok(async_graphql::Value::String(initial_result));
+                                yield Ok(initial_result);
 
                                 // Then listen for broadcast messages from sendSubscriptionMessage
                                 while let Ok(message) = receiver.recv().await {
-                                    yield Ok(async_graphql::Value::String(message));
+                                    // Try to parse incoming message as JSON object, fallback to string
+                                    let parsed_message = match parse_json_to_graphql_value(&message) {
+                                        Ok(graphql_value) => graphql_value,
+                                        Err(_) => async_graphql::Value::String(message)
+                                    };
+                                    yield Ok(parsed_message);
                                 }
                             };
                             Box::pin(stream)
@@ -774,7 +786,7 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
                             );
                             // Fallback: just emit the initial value
                             let stream = async_stream::stream! {
-                                yield Ok(async_graphql::Value::String(initial_result));
+                                yield Ok(initial_result);
                             };
                             Box::pin(stream)
                         };

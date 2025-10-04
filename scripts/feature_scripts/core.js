@@ -33,14 +33,19 @@ registerWebStream('/script_updates');
 // Register GraphQL subscription for script updates
 registerGraphQLSubscription(
 	"scriptUpdates", 
-	"type Subscription { scriptUpdates: String }", 
+	"type ScriptUpdate { type: String!, uri: String!, action: String!, timestamp: String!, contentLength: Int, previousExists: Boolean, via: String } type Subscription { scriptUpdates: ScriptUpdate! }", 
 	"scriptUpdatesResolver"
 );
 
 // GraphQL subscription resolver for script updates
 function scriptUpdatesResolver() {
 	writeLog("Client subscribed to scriptUpdates GraphQL subscription");
-	return "Script updates subscription initialized";
+	return {
+		type: "subscription_init",
+		uri: "system",
+		action: "initialized",
+		timestamp: new Date().toISOString()
+	};
 }
 
 // Helper function to broadcast script update messages
@@ -63,7 +68,7 @@ function broadcastScriptUpdate(uri, action, details = {}) {
 		sendStreamMessageToPath('/script_updates', JSON.stringify(message));
 		
 		// Send to GraphQL subscription using modern approach
-		sendStreamMessageToPath('/graphql/subscription/scriptUpdates', JSON.stringify(message));
+		sendSubscriptionMessage('scriptUpdates', JSON.stringify(message));
 		
 		writeLog('Broadcasted script update: ' + action + ' ' + uri);
 	} catch (error) {
