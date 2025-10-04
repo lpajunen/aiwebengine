@@ -32,9 +32,6 @@ The project roadmap includes planned enhancements such as:
 
 - Authentication and security middleware
 - Database integration
-- Static file serving
-- WebSocket support
-- Advanced configuration management
 - Testing framework integration
 
 ## Getting Started
@@ -46,7 +43,7 @@ The project roadmap includes planned enhancements such as:
 
 ### Documentation
 
-For comprehensive development guidance, including detailed API documentation, examples, and best practices, please refer to our [Developer Guide](APP_DEVELOPMENT.md).
+For comprehensive development guidance, including detailed API documentation, examples, and best practices, please refer to our [Developer Guide](docs/APP_DEVELOPMENT.md).
 
 ### Installation
 
@@ -60,26 +57,6 @@ cargo build --release
 
 # Run the server
 cargo run
-```
-
-### Basic Usage
-
-1. Place your JavaScript scripts in the `scripts/` directory
-2. Register routes using the `register()` function in your scripts
-3. Start the server to begin handling requests
-
-Example JavaScript script (`scripts/hello.js`):
-
-```javascript
-function helloHandler(req) {
-    return {
-        status: 200,
-        body: `Hello, ${req.query.name || 'World'}!`,
-        contentType: "text/plain"
-    };
-}
-
-register('/hello', 'helloHandler', 'GET');
 ```
 
 ## Architecture
@@ -100,7 +77,7 @@ This project welcomes contributions! As it's in active development, there are ma
 - Add comprehensive tests
 - Enhance performance and security
 
-Please see `TODO_IDEAS.md` for detailed information about planned features and development priorities.
+Please see `TODO.md` for detailed information about planned features and development priorities.
 
 ## License
 
