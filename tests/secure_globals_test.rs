@@ -1,4 +1,6 @@
-use aiwebengine::js_engine::{execute_script_for_request_secure, execute_script_secure};
+use aiwebengine::js_engine::{
+    RequestExecutionParams, execute_script_for_request_secure, execute_script_secure,
+};
 use aiwebengine::security::UserContext;
 
 #[test]
@@ -83,16 +85,17 @@ fn test_secure_request_execution() {
     assert!(result.success, "Script setup should succeed");
 
     // Now test secure request execution
-    let request_result = execute_script_for_request_secure(
-        "/test_request_script",
-        "handleSecureTest",
-        "/api/test",
-        "GET",
-        None,
-        None,
-        None,
+    let request_params = RequestExecutionParams {
+        script_uri: "/test_request_script".to_string(),
+        handler_name: "handleSecureTest".to_string(),
+        path: "/api/test".to_string(),
+        method: "GET".to_string(),
+        query_params: None,
+        form_data: None,
+        raw_body: None,
         user_context,
-    );
+    };
+    let request_result = execute_script_for_request_secure(request_params);
 
     match request_result {
         Ok((status, body, content_type)) => {

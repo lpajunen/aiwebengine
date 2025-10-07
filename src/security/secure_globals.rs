@@ -9,6 +9,9 @@ use crate::security::{
     UserContext,
 };
 
+/// Type alias for route registration function
+type RouteRegisterFn = dyn Fn(&str, &str, Option<&str>) -> Result<(), rquickjs::Error>;
+
 /// Secure wrapper for JavaScript global functions that enforces Rust-level validation
 pub struct SecureGlobalContext {
     user_context: UserContext,
@@ -159,9 +162,8 @@ impl SecureGlobalContext {
                     "Secure listLogs called"
                 );
 
-                match repository::fetch_log_messages("") {
-                    logs => Ok(serde_json::to_string(&logs).unwrap_or_else(|_| "[]".to_string())),
-                }
+                let logs = repository::fetch_log_messages("");
+                Ok(serde_json::to_string(&logs).unwrap_or_else(|_| "[]".to_string()))
             },
         )?;
         global.set("listLogs", list_logs)?;
@@ -184,9 +186,8 @@ impl SecureGlobalContext {
                     "Secure listLogsForUri called"
                 );
 
-                match repository::fetch_log_messages(&uri) {
-                    logs => Ok(serde_json::to_string(&logs).unwrap_or_else(|_| "[]".to_string())),
-                }
+                let logs = repository::fetch_log_messages(&uri);
+                Ok(serde_json::to_string(&logs).unwrap_or_else(|_| "[]".to_string()))
             },
         )?;
         global.set("listLogsForUri", list_logs_for_uri)?;
@@ -945,7 +946,7 @@ impl SecureGlobalContext {
         &self,
         ctx: &rquickjs::Ctx<'_>,
         script_uri: &str,
-        register_impl: Option<Box<dyn Fn(&str, &str, Option<&str>) -> Result<(), rquickjs::Error>>>,
+        register_impl: Option<Box<RouteRegisterFn>>,
     ) -> JsResult<()> {
         let global = ctx.globals();
         let user_context = self.user_context.clone();

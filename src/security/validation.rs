@@ -48,6 +48,12 @@ pub struct InputValidator {
     max_asset_size: usize,
 }
 
+impl Default for InputValidator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InputValidator {
     pub fn new() -> Self {
         let uri_pattern =

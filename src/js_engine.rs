@@ -26,6 +26,19 @@ impl Default for ExecutionLimits {
     }
 }
 
+/// Parameters for secure script execution in request context
+#[derive(Debug)]
+pub struct RequestExecutionParams {
+    pub script_uri: String,
+    pub handler_name: String,
+    pub path: String,
+    pub method: String,
+    pub query_params: Option<HashMap<String, String>>,
+    pub form_data: Option<HashMap<String, String>>,
+    pub raw_body: Option<String>,
+    pub user_context: UserContext,
+}
+
 /// Validates a script before execution
 fn validate_script(content: &str, limits: &ExecutionLimits) -> Result<(), String> {
     if content.len() > limits.max_script_size_bytes {
@@ -871,16 +884,9 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
 ///
 /// All global functions are secured with capability checking and input validation.
 pub fn execute_script_for_request_secure(
-    script_uri: &str,
-    handler_name: &str,
-    path: &str,
-    method: &str,
-    query_params: Option<&std::collections::HashMap<String, String>>,
-    form_data: Option<&std::collections::HashMap<String, String>>,
-    raw_body: Option<String>,
-    user_context: UserContext,
+    params: RequestExecutionParams,
 ) -> Result<(u16, String, Option<String>), String> {
-    let script_uri_owned = script_uri.to_string();
+    let script_uri_owned = params.script_uri.clone();
     let rt = Runtime::new().map_err(|e| format!("runtime new: {}", e))?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
@@ -895,7 +901,7 @@ pub fn execute_script_for_request_secure(
         setup_secure_global_functions(
             &ctx,
             &script_uri_owned,
-            user_context,
+            params.user_context,
             Some(security_config),
             None,
         )?;
@@ -904,8 +910,8 @@ pub fn execute_script_for_request_secure(
     })
     .map_err(|e| format!("install secure host fns: {}", e))?;
 
-    let owner_script = repository::fetch_script(script_uri)
-        .ok_or_else(|| format!("no script for uri {}", script_uri))?;
+    let owner_script = repository::fetch_script(&params.script_uri)
+        .ok_or_else(|| format!("no script for uri {}", params.script_uri))?;
 
     ctx.with(|ctx| ctx.eval::<(), _>(owner_script.as_str()))
         .map_err(|e| format!("owner eval: {}", e))?;
@@ -914,24 +920,24 @@ pub fn execute_script_for_request_secure(
         ctx.with(|ctx| -> Result<(u16, String, Option<String>), String> {
             let global = ctx.globals();
             let func: Function = global
-                .get::<_, Function>(handler_name)
-                .map_err(|e| format!("no handler {}: {}", handler_name, e))?;
+                .get::<_, Function>(&params.handler_name)
+                .map_err(|e| format!("no handler {}: {}", params.handler_name, e))?;
 
             // Build the request object
             let request_obj =
                 rquickjs::Object::new(ctx.clone()).map_err(|e| format!("create req obj: {}", e))?;
             request_obj
-                .set("path", path)
+                .set("path", &params.path)
                 .map_err(|e| format!("set path: {}", e))?;
             request_obj
-                .set("method", method)
+                .set("method", &params.method)
                 .map_err(|e| format!("set method: {}", e))?;
 
             // Add query parameters if present
-            if let Some(params) = query_params {
+            if let Some(ref query_params) = params.query_params {
                 let params_obj = rquickjs::Object::new(ctx.clone())
                     .map_err(|e| format!("create params obj: {}", e))?;
-                for (key, value) in params {
+                for (key, value) in query_params {
                     params_obj
                         .set(key.as_str(), value.as_str())
                         .map_err(|e| format!("set param {}: {}", key, e))?;
@@ -942,10 +948,10 @@ pub fn execute_script_for_request_secure(
             }
 
             // Add form data if present
-            if let Some(form) = form_data {
+            if let Some(ref form_data) = params.form_data {
                 let form_obj = rquickjs::Object::new(ctx.clone())
                     .map_err(|e| format!("create form obj: {}", e))?;
-                for (key, value) in form {
+                for (key, value) in form_data {
                     form_obj
                         .set(key.as_str(), value.as_str())
                         .map_err(|e| format!("set form {}: {}", key, e))?;
@@ -956,7 +962,7 @@ pub fn execute_script_for_request_secure(
             }
 
             // Add raw body if present
-            if let Some(body) = raw_body {
+            if let Some(ref body) = params.raw_body {
                 request_obj
                     .set("body", body)
                     .map_err(|e| format!("set body: {}", e))?;
@@ -979,7 +985,7 @@ pub fn execute_script_for_request_secure(
 
                 debug!(
                     "Secure request handler {} returned status: {}, body length: {}",
-                    handler_name,
+                    params.handler_name,
                     status,
                     body.len()
                 );
