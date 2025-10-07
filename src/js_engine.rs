@@ -6,6 +6,7 @@ use std::time::Instant;
 use tracing::{debug, error, warn};
 
 use crate::repository;
+use crate::security::{GlobalSecurityConfig, SecureGlobalContext, UserContext};
 
 /// Resource limits for JavaScript execution
 #[derive(Debug, Clone)]
@@ -73,10 +74,40 @@ impl Default for GlobalFunctionConfig {
     }
 }
 
-/// Sets up common global functions for JavaScript execution contexts
+/// Sets up secure global functions using the new SecureGlobalContext
+///
+/// This is the new secure implementation that enforces all validation in Rust
+fn setup_secure_global_functions(
+    ctx: &rquickjs::Ctx<'_>,
+    script_uri: &str,
+    user_context: UserContext,
+    security_config: Option<GlobalSecurityConfig>,
+    register_fn: Option<RegisterFunctionType>,
+) -> Result<(), rquickjs::Error> {
+    let config = security_config.unwrap_or_default();
+    let secure_context = SecureGlobalContext::with_config(user_context, config);
+
+    // Setup all secure global functions
+    secure_context.setup_secure_globals(ctx, script_uri)?;
+
+    // Setup route registration if provided
+    let register_impl_boxed = register_fn.map(|f| {
+        Box::new(move |path: &str, handler: &str, method: Option<&str>| f(path, handler, method))
+            as Box<dyn Fn(&str, &str, Option<&str>) -> Result<(), rquickjs::Error>>
+    });
+
+    secure_context.setup_route_registration(ctx, script_uri, register_impl_boxed)?;
+
+    Ok(())
+}
+
+/// Sets up common global functions for JavaScript execution contexts (LEGACY)
 ///
 /// This function consolidates the repeated pattern of setting up global functions
 /// across different execution contexts (script registration, request handling, GraphQL resolution)
+///
+/// WARNING: This is the old implementation that has security vulnerabilities.
+/// Use setup_secure_global_functions instead for new code.
 fn setup_global_functions(
     ctx: &rquickjs::Ctx<'_>,
     script_uri: &str,
@@ -635,6 +666,112 @@ impl ScriptExecutionResult {
 
 /// Executes a JavaScript script and captures any register() method calls
 ///
+/// Executes a JavaScript script in a secure environment with proper authentication and validation.
+/// This function creates a QuickJS runtime, sets up the register function,
+/// executes the script, and returns information about the registrations made.
+///
+/// All global functions are secured with capability checking and input validation.
+pub fn execute_script_secure(
+    uri: &str,
+    content: &str,
+    user_context: UserContext,
+) -> ScriptExecutionResult {
+    let start_time = Instant::now();
+
+    // Validate script using default limits
+    let limits = ExecutionLimits::default();
+    if let Err(e) = validate_script(content, &limits) {
+        return ScriptExecutionResult::failed(e, start_time.elapsed().as_millis() as u64);
+    }
+
+    let registrations = Rc::new(RefCell::new(HashMap::new()));
+    let uri_owned = uri.to_string();
+
+    match Runtime::new() {
+        Ok(rt) => match Context::full(&rt) {
+            Ok(ctx) => {
+                let result = ctx.with(|ctx| -> Result<(), rquickjs::Error> {
+                    // Set up all secure global functions
+                    let security_config = GlobalSecurityConfig::default();
+
+                    // Create the register function that captures registrations
+                    let regs_clone = Rc::clone(&registrations);
+                    let uri_clone = uri_owned.clone();
+                    let register_impl = Box::new(
+                        move |path: &str,
+                              handler: &str,
+                              method: Option<&str>|
+                              -> Result<(), rquickjs::Error> {
+                            let method = method.unwrap_or("GET");
+                            debug!(
+                                "Securely registering route {} {} -> {} for script {}",
+                                method, path, handler, uri_clone
+                            );
+                            if let Ok(mut regs) = regs_clone.try_borrow_mut() {
+                                regs.insert(
+                                    (path.to_string(), method.to_string()),
+                                    handler.to_string(),
+                                );
+                            }
+                            Ok(())
+                        },
+                    );
+
+                    setup_secure_global_functions(
+                        &ctx,
+                        &uri_owned,
+                        user_context,
+                        Some(security_config),
+                        Some(register_impl),
+                    )?;
+
+                    // Execute the script
+                    ctx.eval::<(), _>(content)?;
+                    Ok(())
+                });
+
+                match result {
+                    Ok(_) => {
+                        debug!("Script {} executed successfully", uri);
+                        match registrations.try_borrow() {
+                            Ok(regs) => ScriptExecutionResult::success(
+                                regs.clone(),
+                                start_time.elapsed().as_millis() as u64,
+                            ),
+                            Err(_) => ScriptExecutionResult::failed(
+                                "Failed to access registrations".to_string(),
+                                start_time.elapsed().as_millis() as u64,
+                            ),
+                        }
+                    }
+                    Err(e) => {
+                        error!("Script {} execution failed: {}", uri, e);
+                        ScriptExecutionResult::failed(
+                            format!("Script execution failed: {}", e),
+                            start_time.elapsed().as_millis() as u64,
+                        )
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to create context for script {}: {}", uri, e);
+                ScriptExecutionResult::failed(
+                    format!("Failed to create context: {}", e),
+                    start_time.elapsed().as_millis() as u64,
+                )
+            }
+        },
+        Err(e) => {
+            error!("Failed to create runtime for script {}: {}", uri, e);
+            ScriptExecutionResult::failed(
+                format!("Failed to create runtime: {}", e),
+                start_time.elapsed().as_millis() as u64,
+            )
+        }
+    }
+}
+
+/// Executes a JavaScript script (LEGACY - has security vulnerabilities).
 /// This function creates a QuickJS runtime, sets up the register function,
 /// executes the script, and returns information about the registrations made.
 pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
@@ -726,7 +863,147 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
     }
 }
 
-/// Executes a JavaScript script for an HTTP request
+/// Executes a JavaScript script for an HTTP request with secure global functions
+///
+/// This function creates a QuickJS runtime, sets up secure host functions,
+/// executes the script, calls the specified handler with request parameters,
+/// and returns the response.
+///
+/// All global functions are secured with capability checking and input validation.
+pub fn execute_script_for_request_secure(
+    script_uri: &str,
+    handler_name: &str,
+    path: &str,
+    method: &str,
+    query_params: Option<&std::collections::HashMap<String, String>>,
+    form_data: Option<&std::collections::HashMap<String, String>>,
+    raw_body: Option<String>,
+    user_context: UserContext,
+) -> Result<(u16, String, Option<String>), String> {
+    let script_uri_owned = script_uri.to_string();
+    let rt = Runtime::new().map_err(|e| format!("runtime new: {}", e))?;
+    let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
+
+    ctx.with(|ctx| -> Result<(), rquickjs::Error> {
+        // Set up all secure global functions
+        // For request handling, we don't need GraphQL registration but enable everything else
+        let security_config = GlobalSecurityConfig {
+            enable_graphql_registration: false,
+            ..Default::default()
+        };
+
+        setup_secure_global_functions(
+            &ctx,
+            &script_uri_owned,
+            user_context,
+            Some(security_config),
+            None,
+        )?;
+
+        Ok(())
+    })
+    .map_err(|e| format!("install secure host fns: {}", e))?;
+
+    let owner_script = repository::fetch_script(script_uri)
+        .ok_or_else(|| format!("no script for uri {}", script_uri))?;
+
+    ctx.with(|ctx| ctx.eval::<(), _>(owner_script.as_str()))
+        .map_err(|e| format!("owner eval: {}", e))?;
+
+    let (status, body, content_type) =
+        ctx.with(|ctx| -> Result<(u16, String, Option<String>), String> {
+            let global = ctx.globals();
+            let func: Function = global
+                .get::<_, Function>(handler_name)
+                .map_err(|e| format!("no handler {}: {}", handler_name, e))?;
+
+            // Build the request object
+            let request_obj =
+                rquickjs::Object::new(ctx.clone()).map_err(|e| format!("create req obj: {}", e))?;
+            request_obj
+                .set("path", path)
+                .map_err(|e| format!("set path: {}", e))?;
+            request_obj
+                .set("method", method)
+                .map_err(|e| format!("set method: {}", e))?;
+
+            // Add query parameters if present
+            if let Some(params) = query_params {
+                let params_obj = rquickjs::Object::new(ctx.clone())
+                    .map_err(|e| format!("create params obj: {}", e))?;
+                for (key, value) in params {
+                    params_obj
+                        .set(key.as_str(), value.as_str())
+                        .map_err(|e| format!("set param {}: {}", key, e))?;
+                }
+                request_obj
+                    .set("query", params_obj)
+                    .map_err(|e| format!("set query: {}", e))?;
+            }
+
+            // Add form data if present
+            if let Some(form) = form_data {
+                let form_obj = rquickjs::Object::new(ctx.clone())
+                    .map_err(|e| format!("create form obj: {}", e))?;
+                for (key, value) in form {
+                    form_obj
+                        .set(key.as_str(), value.as_str())
+                        .map_err(|e| format!("set form {}: {}", key, e))?;
+                }
+                request_obj
+                    .set("form", form_obj)
+                    .map_err(|e| format!("set form: {}", e))?;
+            }
+
+            // Add raw body if present
+            if let Some(body) = raw_body {
+                request_obj
+                    .set("body", body)
+                    .map_err(|e| format!("set body: {}", e))?;
+            }
+
+            // Call the handler function
+            let result: Value = func
+                .call::<_, Value>((request_obj,))
+                .map_err(|e| format!("call handler: {}", e))?;
+
+            // Parse the response
+            if let Some(response_obj) = result.as_object() {
+                let status: i32 = response_obj
+                    .get("status")
+                    .map_err(|e| format!("missing status: {}", e))?;
+                let body: String = response_obj
+                    .get("body")
+                    .map_err(|e| format!("missing body: {}", e))?;
+                let content_type: Option<String> = response_obj.get("contentType").ok();
+
+                debug!(
+                    "Secure request handler {} returned status: {}, body length: {}",
+                    handler_name,
+                    status,
+                    body.len()
+                );
+
+                Ok((status as u16, body, content_type))
+            } else {
+                // If not an object, treat as string response
+                let body = if result.is_string() {
+                    result
+                        .as_string()
+                        .unwrap()
+                        .to_string()
+                        .unwrap_or_else(|_| "<conversion error>".to_string())
+                } else {
+                    "<no response>".to_string()
+                };
+                Ok((200, body, None))
+            }
+        })?;
+
+    Ok((status, body, content_type))
+}
+
+/// Executes a JavaScript script for an HTTP request (LEGACY - has security vulnerabilities)
 ///
 /// This function creates a QuickJS runtime, sets up host functions,
 /// executes the script, calls the specified handler with request parameters,
