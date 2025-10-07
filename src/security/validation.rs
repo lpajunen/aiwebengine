@@ -39,6 +39,7 @@ pub enum Capability {
 }
 
 /// Comprehensive input validator - ALL VALIDATION IN RUST
+#[derive(Clone)]
 pub struct InputValidator {
     uri_pattern: Regex,
     dangerous_patterns: Vec<Regex>,

@@ -90,6 +90,7 @@ impl SecurityEvent {
     }
 }
 
+#[derive(Clone)]
 pub struct SecurityAuditor {
     // In a real implementation, this might connect to a database
     // or external logging system

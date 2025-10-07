@@ -37,6 +37,7 @@ impl<T> OperationResult<T> {
     }
 }
 
+#[derive(Clone)]
 pub struct SecureOperations {
     validator: InputValidator,
 }

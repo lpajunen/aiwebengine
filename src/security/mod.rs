@@ -1,11 +1,13 @@
 pub mod audit;
 pub mod capabilities;
 pub mod operations;
+pub mod secure_globals;
 pub mod validation;
 
 pub use audit::{SecurityAuditor, SecurityEvent, SecurityEventType, SecuritySeverity};
 pub use capabilities::UserContext;
 pub use operations::{OperationResult, SecureOperations, UpsertScriptRequest};
+pub use secure_globals::{SecureGlobalContext, GlobalSecurityConfig};
 pub use validation::{Capability, InputValidator, SecurityError};
 
 // Re-export convenience macros
