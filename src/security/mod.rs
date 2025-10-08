@@ -2,6 +2,7 @@ pub mod audit;
 pub mod capabilities;
 pub mod operations;
 pub mod secure_globals;
+pub mod secure_globals_simple; // Simplified version for testing
 pub mod validation;
 
 pub use audit::{SecurityAuditor, SecurityEvent, SecurityEventType, SecuritySeverity};
