@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{error, info, warn};
 
+use super::threat_detection::{ThreatAssessment, ThreatDetector, ThreatLevel};
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum SecurityEventType {
     AuthenticationAttempt,
@@ -13,6 +15,7 @@ pub enum SecurityEventType {
     SuspiciousActivity,
     CapabilityViolation,
     SystemSecurityEvent,
+    RateLimitExceeded,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -94,17 +97,30 @@ impl SecurityEvent {
 pub struct SecurityAuditor {
     // In a real implementation, this might connect to a database
     // or external logging system
+    threat_detector: ThreatDetector,
 }
 
 impl SecurityAuditor {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            threat_detector: ThreatDetector::with_default_config(),
+        }
     }
 
-    /// Log a security event
+    pub fn with_threat_detector(threat_detector: ThreatDetector) -> Self {
+        Self { threat_detector }
+    }
+
+    /// Log a security event with enhanced threat analysis
     pub async fn log_event(&self, event: SecurityEvent) {
-        // Log to structured logging system (tracing)
-        match event.severity {
+        // Perform threat analysis
+        let threat_assessment = self.threat_detector.analyze_event(&event);
+
+        // Log based on original severity and threat assessment
+        let effective_severity =
+            self.determine_effective_severity(&event.severity, &threat_assessment);
+
+        match effective_severity {
             SecuritySeverity::Low => {
                 info!(
                     event_id = %event.id,
@@ -112,6 +128,8 @@ impl SecurityAuditor {
                     user_id = ?event.user_id,
                     resource = ?event.resource,
                     action = ?event.action,
+                    threat_level = ?threat_assessment.threat_level,
+                    confidence_score = threat_assessment.confidence_score,
                     "Security event logged"
                 );
             }
@@ -123,6 +141,9 @@ impl SecurityAuditor {
                     resource = ?event.resource,
                     action = ?event.action,
                     error = ?event.error_message,
+                    threat_level = ?threat_assessment.threat_level,
+                    confidence_score = threat_assessment.confidence_score,
+                    threat_indicators = threat_assessment.threat_indicators.len(),
                     "Security warning logged"
                 );
             }
@@ -130,7 +151,7 @@ impl SecurityAuditor {
                 error!(
                     event_id = %event.id,
                     event_type = ?event.event_type,
-                    severity = ?event.severity,
+                    severity = ?effective_severity,
                     user_id = ?event.user_id,
                     ip_address = ?event.ip_address,
                     user_agent = ?event.user_agent,
@@ -138,14 +159,40 @@ impl SecurityAuditor {
                     action = ?event.action,
                     details = ?event.details,
                     error = ?event.error_message,
+                    threat_level = ?threat_assessment.threat_level,
+                    confidence_score = threat_assessment.confidence_score,
+                    threat_indicators = ?threat_assessment.threat_indicators,
+                    recommended_actions = ?threat_assessment.recommended_actions,
                     "Critical security event logged"
                 );
+            }
+        }
+
+        // Log threat assessment details for high-risk events
+        if matches!(
+            threat_assessment.threat_level,
+            ThreatLevel::High | ThreatLevel::Critical
+        ) {
+            warn!(
+                threat_assessment_id = %event.id,
+                threat_level = ?threat_assessment.threat_level,
+                confidence_score = threat_assessment.confidence_score,
+                indicators_count = threat_assessment.threat_indicators.len(),
+                recommended_actions = ?threat_assessment.recommended_actions,
+                "Threat assessment completed"
+            );
+
+            // Execute recommended actions for critical threats
+            if matches!(threat_assessment.threat_level, ThreatLevel::Critical) {
+                self.execute_automated_response(&event, &threat_assessment)
+                    .await;
             }
         }
 
         // TODO: In production, also store in database and/or send to SIEM
         // self.store_in_database(&event).await;
         // self.send_to_siem(&event).await;
+        // self.store_threat_assessment(&threat_assessment).await;
 
         // For critical events, consider immediate alerting
         if matches!(event.severity, SecuritySeverity::Critical) {
@@ -247,6 +294,97 @@ impl SecurityAuditor {
         .with_error(validation_error);
 
         self.log_event(event).await;
+    }
+
+    /// Determine effective severity based on original severity and threat assessment
+    fn determine_effective_severity(
+        &self,
+        original_severity: &SecuritySeverity,
+        threat_assessment: &ThreatAssessment,
+    ) -> SecuritySeverity {
+        // Escalate severity based on threat level
+        match (&original_severity, &threat_assessment.threat_level) {
+            (_, ThreatLevel::Critical) => SecuritySeverity::Critical,
+            (SecuritySeverity::Low, ThreatLevel::High) => SecuritySeverity::High,
+            (SecuritySeverity::Medium, ThreatLevel::High) => SecuritySeverity::High,
+            (SecuritySeverity::Low, ThreatLevel::Medium) => SecuritySeverity::Medium,
+            _ => original_severity.clone(),
+        }
+    }
+
+    /// Execute automated response actions for critical threats
+    async fn execute_automated_response(
+        &self,
+        event: &SecurityEvent,
+        assessment: &ThreatAssessment,
+    ) {
+        warn!(
+            event_id = %event.id,
+            threat_level = ?assessment.threat_level,
+            "Executing automated threat response"
+        );
+
+        // Execute recommended actions
+        for action in &assessment.recommended_actions {
+            if action.contains("Block IP address") {
+                if let Some(ip) = &event.ip_address {
+                    self.request_ip_block(ip).await;
+                }
+            } else if action.contains("Alert security team") {
+                self.send_security_alert(event, assessment).await;
+            } else if action.contains("account lockdown") {
+                if let Some(user_id) = &event.user_id {
+                    self.request_account_lockdown(user_id).await;
+                }
+            }
+        }
+    }
+
+    /// Request IP address blocking (placeholder for actual implementation)
+    async fn request_ip_block(&self, ip_address: &str) {
+        error!(
+            ip_address = %ip_address,
+            "AUTOMATED RESPONSE: IP block requested"
+        );
+        // TODO: Integrate with firewall/WAF API
+        // self.firewall_api.block_ip(ip_address).await;
+    }
+
+    /// Send security alert (placeholder for actual implementation)
+    async fn send_security_alert(&self, event: &SecurityEvent, assessment: &ThreatAssessment) {
+        error!(
+            event_id = %event.id,
+            threat_level = ?assessment.threat_level,
+            confidence_score = assessment.confidence_score,
+            "AUTOMATED RESPONSE: Security team alert sent"
+        );
+        // TODO: Integrate with alerting system (email, Slack, PagerDuty, etc.)
+        // self.alerting_system.send_alert(&alert).await;
+    }
+
+    /// Request account lockdown (placeholder for actual implementation)
+    async fn request_account_lockdown(&self, user_id: &str) {
+        error!(
+            user_id = %user_id,
+            "AUTOMATED RESPONSE: Account lockdown requested"
+        );
+        // TODO: Integrate with user management system
+        // self.user_manager.lockdown_account(user_id).await;
+    }
+
+    /// Get threat detector for external access
+    pub fn threat_detector(&self) -> &ThreatDetector {
+        &self.threat_detector
+    }
+
+    /// Get threat statistics for monitoring
+    pub fn get_threat_statistics(&self) -> super::threat_detection::ThreatStatistics {
+        self.threat_detector.get_threat_statistics()
+    }
+
+    /// Cleanup old threat data
+    pub fn cleanup_old_data(&self) {
+        self.threat_detector.cleanup_old_data();
     }
 
     /// Log suspicious activity

@@ -1,8 +1,8 @@
-use regex::Regex;
-use thiserror::Error;
-use std::collections::HashSet;
 use html_escape::encode_text;
-use sha2::{Sha256, Digest};
+use regex::Regex;
+use sha2::{Digest, Sha256};
+use std::collections::HashSet;
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum SecurityError {
@@ -122,7 +122,8 @@ impl InputValidator {
 
         let mut prototype_pollution_patterns = Vec::new();
         for pattern in prototype_pollution_str_patterns {
-            let regex = Regex::new(pattern).expect("Valid regex pattern for prototype pollution detection");
+            let regex =
+                Regex::new(pattern).expect("Valid regex pattern for prototype pollution detection");
             prototype_pollution_patterns.push(regex);
         }
 
@@ -137,7 +138,8 @@ impl InputValidator {
 
         let mut infinite_loop_patterns = Vec::new();
         for pattern in infinite_loop_str_patterns {
-            let regex = Regex::new(pattern).expect("Valid regex pattern for infinite loop detection");
+            let regex =
+                Regex::new(pattern).expect("Valid regex pattern for infinite loop detection");
             infinite_loop_patterns.push(regex);
         }
 
@@ -274,9 +276,10 @@ impl InputValidator {
         }
 
         if !self.allowed_mime_types.contains(declared_mimetype) {
-            return Err(SecurityError::InvalidUri(
-                format!("MIME type not allowed: {}", declared_mimetype)
-            ));
+            return Err(SecurityError::InvalidUri(format!(
+                "MIME type not allowed: {}",
+                declared_mimetype
+            )));
         }
 
         // Detect actual MIME type from content and verify it matches declared type
@@ -304,7 +307,7 @@ impl InputValidator {
     ) -> Result<(), SecurityError> {
         // Use file magic bytes to detect actual type
         let detected_type = self.detect_mime_type_from_content(content);
-        
+
         // Allow some flexibility for text types
         let is_compatible = match (declared_mimetype, detected_type.as_str()) {
             // Exact matches
@@ -348,9 +351,11 @@ impl InputValidator {
                 "image/gif".to_string()
             }
             // WebP
-            content if content.len() >= 12 && 
-                      content[0..4] == [0x52, 0x49, 0x46, 0x46] && 
-                      content[8..12] == [0x57, 0x45, 0x42, 0x50] => {
+            content
+                if content.len() >= 12
+                    && content[0..4] == [0x52, 0x49, 0x46, 0x46]
+                    && content[8..12] == [0x57, 0x45, 0x42, 0x50] =>
+            {
                 "image/webp".to_string()
             }
             // SVG (starts with < or <?xml)
@@ -369,7 +374,8 @@ impl InputValidator {
                 // Check if content is valid UTF-8 text
                 if let Ok(text) = std::str::from_utf8(content) {
                     // Detect JavaScript
-                    if text.contains("function") || text.contains("var ") || text.contains("const ") {
+                    if text.contains("function") || text.contains("var ") || text.contains("const ")
+                    {
                         "text/javascript".to_string()
                     } else if text.contains("{") && text.contains("}") {
                         "application/json".to_string()
@@ -386,13 +392,11 @@ impl InputValidator {
     /// Validate HTML content for XSS prevention
     fn validate_html_content(&self, content: &[u8]) -> Result<(), SecurityError> {
         let content_str = String::from_utf8_lossy(content);
-        
+
         // Check for XSS patterns
         for pattern in &self.xss_patterns {
             if let Some(matched) = pattern.find(&content_str) {
-                return Err(SecurityError::XssAttempt(
-                    matched.as_str().to_string()
-                ));
+                return Err(SecurityError::XssAttempt(matched.as_str().to_string()));
             }
         }
 
@@ -400,7 +404,7 @@ impl InputValidator {
         let js_in_attr_pattern = Regex::new(r#"on\w+\s*=\s*["'][^"']*javascript"#).unwrap();
         if js_in_attr_pattern.is_match(&content_str) {
             return Err(SecurityError::XssAttempt(
-                "JavaScript in HTML attributes detected".to_string()
+                "JavaScript in HTML attributes detected".to_string(),
             ));
         }
 
@@ -410,32 +414,40 @@ impl InputValidator {
     /// Validate SVG content for security issues
     fn validate_svg_content(&self, content: &[u8]) -> Result<(), SecurityError> {
         let content_str = String::from_utf8_lossy(content);
-        
+
         // SVGs can contain JavaScript, check for script elements
         if content_str.contains("<script") {
             return Err(SecurityError::XssAttempt(
-                "Script element in SVG detected".to_string()
+                "Script element in SVG detected".to_string(),
             ));
         }
 
         // Check for foreign object elements that could contain HTML
         if content_str.contains("<foreignObject") {
             return Err(SecurityError::XssAttempt(
-                "Foreign object in SVG detected".to_string()
+                "Foreign object in SVG detected".to_string(),
             ));
         }
 
         // Check for dangerous event handlers
         let event_handlers = [
-            "onload", "onerror", "onclick", "onmouseover", "onmouseout",
-            "onfocus", "onblur", "onchange", "onsubmit"
+            "onload",
+            "onerror",
+            "onclick",
+            "onmouseover",
+            "onmouseout",
+            "onfocus",
+            "onblur",
+            "onchange",
+            "onsubmit",
         ];
-        
+
         for handler in &event_handlers {
             if content_str.to_lowercase().contains(handler) {
-                return Err(SecurityError::XssAttempt(
-                    format!("Event handler {} in SVG detected", handler)
-                ));
+                return Err(SecurityError::XssAttempt(format!(
+                    "Event handler {} in SVG detected",
+                    handler
+                )));
             }
         }
 
@@ -492,7 +504,7 @@ impl InputValidator {
             let pattern = Regex::new(pattern_str).unwrap();
             if let Some(matched) = pattern.find(content) {
                 return Err(SecurityError::SuspiciousJsPattern(
-                    matched.as_str().to_string()
+                    matched.as_str().to_string(),
                 ));
             }
         }
@@ -504,7 +516,7 @@ impl InputValidator {
     fn analyze_function_nesting(&self, content: &str) -> Result<(), SecurityError> {
         let mut brace_depth: i32 = 0;
         let mut max_depth: i32 = 0;
-        
+
         for char in content.chars() {
             match char {
                 '{' => {
@@ -521,7 +533,7 @@ impl InputValidator {
         // Prevent deeply nested code that could indicate obfuscation
         if max_depth > 20 {
             return Err(SecurityError::SuspiciousJsPattern(
-                "Excessive nesting depth detected".to_string()
+                "Excessive nesting depth detected".to_string(),
             ));
         }
 
@@ -536,12 +548,14 @@ impl InputValidator {
             for matched in template_pattern.find_iter(content) {
                 let template_content = matched.as_str();
                 // Check if template contains dangerous operations
-                if template_content.contains("eval") || 
-                   template_content.contains("Function") ||
-                   template_content.contains("require") {
-                    return Err(SecurityError::SuspiciousJsPattern(
-                        format!("Dangerous template literal: {}", template_content)
-                    ));
+                if template_content.contains("eval")
+                    || template_content.contains("Function")
+                    || template_content.contains("require")
+                {
+                    return Err(SecurityError::SuspiciousJsPattern(format!(
+                        "Dangerous template literal: {}",
+                        template_content
+                    )));
                 }
             }
         }
@@ -550,7 +564,7 @@ impl InputValidator {
         let concat_eval_pattern = Regex::new(r#"["'`][^"'`]*["'`]\s*\+.*eval"#).unwrap();
         if concat_eval_pattern.is_match(content) {
             return Err(SecurityError::SuspiciousJsPattern(
-                "String concatenation with eval detected".to_string()
+                "String concatenation with eval detected".to_string(),
             ));
         }
 
@@ -768,7 +782,11 @@ impl InputValidator {
     }
 
     /// Validate CSRF token
-    pub fn validate_csrf_token(&self, token: &str, session_token: &str) -> Result<(), SecurityError> {
+    pub fn validate_csrf_token(
+        &self,
+        token: &str,
+        session_token: &str,
+    ) -> Result<(), SecurityError> {
         if token.is_empty() || session_token.is_empty() {
             return Err(SecurityError::CsrfValidationFailed);
         }
@@ -789,9 +807,7 @@ impl InputValidator {
         // Check for XSS patterns
         for pattern in &self.xss_patterns {
             if let Some(matched) = pattern.find(input) {
-                return Err(SecurityError::XssAttempt(
-                    matched.as_str().to_string()
-                ));
+                return Err(SecurityError::XssAttempt(matched.as_str().to_string()));
             }
         }
 
@@ -844,16 +860,40 @@ mod tests {
         let validator = InputValidator::new();
 
         // Test infinite loop detection
-        assert!(validator.validate_script_content("while (true) { console.log('test'); }").is_err());
-        assert!(validator.validate_script_content("for (;;) { break; }").is_err());
+        assert!(
+            validator
+                .validate_script_content("while (true) { console.log('test'); }")
+                .is_err()
+        );
+        assert!(
+            validator
+                .validate_script_content("for (;;) { break; }")
+                .is_err()
+        );
 
         // Test prototype pollution detection
-        assert!(validator.validate_script_content("obj.__proto__ = malicious").is_err());
-        assert!(validator.validate_script_content("constructor.prototype = bad").is_err());
+        assert!(
+            validator
+                .validate_script_content("obj.__proto__ = malicious")
+                .is_err()
+        );
+        assert!(
+            validator
+                .validate_script_content("constructor.prototype = bad")
+                .is_err()
+        );
 
         // Test suspicious patterns
-        assert!(validator.validate_script_content("this['eval']('code')").is_err());
-        assert!(validator.validate_script_content("new Function('return this')()").is_err());
+        assert!(
+            validator
+                .validate_script_content("this['eval']('code')")
+                .is_err()
+        );
+        assert!(
+            validator
+                .validate_script_content("new Function('return this')()")
+                .is_err()
+        );
     }
 
     #[test]
@@ -862,14 +902,26 @@ mod tests {
 
         // Test PNG validation
         let png_content = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00];
-        assert!(validator.validate_asset_content(&png_content, "image/png").is_ok());
+        assert!(
+            validator
+                .validate_asset_content(&png_content, "image/png")
+                .is_ok()
+        );
 
         // Test MIME type mismatch
         let text_content = b"Hello, world!";
-        assert!(validator.validate_asset_content(text_content, "image/png").is_err());
+        assert!(
+            validator
+                .validate_asset_content(text_content, "image/png")
+                .is_err()
+        );
 
         // Test disallowed MIME type
-        assert!(validator.validate_asset_content(text_content, "application/x-executable").is_err());
+        assert!(
+            validator
+                .validate_asset_content(text_content, "application/x-executable")
+                .is_err()
+        );
     }
 
     #[test]
@@ -877,9 +929,21 @@ mod tests {
         let validator = InputValidator::new();
 
         // Test XSS pattern detection
-        assert!(validator.validate_user_input("<script>alert('xss')</script>").is_err());
-        assert!(validator.validate_user_input("javascript:alert('xss')").is_err());
-        assert!(validator.validate_user_input("<img onerror='alert(1)' src='x'>").is_err());
+        assert!(
+            validator
+                .validate_user_input("<script>alert('xss')</script>")
+                .is_err()
+        );
+        assert!(
+            validator
+                .validate_user_input("javascript:alert('xss')")
+                .is_err()
+        );
+        assert!(
+            validator
+                .validate_user_input("<img onerror='alert(1)' src='x'>")
+                .is_err()
+        );
 
         // Test safe input encoding
         let safe_input = validator.validate_user_input("Hello & goodbye").unwrap();
@@ -898,6 +962,10 @@ mod tests {
         // Test token validation
         assert!(validator.validate_csrf_token(&token, "session123").is_ok());
         assert!(validator.validate_csrf_token("", "session123").is_err());
-        assert!(validator.validate_csrf_token("invalid", "session123").is_err());
+        assert!(
+            validator
+                .validate_csrf_token("invalid", "session123")
+                .is_err()
+        );
     }
 }

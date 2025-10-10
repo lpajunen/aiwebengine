@@ -9,9 +9,7 @@ use crate::repository;
 use crate::security::UserContext;
 
 // Use the enhanced secure globals implementation
-use crate::security::secure_globals::{
-    GlobalSecurityConfig, SecureGlobalContext,
-};
+use crate::security::secure_globals::{GlobalSecurityConfig, SecureGlobalContext};
 
 /// Resource limits for JavaScript execution
 #[derive(Debug, Clone)]
@@ -65,8 +63,6 @@ fn validate_script(content: &str, limits: &ExecutionLimits) -> Result<(), String
 /// Function type for registering functions in different execution contexts
 type RegisterFunctionType = Box<dyn Fn(&str, &str, Option<&str>) -> Result<(), rquickjs::Error>>;
 
-
-
 /// Sets up secure global functions with proper capability validation
 ///
 /// This function replaces the old vulnerable setup_global_functions with a secure implementation
@@ -79,10 +75,10 @@ fn setup_secure_global_functions(
     register_fn: Option<RegisterFunctionType>,
 ) -> Result<(), rquickjs::Error> {
     let secure_context = SecureGlobalContext::new_with_config(user_context, config.clone());
-    
+
     // Setup secure functions with proper capability validation
     secure_context.setup_secure_functions(ctx, script_uri, register_fn)?;
-    
+
     Ok(())
 }
 
@@ -807,7 +803,13 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                         },
                     );
 
-                    setup_secure_global_functions(&ctx, &uri_owned, UserContext::anonymous(), &config, Some(register_impl))?;
+                    setup_secure_global_functions(
+                        &ctx,
+                        &uri_owned,
+                        UserContext::anonymous(),
+                        &config,
+                        Some(register_impl),
+                    )?;
 
                     // Execute the script
                     ctx.eval::<(), _>(content)?;
@@ -1014,7 +1016,13 @@ pub fn execute_script_for_request(
             ..Default::default()
         };
 
-        setup_secure_global_functions(&ctx, &script_uri_owned, UserContext::anonymous(), &config, None)?;
+        setup_secure_global_functions(
+            &ctx,
+            &script_uri_owned,
+            UserContext::anonymous(),
+            &config,
+            None,
+        )?;
 
         Ok(())
     })

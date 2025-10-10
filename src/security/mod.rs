@@ -1,14 +1,20 @@
 pub mod audit;
 pub mod capabilities;
+pub mod csp;
 pub mod operations;
+pub mod rate_limiting;
 pub mod secure_globals;
 pub mod secure_globals_simple; // Simplified version for testing
+pub mod threat_detection;
 pub mod validation;
 
 pub use audit::{SecurityAuditor, SecurityEvent, SecurityEventType, SecuritySeverity};
 pub use capabilities::UserContext;
+pub use csp::{CspDirective, CspManager, CspPolicy, CspSource, CspViolationReport};
 pub use operations::{OperationResult, SecureOperations, UpsertScriptRequest};
+pub use rate_limiting::{RateLimitConfig, RateLimitKey, RateLimitResult, RateLimiter, TokenBucket};
 pub use secure_globals::{GlobalSecurityConfig, SecureGlobalContext};
+pub use threat_detection::{ThreatAssessment, ThreatDetectionConfig, ThreatDetector, ThreatLevel};
 pub use validation::{Capability, InputValidator, SecurityError};
 
 // Re-export convenience macros
