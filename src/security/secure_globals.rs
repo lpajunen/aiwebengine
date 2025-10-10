@@ -981,8 +981,17 @@ impl SecureGlobalContext {
                                     "Secure registerWebStream called"
                                 );
 
-                                // TODO: Call actual stream registration here
-                                Ok(format!("Web stream '{}' registered successfully", path))
+                                // Actually register the stream
+                                match crate::stream_registry::GLOBAL_STREAM_REGISTRY
+                                    .register_stream(&path, &script_uri_register)
+                                {
+                                    Ok(()) => {
+                                        Ok(format!("Web stream '{}' registered successfully", path))
+                                    }
+                                    Err(e) => {
+                                        Ok(format!("Failed to register stream '{}': {}", path, e))
+                                    }
+                                }
                             } else {
                                 Ok(op_result
                                     .error
@@ -992,16 +1001,24 @@ impl SecureGlobalContext {
                         Err(_) => Ok("Internal server error".to_string()),
                     }
                 } else {
-                    // No tokio runtime available, return success for testing
+                    // No tokio runtime available, register stream for testing
                     debug!(
                         user_id = ?user_ctx_register.user_id,
                         path = %path,
                         "Stream register called (no runtime)"
                     );
-                    Ok(format!(
-                        "Stream '{}' registered successfully (test mode)",
-                        path
-                    ))
+                    match crate::stream_registry::GLOBAL_STREAM_REGISTRY
+                        .register_stream(&path, &script_uri_register)
+                    {
+                        Ok(()) => Ok(format!(
+                            "Stream '{}' registered successfully (test mode)",
+                            path
+                        )),
+                        Err(e) => Ok(format!(
+                            "Failed to register stream '{}' (test mode): {}",
+                            path, e
+                        )),
+                    }
                 }
             },
         )?;

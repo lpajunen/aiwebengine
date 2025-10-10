@@ -1561,8 +1561,9 @@ mod tests {
         assert_eq!(original.registrations.len(), cloned.registrations.len());
     }
 
-    #[test]
-    fn test_register_web_stream_function() {
+    #[tokio::test]
+    async fn test_register_web_stream_function() {
+        use crate::security::UserContext;
         use std::sync::Once;
         static INIT: Once = Once::new();
 
@@ -1577,13 +1578,22 @@ mod tests {
         "#;
 
         let _ = repository::upsert_script("stream-test-func", script_content);
-        let result = execute_script("stream-test-func", script_content);
+        // Use secure execution with admin privileges for testing
+        let result = execute_script_secure(
+            "stream-test-func",
+            script_content,
+            UserContext::admin("test-admin".to_string()),
+        );
 
-        assert!(result.success, "Script should execute successfully");
+        assert!(
+            result.success,
+            "Script should execute successfully: {:?}",
+            result.error
+        );
         assert!(result.error.is_none(), "Should not have any errors");
 
         // Small delay to ensure registration is complete
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
         // Verify the stream was registered
         assert!(
@@ -1626,8 +1636,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_send_stream_message_function() {
+    #[tokio::test]
+    async fn test_send_stream_message_function() {
+        use crate::security::UserContext;
+
         let script_content = r#"
             // Register a stream first
             registerWebStream('/test-message-stream');
@@ -1639,7 +1651,12 @@ mod tests {
         "#;
 
         let _ = repository::upsert_script("stream-message-test", script_content);
-        let result = execute_script("stream-message-test", script_content);
+        // Use secure execution with admin privileges for testing
+        let result = execute_script_secure(
+            "stream-message-test",
+            script_content,
+            UserContext::admin("test-admin".to_string()),
+        );
 
         assert!(
             result.success,
@@ -1648,7 +1665,7 @@ mod tests {
         );
 
         // Small delay to ensure the message is processed
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
         // Verify the stream was registered
         assert!(
@@ -1665,8 +1682,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_send_stream_message_json_object() {
+    #[tokio::test]
+    async fn test_send_stream_message_json_object() {
+        use crate::security::UserContext;
+
         let script_content = r#"
             // Register a stream first
             registerWebStream('/test-json-stream');
@@ -1690,7 +1709,12 @@ mod tests {
         "#;
 
         let _ = repository::upsert_script("stream-json-test", script_content);
-        let result = execute_script("stream-json-test", script_content);
+        // Use secure execution with admin privileges for testing
+        let result = execute_script_secure(
+            "stream-json-test",
+            script_content,
+            UserContext::admin("test-admin".to_string()),
+        );
 
         assert!(
             result.success,
@@ -1699,7 +1723,7 @@ mod tests {
         );
 
         // Small delay to ensure the message is processed
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
         // Verify the stream was registered
         assert!(
