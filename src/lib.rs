@@ -19,6 +19,8 @@ pub mod security;
 pub mod stream_manager;
 pub mod stream_registry;
 
+use security::UserContext;
+
 /// Parses a query string into a HashMap of key-value pairs
 fn parse_query_string(query: &str) -> HashMap<String, String> {
     serde_urlencoded::from_str(query).unwrap_or_default()
@@ -213,7 +215,8 @@ pub async fn start_server_with_config(
     let scripts = repository::fetch_scripts();
     for (uri, content) in scripts.iter() {
         info!("Executing script: {}", uri);
-        let result = js_engine::execute_script(uri, content);
+        // Use secure execution with admin user context for startup script execution
+        let result = js_engine::execute_script_secure(uri, content, UserContext::admin("system".to_string()));
         if !result.success {
             error!("Failed to execute script {}: {:?}", uri, result.error);
         } else {

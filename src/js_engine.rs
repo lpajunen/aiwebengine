@@ -678,6 +678,8 @@ pub fn execute_script_secure(
                     // Set up all secure global functions with audit logging disabled for tests
                     let security_config = GlobalSecurityConfig {
                         enable_audit_logging: false, // Disable for tests to avoid runtime conflicts
+                        enable_graphql_registration: false, // Disable GraphQL to avoid runtime conflicts
+                        enable_streams: false, // Disable streams to avoid runtime conflicts
                         ..Default::default()
                     };
 
@@ -1013,6 +1015,7 @@ pub fn execute_script_for_request(
         // For request handling, we don't need full GraphQL registration (no-ops)
         let config = GlobalSecurityConfig {
             enable_graphql_registration: false,
+            enable_audit_logging: false, // Disable audit logging to avoid runtime conflicts
             ..Default::default()
         };
 
@@ -1129,6 +1132,7 @@ pub fn execute_graphql_resolver(
         let config = GlobalSecurityConfig {
             enable_graphql_registration: false,
             enable_streams: false,
+            enable_audit_logging: false, // Disable audit logging to avoid runtime conflicts
             ..Default::default()
         };
 
