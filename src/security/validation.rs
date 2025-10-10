@@ -341,11 +341,9 @@ impl InputValidator {
         // Check for common file signatures
         match content {
             // PNG
-            content if content.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) => {
-                "image/png".to_string()
-            }
+            [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, ..] => "image/png".to_string(),
             // JPEG
-            content if content.starts_with(&[0xFF, 0xD8, 0xFF]) => "image/jpeg".to_string(),
+            [0xFF, 0xD8, 0xFF, ..] => "image/jpeg".to_string(),
             // GIF
             content if content.starts_with(b"GIF87a") || content.starts_with(b"GIF89a") => {
                 "image/gif".to_string()

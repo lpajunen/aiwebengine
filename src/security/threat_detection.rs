@@ -2,7 +2,7 @@ use chrono::{DateTime, Duration, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, RwLock};
-use tracing::{debug, warn};
+use tracing::warn;
 
 use super::{SecurityEvent, SecurityEventType};
 
@@ -134,7 +134,6 @@ impl ThreatDetector {
     /// Analyze a security event for threats and anomalies
     pub fn analyze_event(&self, event: &SecurityEvent) -> ThreatAssessment {
         let mut threat_indicators = Vec::new();
-        let mut confidence_score = 0.0;
 
         match event.event_type {
             SecurityEventType::AuthenticationFailure => {
@@ -160,7 +159,7 @@ impl ThreatDetector {
         }
 
         // Calculate overall confidence score
-        confidence_score = threat_indicators
+        let confidence_score = threat_indicators
             .iter()
             .map(|indicator| indicator.severity)
             .sum::<f64>()
@@ -342,7 +341,7 @@ impl ThreatDetector {
 
         // Check for unusual time patterns
         let hour = event.timestamp.hour();
-        if hour < 6 || hour > 22 {
+        if !(6..=22).contains(&hour) {
             indicators.push(ThreatIndicator {
                 indicator_type: "unusual_time_access".to_string(),
                 severity: 30.0,

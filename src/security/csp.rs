@@ -127,10 +127,7 @@ impl CspPolicy {
 
     /// Add a source to an existing directive
     pub fn add_source(&mut self, directive: CspDirective, source: CspSource) {
-        self.directives
-            .entry(directive)
-            .or_insert_with(Vec::new)
-            .push(source);
+        self.directives.entry(directive).or_default().push(source);
     }
 
     /// Generate the CSP header value

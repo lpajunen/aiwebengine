@@ -361,7 +361,7 @@ impl RateLimiter {
         }
 
         // Notify threat detector of potential abuse
-        if let Some(threat_detector) = &self.threat_detector {
+        if let Some(_threat_detector) = &self.threat_detector {
             match key {
                 RateLimitKey::IpAddress(ip) => {
                     // Could implement additional threat analysis here
