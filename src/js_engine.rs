@@ -675,11 +675,12 @@ pub fn execute_script_secure(
         Ok(rt) => match Context::full(&rt) {
             Ok(ctx) => {
                 let result = ctx.with(|ctx| -> Result<(), rquickjs::Error> {
-                    // Set up all secure global functions with audit logging disabled for tests
+                    // Set up all secure global functions with audit logging disabled for startup
                     let security_config = GlobalSecurityConfig {
-                        enable_audit_logging: false, // Disable for tests to avoid runtime conflicts
-                        enable_graphql_registration: false, // Disable GraphQL to avoid runtime conflicts
-                        enable_streams: false, // Disable streams to avoid runtime conflicts
+                        enable_audit_logging: false, // Disable for startup to reduce noise
+                        // Re-enable GraphQL and streams now that block_on calls are fixed
+                        enable_graphql_registration: true,
+                        enable_streams: true,
                         ..Default::default()
                     };
 

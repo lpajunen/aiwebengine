@@ -216,7 +216,11 @@ pub async fn start_server_with_config(
     for (uri, content) in scripts.iter() {
         info!("Executing script: {}", uri);
         // Use secure execution with admin user context for startup script execution
-        let result = js_engine::execute_script_secure(uri, content, UserContext::admin("system".to_string()));
+        let result = js_engine::execute_script_secure(
+            uri,
+            content,
+            UserContext::admin("system".to_string()),
+        );
         if !result.success {
             error!("Failed to execute script {}: {:?}", uri, result.error);
         } else {
