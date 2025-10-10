@@ -8,9 +8,9 @@ use tracing::{debug, error, warn};
 use crate::repository;
 use crate::security::UserContext;
 
-// Temporarily use simplified secure globals for testing
-use crate::security::secure_globals_simple::{
-    GlobalSecurityConfig, setup_secure_global_functions as setup_secure_global_functions_simple,
+// Use the enhanced secure globals implementation
+use crate::security::secure_globals::{
+    GlobalSecurityConfig, SecureGlobalContext,
 };
 
 /// Resource limits for JavaScript execution
@@ -65,31 +65,25 @@ fn validate_script(content: &str, limits: &ExecutionLimits) -> Result<(), String
 /// Function type for registering functions in different execution contexts
 type RegisterFunctionType = Box<dyn Fn(&str, &str, Option<&str>) -> Result<(), rquickjs::Error>>;
 
-/// Configuration for different types of global function setups
-#[derive(Debug, Clone)]
-pub struct GlobalFunctionConfig {
-    /// Whether to enable stream functionality
-    pub enable_streams: bool,
-    /// Whether to enable GraphQL registration functions
-    pub enable_graphql_registration: bool,
-    /// Whether to enable asset management functions
-    pub enable_asset_management: bool,
-    /// Whether to enable script management functions
-    pub enable_script_management: bool,
-    /// Whether to enable logging functions
-    pub enable_logging: bool,
-}
 
-impl Default for GlobalFunctionConfig {
-    fn default() -> Self {
-        Self {
-            enable_streams: true,
-            enable_graphql_registration: true,
-            enable_asset_management: true,
-            enable_script_management: true,
-            enable_logging: true,
-        }
-    }
+
+/// Sets up secure global functions with proper capability validation
+///
+/// This function replaces the old vulnerable setup_global_functions with a secure implementation
+/// that enforces all security validation in Rust before allowing JavaScript operations.
+fn setup_secure_global_functions(
+    ctx: &rquickjs::Ctx<'_>,
+    script_uri: &str,
+    user_context: UserContext,
+    config: &GlobalSecurityConfig,
+    register_fn: Option<RegisterFunctionType>,
+) -> Result<(), rquickjs::Error> {
+    let secure_context = SecureGlobalContext::new_with_config(user_context, config.clone());
+    
+    // Setup secure functions with proper capability validation
+    secure_context.setup_secure_functions(ctx, script_uri, register_fn)?;
+    
+    Ok(())
 }
 
 /// Sets up common global functions for JavaScript execution contexts (LEGACY)
@@ -102,7 +96,7 @@ impl Default for GlobalFunctionConfig {
 fn setup_global_functions(
     ctx: &rquickjs::Ctx<'_>,
     script_uri: &str,
-    config: &GlobalFunctionConfig,
+    config: &GlobalSecurityConfig,
     register_fn: Option<RegisterFunctionType>,
 ) -> Result<(), rquickjs::Error> {
     let global = ctx.globals();
@@ -714,11 +708,11 @@ pub fn execute_script_secure(
                         },
                     );
 
-                    setup_secure_global_functions_simple(
+                    setup_secure_global_functions(
                         &ctx,
                         &uri_owned,
                         user_context,
-                        Some(security_config),
+                        &security_config,
                         Some(register_impl),
                     )?;
 
@@ -787,8 +781,8 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
         Ok(rt) => match Context::full(&rt) {
             Ok(ctx) => {
                 let result = ctx.with(|ctx| -> Result<(), rquickjs::Error> {
-                    // Set up all global functions using the helper function
-                    let config = GlobalFunctionConfig::default();
+                    // Set up all global functions using the secure helper function
+                    let config = GlobalSecurityConfig::default();
 
                     // Create the register function that captures registrations
                     let regs_clone = Rc::clone(&registrations);
@@ -813,7 +807,7 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                         },
                     );
 
-                    setup_global_functions(&ctx, &uri_owned, &config, Some(register_impl))?;
+                    setup_secure_global_functions(&ctx, &uri_owned, UserContext::anonymous(), &config, Some(register_impl))?;
 
                     // Execute the script
                     ctx.eval::<(), _>(content)?;
@@ -883,11 +877,11 @@ pub fn execute_script_for_request_secure(
             ..Default::default()
         };
 
-        setup_secure_global_functions_simple(
+        setup_secure_global_functions(
             &ctx,
             &script_uri_owned,
             params.user_context,
-            Some(security_config),
+            &security_config,
             None,
         )?;
 
@@ -1013,14 +1007,14 @@ pub fn execute_script_for_request(
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
     ctx.with(|ctx| -> Result<(), rquickjs::Error> {
-        // Set up all global functions using the helper function
+        // Set up all global functions using the secure helper function
         // For request handling, we don't need full GraphQL registration (no-ops)
-        let config = GlobalFunctionConfig {
+        let config = GlobalSecurityConfig {
             enable_graphql_registration: false,
             ..Default::default()
         };
 
-        setup_global_functions(&ctx, &script_uri_owned, &config, None)?;
+        setup_secure_global_functions(&ctx, &script_uri_owned, UserContext::anonymous(), &config, None)?;
 
         Ok(())
     })
@@ -1122,15 +1116,15 @@ pub fn execute_graphql_resolver(
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
     ctx.with(|ctx| -> Result<String, rquickjs::Error> {
-        // Set up all global functions using the helper function
+        // Set up all global functions using the secure helper function
         // For GraphQL resolvers, we don't need GraphQL registration (no-ops) or stream registration
-        let config = GlobalFunctionConfig {
+        let config = GlobalSecurityConfig {
             enable_graphql_registration: false,
             enable_streams: false,
             ..Default::default()
         };
 
-        setup_global_functions(&ctx, &script_uri_owned, &config, None)?;
+        setup_secure_global_functions(&ctx, &script_uri_owned, UserContext::anonymous(), &config, None)?;
 
         // Override specific functions that have different signatures for GraphQL resolver context
         let global = ctx.globals();
