@@ -1,0 +1,404 @@
+/// Authentication Manager
+///
+/// Central orchestrator for authentication operations, coordinating providers,
+/// sessions, and security infrastructure.
+
+use crate::auth::{
+    AuthError, AuthSecurityContext, AuthSessionManager, OAuth2Provider, OAuth2ProviderConfig,
+    OAuth2TokenResponse, OAuth2UserInfo, ProviderFactory,
+};
+use std::collections::HashMap;
+use std::sync::Arc;
+
+/// User information after successful authentication
+#[derive(Debug, Clone)]
+pub struct AuthenticatedUser {
+    /// Unique user identifier (from provider)
+    pub user_id: String,
+    
+    /// OAuth2 provider name
+    pub provider: String,
+    
+    /// User information from provider
+    pub user_info: OAuth2UserInfo,
+    
+    /// OAuth2 tokens
+    pub tokens: OAuth2TokenResponse,
+}
+
+/// Authentication manager configuration
+#[derive(Debug, Clone)]
+pub struct AuthManagerConfig {
+    /// Base URL for redirect URIs
+    pub base_url: String,
+    
+    /// Session cookie name
+    pub session_cookie_name: String,
+    
+    /// Session cookie domain
+    pub cookie_domain: Option<String>,
+    
+    /// Session cookie secure flag
+    pub cookie_secure: bool,
+    
+    /// Session cookie http-only flag
+    pub cookie_http_only: bool,
+    
+    /// Session cookie same-site policy
+    pub cookie_same_site: CookieSameSite,
+    
+    /// Session timeout in seconds
+    pub session_timeout: u64,
+}
+
+#[derive(Debug, Clone)]
+pub enum CookieSameSite {
+    Strict,
+    Lax,
+    None,
+}
+
+impl Default for AuthManagerConfig {
+    fn default() -> Self {
+        Self {
+            base_url: "http://localhost:3000".to_string(),
+            session_cookie_name: "auth_session".to_string(),
+            cookie_domain: None,
+            cookie_secure: true,
+            cookie_http_only: true,
+            cookie_same_site: CookieSameSite::Lax,
+            session_timeout: 3600 * 24 * 7, // 7 days
+        }
+    }
+}
+
+/// Central authentication manager
+pub struct AuthManager {
+    config: AuthManagerConfig,
+    providers: HashMap<String, Arc<Box<dyn OAuth2Provider>>>,
+    session_manager: Arc<AuthSessionManager>,
+    security_context: Arc<AuthSecurityContext>,
+}
+
+impl AuthManager {
+    /// Create a new authentication manager
+    pub fn new(
+        config: AuthManagerConfig,
+        session_manager: Arc<AuthSessionManager>,
+        security_context: Arc<AuthSecurityContext>,
+    ) -> Self {
+        Self {
+            config,
+            providers: HashMap::new(),
+            session_manager,
+            security_context,
+        }
+    }
+    
+    /// Register an OAuth2 provider
+    pub fn register_provider(
+        &mut self,
+        provider_name: &str,
+        provider_config: OAuth2ProviderConfig,
+    ) -> Result<(), AuthError> {
+        let provider = ProviderFactory::create_provider(provider_name, provider_config)?;
+        self.providers.insert(provider_name.to_string(), Arc::new(provider));
+        Ok(())
+    }
+    
+    /// Get a registered provider
+    pub fn get_provider(&self, provider_name: &str) -> Option<Arc<Box<dyn OAuth2Provider>>> {
+        self.providers.get(provider_name).cloned()
+    }
+    
+    /// List all registered providers
+    pub fn list_providers(&self) -> Vec<String> {
+        self.providers.keys().cloned().collect()
+    }
+    
+    /// Generate OAuth2 authorization URL for a provider
+    ///
+    /// # Arguments
+    /// * `provider_name` - Name of the OAuth2 provider
+    /// * `ip_addr` - Client IP address for CSRF state tracking
+    ///
+    /// # Returns
+    /// Tuple of (authorization_url, csrf_state_token)
+    pub async fn start_login(
+        &self,
+        provider_name: &str,
+        ip_addr: &str,
+    ) -> Result<(String, String), AuthError> {
+        let provider = self.get_provider(provider_name)
+            .ok_or_else(|| AuthError::UnsupportedProvider(provider_name.to_string()))?;
+        
+        // Generate CSRF state token
+        let state = self.security_context
+            .create_oauth_state(provider_name, ip_addr)
+            .await?;
+        
+        // Generate nonce for OIDC providers
+        let nonce = format!("nonce_{}", uuid::Uuid::new_v4());
+        
+        // Generate authorization URL
+        let auth_url = provider.authorization_url(&state, Some(&nonce))?;
+        
+        // Log authentication attempt
+        self.security_context
+            .log_auth_attempt(provider_name, ip_addr)
+            .await;
+        
+        Ok((auth_url, state))
+    }
+    
+    /// Handle OAuth2 callback and complete authentication
+    ///
+    /// # Arguments
+    /// * `provider_name` - Name of the OAuth2 provider
+    /// * `code` - Authorization code from provider
+    /// * `state` - CSRF state token to validate
+    /// * `ip_addr` - Client IP address
+    /// * `user_agent` - Client user agent string
+    ///
+    /// # Returns
+    /// Session token for the authenticated user
+    pub async fn handle_callback(
+        &self,
+        provider_name: &str,
+        code: &str,
+        state: &str,
+        ip_addr: &str,
+        user_agent: &str,
+    ) -> Result<String, AuthError> {
+        // Validate CSRF state
+        if !self.security_context.validate_oauth_state(state, provider_name, ip_addr).await? {
+            self.security_context
+                .log_auth_failure(provider_name, "Invalid OAuth state", Some(ip_addr))
+                .await;
+            return Err(AuthError::InvalidState);
+        }
+        
+        // Get provider
+        let provider = self.get_provider(provider_name)
+            .ok_or_else(|| AuthError::UnsupportedProvider(provider_name.to_string()))?;
+        
+        // Check rate limiting
+        if !self.security_context.check_auth_rate_limit(ip_addr).await {
+            return Err(AuthError::RateLimitExceeded);
+        }
+        
+        // Exchange code for tokens
+        let tokens = provider.exchange_code(code, state).await
+            .map_err(|e| {
+                // Log failure
+                let _ = self.security_context.log_auth_failure(
+                    provider_name,
+                    &format!("Token exchange failed: {}", e),
+                    Some(ip_addr),
+                );
+                e
+            })?;
+        
+        // Get user info
+        let user_info = provider.get_user_info(
+            &tokens.access_token,
+            tokens.id_token.as_deref(),
+        ).await
+            .map_err(|e| {
+                // Log failure
+                let _ = self.security_context.log_auth_failure(
+                    provider_name,
+                    &format!("User info retrieval failed: {}", e),
+                    Some(ip_addr),
+                );
+                e
+            })?;
+        
+        // Verify email if required
+        if !user_info.email_verified {
+            self.security_context
+                .log_auth_failure(provider_name, "Email not verified", Some(ip_addr))
+                .await;
+            return Err(AuthError::ProviderError("Email not verified by provider".to_string()));
+        }
+        
+        // Create session
+        let session_token = self.session_manager
+            .create_session(
+                user_info.provider_user_id.clone(),
+                provider_name.to_string(),
+                Some(user_info.email.clone()),
+                user_info.name.clone(),
+                false, // is_admin - would need additional logic to determine
+                ip_addr.to_string(),
+                user_agent.to_string(),
+            )
+            .await?;
+        
+        // Log successful authentication
+        self.security_context
+            .log_auth_success(&user_info.provider_user_id, provider_name, Some(ip_addr))
+            .await;
+        
+        Ok(session_token.token)
+    }
+    
+    /// Validate a session token
+    ///
+    /// # Arguments
+    /// * `session_token` - Session token to validate
+    /// * `ip_addr` - Client IP address
+    /// * `user_agent` - Client user agent string
+    ///
+    /// # Returns
+    /// User ID if session is valid
+    pub async fn validate_session(
+        &self,
+        session_token: &str,
+        ip_addr: &str,
+        user_agent: &str,
+    ) -> Result<String, AuthError> {
+        self.session_manager
+            .get_session(session_token, ip_addr, user_agent)
+            .await
+            .map(|session| session.user_id)
+    }
+    
+    /// Refresh an OAuth2 access token
+    ///
+    /// # Arguments
+    /// * `provider_name` - Name of the OAuth2 provider
+    /// * `refresh_token` - Refresh token from previous authentication
+    ///
+    /// # Returns
+    /// New token response
+    pub async fn refresh_token(
+        &self,
+        provider_name: &str,
+        refresh_token: &str,
+    ) -> Result<OAuth2TokenResponse, AuthError> {
+        let provider = self.get_provider(provider_name)
+            .ok_or_else(|| AuthError::UnsupportedProvider(provider_name.to_string()))?;
+        
+        provider.refresh_token(refresh_token).await
+    }
+    
+    /// Logout a user session
+    ///
+    /// # Arguments
+    /// * `session_token` - Session token to invalidate
+    /// * `revoke_oauth_token` - Whether to revoke OAuth tokens with provider
+    ///
+    /// # Returns
+    /// Ok if logout succeeded
+    pub async fn logout(
+        &self,
+        session_token: &str,
+        revoke_oauth_token: bool,
+    ) -> Result<(), AuthError> {
+        // Destroy session
+        self.session_manager
+            .delete_session(session_token)
+            .await?;
+        
+        // Optionally revoke OAuth tokens
+        if revoke_oauth_token {
+            // Note: Would need to store OAuth tokens in session to revoke them
+            // This is a simplified version
+            // In production, you'd want to:
+            // 1. Store access/refresh tokens in encrypted session data
+            // 2. Retrieve them here
+            // 3. Call provider.revoke_token()
+        }
+        
+        Ok(())
+    }
+    
+    /// Get authentication manager configuration
+    pub fn config(&self) -> &AuthManagerConfig {
+        &self.config
+    }
+    
+    /// Get session manager
+    pub fn session_manager(&self) -> Arc<AuthSessionManager> {
+        Arc::clone(&self.session_manager)
+    }
+    
+    /// Get security context
+    pub fn security_context(&self) -> Arc<AuthSecurityContext> {
+        Arc::clone(&self.security_context)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::OAuth2ProviderConfig;
+    use crate::security::{
+        CsrfProtection, DataEncryption, RateLimiter, SecureSessionManager, SecurityAuditor,
+        ThreatDetector,
+    };
+    use std::collections::HashMap;
+
+    async fn create_test_manager() -> AuthManager {
+        let config = AuthManagerConfig::default();
+        
+        // Create security infrastructure
+        let auditor = Arc::new(SecurityAuditor::new());
+        let rate_limiter = Arc::new(RateLimiter::new().with_security_auditor(Arc::clone(&auditor)));
+        let threat_detector = Arc::new(ThreatDetector::new(Arc::clone(&auditor)));
+        let csrf = Arc::new(CsrfProtection::new());
+        let encryption = Arc::new(DataEncryption::new("test-encryption-password-32-bytes!").unwrap());
+        
+        let session_mgr = Arc::new(SecureSessionManager::new(
+            encryption.clone(),
+            Arc::clone(&auditor),
+        ));
+        
+        let auth_session_mgr = Arc::new(AuthSessionManager::new(session_mgr));
+        
+        let security_context = Arc::new(AuthSecurityContext::new(
+            Arc::clone(&auditor),
+            rate_limiter,
+            threat_detector,
+            csrf,
+            encryption,
+        ));
+        
+        AuthManager::new(config, auth_session_mgr, security_context)
+    }
+
+    #[tokio::test]
+    async fn test_manager_creation() {
+        let manager = create_test_manager().await;
+        assert_eq!(manager.list_providers().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_register_provider() {
+        let mut manager = create_test_manager().await;
+        
+        let config = OAuth2ProviderConfig {
+            client_id: "test-client".to_string(),
+            client_secret: "test-secret".to_string(),
+            scopes: vec!["openid".to_string(), "email".to_string()],
+            redirect_uri: "https://example.com/callback".to_string(),
+            auth_url: None,
+            token_url: None,
+            userinfo_url: None,
+            extra_params: HashMap::new(),
+        };
+        
+        let result = manager.register_provider("google", config);
+        assert!(result.is_ok());
+        assert_eq!(manager.list_providers().len(), 1);
+        assert!(manager.get_provider("google").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_unsupported_provider() {
+        let manager = create_test_manager().await;
+        let result = manager.start_login("nonexistent", "127.0.0.1").await;
+        assert!(matches!(result, Err(AuthError::UnsupportedProvider(_))));
+    }
+}

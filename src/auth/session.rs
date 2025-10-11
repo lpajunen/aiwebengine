@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::security::{SecureSessionManager, SessionData, SessionToken};
 
-use super::{error::AuthError, AuthSecurityContext};
+use super::error::AuthError;
 
 /// Authentication session (user-facing)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,12 +39,12 @@ impl From<SessionData> for AuthSession {
 
 /// High-level authentication session manager
 pub struct AuthSessionManager {
-    security_context: Arc<AuthSecurityContext>,
+    session_manager: Arc<SecureSessionManager>,
 }
 
 impl AuthSessionManager {
-    pub fn new(security_context: Arc<AuthSecurityContext>) -> Self {
-        Self { security_context }
+    pub fn new(session_manager: Arc<SecureSessionManager>) -> Self {
+        Self { session_manager }
     }
 
     /// Create a new authenticated session
@@ -60,23 +60,18 @@ impl AuthSessionManager {
     ) -> Result<SessionToken, AuthError> {
         // Create session using secure session manager
         let token = self
-            .security_context
             .session_manager
             .create_session(
-                user_id.clone(),
-                provider.clone(),
-                email.clone(),
+                user_id,
+                provider,
+                email,
                 name,
                 is_admin,
-                ip_addr.clone(),
+                ip_addr,
                 user_agent,
             )
             .await
             .map_err(AuthError::Session)?;
-
-        // Log success
-        self.security_context
-            .log_auth_success(&user_id, &provider, Some(&ip_addr)).await;
 
         Ok(token)
     }
@@ -89,7 +84,6 @@ impl AuthSessionManager {
         user_agent: &str,
     ) -> Result<AuthSession, AuthError> {
         let session_data = self
-            .security_context
             .session_manager
             .validate_session(token, ip_addr, user_agent)
             .await
@@ -98,10 +92,9 @@ impl AuthSessionManager {
         Ok(AuthSession::from(session_data))
     }
 
-    /// Invalidate session (logout)
-    pub async fn invalidate_session(&self, token: &str) -> Result<(), AuthError> {
-        self.security_context
-            .session_manager
+    /// Delete session (logout)
+    pub async fn delete_session(&self, token: &str) -> Result<(), AuthError> {
+        self.session_manager
             .invalidate_session(token)
             .await
             .map_err(AuthError::Session)?;
@@ -111,8 +104,7 @@ impl AuthSessionManager {
 
     /// Get session count for a user
     pub async fn get_user_session_count(&self, user_id: &str) -> usize {
-        self.security_context
-            .session_manager
+        self.session_manager
             .get_user_session_count(user_id)
             .await
     }
@@ -126,26 +118,19 @@ impl AuthSessionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::auth::AuthConfig;
-    use crate::security::SecurityAuditor;
+    use crate::security::{DataEncryption, SecurityAuditor};
 
-    fn create_test_manager() -> AuthSessionManager {
-        let config = AuthConfig {
-            jwt_secret: "a".repeat(32),
-            session_timeout: 3600,
-            max_concurrent_sessions: 3,
-            ..Default::default()
-        };
-
+    async fn create_test_manager() -> AuthSessionManager {
         let auditor = Arc::new(SecurityAuditor::new());
-        let security_context = Arc::new(AuthSecurityContext::new(&config, auditor).unwrap());
+        let encryption = Arc::new(DataEncryption::new("test-encryption-password-32-bytes!").unwrap());
+        let session_manager = Arc::new(SecureSessionManager::new(encryption, Arc::clone(&auditor)));
 
-        AuthSessionManager::new(security_context)
+        AuthSessionManager::new(session_manager)
     }
 
     #[tokio::test]
     async fn test_create_and_get_session() {
-        let manager = create_test_manager();
+        let manager = create_test_manager().await;
 
         let token = manager
             .create_session(
@@ -172,8 +157,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_session_invalidation() {
-        let manager = create_test_manager();
+    async fn test_session_deletion() {
+        let manager = create_test_manager().await;
 
         let token = manager
             .create_session(
@@ -188,8 +173,8 @@ mod tests {
             .await
             .unwrap();
 
-        // Invalidate
-        manager.invalidate_session(&token.token).await.unwrap();
+        // Delete
+        manager.delete_session(&token.token).await.unwrap();
 
         // Should fail to retrieve
         let result = manager
@@ -201,7 +186,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_session_count() {
-        let manager = create_test_manager();
+        let manager = create_test_manager().await;
 
         let user_id = "user123";
 
@@ -230,7 +215,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_admin_session() {
-        let manager = create_test_manager();
+        let manager = create_test_manager().await;
 
         let token = manager
             .create_session(
