@@ -654,10 +654,20 @@ impl SecureGlobalContext {
                   resolver_function: String|
                   -> JsResult<String> {
                 // If GraphQL registration is disabled, return success without doing anything
-                tracing::info!("registerGraphQLQuery called: name={}, enable_graphql_registration={}", name, config_query.enable_graphql_registration);
+                tracing::info!(
+                    "registerGraphQLQuery called: name={}, enable_graphql_registration={}",
+                    name,
+                    config_query.enable_graphql_registration
+                );
                 if !config_query.enable_graphql_registration {
-                    tracing::info!("GraphQL registration disabled, skipping query registration for: {}", name);
-                    return Ok(format!("GraphQL query '{}' registration skipped (disabled)", name));
+                    tracing::info!(
+                        "GraphQL registration disabled, skipping query registration for: {}",
+                        name
+                    );
+                    return Ok(format!(
+                        "GraphQL query '{}' registration skipped (disabled)",
+                        name
+                    ));
                 }
 
                 // Check capability
@@ -987,10 +997,20 @@ impl SecureGlobalContext {
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>, path: String| -> JsResult<String> {
                 // If streams are disabled, return success without doing anything
-                tracing::info!("registerWebStream called: path={}, enable_streams={}", path, config_register.enable_streams);
+                tracing::info!(
+                    "registerWebStream called: path={}, enable_streams={}",
+                    path,
+                    config_register.enable_streams
+                );
                 if !config_register.enable_streams {
-                    tracing::info!("Stream registration disabled, skipping stream registration for: {}", path);
-                    return Ok(format!("Web stream '{}' registration skipped (disabled)", path));
+                    tracing::info!(
+                        "Stream registration disabled, skipping stream registration for: {}",
+                        path
+                    );
+                    return Ok(format!(
+                        "Web stream '{}' registration skipped (disabled)",
+                        path
+                    ));
                 }
 
                 // Check capability

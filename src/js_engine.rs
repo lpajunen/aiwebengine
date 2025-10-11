@@ -767,6 +767,8 @@ pub fn execute_script_secure(
 pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
     let start_time = Instant::now();
 
+    tracing::info!("execute_script called for URI: {}", uri);
+
     // Validate script using default limits
     let limits = ExecutionLimits::default();
     if let Err(e) = validate_script(content, &limits) {
@@ -777,22 +779,24 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
     let uri_owned = uri.to_string();
 
     match Runtime::new() {
-        Ok(rt) => match Context::full(&rt) {
-            Ok(ctx) => {
-                let result = ctx.with(|ctx| -> Result<(), rquickjs::Error> {
-                    // Set up all global functions using the secure helper function
-                    let config = GlobalSecurityConfig::default();
+        Ok(rt) => {
+            match Context::full(&rt) {
+                Ok(ctx) => {
+                    let result =
+                        ctx.with(|ctx| -> Result<(), rquickjs::Error> {
+                            // Set up all global functions using the secure helper function
+                            let config = GlobalSecurityConfig::default();
 
-                    // Create the register function that captures registrations
-                    let regs_clone = Rc::clone(&registrations);
-                    let uri_clone = uri_owned.clone();
-                    let register_impl = Box::new(
+                            // Create the register function that captures registrations
+                            let regs_clone = Rc::clone(&registrations);
+                            let uri_clone = uri_owned.clone();
+                            let register_impl = Box::new(
                         move |path: &str,
                               handler: &str,
                               method: Option<&str>|
                               -> Result<(), rquickjs::Error> {
                             let method = method.unwrap_or("GET");
-                            debug!(
+                            tracing::info!(
                                 "Registering route {} {} -> {} for script {}",
                                 method, path, handler, uri_clone
                             );
@@ -806,46 +810,53 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                         },
                     );
 
-                    setup_secure_global_functions(
-                        &ctx,
-                        &uri_owned,
-                        UserContext::anonymous(),
-                        &config,
-                        Some(register_impl),
-                    )?;
+                            setup_secure_global_functions(
+                                &ctx,
+                                &uri_owned,
+                                UserContext::admin("route-discovery".to_string()),
+                                &config,
+                                Some(register_impl),
+                            )?;
 
-                    // Execute the script
-                    ctx.eval::<(), _>(content)?;
-                    Ok(())
-                });
+                            // Execute the script
+                            ctx.eval::<(), _>(content)?;
+                            Ok(())
+                        });
 
-                match result {
-                    Ok(_) => {
-                        debug!("Successfully executed script {}", uri_owned);
-                        let final_regs = registrations.borrow().clone();
-                        let execution_time = start_time.elapsed().as_millis() as u64;
-                        ScriptExecutionResult::success(final_regs, execution_time)
-                    }
-                    Err(e) => {
-                        error!("Failed to execute script {}: {}", uri_owned, e);
-                        ScriptExecutionResult::failed(
-                            format!("Script evaluation error: {}", e),
-                            start_time.elapsed().as_millis() as u64,
-                        )
+                    match result {
+                        Ok(_) => {
+                            tracing::info!("Successfully executed script {}", uri_owned);
+                            let final_regs = registrations.borrow().clone();
+                            tracing::info!(
+                                "Script {} registered {} routes: {:?}",
+                                uri_owned,
+                                final_regs.len(),
+                                final_regs
+                            );
+                            let execution_time = start_time.elapsed().as_millis() as u64;
+                            ScriptExecutionResult::success(final_regs, execution_time)
+                        }
+                        Err(e) => {
+                            error!("Failed to execute script {}: {}", uri_owned, e);
+                            ScriptExecutionResult::failed(
+                                format!("Script evaluation error: {}", e),
+                                start_time.elapsed().as_millis() as u64,
+                            )
+                        }
                     }
                 }
+                Err(e) => {
+                    error!(
+                        "Failed to create QuickJS context for script {}: {}",
+                        uri_owned, e
+                    );
+                    ScriptExecutionResult::failed(
+                        format!("Context creation error: {}", e),
+                        start_time.elapsed().as_millis() as u64,
+                    )
+                }
             }
-            Err(e) => {
-                error!(
-                    "Failed to create QuickJS context for script {}: {}",
-                    uri_owned, e
-                );
-                ScriptExecutionResult::failed(
-                    format!("Context creation error: {}", e),
-                    start_time.elapsed().as_millis() as u64,
-                )
-            }
-        },
+        }
         Err(e) => {
             error!(
                 "Failed to create QuickJS runtime for script {}: {}",
