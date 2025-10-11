@@ -1,7 +1,6 @@
 use aiwebengine::{config::AppConfig, start_server};
 use clap::{Arg, Command};
 use tokio::sync::oneshot;
-use tracing::Level;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
@@ -26,12 +25,10 @@ async fn main() -> anyhow::Result<()> {
         )
         .get_matches();
 
-    // Load configuration
+    // Load configuration first to get logging preferences
     let config = if let Some(config_path) = matches.get_one::<String>("config") {
-        tracing::info!("Loading configuration from: {}", config_path);
         AppConfig::load_from_file(config_path)?
     } else {
-        tracing::info!("Loading configuration from environment and default sources");
         AppConfig::load().unwrap_or_else(|e| {
             eprintln!(
                 "Warning: Failed to load configuration: {}. Using defaults.",
@@ -40,6 +37,67 @@ async fn main() -> anyhow::Result<()> {
             AppConfig::default()
         })
     };
+
+    // Initialize logging based on configuration, but allow RUST_LOG to override
+    let log_level = match config.logging.level.as_str() {
+        "trace" => "trace",
+        "debug" => "debug",
+        "info" => "info",
+        "warn" => "warn",
+        "error" => "error",
+        _ => "info", // Default fallback
+    };
+
+    // Create filter that respects both config and environment
+    // Environment variable RUST_LOG takes precedence if set
+    let filter = if std::env::var("RUST_LOG").is_ok() {
+        // Use environment variable if set
+        tracing_subscriber::EnvFilter::from_default_env()
+    } else {
+        // Use configuration file setting with fallback for other crates
+        tracing_subscriber::EnvFilter::new(format!("aiwebengine={},warn", log_level))
+    };
+
+    // Initialize logging based on configuration format
+    match config.logging.format.as_str() {
+        "json" => {
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(tracing_subscriber::fmt::layer().json())
+                .init();
+        }
+        "compact" => {
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(tracing_subscriber::fmt::layer().compact())
+                .init();
+        }
+        _ => {
+            // "pretty" or default
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(tracing_subscriber::fmt::layer().pretty())
+                .init();
+        }
+    }
+
+    // Now we can log the configuration loading
+    tracing::info!(
+        "Loading configuration from {}",
+        if matches.get_one::<String>("config").is_some() {
+            "specified file"
+        } else {
+            "environment and default sources"
+        }
+    );
+    tracing::info!(
+        "Logging configured: level={}, format={}",
+        config.logging.level,
+        config.logging.format
+    );
+    if std::env::var("RUST_LOG").is_ok() {
+        tracing::info!("RUST_LOG environment variable detected, overriding config file log level");
+    }
 
     // Validate configuration if requested
     if matches.get_flag("validate") {
@@ -68,47 +126,7 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(1);
     }
 
-    // Initialize logging based on configuration
-    let log_level = match config.logging.level.as_str() {
-        "trace" => Level::TRACE,
-        "debug" => Level::DEBUG,
-        "info" => Level::INFO,
-        "warn" => Level::WARN,
-        "error" => Level::ERROR,
-        _ => Level::INFO, // Default fallback
-    };
-
-    // Initialize logging based on configuration
-    match config.logging.format.as_str() {
-        "json" => {
-            tracing_subscriber::registry()
-                .with(
-                    tracing_subscriber::EnvFilter::from_default_env()
-                        .add_directive(log_level.into()),
-                )
-                .with(tracing_subscriber::fmt::layer().json())
-                .init();
-        }
-        "compact" => {
-            tracing_subscriber::registry()
-                .with(
-                    tracing_subscriber::EnvFilter::from_default_env()
-                        .add_directive(log_level.into()),
-                )
-                .with(tracing_subscriber::fmt::layer().compact())
-                .init();
-        }
-        _ => {
-            // "pretty" or default
-            tracing_subscriber::registry()
-                .with(
-                    tracing_subscriber::EnvFilter::from_default_env()
-                        .add_directive(log_level.into()),
-                )
-                .with(tracing_subscriber::fmt::layer().pretty())
-                .init();
-        }
-    }
+    tracing::debug!("Configuration validation completed successfully");
 
     tracing::info!("Starting AIWebEngine Server");
     tracing::info!("Configuration loaded successfully");
