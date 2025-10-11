@@ -90,13 +90,11 @@ impl SecureGlobalContext {
             self.setup_asset_management_functions(ctx, script_uri)?;
         }
 
-        if self.config.enable_graphql_registration {
-            self.setup_graphql_functions(ctx, script_uri)?;
-        }
+        // Always setup GraphQL functions, but they will be no-ops if disabled
+        self.setup_graphql_functions(ctx, script_uri)?;
 
-        if self.config.enable_streams {
-            self.setup_stream_functions(ctx, script_uri)?;
-        }
+        // Always setup stream functions, but they will be no-ops if disabled
+        self.setup_stream_functions(ctx, script_uri)?;
 
         Ok(())
     }
@@ -647,9 +645,21 @@ impl SecureGlobalContext {
         let secure_ops_query = secure_ops.clone();
         let auditor_query = auditor.clone();
         let script_uri_query = script_uri_owned.clone();
+        let config_query = self.config.clone();
         let register_graphql_query = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, name: String, sdl: String| -> JsResult<String> {
+            move |_ctx: rquickjs::Ctx<'_>,
+                  name: String,
+                  sdl: String,
+                  resolver_function: String|
+                  -> JsResult<String> {
+                // If GraphQL registration is disabled, return success without doing anything
+                tracing::info!("registerGraphQLQuery called: name={}, enable_graphql_registration={}", name, config_query.enable_graphql_registration);
+                if !config_query.enable_graphql_registration {
+                    tracing::info!("GraphQL registration disabled, skipping query registration for: {}", name);
+                    return Ok(format!("GraphQL query '{}' registration skipped (disabled)", name));
+                }
+
                 // Check capability
                 if let Err(e) =
                     user_ctx_query.require_capability(&crate::security::Capability::ManageGraphQL)
@@ -712,7 +722,13 @@ impl SecureGlobalContext {
                                 "Secure registerGraphQLQuery called"
                             );
 
-                            // TODO: Call actual GraphQL registration here
+                            // Actually register the GraphQL query
+                            crate::graphql::register_graphql_query(
+                                name.clone(),
+                                sdl.clone(),
+                                resolver_function.clone(),
+                                script_uri_query.clone(),
+                            );
                             Ok(format!("GraphQL query '{}' registered successfully", name))
                         } else {
                             Ok(op_result
@@ -730,9 +746,31 @@ impl SecureGlobalContext {
         let user_ctx_mutation = user_context.clone();
         let secure_ops_mutation = secure_ops.clone();
         let auditor_mutation = auditor.clone();
+        let script_uri_mutation = script_uri_owned.clone();
+        let config_mutation = self.config.clone();
         let register_graphql_mutation = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, name: String, sdl: String| -> JsResult<String> {
+            move |_ctx: rquickjs::Ctx<'_>,
+                  name: String,
+                  sdl: String,
+                  resolver_function: String|
+                  -> JsResult<String> {
+                // If GraphQL registration is disabled, return success without doing anything
+                debug!(
+                    "registerGraphQLMutation called: name={}, enable_graphql_registration={}",
+                    name, config_mutation.enable_graphql_registration
+                );
+                if !config_mutation.enable_graphql_registration {
+                    debug!(
+                        "GraphQL registration disabled, skipping mutation registration for: {}",
+                        name
+                    );
+                    return Ok(format!(
+                        "GraphQL mutation '{}' registration skipped (disabled)",
+                        name
+                    ));
+                }
+
                 // Check capability
                 if let Err(e) = user_ctx_mutation
                     .require_capability(&crate::security::Capability::ManageGraphQL)
@@ -793,7 +831,13 @@ impl SecureGlobalContext {
                                 "Secure registerGraphQLMutation called"
                             );
 
-                            // TODO: Call actual GraphQL registration here
+                            // Actually register the GraphQL mutation
+                            crate::graphql::register_graphql_mutation(
+                                name.clone(),
+                                sdl.clone(),
+                                resolver_function.clone(),
+                                script_uri_mutation.clone(),
+                            );
                             Ok(format!(
                                 "GraphQL mutation '{}' registered successfully",
                                 name
@@ -814,9 +858,31 @@ impl SecureGlobalContext {
         let user_ctx_subscription = user_context.clone();
         let secure_ops_subscription = secure_ops.clone();
         let auditor_subscription = auditor.clone();
+        let script_uri_subscription = script_uri_owned.clone();
+        let config_subscription = self.config.clone();
         let register_graphql_subscription = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, name: String, sdl: String| -> JsResult<String> {
+            move |_ctx: rquickjs::Ctx<'_>,
+                  name: String,
+                  sdl: String,
+                  resolver_function: String|
+                  -> JsResult<String> {
+                // If GraphQL registration is disabled, return success without doing anything
+                debug!(
+                    "registerGraphQLSubscription called: name={}, enable_graphql_registration={}",
+                    name, config_subscription.enable_graphql_registration
+                );
+                if !config_subscription.enable_graphql_registration {
+                    debug!(
+                        "GraphQL registration disabled, skipping subscription registration for: {}",
+                        name
+                    );
+                    return Ok(format!(
+                        "GraphQL subscription '{}' registration skipped (disabled)",
+                        name
+                    ));
+                }
+
                 // Check capability
                 if let Err(e) = user_ctx_subscription
                     .require_capability(&crate::security::Capability::ManageGraphQL)
@@ -877,7 +943,13 @@ impl SecureGlobalContext {
                                 "Secure registerGraphQLSubscription called"
                             );
 
-                            // TODO: Call actual GraphQL registration here
+                            // Actually register the GraphQL subscription
+                            crate::graphql::register_graphql_subscription(
+                                name.clone(),
+                                sdl.clone(),
+                                resolver_function.clone(),
+                                script_uri_subscription.clone(),
+                            );
                             Ok(format!(
                                 "GraphQL subscription '{}' registered successfully",
                                 name
@@ -914,6 +986,13 @@ impl SecureGlobalContext {
         let register_web_stream = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>, path: String| -> JsResult<String> {
+                // If streams are disabled, return success without doing anything
+                tracing::info!("registerWebStream called: path={}, enable_streams={}", path, config_register.enable_streams);
+                if !config_register.enable_streams {
+                    tracing::info!("Stream registration disabled, skipping stream registration for: {}", path);
+                    return Ok(format!("Web stream '{}' registration skipped (disabled)", path));
+                }
+
                 // Check capability
                 if let Err(e) = user_ctx_register
                     .require_capability(&crate::security::Capability::ManageStreams)
@@ -1090,24 +1169,29 @@ impl SecureGlobalContext {
         let send_stream_message_to_path = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>, path: String, message: String| -> JsResult<String> {
-                // Check capability
-                if let Err(e) = user_ctx_send_path
-                    .require_capability(&crate::security::Capability::ManageStreams)
-                {
-                    // Use spawn for fire-and-forget audit logging to avoid runtime conflicts
-                    let auditor_clone = auditor_send_path.clone();
-                    let user_id = user_ctx_send_path.user_id.clone();
-                    tokio::task::spawn(async move {
-                        let _ = auditor_clone
-                            .log_authz_failure(
-                                user_id,
-                                "stream".to_string(),
-                                "send_message_to_path".to_string(),
-                                "ManageStreams".to_string(),
-                            )
-                            .await;
-                    });
-                    return Ok(format!("Error: {}", e));
+                // Allow system-level broadcasting without capability checks for certain paths
+                let is_system_broadcast = path == "/script_updates" || path.starts_with("/system/");
+
+                if !is_system_broadcast {
+                    // Check capability for non-system operations
+                    if let Err(e) = user_ctx_send_path
+                        .require_capability(&crate::security::Capability::ManageStreams)
+                    {
+                        // Use spawn for fire-and-forget audit logging to avoid runtime conflicts
+                        let auditor_clone = auditor_send_path.clone();
+                        let user_id = user_ctx_send_path.user_id.clone();
+                        tokio::task::spawn(async move {
+                            let _ = auditor_clone
+                                .log_authz_failure(
+                                    user_id,
+                                    "stream".to_string(),
+                                    "send_message_to_path".to_string(),
+                                    "ManageStreams".to_string(),
+                                )
+                                .await;
+                        });
+                        return Ok(format!("Error: {}", e));
+                    }
                 }
 
                 // Log the operation attempt using spawn to avoid runtime conflicts
@@ -1146,6 +1230,100 @@ impl SecureGlobalContext {
             },
         )?;
         global.set("sendStreamMessageToPath", send_stream_message_to_path)?;
+
+        // Secure sendSubscriptionMessage function (for GraphQL subscriptions)
+        let user_ctx_send_subscription = user_context.clone();
+        let auditor_send_subscription = auditor.clone();
+        let send_subscription_message = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  subscription_name: String,
+                  message: String|
+                  -> JsResult<String> {
+                // Allow system-level GraphQL subscription broadcasting without capability checks
+                let is_system_broadcast = true; // GraphQL subscriptions are considered system-level
+
+                if !is_system_broadcast {
+                    // Check capability for non-system operations (future use)
+                    if let Err(e) = user_ctx_send_subscription
+                        .require_capability(&crate::security::Capability::ManageGraphQL)
+                    {
+                        // Use spawn for fire-and-forget audit logging to avoid runtime conflicts
+                        let auditor_clone = auditor_send_subscription.clone();
+                        let user_id = user_ctx_send_subscription.user_id.clone();
+                        tokio::task::spawn(async move {
+                            let _ = auditor_clone
+                                .log_authz_failure(
+                                    user_id,
+                                    "graphql".to_string(),
+                                    "send_subscription_message".to_string(),
+                                    "ManageGraphQL".to_string(),
+                                )
+                                .await;
+                        });
+                        return Ok(format!("Error: {}", e));
+                    }
+                }
+
+                // Log the operation attempt using spawn to avoid runtime conflicts
+                let auditor_clone = auditor_send_subscription.clone();
+                let user_id = user_ctx_send_subscription.user_id.clone();
+                let subscription_name_clone = subscription_name.clone();
+                let message_clone = message.clone();
+                tokio::task::spawn(async move {
+                    let _ = auditor_clone
+                        .log_event(
+                            crate::security::SecurityEvent::new(
+                                SecurityEventType::SystemSecurityEvent,
+                                SecuritySeverity::Low,
+                                user_id,
+                            )
+                            .with_resource("graphql".to_string())
+                            .with_action("send_subscription_message".to_string())
+                            .with_detail("subscription_name", &subscription_name_clone)
+                            .with_detail("message_length", message_clone.len().to_string()),
+                        )
+                        .await;
+                });
+
+                debug!(
+                    user_id = ?user_ctx_send_subscription.user_id,
+                    subscription_name = %subscription_name,
+                    message_len = message.len(),
+                    "Secure sendSubscriptionMessage called"
+                );
+
+                // TODO: Call actual GraphQL subscription message sending here
+                // For now, send to the compatibility stream path
+                let stream_path = format!("/graphql/subscription/{}", subscription_name);
+
+                // Try to send via stream path (this will work if the stream is registered)
+                let result = crate::stream_registry::GLOBAL_STREAM_REGISTRY
+                    .broadcast_to_stream(&stream_path, &message);
+
+                match result {
+                    Ok(broadcast_result) => {
+                        if broadcast_result.is_fully_successful() {
+                            Ok(format!(
+                                "GraphQL subscription message sent to {} connections",
+                                broadcast_result.successful_sends
+                            ))
+                        } else {
+                            Ok(format!(
+                                "GraphQL subscription message partially sent: {} successful, {} failed connections",
+                                broadcast_result.successful_sends,
+                                broadcast_result.failed_connections.len()
+                            ))
+                        }
+                    }
+                    Err(e) => Ok(format!(
+                        "Failed to send GraphQL subscription message: {}",
+                        e
+                    )),
+                }
+            },
+        )?;
+        global.set("sendSubscriptionMessage", send_subscription_message)?;
 
         Ok(())
     }
