@@ -15,9 +15,11 @@ pub struct ThreatDetector {
     failed_authz_attempts: Arc<RwLock<HashMap<String, VecDeque<DateTime<Utc>>>>>,
     /// Suspicious activity patterns by IP
     suspicious_activity: Arc<RwLock<HashMap<String, VecDeque<SuspiciousActivity>>>>,
-    /// Geographic anomaly tracking
+    /// Geographic anomaly tracking (TODO: implement geo-location features)
+    #[allow(dead_code)]
     geo_anomalies: Arc<RwLock<HashMap<String, Vec<GeoLocation>>>>,
-    /// Rate limiting violations
+    /// Rate limiting violations (TODO: integrate with rate limiter)
+    #[allow(dead_code)]
     rate_limit_violations: Arc<RwLock<HashMap<String, VecDeque<DateTime<Utc>>>>>,
     /// Configuration for threat detection
     config: ThreatDetectionConfig,

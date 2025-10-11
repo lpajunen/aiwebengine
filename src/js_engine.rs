@@ -89,6 +89,8 @@ fn setup_secure_global_functions(
 ///
 /// WARNING: This is the old implementation that has security vulnerabilities.
 /// Use setup_secure_global_functions instead for new code.
+/// TODO: Remove this function entirely once all code is migrated to setup_secure_global_functions
+#[allow(dead_code)]
 fn setup_global_functions(
     ctx: &rquickjs::Ctx<'_>,
     script_uri: &str,
@@ -991,9 +993,8 @@ pub fn execute_script_for_request_secure(
                 let body = if result.is_string() {
                     result
                         .as_string()
-                        .unwrap()
-                        .to_string()
-                        .unwrap_or_else(|_| "<conversion error>".to_string())
+                        .and_then(|s| s.to_string().ok())
+                        .unwrap_or_else(|| "<conversion error>".to_string())
                 } else {
                     "<no response>".to_string()
                 };
@@ -1245,9 +1246,12 @@ pub fn execute_graphql_resolver(
             resolver_func.call::<_, rquickjs::Value>((args_value,))?
         };
 
-                // Convert the result to a JSON string
+        // Convert the result to a JSON string
         let result_string: String = if result_value.is_string() {
-            result_value.as_string().unwrap().to_string()?
+            result_value
+                .as_string()
+                .ok_or_else(|| rquickjs::Error::new_from_js("value", "string"))?
+                .to_string()?
         } else {
             // Use JavaScript's JSON.stringify to convert any value to JSON
             let json_obj: rquickjs::Object = ctx.globals().get("JSON")?;

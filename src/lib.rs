@@ -72,7 +72,10 @@ async fn handle_stream_request(path: String) -> Response {
                     "Failed to create stream connection: {}",
                     e
                 )))
-                .unwrap();
+                .unwrap_or_else(|err| {
+                    error!("Failed to build error response: {}", err);
+                    Response::new(Body::from("Internal Server Error"))
+                });
         }
     };
 
@@ -305,7 +308,10 @@ pub async fn start_server_with_config(
                     .status(400)
                     .header("content-type", "text/plain")
                     .body(axum::body::Body::from("Failed to read request body"))
-                    .unwrap();
+                    .unwrap_or_else(|err| {
+                        error!("Failed to build error response: {}", err);
+                        axum::response::Response::new(axum::body::Body::from("Bad Request"))
+                    });
             }
         };
 
@@ -316,7 +322,10 @@ pub async fn start_server_with_config(
                     .status(400)
                     .header("content-type", "text/plain")
                     .body(axum::body::Body::from(format!("Invalid JSON: {}", e)))
-                    .unwrap();
+                    .unwrap_or_else(|err| {
+                        error!("Failed to build error response: {}", err);
+                        axum::response::Response::new(axum::body::Body::from("Bad Request"))
+                    });
             }
         };
 
@@ -376,7 +385,10 @@ pub async fn start_server_with_config(
                 .header("access-control-allow-origin", "*")
                 .header("access-control-allow-headers", "content-type")
                 .body(axum::body::Body::from(sse_data))
-                .unwrap()
+                .unwrap_or_else(|err| {
+                    error!("Failed to build SSE response: {}", err);
+                    axum::response::Response::new(axum::body::Body::from("Internal Server Error"))
+                })
         }
     }
 
@@ -437,18 +449,18 @@ pub async fn start_server_with_config(
                 if path_exists {
                     let error_response =
                         error::errors::method_not_allowed(&path, &request_method, &request_id);
-                    return (
-                        StatusCode::from_u16(error_response.status).unwrap(),
-                        serde_json::to_string(&error_response).unwrap(),
-                    )
-                        .into_response();
+                    let status = StatusCode::from_u16(error_response.status)
+                        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                    let body = serde_json::to_string(&error_response)
+                        .unwrap_or_else(|_| r#"{"error":"Serialization failed"}"#.to_string());
+                    return (status, body).into_response();
                 } else {
                     let error_response = error::errors::not_found(&path, &request_id);
-                    return (
-                        StatusCode::from_u16(error_response.status).unwrap(),
-                        serde_json::to_string(&error_response).unwrap(),
-                    )
-                        .into_response();
+                    let status = StatusCode::from_u16(error_response.status)
+                        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                    let body = serde_json::to_string(&error_response)
+                        .unwrap_or_else(|_| r#"{"error":"Serialization failed"}"#.to_string());
+                    return (status, body).into_response();
                 }
             }
         };
@@ -525,11 +537,11 @@ pub async fn start_server_with_config(
                 Ok(r) => r,
                 Err(_) => {
                     let error_response = error::errors::script_timeout(&path, &request_id);
-                    return (
-                        StatusCode::from_u16(error_response.status).unwrap(),
-                        serde_json::to_string(&error_response).unwrap(),
-                    )
-                        .into_response();
+                    let status = StatusCode::from_u16(error_response.status)
+                        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                    let body = serde_json::to_string(&error_response)
+                        .unwrap_or_else(|_| r#"{"error":"Serialization failed"}"#.to_string());
+                    return (status, body).into_response();
                 }
             };
 
@@ -554,20 +566,20 @@ pub async fn start_server_with_config(
             Ok(Err(e)) => {
                 error!("script error for {}: {}", path_log, e);
                 let error_response = error::errors::script_execution_failed(&path, &e, &request_id);
-                (
-                    StatusCode::from_u16(error_response.status).unwrap(),
-                    serde_json::to_string(&error_response).unwrap(),
-                )
-                    .into_response()
+                let status = StatusCode::from_u16(error_response.status)
+                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                let body = serde_json::to_string(&error_response)
+                    .unwrap_or_else(|_| r#"{"error":"Serialization failed"}"#.to_string());
+                (status, body).into_response()
             }
             Err(e) => {
                 error!("task error for {}: {}", path_log, e);
                 let error_response = error::errors::internal_server_error(&path, &e, &request_id);
-                (
-                    StatusCode::from_u16(error_response.status).unwrap(),
-                    serde_json::to_string(&error_response).unwrap(),
-                )
-                    .into_response()
+                let status = StatusCode::from_u16(error_response.status)
+                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                let body = serde_json::to_string(&error_response)
+                    .unwrap_or_else(|_| r#"{"error":"Serialization failed"}"#.to_string());
+                (status, body).into_response()
             }
         }
     }

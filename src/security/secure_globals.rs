@@ -1,15 +1,11 @@
 use base64::Engine;
 use rquickjs::{Function, Result as JsResult};
-use std::collections::HashMap;
 use tracing::debug;
 
 use crate::repository;
 use crate::security::{
     SecureOperations, SecurityAuditor, SecurityEventType, SecuritySeverity, UserContext,
 };
-
-/// Type alias for route registration function
-type RouteRegisterFn = dyn Fn(&str, &str, Option<&str>) -> Result<(), rquickjs::Error>;
 
 /// Secure wrapper for JavaScript global functions that enforces Rust-level validation
 pub struct SecureGlobalContext {
@@ -494,7 +490,7 @@ impl SecureGlobalContext {
 
         // Secure upsertAsset function
         let user_ctx_upsert_asset = user_context.clone();
-        let secure_ops_asset = secure_ops.clone();
+        let _secure_ops_asset = secure_ops.clone();
         let auditor_asset = auditor.clone();
         let script_uri_asset = script_uri_owned.clone();
         let upsert_asset = Function::new(
@@ -642,7 +638,7 @@ impl SecureGlobalContext {
 
         // Secure registerGraphQLQuery function
         let user_ctx_query = user_context.clone();
-        let secure_ops_query = secure_ops.clone();
+        let _secure_ops_query = secure_ops.clone();
         let auditor_query = auditor.clone();
         let script_uri_query = script_uri_owned.clone();
         let config_query = self.config.clone();
@@ -754,7 +750,7 @@ impl SecureGlobalContext {
 
         // Secure registerGraphQLMutation function
         let user_ctx_mutation = user_context.clone();
-        let secure_ops_mutation = secure_ops.clone();
+        let _secure_ops_mutation = secure_ops.clone();
         let auditor_mutation = auditor.clone();
         let script_uri_mutation = script_uri_owned.clone();
         let config_mutation = self.config.clone();
@@ -866,7 +862,7 @@ impl SecureGlobalContext {
 
         // Secure registerGraphQLSubscription function
         let user_ctx_subscription = user_context.clone();
-        let secure_ops_subscription = secure_ops.clone();
+        let _secure_ops_subscription = secure_ops.clone();
         let auditor_subscription = auditor.clone();
         let script_uri_subscription = script_uri_owned.clone();
         let config_subscription = self.config.clone();
@@ -989,7 +985,7 @@ impl SecureGlobalContext {
 
         // Secure registerWebStream function
         let user_ctx_register = user_context.clone();
-        let secure_ops_register = secure_ops.clone();
+        let _secure_ops_register = secure_ops.clone();
         let auditor_register = auditor.clone();
         let config_register = self.config.clone();
         let script_uri_register = script_uri_owned.clone();
@@ -1009,6 +1005,29 @@ impl SecureGlobalContext {
                     );
                     return Ok(format!(
                         "Web stream '{}' registration skipped (disabled)",
+                        path
+                    ));
+                }
+
+                // Validate path format BEFORE checking capabilities or attempting registration
+                if path.is_empty() || !path.starts_with('/') {
+                    tracing::error!(
+                        "Invalid stream path '{}': must start with '/' and not be empty",
+                        path
+                    );
+                    return Ok(format!(
+                        "Error: Invalid stream path '{}': must start with '/' and not be empty",
+                        path
+                    ));
+                }
+
+                if path.len() > 200 {
+                    tracing::error!(
+                        "Invalid stream path '{}': too long (max 200 characters)",
+                        path
+                    );
+                    return Ok(format!(
+                        "Error: Invalid stream path '{}': too long (max 200 characters)",
                         path
                     ));
                 }
