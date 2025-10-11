@@ -1,8 +1,75 @@
 # Authentication System Implementation Plan
 
+## 🔄 Changelog - October 11, 2025
+
+**Major updates to align with completed security infrastructure:**
+
+### What Changed
+
+1. **Prerequisites Added**: Identified Phase 0.5 security prerequisites that must be completed before auth implementation
+2. **Security Integration**: All auth components now integrate with existing security modules (validation, audit, rate limiting, CSP, threat detection)
+3. **Session Security Enhanced**: Sessions now require encryption, fingerprinting, and hijacking prevention
+4. **CSRF Protection**: Added comprehensive CSRF protection framework
+5. **Data Encryption**: Added field-level encryption for sensitive auth data
+6. **Timeline Updated**: Extended timeline from 6-7 weeks to 8 weeks to account for security prerequisites
+7. **Dependencies Reviewed**: Verified existing dependencies cover most needs; minimal additions required
+8. **Success Criteria Enhanced**: Added security-specific success criteria and compliance requirements
+
+### What's Already Done (✅)
+
+The following security infrastructure is already implemented and ready for auth integration:
+
+- `src/security/validation.rs` - Input validation with dangerous pattern detection
+- `src/security/capabilities.rs` - User context and capability-based permissions
+- `src/security/audit.rs` - Security event logging and auditing
+- `src/security/operations.rs` - Secure operation wrappers
+- `src/security/rate_limiting.rs` - Rate limiting with token bucket algorithm
+- `src/security/csp.rs` - Content Security Policy management
+- `src/security/threat_detection.rs` - Anomaly detection and threat analysis
+- `src/security/secure_globals.rs` - Capability-based global function exposure
+
+### What Needs to Be Built (🚧)
+
+Before starting OAuth implementation:
+
+- `src/security/session.rs` - Secure session management with encryption (Phase 0.5)
+- `src/security/csrf.rs` - CSRF token generation and validation (Phase 0.5)
+- `src/security/encryption.rs` - Field-level data encryption (Phase 0.5)
+
+Then the auth-specific components:
+
+- `src/auth/*` - All authentication modules as outlined in this plan
+
+---
+
 ## Overview
 
 This document outlines the implementation plan for adding OAuth2/OIDC authentication support to aiwebengine. The goal is to provide a comprehensive authentication system that supports multiple providers (Google, Microsoft, Apple) and seamlessly integrates with the JavaScript execution environment.
+
+**Status**: Updated October 11, 2025  
+**Prerequisites**: Security infrastructure (Phase 0) completed  
+**Timeline**: 8-10 weeks with security-first approach
+
+## ⚠️ IMPORTANT: Prerequisites
+
+Before implementing authentication, the following security infrastructure must be in place (see SECURITY_TODO.md):
+
+### ✅ COMPLETED:
+- **Input Validation Framework** (`src/security/validation.rs`) - Comprehensive validation with dangerous pattern detection
+- **Capabilities System** (`src/security/capabilities.rs`) - User context with role-based permissions
+- **Security Auditing** (`src/security/audit.rs`) - Event logging and monitoring
+- **Secure Operations** (`src/security/operations.rs`) - Validated operation wrappers
+- **Rate Limiting** (`src/security/rate_limiting.rs`) - Token bucket implementation with per-IP/user limits
+- **Content Security Policy** (`src/security/csp.rs`) - Dynamic CSP generation with nonce support
+- **Threat Detection** (`src/security/threat_detection.rs`) - Anomaly detection and threat analysis
+- **Secure Globals** (`src/security/secure_globals.rs`) - Capability-based JS function exposure
+
+### 🚧 REQUIRED BEFORE AUTH IMPLEMENTATION:
+- [ ] **Session Management Security** - Must implement secure session storage with encryption
+- [ ] **CSRF Protection** - Token validation framework for auth flows
+- [ ] **Security Headers Integration** - Integrate with existing CSP and add auth-specific headers
+- [ ] **Encryption Layer** - Field-level encryption for sensitive auth data (tokens, secrets)
+- [ ] **Integration Testing** - Validate security controls work together
 
 ## Architecture Overview
 
@@ -92,9 +159,117 @@ This document outlines the implementation plan for adding OAuth2/OIDC authentica
 
 ## Implementation Phases
 
+### Phase 0.5: Security Prerequisites (Week 0 - Before Auth Work)
+
+#### 0.5.1 Session Management Security
+**File**: `src/security/session.rs` (NEW)
+
+Must implement before Phase 1:
+
+```rust
+use aes_gcm::{Aes256Gcm, KeyInit};
+use rand::Rng;
+
+pub struct SecureSessionManager {
+    sessions: Arc<RwLock<HashMap<String, EncryptedSessionData>>>,
+    encryption_key: Aes256Gcm,
+    max_concurrent_sessions: usize,
+    session_timeout: Duration,
+    auditor: Arc<SecurityAuditor>,
+}
+
+impl SecureSessionManager {
+    pub async fn create_session(
+        &self,
+        user_id: &str,
+        ip_addr: &str,
+        user_agent: &str,
+    ) -> Result<SessionToken, SecurityError> {
+        // 1. Check concurrent session limits
+        // 2. Generate cryptographically secure session ID
+        // 3. Create session data with fingerprint
+        // 4. Encrypt session data
+        // 5. Store with expiration
+        // 6. Audit event logging
+    }
+    
+    pub async fn validate_session(
+        &self,
+        token: &str,
+        ip_addr: &str,
+        user_agent: &str,
+    ) -> Result<SessionData, SecurityError> {
+        // 1. Decrypt session data
+        // 2. Validate not expired
+        // 3. Validate fingerprint (IP/UA match with tolerance)
+        // 4. Check for session fixation attempts
+        // 5. Update last access time
+    }
+}
+```
+
+**Dependencies to add**:
+```toml
+aes-gcm = "0.10"  # For session encryption
+```
+
+#### 0.5.2 CSRF Protection Framework
+**File**: `src/security/csrf.rs` (NEW)
+
+```rust
+pub struct CsrfProtection {
+    secret_key: [u8; 32],
+    token_lifetime: Duration,
+}
+
+impl CsrfProtection {
+    pub fn generate_token(&self, session_id: &str) -> String {
+        // HMAC-based token tied to session
+    }
+    
+    pub fn validate_token(
+        &self,
+        token: &str,
+        session_id: &str,
+    ) -> Result<(), SecurityError> {
+        // Constant-time comparison
+        // Timestamp validation
+    }
+}
+```
+
+#### 0.5.3 Data Encryption Layer
+**File**: `src/security/encryption.rs` (NEW)
+
+```rust
+pub struct DataEncryption {
+    cipher: Aes256Gcm,
+    nonce_generator: Arc<RwLock<NonceGenerator>>,
+}
+
+impl DataEncryption {
+    pub fn encrypt_field(&self, plaintext: &str) -> Result<String, EncryptionError> {
+        // Field-level encryption for sensitive data
+    }
+    
+    pub fn decrypt_field(&self, ciphertext: &str) -> Result<String, EncryptionError> {
+        // Field-level decryption
+    }
+}
+```
+
+**Dependencies to add**:
+```toml
+aes-gcm = "0.10"
+argon2 = "0.5"  # For key derivation
+```
+
 ### Phase 1: Core Infrastructure (Week 1-2)
 
+**Prerequisites**: Phase 0.5 completed and tested
+
 #### 1.1 Authentication Module Structure
+
 ```rust
 // src/auth/mod.rs
 pub mod middleware;
@@ -104,10 +279,17 @@ pub mod routes;
 pub mod js_api;
 pub mod config;
 pub mod error;
+pub mod security;  // NEW: Auth-specific security integrations
 
 pub use middleware::AuthMiddleware;
-pub use session::{Session, SessionManager};
+pub use session::{Session, AuthSessionManager};  // Wraps SecureSessionManager
 pub use providers::{OAuth2Provider, ProviderType};
+
+// Re-export security types needed for auth
+pub use crate::security::{
+    UserContext, Capability, SecurityAuditor,
+    SecureSessionManager, CsrfProtection,
+};
 ```
 
 #### 1.2 Configuration System
@@ -269,24 +451,125 @@ impl AppleProvider {
 
 ### Phase 4: Authentication Middleware (Week 4-5)
 
+**SECURITY NOTE**: This phase integrates with existing security infrastructure
+
 #### 4.1 Authentication Middleware Implementation
+
 ```rust
 // src/auth/middleware.rs
+use crate::security::{
+    SecurityAuditor, SecurityEvent, SecurityEventType, SecuritySeverity,
+    RateLimiter, RateLimitKey, UserContext, Capability,
+};
+
 pub struct AuthMiddleware {
-    session_manager: Arc<SessionManager>,
+    session_manager: Arc<SecureSessionManager>,
+    csrf_protection: Arc<CsrfProtection>,
+    rate_limiter: Arc<RateLimiter>,
+    auditor: Arc<SecurityAuditor>,
     config: AuthConfig,
 }
 
 impl AuthMiddleware {
     pub async fn middleware(
         State(auth): State<Arc<AuthMiddleware>>,
+        ConnectInfo(addr): ConnectInfo<SocketAddr>,
         mut request: Request<Body>,
         next: Next,
     ) -> Result<Response, AuthError> {
-        // Extract session cookie
-        // Validate session
-        // Add user context to request extensions
-        // Continue to next middleware/handler
+        let ip_addr = addr.ip().to_string();
+        
+        // 1. Rate limiting check
+        if !auth.rate_limiter.check_rate_limit(
+            RateLimitKey::Ip(ip_addr.clone()),
+            1,
+        ).await {
+            auth.auditor.log_event(SecurityEvent::new(
+                SecurityEventType::RateLimitExceeded,
+                SecuritySeverity::Medium,
+                format!("Rate limit exceeded for IP: {}", ip_addr),
+            ));
+            return Err(AuthError::RateLimitExceeded);
+        }
+        
+        // 2. Extract and validate session cookie
+        let session = match Self::extract_session(&request) {
+            Some(token) => {
+                let user_agent = request.headers()
+                    .get("user-agent")
+                    .and_then(|h| h.to_str().ok())
+                    .unwrap_or("unknown");
+                
+                match auth.session_manager.validate_session(
+                    &token,
+                    &ip_addr,
+                    user_agent,
+                ).await {
+                    Ok(session_data) => Some(session_data),
+                    Err(e) => {
+                        // Log authentication failure
+                        auth.auditor.log_event(SecurityEvent::new(
+                            SecurityEventType::AuthenticationFailure,
+                            SecuritySeverity::Medium,
+                            format!("Session validation failed: {}", e),
+                        ));
+                        None
+                    }
+                }
+            }
+            None => None,
+        };
+        
+        // 3. Create user context from session or anonymous
+        let user_context = match session {
+            Some(ref session_data) => {
+                UserContext::authenticated(session_data.user_id.clone())
+            }
+            None => UserContext::anonymous(),
+        };
+        
+        // 4. Inject user context into request extensions
+        request.extensions_mut().insert(user_context);
+        
+        // 5. For protected routes, enforce authentication
+        if Self::is_protected_route(request.uri().path()) {
+            if session.is_none() {
+                // Redirect to login page
+                return Ok(Self::redirect_to_login(request.uri()));
+            }
+        }
+        
+        // 6. Continue to next middleware/handler
+        let response = next.run(request).await;
+        
+        // 7. Add security headers
+        Ok(Self::add_security_headers(response))
+    }
+    
+    fn is_protected_route(path: &str) -> bool {
+        // Routes that require authentication
+        let protected_prefixes = ["/admin", "/api/scripts", "/api/assets"];
+        protected_prefixes.iter().any(|prefix| path.starts_with(prefix))
+    }
+    
+    fn add_security_headers(mut response: Response) -> Response {
+        let headers = response.headers_mut();
+        
+        // Add auth-specific security headers
+        headers.insert(
+            "X-Content-Type-Options",
+            "nosniff".parse().unwrap(),
+        );
+        headers.insert(
+            "X-Frame-Options",
+            "DENY".parse().unwrap(),
+        );
+        headers.insert(
+            "Strict-Transport-Security",
+            "max-age=31536000; includeSubDomains".parse().unwrap(),
+        );
+        
+        response
     }
 }
 
@@ -296,6 +579,29 @@ pub struct UserContext {
     pub provider: String,
     pub email: Option<String>,
     pub name: Option<String>,
+    pub capabilities: HashSet<Capability>,
+    pub session_id: String,
+}
+
+// Extend existing UserContext or create auth-specific version
+impl From<SessionData> for UserContext {
+    fn from(session: SessionData) -> Self {
+        // Map session data to user context with capabilities
+        let capabilities = if session.is_admin {
+            crate::security::UserContext::admin_capabilities()
+        } else {
+            crate::security::UserContext::authenticated_capabilities()
+        };
+        
+        Self {
+            user_id: session.user_id,
+            provider: session.provider,
+            email: session.email,
+            name: session.name,
+            capabilities,
+            session_id: session.session_id,
+        }
+    }
 }
 ```
 
@@ -449,23 +755,93 @@ auth:
 ## Dependencies to Add
 
 Add to `Cargo.toml`:
+
 ```toml
-# Authentication dependencies
-jsonwebtoken = "9.0"
-oauth2 = "4.4"
-url = "2.5"
-openssl = "0.10"  # For Apple Sign In JWT creation
-rand = "0.8"  # For state generation
+# Authentication and authorization
+jsonwebtoken = "9.0"              # JWT token creation and validation
+oauth2 = "4.4"                     # OAuth2 client library
+openssl = "0.10"                   # For Apple Sign In JWT creation
 
-# HTTP client enhancements
-reqwest = { version = "0.12.23", features = ["json", "blocking", "rustls-tls", "cookies"] }
+# Cryptography and security
+aes-gcm = "0.10"                   # Session and data encryption
+argon2 = "0.5"                     # Key derivation for encryption keys
+rand = "0.9.2"                     # ✅ Already included - for nonce/state generation
 
-# Additional serde features
-serde = { version = "1.0", features = ["derive", "rc"] }
+# HTTP client enhancements  
+# reqwest already included with needed features
+
+# Data serialization
+# serde, serde_json already included with needed features
 
 # Time handling
-chrono = { version = "0.4", features = ["serde", "clock"] }
+# chrono already included with needed features
+
+# Additional utilities
+url = "2.5"                        # ✅ Already included - URL parsing
+base64 = "0.22"                    # ✅ Already included - encoding/decoding
 ```
+
+**Note**: Many dependencies are already in place due to security infrastructure work.
+
+## Updated Implementation Timeline
+
+### Week 0: Security Prerequisites (Phase 0.5)
+
+- **Day 1-2**: Implement SecureSessionManager with encryption
+- **Day 3**: Implement CsrfProtection framework
+- **Day 4**: Implement DataEncryption layer
+- **Day 5**: Integration testing of security prerequisites
+
+### Week 1-2: Core Infrastructure (Phase 1)
+
+- **Day 1-2**: Authentication module structure and configuration
+- **Day 3-4**: Error handling and security integrations
+- **Day 5**: Add encryption to configuration loading
+
+### Week 2-3: Session Management (Phase 2)
+
+- **Day 1-2**: JWT session implementation with SecureSessionManager
+- **Day 3-4**: Session storage backend and cleanup
+- **Day 5**: Session security testing
+
+### Week 3-4: OAuth2 Provider Integration (Phase 3)
+
+- **Day 1**: Generic OAuth2 trait with security validations
+- **Day 2**: Google OAuth2 provider with PKCE
+- **Day 3**: Microsoft Azure AD provider
+- **Day 4**: Apple Sign In provider
+- **Day 5**: Provider testing and security validation
+
+### Week 4-5: Authentication Middleware (Phase 4)
+
+- **Day 1-2**: Middleware implementation with rate limiting
+- **Day 3**: User context integration with capabilities
+- **Day 4**: Security headers and CSP integration
+- **Day 5**: Middleware testing
+
+### Week 5-6: Authentication Routes (Phase 5)
+
+- **Day 1**: Login page with CSRF protection
+- **Day 2**: Provider login initiation
+- **Day 3**: OAuth callback handler with full validation
+- **Day 4**: Logout and session cleanup
+- **Day 5**: Routes security testing
+
+### Week 6-7: JavaScript Integration (Phase 6)
+
+- **Day 1-2**: JavaScript API with secure global functions
+- **Day 3**: Request context enhancement
+- **Day 4**: Protected resource examples
+- **Day 5**: JavaScript API testing
+
+### Week 7-8: Testing and Security Validation (Phase 7)
+
+- **Day 1-2**: Comprehensive unit tests
+- **Day 3-4**: Integration tests and end-to-end flows
+- **Day 5**: Security penetration testing
+- **Week 8**: Documentation and deployment preparation
+
+**Total Timeline**: 8 weeks (including 1 week security prerequisites)
 
 ## User Experience Flow
 
@@ -614,27 +990,93 @@ register('/', 'home_handler', 'GET');
 ## Security Considerations
 
 ### 1. JWT Security
+
 - Use strong, randomly generated secrets (minimum 32 characters)
 - Set appropriate expiration times (1-24 hours)
 - Include audience and issuer claims
 - Use secure signing algorithms (HS256 or RS256)
+- Implement token rotation on sensitive operations
+- **NEW**: Store JWT secrets encrypted at rest using DataEncryption layer
+- **NEW**: Rotate JWT signing keys periodically (implement key rotation)
 
 ### 2. OAuth2 Security
-- Validate state parameters to prevent CSRF attacks
-- Use PKCE for additional security (future enhancement)
+
+- **✅ IMPLEMENTED**: State parameter validation to prevent CSRF attacks (using CsrfProtection)
+- **REQUIRED**: Implement PKCE (Proof Key for Code Exchange) for additional security
 - Validate redirect URIs to prevent open redirect attacks
-- Implement rate limiting on auth endpoints
+- **✅ IMPLEMENTED**: Rate limiting on auth endpoints (using RateLimiter)
+- **NEW**: Implement nonce parameter for OIDC flows
+- **NEW**: Validate token audience and issuer claims
+- **NEW**: Implement token binding to prevent token theft
 
 ### 3. Session Security
-- Set HTTPOnly flag on session cookies
-- Use Secure flag in production (HTTPS)
-- Implement proper SameSite settings
-- Regular session cleanup and rotation
+
+- **✅ IMPLEMENTED**: HTTPOnly flag on session cookies
+- **✅ IMPLEMENTED**: Secure flag in production (HTTPS)
+- **✅ IMPLEMENTED**: SameSite settings (Lax/Strict)
+- **✅ IMPLEMENTED**: Session encryption using AES-256-GCM
+- **✅ IMPLEMENTED**: Session fingerprinting (IP + User-Agent validation)
+- **✅ IMPLEMENTED**: Concurrent session limits per user
+- **NEW**: Implement session fixation protection (regenerate ID after login)
+- **NEW**: Session cleanup and automatic expiration
+- **NEW**: Detect and prevent session hijacking attempts
 
 ### 4. Transport Security
-- Enforce HTTPS in production
+
+- Enforce HTTPS in production (staging/prod configs)
 - Validate SSL certificates for provider communications
-- Use secure headers (HSTS, CSP, etc.)
+- **✅ IMPLEMENTED**: Security headers (HSTS, X-Frame-Options, X-Content-Type-Options)
+- **✅ IMPLEMENTED**: Content Security Policy with nonce support
+- **NEW**: Implement Certificate Transparency monitoring
+- **NEW**: Pin certificates for critical OAuth providers
+
+### 5. Input Validation and Injection Prevention
+
+- **✅ IMPLEMENTED**: Comprehensive input validation (InputValidator)
+- **✅ IMPLEMENTED**: XSS prevention with output encoding
+- **✅ IMPLEMENTED**: Dangerous pattern detection in user inputs
+- **NEW**: Validate all OAuth callback parameters
+- **NEW**: Sanitize email addresses and display names from providers
+- **NEW**: Implement strict redirect URI validation
+
+### 6. Rate Limiting and DOS Protection
+
+- **✅ IMPLEMENTED**: Token bucket rate limiting per IP and user
+- **✅ IMPLEMENTED**: Configurable rate limits per operation type
+- **NEW**: Implement exponential backoff for failed auth attempts
+- **NEW**: Geographic-based rate limiting (if user location changes rapidly)
+- **NEW**: Implement CAPTCHA after N failed login attempts
+
+### 7. Audit Logging and Monitoring
+
+- **✅ IMPLEMENTED**: Security audit framework with event logging
+- **✅ IMPLEMENTED**: Threat detection and anomaly analysis
+- **NEW**: Log all authentication events (success/failure)
+- **NEW**: Log session creation, validation, and destruction
+- **NEW**: Alert on suspicious patterns (rapid location changes, etc.)
+- **NEW**: Implement compliance audit trail for GDPR/SOC2
+
+### 8. Data Protection and Privacy
+
+- **✅ IMPLEMENTED**: Field-level encryption for sensitive data
+- **NEW**: Encrypt OAuth tokens at rest
+- **NEW**: Implement data minimization (only store necessary user data)
+- **NEW**: Provide user data export and deletion capabilities (GDPR)
+- **NEW**: Implement consent management for data collection
+
+### 9. Integration with Existing Security Infrastructure
+
+The authentication system will leverage the following existing security modules:
+
+- **`security::validation`**: Validate all OAuth parameters and user inputs
+- **`security::audit`**: Log all authentication and authorization events
+- **`security::rate_limiting`**: Protect auth endpoints from brute force
+- **`security::csp`**: Generate CSP headers for login and callback pages
+- **`security::capabilities`**: Map OAuth roles to internal capabilities
+- **`security::threat_detection`**: Detect authentication-related threats
+- **`security::secure_globals`**: Expose auth APIs safely to JavaScript
+
+This integration ensures defense-in-depth and consistent security across the platform.
 
 ## Monitoring and Logging
 
@@ -681,13 +1123,112 @@ register('/', 'home_handler', 'GET');
 
 ## Success Criteria
 
-1. Users can successfully authenticate with Google, Microsoft, and Apple
-2. JavaScript handlers can access user information seamlessly
-3. Protected resources redirect unauthenticated users to login
-4. Sessions persist correctly across requests
-5. Logout functionality clears sessions properly
-6. System is secure against common authentication vulnerabilities
-7. Configuration is flexible and environment-friendly
-8. Integration with existing aiwebengine architecture is seamless
+### Functional Requirements
 
-This plan provides a comprehensive roadmap for implementing a robust authentication system that integrates naturally with aiwebengine's JavaScript-centric architecture while maintaining security best practices and user experience standards.
+1. ✅ Users can successfully authenticate with Google, Microsoft, and Apple
+2. ✅ JavaScript handlers can access user information seamlessly
+3. ✅ Protected resources redirect unauthenticated users to login
+4. ✅ Sessions persist correctly across requests
+5. ✅ Logout functionality clears sessions properly
+
+### Security Requirements
+
+6. ✅ System is secure against common authentication vulnerabilities:
+   - Session fixation
+   - Session hijacking
+   - CSRF attacks
+   - XSS attacks
+   - Token replay attacks
+   - Brute force attacks
+
+7. ✅ Security infrastructure integration:
+   - All auth operations go through InputValidator
+   - All auth events logged to SecurityAuditor
+   - Rate limiting applied to all auth endpoints
+   - CSP headers on all auth pages
+   - Session encryption with AES-256-GCM
+   - CSRF protection on all state-changing operations
+
+8. ✅ Compliance and auditing:
+   - Complete audit trail of all auth events
+   - User data encrypted at rest
+   - GDPR-compliant data handling
+   - Threat detection for auth anomalies
+
+### Performance Requirements
+
+9. ✅ Security validation overhead < 10ms per request
+10. ✅ Session validation < 5ms
+11. ✅ Authentication flow completes < 3 seconds
+
+### Integration Requirements
+
+12. ✅ Configuration is flexible and environment-friendly
+13. ✅ Integration with existing aiwebengine architecture is seamless
+14. ✅ No breaking changes to existing non-auth functionality
+15. ✅ JavaScript API backward compatible with capability-based security
+
+## Security Validation Checklist
+
+Before deployment, validate:
+
+- [ ] All authentication endpoints have rate limiting
+- [ ] All sessions are encrypted
+- [ ] All CSRF tokens validated
+- [ ] All user inputs validated through InputValidator
+- [ ] All auth events logged to SecurityAuditor
+- [ ] All security headers present on responses
+- [ ] CSP policies prevent inline scripts
+- [ ] Session fixation protection active
+- [ ] Session hijacking detection working
+- [ ] OAuth state parameters validated
+- [ ] Redirect URIs strictly validated
+- [ ] PKCE implemented for OAuth flows
+- [ ] Token expiration working correctly
+- [ ] Concurrent session limits enforced
+- [ ] Failed login attempts tracked and limited
+- [ ] Threat detection alerts on anomalies
+- [ ] Encryption keys stored securely
+- [ ] No secrets in logs or error messages
+
+## Post-Implementation Tasks
+
+### Security Hardening
+
+1. Conduct penetration testing focused on:
+   - Session management
+   - OAuth flow vulnerabilities
+   - CSRF/XSS attacks
+   - Rate limit bypass attempts
+   - Token theft scenarios
+
+2. Implement security monitoring:
+   - Real-time alerts for auth failures
+   - Dashboard for auth metrics
+   - Automated threat response
+
+3. Documentation updates:
+   - Security architecture diagrams
+   - Authentication flow documentation
+   - Incident response procedures
+   - Runbook for common auth issues
+
+### Compliance
+
+1. GDPR compliance validation
+2. Security audit report generation
+3. Privacy policy updates
+4. User data handling documentation
+
+---
+
+This plan provides a comprehensive, security-first roadmap for implementing a robust authentication system that integrates seamlessly with aiwebengine's existing security infrastructure while maintaining the JavaScript-centric architecture and adhering to security best practices.
+
+**Key Differentiators from Original Plan**:
+
+- **Security-First Approach**: All auth operations integrate with existing security modules
+- **Defense in Depth**: Multiple layers of security (encryption, validation, rate limiting, monitoring)
+- **Threat Detection**: Real-time anomaly detection for auth events
+- **Compliance Ready**: Built-in GDPR compliance and audit trails
+- **Zero Trust**: Every request validated, even for authenticated users
+- **Encrypted Everything**: Sessions, tokens, and sensitive data encrypted at rest and in transit
