@@ -19,6 +19,9 @@ pub mod security;
 pub mod stream_manager;
 pub mod stream_registry;
 
+// Authentication module (Phase 1 - Core Infrastructure)
+pub mod auth;
+
 use security::UserContext;
 
 /// Parses a query string into a HashMap of key-value pairs
