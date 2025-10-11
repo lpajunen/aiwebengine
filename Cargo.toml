@@ -45,6 +45,12 @@ aes-gcm = "0.10"
 argon2 = "0.5"
 subtle = "2.5"
 
+# OAuth2 and JWT (Phase 2)
+oauth2 = "4.4"
+jsonwebtoken = "9.3"
+openidconnect = "3.5"
+async-trait = "0.1"
+
 # Optimize test builds for faster compilation and execution
 [profile.test]
 opt-level = 1          # Basic optimizations for tests

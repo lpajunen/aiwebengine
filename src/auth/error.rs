@@ -11,6 +11,9 @@ pub enum AuthError {
     #[error("Invalid JWT token: {0}")]
     InvalidToken(String),
 
+    #[error("JWT error: {0}")]
+    JwtError(String),
+
     #[error("JWT token expired")]
     TokenExpired,
 
@@ -21,6 +24,9 @@ pub enum AuthError {
     MissingClaim(String),
 
     // OAuth2-related errors
+    #[error("OAuth2 error: {0}")]
+    OAuth2Error(String),
+
     #[error("OAuth2 provider error: {0}")]
     ProviderError(String),
 
@@ -42,6 +48,9 @@ pub enum AuthError {
     // Session-related errors
     #[error("Session error: {0}")]
     Session(#[from] SessionError),
+
+    #[error("Session error: {0}")]
+    SessionError(String),
 
     #[error("Session not found or expired")]
     NoSession,
@@ -114,6 +123,7 @@ impl AuthError {
     pub fn status_code(&self) -> u16 {
         match self {
             AuthError::InvalidToken(_)
+            | AuthError::JwtError(_)
             | AuthError::TokenExpired
             | AuthError::SignatureVerificationFailed
             | AuthError::NoSession
