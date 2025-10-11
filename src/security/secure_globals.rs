@@ -510,14 +510,25 @@ impl SecureGlobalContext {
                     Err(e) => return Ok(format!("Error decoding base64 content: {}", e)),
                 };
 
-                // For now, skip the async asset upload to avoid runtime conflicts
-                // TODO: Implement proper async handling for asset operations
-                let result: Result<
-                    crate::security::OperationResult<String>,
-                    axum::http::StatusCode,
-                > = Ok(crate::security::OperationResult::success(
-                    "Asset upload accepted (validation skipped)".to_string(),
-                ));
+                // Check capability
+                if let Err(e) = user_ctx_upsert_asset
+                    .require_capability(&crate::security::Capability::WriteAssets)
+                {
+                    return Ok(format!("Access denied: {}", e));
+                }
+
+                // Validate asset name (inline validation since we can't call async)
+                if asset_name.is_empty() || asset_name.len() > 255 {
+                    return Ok("Invalid asset name: must be 1-255 characters".to_string());
+                }
+                if asset_name.contains("..") || asset_name.contains('\\') {
+                    return Ok("Invalid asset name: path traversal not allowed".to_string());
+                }
+
+                // Validate content size (10MB limit)
+                if content.len() > 10 * 1024 * 1024 {
+                    return Ok("Asset too large (max 10MB)".to_string());
+                }
 
                 // Log the operation attempt using spawn to avoid runtime conflicts
                 let auditor_clone = auditor_asset.clone();
@@ -544,28 +555,15 @@ impl SecureGlobalContext {
                         .await;
                 });
 
-                match result {
-                    Ok(op_result) => {
-                        if op_result.success {
-                            // If validation passed, call repository
-                            let asset = repository::Asset {
-                                public_path: asset_name.clone(),
-                                mimetype,
-                                content,
-                            };
-                            match repository::upsert_asset(asset) {
-                                Ok(_) => {
-                                    Ok(format!("Asset '{}' upserted successfully", asset_name))
-                                }
-                                Err(e) => Ok(format!("Error upserting asset: {}", e)),
-                            }
-                        } else {
-                            Ok(op_result
-                                .error
-                                .unwrap_or_else(|| "Unknown error".to_string()))
-                        }
-                    }
-                    Err(_) => Ok("Internal server error".to_string()),
+                // Call repository directly (sync operation)
+                let asset = repository::Asset {
+                    public_path: asset_name.clone(),
+                    mimetype,
+                    content,
+                };
+                match repository::upsert_asset(asset) {
+                    Ok(_) => Ok(format!("Asset '{}' upserted successfully", asset_name)),
+                    Err(e) => Ok(format!("Error upserting asset: {}", e)),
                 }
             },
         )?;
@@ -690,14 +688,20 @@ impl SecureGlobalContext {
                     return Ok(format!("Error: {}", e));
                 }
 
-                // For now, skip the async GraphQL schema validation to avoid runtime conflicts
-                // TODO: Implement proper async handling for GraphQL operations
-                let validation_result: Result<
-                    crate::security::OperationResult<String>,
-                    axum::http::StatusCode,
-                > = Ok(crate::security::OperationResult::success(
-                    "GraphQL query schema accepted (validation skipped)".to_string(),
-                ));
+                // Validate GraphQL schema inline (sync validation)
+                // Basic SDL validation
+                if sdl.is_empty() || sdl.len() > 100_000 {
+                    return Ok("Invalid SDL: must be between 1 and 100,000 characters".to_string());
+                }
+                if name.is_empty() || name.len() > 100 {
+                    return Ok(
+                        "Invalid query name: must be between 1 and 100 characters".to_string()
+                    );
+                }
+                // Check for dangerous patterns
+                if sdl.contains("__proto__") || sdl.contains("constructor") {
+                    return Ok("Invalid SDL: contains dangerous patterns".to_string());
+                }
 
                 // Log the operation attempt using spawn to avoid runtime conflicts
                 let auditor_clone = auditor_query.clone();
@@ -722,32 +726,21 @@ impl SecureGlobalContext {
                         .await;
                 });
 
-                match validation_result {
-                    Ok(op_result) => {
-                        if op_result.success {
-                            debug!(
-                                user_id = ?user_ctx_query.user_id,
-                                name = %name,
-                                sdl_len = sdl.len(),
-                                "Secure registerGraphQLQuery called"
-                            );
+                debug!(
+                    user_id = ?user_ctx_query.user_id,
+                    name = %name,
+                    sdl_len = sdl.len(),
+                    "Secure registerGraphQLQuery called"
+                );
 
-                            // Actually register the GraphQL query
-                            crate::graphql::register_graphql_query(
-                                name.clone(),
-                                sdl.clone(),
-                                resolver_function.clone(),
-                                script_uri_query.clone(),
-                            );
-                            Ok(format!("GraphQL query '{}' registered successfully", name))
-                        } else {
-                            Ok(op_result
-                                .error
-                                .unwrap_or_else(|| "Unknown error".to_string()))
-                        }
-                    }
-                    Err(_) => Ok("Internal server error".to_string()),
-                }
+                // Actually register the GraphQL query
+                crate::graphql::register_graphql_query(
+                    name.clone(),
+                    sdl.clone(),
+                    resolver_function.clone(),
+                    script_uri_query.clone(),
+                );
+                Ok(format!("GraphQL query '{}' registered successfully", name))
             },
         )?;
         global.set("registerGraphQLQuery", register_graphql_query)?;
@@ -801,14 +794,18 @@ impl SecureGlobalContext {
                     return Ok(format!("Error: {}", e));
                 }
 
-                // For now, skip the async GraphQL schema validation to avoid runtime conflicts
-                // TODO: Implement proper async handling for GraphQL operations
-                let validation_result: Result<
-                    crate::security::OperationResult<String>,
-                    axum::http::StatusCode,
-                > = Ok(crate::security::OperationResult::success(
-                    "GraphQL mutation schema accepted (validation skipped)".to_string(),
-                ));
+                // Validate GraphQL schema inline (sync validation)
+                if sdl.is_empty() || sdl.len() > 100_000 {
+                    return Ok("Invalid SDL: must be between 1 and 100,000 characters".to_string());
+                }
+                if name.is_empty() || name.len() > 100 {
+                    return Ok(
+                        "Invalid mutation name: must be between 1 and 100 characters".to_string(),
+                    );
+                }
+                if sdl.contains("__proto__") || sdl.contains("constructor") {
+                    return Ok("Invalid SDL: contains dangerous patterns".to_string());
+                }
 
                 // Log the operation attempt using spawn to avoid runtime conflicts
                 let auditor_clone = auditor_mutation.clone();
@@ -831,35 +828,24 @@ impl SecureGlobalContext {
                         .await;
                 });
 
-                match validation_result {
-                    Ok(op_result) => {
-                        if op_result.success {
-                            debug!(
-                                user_id = ?user_ctx_mutation.user_id,
-                                name = %name,
-                                sdl_len = sdl.len(),
-                                "Secure registerGraphQLMutation called"
-                            );
+                debug!(
+                    user_id = ?user_ctx_mutation.user_id,
+                    name = %name,
+                    sdl_len = sdl.len(),
+                    "Secure registerGraphQLMutation called"
+                );
 
-                            // Actually register the GraphQL mutation
-                            crate::graphql::register_graphql_mutation(
-                                name.clone(),
-                                sdl.clone(),
-                                resolver_function.clone(),
-                                script_uri_mutation.clone(),
-                            );
-                            Ok(format!(
-                                "GraphQL mutation '{}' registered successfully",
-                                name
-                            ))
-                        } else {
-                            Ok(op_result
-                                .error
-                                .unwrap_or_else(|| "Unknown error".to_string()))
-                        }
-                    }
-                    Err(_) => Ok("Internal server error".to_string()),
-                }
+                // Actually register the GraphQL mutation
+                crate::graphql::register_graphql_mutation(
+                    name.clone(),
+                    sdl.clone(),
+                    resolver_function.clone(),
+                    script_uri_mutation.clone(),
+                );
+                Ok(format!(
+                    "GraphQL mutation '{}' registered successfully",
+                    name
+                ))
             },
         )?;
         global.set("registerGraphQLMutation", register_graphql_mutation)?;
@@ -913,14 +899,19 @@ impl SecureGlobalContext {
                     return Ok(format!("Error: {}", e));
                 }
 
-                // For now, skip the async GraphQL schema validation to avoid runtime conflicts
-                // TODO: Implement proper async handling for GraphQL operations
-                let validation_result: Result<
-                    crate::security::OperationResult<String>,
-                    axum::http::StatusCode,
-                > = Ok(crate::security::OperationResult::success(
-                    "GraphQL subscription schema accepted (validation skipped)".to_string(),
-                ));
+                // Validate GraphQL schema inline (sync validation)
+                if sdl.is_empty() || sdl.len() > 100_000 {
+                    return Ok("Invalid SDL: must be between 1 and 100,000 characters".to_string());
+                }
+                if name.is_empty() || name.len() > 100 {
+                    return Ok(
+                        "Invalid subscription name: must be between 1 and 100 characters"
+                            .to_string(),
+                    );
+                }
+                if sdl.contains("__proto__") || sdl.contains("constructor") {
+                    return Ok("Invalid SDL: contains dangerous patterns".to_string());
+                }
 
                 // Log the operation attempt using spawn to avoid runtime conflicts
                 let auditor_clone = auditor_subscription.clone();
@@ -943,35 +934,24 @@ impl SecureGlobalContext {
                         .await;
                 });
 
-                match validation_result {
-                    Ok(op_result) => {
-                        if op_result.success {
-                            debug!(
-                                user_id = ?user_ctx_subscription.user_id,
-                                name = %name,
-                                sdl_len = sdl.len(),
-                                "Secure registerGraphQLSubscription called"
-                            );
+                debug!(
+                    user_id = ?user_ctx_subscription.user_id,
+                    name = %name,
+                    sdl_len = sdl.len(),
+                    "Secure registerGraphQLSubscription called"
+                );
 
-                            // Actually register the GraphQL subscription
-                            crate::graphql::register_graphql_subscription(
-                                name.clone(),
-                                sdl.clone(),
-                                resolver_function.clone(),
-                                script_uri_subscription.clone(),
-                            );
-                            Ok(format!(
-                                "GraphQL subscription '{}' registered successfully",
-                                name
-                            ))
-                        } else {
-                            Ok(op_result
-                                .error
-                                .unwrap_or_else(|| "Unknown error".to_string()))
-                        }
-                    }
-                    Err(_) => Ok("Internal server error".to_string()),
-                }
+                // Actually register the GraphQL subscription
+                crate::graphql::register_graphql_subscription(
+                    name.clone(),
+                    sdl.clone(),
+                    resolver_function.clone(),
+                    script_uri_subscription.clone(),
+                );
+                Ok(format!(
+                    "GraphQL subscription '{}' registered successfully",
+                    name
+                ))
             },
         )?;
         global.set("registerGraphQLSubscription", register_graphql_subscription)?;
@@ -1060,19 +1040,14 @@ impl SecureGlobalContext {
                     return Ok(format!("Error: {}", e));
                 }
 
-                // Try to execute stream operation if we have a runtime
-                if let Ok(rt) = tokio::runtime::Handle::try_current() {
-                    // For now, skip the async stream creation to avoid runtime conflicts
-                    // TODO: Implement proper async handling for stream operations
-                    let validation_result: Result<
-                        crate::security::OperationResult<String>,
-                        axum::http::StatusCode,
-                    > = Ok(crate::security::OperationResult::success(
-                        "Stream registration accepted (validation skipped)".to_string(),
-                    ));
+                // Validate stream path inline (stream registry also validates)
+                if path.contains("..") || path.contains('\\') {
+                    return Ok("Invalid stream path: path traversal not allowed".to_string());
+                }
 
-                    // Log the operation attempt if audit logging is enabled
-                    if config_register.enable_audit_logging {
+                // Log the operation attempt if audit logging is enabled and we have a runtime
+                if config_register.enable_audit_logging {
+                    if let Ok(rt) = tokio::runtime::Handle::try_current() {
                         let auditor_clone = auditor_register.clone();
                         let user_id = user_ctx_register.user_id.clone();
                         let path_clone = path.clone();
@@ -1093,54 +1068,20 @@ impl SecureGlobalContext {
                                 .await;
                         });
                     }
+                }
 
-                    match validation_result {
-                        Ok(op_result) => {
-                            if op_result.success {
-                                debug!(
-                                    user_id = ?user_ctx_register.user_id,
-                                    path = %path,
-                                    "Secure registerWebStream called"
-                                );
+                debug!(
+                    user_id = ?user_ctx_register.user_id,
+                    path = %path,
+                    "Secure registerWebStream called"
+                );
 
-                                // Actually register the stream
-                                match crate::stream_registry::GLOBAL_STREAM_REGISTRY
-                                    .register_stream(&path, &script_uri_register)
-                                {
-                                    Ok(()) => {
-                                        Ok(format!("Web stream '{}' registered successfully", path))
-                                    }
-                                    Err(e) => {
-                                        Ok(format!("Failed to register stream '{}': {}", path, e))
-                                    }
-                                }
-                            } else {
-                                Ok(op_result
-                                    .error
-                                    .unwrap_or_else(|| "Unknown error".to_string()))
-                            }
-                        }
-                        Err(_) => Ok("Internal server error".to_string()),
-                    }
-                } else {
-                    // No tokio runtime available, register stream for testing
-                    debug!(
-                        user_id = ?user_ctx_register.user_id,
-                        path = %path,
-                        "Stream register called (no runtime)"
-                    );
-                    match crate::stream_registry::GLOBAL_STREAM_REGISTRY
-                        .register_stream(&path, &script_uri_register)
-                    {
-                        Ok(()) => Ok(format!(
-                            "Stream '{}' registered successfully (test mode)",
-                            path
-                        )),
-                        Err(e) => Ok(format!(
-                            "Failed to register stream '{}' (test mode): {}",
-                            path, e
-                        )),
-                    }
+                // Actually register the stream (sync operation)
+                match crate::stream_registry::GLOBAL_STREAM_REGISTRY
+                    .register_stream(&path, &script_uri_register)
+                {
+                    Ok(()) => Ok(format!("Web stream '{}' registered successfully", path)),
+                    Err(e) => Ok(format!("Failed to register stream '{}': {}", path, e)),
                 }
             },
         )?;
@@ -1200,8 +1141,27 @@ impl SecureGlobalContext {
                     "Secure sendStreamMessage called"
                 );
 
-                // TODO: Call actual stream message sending here
-                Ok("Stream message sent successfully".to_string())
+                // Call actual stream message sending (sync operation)
+                match crate::stream_registry::GLOBAL_STREAM_REGISTRY
+                    .broadcast_to_all_streams(&message)
+                {
+                    Ok(result) => {
+                        if result.is_fully_successful() {
+                            Ok(format!(
+                                "Stream message sent to {} connections successfully",
+                                result.successful_sends
+                            ))
+                        } else {
+                            Ok(format!(
+                                "Stream message partially sent: {} successful, {} failed out of {} total",
+                                result.successful_sends,
+                                result.failed_connections.len(),
+                                result.total_connections
+                            ))
+                        }
+                    }
+                    Err(e) => Ok(format!("Failed to send stream message: {}", e)),
+                }
             },
         )?;
         global.set("sendStreamMessage", send_stream_message)?;
@@ -1265,11 +1225,31 @@ impl SecureGlobalContext {
                     "Secure sendStreamMessageToPath called"
                 );
 
-                // TODO: Call actual path-specific stream message sending here
-                Ok(format!(
-                    "Stream message sent to path '{}' successfully",
-                    path
-                ))
+                // Call actual path-specific stream message sending (sync operation)
+                match crate::stream_registry::GLOBAL_STREAM_REGISTRY
+                    .broadcast_to_stream(&path, &message)
+                {
+                    Ok(result) => {
+                        if result.is_fully_successful() {
+                            Ok(format!(
+                                "Stream message sent to path '{}' ({} connections) successfully",
+                                path, result.successful_sends
+                            ))
+                        } else {
+                            Ok(format!(
+                                "Stream message to '{}' partially sent: {} successful, {} failed out of {} total",
+                                path,
+                                result.successful_sends,
+                                result.failed_connections.len(),
+                                result.total_connections
+                            ))
+                        }
+                    }
+                    Err(e) => Ok(format!(
+                        "Failed to send stream message to path '{}': {}",
+                        path, e
+                    )),
+                }
             },
         )?;
         global.set("sendStreamMessageToPath", send_stream_message_to_path)?;
@@ -1336,11 +1316,11 @@ impl SecureGlobalContext {
                     "Secure sendSubscriptionMessage called"
                 );
 
-                // TODO: Call actual GraphQL subscription message sending here
-                // For now, send to the compatibility stream path
+                // Call actual GraphQL subscription message sending (sync operation)
+                // Send to the auto-registered stream path for this subscription
                 let stream_path = format!("/graphql/subscription/{}", subscription_name);
 
-                // Try to send via stream path (this will work if the stream is registered)
+                // Send via stream path
                 let result = crate::stream_registry::GLOBAL_STREAM_REGISTRY
                     .broadcast_to_stream(&stream_path, &message);
 

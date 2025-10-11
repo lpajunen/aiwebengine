@@ -76,10 +76,18 @@ impl SecureOperations {
             )));
         }
 
-        // TODO: Call actual repository layer here
-        // For now, simulate success
-        let success_message = format!("Script '{}' upserted successfully", request.script_name);
-        Ok(OperationResult::success(success_message))
+        // Call actual repository layer
+        match crate::repository::upsert_script(&request.script_name, &request.js_script) {
+            Ok(()) => {
+                let success_message =
+                    format!("Script '{}' upserted successfully", request.script_name);
+                Ok(OperationResult::success(success_message))
+            }
+            Err(e) => Ok(OperationResult::error(format!(
+                "Failed to upsert script: {}",
+                e
+            ))),
+        }
     }
 
     /// Secure wrapper for asset management operations
@@ -106,9 +114,44 @@ impl SecureOperations {
             ));
         }
 
-        // TODO: Call actual asset storage here
-        let success_message = format!("Asset '{}' uploaded successfully", filename);
-        Ok(OperationResult::success(success_message))
+        // Determine MIME type (simple implementation, could be enhanced)
+        let mimetype = if filename.ends_with(".html") {
+            "text/html"
+        } else if filename.ends_with(".css") {
+            "text/css"
+        } else if filename.ends_with(".js") {
+            "application/javascript"
+        } else if filename.ends_with(".json") {
+            "application/json"
+        } else if filename.ends_with(".svg") {
+            "image/svg+xml"
+        } else if filename.ends_with(".png") {
+            "image/png"
+        } else if filename.ends_with(".jpg") || filename.ends_with(".jpeg") {
+            "image/jpeg"
+        } else if filename.ends_with(".txt") {
+            "text/plain"
+        } else {
+            "application/octet-stream"
+        };
+
+        // Call actual asset storage
+        let asset = crate::repository::Asset {
+            public_path: filename.clone(),
+            mimetype: mimetype.to_string(),
+            content,
+        };
+
+        match crate::repository::upsert_asset(asset) {
+            Ok(()) => {
+                let success_message = format!("Asset '{}' uploaded successfully", filename);
+                Ok(OperationResult::success(success_message))
+            }
+            Err(e) => Ok(OperationResult::error(format!(
+                "Failed to upload asset: {}",
+                e
+            ))),
+        }
     }
 
     /// Secure wrapper for HTTP requests

@@ -565,7 +565,10 @@ pub async fn start_server_with_config(
             Ok(Ok((status, body, content_type))) => {
                 info!(
                     "[{}] ✅ Successfully executed handler '{}' - status: {}, body_length: {} bytes",
-                    request_id, handler_name, status, body.len()
+                    request_id,
+                    handler_name,
+                    status,
+                    body.len()
                 );
                 let mut response = (
                     StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
