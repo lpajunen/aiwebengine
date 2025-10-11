@@ -6,7 +6,7 @@ use axum_server::Server;
 use futures::StreamExt as FuturesStreamExt;
 use std::collections::HashMap;
 use tokio_stream::wrappers::BroadcastStream;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 pub mod config;
 pub mod error;
@@ -303,7 +303,8 @@ pub async fn start_server_with_config(
         let (_parts, body) = req.into_parts();
         let body_bytes = match axum::body::to_bytes(body, usize::MAX).await {
             Ok(bytes) => bytes,
-            Err(_) => {
+            Err(e) => {
+                error!("GraphQL SSE: Failed to read request body: {}", e);
                 return axum::response::Response::builder()
                     .status(400)
                     .header("content-type", "text/plain")
@@ -318,6 +319,7 @@ pub async fn start_server_with_config(
         let request: async_graphql::Request = match serde_json::from_slice(&body_bytes) {
             Ok(req) => req,
             Err(e) => {
+                error!("GraphQL SSE: Invalid JSON in request body: {}", e);
                 return axum::response::Response::builder()
                     .status(400)
                     .header("content-type", "text/plain")
@@ -447,6 +449,10 @@ pub async fn start_server_with_config(
                     .unwrap_or_else(|| "unknown".to_string());
 
                 if path_exists {
+                    warn!(
+                        "[{}] ⚠️  Method not allowed: {} {} (path exists but method not registered)",
+                        request_id, request_method, path
+                    );
                     let error_response =
                         error::errors::method_not_allowed(&path, &request_method, &request_id);
                     let status = StatusCode::from_u16(error_response.status)
@@ -455,6 +461,10 @@ pub async fn start_server_with_config(
                         .unwrap_or_else(|_| r#"{"error":"Serialization failed"}"#.to_string());
                     return (status, body).into_response();
                 } else {
+                    warn!(
+                        "[{}] ⚠️  Route not found: {} {} (no handler registered for this path)",
+                        request_id, request_method, path
+                    );
                     let error_response = error::errors::not_found(&path, &request_id);
                     let status = StatusCode::from_u16(error_response.status)
                         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
@@ -467,6 +477,7 @@ pub async fn start_server_with_config(
         let owner_uri_cl = owner_uri.clone();
         let handler_cl = handler_name.clone();
         let path_log = path.to_string();
+        let method_log = request_method.clone();
         let query_string = req.uri().query().map(|s| s.to_string()).unwrap_or_default();
         let query_params = parse_query_string(&query_string);
 
@@ -476,6 +487,11 @@ pub async fn start_server_with_config(
             .get::<middleware::RequestId>()
             .map(|rid| rid.0.clone())
             .unwrap_or_else(|| "unknown".to_string());
+
+        info!(
+            "[{}] Executing handler '{}' from script '{}' for {} {}",
+            request_id, handler_name, owner_uri, request_method, path
+        );
 
         // Extract content type before consuming the request
         let content_type = req
@@ -547,6 +563,10 @@ pub async fn start_server_with_config(
 
         match timed {
             Ok(Ok((status, body, content_type))) => {
+                info!(
+                    "[{}] ✅ Successfully executed handler '{}' - status: {}, body_length: {} bytes",
+                    request_id, handler_name, status, body.len()
+                );
                 let mut response = (
                     StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
                     body,
@@ -564,7 +584,10 @@ pub async fn start_server_with_config(
                 response
             }
             Ok(Err(e)) => {
-                error!("script error for {}: {}", path_log, e);
+                error!(
+                    "[{}] ❌ Script execution error for {} {}: {} (handler: {}, script: {})",
+                    request_id, method_log, path_log, e, handler_name, owner_uri
+                );
                 let error_response = error::errors::script_execution_failed(&path, &e, &request_id);
                 let status = StatusCode::from_u16(error_response.status)
                     .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
@@ -573,7 +596,10 @@ pub async fn start_server_with_config(
                 (status, body).into_response()
             }
             Err(e) => {
-                error!("task error for {}: {}", path_log, e);
+                error!(
+                    "[{}] ❌ Task/runtime error for {} {}: {} (handler: {}, script: {})",
+                    request_id, method_log, path_log, e, handler_name, owner_uri
+                );
                 let error_response = error::errors::internal_server_error(&path, &e, &request_id);
                 let status = StatusCode::from_u16(error_response.status)
                     .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);

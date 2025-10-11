@@ -217,12 +217,13 @@ impl SecureGlobalContext {
         let user_ctx_list = user_context.clone();
         let list_logs = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
+            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<Vec<String>> {
                 // Check capability
-                if let Err(e) =
+                if let Err(_e) =
                     user_ctx_list.require_capability(&crate::security::Capability::ViewLogs)
                 {
-                    return Ok(format!("Error: {}", e));
+                    // Return empty array if no permission (JavaScript expects an array)
+                    return Ok(Vec::new());
                 }
 
                 debug!(
@@ -231,7 +232,7 @@ impl SecureGlobalContext {
                 );
 
                 let logs = repository::fetch_log_messages("");
-                Ok(serde_json::to_string(&logs).unwrap_or_else(|_| "[]".to_string()))
+                Ok(logs)
             },
         )?;
         global.set("listLogs", list_logs)?;
@@ -240,12 +241,13 @@ impl SecureGlobalContext {
         let user_ctx_list_uri = user_context.clone();
         let list_logs_for_uri = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, uri: String| -> JsResult<String> {
+            move |_ctx: rquickjs::Ctx<'_>, uri: String| -> JsResult<Vec<String>> {
                 // Check capability
-                if let Err(e) =
+                if let Err(_e) =
                     user_ctx_list_uri.require_capability(&crate::security::Capability::ViewLogs)
                 {
-                    return Ok(format!("Error: {}", e));
+                    // Return empty array if no permission (JavaScript expects an array)
+                    return Ok(Vec::new());
                 }
 
                 debug!(
@@ -255,7 +257,7 @@ impl SecureGlobalContext {
                 );
 
                 let logs = repository::fetch_log_messages(&uri);
-                Ok(serde_json::to_string(&logs).unwrap_or_else(|_| "[]".to_string()))
+                Ok(logs)
             },
         )?;
         global.set("listLogsForUri", list_logs_for_uri)?;
@@ -279,12 +281,13 @@ impl SecureGlobalContext {
         let user_ctx_list = user_context.clone();
         let list_scripts = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
+            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<Vec<String>> {
                 // Check capability
-                if let Err(e) =
+                if let Err(_e) =
                     user_ctx_list.require_capability(&crate::security::Capability::ReadScripts)
                 {
-                    return Ok(format!("Error: {}", e));
+                    // Return empty array if no permission (JavaScript expects an array)
+                    return Ok(Vec::new());
                 }
 
                 debug!(
@@ -293,7 +296,7 @@ impl SecureGlobalContext {
                 );
 
                 let scripts = repository::fetch_scripts();
-                Ok(serde_json::to_string(&scripts).unwrap_or_else(|_| "{}".to_string()))
+                Ok(scripts.keys().cloned().collect())
             },
         )?;
         global.set("listScripts", list_scripts)?;
@@ -439,12 +442,13 @@ impl SecureGlobalContext {
         let user_ctx_list = user_context.clone();
         let list_assets = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
+            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<Vec<String>> {
                 // Check capability
-                if let Err(e) =
+                if let Err(_e) =
                     user_ctx_list.require_capability(&crate::security::Capability::ReadAssets)
                 {
-                    return Ok(format!("Error: {}", e));
+                    // Return empty array if no permission (JavaScript expects an array)
+                    return Ok(Vec::new());
                 }
 
                 debug!(
@@ -454,7 +458,7 @@ impl SecureGlobalContext {
 
                 let assets = repository::fetch_assets();
                 let asset_names: Vec<String> = assets.keys().cloned().collect();
-                Ok(serde_json::to_string(&asset_names).unwrap_or_else(|_| "[]".to_string()))
+                Ok(asset_names)
             },
         )?;
         global.set("listAssets", list_assets)?;
