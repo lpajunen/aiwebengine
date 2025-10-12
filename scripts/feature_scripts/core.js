@@ -2,6 +2,11 @@
 function core_root(req) {
 	writeLog('core-root-called');
 	writeLog('req: ' + JSON.stringify(req));
+	if (auth.isAuthenticated) {
+    	writeLog("User is logged in");
+	} else {
+    	writeLog("Anonymous user");
+	}
 	return { status: 200, body: 'Core handler: OK' };
 }
 

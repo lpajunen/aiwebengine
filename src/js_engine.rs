@@ -40,6 +40,8 @@ pub struct RequestExecutionParams {
     pub form_data: Option<HashMap<String, String>>,
     pub raw_body: Option<String>,
     pub user_context: UserContext,
+    /// Optional OAuth authentication context for JavaScript auth API
+    pub auth_context: Option<crate::auth::JsAuthContext>,
 }
 
 /// Validates a script before execution
@@ -73,11 +75,17 @@ fn setup_secure_global_functions(
     user_context: UserContext,
     config: &GlobalSecurityConfig,
     register_fn: Option<RegisterFunctionType>,
+    auth_context: Option<crate::auth::JsAuthContext>,
 ) -> Result<(), rquickjs::Error> {
     let secure_context = SecureGlobalContext::new_with_config(user_context, config.clone());
 
     // Setup secure functions with proper capability validation
     secure_context.setup_secure_functions(ctx, script_uri, register_fn)?;
+    
+    // Setup authentication globals if auth context is provided
+    if let Some(auth_ctx) = auth_context {
+        crate::auth::AuthJsApi::setup_auth_globals(ctx, auth_ctx)?;
+    }
 
     Ok(())
 }
@@ -190,6 +198,7 @@ pub fn execute_script_secure(
                         user_context,
                         &security_config,
                         Some(register_impl),
+                        None, // No auth context during script execution with config
                     )?;
 
                     // Execute the script
@@ -287,15 +296,14 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                         },
                     );
 
-                            setup_secure_global_functions(
-                                &ctx,
-                                &uri_owned,
-                                UserContext::admin("route-discovery".to_string()),
-                                &config,
-                                Some(register_impl),
-                            )?;
-
-                            // Execute the script
+                    setup_secure_global_functions(
+                        &ctx,
+                        &uri_owned,
+                        UserContext::admin("route-discovery".to_string()),
+                        &config,
+                        Some(register_impl),
+                        None, // No auth context during script registration
+                    )?;                            // Execute the script
                             ctx.eval::<(), _>(content)?;
                             Ok(())
                         });
@@ -376,6 +384,7 @@ pub fn execute_script_for_request_secure(
             params.user_context,
             &security_config,
             None,
+            params.auth_context, // Pass auth context for request handling
         )?;
 
         Ok(())
@@ -513,6 +522,7 @@ pub fn execute_script_for_request(
             UserContext::anonymous(),
             &config,
             None,
+            None, // No auth context for legacy execution
         )?;
 
         Ok(())
@@ -624,7 +634,7 @@ pub fn execute_graphql_resolver(
             ..Default::default()
         };
 
-        setup_secure_global_functions(&ctx, &script_uri_owned, UserContext::anonymous(), &config, None)?;
+        setup_secure_global_functions(&ctx, &script_uri_owned, UserContext::anonymous(), &config, None, None)?;
 
         // Override specific functions that have different signatures for GraphQL resolver context
         let global = ctx.globals();
