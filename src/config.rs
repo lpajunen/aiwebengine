@@ -26,6 +26,10 @@ pub struct AppConfig {
 
     /// Performance configuration
     pub performance: PerformanceConfig,
+
+    /// Authentication configuration (optional)
+    #[serde(default)]
+    pub auth: Option<crate::auth::AuthConfig>,
 }
 
 /// Server-specific configuration

@@ -11,7 +11,7 @@ pub mod routes;
 pub mod security;
 pub mod session;
 
-pub use config::{AuthConfig, ProviderConfig, ProvidersConfig};
+pub use config::{AuthConfig, CookieConfig, ProviderConfig, ProvidersConfig, SameSitePolicy};
 pub use error::AuthError;
 pub use js_api::{AuthJsApi, JsAuthContext};
 pub use manager::{AuthManager, AuthManagerConfig, AuthenticatedUser, CookieSameSite};
