@@ -71,3 +71,46 @@ enable_compression = false
 worker_pool_size = 2
 # Small request queue for development
 max_request_queue_size = 50
+
+[auth]
+# Enable authentication in development
+enabled = true
+# Development JWT secret (change in production!)
+jwt_secret = "dev-jwt-secret-minimum-32-characters-required-for-security"
+# Session timeout in seconds (1 hour)
+session_timeout = 3600
+# Max concurrent sessions per user
+max_concurrent_sessions = 10
+
+[auth.cookie]
+# Cookie settings for development
+name = "session"
+path = "/"
+secure = false  # Set to true in production with HTTPS
+http_only = true
+same_site = "lax"
+
+[auth.providers]
+# OAuth2 providers configuration
+# Note: You'll need to register your app with each provider and add credentials
+
+# Google OAuth2 (uncomment and fill in to enable)
+# [auth.providers.google]
+# client_id = "your-google-client-id"
+# client_secret = "your-google-client-secret"
+# redirect_uri = "http://localhost:3000/auth/callback/google"
+
+# Microsoft OAuth2 (uncomment and fill in to enable)
+# [auth.providers.microsoft]
+# client_id = "your-microsoft-client-id"
+# client_secret = "your-microsoft-client-secret"
+# redirect_uri = "http://localhost:3000/auth/callback/microsoft"
+# tenant_id = "common"  # or your specific tenant ID
+
+# Apple OAuth2 (uncomment and fill in to enable)
+# [auth.providers.apple]
+# client_id = "your-apple-client-id"
+# redirect_uri = "http://localhost:3000/auth/callback/apple"
+# team_id = "your-team-id"
+# key_id = "your-key-id"
+# private_key = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"

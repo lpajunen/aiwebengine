@@ -400,25 +400,20 @@ pub async fn start_server_with_config(
     };
 
     // Initialize authentication if configured
-    let auth_manager: Option<Arc<auth::AuthManager>> = if let Ok(app_config) = config::AppConfig::load() {
-        if let Some(auth_config) = app_config.auth {
-            info!("Authentication is enabled, initializing AuthManager...");
-            match initialize_auth_manager(auth_config).await {
-                Ok(manager) => {
-                    info!("AuthManager initialized successfully");
-                    Some(manager)
-                }
-                Err(e) => {
-                    warn!("Failed to initialize AuthManager: {}. Authentication will be disabled.", e);
-                    None
-                }
+    let auth_manager: Option<Arc<auth::AuthManager>> = if let Some(auth_config) = config.auth.clone() {
+        info!("Authentication is enabled, initializing AuthManager...");
+        match initialize_auth_manager(auth_config).await {
+            Ok(manager) => {
+                info!("AuthManager initialized successfully");
+                Some(manager)
             }
-        } else {
-            info!("No authentication configuration found, running without authentication");
-            None
+            Err(e) => {
+                warn!("Failed to initialize AuthManager: {}. Authentication will be disabled.", e);
+                None
+            }
         }
     } else {
-        info!("Could not load app config, running without authentication");
+        info!("No authentication configuration found (config.auth is None), running without authentication");
         None
     };
 

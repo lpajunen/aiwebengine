@@ -5,7 +5,7 @@
 
 use crate::auth::AuthManager;
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
@@ -178,14 +178,14 @@ async fn login_page(
 /// Start OAuth2 login flow - redirects to provider
 async fn start_login(
     State(auth_manager): State<Arc<AuthManager>>,
-    Query(params): Query<LoginParams>,
+    Path(provider): Path<String>,
     headers: HeaderMap,
 ) -> Result<Redirect, ErrorResponse> {
     let ip_addr = get_client_ip(&headers);
     
     // Generate authorization URL
     let (auth_url, _state) = auth_manager
-        .start_login(&params.provider, &ip_addr)
+        .start_login(&provider, &ip_addr)
         .await
         .map_err(|e| ErrorResponse {
             error: "login_failed".to_string(),
@@ -345,7 +345,7 @@ async fn auth_status(
 pub fn create_auth_router(auth_manager: Arc<AuthManager>) -> Router {
     Router::new()
         .route("/login", get(login_page))
-        .route("/login/:provider", get(start_login))
+        .route("/login/{provider}", get(start_login))
         .route("/callback", get(oauth_callback))
         .route("/logout", post(logout))
         .route("/status", get(auth_status))

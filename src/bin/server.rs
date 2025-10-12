@@ -1,4 +1,4 @@
-use aiwebengine::{config::AppConfig, start_server};
+use aiwebengine::{config::AppConfig, start_server_with_config};
 use clap::{Arg, Command};
 use tokio::sync::oneshot;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -145,13 +145,22 @@ async fn main() -> anyhow::Result<()> {
         "Rate limiting: {} requests/minute",
         config.security.rate_limit_per_minute
     );
+    tracing::info!("Auth configuration present: {}", config.auth.is_some());
+    if let Some(ref auth_cfg) = config.auth {
+        tracing::info!("Auth enabled: {}", auth_cfg.enabled);
+        tracing::info!("Auth JWT secret length: {}", auth_cfg.jwt_secret.len());
+    }
 
     // Create a one-shot channel for graceful shutdown signaling
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
+    // Clone needed values before moving config
+    let graceful_shutdown = config.server.graceful_shutdown;
+    let shutdown_timeout_secs = config.server.shutdown_timeout_secs;
+
     // Spawn the server task that listens until shutdown_rx receives a value
     let server_task = tokio::spawn(async move {
-        match start_server(shutdown_rx).await {
+        match start_server_with_config(config, shutdown_rx).await {
             Ok(port) => tracing::info!("Server started successfully on port {}", port),
             Err(e) => tracing::error!("Server error: {}", e),
         }
@@ -166,13 +175,13 @@ async fn main() -> anyhow::Result<()> {
     let _ = shutdown_tx.send(());
 
     // Wait for server task to finish with timeout if graceful shutdown is enabled
-    if config.server.graceful_shutdown {
-        let timeout = tokio::time::Duration::from_secs(config.server.shutdown_timeout_secs);
+    if graceful_shutdown {
+        let timeout = tokio::time::Duration::from_secs(shutdown_timeout_secs);
         match tokio::time::timeout(timeout, server_task).await {
             Ok(_) => tracing::info!("Server stopped gracefully"),
             Err(_) => tracing::warn!(
                 "Server shutdown timed out after {}s",
-                config.server.shutdown_timeout_secs
+                shutdown_timeout_secs
             ),
         }
     } else {

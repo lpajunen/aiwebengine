@@ -310,11 +310,11 @@ impl AppConfig {
         let figment = Figment::new().merge(Serialized::defaults(AppConfig::default()));
 
         let figment = if path.extension() == Some(std::ffi::OsStr::new("toml")) {
-            figment.merge(Toml::file(path).nested())
+            figment.merge(Toml::file(path))
         } else if path.extension() == Some(std::ffi::OsStr::new("yaml"))
             || path.extension() == Some(std::ffi::OsStr::new("yml"))
         {
-            figment.merge(Yaml::file(path).nested())
+            figment.merge(Yaml::file(path))
         } else {
             return Err(anyhow::anyhow!(
                 "Unsupported config file format: {:?}",
@@ -396,9 +396,7 @@ impl AppConfig {
         }
 
         // Validate security configuration
-        if self.security.rate_limit_per_minute == 0 {
-            anyhow::bail!("Rate limit per minute must be > 0");
-        }
+        // Note: rate_limit_per_minute of 0 means disabled, which is allowed
 
         if self.security.max_request_body_bytes == 0 {
             anyhow::bail!("Max request body size must be > 0");
