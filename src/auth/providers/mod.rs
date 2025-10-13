@@ -2,43 +2,42 @@
 ///
 /// This module provides a generic OAuth2Provider trait and implementations
 /// for major OAuth2 providers (Google, Microsoft, Apple).
-
 use crate::auth::error::AuthError;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+pub mod apple;
 pub mod google;
 pub mod microsoft;
-pub mod apple;
 
 /// User information returned from OAuth2 providers
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuth2UserInfo {
     /// Unique user identifier from the provider
     pub provider_user_id: String,
-    
+
     /// User's email address
     pub email: String,
-    
+
     /// Whether the email has been verified by the provider
     pub email_verified: bool,
-    
+
     /// User's full name (if available)
     pub name: Option<String>,
-    
+
     /// User's given/first name (if available)
     pub given_name: Option<String>,
-    
+
     /// User's family/last name (if available)
     pub family_name: Option<String>,
-    
+
     /// URL to user's profile picture (if available)
     pub picture: Option<String>,
-    
+
     /// User's locale/language preference (if available)
     pub locale: Option<String>,
-    
+
     /// Additional provider-specific data
     pub raw_data: HashMap<String, serde_json::Value>,
 }
@@ -48,19 +47,19 @@ pub struct OAuth2UserInfo {
 pub struct OAuth2TokenResponse {
     /// Access token for API requests
     pub access_token: String,
-    
+
     /// Token type (usually "Bearer")
     pub token_type: String,
-    
+
     /// Token expiration time in seconds
     pub expires_in: Option<u64>,
-    
+
     /// Refresh token for obtaining new access tokens
     pub refresh_token: Option<String>,
-    
+
     /// ID token (for OpenID Connect providers)
     pub id_token: Option<String>,
-    
+
     /// OAuth2 scopes granted
     pub scope: Option<String>,
 }
@@ -70,25 +69,25 @@ pub struct OAuth2TokenResponse {
 pub struct OAuth2ProviderConfig {
     /// Client ID from the provider
     pub client_id: String,
-    
+
     /// Client secret from the provider
     pub client_secret: String,
-    
+
     /// OAuth2 scopes to request
     pub scopes: Vec<String>,
-    
+
     /// Redirect URI (callback URL)
     pub redirect_uri: String,
-    
+
     /// Authorization endpoint URL (if custom)
     pub auth_url: Option<String>,
-    
+
     /// Token endpoint URL (if custom)
     pub token_url: Option<String>,
-    
+
     /// UserInfo endpoint URL (if custom)
     pub userinfo_url: Option<String>,
-    
+
     /// Additional provider-specific configuration
     pub extra_params: HashMap<String, String>,
 }
@@ -101,23 +100,23 @@ impl OAuth2ProviderConfig {
                 "OAuth2 client_id cannot be empty".to_string(),
             ));
         }
-        
+
         if self.client_secret.is_empty() {
             return Err(AuthError::ConfigError(
                 "OAuth2 client_secret cannot be empty".to_string(),
             ));
         }
-        
+
         if self.redirect_uri.is_empty() {
             return Err(AuthError::ConfigError(
                 "OAuth2 redirect_uri cannot be empty".to_string(),
             ));
         }
-        
+
         // Validate redirect_uri is a valid URL
         url::Url::parse(&self.redirect_uri)
             .map_err(|e| AuthError::ConfigError(format!("Invalid redirect_uri: {}", e)))?;
-        
+
         Ok(())
     }
 }
@@ -131,7 +130,7 @@ impl OAuth2ProviderConfig {
 pub trait OAuth2Provider: Send + Sync {
     /// Get the provider name (e.g., "google", "microsoft", "apple")
     fn name(&self) -> &str;
-    
+
     /// Generate the authorization URL for the OAuth2 flow
     ///
     /// # Arguments
@@ -141,7 +140,7 @@ pub trait OAuth2Provider: Send + Sync {
     /// # Returns
     /// The authorization URL to redirect the user to
     fn authorization_url(&self, state: &str, nonce: Option<&str>) -> Result<String, AuthError>;
-    
+
     /// Exchange the authorization code for tokens
     ///
     /// # Arguments
@@ -155,7 +154,7 @@ pub trait OAuth2Provider: Send + Sync {
         code: &str,
         state: &str,
     ) -> Result<OAuth2TokenResponse, AuthError>;
-    
+
     /// Get user information using the access token
     ///
     /// # Arguments
@@ -169,7 +168,7 @@ pub trait OAuth2Provider: Send + Sync {
         access_token: &str,
         id_token: Option<&str>,
     ) -> Result<OAuth2UserInfo, AuthError>;
-    
+
     /// Refresh an access token using a refresh token
     ///
     /// # Arguments
@@ -177,11 +176,8 @@ pub trait OAuth2Provider: Send + Sync {
     ///
     /// # Returns
     /// A new token response with fresh access token
-    async fn refresh_token(
-        &self,
-        refresh_token: &str,
-    ) -> Result<OAuth2TokenResponse, AuthError>;
-    
+    async fn refresh_token(&self, refresh_token: &str) -> Result<OAuth2TokenResponse, AuthError>;
+
     /// Revoke a token (logout)
     ///
     /// # Arguments
@@ -210,7 +206,7 @@ impl ProviderFactory {
     ) -> Result<Box<dyn OAuth2Provider>, AuthError> {
         // Validate configuration first
         config.validate()?;
-        
+
         match provider_name.to_lowercase().as_str() {
             "google" => Ok(Box::new(google::GoogleProvider::new(config)?)),
             "microsoft" => Ok(Box::new(microsoft::MicrosoftProvider::new(config)?)),
@@ -239,7 +235,7 @@ mod tests {
             userinfo_url: None,
             extra_params: HashMap::new(),
         };
-        
+
         assert!(config.validate().is_ok());
     }
 
@@ -255,7 +251,7 @@ mod tests {
             userinfo_url: None,
             extra_params: HashMap::new(),
         };
-        
+
         assert!(matches!(config.validate(), Err(AuthError::ConfigError(_))));
     }
 
@@ -271,7 +267,7 @@ mod tests {
             userinfo_url: None,
             extra_params: HashMap::new(),
         };
-        
+
         assert!(matches!(config.validate(), Err(AuthError::ConfigError(_))));
     }
 }

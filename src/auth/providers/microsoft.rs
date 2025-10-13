@@ -3,11 +3,10 @@
 /// Implements OAuth2 authentication with Microsoft Azure Active Directory
 /// using OpenID Connect. Supports both personal Microsoft accounts and
 /// organizational/work accounts.
-
 use super::{OAuth2Provider, OAuth2ProviderConfig, OAuth2TokenResponse, OAuth2UserInfo};
 use crate::auth::error::AuthError;
 use async_trait::async_trait;
-use jsonwebtoken::{decode, decode_header, DecodingKey, Validation, Algorithm};
+use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -22,37 +21,37 @@ const MICROSOFT_ISSUER: &str = "https://login.microsoftonline.com";
 struct MicrosoftIdTokenClaims {
     /// Issuer
     iss: String,
-    
+
     /// Subject (user ID)
     sub: String,
-    
+
     /// Audience (client ID)
     aud: String,
-    
+
     /// Expiration time
     exp: u64,
-    
+
     /// Issued at time
     iat: u64,
-    
+
     /// Not before time
     nbf: Option<u64>,
-    
+
     /// Email address
     email: Option<String>,
-    
+
     /// Preferred username
     preferred_username: Option<String>,
-    
+
     /// Name
     name: Option<String>,
-    
+
     /// Object ID (Azure AD)
     oid: Option<String>,
-    
+
     /// Tenant ID
     tid: Option<String>,
-    
+
     /// Nonce
     nonce: Option<String>,
 }
@@ -131,74 +130,69 @@ impl MicrosoftProvider {
                 "User.Read".to_string(), // Required for Graph API access
             ];
         }
-        
+
         // Ensure openid scope is included for OIDC
         if !config.scopes.contains(&"openid".to_string()) {
             config.scopes.push("openid".to_string());
         }
-        
+
         // Extract tenant ID from extra params (default to "common")
         let tenant_id = config
             .extra_params
             .get("tenant_id")
             .cloned()
             .unwrap_or_else(|| "common".to_string());
-        
+
         let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| AuthError::OAuth2Error(format!("Failed to create HTTP client: {}", e)))?;
-        
+
         Ok(Self {
             config,
             http_client,
             tenant_id,
         })
     }
-    
+
     /// Get authorization URL with tenant ID
     fn get_auth_url(&self) -> String {
-        self.config
-            .auth_url
-            .clone()
-            .unwrap_or_else(|| {
-                format!(
-                    "https://login.microsoftonline.com/{}/oauth2/v2.0/authorize",
-                    self.tenant_id
-                )
-            })
+        self.config.auth_url.clone().unwrap_or_else(|| {
+            format!(
+                "https://login.microsoftonline.com/{}/oauth2/v2.0/authorize",
+                self.tenant_id
+            )
+        })
     }
-    
+
     /// Get token URL with tenant ID
     fn get_token_url(&self) -> String {
-        self.config
-            .token_url
-            .clone()
-            .unwrap_or_else(|| {
-                format!(
-                    "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
-                    self.tenant_id
-                )
-            })
+        self.config.token_url.clone().unwrap_or_else(|| {
+            format!(
+                "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
+                self.tenant_id
+            )
+        })
     }
-    
+
     /// Verify Microsoft ID token
     async fn verify_id_token(&self, id_token: &str) -> Result<MicrosoftIdTokenClaims, AuthError> {
         // Decode header to get key ID
         let header = decode_header(id_token)
             .map_err(|e| AuthError::JwtError(format!("Failed to decode ID token header: {}", e)))?;
-        
-        let kid = header.kid.ok_or_else(|| {
-            AuthError::JwtError("ID token missing key ID (kid)".to_string())
-        })?;
-        
+
+        let kid = header
+            .kid
+            .ok_or_else(|| AuthError::JwtError("ID token missing key ID (kid)".to_string()))?;
+
         // Fetch Microsoft's public keys (JWKS)
         let jwks_url = format!(
             "https://login.microsoftonline.com/{}/discovery/v2.0/keys",
             self.tenant_id
         );
-        
-        let jwks_response = self.http_client
+
+        let jwks_response = self
+            .http_client
             .get(&jwks_url)
             .send()
             .await
@@ -206,53 +200,57 @@ impl MicrosoftProvider {
             .json::<serde_json::Value>()
             .await
             .map_err(|e| AuthError::OAuth2Error(format!("Failed to parse JWKS: {}", e)))?;
-        
+
         // Find the matching key
-        let keys = jwks_response["keys"].as_array()
+        let keys = jwks_response["keys"]
+            .as_array()
             .ok_or_else(|| AuthError::JwtError("Invalid JWKS format".to_string()))?;
-        
-        let matching_key = keys.iter()
+
+        let matching_key = keys
+            .iter()
             .find(|k| k["kid"].as_str() == Some(&kid))
             .ok_or_else(|| AuthError::JwtError(format!("Key ID {} not found in JWKS", kid)))?;
-        
+
         // Extract RSA components
-        let n = matching_key["n"].as_str()
+        let n = matching_key["n"]
+            .as_str()
             .ok_or_else(|| AuthError::JwtError("Missing 'n' in JWK".to_string()))?;
-        let e = matching_key["e"].as_str()
+        let e = matching_key["e"]
+            .as_str()
             .ok_or_else(|| AuthError::JwtError("Missing 'e' in JWK".to_string()))?;
-        
+
         // Create decoding key from RSA components
         let decoding_key = DecodingKey::from_rsa_components(n, e)
             .map_err(|e| AuthError::JwtError(format!("Failed to create decoding key: {}", e)))?;
-        
+
         // Set up validation
         let mut validation = Validation::new(Algorithm::RS256);
         validation.set_audience(&[&self.config.client_id]);
-        
+
         // Microsoft uses tenant-specific issuer URLs
         let issuer = format!("https://login.microsoftonline.com/{}/v2.0", self.tenant_id);
         validation.set_issuer(&[&issuer]);
-        
+
         // Decode and validate token
         let token_data = decode::<MicrosoftIdTokenClaims>(id_token, &decoding_key, &validation)
             .map_err(|e| AuthError::JwtError(format!("ID token validation failed: {}", e)))?;
-        
+
         Ok(token_data.claims)
     }
-    
+
     /// Convert Microsoft Graph user to OAuth2UserInfo
     fn convert_graph_user(&self, user: MicrosoftGraphUser) -> OAuth2UserInfo {
         let mut raw_data = HashMap::new();
         raw_data.insert("id".to_string(), serde_json::json!(user.id));
-        
+
         if let Some(upn) = &user.user_principal_name {
             raw_data.insert("userPrincipalName".to_string(), serde_json::json!(upn));
         }
-        
+
         // Microsoft doesn't provide email_verified flag in Graph API
         // Assume verified for organizational accounts
         let email_verified = user.mail.is_some() || user.user_principal_name.is_some();
-        
+
         OAuth2UserInfo {
             provider_user_id: user.id,
             email: user.mail.or(user.user_principal_name).unwrap_or_default(),
@@ -265,23 +263,26 @@ impl MicrosoftProvider {
             raw_data,
         }
     }
-    
+
     /// Convert ID token claims to OAuth2UserInfo
     fn convert_id_token_claims(&self, claims: MicrosoftIdTokenClaims) -> OAuth2UserInfo {
         let mut raw_data = HashMap::new();
         raw_data.insert("iss".to_string(), serde_json::json!(claims.iss));
         raw_data.insert("iat".to_string(), serde_json::json!(claims.iat));
         raw_data.insert("exp".to_string(), serde_json::json!(claims.exp));
-        
+
         if let Some(oid) = &claims.oid {
             raw_data.insert("oid".to_string(), serde_json::json!(oid));
         }
         if let Some(tid) = &claims.tid {
             raw_data.insert("tid".to_string(), serde_json::json!(tid));
         }
-        
-        let email = claims.email.or(claims.preferred_username).unwrap_or_default();
-        
+
+        let email = claims
+            .email
+            .or(claims.preferred_username)
+            .unwrap_or_default();
+
         OAuth2UserInfo {
             provider_user_id: claims.sub,
             email,
@@ -301,13 +302,13 @@ impl OAuth2Provider for MicrosoftProvider {
     fn name(&self) -> &str {
         "microsoft"
     }
-    
+
     fn authorization_url(&self, state: &str, nonce: Option<&str>) -> Result<String, AuthError> {
         let auth_url = self.get_auth_url();
-        
+
         let mut url = url::Url::parse(&auth_url)
             .map_err(|e| AuthError::ConfigError(format!("Invalid auth URL: {}", e)))?;
-        
+
         {
             let mut query = url.query_pairs_mut();
             query.append_pair("client_id", &self.config.client_id);
@@ -316,11 +317,11 @@ impl OAuth2Provider for MicrosoftProvider {
             query.append_pair("scope", &self.config.scopes.join(" "));
             query.append_pair("state", state);
             query.append_pair("response_mode", "query");
-            
+
             if let Some(nonce) = nonce {
                 query.append_pair("nonce", nonce);
             }
-            
+
             // Add extra parameters (excluding tenant_id which is in URL)
             for (key, value) in &self.config.extra_params {
                 if key != "tenant_id" {
@@ -328,17 +329,17 @@ impl OAuth2Provider for MicrosoftProvider {
                 }
             }
         }
-        
+
         Ok(url.to_string())
     }
-    
+
     async fn exchange_code(
         &self,
         code: &str,
         _state: &str,
     ) -> Result<OAuth2TokenResponse, AuthError> {
         let token_url = self.get_token_url();
-        
+
         let token_request = MicrosoftTokenRequest {
             code: code.to_string(),
             client_id: self.config.client_id.clone(),
@@ -347,14 +348,15 @@ impl OAuth2Provider for MicrosoftProvider {
             grant_type: "authorization_code".to_string(),
             scope: Some(self.config.scopes.join(" ")),
         };
-        
-        let response = self.http_client
+
+        let response = self
+            .http_client
             .post(&token_url)
             .form(&token_request)
             .send()
             .await
             .map_err(|e| AuthError::OAuth2Error(format!("Token request failed: {}", e)))?;
-        
+
         if !response.status().is_success() {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
@@ -363,12 +365,11 @@ impl OAuth2Provider for MicrosoftProvider {
                 status, error_text
             )));
         }
-        
-        let token_response: MicrosoftTokenResponseRaw = response
-            .json()
-            .await
-            .map_err(|e| AuthError::OAuth2Error(format!("Failed to parse token response: {}", e)))?;
-        
+
+        let token_response: MicrosoftTokenResponseRaw = response.json().await.map_err(|e| {
+            AuthError::OAuth2Error(format!("Failed to parse token response: {}", e))
+        })?;
+
         Ok(OAuth2TokenResponse {
             access_token: token_response.access_token,
             token_type: token_response.token_type,
@@ -378,7 +379,7 @@ impl OAuth2Provider for MicrosoftProvider {
             scope: token_response.scope,
         })
     }
-    
+
     async fn get_user_info(
         &self,
         access_token: &str,
@@ -391,17 +392,22 @@ impl OAuth2Provider for MicrosoftProvider {
             }
             // Fall through to Graph API if ID token validation fails
         }
-        
+
         // Use Microsoft Graph API for detailed user info
-        let userinfo_url = self.config.userinfo_url.as_deref().unwrap_or(MICROSOFT_USERINFO_URL);
-        
-        let response = self.http_client
+        let userinfo_url = self
+            .config
+            .userinfo_url
+            .as_deref()
+            .unwrap_or(MICROSOFT_USERINFO_URL);
+
+        let response = self
+            .http_client
             .get(userinfo_url)
             .bearer_auth(access_token)
             .send()
             .await
             .map_err(|e| AuthError::OAuth2Error(format!("UserInfo request failed: {}", e)))?;
-        
+
         if !response.status().is_success() {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
@@ -410,21 +416,18 @@ impl OAuth2Provider for MicrosoftProvider {
                 status, error_text
             )));
         }
-        
+
         let graph_user: MicrosoftGraphUser = response
             .json()
             .await
             .map_err(|e| AuthError::OAuth2Error(format!("Failed to parse userinfo: {}", e)))?;
-        
+
         Ok(self.convert_graph_user(graph_user))
     }
-    
-    async fn refresh_token(
-        &self,
-        refresh_token: &str,
-    ) -> Result<OAuth2TokenResponse, AuthError> {
+
+    async fn refresh_token(&self, refresh_token: &str) -> Result<OAuth2TokenResponse, AuthError> {
         let token_url = self.get_token_url();
-        
+
         let refresh_request = MicrosoftRefreshRequest {
             refresh_token: refresh_token.to_string(),
             client_id: self.config.client_id.clone(),
@@ -432,14 +435,15 @@ impl OAuth2Provider for MicrosoftProvider {
             grant_type: "refresh_token".to_string(),
             scope: Some(self.config.scopes.join(" ")),
         };
-        
-        let response = self.http_client
+
+        let response = self
+            .http_client
             .post(&token_url)
             .form(&refresh_request)
             .send()
             .await
             .map_err(|e| AuthError::OAuth2Error(format!("Refresh token request failed: {}", e)))?;
-        
+
         if !response.status().is_success() {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
@@ -448,22 +452,23 @@ impl OAuth2Provider for MicrosoftProvider {
                 status, error_text
             )));
         }
-        
-        let token_response: MicrosoftTokenResponseRaw = response
-            .json()
-            .await
-            .map_err(|e| AuthError::OAuth2Error(format!("Failed to parse refresh response: {}", e)))?;
-        
+
+        let token_response: MicrosoftTokenResponseRaw = response.json().await.map_err(|e| {
+            AuthError::OAuth2Error(format!("Failed to parse refresh response: {}", e))
+        })?;
+
         Ok(OAuth2TokenResponse {
             access_token: token_response.access_token,
             token_type: token_response.token_type,
             expires_in: token_response.expires_in,
-            refresh_token: token_response.refresh_token.or(Some(refresh_token.to_string())),
+            refresh_token: token_response
+                .refresh_token
+                .or(Some(refresh_token.to_string())),
             id_token: token_response.id_token,
             scope: token_response.scope,
         })
     }
-    
+
     async fn revoke_token(&self, _token: &str) -> Result<(), AuthError> {
         // Microsoft doesn't provide a token revocation endpoint
         // Tokens expire naturally or can be invalidated through Azure AD admin
@@ -504,9 +509,11 @@ mod tests {
     fn test_authorization_url_generation() {
         let config = create_test_config();
         let provider = MicrosoftProvider::new(config).unwrap();
-        
-        let auth_url = provider.authorization_url("test-state", Some("test-nonce")).unwrap();
-        
+
+        let auth_url = provider
+            .authorization_url("test-state", Some("test-nonce"))
+            .unwrap();
+
         assert!(auth_url.contains("client_id=test-client-id"));
         assert!(auth_url.contains("state=test-state"));
         assert!(auth_url.contains("nonce=test-nonce"));
@@ -517,11 +524,13 @@ mod tests {
     #[test]
     fn test_custom_tenant_id() {
         let mut config = create_test_config();
-        config.extra_params.insert("tenant_id".to_string(), "custom-tenant".to_string());
-        
+        config
+            .extra_params
+            .insert("tenant_id".to_string(), "custom-tenant".to_string());
+
         let provider = MicrosoftProvider::new(config).unwrap();
         assert_eq!(provider.tenant_id, "custom-tenant");
-        
+
         let auth_url = provider.authorization_url("test-state", None).unwrap();
         assert!(auth_url.contains("/custom-tenant/oauth2/v2.0/authorize"));
     }

@@ -281,9 +281,7 @@ impl ProviderConfig {
         }
 
         // Validate redirect URI format
-        if !self.redirect_uri.starts_with("http://")
-            && !self.redirect_uri.starts_with("https://")
-        {
+        if !self.redirect_uri.starts_with("http://") && !self.redirect_uri.starts_with("https://") {
             return Err(AuthError::InvalidConfig {
                 key: format!("providers.{}.redirect_uri", provider_name),
                 reason: "must start with http:// or https://".to_string(),
@@ -393,7 +391,10 @@ mod tests {
 
         let result = config.validate();
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), AuthError::InvalidConfig { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            AuthError::InvalidConfig { .. }
+        ));
     }
 
     #[test]

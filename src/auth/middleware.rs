@@ -2,11 +2,10 @@
 ///
 /// Axum middleware for extracting and validating authentication from requests,
 /// injecting authenticated user context into request extensions.
-
 use crate::auth::{AuthError, AuthManager};
 use axum::{
     extract::{Request, State},
-    http::{header, StatusCode},
+    http::{StatusCode, header},
     middleware::Next,
     response::{IntoResponse, Response},
 };
@@ -17,10 +16,10 @@ use std::sync::Arc;
 pub struct AuthUser {
     /// Unique user identifier
     pub user_id: String,
-    
+
     /// OAuth2 provider used for authentication
     pub provider: String,
-    
+
     /// Session token
     pub session_token: String,
 }
@@ -45,7 +44,7 @@ fn extract_session_token(req: &Request) -> Option<String> {
             }
         }
     }
-    
+
     // Try cookie
     if let Some(cookie_header) = req.headers().get(header::COOKIE) {
         if let Ok(cookie_str) = cookie_header.to_str() {
@@ -59,7 +58,7 @@ fn extract_session_token(req: &Request) -> Option<String> {
             }
         }
     }
-    
+
     None
 }
 
@@ -73,14 +72,14 @@ fn extract_client_ip(req: &Request) -> String {
             }
         }
     }
-    
+
     // Try X-Real-IP header
     if let Some(real_ip) = req.headers().get("x-real-ip") {
         if let Ok(ip_str) = real_ip.to_str() {
             return ip_str.to_string();
         }
     }
-    
+
     // Fallback to connection info (would need to be passed through state)
     "unknown".to_string()
 }
@@ -103,9 +102,12 @@ pub async fn optional_auth_middleware(
     if let Some(session_token) = extract_session_token(&req) {
         let ip_addr = extract_client_ip(&req);
         let user_agent = extract_user_agent(&req);
-        
+
         // Validate session
-        match auth_manager.validate_session(&session_token, &ip_addr, &user_agent).await {
+        match auth_manager
+            .validate_session(&session_token, &ip_addr, &user_agent)
+            .await
+        {
             Ok(user_id) => {
                 // Inject authenticated user into request
                 let auth_user = AuthUser::new(
@@ -120,7 +122,7 @@ pub async fn optional_auth_middleware(
             }
         }
     }
-    
+
     next.run(req).await
 }
 
@@ -130,18 +132,17 @@ pub async fn required_auth_middleware(
     mut req: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let session_token = extract_session_token(&req)
-        .ok_or(StatusCode::UNAUTHORIZED)?;
-    
+    let session_token = extract_session_token(&req).ok_or(StatusCode::UNAUTHORIZED)?;
+
     let ip_addr = extract_client_ip(&req);
     let user_agent = extract_user_agent(&req);
-    
+
     // Validate session
     let user_id = auth_manager
         .validate_session(&session_token, &ip_addr, &user_agent)
         .await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
-    
+
     // Inject authenticated user into request
     let auth_user = AuthUser::new(
         user_id,
@@ -149,7 +150,7 @@ pub async fn required_auth_middleware(
         session_token,
     );
     req.extensions_mut().insert(auth_user);
-    
+
     Ok(next.run(req).await)
 }
 
@@ -163,12 +164,12 @@ impl IntoResponse for AuthErrorResponse {
     fn into_response(self) -> Response {
         let status = StatusCode::from_u16(self.error.status_code())
             .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-        
+
         let body = serde_json::json!({
             "error": self.error.to_string(),
             "status": status.as_u16(),
         });
-        
+
         (status, axum::Json(body)).into_response()
     }
 }
@@ -216,7 +217,7 @@ where
 mod tests {
     use super::*;
     use axum::body::Body;
-    use axum::http::{Request, StatusCode};
+    use axum::http::Request;
 
     #[test]
     fn test_extract_session_from_bearer() {
@@ -224,7 +225,7 @@ mod tests {
             .header("Authorization", "Bearer test-token-123")
             .body(Body::empty())
             .unwrap();
-        
+
         let token = extract_session_token(&req);
         assert_eq!(token, Some("test-token-123".to_string()));
     }
@@ -235,7 +236,7 @@ mod tests {
             .header("Cookie", "auth_session=cookie-token-456; other=value")
             .body(Body::empty())
             .unwrap();
-        
+
         let token = extract_session_token(&req);
         assert_eq!(token, Some("cookie-token-456".to_string()));
     }
@@ -246,7 +247,7 @@ mod tests {
             .header("X-Forwarded-For", "192.168.1.1, 10.0.0.1")
             .body(Body::empty())
             .unwrap();
-        
+
         let ip = extract_client_ip(&req);
         assert_eq!(ip, "192.168.1.1");
     }
@@ -257,7 +258,7 @@ mod tests {
             .header("X-Real-IP", "192.168.1.100")
             .body(Body::empty())
             .unwrap();
-        
+
         let ip = extract_client_ip(&req);
         assert_eq!(ip, "192.168.1.100");
     }
@@ -268,17 +269,15 @@ mod tests {
             .header("User-Agent", "Mozilla/5.0 Test Browser")
             .body(Body::empty())
             .unwrap();
-        
+
         let ua = extract_user_agent(&req);
         assert_eq!(ua, "Mozilla/5.0 Test Browser");
     }
 
     #[test]
     fn test_extract_user_agent_missing() {
-        let req = Request::builder()
-            .body(Body::empty())
-            .unwrap();
-        
+        let req = Request::builder().body(Body::empty()).unwrap();
+
         let ua = extract_user_agent(&req);
         assert_eq!(ua, "unknown");
     }

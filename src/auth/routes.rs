@@ -2,14 +2,13 @@
 ///
 /// HTTP route handlers for OAuth2 authentication flow including
 /// login initiation, callback processing, and logout.
-
 use crate::auth::AuthManager;
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -19,13 +18,13 @@ use std::sync::Arc;
 pub struct OAuthCallbackParams {
     /// Authorization code from provider
     code: Option<String>,
-    
+
     /// CSRF state token
     state: Option<String>,
-    
+
     /// Error from provider
     error: Option<String>,
-    
+
     /// Error description from provider
     error_description: Option<String>,
 }
@@ -35,7 +34,7 @@ pub struct OAuthCallbackParams {
 pub struct LoginParams {
     /// OAuth2 provider name
     provider: String,
-    
+
     /// Optional redirect URL after successful login
     redirect: Option<String>,
 }
@@ -95,11 +94,9 @@ fn get_user_agent(headers: &HeaderMap) -> String {
 }
 
 /// Login page handler - displays available providers
-async fn login_page(
-    State(auth_manager): State<Arc<AuthManager>>,
-) -> Html<String> {
+async fn login_page(State(auth_manager): State<Arc<AuthManager>>) -> Html<String> {
     let providers = auth_manager.list_providers();
-    
+
     let html = format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -171,7 +168,7 @@ async fn login_page(
             .collect::<Vec<_>>()
             .join("\n        ")
     );
-    
+
     Html(html)
 }
 
@@ -182,7 +179,7 @@ async fn start_login(
     headers: HeaderMap,
 ) -> Result<Redirect, ErrorResponse> {
     let ip_addr = get_client_ip(&headers);
-    
+
     // Generate authorization URL
     let (auth_url, _state) = auth_manager
         .start_login(&provider, &ip_addr)
@@ -191,7 +188,7 @@ async fn start_login(
             error: "login_failed".to_string(),
             message: e.to_string(),
         })?;
-    
+
     // Redirect to provider
     Ok(Redirect::temporary(&auth_url))
 }
@@ -204,30 +201,29 @@ async fn oauth_callback(
 ) -> Result<Response, ErrorResponse> {
     // Check for provider error
     if let Some(error) = params.error {
-        let message = params.error_description.unwrap_or_else(|| "Unknown error".to_string());
-        return Err(ErrorResponse {
-            error,
-            message,
-        });
+        let message = params
+            .error_description
+            .unwrap_or_else(|| "Unknown error".to_string());
+        return Err(ErrorResponse { error, message });
     }
-    
+
     // Get code and state
     let code = params.code.ok_or_else(|| ErrorResponse {
         error: "missing_code".to_string(),
         message: "Authorization code missing from callback".to_string(),
     })?;
-    
+
     let state = params.state.ok_or_else(|| ErrorResponse {
         error: "missing_state".to_string(),
         message: "State parameter missing from callback".to_string(),
     })?;
-    
+
     let ip_addr = get_client_ip(&headers);
     let user_agent = get_user_agent(&headers);
-    
+
     // Extract provider from state (state format: "provider:random")
     let provider = state.split(':').next().unwrap_or("unknown");
-    
+
     // Handle callback
     let session_token = auth_manager
         .handle_callback(provider, &code, &state, &ip_addr, &user_agent)
@@ -236,7 +232,7 @@ async fn oauth_callback(
             error: "authentication_failed".to_string(),
             message: e.to_string(),
         })?;
-    
+
     // Set session cookie
     let config = auth_manager.config();
     let cookie_value = format!(
@@ -246,15 +242,14 @@ async fn oauth_callback(
         config.session_timeout,
         if config.cookie_secure { "; Secure" } else { "" }
     );
-    
+
     // Return redirect with cookie
     let response = Redirect::to("/").into_response();
     let (mut parts, body) = response.into_parts();
-    parts.headers.insert(
-        header::SET_COOKIE,
-        cookie_value.parse().unwrap(),
-    );
-    
+    parts
+        .headers
+        .insert(header::SET_COOKIE, cookie_value.parse().unwrap());
+
     Ok(Response::from_parts(parts, body))
 }
 
@@ -269,35 +264,32 @@ async fn logout(
         .get(header::COOKIE)
         .and_then(|v| v.to_str().ok())
         .and_then(|cookies| {
-            cookies
-                .split(';')
-                .find_map(|cookie| {
-                    let cookie = cookie.trim();
-                    cookie.strip_prefix("auth_session=")
-                })
+            cookies.split(';').find_map(|cookie| {
+                let cookie = cookie.trim();
+                cookie.strip_prefix("auth_session=")
+            })
         });
-    
+
     if let Some(token) = session_token {
         // Destroy session
         let _ = auth_manager.logout(token, false).await;
     }
-    
+
     // Clear cookie
     let config = auth_manager.config();
     let cookie_value = format!(
         "{}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
         config.session_cookie_name
     );
-    
+
     // Redirect to specified location or home
     let redirect_url = params.redirect.as_deref().unwrap_or("/");
     let response = Redirect::to(redirect_url).into_response();
     let (mut parts, body) = response.into_parts();
-    parts.headers.insert(
-        header::SET_COOKIE,
-        cookie_value.parse().unwrap(),
-    );
-    
+    parts
+        .headers
+        .insert(header::SET_COOKIE, cookie_value.parse().unwrap());
+
     Ok(Response::from_parts(parts, body))
 }
 
@@ -308,22 +300,23 @@ async fn auth_status(
 ) -> Json<AuthResponse> {
     let ip_addr = get_client_ip(&headers);
     let user_agent = get_user_agent(&headers);
-    
+
     // Extract session token
     let session_token = headers
         .get(header::COOKIE)
         .and_then(|v| v.to_str().ok())
         .and_then(|cookies| {
-            cookies
-                .split(';')
-                .find_map(|cookie| {
-                    let cookie = cookie.trim();
-                    cookie.strip_prefix("auth_session=")
-                })
+            cookies.split(';').find_map(|cookie| {
+                let cookie = cookie.trim();
+                cookie.strip_prefix("auth_session=")
+            })
         });
-    
+
     if let Some(token) = session_token {
-        if let Ok(user_id) = auth_manager.validate_session(token, &ip_addr, &user_agent).await {
+        if let Ok(user_id) = auth_manager
+            .validate_session(token, &ip_addr, &user_agent)
+            .await
+        {
             return Json(AuthResponse {
                 success: true,
                 session_token: Some(token.to_string()),
@@ -332,7 +325,7 @@ async fn auth_status(
             });
         }
     }
-    
+
     Json(AuthResponse {
         success: false,
         session_token: None,
@@ -360,8 +353,11 @@ mod tests {
     #[test]
     fn test_get_client_ip_from_forwarded() {
         let mut headers = HeaderMap::new();
-        headers.insert("x-forwarded-for", HeaderValue::from_static("192.168.1.1, 10.0.0.1"));
-        
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("192.168.1.1, 10.0.0.1"),
+        );
+
         let ip = get_client_ip(&headers);
         assert_eq!(ip, "192.168.1.1");
     }
@@ -370,7 +366,7 @@ mod tests {
     fn test_get_client_ip_from_real_ip() {
         let mut headers = HeaderMap::new();
         headers.insert("x-real-ip", HeaderValue::from_static("192.168.1.100"));
-        
+
         let ip = get_client_ip(&headers);
         assert_eq!(ip, "192.168.1.100");
     }
@@ -380,9 +376,9 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(
             header::USER_AGENT,
-            HeaderValue::from_static("Mozilla/5.0 Test")
+            HeaderValue::from_static("Mozilla/5.0 Test"),
         );
-        
+
         let ua = get_user_agent(&headers);
         assert_eq!(ua, "Mozilla/5.0 Test");
     }

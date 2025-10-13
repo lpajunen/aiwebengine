@@ -2,8 +2,8 @@
 // Tests session management, CSRF protection, and data encryption
 
 use aiwebengine::security::{
-    CsrfProtection, DataEncryption, EncryptedData, FieldEncryptor, OAuthStateManager,
-    SecureSessionManager, SecurityAuditor, SessionError,
+    CsrfProtection, DataEncryption, FieldEncryptor, OAuthStateManager, SecureSessionManager,
+    SecurityAuditor, SessionError,
 };
 use std::sync::Arc;
 
@@ -203,7 +203,9 @@ async fn test_csrf_token_session_binding() {
     let token = csrf.generate_token(Some("session123".to_string())).await;
 
     // Validate with wrong session
-    let result = csrf.validate_token(&token.token, Some("wrong_session")).await;
+    let result = csrf
+        .validate_token(&token.token, Some("wrong_session"))
+        .await;
     assert!(result.is_err());
 }
 

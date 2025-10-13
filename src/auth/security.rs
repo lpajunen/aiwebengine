@@ -4,9 +4,8 @@
 use std::sync::Arc;
 
 use crate::security::{
-    CsrfProtection, DataEncryption, RateLimitKey,
-    RateLimiter, SecurityAuditor, SecurityEvent, SecurityEventType,
-    SecuritySeverity,
+    CsrfProtection, DataEncryption, RateLimitKey, RateLimiter, SecurityAuditor, SecurityEvent,
+    SecurityEventType, SecuritySeverity,
 };
 
 use super::error::AuthError;
@@ -45,11 +44,15 @@ impl AuthSecurityContext {
     }
 
     /// Create OAuth state token
-    pub async fn create_oauth_state(&self, provider: &str, ip_addr: &str) -> Result<String, AuthError> {
+    pub async fn create_oauth_state(
+        &self,
+        provider: &str,
+        ip_addr: &str,
+    ) -> Result<String, AuthError> {
         // Generate a random state token
         let random_part: u64 = rand::random();
         let state = format!("{}:{}:{}", provider, ip_addr.replace('.', "_"), random_part);
-        
+
         // Store in CSRF protection (reusing CSRF mechanism for OAuth state)
         Ok(state)
     }
@@ -66,25 +69,27 @@ impl AuthSecurityContext {
         if parts.len() != 3 {
             return Ok(false);
         }
-        
+
         let provider = parts[0];
         let ip_addr = parts[1].replace('_', ".");
-        
+
         // Validate provider and IP match
         Ok(provider == expected_provider && ip_addr == expected_ip)
     }
 
     /// Log authentication attempt
     pub async fn log_auth_attempt(&self, provider: &str, ip_addr: &str) {
-        self.auditor.log_event(
-            SecurityEvent::new(
-                SecurityEventType::AuthenticationAttempt,
-                SecuritySeverity::Low,
-                None,
+        self.auditor
+            .log_event(
+                SecurityEvent::new(
+                    SecurityEventType::AuthenticationAttempt,
+                    SecuritySeverity::Low,
+                    None,
+                )
+                .with_detail("provider", provider)
+                .with_detail("ip_address", ip_addr),
             )
-            .with_detail("provider", provider)
-            .with_detail("ip_address", ip_addr),
-        ).await;
+            .await;
     }
 
     /// Log authentication success
@@ -122,14 +127,16 @@ impl AuthSecurityContext {
 
     /// Log suspicious activity
     pub async fn log_suspicious_activity(&self, description: &str, user_id: Option<&str>) {
-        self.auditor.log_event(
-            SecurityEvent::new(
-                SecurityEventType::SuspiciousActivity,
-                SecuritySeverity::High,
-                user_id.map(|s| s.to_string()),
+        self.auditor
+            .log_event(
+                SecurityEvent::new(
+                    SecurityEventType::SuspiciousActivity,
+                    SecuritySeverity::High,
+                    user_id.map(|s| s.to_string()),
+                )
+                .with_detail("description", description),
             )
-            .with_detail("description", description),
-        ).await;
+            .await;
     }
 
     /// Check rate limit for authentication attempts
@@ -141,7 +148,6 @@ impl AuthSecurityContext {
 
         result.allowed
     }
-
 }
 
 #[cfg(test)]
@@ -152,8 +158,10 @@ mod tests {
     async fn test_create_security_context() {
         let auditor = Arc::new(SecurityAuditor::new());
         let rate_limiter = Arc::new(RateLimiter::new().with_security_auditor(Arc::clone(&auditor)));
-        let csrf = Arc::new(CsrfProtection::new());
-        let encryption = Arc::new(DataEncryption::new("test-encryption-password-32-bytes!").unwrap());
+        let csrf_key: [u8; 32] = *b"test-csrf-secret-key-32-bytes!!!";
+        let csrf = Arc::new(CsrfProtection::new(csrf_key, 3600));
+        let encryption_key: [u8; 32] = *b"test-encryption-key-32-bytes!!!!";
+        let encryption = Arc::new(DataEncryption::new(&encryption_key));
 
         let context = AuthSecurityContext::new(auditor, rate_limiter, csrf, encryption);
         assert!(Arc::strong_count(&context.auditor) >= 1);
@@ -163,12 +171,17 @@ mod tests {
     async fn test_oauth_state_creation() {
         let auditor = Arc::new(SecurityAuditor::new());
         let rate_limiter = Arc::new(RateLimiter::new().with_security_auditor(Arc::clone(&auditor)));
-        let csrf = Arc::new(CsrfProtection::new());
-        let encryption = Arc::new(DataEncryption::new("test-encryption-password-32-bytes!").unwrap());
+        let csrf_key: [u8; 32] = *b"test-csrf-secret-key-32-bytes!!!";
+        let csrf = Arc::new(CsrfProtection::new(csrf_key, 3600));
+        let encryption_key: [u8; 32] = *b"test-encryption-key-32-bytes!!!!";
+        let encryption = Arc::new(DataEncryption::new(&encryption_key));
 
         let context = AuthSecurityContext::new(auditor, rate_limiter, csrf, encryption);
-        
-        let state = context.create_oauth_state("google", "192.168.1.1").await.unwrap();
+
+        let state = context
+            .create_oauth_state("google", "192.168.1.1")
+            .await
+            .unwrap();
         assert!(state.contains("google"));
         assert!(state.contains("192_168_1_1"));
     }
@@ -177,21 +190,35 @@ mod tests {
     async fn test_oauth_state_validation() {
         let auditor = Arc::new(SecurityAuditor::new());
         let rate_limiter = Arc::new(RateLimiter::new().with_security_auditor(Arc::clone(&auditor)));
-        let csrf = Arc::new(CsrfProtection::new());
-        let encryption = Arc::new(DataEncryption::new("test-encryption-password-32-bytes!").unwrap());
+        let csrf_key: [u8; 32] = *b"test-csrf-secret-key-32-bytes!!!";
+        let csrf = Arc::new(CsrfProtection::new(csrf_key, 3600));
+        let encryption_key: [u8; 32] = *b"test-encryption-key-32-bytes!!!!";
+        let encryption = Arc::new(DataEncryption::new(&encryption_key));
 
         let context = AuthSecurityContext::new(auditor, rate_limiter, csrf, encryption);
-        
-        let state = context.create_oauth_state("google", "192.168.1.1").await.unwrap();
-        let valid = context.validate_oauth_state(&state, "google", "192.168.1.1").await.unwrap();
+
+        let state = context
+            .create_oauth_state("google", "192.168.1.1")
+            .await
+            .unwrap();
+        let valid = context
+            .validate_oauth_state(&state, "google", "192.168.1.1")
+            .await
+            .unwrap();
         assert!(valid);
-        
+
         // Wrong provider
-        let invalid = context.validate_oauth_state(&state, "microsoft", "192.168.1.1").await.unwrap();
+        let invalid = context
+            .validate_oauth_state(&state, "microsoft", "192.168.1.1")
+            .await
+            .unwrap();
         assert!(!invalid);
-        
+
         // Wrong IP
-        let invalid = context.validate_oauth_state(&state, "google", "192.168.1.2").await.unwrap();
+        let invalid = context
+            .validate_oauth_state(&state, "google", "192.168.1.2")
+            .await
+            .unwrap();
         assert!(!invalid);
     }
 
@@ -199,8 +226,10 @@ mod tests {
     async fn test_rate_limiting() {
         let auditor = Arc::new(SecurityAuditor::new());
         let rate_limiter = Arc::new(RateLimiter::new().with_security_auditor(Arc::clone(&auditor)));
-        let csrf = Arc::new(CsrfProtection::new());
-        let encryption = Arc::new(DataEncryption::new("test-encryption-password-32-bytes!").unwrap());
+        let csrf_key: [u8; 32] = *b"test-csrf-secret-key-32-bytes!!!";
+        let csrf = Arc::new(CsrfProtection::new(csrf_key, 3600));
+        let encryption_key: [u8; 32] = *b"test-encryption-key-32-bytes!!!!";
+        let encryption = Arc::new(DataEncryption::new(&encryption_key));
 
         let context = AuthSecurityContext::new(auditor, rate_limiter, csrf, encryption);
 

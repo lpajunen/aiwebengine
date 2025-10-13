@@ -51,11 +51,11 @@ impl CsrfProtection {
     pub async fn generate_token(&self, session_id: Option<String>) -> CsrfToken {
         let now = Utc::now();
         let expires_at = now + self.token_lifetime;
-        
+
         // Generate random data for token
         let random_data: [u8; 16] = rand::random();
         let timestamp = now.timestamp().to_be_bytes();
-        
+
         // Combine session_id (if present), timestamp, and random data
         let mut data = Vec::new();
         if let Some(ref sid) = session_id {
@@ -63,10 +63,10 @@ impl CsrfProtection {
         }
         data.extend_from_slice(&timestamp);
         data.extend_from_slice(&random_data);
-        
+
         // Create HMAC
         let token = self.create_hmac(&data);
-        
+
         // Store token metadata
         let mut tokens = self.tokens.write().await;
         tokens.insert(
@@ -77,12 +77,12 @@ impl CsrfProtection {
                 expires_at,
             },
         );
-        
+
         debug!(
             "Generated CSRF token (session: {:?}, expires: {})",
             session_id, expires_at
         );
-        
+
         CsrfToken {
             token,
             created_at: now,
@@ -114,7 +114,8 @@ impl CsrfProtection {
         if let Some(token_session) = &metadata.session_id {
             match session_id {
                 Some(provided_session) => {
-                    if !self.constant_time_eq(token_session.as_bytes(), provided_session.as_bytes()) {
+                    if !self.constant_time_eq(token_session.as_bytes(), provided_session.as_bytes())
+                    {
                         warn!("CSRF token session mismatch");
                         return Err(SecurityError::CsrfValidationFailed);
                     }
@@ -136,7 +137,7 @@ impl CsrfProtection {
         tokens
             .remove(token)
             .ok_or(SecurityError::CsrfValidationFailed)?;
-        
+
         debug!("CSRF token invalidated");
         Ok(())
     }
@@ -145,15 +146,15 @@ impl CsrfProtection {
     pub async fn cleanup_expired_tokens(&self) -> usize {
         let now = Utc::now();
         let mut tokens = self.tokens.write().await;
-        
+
         let initial_count = tokens.len();
         tokens.retain(|_, metadata| now <= metadata.expires_at);
         let removed = initial_count - tokens.len();
-        
+
         if removed > 0 {
             debug!("Cleaned up {} expired CSRF tokens", removed);
         }
-        
+
         removed
     }
 

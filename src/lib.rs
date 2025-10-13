@@ -203,31 +203,35 @@ fn path_has_any_route(path: &str) -> bool {
 async fn initialize_auth_manager(
     auth_config: auth::AuthConfig,
 ) -> Result<Arc<auth::AuthManager>, auth::AuthError> {
-    use auth::{AuthManager, AuthManagerConfig, AuthSecurityContext, AuthSessionManager, CookieSameSite};
-    use security::{SecurityAuditor, RateLimiter, CsrfProtection, DataEncryption, SecureSessionManager};
-    
+    use auth::{
+        AuthManager, AuthManagerConfig, AuthSecurityContext, AuthSessionManager, CookieSameSite,
+    };
+    use security::{
+        CsrfProtection, DataEncryption, RateLimiter, SecureSessionManager, SecurityAuditor,
+    };
+
     // Create security infrastructure
     let auditor = Arc::new(SecurityAuditor::new());
-    
+
     // Create rate limiter
     let rate_limiter = Arc::new(RateLimiter::new());
-    
+
     // Create CSRF protection with random key
     let csrf_key: [u8; 32] = rand::random();
     let csrf = Arc::new(CsrfProtection::new(csrf_key, 3600)); // 1 hour lifetime
-    
+
     // Create encryption with random key for sessions
     let encryption_key: [u8; 32] = rand::random();
     let encryption = Arc::new(DataEncryption::new(&encryption_key));
-    
+
     // Create secure session manager
     let session_manager = Arc::new(SecureSessionManager::new(
         &encryption_key,
-        3600,                  // 1 hour session lifetime (seconds)
-        10,                    // max 10 sessions per user
+        3600, // 1 hour session lifetime (seconds)
+        10,   // max 10 sessions per user
         Arc::clone(&auditor),
     )?);
-    
+
     // Create auth-specific security context
     let security_context = Arc::new(AuthSecurityContext::new(
         Arc::clone(&auditor),
@@ -235,10 +239,10 @@ async fn initialize_auth_manager(
         csrf,
         encryption,
     ));
-    
+
     // Create auth session manager
     let auth_session_manager = Arc::new(AuthSessionManager::new(Arc::clone(&session_manager)));
-    
+
     // Create AuthManager config from auth config
     let manager_config = AuthManagerConfig {
         base_url: "http://localhost:8080".to_string(), // TODO: Get from app config
@@ -253,14 +257,10 @@ async fn initialize_auth_manager(
         },
         session_timeout: auth_config.session_timeout,
     };
-    
+
     // Create auth manager
-    let mut auth_manager = AuthManager::new(
-        manager_config,
-        auth_session_manager,
-        security_context,
-    );
-    
+    let mut auth_manager = AuthManager::new(manager_config, auth_session_manager, security_context);
+
     // Register OAuth2 providers if configured
     if let Some(google_config) = auth_config.providers.google {
         info!("Registering Google OAuth2 provider");
@@ -271,7 +271,11 @@ async fn initialize_auth_manager(
             scopes: if !google_config.scopes.is_empty() {
                 google_config.scopes
             } else {
-                vec!["openid".to_string(), "profile".to_string(), "email".to_string()]
+                vec![
+                    "openid".to_string(),
+                    "profile".to_string(),
+                    "email".to_string(),
+                ]
             },
             auth_url: None, // Use default Google URLs
             token_url: None,
@@ -280,7 +284,7 @@ async fn initialize_auth_manager(
         };
         auth_manager.register_provider("google", oauth_config)?;
     }
-    
+
     if let Some(microsoft_config) = auth_config.providers.microsoft {
         info!("Registering Microsoft OAuth2 provider");
         let mut extra_params = HashMap::new();
@@ -294,7 +298,11 @@ async fn initialize_auth_manager(
             scopes: if !microsoft_config.scopes.is_empty() {
                 microsoft_config.scopes
             } else {
-                vec!["openid".to_string(), "profile".to_string(), "email".to_string()]
+                vec![
+                    "openid".to_string(),
+                    "profile".to_string(),
+                    "email".to_string(),
+                ]
             },
             auth_url: None, // Use default Microsoft URLs
             token_url: None,
@@ -303,7 +311,7 @@ async fn initialize_auth_manager(
         };
         auth_manager.register_provider("microsoft", oauth_config)?;
     }
-    
+
     if let Some(apple_config) = auth_config.providers.apple {
         info!("Registering Apple OAuth2 provider");
         let mut extra_params = HashMap::new();
@@ -332,7 +340,7 @@ async fn initialize_auth_manager(
         };
         auth_manager.register_provider("apple", oauth_config)?;
     }
-    
+
     Ok(Arc::new(auth_manager))
 }
 
@@ -400,7 +408,9 @@ pub async fn start_server_with_config(
     };
 
     // Initialize authentication if configured
-    let auth_manager: Option<Arc<auth::AuthManager>> = if let Some(auth_config) = config.auth.clone() {
+    let auth_manager: Option<Arc<auth::AuthManager>> = if let Some(auth_config) =
+        config.auth.clone()
+    {
         info!("Authentication is enabled, initializing AuthManager...");
         match initialize_auth_manager(auth_config).await {
             Ok(manager) => {
@@ -408,12 +418,17 @@ pub async fn start_server_with_config(
                 Some(manager)
             }
             Err(e) => {
-                warn!("Failed to initialize AuthManager: {}. Authentication will be disabled.", e);
+                warn!(
+                    "Failed to initialize AuthManager: {}. Authentication will be disabled.",
+                    e
+                );
                 None
             }
         }
     } else {
-        info!("No authentication configuration found (config.auth is None), running without authentication");
+        info!(
+            "No authentication configuration found (config.auth is None), running without authentication"
+        );
         None
     };
 
@@ -784,13 +799,13 @@ pub async fn start_server_with_config(
             "/graphql/sse",
             axum::routing::post(move |req| graphql_sse(schema_for_sse, req)),
         );
-    
+
     // Mount authentication routes if auth is enabled
     if let Some(ref auth_mgr) = auth_manager {
         info!("Mounting authentication routes at /auth");
         let auth_router = auth::create_auth_router(Arc::clone(auth_mgr));
         app = app.nest("/auth", auth_router);
-        
+
         // Add optional auth middleware to all routes
         let auth_mgr_for_middleware = Arc::clone(auth_mgr);
         app = app.layer(axum::middleware::from_fn_with_state(
@@ -800,7 +815,7 @@ pub async fn start_server_with_config(
     } else {
         info!("Authentication disabled - no auth routes mounted");
     }
-    
+
     // Add catch-all dynamic routes
     app = app
         .route(

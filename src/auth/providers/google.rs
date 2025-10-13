@@ -2,11 +2,10 @@
 ///
 /// Implements OAuth2 authentication with Google using OpenID Connect.
 /// Supports ID token verification and userinfo endpoint.
-
 use super::{OAuth2Provider, OAuth2ProviderConfig, OAuth2TokenResponse, OAuth2UserInfo};
 use crate::auth::error::AuthError;
 use async_trait::async_trait;
-use jsonwebtoken::{decode, decode_header, DecodingKey, Validation, Algorithm};
+use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -21,40 +20,40 @@ const GOOGLE_ISSUER: &str = "https://accounts.google.com";
 struct GoogleIdTokenClaims {
     /// Issuer (should be accounts.google.com)
     iss: String,
-    
+
     /// Subject (user ID)
     sub: String,
-    
+
     /// Audience (client ID)
     aud: String,
-    
+
     /// Expiration time
     exp: u64,
-    
+
     /// Issued at time
     iat: u64,
-    
+
     /// Email address
     email: Option<String>,
-    
+
     /// Email verified flag
     email_verified: Option<bool>,
-    
+
     /// User's full name
     name: Option<String>,
-    
+
     /// Given name
     given_name: Option<String>,
-    
+
     /// Family name
     family_name: Option<String>,
-    
+
     /// Profile picture URL
     picture: Option<String>,
-    
+
     /// Locale
     locale: Option<String>,
-    
+
     /// Hosted domain (for G Suite)
     hd: Option<String>,
 }
@@ -127,35 +126,36 @@ impl GoogleProvider {
                 "profile".to_string(),
             ];
         }
-        
+
         // Ensure openid scope is included for OIDC
         if !config.scopes.contains(&"openid".to_string()) {
             config.scopes.push("openid".to_string());
         }
-        
+
         let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| AuthError::OAuth2Error(format!("Failed to create HTTP client: {}", e)))?;
-        
+
         Ok(Self {
             config,
             http_client,
         })
     }
-    
+
     /// Verify Google ID token
     async fn verify_id_token(&self, id_token: &str) -> Result<GoogleIdTokenClaims, AuthError> {
         // Decode header to get key ID
         let header = decode_header(id_token)
             .map_err(|e| AuthError::JwtError(format!("Failed to decode ID token header: {}", e)))?;
-        
-        let kid = header.kid.ok_or_else(|| {
-            AuthError::JwtError("ID token missing key ID (kid)".to_string())
-        })?;
-        
+
+        let kid = header
+            .kid
+            .ok_or_else(|| AuthError::JwtError("ID token missing key ID (kid)".to_string()))?;
+
         // Fetch Google's public keys (JWKS)
-        let jwks_response = self.http_client
+        let jwks_response = self
+            .http_client
             .get(GOOGLE_JWKS_URL)
             .send()
             .await
@@ -163,45 +163,49 @@ impl GoogleProvider {
             .json::<serde_json::Value>()
             .await
             .map_err(|e| AuthError::OAuth2Error(format!("Failed to parse JWKS: {}", e)))?;
-        
+
         // Find the matching key
-        let keys = jwks_response["keys"].as_array()
+        let keys = jwks_response["keys"]
+            .as_array()
             .ok_or_else(|| AuthError::JwtError("Invalid JWKS format".to_string()))?;
-        
-        let matching_key = keys.iter()
+
+        let matching_key = keys
+            .iter()
             .find(|k| k["kid"].as_str() == Some(&kid))
             .ok_or_else(|| AuthError::JwtError(format!("Key ID {} not found in JWKS", kid)))?;
-        
+
         // Extract RSA components
-        let n = matching_key["n"].as_str()
+        let n = matching_key["n"]
+            .as_str()
             .ok_or_else(|| AuthError::JwtError("Missing 'n' in JWK".to_string()))?;
-        let e = matching_key["e"].as_str()
+        let e = matching_key["e"]
+            .as_str()
             .ok_or_else(|| AuthError::JwtError("Missing 'e' in JWK".to_string()))?;
-        
+
         // Create decoding key from RSA components
         let decoding_key = DecodingKey::from_rsa_components(n, e)
             .map_err(|e| AuthError::JwtError(format!("Failed to create decoding key: {}", e)))?;
-        
+
         // Set up validation
         let mut validation = Validation::new(Algorithm::RS256);
         validation.set_audience(&[&self.config.client_id]);
         validation.set_issuer(&[GOOGLE_ISSUER, "accounts.google.com"]);
-        
+
         // Decode and validate token
         let token_data = decode::<GoogleIdTokenClaims>(id_token, &decoding_key, &validation)
             .map_err(|e| AuthError::JwtError(format!("ID token validation failed: {}", e)))?;
-        
+
         Ok(token_data.claims)
     }
-    
+
     /// Convert Google userinfo to OAuth2UserInfo
     fn convert_userinfo(&self, info: GoogleUserInfoResponse) -> OAuth2UserInfo {
         let mut raw_data = HashMap::new();
-        
+
         if let Some(hd) = &info.hd {
             raw_data.insert("hd".to_string(), serde_json::json!(hd));
         }
-        
+
         OAuth2UserInfo {
             provider_user_id: info.sub,
             email: info.email.unwrap_or_default(),
@@ -214,18 +218,18 @@ impl GoogleProvider {
             raw_data,
         }
     }
-    
+
     /// Convert ID token claims to OAuth2UserInfo
     fn convert_id_token_claims(&self, claims: GoogleIdTokenClaims) -> OAuth2UserInfo {
         let mut raw_data = HashMap::new();
-        
+
         if let Some(hd) = &claims.hd {
             raw_data.insert("hd".to_string(), serde_json::json!(hd));
         }
         raw_data.insert("iss".to_string(), serde_json::json!(claims.iss));
         raw_data.insert("iat".to_string(), serde_json::json!(claims.iat));
         raw_data.insert("exp".to_string(), serde_json::json!(claims.exp));
-        
+
         OAuth2UserInfo {
             provider_user_id: claims.sub,
             email: claims.email.unwrap_or_default(),
@@ -245,13 +249,13 @@ impl OAuth2Provider for GoogleProvider {
     fn name(&self) -> &str {
         "google"
     }
-    
+
     fn authorization_url(&self, state: &str, nonce: Option<&str>) -> Result<String, AuthError> {
         let auth_url = self.config.auth_url.as_deref().unwrap_or(GOOGLE_AUTH_URL);
-        
+
         let mut url = url::Url::parse(auth_url)
             .map_err(|e| AuthError::ConfigError(format!("Invalid auth URL: {}", e)))?;
-        
+
         {
             let mut query = url.query_pairs_mut();
             query.append_pair("client_id", &self.config.client_id);
@@ -261,27 +265,27 @@ impl OAuth2Provider for GoogleProvider {
             query.append_pair("state", state);
             query.append_pair("access_type", "offline"); // Request refresh token
             query.append_pair("prompt", "consent"); // Force consent to get refresh token
-            
+
             if let Some(nonce) = nonce {
                 query.append_pair("nonce", nonce);
             }
-            
+
             // Add extra parameters
             for (key, value) in &self.config.extra_params {
                 query.append_pair(key, value);
             }
         }
-        
+
         Ok(url.to_string())
     }
-    
+
     async fn exchange_code(
         &self,
         code: &str,
         _state: &str,
     ) -> Result<OAuth2TokenResponse, AuthError> {
         let token_url = self.config.token_url.as_deref().unwrap_or(GOOGLE_TOKEN_URL);
-        
+
         let token_request = GoogleTokenRequest {
             code: code.to_string(),
             client_id: self.config.client_id.clone(),
@@ -289,14 +293,15 @@ impl OAuth2Provider for GoogleProvider {
             redirect_uri: self.config.redirect_uri.clone(),
             grant_type: "authorization_code".to_string(),
         };
-        
-        let response = self.http_client
+
+        let response = self
+            .http_client
             .post(token_url)
             .form(&token_request)
             .send()
             .await
             .map_err(|e| AuthError::OAuth2Error(format!("Token request failed: {}", e)))?;
-        
+
         if !response.status().is_success() {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
@@ -305,12 +310,11 @@ impl OAuth2Provider for GoogleProvider {
                 status, error_text
             )));
         }
-        
-        let token_response: GoogleTokenResponseRaw = response
-            .json()
-            .await
-            .map_err(|e| AuthError::OAuth2Error(format!("Failed to parse token response: {}", e)))?;
-        
+
+        let token_response: GoogleTokenResponseRaw = response.json().await.map_err(|e| {
+            AuthError::OAuth2Error(format!("Failed to parse token response: {}", e))
+        })?;
+
         Ok(OAuth2TokenResponse {
             access_token: token_response.access_token,
             token_type: token_response.token_type,
@@ -320,7 +324,7 @@ impl OAuth2Provider for GoogleProvider {
             scope: token_response.scope,
         })
     }
-    
+
     async fn get_user_info(
         &self,
         access_token: &str,
@@ -331,17 +335,22 @@ impl OAuth2Provider for GoogleProvider {
             let claims = self.verify_id_token(id_token).await?;
             return Ok(self.convert_id_token_claims(claims));
         }
-        
+
         // Fallback to userinfo endpoint
-        let userinfo_url = self.config.userinfo_url.as_deref().unwrap_or(GOOGLE_USERINFO_URL);
-        
-        let response = self.http_client
+        let userinfo_url = self
+            .config
+            .userinfo_url
+            .as_deref()
+            .unwrap_or(GOOGLE_USERINFO_URL);
+
+        let response = self
+            .http_client
             .get(userinfo_url)
             .bearer_auth(access_token)
             .send()
             .await
             .map_err(|e| AuthError::OAuth2Error(format!("UserInfo request failed: {}", e)))?;
-        
+
         if !response.status().is_success() {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
@@ -350,35 +359,33 @@ impl OAuth2Provider for GoogleProvider {
                 status, error_text
             )));
         }
-        
+
         let userinfo: GoogleUserInfoResponse = response
             .json()
             .await
             .map_err(|e| AuthError::OAuth2Error(format!("Failed to parse userinfo: {}", e)))?;
-        
+
         Ok(self.convert_userinfo(userinfo))
     }
-    
-    async fn refresh_token(
-        &self,
-        refresh_token: &str,
-    ) -> Result<OAuth2TokenResponse, AuthError> {
+
+    async fn refresh_token(&self, refresh_token: &str) -> Result<OAuth2TokenResponse, AuthError> {
         let token_url = self.config.token_url.as_deref().unwrap_or(GOOGLE_TOKEN_URL);
-        
+
         let refresh_request = GoogleRefreshRequest {
             refresh_token: refresh_token.to_string(),
             client_id: self.config.client_id.clone(),
             client_secret: self.config.client_secret.clone(),
             grant_type: "refresh_token".to_string(),
         };
-        
-        let response = self.http_client
+
+        let response = self
+            .http_client
             .post(token_url)
             .form(&refresh_request)
             .send()
             .await
             .map_err(|e| AuthError::OAuth2Error(format!("Refresh token request failed: {}", e)))?;
-        
+
         if !response.status().is_success() {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
@@ -387,12 +394,11 @@ impl OAuth2Provider for GoogleProvider {
                 status, error_text
             )));
         }
-        
-        let token_response: GoogleTokenResponseRaw = response
-            .json()
-            .await
-            .map_err(|e| AuthError::OAuth2Error(format!("Failed to parse refresh response: {}", e)))?;
-        
+
+        let token_response: GoogleTokenResponseRaw = response.json().await.map_err(|e| {
+            AuthError::OAuth2Error(format!("Failed to parse refresh response: {}", e))
+        })?;
+
         Ok(OAuth2TokenResponse {
             access_token: token_response.access_token,
             token_type: token_response.token_type,
@@ -402,21 +408,22 @@ impl OAuth2Provider for GoogleProvider {
             scope: token_response.scope,
         })
     }
-    
+
     async fn revoke_token(&self, token: &str) -> Result<(), AuthError> {
         let revoke_url = "https://oauth2.googleapis.com/revoke";
-        
+
         let revoke_request = GoogleRevokeRequest {
             token: token.to_string(),
         };
-        
-        let response = self.http_client
+
+        let response = self
+            .http_client
             .post(revoke_url)
             .form(&revoke_request)
             .send()
             .await
             .map_err(|e| AuthError::OAuth2Error(format!("Token revocation failed: {}", e)))?;
-        
+
         if !response.status().is_success() {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
@@ -425,7 +432,7 @@ impl OAuth2Provider for GoogleProvider {
                 status, error_text
             )));
         }
-        
+
         Ok(())
     }
 }
@@ -438,7 +445,11 @@ mod tests {
         OAuth2ProviderConfig {
             client_id: "test-client-id".to_string(),
             client_secret: "test-client-secret".to_string(),
-            scopes: vec!["openid".to_string(), "email".to_string(), "profile".to_string()],
+            scopes: vec![
+                "openid".to_string(),
+                "email".to_string(),
+                "profile".to_string(),
+            ],
             redirect_uri: "https://example.com/auth/callback".to_string(),
             auth_url: None,
             token_url: None,
@@ -458,9 +469,11 @@ mod tests {
     fn test_authorization_url_generation() {
         let config = create_test_config();
         let provider = GoogleProvider::new(config).unwrap();
-        
-        let auth_url = provider.authorization_url("test-state", Some("test-nonce")).unwrap();
-        
+
+        let auth_url = provider
+            .authorization_url("test-state", Some("test-nonce"))
+            .unwrap();
+
         assert!(auth_url.contains("client_id=test-client-id"));
         assert!(auth_url.contains("state=test-state"));
         assert!(auth_url.contains("nonce=test-nonce"));

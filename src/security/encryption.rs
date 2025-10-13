@@ -2,11 +2,11 @@
 // Provides field-level encryption for sensitive data (OAuth tokens, secrets, etc.)
 
 use aes_gcm::{
-    aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
+    aead::{Aead, KeyInit},
 };
 use argon2::Argon2;
-use base64::{engine::general_purpose, Engine as _};
+use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::debug;
@@ -61,10 +61,10 @@ impl DataEncryption {
     /// Create from a password using Argon2 key derivation
     pub fn from_password(password: &str, salt: &[u8]) -> Result<Self, EncryptionError> {
         let mut key = [0u8; 32];
-        
+
         // Use Argon2id for key derivation
         let argon2 = Argon2::default();
-        
+
         // Derive key from password
         argon2
             .hash_password_into(password.as_bytes(), salt, &mut key)
@@ -230,7 +230,10 @@ impl FieldEncryptor {
     }
 
     /// Decrypt an OAuth access token
-    pub fn decrypt_access_token(&self, encrypted: &EncryptedData) -> Result<String, EncryptionError> {
+    pub fn decrypt_access_token(
+        &self,
+        encrypted: &EncryptedData,
+    ) -> Result<String, EncryptionError> {
         debug!("Decrypting access token");
         self.encryption.decrypt_field(encrypted)
     }
@@ -242,7 +245,10 @@ impl FieldEncryptor {
     }
 
     /// Decrypt an OAuth refresh token
-    pub fn decrypt_refresh_token(&self, encrypted: &EncryptedData) -> Result<String, EncryptionError> {
+    pub fn decrypt_refresh_token(
+        &self,
+        encrypted: &EncryptedData,
+    ) -> Result<String, EncryptionError> {
         debug!("Decrypting refresh token");
         self.encryption.decrypt_field(encrypted)
     }
@@ -254,7 +260,10 @@ impl FieldEncryptor {
     }
 
     /// Decrypt a client secret
-    pub fn decrypt_client_secret(&self, encrypted: &EncryptedData) -> Result<String, EncryptionError> {
+    pub fn decrypt_client_secret(
+        &self,
+        encrypted: &EncryptedData,
+    ) -> Result<String, EncryptionError> {
         debug!("Decrypting client secret");
         self.encryption.decrypt_field(encrypted)
     }

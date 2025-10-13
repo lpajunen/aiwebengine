@@ -62,13 +62,7 @@ impl AuthSessionManager {
         let token = self
             .session_manager
             .create_session(
-                user_id,
-                provider,
-                email,
-                name,
-                is_admin,
-                ip_addr,
-                user_agent,
+                user_id, provider, email, name, is_admin, ip_addr, user_agent,
             )
             .await
             .map_err(AuthError::Session)?;
@@ -104,9 +98,7 @@ impl AuthSessionManager {
 
     /// Get session count for a user
     pub async fn get_user_session_count(&self, user_id: &str) -> usize {
-        self.session_manager
-            .get_user_session_count(user_id)
-            .await
+        self.session_manager.get_user_session_count(user_id).await
     }
 
     /// Check if user has reached concurrent session limit
@@ -118,12 +110,14 @@ impl AuthSessionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::security::{DataEncryption, SecurityAuditor};
+    use crate::security::SecurityAuditor;
 
     async fn create_test_manager() -> AuthSessionManager {
         let auditor = Arc::new(SecurityAuditor::new());
-        let encryption = Arc::new(DataEncryption::new("test-encryption-password-32-bytes!").unwrap());
-        let session_manager = Arc::new(SecureSessionManager::new(encryption, Arc::clone(&auditor)));
+        let encryption_key: [u8; 32] = *b"test-encryption-key-32-bytes!!!!";
+        let session_manager =
+            SecureSessionManager::new(&encryption_key, 3600, 10, Arc::clone(&auditor)).unwrap();
+        let session_manager = Arc::new(session_manager);
 
         AuthSessionManager::new(session_manager)
     }

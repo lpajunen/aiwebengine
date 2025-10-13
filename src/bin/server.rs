@@ -179,10 +179,7 @@ async fn main() -> anyhow::Result<()> {
         let timeout = tokio::time::Duration::from_secs(shutdown_timeout_secs);
         match tokio::time::timeout(timeout, server_task).await {
             Ok(_) => tracing::info!("Server stopped gracefully"),
-            Err(_) => tracing::warn!(
-                "Server shutdown timed out after {}s",
-                shutdown_timeout_secs
-            ),
+            Err(_) => tracing::warn!("Server shutdown timed out after {}s", shutdown_timeout_secs),
         }
     } else {
         let _ = server_task.await;

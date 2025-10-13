@@ -2,12 +2,10 @@
 // Provides encrypted session storage with fingerprinting, concurrent session limits,
 // and comprehensive security controls for authentication
 
-use super::{
-    audit::{SecurityAuditor, SecurityEvent, SecurityEventType, SecuritySeverity},
-};
+use super::audit::{SecurityAuditor, SecurityEvent, SecurityEventType, SecuritySeverity};
 use aes_gcm::{
-    aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
+    aead::{Aead, KeyInit},
 };
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -179,14 +177,16 @@ impl SecureSessionManager {
     ) -> Result<SessionToken, SessionError> {
         // Check concurrent session limits
         let mut user_sessions = self.user_sessions.write().await;
-        let existing_sessions = user_sessions.entry(user_id.clone()).or_insert_with(Vec::new);
+        let existing_sessions = user_sessions
+            .entry(user_id.clone())
+            .or_insert_with(Vec::new);
 
         if existing_sessions.len() >= self.max_concurrent_sessions {
             // Remove oldest session
             if let Some(oldest_token) = existing_sessions.first().cloned() {
                 self.invalidate_session_internal(&oldest_token).await?;
                 existing_sessions.remove(0);
-                
+
                 warn!(
                     "Removed oldest session for user {} due to concurrent session limit",
                     user_id
@@ -210,7 +210,11 @@ impl SecureSessionManager {
             created_at: now,
             last_access: now,
             expires_at,
-            fingerprint: SessionFingerprint::new(ip_addr.clone(), &user_agent, self.strict_ip_validation),
+            fingerprint: SessionFingerprint::new(
+                ip_addr.clone(),
+                &user_agent,
+                self.strict_ip_validation,
+            ),
         };
 
         // Encrypt session data
@@ -224,19 +228,22 @@ impl SecureSessionManager {
         existing_sessions.push(token.clone());
 
         // Audit log
-        self.auditor.log_event(SecurityEvent::new(
-            SecurityEventType::AuthenticationSuccess,
-            SecuritySeverity::Low,
-            Some(user_id.clone()),
-        ).with_detail("provider", &provider)
-         .with_detail("ip_address", &ip_addr));
+        self.auditor.log_event(
+            SecurityEvent::new(
+                SecurityEventType::AuthenticationSuccess,
+                SecuritySeverity::Low,
+                Some(user_id.clone()),
+            )
+            .with_detail("provider", &provider)
+            .with_detail("ip_address", &ip_addr),
+        );
 
-        info!("Created session for user {} (provider: {})", user_id, provider);
+        info!(
+            "Created session for user {} (provider: {})",
+            user_id, provider
+        );
 
-        Ok(SessionToken {
-            token,
-            expires_at,
-        })
+        Ok(SessionToken { token, expires_at })
     }
 
     /// Validate and retrieve session data
@@ -260,25 +267,31 @@ impl SecureSessionManager {
         // Check expiration
         if Utc::now() > session_data.expires_at {
             self.invalidate_session(token).await?;
-            
-            self.auditor.log_event(SecurityEvent::new(
-                SecurityEventType::AuthenticationFailure,
-                SecuritySeverity::Low,
-                Some(session_data.user_id.clone()),
-            ).with_error("Session expired".to_string()));
-            
+
+            self.auditor.log_event(
+                SecurityEvent::new(
+                    SecurityEventType::AuthenticationFailure,
+                    SecuritySeverity::Low,
+                    Some(session_data.user_id.clone()),
+                )
+                .with_error("Session expired".to_string()),
+            );
+
             return Err(SessionError::SessionExpired);
         }
 
         // Validate fingerprint
         if !session_data.fingerprint.validate(ip_addr, user_agent) {
-            self.auditor.log_event(SecurityEvent::new(
-                SecurityEventType::SuspiciousActivity,
-                SecuritySeverity::High,
-                Some(session_data.user_id.clone()),
-            ).with_detail("reason", "Session fingerprint mismatch")
-             .with_detail("ip_addr", ip_addr)
-             .with_detail("expected_ip", &session_data.fingerprint.ip_addr));
+            self.auditor.log_event(
+                SecurityEvent::new(
+                    SecurityEventType::SuspiciousActivity,
+                    SecuritySeverity::High,
+                    Some(session_data.user_id.clone()),
+                )
+                .with_detail("reason", "Session fingerprint mismatch")
+                .with_detail("ip_addr", ip_addr)
+                .with_detail("expected_ip", &session_data.fingerprint.ip_addr),
+            );
 
             // Don't invalidate session if IP changed but UA matches (mobile networks)
             if !self.strict_ip_validation && ip_addr != session_data.fingerprint.ip_addr {
@@ -286,7 +299,7 @@ impl SecureSessionManager {
                     "IP changed for user {} session (old: {}, new: {})",
                     session_data.user_id, session_data.fingerprint.ip_addr, ip_addr
                 );
-                
+
                 // Update fingerprint with new IP
                 session_data.fingerprint.ip_addr = ip_addr.to_string();
             } else {
@@ -297,7 +310,7 @@ impl SecureSessionManager {
 
         // Update last access time
         session_data.last_access = Utc::now();
-        
+
         // Re-encrypt and update session
         let encrypted = self.encrypt_session(&session_data)?;
         let mut sessions = self.sessions.write().await;
@@ -316,7 +329,9 @@ impl SecureSessionManager {
     async fn invalidate_session_internal(&self, token: &str) -> Result<(), SessionError> {
         // Remove session
         let mut sessions = self.sessions.write().await;
-        let encrypted = sessions.remove(token).ok_or(SessionError::SessionNotFound)?;
+        let encrypted = sessions
+            .remove(token)
+            .ok_or(SessionError::SessionNotFound)?;
         drop(sessions);
 
         // Decrypt to get user_id for cleanup
@@ -330,11 +345,14 @@ impl SecureSessionManager {
                 }
             }
 
-            self.auditor.log_event(SecurityEvent::new(
-                SecurityEventType::SystemSecurityEvent,
-                SecuritySeverity::Low,
-                Some(session_data.user_id.clone()),
-            ).with_action("logout".to_string()));
+            self.auditor.log_event(
+                SecurityEvent::new(
+                    SecurityEventType::SystemSecurityEvent,
+                    SecuritySeverity::Low,
+                    Some(session_data.user_id.clone()),
+                )
+                .with_action("logout".to_string()),
+            );
 
             info!("Invalidated session for user {}", session_data.user_id);
         }
@@ -379,7 +397,10 @@ impl SecureSessionManager {
     }
 
     /// Encrypt session data
-    fn encrypt_session(&self, session_data: &SessionData) -> Result<EncryptedSessionData, SessionError> {
+    fn encrypt_session(
+        &self,
+        session_data: &SessionData,
+    ) -> Result<EncryptedSessionData, SessionError> {
         // Serialize session data
         let plaintext = serde_json::to_vec(session_data)
             .map_err(|e| SessionError::EncryptionError(format!("Serialization failed: {}", e)))?;
@@ -402,7 +423,10 @@ impl SecureSessionManager {
     }
 
     /// Decrypt session data
-    fn decrypt_session(&self, encrypted: &EncryptedSessionData) -> Result<SessionData, SessionError> {
+    fn decrypt_session(
+        &self,
+        encrypted: &EncryptedSessionData,
+    ) -> Result<SessionData, SessionError> {
         let nonce = Nonce::from_slice(&encrypted.nonce);
 
         // Decrypt

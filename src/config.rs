@@ -588,9 +588,9 @@ mod tests {
         config.security.cors_allowed_origins = vec!["invalid-origin".to_string()];
         assert!(config.validate().is_ok());
 
-        // Test rate limiting validation - zero rate limit should fail
+        // Test rate limiting validation - zero rate limit means disabled (allowed)
         config.security.rate_limit_per_minute = 0;
-        assert!(config.validate().is_err());
+        assert!(config.validate().is_ok());
 
         config.security.rate_limit_per_minute = 100;
         assert!(config.validate().is_ok());

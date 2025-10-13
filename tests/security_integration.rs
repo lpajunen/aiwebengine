@@ -9,7 +9,6 @@ use aiwebengine::security::{
     Capability, InputValidator, RateLimitKey, RateLimiter, SecureOperations, UpsertScriptRequest,
     UserContext,
 };
-use std::collections::HashSet;
 use std::time::Duration;
 
 // Helper function to create a user with specific capabilities

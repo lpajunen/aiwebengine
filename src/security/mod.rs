@@ -15,7 +15,9 @@ pub use audit::{SecurityAuditor, SecurityEvent, SecurityEventType, SecuritySever
 pub use capabilities::UserContext;
 pub use csp::{CspDirective, CspManager, CspPolicy, CspSource, CspViolationReport};
 pub use csrf::{CsrfProtection, CsrfToken, OAuthStateManager};
-pub use encryption::{DataEncryption, EncryptedData, EncryptionError, FieldEncryptor, SecureString};
+pub use encryption::{
+    DataEncryption, EncryptedData, EncryptionError, FieldEncryptor, SecureString,
+};
 pub use operations::{OperationResult, SecureOperations, UpsertScriptRequest};
 pub use rate_limiting::{RateLimitConfig, RateLimitKey, RateLimitResult, RateLimiter, TokenBucket};
 pub use secure_globals::{GlobalSecurityConfig, SecureGlobalContext};

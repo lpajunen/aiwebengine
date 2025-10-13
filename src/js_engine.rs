@@ -81,7 +81,7 @@ fn setup_secure_global_functions(
 
     // Setup secure functions with proper capability validation
     secure_context.setup_secure_functions(ctx, script_uri, register_fn)?;
-    
+
     // Setup authentication globals if auth context is provided
     if let Some(auth_ctx) = auth_context {
         crate::auth::AuthJsApi::setup_auth_globals(ctx, auth_ctx)?;
@@ -296,14 +296,14 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                         },
                     );
 
-                    setup_secure_global_functions(
-                        &ctx,
-                        &uri_owned,
-                        UserContext::admin("route-discovery".to_string()),
-                        &config,
-                        Some(register_impl),
-                        None, // No auth context during script registration
-                    )?;                            // Execute the script
+                            setup_secure_global_functions(
+                                &ctx,
+                                &uri_owned,
+                                UserContext::admin("route-discovery".to_string()),
+                                &config,
+                                Some(register_impl),
+                                None, // No auth context during script registration
+                            )?; // Execute the script
                             ctx.eval::<(), _>(content)?;
                             Ok(())
                         });

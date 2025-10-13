@@ -95,6 +95,7 @@ async fn test_secure_request_execution() {
         form_data: None,
         raw_body: None,
         user_context,
+        auth_context: None,
     };
     let request_result = execute_script_for_request_secure(request_params);
 
