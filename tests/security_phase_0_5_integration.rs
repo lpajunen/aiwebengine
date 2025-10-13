@@ -114,31 +114,39 @@ async fn test_session_ip_change_tolerance() {
     assert!(result.is_ok());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_concurrent_session_limit() {
-    let key: [u8; 32] = rand::random();
-    let auditor = Arc::new(SecurityAuditor::new());
-    let manager = SecureSessionManager::new(&key, 3600, 3, auditor).unwrap();
+    // Add timeout to prevent hanging
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        async {
+            let key: [u8; 32] = rand::random();
+            let auditor = Arc::new(SecurityAuditor::new());
+            let manager = SecureSessionManager::new(&key, 3600, 3, auditor).unwrap();
 
-    // Create 5 sessions (limit is 3)
-    for i in 0..5 {
-        manager
-            .create_session(
-                "user123".to_string(),
-                "google".to_string(),
-                None,
-                None,
-                false,
-                format!("192.168.1.{}", i),
-                "Mozilla/5.0".to_string(),
-            )
-            .await
-            .unwrap();
-    }
+            // Create 5 sessions (limit is 3)
+            for i in 0..5 {
+                manager
+                    .create_session(
+                        "user123".to_string(),
+                        "google".to_string(),
+                        None,
+                        None,
+                        false,
+                        format!("192.168.1.{}", i),
+                        "Mozilla/5.0".to_string(),
+                    )
+                    .await
+                    .unwrap();
+            }
 
-    // Should only have 3 sessions
-    let count = manager.get_user_session_count("user123").await;
-    assert_eq!(count, 3);
+            // Should only have 3 sessions
+            let count = manager.get_user_session_count("user123").await;
+            assert_eq!(count, 3);
+        }
+    ).await;
+    
+    assert!(result.is_ok(), "Test timed out - possible deadlock in session manager");
 }
 
 #[tokio::test]

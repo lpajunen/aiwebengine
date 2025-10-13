@@ -1,0 +1,29 @@
+# Configuration for cargo-nextest (faster test runner)
+# Install with: cargo install cargo-nextest
+# Run with: cargo nextest run
+
+[profile.default]
+# Run tests in parallel with proper isolation
+test-threads = 4
+
+# Timeout for individual tests (prevents hanging)
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+# Retry flaky tests
+retries = { backoff = "exponential", count = 2, delay = "1s" }
+
+# Test groups that should run serially
+[[profile.default.overrides]]
+filter = 'test(test_concurrent)'
+threads-required = 1
+
+[[profile.default.overrides]]
+filter = 'test(integration)'
+# Integration tests get longer timeout
+slow-timeout = { period = "120s" }
+
+[profile.ci]
+# CI-specific settings
+test-threads = 2
+slow-timeout = { period = "180s", terminate-after = 5 }
+retries = { backoff = "exponential", count = 3, delay = "1s" }

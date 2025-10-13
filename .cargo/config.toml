@@ -1,0 +1,23 @@
+# Cargo configuration for faster test execution
+
+[build]
+# Use more CPU cores for parallel compilation
+jobs = 8
+
+[test]
+# Default test profile optimizations
+# Use incremental compilation for faster rebuilds
+incremental = true
+
+[profile.test]
+# Basic optimizations for faster test execution
+opt-level = 1
+debug = 1
+codegen-units = 4
+incremental = true
+
+[profile.dev]
+# Development profile optimizations
+opt-level = 0
+debug = true
+incremental = true

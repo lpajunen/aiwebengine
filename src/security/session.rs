@@ -177,23 +177,32 @@ impl SecureSessionManager {
         ip_addr: String,
         user_agent: String,
     ) -> Result<SessionToken, SessionError> {
-        // Check concurrent session limits
-        let mut user_sessions = self.user_sessions.write().await;
-        let existing_sessions = user_sessions
-            .entry(user_id.clone())
-            .or_insert_with(Vec::new);
+        // Check concurrent session limits and get token to remove if needed
+        let token_to_remove = {
+            let mut user_sessions = self.user_sessions.write().await;
+            let existing_sessions = user_sessions
+                .entry(user_id.clone())
+                .or_insert_with(Vec::new);
 
-        if existing_sessions.len() >= self.max_concurrent_sessions {
-            // Remove oldest session
-            if let Some(oldest_token) = existing_sessions.first().cloned() {
-                self.invalidate_session_internal(&oldest_token).await?;
-                existing_sessions.remove(0);
-
-                warn!(
-                    "Removed oldest session for user {} due to concurrent session limit",
-                    user_id
-                );
+            if existing_sessions.len() >= self.max_concurrent_sessions {
+                // Get oldest session token to remove
+                let oldest_token = existing_sessions.first().cloned();
+                if oldest_token.is_some() {
+                    existing_sessions.remove(0);
+                }
+                oldest_token
+            } else {
+                None
             }
+        }; // Lock is dropped here
+
+        // Remove the oldest session if needed (without holding the user_sessions lock)
+        if let Some(token) = token_to_remove {
+            self.invalidate_session_internal(&token).await?;
+            warn!(
+                "Removed oldest session for user {} due to concurrent session limit",
+                user_id
+            );
         }
 
         // Generate session token
@@ -225,9 +234,15 @@ impl SecureSessionManager {
         // Store encrypted session
         let mut sessions = self.sessions.write().await;
         sessions.insert(token.clone(), encrypted);
+        drop(sessions);
 
-        // Track session for user
-        existing_sessions.push(token.clone());
+        // Track session for user (re-acquire lock separately)
+        let mut user_sessions = self.user_sessions.write().await;
+        user_sessions
+            .entry(user_id.clone())
+            .or_insert_with(Vec::new)
+            .push(token.clone());
+        drop(user_sessions);
 
         // Audit log
         self.auditor
@@ -517,28 +532,36 @@ mod tests {
         assert!(matches!(result, Err(SessionError::FingerprintMismatch)));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_concurrent_session_limit() {
-        let manager = create_test_manager();
+        // Add timeout to prevent hanging
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            async {
+                let manager = create_test_manager();
 
-        // Create 4 sessions (limit is 3)
-        for _i in 0..4 {
-            manager
-                .create_session(
-                    "user123".to_string(),
-                    "google".to_string(),
-                    None,
-                    None,
-                    false,
-                    "192.168.1.1".to_string(),
-                    "Mozilla/5.0".to_string(),
-                )
-                .await
-                .unwrap();
-        }
+                // Create 4 sessions (limit is 3)
+                for _i in 0..4 {
+                    manager
+                        .create_session(
+                            "user123".to_string(),
+                            "google".to_string(),
+                            None,
+                            None,
+                            false,
+                            "192.168.1.1".to_string(),
+                            "Mozilla/5.0".to_string(),
+                        )
+                        .await
+                        .unwrap();
+                }
 
-        let count = manager.get_user_session_count("user123").await;
-        assert_eq!(count, 3); // Should be limited to 3
+                let count = manager.get_user_session_count("user123").await;
+                assert_eq!(count, 3); // Should be limited to 3
+            }
+        ).await;
+        
+        assert!(result.is_ok(), "Test timed out - possible deadlock in session manager");
     }
 
     #[tokio::test]
