@@ -7,7 +7,7 @@ use common::{TestContext, wait_for_server};
 #[tokio::test]
 async fn test_health_endpoint() {
     let context = TestContext::new();
-    
+
     // Load the core script which contains the health endpoint
     let _ = repository::upsert_script(
         "https://example.com/core",
@@ -15,8 +15,11 @@ async fn test_health_endpoint() {
     );
 
     // Start server with proper shutdown support
-    let port = context.start_server().await.expect("server failed to start");
-    
+    let port = context
+        .start_server()
+        .await
+        .expect("server failed to start");
+
     // Wait for server to be ready (replaces long sleep)
     wait_for_server(port, 20).await.expect("Server not ready");
 
@@ -52,7 +55,7 @@ async fn test_health_endpoint() {
 #[tokio::test]
 async fn test_health_endpoint_content_type() {
     let context = TestContext::new();
-    
+
     // Load the core script
     let _ = repository::upsert_script(
         "https://example.com/core",
@@ -60,7 +63,10 @@ async fn test_health_endpoint_content_type() {
     );
 
     // Start server
-    let port = context.start_server().await.expect("server failed to start");
+    let port = context
+        .start_server()
+        .await
+        .expect("server failed to start");
     wait_for_server(port, 20).await.expect("Server not ready");
 
     let client = reqwest::Client::new();
@@ -80,7 +86,7 @@ async fn test_health_endpoint_content_type() {
         .expect("Content-Type header not valid string");
 
     assert_eq!(content_type, "application/json");
-    
+
     // Cleanup
     context.cleanup().await.expect("Failed to cleanup");
 }
@@ -88,14 +94,17 @@ async fn test_health_endpoint_content_type() {
 #[tokio::test]
 async fn test_script_logs_endpoint() {
     let context = TestContext::new();
-    
+
     // Load the core script which contains the script_logs endpoint
     let _ = repository::upsert_script(
         "https://example.com/core",
         include_str!("../scripts/feature_scripts/core.js"),
     );
 
-    let port = context.start_server().await.expect("server failed to start");
+    let port = context
+        .start_server()
+        .await
+        .expect("server failed to start");
     wait_for_server(port, 20).await.expect("Server not ready");
 
     let client = reqwest::Client::new();
@@ -108,7 +117,7 @@ async fn test_script_logs_endpoint() {
         .expect("Script logs request failed");
 
     assert_eq!(logs_response.status(), 200);
-    
+
     // Cleanup
     context.cleanup().await.expect("Failed to cleanup");
 }

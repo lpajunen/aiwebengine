@@ -10,27 +10,11 @@ async fn test_basic_streaming_functionality() {
     let test_script = r#"
         // Register the stream
         registerWebStream('/test_stream');
-        
-        function test_send_message(req) {
-            sendStreamMessageToPath('/test_stream', JSON.stringify({
-                type: 'test_message',
-                content: 'Hello from test!',
-                timestamp: new Date().toISOString()
-            }));
-            
-            return {
-                status: 200,
-                body: 'Message sent',
-                contentType: 'text/plain'
-            };
-        }
-        
-        register('/send_test_message', 'test_send_message', 'GET');
     "#;
 
     info!("Testing basic streaming functionality");
 
-    // Store and execute the test script
+    // Store and execute the test script to register the stream
     let _ = aiwebengine::repository::upsert_script("test_basic_streaming.js", test_script);
     let result = js_engine::execute_script("test_basic_streaming.js", test_script);
     assert!(
@@ -61,22 +45,20 @@ async fn test_basic_streaming_functionality() {
     // Give some time for connection setup
     sleep(Duration::from_millis(100)).await;
 
-    // Now trigger the message sending
-    let send_result = js_engine::execute_script_for_request(
-        "test_basic_streaming.js",
-        "test_send_message",
-        "/send_test_message",
-        "GET",
-        None,
-        None,
-        None,
-    );
+    // Send a message to the stream
+    let send_script = r#"
+        sendStreamMessageToPath('/test_stream', JSON.stringify({
+            type: 'test_message',
+            content: 'Hello from test!',
+            timestamp: new Date().toISOString()
+        }));
+    "#;
 
-    info!("Send message result: {:?}", send_result);
+    let send_result = js_engine::execute_script("test_send.js", send_script);
     assert!(
-        send_result.is_ok(),
-        "Failed to send test message: {:?}",
-        send_result
+        send_result.success,
+        "Failed to send message: {:?}",
+        send_result.error
     );
 
     // Wait for the message

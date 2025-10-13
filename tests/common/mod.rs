@@ -1,7 +1,7 @@
 use aiwebengine::{config, start_server_with_config};
 use std::sync::Arc;
-use tokio::sync::{Mutex, oneshot};
 use std::time::Duration;
+use tokio::sync::{Mutex, oneshot};
 
 /// Improved test server with proper shutdown support
 pub struct TestServer {
@@ -13,10 +13,10 @@ impl TestServer {
     /// Start a test server with automatic port selection and shutdown support
     pub async fn start() -> anyhow::Result<Self> {
         let mut test_config = config::Config::test_config_with_port(0);
-        
+
         // Disable auth for tests by default to avoid overhead
         test_config.auth = None;
-        
+
         // Set faster timeout for tests
         test_config.javascript.execution_timeout_ms = 5000; // 5 second timeout for tests
 
@@ -112,7 +112,10 @@ pub async fn wait_for_server(port: u16, max_attempts: u32) -> anyhow::Result<()>
         }
     }
 
-    Err(anyhow::anyhow!("Server not ready after {} attempts", max_attempts))
+    Err(anyhow::anyhow!(
+        "Server not ready after {} attempts",
+        max_attempts
+    ))
 }
 
 /// Macro for running tests with automatic server management

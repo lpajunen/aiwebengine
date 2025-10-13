@@ -270,7 +270,7 @@ mod tests {
     #[test]
     fn test_upsert_script_requires_capability() {
         let ops = SecureOperations::new();
-        
+
         // Create a user with no capabilities at all (custom context)
         let user = UserContext {
             user_id: None,
@@ -291,7 +291,7 @@ mod tests {
         let result = result.unwrap();
         assert!(!result.success);
         assert!(result.error.as_ref().unwrap().contains("Access denied"));
-        
+
         // Test that anonymous users (with write capability) CAN write
         let anonymous_user = UserContext::anonymous();
         let request2 = UpsertScriptRequest {
@@ -301,7 +301,10 @@ mod tests {
         let result2 = rt.block_on(ops.upsert_script(&anonymous_user, request2));
         assert!(result2.is_ok());
         let result2 = result2.unwrap();
-        assert!(result2.success, "Anonymous users should be able to write scripts in dev mode");
+        assert!(
+            result2.success,
+            "Anonymous users should be able to write scripts in dev mode"
+        );
     }
 
     #[test]

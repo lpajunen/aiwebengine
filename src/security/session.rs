@@ -535,33 +535,34 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_concurrent_session_limit() {
         // Add timeout to prevent hanging
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            async {
-                let manager = create_test_manager();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let manager = create_test_manager();
 
-                // Create 4 sessions (limit is 3)
-                for _i in 0..4 {
-                    manager
-                        .create_session(
-                            "user123".to_string(),
-                            "google".to_string(),
-                            None,
-                            None,
-                            false,
-                            "192.168.1.1".to_string(),
-                            "Mozilla/5.0".to_string(),
-                        )
-                        .await
-                        .unwrap();
-                }
-
-                let count = manager.get_user_session_count("user123").await;
-                assert_eq!(count, 3); // Should be limited to 3
+            // Create 4 sessions (limit is 3)
+            for _i in 0..4 {
+                manager
+                    .create_session(
+                        "user123".to_string(),
+                        "google".to_string(),
+                        None,
+                        None,
+                        false,
+                        "192.168.1.1".to_string(),
+                        "Mozilla/5.0".to_string(),
+                    )
+                    .await
+                    .unwrap();
             }
-        ).await;
-        
-        assert!(result.is_ok(), "Test timed out - possible deadlock in session manager");
+
+            let count = manager.get_user_session_count("user123").await;
+            assert_eq!(count, 3); // Should be limited to 3
+        })
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "Test timed out - possible deadlock in session manager"
+        );
     }
 
     #[tokio::test]
