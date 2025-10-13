@@ -34,8 +34,16 @@ impl UserContext {
     }
 
     fn anonymous_capabilities() -> HashSet<Capability> {
-        // Anonymous users can only read
-        [Capability::ViewLogs].into_iter().collect()
+        // Anonymous users can read and write (for development/testing)
+        // In production, these should be restricted to authenticated users only
+        [
+            Capability::ViewLogs,
+            Capability::ReadScripts,
+            Capability::WriteScripts,
+            Capability::ReadAssets,
+        ]
+        .into_iter()
+        .collect()
     }
 
     fn authenticated_capabilities() -> HashSet<Capability> {
@@ -98,7 +106,13 @@ mod tests {
         assert!(!user.is_authenticated);
         assert!(user.user_id.is_none());
         assert!(user.has_capability(&Capability::ViewLogs));
-        assert!(!user.has_capability(&Capability::WriteScripts));
+        // Anonymous users now have ReadScripts and WriteScripts for development/testing
+        assert!(user.has_capability(&Capability::ReadScripts));
+        assert!(user.has_capability(&Capability::WriteScripts));
+        assert!(user.has_capability(&Capability::ReadAssets));
+        // But not delete capabilities
+        assert!(!user.has_capability(&Capability::DeleteScripts));
+        assert!(!user.has_capability(&Capability::DeleteAssets));
     }
 
     #[test]
@@ -125,10 +139,13 @@ mod tests {
     fn test_capability_requirement() {
         let user = UserContext::anonymous();
 
-        // Should succeed for allowed capability
+        // Should succeed for allowed capabilities
         assert!(user.require_capability(&Capability::ViewLogs).is_ok());
+        assert!(user.require_capability(&Capability::ReadScripts).is_ok());
+        assert!(user.require_capability(&Capability::WriteScripts).is_ok());
 
-        // Should fail for disallowed capability
-        assert!(user.require_capability(&Capability::WriteScripts).is_err());
+        // Should fail for disallowed capabilities (like delete)
+        assert!(user.require_capability(&Capability::DeleteScripts).is_err());
+        assert!(user.require_capability(&Capability::ManageGraphQL).is_err());
     }
 }
