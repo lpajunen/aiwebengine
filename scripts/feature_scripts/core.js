@@ -442,8 +442,12 @@ function upsertScriptMutation(args) {
 
 function deleteScriptMutation(args) {
 	try {
-		const deleted = deleteScript(args.uri);
-		if (deleted) {
+		const result = deleteScript(args.uri);
+		// deleteScript returns a string message, check if it indicates success or error
+		const isError = result && result.startsWith('Error:');
+		const success = result && result.includes('deleted successfully') && !isError;
+		
+		if (success) {
 			// Broadcast the script removal
 			broadcastScriptUpdate(args.uri, 'removed', {
 				via: 'graphql'
@@ -451,13 +455,13 @@ function deleteScriptMutation(args) {
 			
 			writeLog(`Script deleted via GraphQL: ${args.uri}`);
 			return JSON.stringify({
-				message: `Script deleted successfully: ${args.uri}`,
+				message: result || `Script deleted successfully: ${args.uri}`,
 				uri: args.uri,
 				success: true
 			});
 		} else {
 			return JSON.stringify({
-				message: `Script not found: ${args.uri}`,
+				message: result || `Script not found: ${args.uri}`,
 				uri: args.uri,
 				success: false
 			});

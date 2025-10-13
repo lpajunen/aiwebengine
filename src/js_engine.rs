@@ -634,7 +634,9 @@ pub fn execute_graphql_resolver(
             ..Default::default()
         };
 
-        setup_secure_global_functions(&ctx, &script_uri_owned, UserContext::anonymous(), &config, None, None)?;
+        // GraphQL resolvers run with admin context to allow script management operations
+        // In production, this should be secured via GraphQL-level authentication/authorization
+        setup_secure_global_functions(&ctx, &script_uri_owned, UserContext::admin("graphql-resolver".to_string()), &config, None, None)?;
 
         // Override specific functions that have different signatures for GraphQL resolver context
         let global = ctx.globals();

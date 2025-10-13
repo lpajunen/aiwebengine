@@ -218,6 +218,10 @@ async fn test_graphql_endpoints() {
 
 #[tokio::test]
 async fn test_graphql_script_mutations() {
+    // Clean up any existing test scripts to avoid conflicts from previous test runs
+    let _ = repository::delete_script("http://test/script");
+    let _ = repository::delete_script("http://test/nonexistent");
+
     // Load the core script to get script management GraphQL operations
     let _ = repository::upsert_script(
         "https://example.com/core",
@@ -330,7 +334,7 @@ async fn test_graphql_script_mutations() {
         delete_result["message"]
             .as_str()
             .unwrap()
-            .contains("Script deleted successfully")
+            .contains("deleted successfully")
     );
 
     // Test deleteScript with non-existent script - should return success: false
@@ -383,6 +387,6 @@ async fn test_graphql_script_mutations() {
         delete_nonexistent_result["message"]
             .as_str()
             .unwrap()
-            .contains("Script not found")
+            .contains("not found")
     );
 }

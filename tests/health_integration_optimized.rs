@@ -109,9 +109,12 @@ async fn test_script_logs_endpoint() {
 
     let client = reqwest::Client::new();
 
-    // Test script_logs endpoint
+    // Test script_logs endpoint with a valid URI parameter
     let logs_response = client
-        .get(format!("http://127.0.0.1:{}/script_logs", port))
+        .get(format!(
+            "http://127.0.0.1:{}/script_logs?uri=https://example.com/core",
+            port
+        ))
         .send()
         .await
         .expect("Script logs request failed");
