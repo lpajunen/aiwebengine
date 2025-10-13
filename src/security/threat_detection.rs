@@ -356,22 +356,21 @@ impl ThreatDetector {
         }
 
         // Check for suspicious user agent patterns
-        if let Some(user_agent) = &event.user_agent {
-            if user_agent.contains("bot")
+        if let Some(user_agent) = &event.user_agent
+            && (user_agent.contains("bot")
                 || user_agent.contains("crawler")
                 || user_agent.contains("scanner")
-                || user_agent.len() < 20
-            {
-                indicators.push(ThreatIndicator {
-                    indicator_type: "suspicious_user_agent".to_string(),
-                    severity: 40.0,
-                    description: "Suspicious user agent detected".to_string(),
-                    evidence: vec![
-                        format!("User agent: {}", user_agent),
-                        format!("IP: {:?}", event.ip_address),
-                    ],
-                });
-            }
+                || user_agent.len() < 20)
+        {
+            indicators.push(ThreatIndicator {
+                indicator_type: "suspicious_user_agent".to_string(),
+                severity: 40.0,
+                description: "Suspicious user agent detected".to_string(),
+                evidence: vec![
+                    format!("User agent: {}", user_agent),
+                    format!("IP: {:?}", event.ip_address),
+                ],
+            });
         }
 
         indicators
@@ -385,23 +384,16 @@ impl ThreatDetector {
         if let Some(ip) = &event.ip_address {
             // This would need more sophisticated tracking, but for now we can
             // detect basic patterns based on event details
-            if let Some(details) = event.details.get("request_count") {
-                if let Ok(count) = details.parse::<i32>() {
-                    if count > 100 {
-                        indicators.push(ThreatIndicator {
-                            indicator_type: "rapid_request_pattern".to_string(),
-                            severity: 60.0,
-                            description: format!(
-                                "High request volume detected: {} requests",
-                                count
-                            ),
-                            evidence: vec![
-                                format!("IP: {}", ip),
-                                format!("Request count: {}", count),
-                            ],
-                        });
-                    }
-                }
+            if let Some(details) = event.details.get("request_count")
+                && let Ok(count) = details.parse::<i32>()
+                && count > 100
+            {
+                indicators.push(ThreatIndicator {
+                    indicator_type: "rapid_request_pattern".to_string(),
+                    severity: 60.0,
+                    description: format!("High request volume detected: {} requests", count),
+                    evidence: vec![format!("IP: {}", ip), format!("Request count: {}", count)],
+                });
             }
         }
 

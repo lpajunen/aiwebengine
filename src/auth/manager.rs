@@ -6,9 +6,11 @@ use crate::auth::{
     AuthError, AuthSecurityContext, AuthSessionManager, OAuth2Provider, OAuth2ProviderConfig,
     OAuth2TokenResponse, OAuth2UserInfo, ProviderFactory,
 };
-use crate::security::ThreatDetectionConfig;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+#[cfg(test)]
+use crate::security::ThreatDetectionConfig;
 
 /// User information after successful authentication
 #[derive(Debug, Clone)]
@@ -197,12 +199,16 @@ impl AuthManager {
 
         // Exchange code for tokens
         let tokens = provider.exchange_code(code, state).await.map_err(|e| {
-            // Log failure
-            let _ = self.security_context.log_auth_failure(
-                provider_name,
-                &format!("Token exchange failed: {}", e),
-                Some(ip_addr),
-            );
+            // Log failure (spawn to avoid blocking)
+            let security_context = self.security_context.clone();
+            let provider_name = provider_name.to_string();
+            let error_msg = format!("Token exchange failed: {}", e);
+            let ip = ip_addr.to_string();
+            tokio::spawn(async move {
+                let _ = security_context
+                    .log_auth_failure(&provider_name, &error_msg, Some(&ip))
+                    .await;
+            });
             e
         })?;
 
@@ -211,12 +217,16 @@ impl AuthManager {
             .get_user_info(&tokens.access_token, tokens.id_token.as_deref())
             .await
             .map_err(|e| {
-                // Log failure
-                let _ = self.security_context.log_auth_failure(
-                    provider_name,
-                    &format!("User info retrieval failed: {}", e),
-                    Some(ip_addr),
-                );
+                // Log failure (spawn to avoid blocking)
+                let security_context = self.security_context.clone();
+                let provider_name = provider_name.to_string();
+                let error_msg = format!("User info retrieval failed: {}", e);
+                let ip = ip_addr.to_string();
+                tokio::spawn(async move {
+                    let _ = security_context
+                        .log_auth_failure(&provider_name, &error_msg, Some(&ip))
+                        .await;
+                });
                 e
             })?;
 
@@ -355,7 +365,7 @@ mod tests {
         let auditor = Arc::new(SecurityAuditor::new());
         let rate_limiter = Arc::new(RateLimiter::new().with_security_auditor(Arc::clone(&auditor)));
         let threat_config = ThreatDetectionConfig::default();
-        let threat_detector = Arc::new(ThreatDetector::new(threat_config));
+        let _threat_detector = Arc::new(ThreatDetector::new(threat_config));
         let csrf_key: [u8; 32] = *b"test-csrf-secret-key-32-bytes!!!";
         let csrf = Arc::new(CsrfProtection::new(csrf_key, 3600));
         let encryption_key: [u8; 32] = *b"test-encryption-key-32-bytes!!!!";

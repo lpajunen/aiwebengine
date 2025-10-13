@@ -487,7 +487,7 @@ mod tests {
 
         // Should have approximately 1 token after 0.1 seconds
         let available = bucket.available_tokens();
-        assert!(available >= 0.5 && available <= 1.5);
+        assert!((0.5..=1.5).contains(&available));
     }
 
     #[test]

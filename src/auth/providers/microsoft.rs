@@ -10,11 +10,11 @@ use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-const MICROSOFT_AUTH_URL: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
-const MICROSOFT_TOKEN_URL: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
+const _MICROSOFT_AUTH_URL: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
+const _MICROSOFT_TOKEN_URL: &str = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
 const MICROSOFT_USERINFO_URL: &str = "https://graph.microsoft.com/v1.0/me";
-const MICROSOFT_JWKS_URL: &str = "https://login.microsoftonline.com/common/discovery/v2.0/keys";
-const MICROSOFT_ISSUER: &str = "https://login.microsoftonline.com";
+const _MICROSOFT_JWKS_URL: &str = "https://login.microsoftonline.com/common/discovery/v2.0/keys";
+const _MICROSOFT_ISSUER: &str = "https://login.microsoftonline.com";
 
 /// Microsoft ID token claims
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -386,12 +386,12 @@ impl OAuth2Provider for MicrosoftProvider {
         id_token: Option<&str>,
     ) -> Result<OAuth2UserInfo, AuthError> {
         // Prefer ID token for user info when available
-        if let Some(id_token) = id_token {
-            if let Ok(claims) = self.verify_id_token(id_token).await {
-                return Ok(self.convert_id_token_claims(claims));
-            }
-            // Fall through to Graph API if ID token validation fails
+        if let Some(id_token) = id_token
+            && let Ok(claims) = self.verify_id_token(id_token).await
+        {
+            return Ok(self.convert_id_token_claims(claims));
         }
+        // Fall through to Graph API if ID token validation fails
 
         // Use Microsoft Graph API for detailed user info
         let userinfo_url = self

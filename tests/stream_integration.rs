@@ -54,7 +54,7 @@ async fn test_stream_endpoints() {
 
     // Test 1: Regular endpoint should work normally
     let response = client
-        .get(&format!("{}/regular-endpoint", base_url))
+        .get(format!("{}/regular-endpoint", base_url))
         .send()
         .await
         .expect("Failed to send regular request");
@@ -69,7 +69,7 @@ async fn test_stream_endpoints() {
 
     // Test 2: Stream endpoint should return SSE headers
     let response = client
-        .get(&format!("{}/test-stream", base_url))
+        .get(format!("{}/test-stream", base_url))
         .send()
         .await
         .expect("Failed to send stream request");
@@ -88,7 +88,7 @@ async fn test_stream_endpoints() {
 
     // Test 3: Non-existent stream should return 404
     let response = client
-        .get(&format!("{}/non-existent-stream", base_url))
+        .get(format!("{}/non-existent-stream", base_url))
         .send()
         .await
         .expect("Failed to send request to non-existent stream");
@@ -186,7 +186,7 @@ async fn test_stream_messaging() {
 
     // Test: Send notification endpoint via GET should work
     let response = client
-        .get(&format!("{}/send-notification", base_url))
+        .get(format!("{}/send-notification", base_url))
         .send()
         .await
         .expect("Failed to send GET notification request");

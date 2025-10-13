@@ -77,17 +77,17 @@ impl DataEncryption {
     pub fn encrypt_field(&self, plaintext: &str) -> Result<EncryptedData, EncryptionError> {
         // Generate random nonce (96 bits / 12 bytes for AES-GCM)
         let nonce_bytes: [u8; 12] = rand::random();
-        let nonce = Nonce::from_slice(&nonce_bytes);
+        let nonce = Nonce::from(nonce_bytes);
 
         // Encrypt
         let ciphertext = self
             .cipher
-            .encrypt(nonce, plaintext.as_bytes())
+            .encrypt(&nonce, plaintext.as_bytes())
             .map_err(|e| EncryptionError::EncryptionFailed(e.to_string()))?;
 
         // Encode to base64 for storage
         let ciphertext_b64 = general_purpose::STANDARD.encode(&ciphertext);
-        let nonce_b64 = general_purpose::STANDARD.encode(&nonce_bytes);
+        let nonce_b64 = general_purpose::STANDARD.encode(nonce_bytes);
 
         Ok(EncryptedData {
             ciphertext: ciphertext_b64,
@@ -135,15 +135,15 @@ impl DataEncryption {
     /// Encrypt binary data
     pub fn encrypt_bytes(&self, plaintext: &[u8]) -> Result<EncryptedData, EncryptionError> {
         let nonce_bytes: [u8; 12] = rand::random();
-        let nonce = Nonce::from_slice(&nonce_bytes);
+        let nonce = Nonce::from(nonce_bytes);
 
         let ciphertext = self
             .cipher
-            .encrypt(nonce, plaintext)
+            .encrypt(&nonce, plaintext)
             .map_err(|e| EncryptionError::EncryptionFailed(e.to_string()))?;
 
         let ciphertext_b64 = general_purpose::STANDARD.encode(&ciphertext);
-        let nonce_b64 = general_purpose::STANDARD.encode(&nonce_bytes);
+        let nonce_b64 = general_purpose::STANDARD.encode(nonce_bytes);
 
         Ok(EncryptedData {
             ciphertext: ciphertext_b64,

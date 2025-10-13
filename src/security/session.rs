@@ -9,7 +9,7 @@ use aes_gcm::{
 };
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -78,7 +78,8 @@ impl SessionFingerprint {
     }
 
     fn hash_user_agent(user_agent: &str) -> String {
-        let mut hasher = Sha256::new();
+        use sha2::Digest;
+        let mut hasher = Sha256::default();
         hasher.update(user_agent.as_bytes());
         format!("{:x}", hasher.finalize())
     }
@@ -107,6 +108,7 @@ impl SessionFingerprint {
 struct EncryptedSessionData {
     ciphertext: Vec<u8>,
     nonce: [u8; 12],
+    #[allow(dead_code)]
     created_at: DateTime<Utc>,
 }
 
@@ -121,7 +123,7 @@ impl SessionToken {
     fn generate() -> String {
         let random_bytes: [u8; 32] = rand::random();
         use base64::Engine;
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&random_bytes)
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(random_bytes)
     }
 }
 
@@ -228,15 +230,17 @@ impl SecureSessionManager {
         existing_sessions.push(token.clone());
 
         // Audit log
-        self.auditor.log_event(
-            SecurityEvent::new(
-                SecurityEventType::AuthenticationSuccess,
-                SecuritySeverity::Low,
-                Some(user_id.clone()),
+        self.auditor
+            .log_event(
+                SecurityEvent::new(
+                    SecurityEventType::AuthenticationSuccess,
+                    SecuritySeverity::Low,
+                    Some(user_id.clone()),
+                )
+                .with_detail("provider", &provider)
+                .with_detail("ip_address", &ip_addr),
             )
-            .with_detail("provider", &provider)
-            .with_detail("ip_address", &ip_addr),
-        );
+            .await;
 
         info!(
             "Created session for user {} (provider: {})",
@@ -268,30 +272,34 @@ impl SecureSessionManager {
         if Utc::now() > session_data.expires_at {
             self.invalidate_session(token).await?;
 
-            self.auditor.log_event(
-                SecurityEvent::new(
-                    SecurityEventType::AuthenticationFailure,
-                    SecuritySeverity::Low,
-                    Some(session_data.user_id.clone()),
+            self.auditor
+                .log_event(
+                    SecurityEvent::new(
+                        SecurityEventType::AuthenticationFailure,
+                        SecuritySeverity::Low,
+                        Some(session_data.user_id.clone()),
+                    )
+                    .with_error("Session expired".to_string()),
                 )
-                .with_error("Session expired".to_string()),
-            );
+                .await;
 
             return Err(SessionError::SessionExpired);
         }
 
         // Validate fingerprint
         if !session_data.fingerprint.validate(ip_addr, user_agent) {
-            self.auditor.log_event(
-                SecurityEvent::new(
-                    SecurityEventType::SuspiciousActivity,
-                    SecuritySeverity::High,
-                    Some(session_data.user_id.clone()),
+            self.auditor
+                .log_event(
+                    SecurityEvent::new(
+                        SecurityEventType::SuspiciousActivity,
+                        SecuritySeverity::High,
+                        Some(session_data.user_id.clone()),
+                    )
+                    .with_detail("reason", "Session fingerprint mismatch")
+                    .with_detail("ip_addr", ip_addr)
+                    .with_detail("expected_ip", &session_data.fingerprint.ip_addr),
                 )
-                .with_detail("reason", "Session fingerprint mismatch")
-                .with_detail("ip_addr", ip_addr)
-                .with_detail("expected_ip", &session_data.fingerprint.ip_addr),
-            );
+                .await;
 
             // Don't invalidate session if IP changed but UA matches (mobile networks)
             if !self.strict_ip_validation && ip_addr != session_data.fingerprint.ip_addr {
@@ -345,14 +353,16 @@ impl SecureSessionManager {
                 }
             }
 
-            self.auditor.log_event(
-                SecurityEvent::new(
-                    SecurityEventType::SystemSecurityEvent,
-                    SecuritySeverity::Low,
-                    Some(session_data.user_id.clone()),
+            self.auditor
+                .log_event(
+                    SecurityEvent::new(
+                        SecurityEventType::SystemSecurityEvent,
+                        SecuritySeverity::Low,
+                        Some(session_data.user_id.clone()),
+                    )
+                    .with_action("logout".to_string()),
                 )
-                .with_action("logout".to_string()),
-            );
+                .await;
 
             info!("Invalidated session for user {}", session_data.user_id);
         }
@@ -368,10 +378,10 @@ impl SecureSessionManager {
 
         // Find expired sessions
         for (token, encrypted) in sessions.iter() {
-            if let Ok(session_data) = self.decrypt_session(encrypted) {
-                if now > session_data.expires_at {
-                    expired_tokens.push(token.clone());
-                }
+            if let Ok(session_data) = self.decrypt_session(encrypted)
+                && now > session_data.expires_at
+            {
+                expired_tokens.push(token.clone());
             }
         }
 
@@ -407,12 +417,12 @@ impl SecureSessionManager {
 
         // Generate random nonce
         let nonce_bytes: [u8; 12] = rand::random();
-        let nonce = Nonce::from_slice(&nonce_bytes);
+        let nonce = Nonce::from(nonce_bytes);
 
         // Encrypt
         let ciphertext = self
             .cipher
-            .encrypt(nonce, plaintext.as_ref())
+            .encrypt(&nonce, plaintext.as_ref())
             .map_err(|e| SessionError::EncryptionError(format!("Encryption failed: {}", e)))?;
 
         Ok(EncryptedSessionData {
@@ -427,12 +437,12 @@ impl SecureSessionManager {
         &self,
         encrypted: &EncryptedSessionData,
     ) -> Result<SessionData, SessionError> {
-        let nonce = Nonce::from_slice(&encrypted.nonce);
+        let nonce = Nonce::from(encrypted.nonce);
 
         // Decrypt
         let plaintext = self
             .cipher
-            .decrypt(nonce, encrypted.ciphertext.as_ref())
+            .decrypt(&nonce, encrypted.ciphertext.as_ref())
             .map_err(|e| SessionError::DecryptionError(format!("Decryption failed: {}", e)))?;
 
         // Deserialize

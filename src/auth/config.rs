@@ -289,28 +289,25 @@ impl ProviderConfig {
         }
 
         // Provider-specific validation
-        match provider_name {
-            "apple" => {
-                if self.team_id.is_none() {
-                    return Err(AuthError::MissingConfig(format!(
-                        "providers.{}.team_id",
-                        provider_name
-                    )));
-                }
-                if self.key_id.is_none() {
-                    return Err(AuthError::MissingConfig(format!(
-                        "providers.{}.key_id",
-                        provider_name
-                    )));
-                }
-                if self.private_key.is_none() {
-                    return Err(AuthError::MissingConfig(format!(
-                        "providers.{}.private_key",
-                        provider_name
-                    )));
-                }
+        if provider_name == "apple" {
+            if self.team_id.is_none() {
+                return Err(AuthError::MissingConfig(format!(
+                    "providers.{}.team_id",
+                    provider_name
+                )));
             }
-            _ => {}
+            if self.key_id.is_none() {
+                return Err(AuthError::MissingConfig(format!(
+                    "providers.{}.key_id",
+                    provider_name
+                )));
+            }
+            if self.private_key.is_none() {
+                return Err(AuthError::MissingConfig(format!(
+                    "providers.{}.private_key",
+                    provider_name
+                )));
+            }
         }
 
         Ok(())

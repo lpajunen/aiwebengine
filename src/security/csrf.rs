@@ -33,6 +33,7 @@ pub struct CsrfProtection {
 #[derive(Debug, Clone)]
 struct TokenMetadata {
     session_id: Option<String>,
+    #[allow(dead_code)]
     created_at: DateTime<Utc>,
     expires_at: DateTime<Utc>,
 }
@@ -161,7 +162,7 @@ impl CsrfProtection {
     /// Create HMAC signature
     fn create_hmac(&self, data: &[u8]) -> String {
         let mut mac = Sha256::new();
-        mac.update(&self.secret_key);
+        mac.update(self.secret_key);
         mac.update(data);
         format!("{:x}", mac.finalize())
     }

@@ -33,9 +33,11 @@ pub struct OAuthCallbackParams {
 #[derive(Debug, Deserialize)]
 pub struct LoginParams {
     /// OAuth2 provider name
+    #[allow(dead_code)]
     provider: String,
 
     /// Optional redirect URL after successful login
+    #[allow(dead_code)]
     redirect: Option<String>,
 }
 
@@ -312,18 +314,17 @@ async fn auth_status(
             })
         });
 
-    if let Some(token) = session_token {
-        if let Ok(user_id) = auth_manager
+    if let Some(token) = session_token
+        && let Ok(user_id) = auth_manager
             .validate_session(token, &ip_addr, &user_agent)
             .await
-        {
-            return Json(AuthResponse {
-                success: true,
-                session_token: Some(token.to_string()),
-                user_id: Some(user_id),
-                redirect: None,
-            });
-        }
+    {
+        return Json(AuthResponse {
+            success: true,
+            session_token: Some(token.to_string()),
+            user_id: Some(user_id),
+            redirect: None,
+        });
     }
 
     Json(AuthResponse {

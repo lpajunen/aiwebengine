@@ -81,6 +81,7 @@ impl JsAuthContext {
 /// - `auth.currentUser()` - Get complete user object or null
 /// - `auth.requireAuth()` - Throw error if not authenticated
 pub struct AuthJsApi {
+    #[allow(dead_code)]
     auth_context: JsAuthContext,
 }
 

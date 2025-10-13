@@ -1,5 +1,4 @@
 use serde_json::{Value, json};
-use tokio;
 use tracing::info;
 
 #[tokio::test]
@@ -22,7 +21,7 @@ async fn test_subscription_schema_configured() {
     });
 
     let response = client
-        .post(&format!("http://127.0.0.1:{}/graphql", port))
+        .post(format!("http://127.0.0.1:{}/graphql", port))
         .json(&introspection_query)
         .send()
         .await
@@ -40,27 +39,25 @@ async fn test_subscription_schema_configured() {
                 info!("Subscription type: {:?}", subscription_type);
 
                 // Check for expected subscription fields
-                if let Some(fields) = subscription_type.get("fields") {
-                    if let Some(fields_array) = fields.as_array() {
-                        let field_names: Vec<String> = fields_array
-                            .iter()
-                            .filter_map(|f| {
-                                f.get("name").and_then(|n| n.as_str().map(String::from))
-                            })
-                            .collect();
+                if let Some(fields) = subscription_type.get("fields")
+                    && let Some(fields_array) = fields.as_array()
+                {
+                    let field_names: Vec<String> = fields_array
+                        .iter()
+                        .filter_map(|f| f.get("name").and_then(|n| n.as_str().map(String::from)))
+                        .collect();
 
-                        info!("Available subscription fields: {:?}", field_names);
+                    info!("Available subscription fields: {:?}", field_names);
 
-                        // We expect at least one subscription field (scriptUpdates from core.js)
-                        assert!(
-                            !field_names.is_empty(),
-                            "Expected at least one subscription field"
-                        );
-                        assert!(
-                            field_names.contains(&"scriptUpdates".to_string()),
-                            "Expected 'scriptUpdates' subscription field to be present"
-                        );
-                    }
+                    // We expect at least one subscription field (scriptUpdates from core.js)
+                    assert!(
+                        !field_names.is_empty(),
+                        "Expected at least one subscription field"
+                    );
+                    assert!(
+                        field_names.contains(&"scriptUpdates".to_string()),
+                        "Expected 'scriptUpdates' subscription field to be present"
+                    );
                 }
             }
         } else {

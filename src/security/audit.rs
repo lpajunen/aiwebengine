@@ -332,10 +332,10 @@ impl SecurityAuditor {
                 }
             } else if action.contains("Alert security team") {
                 self.send_security_alert(event, assessment).await;
-            } else if action.contains("account lockdown") {
-                if let Some(user_id) = &event.user_id {
-                    self.request_account_lockdown(user_id).await;
-                }
+            } else if action.contains("account lockdown")
+                && let Some(user_id) = &event.user_id
+            {
+                self.request_account_lockdown(user_id).await;
             }
         }
     }

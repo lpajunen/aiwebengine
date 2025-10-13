@@ -278,7 +278,7 @@ async fn test_graphql_script_mutations() {
     // Verify field values
     assert_eq!(upsert_result["uri"].as_str().unwrap(), "http://test/script");
     assert_eq!(upsert_result["chars"].as_u64().unwrap(), 20); // "console.log('test');" is 20 characters
-    assert_eq!(upsert_result["success"].as_bool().unwrap(), true);
+    assert!(upsert_result["success"].as_bool().unwrap());
     assert!(
         upsert_result["message"]
             .as_str()
@@ -325,7 +325,7 @@ async fn test_graphql_script_mutations() {
 
     // Verify field values
     assert_eq!(delete_result["uri"].as_str().unwrap(), "http://test/script");
-    assert_eq!(delete_result["success"].as_bool().unwrap(), true);
+    assert!(delete_result["success"].as_bool().unwrap());
     assert!(
         delete_result["message"]
             .as_str()
@@ -378,10 +378,7 @@ async fn test_graphql_script_mutations() {
         delete_nonexistent_result["uri"].as_str().unwrap(),
         "http://test/nonexistent"
     );
-    assert_eq!(
-        delete_nonexistent_result["success"].as_bool().unwrap(),
-        false
-    );
+    assert!(!delete_nonexistent_result["success"].as_bool().unwrap());
     assert!(
         delete_nonexistent_result["message"]
             .as_str()

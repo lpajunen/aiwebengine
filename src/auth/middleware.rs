@@ -37,24 +37,23 @@ impl AuthUser {
 /// Extract session token from request cookies or Authorization header
 fn extract_session_token(req: &Request) -> Option<String> {
     // Try Authorization header first (Bearer token)
-    if let Some(auth_header) = req.headers().get(header::AUTHORIZATION) {
-        if let Ok(auth_str) = auth_header.to_str() {
-            if let Some(token) = auth_str.strip_prefix("Bearer ") {
-                return Some(token.to_string());
-            }
-        }
+    if let Some(auth_header) = req.headers().get(header::AUTHORIZATION)
+        && let Ok(auth_str) = auth_header.to_str()
+        && let Some(token) = auth_str.strip_prefix("Bearer ")
+    {
+        return Some(token.to_string());
     }
 
     // Try cookie
-    if let Some(cookie_header) = req.headers().get(header::COOKIE) {
-        if let Ok(cookie_str) = cookie_header.to_str() {
-            for cookie in cookie_str.split(';') {
-                let cookie = cookie.trim();
-                if let Some((name, value)) = cookie.split_once('=') {
-                    if name == "auth_session" {
-                        return Some(value.to_string());
-                    }
-                }
+    if let Some(cookie_header) = req.headers().get(header::COOKIE)
+        && let Ok(cookie_str) = cookie_header.to_str()
+    {
+        for cookie in cookie_str.split(';') {
+            let cookie = cookie.trim();
+            if let Some((name, value)) = cookie.split_once('=')
+                && name == "auth_session"
+            {
+                return Some(value.to_string());
             }
         }
     }
@@ -65,19 +64,18 @@ fn extract_session_token(req: &Request) -> Option<String> {
 /// Extract client IP address from request
 fn extract_client_ip(req: &Request) -> String {
     // Try X-Forwarded-For header first
-    if let Some(forwarded) = req.headers().get("x-forwarded-for") {
-        if let Ok(forwarded_str) = forwarded.to_str() {
-            if let Some(ip) = forwarded_str.split(',').next() {
-                return ip.trim().to_string();
-            }
-        }
+    if let Some(forwarded) = req.headers().get("x-forwarded-for")
+        && let Ok(forwarded_str) = forwarded.to_str()
+        && let Some(ip) = forwarded_str.split(',').next()
+    {
+        return ip.trim().to_string();
     }
 
     // Try X-Real-IP header
-    if let Some(real_ip) = req.headers().get("x-real-ip") {
-        if let Ok(ip_str) = real_ip.to_str() {
-            return ip_str.to_string();
-        }
+    if let Some(real_ip) = req.headers().get("x-real-ip")
+        && let Ok(ip_str) = real_ip.to_str()
+    {
+        return ip_str.to_string();
     }
 
     // Fallback to connection info (would need to be passed through state)

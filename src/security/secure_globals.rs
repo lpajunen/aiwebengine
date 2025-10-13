@@ -1021,21 +1021,21 @@ impl SecureGlobalContext {
                     .require_capability(&crate::security::Capability::ManageStreams)
                 {
                     // Only try async logging if we're in a runtime and audit logging is enabled
-                    if config_register.enable_audit_logging {
-                        if let Ok(rt) = tokio::runtime::Handle::try_current() {
-                            let auditor_clone = auditor_register.clone();
-                            let user_id = user_ctx_register.user_id.clone();
-                            rt.spawn(async move {
-                                let _ = auditor_clone
-                                    .log_authz_failure(
-                                        user_id,
-                                        "stream".to_string(),
-                                        "register".to_string(),
-                                        "ManageStreams".to_string(),
-                                    )
-                                    .await;
-                            });
-                        }
+                    if config_register.enable_audit_logging
+                        && let Ok(rt) = tokio::runtime::Handle::try_current()
+                    {
+                        let auditor_clone = auditor_register.clone();
+                        let user_id = user_ctx_register.user_id.clone();
+                        rt.spawn(async move {
+                            let _ = auditor_clone
+                                .log_authz_failure(
+                                    user_id,
+                                    "stream".to_string(),
+                                    "register".to_string(),
+                                    "ManageStreams".to_string(),
+                                )
+                                .await;
+                        });
                     }
                     return Ok(format!("Error: {}", e));
                 }
@@ -1046,28 +1046,28 @@ impl SecureGlobalContext {
                 }
 
                 // Log the operation attempt if audit logging is enabled and we have a runtime
-                if config_register.enable_audit_logging {
-                    if let Ok(rt) = tokio::runtime::Handle::try_current() {
-                        let auditor_clone = auditor_register.clone();
-                        let user_id = user_ctx_register.user_id.clone();
-                        let path_clone = path.clone();
-                        let script_uri_clone = script_uri_register.clone();
-                        rt.spawn(async move {
-                            let _ = auditor_clone
-                                .log_event(
-                                    crate::security::SecurityEvent::new(
-                                        SecurityEventType::SystemSecurityEvent,
-                                        SecuritySeverity::Medium,
-                                        user_id,
-                                    )
-                                    .with_resource("stream".to_string())
-                                    .with_action("register".to_string())
-                                    .with_detail("path", &path_clone)
-                                    .with_detail("script_uri", &script_uri_clone),
+                if config_register.enable_audit_logging
+                    && let Ok(rt) = tokio::runtime::Handle::try_current()
+                {
+                    let auditor_clone = auditor_register.clone();
+                    let user_id = user_ctx_register.user_id.clone();
+                    let path_clone = path.clone();
+                    let script_uri_clone = script_uri_register.clone();
+                    rt.spawn(async move {
+                        let _ = auditor_clone
+                            .log_event(
+                                crate::security::SecurityEvent::new(
+                                    SecurityEventType::SystemSecurityEvent,
+                                    SecuritySeverity::Medium,
+                                    user_id,
                                 )
-                                .await;
-                        });
-                    }
+                                .with_resource("stream".to_string())
+                                .with_action("register".to_string())
+                                .with_detail("path", &path_clone)
+                                .with_detail("script_uri", &script_uri_clone),
+                            )
+                            .await;
+                    });
                 }
 
                 debug!(

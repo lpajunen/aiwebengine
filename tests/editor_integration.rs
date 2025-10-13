@@ -50,7 +50,7 @@ async fn test_editor_api_endpoints() {
         let get_response = tokio::time::timeout(
             Duration::from_secs(5),
             client
-                .get(&format!(
+                .get(format!(
                     "http://127.0.0.1:{}/api/scripts/{}",
                     port, short_name
                 ))
@@ -87,7 +87,7 @@ async fn test_editor_api_endpoints() {
     let save_response = tokio::time::timeout(
         Duration::from_secs(5),
         client
-            .post(&format!(
+            .post(format!(
                 "http://127.0.0.1:{}/api/scripts/{}",
                 port, test_script_name
             ))
@@ -112,7 +112,7 @@ async fn test_editor_api_endpoints() {
     let verify_response = tokio::time::timeout(
         Duration::from_secs(5),
         client
-            .get(&format!(
+            .get(format!(
                 "http://127.0.0.1:{}/api/scripts/{}",
                 port, test_script_name
             ))
