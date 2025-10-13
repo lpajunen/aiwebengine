@@ -46,9 +46,9 @@ argon2 = "0.5"
 subtle = "2.5"
 
 # OAuth2 and JWT (Phase 2)
-oauth2 = "4.4"
-jsonwebtoken = "9.3"
-openidconnect = "3.5"
+oauth2 = "5.0.0"
+jsonwebtoken = { version = "10.0.0", features = ["rust_crypto"] }
+openidconnect = "4.0.1"
 async-trait = "0.1"
 
 # Optimize test builds for faster compilation and execution

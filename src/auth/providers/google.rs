@@ -16,7 +16,7 @@ const GOOGLE_JWKS_URL: &str = "https://www.googleapis.com/oauth2/v3/certs";
 const GOOGLE_ISSUER: &str = "https://accounts.google.com";
 
 /// Google ID token claims (from JWT)
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 struct GoogleIdTokenClaims {
     /// Issuer (should be accounts.google.com)
     iss: String,

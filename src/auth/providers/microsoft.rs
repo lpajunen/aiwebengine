@@ -17,7 +17,7 @@ const MICROSOFT_JWKS_URL: &str = "https://login.microsoftonline.com/common/disco
 const MICROSOFT_ISSUER: &str = "https://login.microsoftonline.com";
 
 /// Microsoft ID token claims
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 struct MicrosoftIdTokenClaims {
     /// Issuer
     iss: String,

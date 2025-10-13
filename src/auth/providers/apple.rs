@@ -18,7 +18,7 @@ const APPLE_JWKS_URL: &str = "https://appleid.apple.com/auth/keys";
 const APPLE_ISSUER: &str = "https://appleid.apple.com";
 
 /// Apple ID token claims
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 struct AppleIdTokenClaims {
     /// Issuer (should be appleid.apple.com)
     iss: String,
