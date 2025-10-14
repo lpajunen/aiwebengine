@@ -176,6 +176,23 @@ pub fn fetch_log_messages(script_uri: &str) -> Vec<String> {
     }
 }
 
+/// Fetch ALL log messages from all script URIs
+pub fn fetch_all_log_messages() -> Vec<String> {
+    match safe_lock_logs() {
+        Ok(guard) => {
+            let mut all_logs = Vec::new();
+            for logs in guard.values() {
+                all_logs.extend(logs.clone());
+            }
+            all_logs
+        }
+        Err(e) => {
+            error!("Failed to fetch all log messages: {}", e);
+            vec![format!("Error: Could not retrieve logs - {}", e)]
+        }
+    }
+}
+
 /// Clear log messages for a script
 pub fn clear_log_messages(script_uri: &str) -> Result<(), RepositoryError> {
     let mut guard = safe_lock_logs()?;

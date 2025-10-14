@@ -1,5 +1,6 @@
+mod common;
+
 use aiwebengine::repository;
-use aiwebengine::start_server_without_shutdown;
 use std::time::Duration;
 use tokio::time::timeout;
 
@@ -11,18 +12,22 @@ async fn js_script_mgmt_functions_work() {
         include_str!("../scripts/test_scripts/js_script_mgmt_test.js"),
     );
 
-    // Start server with timeout
-    let server_future = start_server_without_shutdown();
-    let port = match timeout(Duration::from_secs(5), server_future).await {
-        Ok(Ok(port)) => port,
-        Ok(Err(e)) => panic!("Server failed to start: {:?}", e),
-        Err(_) => panic!("Server startup timed out"),
-    };
+    // Use the new TestContext pattern for proper server lifecycle management
+    let context = common::TestContext::new();
+    let port = context
+        .start_server()
+        .await
+        .expect("Server failed to start");
+
+    // Wait for server to be ready and scripts to be executed
+    common::wait_for_server(port, 40)
+        .await
+        .expect("Server not ready");
+
+    // Give extra time for JavaScript scripts to execute and register routes
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
     println!("Server started on port: {}", port);
-
-    // Wait for server to be ready to accept connections
-    tokio::time::sleep(Duration::from_millis(200)).await;
 
     let client = reqwest::Client::new();
 
@@ -84,22 +89,29 @@ async fn js_script_mgmt_functions_work() {
     // These operations are validated by the js_mgmt_check handler above
     // No need to test route availability since script deletion doesn't affect
     // already-registered routes in the current system design
+
+    // Proper cleanup
+    context.cleanup().await.expect("Failed to cleanup");
 }
 
 #[tokio::test]
 async fn test_upsert_script_endpoint() {
-    // Start server with timeout
-    let server_future = start_server_without_shutdown();
-    let port = match timeout(Duration::from_secs(5), server_future).await {
-        Ok(Ok(port)) => port,
-        Ok(Err(e)) => panic!("Server failed to start: {:?}", e),
-        Err(_) => panic!("Server startup timed out"),
-    };
+    // Use the new TestContext pattern for proper server lifecycle management
+    let context = common::TestContext::new();
+    let port = context
+        .start_server()
+        .await
+        .expect("Server failed to start");
+
+    // Wait for server to be ready and scripts to be executed
+    common::wait_for_server(port, 40)
+        .await
+        .expect("Server not ready");
+
+    // Give extra time for JavaScript scripts to execute and register routes
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
     println!("Server started on port: {}", port);
-
-    // Wait for server to be ready to accept connections
-    tokio::time::sleep(Duration::from_millis(200)).await;
 
     let client = reqwest::Client::new();
 
@@ -176,22 +188,29 @@ register('/test-endpoint', 'test_endpoint_handler', 'GET');
         test_body, "Test endpoint works!",
         "Expected correct response body"
     );
+
+    // Proper cleanup
+    context.cleanup().await.expect("Failed to cleanup");
 }
 
 #[tokio::test]
 async fn test_delete_script_endpoint() {
-    // Start server with timeout
-    let server_future = start_server_without_shutdown();
-    let port = match timeout(Duration::from_secs(5), server_future).await {
-        Ok(Ok(port)) => port,
-        Ok(Err(e)) => panic!("Server failed to start: {:?}", e),
-        Err(_) => panic!("Server startup timed out"),
-    };
+    // Use the new TestContext pattern for proper server lifecycle management
+    let context = common::TestContext::new();
+    let port = context
+        .start_server()
+        .await
+        .expect("Server failed to start");
+
+    // Wait for server to be ready and scripts to be executed
+    common::wait_for_server(port, 40)
+        .await
+        .expect("Server not ready");
+
+    // Give extra time for JavaScript scripts to execute and register routes
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
     println!("Server started on port: {}", port);
-
-    // Wait for server to be ready to accept connections
-    tokio::time::sleep(Duration::from_millis(200)).await;
 
     let client = reqwest::Client::new();
 
@@ -331,22 +350,29 @@ register('/delete-test-endpoint', 'delete_test_handler', 'GET');
         nonexistent_body["error"], "Script not found",
         "Expected 'Script not found' error"
     );
+
+    // Proper cleanup
+    context.cleanup().await.expect("Failed to cleanup");
 }
 
 #[tokio::test]
 async fn test_script_lifecycle_via_http_api() {
-    // Start server with timeout
-    let server_future = start_server_without_shutdown();
-    let port = match timeout(Duration::from_secs(5), server_future).await {
-        Ok(Ok(port)) => port,
-        Ok(Err(e)) => panic!("Server failed to start: {:?}", e),
-        Err(_) => panic!("Server startup timed out"),
-    };
+    // Use the new TestContext pattern for proper server lifecycle management
+    let context = common::TestContext::new();
+    let port = context
+        .start_server()
+        .await
+        .expect("Server failed to start");
+
+    // Wait for server to be ready and scripts to be executed
+    common::wait_for_server(port, 40)
+        .await
+        .expect("Server not ready");
+
+    // Give extra time for JavaScript scripts to execute and register routes
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
     println!("Server started on port: {}", port);
-
-    // Wait for server to be ready to accept connections
-    tokio::time::sleep(Duration::from_millis(200)).await;
 
     let client = reqwest::Client::new();
 
@@ -445,22 +471,29 @@ register('/lifecycle-test', 'lifecycle_test_handler', 'GET');
         404,
         "Expected 404 for deleted script endpoint"
     );
+
+    // Proper cleanup
+    context.cleanup().await.expect("Failed to cleanup");
 }
 
 #[tokio::test]
 async fn test_read_script_endpoint() {
-    // Start server with timeout
-    let server_future = start_server_without_shutdown();
-    let port = match timeout(Duration::from_secs(5), server_future).await {
-        Ok(Ok(port)) => port,
-        Ok(Err(e)) => panic!("Server failed to start: {:?}", e),
-        Err(_) => panic!("Server startup timed out"),
-    };
+    // Use the new TestContext pattern for proper server lifecycle management
+    let context = common::TestContext::new();
+    let port = context
+        .start_server()
+        .await
+        .expect("Server failed to start");
+
+    // Wait for server to be ready and scripts to be executed
+    common::wait_for_server(port, 40)
+        .await
+        .expect("Server not ready");
+
+    // Give extra time for JavaScript scripts to execute and register routes
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
     println!("Server started on port: {}", port);
-
-    // Wait for server to be ready to accept connections
-    tokio::time::sleep(Duration::from_millis(200)).await;
 
     let client = reqwest::Client::new();
 
@@ -592,4 +625,7 @@ register('/read-test-endpoint', 'read_test_handler', 'GET');
         missing_uri_body["error"], "Missing required parameter: uri",
         "Expected 'Missing required parameter: uri' error"
     );
+
+    // Proper cleanup
+    context.cleanup().await.expect("Failed to cleanup");
 }

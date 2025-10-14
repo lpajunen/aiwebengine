@@ -516,13 +516,16 @@ pub fn execute_script_for_request(
             ..Default::default()
         };
 
+        // Always provide an anonymous auth context so scripts can safely check auth state
+        let auth_ctx = crate::auth::JsAuthContext::anonymous();
+
         setup_secure_global_functions(
             &ctx,
             &script_uri_owned,
             UserContext::anonymous(),
             &config,
             None,
-            None, // No auth context for legacy execution
+            Some(auth_ctx), // Provide anonymous auth context
         )?;
 
         Ok(())

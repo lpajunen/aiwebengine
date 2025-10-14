@@ -1,74 +1,66 @@
+mod common;
+
 use aiwebengine::repository;
-use aiwebengine::start_server_without_shutdown;
 use std::time::Duration;
 
 #[tokio::test]
 async fn js_registered_route_returns_expected() {
-    // ensure repository scripts are present (core/debug are included by default)
-    // start server in background task
-    let port = tokio::time::timeout(Duration::from_secs(5), start_server_without_shutdown())
+    // Use the new TestContext pattern for proper server lifecycle management
+    let context = common::TestContext::new();
+    let port = context
+        .start_server()
         .await
-        .expect("Server startup timed out")
         .expect("Server failed to start");
 
-    // Wait for server to be ready to accept connections
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // Wait for server to be ready - this checks /health which should be registered by core.js
+    common::wait_for_server(port, 40)
+        .await
+        .expect("Server not ready");
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()
         .expect("Failed to create HTTP client");
 
-    // send request to `/` which should be registered by `scripts/core.js`.
-    // Retry a few times to avoid races while the server finishes startup.
-    let mut got = false;
-    let mut last_body = String::new();
-    for i in 0..10 {
-        println!(
-            "DEBUG: Test attempt {} - making request to http://127.0.0.1:{}/",
-            i, port
-        );
-        let res_root = tokio::time::timeout(
-            Duration::from_secs(5),
-            client.get(format!("http://127.0.0.1:{}/", port)).send(),
-        )
-        .await;
+    // First verify /health works (this confirms core.js is loaded)
+    let health_res = client
+        .get(format!("http://127.0.0.1:{}/health", port))
+        .send()
+        .await
+        .expect("Health check failed");
 
-        match res_root {
-            Ok(Ok(res)) => {
-                println!(
-                    "DEBUG: Test attempt {} - got response with status: {}",
-                    i,
-                    res.status()
-                );
-                if res.status() == reqwest::StatusCode::OK {
-                    let body_root = res.text().await.expect("read root body");
-                    println!("DEBUG: Test attempt {} - response body: '{}'", i, body_root);
-                    last_body = body_root.clone();
-                    if !body_root.is_empty() && body_root.contains("Core handler: OK") {
-                        got = true;
-                        break;
-                    }
-                } else {
-                    last_body = format!("HTTP {}", res.status());
-                }
-            }
-            Ok(Err(e)) => {
-                println!("DEBUG: Test attempt {} - request failed: {}", i, e);
-                last_body = format!("Request failed: {}", e);
-            }
-            Err(_) => {
-                println!("DEBUG: Test attempt {} - request timed out", i);
-                last_body = "Request timed out".to_string();
-            }
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-    assert!(
-        got,
-        "expected / to return Core handler response, last body: {}",
-        last_body
+    assert_eq!(
+        health_res.status(),
+        reqwest::StatusCode::OK,
+        "Health endpoint should be OK"
     );
+
+    // Now test the root endpoint which is also registered by core.js
+    let res = client
+        .get(format!("http://127.0.0.1:{}/", port))
+        .send()
+        .await
+        .expect("Request to / failed");
+
+    let status = res.status();
+    let body = res.text().await.expect("Failed to read response body");
+
+    assert_eq!(
+        status,
+        reqwest::StatusCode::OK,
+        "Expected 200 OK status for /, got {} with body: {}",
+        status,
+        body
+    );
+
+    assert!(
+        body.contains("Core handler: OK"),
+        "Expected 'Core handler: OK' in response, got: {}",
+        body
+    );
+
+    // Proper cleanup
+    context.cleanup().await.expect("Failed to cleanup");
 }
 
 #[tokio::test]

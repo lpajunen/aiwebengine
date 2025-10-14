@@ -231,7 +231,8 @@ impl SecureGlobalContext {
                     "Secure listLogs called"
                 );
 
-                let logs = repository::fetch_log_messages("");
+                // Fetch all logs from all script URIs
+                let logs = repository::fetch_all_log_messages();
                 Ok(logs)
             },
         )?;
