@@ -1,5 +1,5 @@
 use rquickjs::{Function, Result as JsResult};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::repository;
 use crate::security::UserContext;
@@ -126,17 +126,14 @@ impl SecureGlobalContext {
         let user_ctx_get = user_context.clone();
         let get_script = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, script_name: String| -> JsResult<String> {
+            move |_ctx: rquickjs::Ctx<'_>, script_name: String| -> JsResult<Option<String>> {
                 debug!(
                     script_name = %script_name,
                     user_id = ?user_ctx_get.user_id,
                     "Secure getScript called"
                 );
 
-                match repository::fetch_script(&script_name) {
-                    Some(content) => Ok(content),
-                    None => Ok(format!("Error: Script '{}' not found", script_name)),
-                }
+                Ok(repository::fetch_script(&script_name))
             },
         )?;
         global.set("getScript", get_script)?;
@@ -179,12 +176,18 @@ impl SecureGlobalContext {
         let user_ctx_delete = user_context.clone();
         let delete_script = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, script_name: String| -> JsResult<String> {
+            move |_ctx: rquickjs::Ctx<'_>, script_name: String| -> JsResult<bool> {
                 // Check capability
                 if let Err(e) =
                     user_ctx_delete.require_capability(&crate::security::Capability::DeleteScripts)
                 {
-                    return Ok(format!("Error: {}", e));
+                    warn!(
+                        script_name = %script_name,
+                        user_id = ?user_ctx_delete.user_id,
+                        error = %e,
+                        "deleteScript capability check failed"
+                    );
+                    return Ok(false);
                 }
 
                 debug!(
@@ -193,8 +196,7 @@ impl SecureGlobalContext {
                     "Secure deleteScript called"
                 );
 
-                repository::delete_script(&script_name);
-                Ok(format!("Script '{}' deleted successfully", script_name))
+                Ok(repository::delete_script(&script_name))
             },
         )?;
         global.set("deleteScript", delete_script)?;

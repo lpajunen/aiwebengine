@@ -285,9 +285,14 @@ async fn test_rate_limiting_resets_after_window() {
 
 #[tokio::test]
 async fn test_anonymous_user_has_minimal_capabilities() {
+    // Set production mode to test strict anonymous user capabilities
+    unsafe {
+        std::env::set_var("AIWEBENGINE_MODE", "production");
+    }
+
     let anon_user = UserContext::anonymous();
 
-    // Anonymous users should not have write capabilities
+    // Anonymous users should not have write capabilities in production mode
     assert!(
         anon_user
             .require_capability(&Capability::WriteScripts)
@@ -308,6 +313,11 @@ async fn test_anonymous_user_has_minimal_capabilities() {
             .require_capability(&Capability::ManageStreams)
             .is_err()
     );
+
+    // Cleanup - restore development mode for other tests
+    unsafe {
+        std::env::set_var("AIWEBENGINE_MODE", "development");
+    }
 }
 
 #[tokio::test]

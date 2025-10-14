@@ -1,6 +1,6 @@
 use base64::Engine;
 use rquickjs::{Function, Result as JsResult};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::repository;
 use crate::security::{
@@ -306,12 +306,18 @@ impl SecureGlobalContext {
         let user_ctx_get = user_context.clone();
         let get_script = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, script_name: String| -> JsResult<String> {
+            move |_ctx: rquickjs::Ctx<'_>, script_name: String| -> JsResult<Option<String>> {
                 // Check capability
                 if let Err(e) =
                     user_ctx_get.require_capability(&crate::security::Capability::ReadScripts)
                 {
-                    return Ok(format!("Error: {}", e));
+                    warn!(
+                        user_id = ?user_ctx_get.user_id,
+                        script_name = %script_name,
+                        error = %e,
+                        "getScript capability check failed"
+                    );
+                    return Ok(None);
                 }
 
                 debug!(
@@ -320,10 +326,7 @@ impl SecureGlobalContext {
                     "Secure getScript called"
                 );
 
-                match repository::fetch_script(&script_name) {
-                    Some(content) => Ok(content),
-                    None => Ok(format!("Script '{}' not found", script_name)),
-                }
+                Ok(repository::fetch_script(&script_name))
             },
         )?;
         global.set("getScript", get_script)?;
@@ -370,7 +373,7 @@ impl SecureGlobalContext {
         let auditor_delete = auditor.clone();
         let delete_script = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, script_name: String| -> JsResult<String> {
+            move |_ctx: rquickjs::Ctx<'_>, script_name: String| -> JsResult<bool> {
                 // Check capability
                 if let Err(e) =
                     user_ctx_delete.require_capability(&crate::security::Capability::DeleteScripts)
@@ -388,7 +391,13 @@ impl SecureGlobalContext {
                             )
                             .await;
                     });
-                    return Ok(format!("Error: {}", e));
+                    warn!(
+                        user_id = ?user_ctx_delete.user_id,
+                        script_name = %script_name,
+                        error = %e,
+                        "deleteScript capability check failed"
+                    );
+                    return Ok(false);
                 }
 
                 // Log the operation attempt using spawn to avoid runtime conflicts
@@ -416,10 +425,7 @@ impl SecureGlobalContext {
                     "Secure deleteScript called"
                 );
 
-                match repository::delete_script(&script_name) {
-                    true => Ok(format!("Script '{}' deleted successfully", script_name)),
-                    false => Ok(format!("Script '{}' not found", script_name)),
-                }
+                Ok(repository::delete_script(&script_name))
             },
         )?;
         global.set("deleteScript", delete_script)?;

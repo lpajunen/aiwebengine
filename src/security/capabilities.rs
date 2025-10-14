@@ -34,16 +34,33 @@ impl UserContext {
     }
 
     fn anonymous_capabilities() -> HashSet<Capability> {
-        // Anonymous users can read and write (for development/testing)
-        // In production, these should be restricted to authenticated users only
-        [
-            Capability::ViewLogs,
-            Capability::ReadScripts,
-            Capability::WriteScripts,
-            Capability::ReadAssets,
-        ]
-        .into_iter()
-        .collect()
+        // In development mode, anonymous users get elevated permissions for testing
+        // In production, they should have minimal read-only capabilities (REQ-AUTH-006)
+        let is_dev_mode = std::env::var("AIWEBENGINE_MODE")
+            .unwrap_or_else(|_| "development".to_string())
+            == "development";
+
+        if is_dev_mode {
+            // Development mode: elevated permissions for easier testing
+            [
+                Capability::ViewLogs,
+                Capability::ReadScripts,
+                Capability::WriteScripts,
+                Capability::ReadAssets,
+                Capability::WriteAssets,
+                Capability::DeleteScripts, // Allow script deletion in dev mode
+            ]
+            .into_iter()
+            .collect()
+        } else {
+            // Production mode: minimal read-only capabilities
+            [
+                Capability::ReadScripts, // Read public scripts only
+                Capability::ReadAssets,  // Read public assets only
+            ]
+            .into_iter()
+            .collect()
+        }
     }
 
     fn authenticated_capabilities() -> HashSet<Capability> {

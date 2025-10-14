@@ -265,7 +265,8 @@ function read_script_handler(req) {
 		// Call the getScript function
 		const content = getScript(uri);
 		
-		if (content) {
+		// getScript returns null if script not found or access denied
+		if (content !== null && content !== undefined) {
 			writeLog(`Script retrieved: ${uri} (${content.length} characters)`);
 			return {
 				status: 200,
@@ -380,7 +381,8 @@ function scriptQuery(args) {
 		const content = getScript(args.uri);
 		const logs = listLogsForUri(args.uri);
 		
-		if (content) {
+		// getScript returns null if script not found
+		if (content !== null && content !== undefined) {
 			return JSON.stringify({
 				uri: args.uri,
 				content: content,
@@ -443,11 +445,9 @@ function upsertScriptMutation(args) {
 function deleteScriptMutation(args) {
 	try {
 		const result = deleteScript(args.uri);
-		// deleteScript returns a string message, check if it indicates success or error
-		const isError = result && result.startsWith('Error:');
-		const success = result && result.includes('deleted successfully') && !isError;
+		// deleteScript now returns boolean: true if deleted, false if not found
 		
-		if (success) {
+		if (result) {
 			// Broadcast the script removal
 			broadcastScriptUpdate(args.uri, 'removed', {
 				via: 'graphql'
