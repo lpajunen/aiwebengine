@@ -471,17 +471,6 @@ The engine MUST:
 - Support stream-specific routing
 - Provide stream status information
 
-### REQ-RT-003: WebSocket Support
-**Priority**: MEDIUM  
-**Status**: PLANNED
-
-The engine SHOULD support WebSocket:
-- Bidirectional communication
-- Binary and text messages
-- Connection lifecycle management
-- Ping/pong heartbeats
-- WebSocket upgrade handling
-
 ---
 
 ## GraphQL Support
@@ -642,16 +631,6 @@ The engine SHOULD expose:
 - Support for all HTTP methods
 - Request/response streaming
 - Timeout configuration
-
-### REQ-JSAPI-007: File System API
-**Priority**: LOW  
-**Status**: PLANNED
-
-The engine MAY expose (dev mode only):
-- File reading functions
-- File writing functions
-- Directory operations
-- Path utilities
 
 ---
 
