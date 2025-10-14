@@ -20,15 +20,16 @@ This document defines the complete requirements for the aiwebengine project, cov
    - [Configuration Management](#configuration-management)
    - [Logging & Monitoring](#logging--monitoring)
 3. [Real-Time Features](#real-time-features)
-4. [GraphQL Support](#graphql-support)
-5. [Data Management](#data-management)
-6. [JavaScript APIs](#javascript-apis)
-7. [Asset Management](#asset-management)
-8. [Development Requirements](#development-requirements)
-9. [Documentation Requirements](#documentation-requirements)
-10. [Testing Requirements](#testing-requirements)
-11. [Performance Requirements](#performance-requirements)
-12. [Deployment Requirements](#deployment-requirements)
+4. [Model Context Protocol (MCP) Support](#model-context-protocol-mcp-support)
+5. [GraphQL Support](#graphql-support)
+6. [Data Management](#data-management)
+7. [JavaScript APIs](#javascript-apis)
+8. [Asset Management](#asset-management)
+9. [Development Requirements](#development-requirements)
+10. [Documentation Requirements](#documentation-requirements)
+11. [Testing Requirements](#testing-requirements)
+12. [Performance Requirements](#performance-requirements)
+13. [Deployment Requirements](#deployment-requirements)
 
 ---
 
@@ -77,7 +78,7 @@ The engine MUST parse and expose:
 
 #### REQ-HTTP-003: Response Generation
 **Priority**: CRITICAL  
-**Status**: IMPLEMENTED
+**Status**: PARTIAL
 
 The engine MUST support response generation with:
 - Custom HTTP status codes (100-599)
@@ -85,6 +86,16 @@ The engine MUST support response generation with:
 - Content-Type specification
 - Response body (text, JSON, HTML, binary)
 - Streaming responses for large content
+
+The engine MUST validate JavaScript-generated responses:
+- Verify HTTP status codes are valid and browser-compatible (100-599)
+- Warn or reject invalid status codes with helpful error messages
+- Validate required headers are properly formatted
+- Detect common mistakes (e.g., missing Content-Type for specific responses)
+- Provide clear error messages to help script developers fix issues
+- Suggest corrections for common errors (e.g., typos in status codes)
+- Log validation warnings in development mode
+- Optionally enforce strict validation in production mode
 
 #### REQ-HTTP-004: Request Timeout
 **Priority**: HIGH  
@@ -122,6 +133,35 @@ The engine SHOULD support Cross-Origin Resource Sharing (CORS):
 - Wildcard or specific origin allowlists
 - Preflight request handling
 - Credential support configuration
+
+#### REQ-HTTP-008: Multipart File Upload
+**Priority**: MEDIUM  
+**Status**: PARTIAL
+
+The engine MUST properly parse MIME multipart requests:
+- Parse `multipart/form-data` content type correctly
+- Support file uploads with metadata (filename, content-type)
+- Handle multiple file uploads in single request
+- Support mixed form fields and files
+- Validate multipart boundaries
+- Stream large file uploads to prevent memory exhaustion
+- Expose uploaded files to JavaScript handlers with metadata
+
+#### REQ-HTTP-009: Response Compression
+**Priority**: MEDIUM  
+**Status**: PLANNED
+
+The engine SHOULD automatically compress responses:
+- Support gzip compression
+- Support Brotli compression (future)
+- Automatically compress based on `Accept-Encoding` header
+- Apply compression transparently without JavaScript code changes
+- Configure compression level and minimum size threshold
+- Skip compression for already-compressed content types (images, videos, etc.)
+- Set appropriate `Content-Encoding` headers
+- Preserve original response headers and status codes
+
+**Note**: Compression should be handled at the engine level, requiring no modifications to JavaScript handler code.
 
 ---
 
@@ -195,6 +235,19 @@ The engine MUST support:
 - Script listing and inspection
 - Script deletion
 - Script versioning (future)
+
+#### REQ-JS-008: Multi-Language Runtime Support
+**Priority**: LOW  
+**Status**: PLANNED
+
+The engine SHOULD be designed to support multiple scripting languages:
+- Architecture should not be strictly tied to QuickJS
+- Support pluggable runtime backends
+- Enable alternative languages (e.g., Lua, Python, Rhai)
+- Maintain consistent API across different runtimes
+- Allow runtime selection via configuration
+
+**Note**: This ensures future flexibility and prevents vendor lock-in to a single JavaScript engine.
 
 ---
 
@@ -315,7 +368,7 @@ The engine MUST set cookies with:
 
 #### REQ-AUTH-004: JavaScript Auth API
 **Priority**: HIGH  
-**Status**: IMPLEMENTED
+**Status**: PARTIAL
 
 The engine MUST expose authentication to JavaScript:
 - `auth.isAuthenticated` - check if user logged in
@@ -323,20 +376,76 @@ The engine MUST expose authentication to JavaScript:
 - `auth.userEmail` - get user email
 - `auth.userName` - get user display name
 - `auth.provider` - get OAuth provider
-- `auth.currentUser()` - get full user object
+- `auth.role` - get user role (unauthenticated/authenticated/editor/admin)
+- `auth.isEditor` - check if user has editor rights
+- `auth.isAdmin` - check if user is administrator
+- `auth.groups` - get user's group memberships
+- `auth.canManageScript(scriptId)` - check if user can manage specific script
+- `auth.currentUser()` - get full user object with role and permissions
 - `auth.requireAuth()` - enforce authentication
+- `auth.requireEditor()` - enforce editor or admin role
+- `auth.requireAdmin()` - enforce administrator role
 
 #### REQ-AUTH-005: Authorization
-**Priority**: MEDIUM  
+**Priority**: HIGH  
 **Status**: PLANNED
 
-The engine SHOULD support:
-- Role-based access control (RBAC)
-- Permission checking in JavaScript
-- Resource-level authorization
+The engine MUST support fine-grained authorization:
+- Role-based access control (RBAC) aligned with REQ-AUTH-006
+- Permission checking in JavaScript via auth API
+- Resource-level authorization (script ownership and permissions)
+- Group-based permissions with inheritance
 - Custom authorization policies
+- Access control for script management endpoints
+- Audit logging for authorization decisions
 
-#### REQ-AUTH-006: Multi-factor Authentication
+#### REQ-AUTH-006: User Roles and Hierarchy
+**Priority**: HIGH  
+**Status**: PLANNED
+
+The engine MUST support a hierarchical user role system with four levels:
+
+**1. Unauthenticated Users:**
+- Can access public content provided by the engine
+- No authentication required
+- Read-only access to public endpoints
+
+**2. Authenticated Users:**
+- Can access protected content
+- Have user profile and session
+- Can use all content provided by the engine
+- Cannot manage scripts or configuration
+
+**3. Authenticated with Editor Rights:**
+- All authenticated user capabilities
+- Can create, read, update, and delete scripts they own
+- Can manage scripts owned by groups they belong to
+- Can manage scripts they have explicit permissions for
+- Cannot access other users' scripts without permission
+- Cannot perform administrative tasks
+
+**4. Administrators:**
+- Full system access without restrictions
+- Can manage any scripts regardless of ownership
+- Can manage users, groups, and permissions
+- Can access system configuration
+- Can override any access control restrictions
+
+**Group Management:**
+- Groups can contain users
+- Groups can contain other groups (nested/hierarchical)
+- Groups can own scripts
+- Group membership grants permissions to group-owned resources
+- Permissions inherited from parent groups
+
+**Script Ownership and Permissions:**
+- Scripts have an owner (user or group)
+- Editors can manage scripts they own
+- Editors can manage scripts owned by their groups
+- Explicit permissions can grant access beyond ownership
+- Administrators bypass all ownership checks
+
+#### REQ-AUTH-007: Multi-factor Authentication
 **Priority**: LOW  
 **Status**: PLANNED
 
@@ -473,6 +582,111 @@ The engine MUST:
 
 ---
 
+## Model Context Protocol (MCP) Support
+
+### REQ-MCP-001: MCP Server Implementation
+**Priority**: MEDIUM  
+**Status**: PLANNED
+
+The engine SHOULD support Model Context Protocol (MCP):
+- Act as an MCP server for AI/LLM integration
+- Support MCP protocol specification
+- Handle MCP client connections
+- Support JSON-RPC 2.0 message format
+- Implement standard MCP capabilities negotiation
+- Support both stdio and HTTP transports
+
+### REQ-MCP-002: JavaScript MCP API
+**Priority**: MEDIUM  
+**Status**: PLANNED
+
+The engine SHOULD expose MCP functionality to JavaScript:
+- `registerMCPTool(name, description, schema, handlerFn)` - Register MCP tools
+- `registerMCPResource(uri, name, description, handlerFn)` - Register MCP resources
+- `registerMCPPrompt(name, description, arguments, handlerFn)` - Register MCP prompts
+- Tool schema definition using JSON Schema
+- Handler functions receive structured MCP requests
+- Return structured responses compatible with MCP spec
+
+### REQ-MCP-003: MCP Tool Execution
+**Priority**: MEDIUM  
+**Status**: PLANNED
+
+The engine SHOULD support MCP tool operations:
+- List available tools (tools/list)
+- Execute tool calls (tools/call)
+- Validate tool arguments against schema
+- Return tool results in MCP format
+- Handle tool execution errors gracefully
+- Support async tool execution
+
+### REQ-MCP-004: MCP Resource Management
+**Priority**: MEDIUM  
+**Status**: PLANNED
+
+The engine SHOULD support MCP resource operations:
+- List available resources (resources/list)
+- Read resource contents (resources/read)
+- Subscribe to resource updates (resources/subscribe)
+- Support various resource types (text, binary, structured data)
+- Resource templates and URI patterns
+- Resource metadata and descriptions
+
+### REQ-MCP-005: MCP Prompt Management
+**Priority**: MEDIUM  
+**Status**: PLANNED
+
+The engine SHOULD support MCP prompt operations:
+- List available prompts (prompts/list)
+- Get prompt with arguments (prompts/get)
+- Support dynamic prompt generation
+- Prompt argument validation
+- Return prompts with embedded context
+
+**Example JavaScript MCP Registration:**
+```javascript
+// Register an MCP tool
+registerMCPTool(
+    "search_scripts",
+    "Search for scripts by name or content",
+    {
+        type: "object",
+        properties: {
+            query: { type: "string", description: "Search query" },
+            limit: { type: "number", description: "Max results" }
+        },
+        required: ["query"]
+    },
+    function(args) {
+        // Tool implementation
+        return {
+            results: searchScripts(args.query, args.limit || 10)
+        };
+    }
+);
+
+// Register an MCP resource
+registerMCPResource(
+    "script://{scriptId}",
+    "Script Source",
+    "Access script source code by ID",
+    function(uri) {
+        const scriptId = extractScriptId(uri);
+        return {
+            contents: [
+                {
+                    uri: uri,
+                    mimeType: "application/javascript",
+                    text: getScriptContent(scriptId)
+                }
+            ]
+        };
+    }
+);
+```
+
+---
+
 ## GraphQL Support
 
 ### REQ-GQL-001: GraphQL Server
@@ -602,7 +816,17 @@ The engine MUST expose:
 - `registerGraphQLSubscription(name, schema, resolver)`
 - `sendSubscriptionMessage(name, data)`
 
-### REQ-JSAPI-004: Authentication APIs
+### REQ-JSAPI-004: MCP APIs
+**Priority**: MEDIUM  
+**Status**: PLANNED
+
+The engine SHOULD expose:
+- `registerMCPTool(name, description, schema, handler)` - Register MCP tools
+- `registerMCPResource(uri, name, description, handler)` - Register MCP resources
+- `registerMCPPrompt(name, description, arguments, handler)` - Register MCP prompts
+- MCP request/response handling functions
+
+### REQ-JSAPI-005: Authentication APIs
 **Priority**: HIGH  
 **Status**: IMPLEMENTED
 
@@ -611,7 +835,7 @@ The engine MUST expose:
 - `auth.isAuthenticated`, `auth.userId`, `auth.userEmail`, etc.
 - `auth.currentUser()` and `auth.requireAuth()`
 
-### REQ-JSAPI-005: Utility APIs
+### REQ-JSAPI-006: Utility APIs
 **Priority**: MEDIUM  
 **Status**: PARTIAL
 
@@ -622,7 +846,7 @@ The engine SHOULD expose:
 - Crypto utilities (hashing, random generation)
 - Date/time utilities
 
-### REQ-JSAPI-006: HTTP Client API
+### REQ-JSAPI-007: HTTP Client API
 **Priority**: MEDIUM  
 **Status**: PLANNED
 
@@ -1006,6 +1230,7 @@ The engine MUST support:
 - **File Storage**: S3-compatible object storage
 - **Search Integration**: Elasticsearch/OpenSearch
 - **Message Queue**: Redis/RabbitMQ integration
+- **Additional Scripting Languages**: Lua, Python, Rhai runtime support (see REQ-JS-008)
 
 ---
 
