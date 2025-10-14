@@ -1,18 +1,23 @@
+mod common;
+
+use common::{TestContext, wait_for_server};
 use serde_json::{Value, json};
 use tracing::info;
 
 #[tokio::test]
 async fn test_subscription_schema_configured() {
-    tracing_subscriber::fmt::init();
+    let _ = tracing_subscriber::fmt::try_init();
+
+    let context = TestContext::new();
 
     // Start the server
-    let port = aiwebengine::start_server_without_shutdown()
+    let port = context
+        .start_server()
         .await
-        .expect("Failed to start server");
-    info!("Server started on port: {}", port);
+        .expect("Server failed to start");
+    wait_for_server(port, 20).await.expect("Server not ready");
 
-    // Wait a moment for server to initialize
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    info!("Server started on port: {}", port);
 
     // Test GraphQL introspection query for subscription type
     let client = reqwest::Client::new();
@@ -66,4 +71,7 @@ async fn test_subscription_schema_configured() {
     } else {
         panic!("❌ Invalid GraphQL schema response: {:?}", response_body);
     }
+
+    // Cleanup
+    context.cleanup().await.expect("Failed to cleanup");
 }

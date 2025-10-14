@@ -1,15 +1,22 @@
-use aiwebengine::{js_engine, repository, start_server_without_shutdown, stream_registry};
+mod common;
+
+use aiwebengine::{js_engine, repository, stream_registry};
+use common::{TestContext, wait_for_server};
 use reqwest::Client;
 use tokio::time::{Duration, sleep};
 
 #[tokio::test]
 async fn test_stream_endpoints() {
-    // Start server in background
-    let port = start_server_without_shutdown().await.unwrap();
-    let base_url = format!("http://127.0.0.1:{}", port);
+    let context = TestContext::new();
 
-    // Give server time to start
-    sleep(Duration::from_millis(1000)).await;
+    // Start server
+    let port = context
+        .start_server()
+        .await
+        .expect("Server failed to start");
+    wait_for_server(port, 20).await.expect("Server not ready");
+
+    let base_url = format!("http://127.0.0.1:{}", port);
 
     // Create a script that registers a stream
     let script_content = r#"
@@ -94,16 +101,23 @@ async fn test_stream_endpoints() {
         .expect("Failed to send request to non-existent stream");
 
     assert_eq!(response.status(), 404);
+
+    // Cleanup
+    context.cleanup().await.expect("Failed to cleanup");
 }
 
 #[tokio::test]
 async fn test_stream_messaging() {
-    // Start server in background
-    let port = start_server_without_shutdown().await.unwrap();
-    let base_url = format!("http://127.0.0.1:{}", port);
+    let context = TestContext::new();
 
-    // Give server time to start
-    sleep(Duration::from_millis(1000)).await;
+    // Start server
+    let port = context
+        .start_server()
+        .await
+        .expect("Server failed to start");
+    wait_for_server(port, 20).await.expect("Server not ready");
+
+    let base_url = format!("http://127.0.0.1:{}", port);
 
     // Create a script that registers a stream and a sender endpoint
     let script_content = r#"
@@ -208,4 +222,7 @@ async fn test_stream_messaging() {
         logs.iter().any(|log| log.contains("Sent notification")),
         "Should have logged the sent notification"
     );
+
+    // Cleanup
+    context.cleanup().await.expect("Failed to cleanup");
 }

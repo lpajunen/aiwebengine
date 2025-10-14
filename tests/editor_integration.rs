@@ -1,32 +1,26 @@
-use aiwebengine::start_server_without_shutdown;
-use std::time::Duration;
+mod common;
+
+use common::{TestContext, wait_for_server};
 
 #[tokio::test]
 async fn test_editor_api_endpoints() {
-    // Start server with timeout
-    let port = tokio::time::timeout(Duration::from_secs(5), start_server_without_shutdown())
+    let context = TestContext::new();
+
+    // Start server
+    let port = context
+        .start_server()
         .await
-        .expect("Server startup timed out")
         .expect("Server failed to start");
+    wait_for_server(port, 20).await.expect("Server not ready");
 
-    // Wait for server to be ready to accept connections
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .expect("Failed to create HTTP client");
+    let client = reqwest::Client::new();
 
     // Test GET /api/scripts - list scripts
-    let list_response = tokio::time::timeout(
-        Duration::from_secs(5),
-        client
-            .get(format!("http://127.0.0.1:{}/api/scripts", port))
-            .send(),
-    )
-    .await
-    .expect("List scripts request timed out")
-    .expect("List scripts request failed");
+    let list_response = client
+        .get(format!("http://127.0.0.1:{}/api/scripts", port))
+        .send()
+        .await
+        .expect("List scripts request failed");
 
     assert_eq!(list_response.status(), 200);
     let list_body = list_response
@@ -47,18 +41,14 @@ async fn test_editor_api_endpoints() {
 
         // Try with just the short name first
         let short_name = "core";
-        let get_response = tokio::time::timeout(
-            Duration::from_secs(5),
-            client
-                .get(format!(
-                    "http://127.0.0.1:{}/api/scripts/{}",
-                    port, short_name
-                ))
-                .send(),
-        )
-        .await
-        .expect("Get script request timed out")
-        .expect("Get script request failed");
+        let get_response = client
+            .get(format!(
+                "http://127.0.0.1:{}/api/scripts/{}",
+                port, short_name
+            ))
+            .send()
+            .await
+            .expect("Get script request failed");
 
         println!(
             "Response status for {}: {}",
@@ -84,19 +74,15 @@ async fn test_editor_api_endpoints() {
     let test_content =
         "// Test script content\nfunction test() {\n    return 'Hello from test!';\n}";
 
-    let save_response = tokio::time::timeout(
-        Duration::from_secs(5),
-        client
-            .post(format!(
-                "http://127.0.0.1:{}/api/scripts/{}",
-                port, test_script_name
-            ))
-            .body(test_content.to_string())
-            .send(),
-    )
-    .await
-    .expect("Save script request timed out")
-    .expect("Save script request failed");
+    let save_response = client
+        .post(format!(
+            "http://127.0.0.1:{}/api/scripts/{}",
+            port, test_script_name
+        ))
+        .body(test_content.to_string())
+        .send()
+        .await
+        .expect("Save script request failed");
 
     let save_status = save_response.status();
     println!("Save response status: {}", save_status);
@@ -109,18 +95,14 @@ async fn test_editor_api_endpoints() {
     assert_eq!(save_status, 200);
 
     // Verify the script was saved by retrieving it
-    let verify_response = tokio::time::timeout(
-        Duration::from_secs(5),
-        client
-            .get(format!(
-                "http://127.0.0.1:{}/api/scripts/{}",
-                port, test_script_name
-            ))
-            .send(),
-    )
-    .await
-    .expect("Verify script request timed out")
-    .expect("Verify script request failed");
+    let verify_response = client
+        .get(format!(
+            "http://127.0.0.1:{}/api/scripts/{}",
+            port, test_script_name
+        ))
+        .send()
+        .await
+        .expect("Verify script request failed");
 
     println!("Verify response status: {}", verify_response.status());
 
@@ -143,4 +125,7 @@ async fn test_editor_api_endpoints() {
     }
 
     println!("All editor API tests passed!");
+
+    // Cleanup
+    context.cleanup().await.expect("Failed to cleanup");
 }

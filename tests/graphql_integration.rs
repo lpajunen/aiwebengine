@@ -1,9 +1,12 @@
+mod common;
+
 use aiwebengine::repository;
-use aiwebengine::start_server_without_shutdown;
-use std::time::Duration;
+use common::{TestContext, wait_for_server};
 
 #[tokio::test]
 async fn test_graphql_endpoints() {
+    let context = TestContext::new();
+
     // Load the GraphQL test script
     let _ = repository::upsert_script(
         "https://example.com/graphql_test",
@@ -16,17 +19,12 @@ async fn test_graphql_endpoints() {
         include_str!("../scripts/feature_scripts/core.js"),
     );
 
-    // Start server in background task
-    let port = start_server_without_shutdown()
+    // Start server
+    let port = context
+        .start_server()
         .await
-        .expect("server failed to start");
-    tokio::spawn(async move {
-        // Server is already started, just keep it running
-        tokio::time::sleep(Duration::from_secs(10)).await;
-    });
-
-    // Give server time to start
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+        .expect("Server failed to start");
+    wait_for_server(port, 20).await.expect("Server not ready");
 
     let client = reqwest::Client::new();
 
@@ -214,10 +212,15 @@ async fn test_graphql_endpoints() {
 
     let cache_control = sse_response.headers().get("cache-control").unwrap();
     assert_eq!(cache_control, "no-cache");
+
+    // Cleanup
+    context.cleanup().await.expect("Failed to cleanup");
 }
 
 #[tokio::test]
 async fn test_graphql_script_mutations() {
+    let context = TestContext::new();
+
     // Clean up any existing test scripts to avoid conflicts from previous test runs
     let _ = repository::delete_script("http://test/script");
     let _ = repository::delete_script("http://test/nonexistent");
@@ -228,16 +231,12 @@ async fn test_graphql_script_mutations() {
         include_str!("../scripts/feature_scripts/core.js"),
     );
 
-    // Start server in background task
-    let port = start_server_without_shutdown()
+    // Start server
+    let port = context
+        .start_server()
         .await
-        .expect("server failed to start");
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(10)).await;
-    });
-
-    // Give server time to start
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+        .expect("Server failed to start");
+    wait_for_server(port, 20).await.expect("Server not ready");
 
     let client = reqwest::Client::new();
 
@@ -389,4 +388,7 @@ async fn test_graphql_script_mutations() {
             .unwrap()
             .contains("not found")
     );
+
+    // Cleanup
+    context.cleanup().await.expect("Failed to cleanup");
 }

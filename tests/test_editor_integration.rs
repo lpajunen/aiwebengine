@@ -1,9 +1,12 @@
+mod common;
+
 use aiwebengine::repository;
-use aiwebengine::start_server_without_shutdown;
-use std::time::Duration;
+use common::{TestContext, wait_for_server};
 
 #[tokio::test]
 async fn test_test_editor_api_endpoints() {
+    let context = TestContext::new();
+
     // Load test scripts dynamically using upsert_script
     let _ = repository::upsert_script(
         "https://example.com/test_editor",
@@ -14,55 +17,39 @@ async fn test_test_editor_api_endpoints() {
         include_str!("../scripts/test_scripts/test_editor_api.js"),
     );
 
-    // Start server with timeout
-    let port = tokio::time::timeout(Duration::from_secs(5), start_server_without_shutdown())
+    // Start server
+    let port = context
+        .start_server()
         .await
-        .expect("Server startup timed out")
         .expect("Server failed to start");
+    wait_for_server(port, 20).await.expect("Server not ready");
 
-    // Spawn server in background to keep it running
-    tokio::spawn(async move {
-        // Keep server running for test duration
-        tokio::time::sleep(Duration::from_secs(30)).await;
-    });
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .expect("Failed to create HTTP client");
+    let client = reqwest::Client::new();
 
     // Test the root endpoint first
-    let root_response = tokio::time::timeout(
-        Duration::from_secs(5),
-        client.get(format!("http://127.0.0.1:{}/", port)).send(),
-    )
-    .await;
+    let root_response = client
+        .get(format!("http://127.0.0.1:{}/", port))
+        .send()
+        .await;
 
     match root_response {
-        Ok(Ok(resp)) => {
+        Ok(resp) => {
             println!("Root request succeeded with status: {}", resp.status());
             let body = resp.text().await.unwrap_or_default();
             println!("Root response body: {}", body);
         }
-        Ok(Err(e)) => {
+        Err(e) => {
             println!("Root request failed: {}", e);
-        }
-        Err(_) => {
-            println!("Root request timed out");
         }
     }
 
     // Now test the /test-editor-api endpoint
     println!("Making request to /test-editor-api...");
-    let test_api_response = tokio::time::timeout(
-        Duration::from_secs(5),
-        client
-            .get(format!("http://127.0.0.1:{}/test-editor-api", port))
-            .send(),
-    )
-    .await
-    .expect("Test editor API request timed out")
-    .expect("Test editor API request failed");
+    let test_api_response = client
+        .get(format!("http://127.0.0.1:{}/test-editor-api", port))
+        .send()
+        .await
+        .expect("Test editor API request failed");
 
     let status = test_api_response.status();
     let test_api_body = test_api_response
@@ -79,10 +66,15 @@ async fn test_test_editor_api_endpoints() {
 
     assert_eq!(status, 200);
     assert!(test_api_body.contains("Testing editor API endpoints"));
+
+    // Cleanup
+    context.cleanup().await.expect("Failed to cleanup");
 }
 
 #[tokio::test]
 async fn test_test_editor_functionality() {
+    let context = TestContext::new();
+
     // Load test scripts dynamically using upsert_script
     let _ = repository::upsert_script(
         "https://example.com/test_editor",
@@ -93,30 +85,21 @@ async fn test_test_editor_functionality() {
         include_str!("../scripts/test_scripts/test_editor_api.js"),
     );
 
-    // Start server with timeout
-    let port = tokio::time::timeout(Duration::from_secs(5), start_server_without_shutdown())
+    // Start server
+    let port = context
+        .start_server()
         .await
-        .expect("Server startup timed out")
         .expect("Server failed to start");
+    wait_for_server(port, 20).await.expect("Server not ready");
 
-    // Wait for server to be ready to accept connections
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .expect("Failed to create HTTP client");
+    let client = reqwest::Client::new();
 
     // Test that the scripts list API includes the test scripts
-    let scripts_response = tokio::time::timeout(
-        Duration::from_secs(5),
-        client
-            .get(format!("http://127.0.0.1:{}/api/scripts", port))
-            .send(),
-    )
-    .await
-    .expect("Scripts list request timed out")
-    .expect("Scripts list request failed");
+    let scripts_response = client
+        .get(format!("http://127.0.0.1:{}/api/scripts", port))
+        .send()
+        .await
+        .expect("Scripts list request failed");
 
     assert_eq!(scripts_response.status(), 200);
     let scripts_body = scripts_response
@@ -140,18 +123,14 @@ async fn test_test_editor_functionality() {
     assert!(script_names.contains(&"https://example.com/test_editor_api".to_string()));
 
     // Test retrieving the test_editor script content
-    let test_editor_response = tokio::time::timeout(
-        Duration::from_secs(5),
-        client
-            .get(format!(
-                "http://127.0.0.1:{}/api/scripts/https://example.com/test_editor",
-                port
-            ))
-            .send(),
-    )
-    .await
-    .expect("Test editor script request timed out")
-    .expect("Test editor script request failed");
+    let test_editor_response = client
+        .get(format!(
+            "http://127.0.0.1:{}/api/scripts/https://example.com/test_editor",
+            port
+        ))
+        .send()
+        .await
+        .expect("Test editor script request failed");
 
     assert_eq!(test_editor_response.status(), 200);
     let test_editor_body = test_editor_response
@@ -161,4 +140,7 @@ async fn test_test_editor_functionality() {
 
     assert!(test_editor_body.contains("testEditorAPI"));
     assert!(test_editor_body.contains("listScripts"));
+
+    // Cleanup
+    context.cleanup().await.expect("Failed to cleanup");
 }

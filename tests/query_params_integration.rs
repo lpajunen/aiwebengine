@@ -1,39 +1,33 @@
+mod common;
+
 use aiwebengine::repository;
-use aiwebengine::start_server_without_shutdown;
-use std::time::Duration;
+use common::{TestContext, wait_for_server};
 
 #[tokio::test]
 async fn test_query_parameters() {
+    let context = TestContext::new();
+
     // Dynamically load the query test script
     let _ = repository::upsert_script(
         "https://example.com/query_test",
         include_str!("../scripts/test_scripts/query_test.js"),
     );
 
-    // Start server with timeout
-    let port = tokio::time::timeout(Duration::from_secs(5), start_server_without_shutdown())
+    // Start server
+    let port = context
+        .start_server()
         .await
-        .expect("Server startup timed out")
         .expect("Server failed to start");
+    wait_for_server(port, 20).await.expect("Server not ready");
 
-    // Wait for server to be ready to accept connections
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .expect("Failed to create HTTP client");
+    let client = reqwest::Client::new();
 
     // Test GET request to /api/query without query parameters
-    let response_no_query = tokio::time::timeout(
-        Duration::from_secs(5),
-        client
-            .get(format!("http://127.0.0.1:{}/api/query", port))
-            .send(),
-    )
-    .await
-    .expect("GET request without query timed out")
-    .expect("GET request without query failed");
+    let response_no_query = client
+        .get(format!("http://127.0.0.1:{}/api/query", port))
+        .send()
+        .await
+        .expect("GET request without query failed");
 
     assert_eq!(response_no_query.status(), 200);
     let body_no_query = response_no_query
@@ -52,18 +46,14 @@ async fn test_query_parameters() {
     );
 
     // Test GET request to /api/query with query parameters
-    let response_with_query = tokio::time::timeout(
-        Duration::from_secs(5),
-        client
-            .get(format!(
-                "http://127.0.0.1:{}/api/query?id=123&name=test",
-                port
-            ))
-            .send(),
-    )
-    .await
-    .expect("GET request with query timed out")
-    .expect("GET request with query failed");
+    let response_with_query = client
+        .get(format!(
+            "http://127.0.0.1:{}/api/query?id=123&name=test",
+            port
+        ))
+        .send()
+        .await
+        .expect("GET request with query failed");
 
     assert_eq!(response_with_query.status(), 200);
     let body_with_query = response_with_query
@@ -89,4 +79,7 @@ async fn test_query_parameters() {
         body_no_query.contains("/api/query") && body_with_query.contains("/api/query"),
         "Both requests should be handled by the same route"
     );
+
+    // Cleanup
+    context.cleanup().await.expect("Failed to cleanup");
 }
