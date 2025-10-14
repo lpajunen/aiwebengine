@@ -5,7 +5,7 @@
 This document defines the complete requirements for the aiwebengine project, covering both the core engine functionality and development on top of the engine. All features, tests, and development work should align with these requirements.
 
 **Last Updated**: October 14, 2025  
-**Version**: 1.0
+**Version**: 1.1
 
 ---
 
@@ -163,6 +163,17 @@ The engine SHOULD automatically compress responses:
 
 **Note**: Compression should be handled at the engine level, requiring no modifications to JavaScript handler code.
 
+#### REQ-HTTP-010: Advanced Streaming
+**Priority**: MEDIUM
+**Status**: PLANNED
+
+The engine MUST support advanced streaming capabilities:
+- Memory-efficient streaming for large payloads
+- Backpressure handling in streams
+- Configurable stream buffer sizes
+- Stream error recovery mechanisms
+- Chunked transfer encoding support
+
 ---
 
 ### JavaScript Runtime
@@ -249,6 +260,17 @@ The engine SHOULD be designed to support multiple scripting languages:
 
 **Note**: This ensures future flexibility and prevents vendor lock-in to a single JavaScript engine.
 
+#### REQ-JS-009: Resource Lock Management
+**Priority**: HIGH
+**Status**: PLANNED
+
+The engine MUST implement robust lock management:
+- Mutex poisoning detection and recovery
+- Circuit breaker patterns for lock failures
+- Graceful degradation when locks are poisoned
+- Retry mechanisms with exponential backoff
+- Automatic recovery from deadlocks
+
 ---
 
 ### Security
@@ -322,12 +344,104 @@ The engine SHOULD implement:
 **Priority**: HIGH  
 **Status**: PLANNED
 
-The engine MUST set security headers:
+The engine MUST set comprehensive security headers:
 - `X-Content-Type-Options: nosniff`
 - `X-Frame-Options: DENY` (configurable)
 - `X-XSS-Protection: 1; mode=block`
 - `Strict-Transport-Security` (when HTTPS enabled)
-- `Content-Security-Policy` (configurable)
+- `Content-Security-Policy` (configurable, with nonce support)
+- `Referrer-Policy: strict-origin-when-cross-origin`
+- `Permissions-Policy` (camera, microphone, geolocation restrictions)
+
+#### REQ-SEC-008: Security Enforcement Architecture
+**Priority**: CRITICAL
+**Status**: REQUIRED
+
+The engine MUST enforce security at the Rust layer, not JavaScript:
+- **Security validation MUST be in Rust** - JavaScript cannot bypass security controls
+- **JavaScript contains only business logic** - No security decisions in JS layer
+- **Capability-based security model** - All operations require explicit capabilities
+- **Global functions validate in Rust** before execution
+- **Security boundaries enforced** by the type system and runtime
+
+**Architecture Principle**: Trust the Rust layer, verify everything from JavaScript.
+
+#### REQ-SEC-009: Sandbox Hardening
+**Priority**: CRITICAL
+**Status**: PARTIAL
+
+The engine MUST prevent JavaScript sandbox escapes:
+- **AST-based validation** for dangerous JavaScript patterns
+- **Prototype pollution prevention** - Block `__proto__`, `constructor` manipulation
+- **Dynamic code execution blocking** - Prevent `eval()`, `Function()`, `setTimeout()`, `setInterval()`
+- **Constructor escape prevention** - Block `constructor.constructor` patterns
+- **Import/require blocking** - Prevent module loading attempts
+
+#### REQ-SEC-010: Data Encryption Requirements
+**Priority**: HIGH
+**Status**: PLANNED
+
+The engine MUST support data encryption:
+- **Encryption at rest** for sensitive data
+- **Field-level encryption** for PII (Personally Identifiable Information)
+- **AES-256-GCM encryption** algorithm
+- **Key derivation** using Argon2 or similar
+- **Secure key management** - Keys never in logs or config files
+
+#### REQ-SEC-011: CSRF Protection
+**Priority**: HIGH
+**Status**: PLANNED
+
+The engine MUST implement CSRF protection:
+- **CSRF token generation** with cryptographic randomness
+- **Token validation** with constant-time comparison
+- **Double-submit cookie pattern** support
+- **SameSite cookie** configuration (Strict/Lax)
+- **Per-request CSRF validation** for state-changing operations
+
+#### REQ-SEC-012: Security Monitoring & Audit
+**Priority**: HIGH
+**Status**: PARTIAL
+
+The engine MUST provide comprehensive security monitoring:
+- **Security event taxonomy** - Standardized event types
+- **Audit trail** for all security-relevant operations
+- **Security event correlation** - Link related events
+- **SIEM integration** capability
+- **Threat detection** and automated alerting
+- **Suspicious activity monitoring** with configurable thresholds
+
+#### REQ-SEC-013: Threat Detection & Response
+**Priority**: MEDIUM
+**Status**: PLANNED
+
+The engine SHOULD implement threat detection:
+- **Anomaly detection** algorithms
+- **Brute force attack detection** - Failed login tracking
+- **Geographic anomaly detection** - Unusual location access
+- **Automated threat response** triggers
+- **IP blocking and allowlisting** mechanisms
+
+#### REQ-SEC-014: Data Classification & Privacy
+**Priority**: HIGH
+**Status**: PLANNED
+
+The engine MUST support data classification:
+- **Classification levels** - Public, Internal, Confidential, Restricted
+- **PII handling** requirements and automatic detection
+- **Sensitive data in logs** prevention
+- **Data retention policies** enforcement
+- **Right to erasure** (GDPR compliance) support
+
+#### REQ-SEC-015: Incident Response
+**Priority**: MEDIUM
+**Status**: PLANNED
+
+The engine SHOULD support incident response:
+- **Incident response procedures** documentation
+- **Security incident types** and categorization
+- **Breach notification** capabilities
+- **Forensics and logging** for investigation
 
 ---
 
@@ -342,7 +456,11 @@ The engine MUST support OAuth2/OpenID Connect with:
 - Microsoft authentication
 - Apple authentication
 - Standard OAuth2 authorization code flow
-- CSRF protection via state parameter
+- **PKCE (Proof Key for Code Exchange)** - Required for all OAuth flows
+- **State parameter** validation with CSRF protection
+- **Nonce validation** for OIDC flows
+- **JWT audience and issuer validation**
+- **Token binding** to prevent replay attacks
 - Token validation and verification
 
 #### REQ-AUTH-002: Session Management
@@ -351,10 +469,16 @@ The engine MUST support OAuth2/OpenID Connect with:
 
 The engine MUST:
 - Support JWT-based sessions
+- **Session encryption** with AES-256-GCM
+- **Session fingerprinting** (IP + User Agent validation with tolerance)
+- **Session hijacking prevention** mechanisms
+- **Concurrent session limits** per user (configurable)
+- **Session fixation protection** - Regenerate session ID on login
 - Store session tokens in secure cookies
 - Implement session expiration
 - Support session refresh
 - Provide session invalidation/logout
+- **Device fingerprinting** and trusted device management (optional)
 
 #### REQ-AUTH-003: Secure Cookies
 **Priority**: CRITICAL  
@@ -454,6 +578,23 @@ The engine MAY support:
 - SMS-based MFA
 - WebAuthn/FIDO2
 
+#### REQ-AUTH-008: Advanced Session Security
+**Priority**: HIGH
+**Status**: PLANNED
+
+Additional session security requirements covered by REQ-AUTH-002.
+
+#### REQ-AUTH-009: Account Security
+**Priority**: HIGH
+**Status**: PLANNED
+
+The engine MUST implement account security features:
+- **Account lockout** after configurable failed login attempts
+- **Suspicious login detection** and user alerts
+- **Password strength requirements** enforcement
+- **Account recovery security** with verified contact methods
+- **Login history** and activity logs for users
+
 ---
 
 ### Configuration Management
@@ -474,7 +615,10 @@ The engine MUST support configuration from:
 The engine MUST:
 - Support multiple configuration files (dev, staging, prod)
 - Allow environment variable overrides
-- Validate configuration on startup
+- **Configuration validation on startup** with detailed error messages
+- **Environment-specific validation** rules
+- **Configuration merging** and override rules
+- **Secrets validation** (minimum length, format requirements)
 - Report configuration errors clearly
 
 #### REQ-CFG-003: Configuration Schema
@@ -488,6 +632,12 @@ The engine MUST support configuration for:
 - Repository (database type, connection string, pool size)
 - Security (API keys, HTTPS enforcement)
 - Authentication (OAuth providers, redirect URLs, secrets)
+- **Secrets management** (environment-based, never in config files)
+
+The engine MUST ensure:
+- **Secrets rotation** mechanism support
+- Integration with secret managers (HashiCorp Vault, AWS Secrets Manager) (future)
+- **Secrets never in logs** or error messages
 
 #### REQ-CFG-004: Hot Reload
 **Priority**: LOW  
@@ -519,6 +669,9 @@ The engine MUST:
 The engine SHOULD:
 - Support log rotation (hourly, daily, weekly)
 - Implement log retention policies
+- **Automatic log cleanup** based on retention policy
+- **Compressed log storage**
+- **Log archival strategies**
 - Compress old log files
 - Clean up expired logs
 
@@ -553,6 +706,27 @@ The engine SHOULD expose:
 - Memory usage
 - JavaScript execution metrics
 - Prometheus metrics endpoint (future)
+
+#### REQ-LOG-006: Operational Dashboards
+**Priority**: MEDIUM
+**Status**: PLANNED
+
+The engine SHOULD provide:
+- **Real-time operational dashboard** capabilities
+- **Key metrics visualization** integration points
+- **Alert dashboard** support
+- Dashboard data API endpoints
+
+#### REQ-LOG-007: Alerting & Notifications
+**Priority**: MEDIUM
+**Status**: PLANNED
+
+The engine SHOULD support alerting:
+- **Alert rule configuration**
+- **Notification channels** (email, Slack, PagerDuty, webhooks)
+- **Alert severity levels** (info, warning, error, critical)
+- **Alert escalation policies**
+- Integration with monitoring systems
 
 ---
 
@@ -856,6 +1030,24 @@ The engine SHOULD expose:
 - Request/response streaming
 - Timeout configuration
 
+### REQ-JSAPI-008: API Naming Standards
+**Priority**: MEDIUM
+**Status**: PLANNED
+
+The project SHOULD maintain consistent JavaScript API naming:
+- **Function naming conventions** - Verb-based, camelCase
+- **API consistency** across all global functions
+- **Deprecation process** for API changes
+- Clear migration guides for breaking changes
+
+**Future API Naming Improvements**:
+- Consider: `register` → `registerWebHandler`
+- Consider: `registerGraphQLQuery` → `registerQueryHandler`
+- Consider: `registerGraphQLMutation` → `registerMutationHandler`
+- Consider: `registerGraphQLSubscription` → `registerSubscriptionHandler`
+
+Note: API renaming is a breaking change and requires careful migration planning.
+
 ---
 
 ## Asset Management
@@ -942,6 +1134,62 @@ The engine MUST provide:
 - Stack traces for JavaScript errors
 - Request/response logging in debug mode
 - Performance profiling (future)
+
+### REQ-DEV-005: Error Handling Standards
+**Priority**: CRITICAL
+**Status**: REQUIRED
+
+The project MUST enforce error handling standards:
+- **Explicit prohibition of `unwrap()` and `expect()`** in production code paths
+- **Comprehensive `Result<T, E>` error propagation** throughout codebase
+- **Structured error responses** with context and request IDs
+- **Error handling patterns** for async operations
+- Graceful error recovery mechanisms
+
+### REQ-DEV-006: Code Quality Standards
+**Priority**: HIGH
+**Status**: REQUIRED
+
+The project MUST maintain code quality:
+- **Zero compiler warnings** enforcement
+- **Clippy linting** compliance with strict settings
+- **Code formatting** with rustfmt (automatic formatting)
+- **Pre-commit hooks** for quality checks
+- **CI enforcement** of quality standards
+- Code review requirements for all changes
+
+### REQ-DEV-007: Development Tooling
+**Priority**: MEDIUM
+**Status**: PLANNED
+
+The project SHOULD provide development tools:
+- **Makefile or task runner** for common commands
+- **Docker development environment** for consistency
+- **Auto-reload** for development mode
+- **Helper scripts** for testing and deployment
+- Development server with debugging capabilities
+
+### REQ-DEV-008: Development Environment
+**Priority**: MEDIUM
+**Status**: PLANNED
+
+The project SHOULD ensure environment consistency:
+- **Docker development environment**
+- **docker-compose** for local stack
+- **Development environment parity** with production
+- **`.env.example`** file with all required variables
+- Environment setup automation scripts
+
+### REQ-DEV-009: Debugging & Profiling
+**Priority**: MEDIUM
+**Status**: PLANNED
+
+The project SHOULD support debugging and profiling:
+- **Performance profiling** tools integration
+- **Memory profiling** capabilities
+- **Debugging support** in development mode
+- **Request/response debugging** tools
+- Trace logging for complex operations
 
 ---
 
@@ -1094,6 +1342,63 @@ The project MUST provide test scripts:
 - Example test patterns
 - Test utilities and helpers
 
+### REQ-TEST-007: Test Infrastructure
+**Priority**: HIGH
+**Status**: REQUIRED
+
+The project MUST implement robust test infrastructure:
+- **Test server lifecycle management** - No resource leaks
+- **Test isolation and cleanup** requirements
+- **Parallel test execution** support
+- **Test timeout requirements** - Prevent hanging tests
+- **Fast test execution standards** - < 30s for integration tests
+- Proper server shutdown in tests
+
+### REQ-TEST-008: Security Testing
+**Priority**: CRITICAL
+**Status**: PLANNED
+
+The project MUST perform security testing:
+- **Penetration testing** checklist
+- **Security testing before production** deployment
+- **Vulnerability scanning** requirements
+- **Third-party security audit** requirements
+- SQL injection, XSS, CSRF testing
+- Authentication bypass testing
+- Authorization testing (privilege escalation)
+- JavaScript sandbox escape testing
+
+### REQ-TEST-009: Test Performance
+**Priority**: HIGH
+**Status**: REQUIRED
+
+The project MUST meet test performance standards:
+- **Maximum test execution time** limits per test
+- **Integration test performance targets** - < 30 seconds total suite
+- **Test server resource cleanup** enforcement
+- **Test isolation** standards to prevent interference
+- No test hangs or infinite waits
+
+### REQ-TEST-010: Advanced Testing Methods
+**Priority**: MEDIUM
+**Status**: PLANNED
+
+The project SHOULD implement advanced testing:
+- **Property-based testing** for complex algorithms
+- **Randomized input testing**
+- **Invariant testing** requirements
+- Fuzz testing for input validation
+
+### REQ-TEST-011: Test Infrastructure & Mocking
+**Priority**: MEDIUM
+**Status**: PLANNED
+
+The project SHOULD provide test infrastructure:
+- **HTTP mocking** requirements (wiremock/mockito)
+- **Test fixture** requirements
+- **Test data builders** pattern
+- Mock utilities for external dependencies
+
 ---
 
 ## Performance Requirements
@@ -1127,6 +1432,38 @@ The engine SHOULD handle many simultaneous connections.
 **Target**: <10ms for typical handler execution
 
 JavaScript execution should be fast and efficient.
+
+### REQ-PERF-006: Script Compilation & Caching
+**Priority**: MEDIUM
+**Status**: PLANNED
+
+The engine SHOULD implement script optimization:
+- **Script pre-compilation** for performance
+- **Compiled script caching** mechanism
+- **Cache invalidation strategies**
+- **Lazy loading** for large scripts
+- Bytecode caching when possible
+
+### REQ-PERF-007: Concurrent Execution Architecture
+**Priority**: MEDIUM
+**Status**: PLANNED
+
+The engine SHOULD support concurrent execution:
+- **Worker pool** for JavaScript execution
+- **Concurrent script execution limits**
+- **Thread pool configuration** and management
+- **Load balancing** across worker threads
+- Isolation between concurrent executions
+
+### REQ-PERF-008: Routing Performance
+**Priority**: LOW
+**Status**: PLANNED
+
+The engine MAY optimize routing:
+- **Efficient routing algorithm** (trie or radix tree)
+- **Performance targets** for route matching
+- **Support for complex route patterns**
+- Route compilation and optimization
 
 ---
 
@@ -1181,6 +1518,38 @@ The engine MUST provide:
 - Liveness checks
 - Dependency health status
 
+### REQ-DEPLOY-006: Server Lifecycle
+**Priority**: HIGH
+**Status**: REQUIRED
+
+The engine MUST implement proper lifecycle management:
+- **Graceful server startup** and initialization
+- **Proper cleanup** of resources on shutdown
+- **Signal handling** (SIGTERM, SIGINT) for graceful termination
+- **Zero-downtime restart** capability
+- Resource cleanup verification
+
+### REQ-DEPLOY-007: CI/CD Pipeline
+**Priority**: HIGH
+**Status**: PLANNED
+
+The project MUST implement CI/CD:
+- **Continuous integration** requirements
+- **Automated testing** in CI pipeline
+- **Code coverage reporting** in CI
+- **Release automation** requirements
+- Automated deployment validation
+
+### REQ-DEPLOY-008: Distributed Tracing
+**Priority**: MEDIUM
+**Status**: PLANNED
+
+The engine SHOULD support distributed tracing:
+- **OpenTelemetry integration** requirements
+- **Trace context propagation**
+- **Service mesh integration** capabilities
+- Span creation and management
+
 ---
 
 ## Compliance and Standards
@@ -1223,14 +1592,21 @@ The engine MUST support:
 - **Database ORM**: Higher-level database abstraction
 - **Template Engine**: Server-side templating
 - **Caching Layer**: Response and data caching
-- **Distributed Tracing**: OpenTelemetry integration
+- **Distributed Tracing**: OpenTelemetry integration (see REQ-DEPLOY-008)
 - **Service Mesh**: Istio/Linkerd support
 - **Scheduled Tasks**: Cron-like job scheduling
 - **Email Support**: SMTP integration for notifications
 - **File Storage**: S3-compatible object storage
 - **Search Integration**: Elasticsearch/OpenSearch
 - **Message Queue**: Redis/RabbitMQ integration
+- **GraphQL Playground**: Interactive GraphQL IDE (development mode only)
+- **API Version Migration Tools**: Automated migration for breaking changes
 - **Additional Scripting Languages**: Lua, Python, Rhai runtime support (see REQ-JS-008)
+
+### Explicitly Not Planned
+
+- **Package Management for Scripts**: npm/package.json integration for scripts
+- **VS Code Extension**: IDE-specific tooling for aiwebengine development
 
 ---
 
@@ -1262,6 +1638,7 @@ Example documentation:
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0 | 2025-10-14 | Initial requirements document |
+| 1.1 | 2025-10-14 | Added 41 requirements from gap analysis: Security enhancements (REQ-SEC-008 through REQ-SEC-015), Authentication improvements (REQ-AUTH-008, REQ-AUTH-009), Configuration enhancements, Logging extensions (REQ-LOG-006, REQ-LOG-007), Development standards (REQ-DEV-005 through REQ-DEV-009), Testing requirements (REQ-TEST-007 through REQ-TEST-011), Performance requirements (REQ-PERF-006 through REQ-PERF-008), Deployment requirements (REQ-DEPLOY-006 through REQ-DEPLOY-008), JavaScript runtime (REQ-JS-009), HTTP streaming (REQ-HTTP-010), and API naming standards (REQ-JSAPI-008) |
 
 ---
 
