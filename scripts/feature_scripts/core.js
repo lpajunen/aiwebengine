@@ -455,13 +455,13 @@ function deleteScriptMutation(args) {
 			
 			writeLog(`Script deleted via GraphQL: ${args.uri}`);
 			return JSON.stringify({
-				message: result || `Script deleted successfully: ${args.uri}`,
+				message: `Script deleted successfully: ${args.uri}`,
 				uri: args.uri,
 				success: true
 			});
 		} else {
 			return JSON.stringify({
-				message: result || `Script not found: ${args.uri}`,
+				message: `Script not found: ${args.uri}`,
 				uri: args.uri,
 				success: false
 			});

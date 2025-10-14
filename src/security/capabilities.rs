@@ -118,18 +118,39 @@ mod tests {
 
     #[test]
     fn test_anonymous_user_capabilities() {
-        let user = UserContext::anonymous();
+        // Test development mode (default)
+        unsafe {
+            std::env::set_var("AIWEBENGINE_MODE", "development");
+        }
+        let dev_user = UserContext::anonymous();
 
-        assert!(!user.is_authenticated);
-        assert!(user.user_id.is_none());
-        assert!(user.has_capability(&Capability::ViewLogs));
-        // Anonymous users now have ReadScripts and WriteScripts for development/testing
-        assert!(user.has_capability(&Capability::ReadScripts));
-        assert!(user.has_capability(&Capability::WriteScripts));
-        assert!(user.has_capability(&Capability::ReadAssets));
-        // But not delete capabilities
-        assert!(!user.has_capability(&Capability::DeleteScripts));
-        assert!(!user.has_capability(&Capability::DeleteAssets));
+        assert!(!dev_user.is_authenticated);
+        assert!(dev_user.user_id.is_none());
+        assert!(dev_user.has_capability(&Capability::ViewLogs));
+        assert!(dev_user.has_capability(&Capability::ReadScripts));
+        assert!(dev_user.has_capability(&Capability::WriteScripts));
+        assert!(dev_user.has_capability(&Capability::ReadAssets));
+        assert!(dev_user.has_capability(&Capability::WriteAssets));
+        assert!(dev_user.has_capability(&Capability::DeleteScripts)); // Allowed in dev mode
+
+        // Test production mode
+        unsafe {
+            std::env::set_var("AIWEBENGINE_MODE", "production");
+        }
+        let prod_user = UserContext::anonymous();
+
+        assert!(!prod_user.is_authenticated);
+        assert!(prod_user.user_id.is_none());
+        assert!(prod_user.has_capability(&Capability::ReadScripts)); // Read-only in production
+        assert!(prod_user.has_capability(&Capability::ReadAssets));
+        assert!(!prod_user.has_capability(&Capability::ViewLogs)); // No logs in production
+        assert!(!prod_user.has_capability(&Capability::WriteScripts)); // No write in production
+        assert!(!prod_user.has_capability(&Capability::DeleteScripts)); // No delete in production
+
+        // Restore dev mode for other tests
+        unsafe {
+            std::env::set_var("AIWEBENGINE_MODE", "development");
+        }
     }
 
     #[test]
@@ -154,15 +175,20 @@ mod tests {
 
     #[test]
     fn test_capability_requirement() {
+        // Ensure we're in development mode for this test
+        unsafe {
+            std::env::set_var("AIWEBENGINE_MODE", "development");
+        }
         let user = UserContext::anonymous();
 
-        // Should succeed for allowed capabilities
+        // Should succeed for allowed capabilities in dev mode
         assert!(user.require_capability(&Capability::ViewLogs).is_ok());
         assert!(user.require_capability(&Capability::ReadScripts).is_ok());
         assert!(user.require_capability(&Capability::WriteScripts).is_ok());
+        assert!(user.require_capability(&Capability::DeleteScripts).is_ok()); // OK in dev mode
 
-        // Should fail for disallowed capabilities (like delete)
-        assert!(user.require_capability(&Capability::DeleteScripts).is_err());
+        // Should still fail for some capabilities
         assert!(user.require_capability(&Capability::ManageGraphQL).is_err());
+        assert!(user.require_capability(&Capability::ManageStreams).is_err());
     }
 }

@@ -31,7 +31,7 @@ dev:
 
 # Run tests with cargo-nextest (better output)
 test:
-	cargo nextest run --all-features
+	cargo nextest run --all-features --no-fail-fast
 
 # Run tests with standard cargo test
 test-simple:
