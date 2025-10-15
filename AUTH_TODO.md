@@ -55,6 +55,7 @@ This document outlines the implementation plan for adding OAuth2/OIDC authentica
 Before implementing authentication, the following security infrastructure must be in place (see SECURITY_TODO.md):
 
 ### ✅ COMPLETED:
+
 - **Input Validation Framework** (`src/security/validation.rs`) - Comprehensive validation with dangerous pattern detection
 - **Capabilities System** (`src/security/capabilities.rs`) - User context with role-based permissions
 - **Security Auditing** (`src/security/audit.rs`) - Event logging and monitoring
@@ -65,6 +66,7 @@ Before implementing authentication, the following security infrastructure must b
 - **Secure Globals** (`src/security/secure_globals.rs`) - Capability-based JS function exposure
 
 ### 🚧 REQUIRED BEFORE AUTH IMPLEMENTATION:
+
 - [ ] **Session Management Security** - Must implement secure session storage with encryption
 - [ ] **CSRF Protection** - Token validation framework for auth flows
 - [ ] **Security Headers Integration** - Integrate with existing CSP and add auth-specific headers
@@ -118,6 +120,7 @@ Before implementing authentication, the following security infrastructure must b
 ## Core Components
 
 ### 1. Authentication Middleware
+
 **File**: `src/auth/middleware.rs`
 
 - **Session Cookie Validation**: Verify JWT tokens in HTTP cookies
@@ -126,6 +129,7 @@ Before implementing authentication, the following security infrastructure must b
 - **Request ID Integration**: Leverage existing middleware system
 
 ### 2. OAuth2 Provider Integration
+
 **Directory**: `src/auth/providers/`
 
 - **Generic OAuth2 Trait**: Common interface for all providers
@@ -135,6 +139,7 @@ Before implementing authentication, the following security infrastructure must b
 - **Provider Discovery**: Automatic OIDC endpoint discovery
 
 ### 3. Session Management
+
 **File**: `src/auth/session.rs`
 
 - **JWT Token Generation**: Create signed JWT tokens with user claims
@@ -143,6 +148,7 @@ Before implementing authentication, the following security infrastructure must b
 - **Session Cleanup**: Automatic cleanup of expired sessions
 
 ### 4. Authentication Routes
+
 **File**: `src/auth/routes.rs`
 
 - **Login Page Handler**: `/login` - Provider selection interface
@@ -151,6 +157,7 @@ Before implementing authentication, the following security infrastructure must b
 - **Logout Handler**: `/logout` - Session termination
 
 ### 5. JavaScript Integration
+
 **File**: `src/auth/js_api.rs`
 
 - **User Context API**: JavaScript functions to access user information
@@ -162,6 +169,7 @@ Before implementing authentication, the following security infrastructure must b
 ### Phase 0.5: Security Prerequisites (Week 0 - Before Auth Work)
 
 #### 0.5.1 Session Management Security
+
 **File**: `src/security/session.rs` (NEW)
 
 Must implement before Phase 1:
@@ -192,7 +200,7 @@ impl SecureSessionManager {
         // 5. Store with expiration
         // 6. Audit event logging
     }
-    
+
     pub async fn validate_session(
         &self,
         token: &str,
@@ -209,11 +217,13 @@ impl SecureSessionManager {
 ```
 
 **Dependencies to add**:
+
 ```toml
 aes-gcm = "0.10"  # For session encryption
 ```
 
 #### 0.5.2 CSRF Protection Framework
+
 **File**: `src/security/csrf.rs` (NEW)
 
 ```rust
@@ -226,7 +236,7 @@ impl CsrfProtection {
     pub fn generate_token(&self, session_id: &str) -> String {
         // HMAC-based token tied to session
     }
-    
+
     pub fn validate_token(
         &self,
         token: &str,
@@ -239,6 +249,7 @@ impl CsrfProtection {
 ```
 
 #### 0.5.3 Data Encryption Layer
+
 **File**: `src/security/encryption.rs` (NEW)
 
 ```rust
@@ -251,7 +262,7 @@ impl DataEncryption {
     pub fn encrypt_field(&self, plaintext: &str) -> Result<String, EncryptionError> {
         // Field-level encryption for sensitive data
     }
-    
+
     pub fn decrypt_field(&self, ciphertext: &str) -> Result<String, EncryptionError> {
         // Field-level decryption
     }
@@ -259,6 +270,7 @@ impl DataEncryption {
 ```
 
 **Dependencies to add**:
+
 ```toml
 aes-gcm = "0.10"
 argon2 = "0.5"  # For key derivation
@@ -293,6 +305,7 @@ pub use crate::security::{
 ```
 
 #### 1.2 Configuration System
+
 ```rust
 // src/auth/config.rs
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -321,19 +334,20 @@ pub struct ProviderConfig {
 ```
 
 #### 1.3 Error Handling
+
 ```rust
 // src/auth/error.rs
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
     #[error("Invalid JWT token: {0}")]
     InvalidToken(String),
-    
+
     #[error("OAuth2 provider error: {0}")]
     ProviderError(String),
-    
+
     #[error("Session not found")]
     SessionNotFound,
-    
+
     #[error("Configuration error: {0}")]
     ConfigError(String),
 }
@@ -342,6 +356,7 @@ pub enum AuthError {
 ### Phase 2: Session Management (Week 2-3)
 
 #### 2.1 JWT Session Implementation
+
 ```rust
 // src/auth/session.rs
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -363,6 +378,7 @@ impl SessionManager {
 ```
 
 #### 2.2 Session Storage Backend
+
 ```rust
 // src/auth/session.rs
 pub trait SessionStore: Send + Sync {
@@ -381,6 +397,7 @@ pub struct InMemorySessionStore {
 ### Phase 3: OAuth2 Provider Integration (Week 3-4)
 
 #### 3.1 Generic OAuth2 Provider Trait
+
 ```rust
 // src/auth/providers/mod.rs
 #[async_trait]
@@ -401,6 +418,7 @@ pub struct UserInfo {
 ```
 
 #### 3.2 Google OAuth2 Provider
+
 ```rust
 // src/auth/providers/google.rs
 pub struct GoogleProvider {
@@ -416,6 +434,7 @@ impl GoogleProvider {
 ```
 
 #### 3.3 Microsoft Azure AD Provider
+
 ```rust
 // src/auth/providers/microsoft.rs
 pub struct MicrosoftProvider {
@@ -432,6 +451,7 @@ impl MicrosoftProvider {
 ```
 
 #### 3.4 Apple Sign In Provider
+
 ```rust
 // src/auth/providers/apple.rs
 pub struct AppleProvider {
@@ -444,7 +464,7 @@ pub struct AppleProvider {
 impl AppleProvider {
     const AUTHORIZATION_URL: &'static str = "https://appleid.apple.com/auth/authorize";
     const TOKEN_URL: &'static str = "https://appleid.apple.com/auth/token";
-    
+
     fn create_client_secret(&self) -> Result<String, AuthError>;
 }
 ```
@@ -478,7 +498,7 @@ impl AuthMiddleware {
         next: Next,
     ) -> Result<Response, AuthError> {
         let ip_addr = addr.ip().to_string();
-        
+
         // 1. Rate limiting check
         if !auth.rate_limiter.check_rate_limit(
             RateLimitKey::Ip(ip_addr.clone()),
@@ -491,7 +511,7 @@ impl AuthMiddleware {
             ));
             return Err(AuthError::RateLimitExceeded);
         }
-        
+
         // 2. Extract and validate session cookie
         let session = match Self::extract_session(&request) {
             Some(token) => {
@@ -499,7 +519,7 @@ impl AuthMiddleware {
                     .get("user-agent")
                     .and_then(|h| h.to_str().ok())
                     .unwrap_or("unknown");
-                
+
                 match auth.session_manager.validate_session(
                     &token,
                     &ip_addr,
@@ -519,7 +539,7 @@ impl AuthMiddleware {
             }
             None => None,
         };
-        
+
         // 3. Create user context from session or anonymous
         let user_context = match session {
             Some(ref session_data) => {
@@ -527,10 +547,10 @@ impl AuthMiddleware {
             }
             None => UserContext::anonymous(),
         };
-        
+
         // 4. Inject user context into request extensions
         request.extensions_mut().insert(user_context);
-        
+
         // 5. For protected routes, enforce authentication
         if Self::is_protected_route(request.uri().path()) {
             if session.is_none() {
@@ -538,23 +558,23 @@ impl AuthMiddleware {
                 return Ok(Self::redirect_to_login(request.uri()));
             }
         }
-        
+
         // 6. Continue to next middleware/handler
         let response = next.run(request).await;
-        
+
         // 7. Add security headers
         Ok(Self::add_security_headers(response))
     }
-    
+
     fn is_protected_route(path: &str) -> bool {
         // Routes that require authentication
         let protected_prefixes = ["/admin", "/api/scripts", "/api/assets"];
         protected_prefixes.iter().any(|prefix| path.starts_with(prefix))
     }
-    
+
     fn add_security_headers(mut response: Response) -> Response {
         let headers = response.headers_mut();
-        
+
         // Add auth-specific security headers
         headers.insert(
             "X-Content-Type-Options",
@@ -568,7 +588,7 @@ impl AuthMiddleware {
             "Strict-Transport-Security",
             "max-age=31536000; includeSubDomains".parse().unwrap(),
         );
-        
+
         response
     }
 }
@@ -592,7 +612,7 @@ impl From<SessionData> for UserContext {
         } else {
             crate::security::UserContext::authenticated_capabilities()
         };
-        
+
         Self {
             user_id: session.user_id,
             provider: session.provider,
@@ -608,6 +628,7 @@ impl From<SessionData> for UserContext {
 ### Phase 5: Authentication Routes (Week 5-6)
 
 #### 5.1 Login Page Handler
+
 ```rust
 // src/auth/routes.rs
 pub async fn login_page_handler(
@@ -615,13 +636,14 @@ pub async fn login_page_handler(
     State(config): State<Arc<AuthConfig>>,
 ) -> impl IntoResponse {
     let return_url = params.get("return_url").cloned();
-    
+
     // Generate HTML page with provider buttons
     // Include return_url in state parameter
 }
 ```
 
 #### 5.2 Provider Login Initiation
+
 ```rust
 pub async fn provider_login_handler(
     Path(provider_name): Path<String>,
@@ -634,6 +656,7 @@ pub async fn provider_login_handler(
 ```
 
 #### 5.3 OAuth Callback Handler
+
 ```rust
 pub async fn oauth_callback_handler(
     Path(provider_name): Path<String>,
@@ -652,6 +675,7 @@ pub async fn oauth_callback_handler(
 ### Phase 6: JavaScript Integration (Week 6-7)
 
 #### 6.1 JavaScript API Extensions
+
 ```rust
 // src/auth/js_api.rs
 pub fn register_auth_functions(runtime: &rquickjs::Runtime) -> Result<(), AuthError> {
@@ -674,6 +698,7 @@ fn js_expect_login(ctx: &rquickjs::Context, return_url: Option<String>) -> Resul
 ```
 
 #### 6.2 Request Context Enhancement
+
 ```rust
 // In js_engine.rs - enhance request object
 let request_obj = js_ctx.object_value()?;
@@ -722,6 +747,7 @@ APPLE_REDIRECT_URI=http://localhost:3000/auth/callback/apple
 ### Configuration File Integration
 
 Add to `config.example.yaml`:
+
 ```yaml
 auth:
   jwt_secret: "${AUTH_JWT_SECRET}"
@@ -767,7 +793,7 @@ aes-gcm = "0.10"                   # Session and data encryption
 argon2 = "0.5"                     # Key derivation for encryption keys
 rand = "0.9.2"                     # ✅ Already included - for nonce/state generation
 
-# HTTP client enhancements  
+# HTTP client enhancements
 # reqwest already included with needed features
 
 # Data serialization
@@ -846,143 +872,178 @@ base64 = "0.22"                    # ✅ Already included - encoding/decoding
 ## User Experience Flow
 
 ### 1. Login Page (`/login`)
+
 ```html
 <!DOCTYPE html>
 <html>
-<head>
+  <head>
     <title>Login - aiwebengine</title>
     <style>
-        .login-container { max-width: 400px; margin: 100px auto; text-align: center; }
-        .provider-button { display: block; width: 100%; margin: 10px 0; padding: 12px; font-size: 16px; border: none; border-radius: 5px; cursor: pointer; }
-        .google { background: #4285f4; color: white; }
-        .microsoft { background: #0078d4; color: white; }
-        .apple { background: #000; color: white; }
+      .login-container {
+        max-width: 400px;
+        margin: 100px auto;
+        text-align: center;
+      }
+      .provider-button {
+        display: block;
+        width: 100%;
+        margin: 10px 0;
+        padding: 12px;
+        font-size: 16px;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+      }
+      .google {
+        background: #4285f4;
+        color: white;
+      }
+      .microsoft {
+        background: #0078d4;
+        color: white;
+      }
+      .apple {
+        background: #000;
+        color: white;
+      }
     </style>
-</head>
-<body>
+  </head>
+  <body>
     <div class="login-container">
-        <h1>Sign In</h1>
-        <p>Choose your preferred sign-in method:</p>
-        
-        <a href="/auth/login/google?state={{state}}" class="provider-button google">
-            Sign in with Google
-        </a>
-        
-        <a href="/auth/login/microsoft?state={{state}}" class="provider-button microsoft">
-            Sign in with Microsoft
-        </a>
-        
-        <a href="/auth/login/apple?state={{state}}" class="provider-button apple">
-            Sign in with Apple
-        </a>
+      <h1>Sign In</h1>
+      <p>Choose your preferred sign-in method:</p>
+
+      <a
+        href="/auth/login/google?state={{state}}"
+        class="provider-button google"
+      >
+        Sign in with Google
+      </a>
+
+      <a
+        href="/auth/login/microsoft?state={{state}}"
+        class="provider-button microsoft"
+      >
+        Sign in with Microsoft
+      </a>
+
+      <a href="/auth/login/apple?state={{state}}" class="provider-button apple">
+        Sign in with Apple
+      </a>
     </div>
-</body>
+  </body>
 </html>
 ```
 
 ### 2. JavaScript Handler Examples
 
 #### Protected Resource Example
+
 ```javascript
 // scripts/user_dashboard.js
 
 function dashboard_handler(req) {
-    // Use expectLogin to ensure user is authenticated
-    const user = expectLogin(req.path);
-    
-    if (user.isRedirect) {
-        // User not authenticated, return redirect response
-        return user.response;
-    }
-    
-    // User is authenticated, proceed with handler
-    const userData = user.data;
-    
-    return {
-        status: 200,
-        body: `
+  // Use expectLogin to ensure user is authenticated
+  const user = expectLogin(req.path);
+
+  if (user.isRedirect) {
+    // User not authenticated, return redirect response
+    return user.response;
+  }
+
+  // User is authenticated, proceed with handler
+  const userData = user.data;
+
+  return {
+    status: 200,
+    body: `
             <h1>Welcome, ${userData.name || userData.email}!</h1>
             <p>User ID: ${userData.user_id}</p>
             <p>Provider: ${userData.provider}</p>
             <p>Email: ${userData.email}</p>
             <a href="/logout">Logout</a>
         `,
-        contentType: "text/html"
-    };
+    contentType: "text/html",
+  };
 }
 
-register('/dashboard', 'dashboard_handler', 'GET');
+register("/dashboard", "dashboard_handler", "GET");
 ```
 
 #### API Endpoint Example
+
 ```javascript
 // scripts/user_api.js
 
 function get_user_profile(req) {
-    // Check if user is authenticated
-    if (!isAuthenticated()) {
-        return {
-            status: 401,
-            body: JSON.stringify({ error: "Authentication required" }),
-            contentType: "application/json"
-        };
-    }
-    
-    const user = getCurrentUser();
-    
+  // Check if user is authenticated
+  if (!isAuthenticated()) {
     return {
-        status: 200,
-        body: JSON.stringify({
-            user_id: user.user_id,
-            email: user.email,
-            name: user.name,
-            provider: user.provider
-        }),
-        contentType: "application/json"
+      status: 401,
+      body: JSON.stringify({ error: "Authentication required" }),
+      contentType: "application/json",
     };
+  }
+
+  const user = getCurrentUser();
+
+  return {
+    status: 200,
+    body: JSON.stringify({
+      user_id: user.user_id,
+      email: user.email,
+      name: user.name,
+      provider: user.provider,
+    }),
+    contentType: "application/json",
+  };
 }
 
-register('/api/user/profile', 'get_user_profile', 'GET');
+register("/api/user/profile", "get_user_profile", "GET");
 ```
 
 #### Personalized Content Example
+
 ```javascript
 // scripts/personalized_content.js
 
 function home_handler(req) {
-    let content = "<h1>Welcome to aiwebengine!</h1>";
-    
-    if (isAuthenticated()) {
-        const user = getCurrentUser();
-        content += `<p>Hello, ${user.name || user.email}!</p>`;
-        content += `<a href="/dashboard">Go to Dashboard</a> | <a href="/logout">Logout</a>`;
-    } else {
-        content += `<p>Please <a href="/login?return_url=${encodeURIComponent(req.path)}">sign in</a> to access personalized features.</p>`;
-    }
-    
-    return {
-        status: 200,
-        body: content,
-        contentType: "text/html"
-    };
+  let content = "<h1>Welcome to aiwebengine!</h1>";
+
+  if (isAuthenticated()) {
+    const user = getCurrentUser();
+    content += `<p>Hello, ${user.name || user.email}!</p>`;
+    content += `<a href="/dashboard">Go to Dashboard</a> | <a href="/logout">Logout</a>`;
+  } else {
+    content += `<p>Please <a href="/login?return_url=${encodeURIComponent(req.path)}">sign in</a> to access personalized features.</p>`;
+  }
+
+  return {
+    status: 200,
+    body: content,
+    contentType: "text/html",
+  };
 }
 
-register('/', 'home_handler', 'GET');
+register("/", "home_handler", "GET");
 ```
 
 ## Testing Strategy
 
 ### 1. Unit Tests
+
 - **Session Management**: JWT creation, validation, expiration
 - **OAuth2 Providers**: Token exchange, user info retrieval
 - **Middleware**: Authentication flow, user context injection
 
 ### 2. Integration Tests
+
 - **End-to-End Auth Flow**: Login → callback → protected resource
 - **JavaScript API**: `expectLogin`, `getCurrentUser`, `isAuthenticated`
 - **Error Handling**: Invalid tokens, expired sessions, provider errors
 
 ### 3. Security Tests
+
 - **JWT Security**: Signature validation, expiration handling
 - **CSRF Protection**: State parameter validation
 - **Session Security**: Secure cookie settings, session fixation
@@ -1081,6 +1142,7 @@ This integration ensures defense-in-depth and consistent security across the pla
 ## Monitoring and Logging
 
 ### Authentication Events to Log
+
 - Successful logins with provider and user ID
 - Failed authentication attempts
 - Session creation and destruction
@@ -1088,6 +1150,7 @@ This integration ensures defense-in-depth and consistent security across the pla
 - Configuration errors
 
 ### Metrics to Track
+
 - Authentication success/failure rates by provider
 - Session duration statistics
 - Provider response times
@@ -1096,6 +1159,7 @@ This integration ensures defense-in-depth and consistent security across the pla
 ## Future Enhancements
 
 ### Phase 7: Advanced Features (Future)
+
 1. **Multi-factor Authentication**: TOTP, SMS, email verification
 2. **Social Login Extensions**: GitHub, Discord, Twitter/X
 3. **SAML Support**: Enterprise SSO integration
@@ -1106,6 +1170,7 @@ This integration ensures defense-in-depth and consistent security across the pla
 8. **Audit Logging**: Comprehensive security event logging
 
 ### Phase 8: Enterprise Features (Future)
+
 1. **LDAP Integration**: Active Directory authentication
 2. **Role-Based Access Control**: Fine-grained permissions
 3. **Organization Management**: Multi-tenant support

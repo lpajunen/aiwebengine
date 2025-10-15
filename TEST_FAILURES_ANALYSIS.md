@@ -15,10 +15,12 @@ All 6 failing tests **can be fixed** based on existing REQUIREMENTS.md documenta
 ### 1. Security Test Failure
 
 #### Test: `test_anonymous_user_has_minimal_capabilities`
+
 **File**: `tests/security_integration.rs:291`  
 **Status**: ❌ FAILS - Implementation Bug
 
 **Error**:
+
 ```
 assertion failed: anon_user.require_capability(&Capability::WriteScripts).is_err()
 ```
@@ -27,6 +29,7 @@ assertion failed: anon_user.require_capability(&Capability::WriteScripts).is_err
 The `UserContext::anonymous()` implementation in `src/security/capabilities.rs:36-46` grants **WriteScripts** capability to anonymous users, which directly violates security requirements.
 
 **Current Implementation** (INCORRECT):
+
 ```rust
 fn anonymous_capabilities() -> HashSet<Capability> {
     // Anonymous users can read and write (for development/testing)
@@ -43,14 +46,17 @@ fn anonymous_capabilities() -> HashSet<Capability> {
 ```
 
 **Requirement Violated**: REQ-AUTH-006 (Anonymous User Restrictions)
+
 > Anonymous users SHOULD have minimal capabilities:
+>
 > - Read public content ONLY
 > - NO write operations
 > - NO script management
 > - NO GraphQL mutations
 
-**Required Fix**: 
+**Required Fix**:
 Remove `WriteScripts` from anonymous capabilities:
+
 ```rust
 fn anonymous_capabilities() -> HashSet<Capability> {
     [
@@ -69,6 +75,7 @@ fn anonymous_capabilities() -> HashSet<Capability> {
 ### 2. Script Management HTTP API Failures
 
 #### Tests:
+
 - `test_delete_script_endpoint` (line 314)
 - `test_script_lifecycle_via_http_api` (line 469)
 - `test_read_script_endpoint` (line 582)
@@ -76,6 +83,7 @@ fn anonymous_capabilities() -> HashSet<Capability> {
 **Status**: ❌ FAILS - Implementation Bug
 
 **Error Pattern**:
+
 ```
 assertion `left == right` failed: Expected 404 for deleted/nonexistent script
   left: 200
@@ -88,6 +96,7 @@ The JavaScript global functions `getScript()` and `deleteScript()` return **stri
 **Current Implementation Issues**:
 
 1. **getScript() returns string on failure** (src/security/secure_globals.rs:327):
+
 ```rust
 match repository::fetch_script(&script_name) {
     Some(content) => Ok(content),
@@ -96,6 +105,7 @@ match repository::fetch_script(&script_name) {
 ```
 
 2. **deleteScript() returns string on failure** (src/security/secure_globals.rs:422):
+
 ```rust
 match repository::delete_script(&script_name) {
     true => Ok(format!("Script '{}' deleted successfully", script_name)),
@@ -104,17 +114,20 @@ match repository::delete_script(&script_name) {
 ```
 
 3. **JavaScript handler checks falsy value** (scripts/feature_scripts/core.js:273):
+
 ```javascript
 const content = getScript(uri);
 
-if (content) {  // ❌ String "Script 'x' not found" is truthy!
-    return { status: 200, body: content, contentType: 'application/javascript' };
+if (content) {
+  // ❌ String "Script 'x' not found" is truthy!
+  return { status: 200, body: content, contentType: "application/javascript" };
 } else {
-    return { status: 404, body: JSON.stringify({ error: 'Script not found' }) };
+  return { status: 404, body: JSON.stringify({ error: "Script not found" }) };
 }
 ```
 
 **Requirement Coverage**: REQ-JS-006 (Script Management API)
+
 > - `getScript(name)` - Retrieve script content by name
 >   - Returns script content string on success
 >   - Returns null/undefined on failure
@@ -125,6 +138,7 @@ if (content) {  // ❌ String "Script 'x' not found" is truthy!
 **Required Fixes**:
 
 1. **Fix getScript() to return null on failure**:
+
 ```rust
 match repository::fetch_script(&script_name) {
     Some(content) => Ok(content),
@@ -133,6 +147,7 @@ match repository::fetch_script(&script_name) {
 ```
 
 OR use `Option<String>` return type:
+
 ```rust
 move |_ctx: rquickjs::Ctx<'_>, script_name: String| -> JsResult<Option<String>> {
     // ...
@@ -141,6 +156,7 @@ move |_ctx: rquickjs::Ctx<'_>, script_name: String| -> JsResult<Option<String>> 
 ```
 
 2. **Fix deleteScript() to return boolean**:
+
 ```rust
 move |_ctx: rquickjs::Ctx<'_>, script_name: String| -> JsResult<bool> {
     // ... capability checks ...
@@ -155,12 +171,14 @@ move |_ctx: rquickjs::Ctx<'_>, script_name: String| -> JsResult<bool> {
 ### 3. Script Streaming Integration Failures
 
 #### Tests:
+
 - `test_script_update_streaming_integration` (line 157)
 - `test_script_update_message_format` (line 321)
 
 **Status**: ❌ FAILS - Test Infrastructure Issue
 
 **Error**:
+
 ```
 Timeout waiting for insert/inserted message
 ```
@@ -169,6 +187,7 @@ Timeout waiting for insert/inserted message
 Tests are trying to use streaming functionality **without a running HTTP server**. The tests directly call `execute_script()` which doesn't trigger the stream broadcast mechanism that requires an active server.
 
 **Test Code Issue** (tests/script_streaming_integration.rs:133-142):
+
 ```rust
 // This registers the stream but doesn't start a server
 let result = aiwebengine::js_engine::execute_script("test_streaming_core.js", core_script_content);
@@ -189,7 +208,9 @@ match tokio::time::timeout(Duration::from_secs(2), receiver.recv()).await {
 ```
 
 **Requirement Coverage**: REQ-TEST-007 (Test Infrastructure)
+
 > The project MUST implement robust test infrastructure:
+>
 > - **Test server lifecycle management** - No resource leaks
 > - **Test isolation and cleanup** requirements
 > - **Parallel test execution** support
@@ -202,26 +223,26 @@ Refactor streaming tests to use `TestContext` pattern like other integration tes
 async fn test_script_update_streaming_integration() {
     let context = common::TestContext::new();
     let port = context.start_server().await.expect("Server failed to start");
-    
+
     common::wait_for_server(port, 40).await.expect("Server not ready");
-    
+
     // Now use HTTP client to trigger upsert which will broadcast
     let client = reqwest::Client::new();
-    
+
     // Subscribe to SSE stream
     let stream_url = format!("http://127.0.0.1:{}/script_updates_test1", port);
     let mut event_source = reqwest::get(&stream_url).await.unwrap();
-    
+
     // Trigger upsert via HTTP
     client.post(format!("http://127.0.0.1:{}/upsert_script", port))
         .form(&[("uri", "test.js"), ("content", "console.log('test');")])
         .send()
         .await
         .unwrap();
-    
+
     // Now messages will arrive via SSE
     // ... receive and validate messages ...
-    
+
     context.cleanup().await.expect("Failed to cleanup");
 }
 ```
@@ -310,7 +331,8 @@ All failing tests have corresponding requirements that, if followed correctly, w
 
 ## Conclusion
 
-**Answer to User Question**: 
+**Answer to User Question**:
+
 > "can these be fixed based on REQUIREMENTS.md and other documentation related to testing. or do we need better requirements?"
 
 ✅ **YES, these can ALL be fixed based on existing requirements.**
@@ -318,17 +340,20 @@ All failing tests have corresponding requirements that, if followed correctly, w
 ❌ **NO, we do NOT need better requirements.**
 
 The REQUIREMENTS.md document is comprehensive and well-structured. The failures are due to:
+
 1. **Implementation bugs** (security, return types)
 2. **Test infrastructure issues** (not following established patterns)
 3. **Incomplete implementation** (not following API contracts)
 
 All necessary guidance exists in the requirements. The development team needs to:
+
 1. Follow the security requirements strictly
 2. Implement API contracts as specified
 3. Use proper test infrastructure patterns
 4. Review and enforce requirement compliance
 
 ### Next Steps:
+
 1. Apply the 4 fixes listed above
 2. Run tests again: `cargo nextest run --no-fail-fast`
 3. All 6 tests should pass

@@ -56,11 +56,13 @@ cargo run --bin deployer \
 #### Development Workflow
 
 1. **Start the server**:
+
    ```bash
    cargo run --bin server
    ```
 
 2. **Start the deployer** in another terminal:
+
    ```bash
    cargo run --bin deployer \
      --uri "https://example.com/my-feature" \
@@ -92,6 +94,7 @@ cargo run --bin deployer \
 ## Error Handling
 
 The deployer provides clear feedback:
+
 - ✅ **Success**: Script deployed successfully
 - ❌ **File not found**: Specified file doesn't exist
 - ❌ **Server unreachable**: Cannot connect to the server
@@ -111,7 +114,15 @@ You can add a task to your VS Code workspace for easy deployment:
       "label": "Deploy Script",
       "type": "shell",
       "command": "cargo",
-      "args": ["run", "--bin", "deployer", "--uri", "https://example.com/my-script", "--file", "${file}"],
+      "args": [
+        "run",
+        "--bin",
+        "deployer",
+        "--uri",
+        "https://example.com/my-script",
+        "--file",
+        "${file}"
+      ],
       "group": "build",
       "presentation": {
         "echo": true,
@@ -139,16 +150,19 @@ watch-script:
 ## Troubleshooting
 
 ### Server Not Running
+
 ```
 ❌ Failed to deploy script: https://example.com/test (Status: 000)
 ```
 
 **Solution**: Make sure the aiwebengine server is running:
+
 ```bash
 cargo run --bin server
 ```
 
 ### File Not Found
+
 ```
 ❌ Error: File 'my-script.js' does not exist
 ```
@@ -156,6 +170,7 @@ cargo run --bin server
 **Solution**: Check the file path and ensure the file exists.
 
 ### Permission Issues
+
 If you get permission errors, make sure the server has write access to its data directory.
 
 ## Advanced Usage

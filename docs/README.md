@@ -28,14 +28,14 @@ The core concept is that you create JavaScript scripts that define how your web 
 
    ```javascript
    function helloHandler(req) {
-       return {
-           status: 200,
-           body: `Hello, ${req.query.name || 'World'}!`,
-           contentType: "text/plain"
-       };
+     return {
+       status: 200,
+       body: `Hello, ${req.query.name || "World"}!`,
+       contentType: "text/plain",
+     };
    }
 
-   register('/hello', 'helloHandler', 'GET');
+   register("/hello", "helloHandler", "GET");
    ```
 
 3. **Access your endpoint**: Visit `http://localhost:3000/hello?name=User`
@@ -48,13 +48,13 @@ Want to add real-time features? Here's how to create a live notification system:
 
    ```javascript
    // Register a stream endpoint for real-time notifications
-   registerWebStream('/notifications');
+   registerWebStream("/notifications");
 
    // Page that displays notifications in real-time
    function notificationPage(req) {
-       return {
-           status: 200,
-           body: `
+     return {
+       status: 200,
+       body: `
            <!DOCTYPE html>
            <html>
            <head><title>Live Notifications</title></head>
@@ -75,21 +75,21 @@ Want to add real-time features? Here's how to create a live notification system:
                </script>
            </body>
            </html>`,
-           contentType: "text/html"
-       };
+       contentType: "text/html",
+     };
    }
 
    // Handler to send notifications to all connected clients
    function sendNotification(req) {
-       sendStreamMessage({
-           type: 'info',
-           message: 'Hello from the server! ' + new Date().toLocaleTimeString()
-       });
-       return { status: 200, body: 'Notification sent!' };
+     sendStreamMessage({
+       type: "info",
+       message: "Hello from the server! " + new Date().toLocaleTimeString(),
+     });
+     return { status: 200, body: "Notification sent!" };
    }
 
-   register('/live-notifications', 'notificationPage', 'GET');
-   register('/send-notification', 'sendNotification', 'POST');
+   register("/live-notifications", "notificationPage", "GET");
+   register("/send-notification", "sendNotification", "POST");
    ```
 
 2. **Access your streaming app**: Visit `http://localhost:3000/live-notifications`

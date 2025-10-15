@@ -5,10 +5,11 @@
 Your tests are hanging because of **4 major problems**:
 
 ### 1. **Server Instances Never Shut Down** ⚠️ CRITICAL
+
 - **Problem**: `start_server_without_shutdown()` uses `Box::leak()` to prevent shutdown
 - **Impact**: Each test spawns a server that runs forever
 - **Result**: 24 test files × multiple tests = dozens of zombie processes
-- **Evidence**: 
+- **Evidence**:
   ```rust
   // src/lib.rs:988
   let (tx, rx) = tokio::sync::oneshot::channel::<()>();
@@ -16,6 +17,7 @@ Your tests are hanging because of **4 major problems**:
   ```
 
 ### 2. **Excessive Sleep Delays** 🐌
+
 - **Problem**: Tests sleep for 10-30 seconds waiting for servers
 - **Impact**: Adds 10-30 seconds per test
 - **Evidence**:
@@ -27,6 +29,7 @@ Your tests are hanging because of **4 major problems**:
   ```
 
 ### 3. **No Test Isolation** 💥
+
 - **Problem**: Tests share global state without cleanup
 - **Shared Resources**:
   - `repository` (script storage)
@@ -35,6 +38,7 @@ Your tests are hanging because of **4 major problems**:
 - **Impact**: Race conditions, port conflicts, state pollution
 
 ### 4. **Serial Test Execution** 🐢
+
 - **Problem**: Tests run sequentially by default
 - **Impact**: Total runtime = sum of all test times
 - **Example**: 89 integration tests × 10s each = ~15 minutes minimum
@@ -67,6 +71,7 @@ pub async fn wait_for_server(port: u16, max_attempts: u32) -> anyhow::Result<()>
 ### 2. Test Runner Configuration
 
 **`.config/nextest.toml`**:
+
 ```toml
 [profile.default]
 test-threads = 4  # ✅ Parallel execution
@@ -75,6 +80,7 @@ retries = { backoff = "exponential", count = 2 }  # ✅ Retry flaky tests
 ```
 
 **`.cargo/config.toml`**:
+
 ```toml
 [profile.test]
 opt-level = 1  # ✅ Faster test compilation
@@ -84,6 +90,7 @@ codegen-units = 4  # ✅ Parallel codegen
 ### 3. Migration Pattern
 
 **Before** (slow, leaks resources):
+
 ```rust
 #[tokio::test]
 async fn test_health_endpoint() {
@@ -98,6 +105,7 @@ async fn test_health_endpoint() {
 ```
 
 **After** (fast, clean):
+
 ```rust
 mod common;
 
@@ -106,9 +114,9 @@ async fn test_health_endpoint() {
     let context = common::TestContext::new();
     let port = context.start_server().await.unwrap();
     common::wait_for_server(port, 20).await.unwrap();  // ✅ 1s max
-    
+
     // test code
-    
+
     context.cleanup().await.unwrap();  // ✅ Proper cleanup!
 }
 ```
@@ -153,22 +161,24 @@ cargo nextest run  # Parallel execution with timeouts
 ### Fix the Hanging Test Specifically
 
 The `test_concurrent_session_limit` test is likely hanging due to:
+
 1. Port conflicts from zombie servers
 2. Lock contention in session manager
 3. Missing timeout
 
 **Quick fix**:
+
 ```rust
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_concurrent_session_limit() {
     // Add timeout wrapper
     tokio::time::timeout(Duration::from_secs(5), async {
         let manager = create_test_manager();
-        
+
         for _i in 0..4 {
             manager.create_session(/* ... */).await.unwrap();
         }
-        
+
         let count = manager.get_user_session_count("user123").await;
         assert_eq!(count, 3);
     })
@@ -180,16 +190,19 @@ async fn test_concurrent_session_limit() {
 ## 📊 Expected Performance
 
 ### Before:
+
 - **Unit tests**: 0.5s ✅ (already fast)
 - **Integration tests**: 5+ minutes or **HANG** ❌
 - **Total**: **UNUSABLE**
 
 ### After:
+
 - **Unit tests**: 0.5s ✅
 - **Integration tests**: < 30 seconds ✅
 - **Total**: **< 1 minute** 🎉
 
 ### Per-test improvement:
+
 - Before: 10-30 seconds per test
 - After: 0.5-2 seconds per test
 - **Speedup: 10-60x faster**
@@ -219,6 +232,7 @@ cargo test -- --list | wc -l
 ## 📝 Additional Optimizations
 
 ### Option 1: Feature flag for slow tests
+
 ```toml
 # Cargo.toml
 [features]
@@ -232,6 +246,7 @@ cargo test --features slow-tests
 ```
 
 ### Option 2: Use serial_test for shared resources
+
 ```toml
 [dev-dependencies]
 serial_test = "3.0"
@@ -243,6 +258,7 @@ async fn test_shared_resource() { }
 ```
 
 ### Option 3: Mock external dependencies
+
 ```toml
 [dev-dependencies]
 wiremock = "0.6"  # HTTP mocking
@@ -252,6 +268,7 @@ mockito = "1.0"   # HTTP mocking alternative
 ## 🎯 Action Plan
 
 1. **Immediate** (do this now):
+
    ```bash
    pkill -9 aiwebengine
    cargo install cargo-nextest
@@ -276,7 +293,7 @@ mockito = "1.0"   # HTTP mocking alternative
 ## 📚 Files Reference
 
 - ✅ `tests/common/mod.rs` - New test utilities
-- ✅ `.cargo/config.toml` - Build optimizations  
+- ✅ `.cargo/config.toml` - Build optimizations
 - ✅ `.config/nextest.toml` - Test runner config
 - ✅ `TEST_OPTIMIZATION.md` - Full migration guide
 - ✅ `tests/health_integration_optimized.rs` - Example migration

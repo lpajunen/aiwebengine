@@ -51,12 +51,12 @@ Handler functions receive a `req` object and return a response object:
 
 ```javascript
 function myHandler(req) {
-    // Process the request
-    return {
-        status: 200,
-        body: "Hello World",
-        contentType: "text/plain"
-    };
+  // Process the request
+  return {
+    status: 200,
+    body: "Hello World",
+    contentType: "text/plain",
+  };
 }
 ```
 
@@ -90,10 +90,10 @@ Examples:
 
 ```javascript
 // GET /api/users
-register('/api/users', 'getUsersHandler', 'GET');
+register("/api/users", "getUsersHandler", "GET");
 
 // POST /api/users
-register('/api/users', 'createUserHandler', 'POST');
+register("/api/users", "createUserHandler", "POST");
 ```
 
 ## Using the Deployer Tool
@@ -181,13 +181,13 @@ Create a script with streaming capabilities:
 
 ```javascript
 // Register a stream endpoint
-registerWebStream('/test-stream');
+registerWebStream("/test-stream");
 
 // Page to test the stream
 function streamTestPage(req) {
-    return {
-        status: 200,
-        body: `
+  return {
+    status: 200,
+    body: `
         <!DOCTYPE html>
         <html>
         <head><title>Stream Test</title></head>
@@ -208,22 +208,22 @@ function streamTestPage(req) {
             </script>
         </body>
         </html>`,
-        contentType: "text/html"
-    };
+    contentType: "text/html",
+  };
 }
 
 // Handler to send test messages
 function sendTestMessage(req) {
-    sendStreamMessage({
-        type: 'test',
-        message: 'Hello from stream!',
-        timestamp: new Date().toISOString()
-    });
-    return { status: 200, body: 'Message sent' };
+  sendStreamMessage({
+    type: "test",
+    message: "Hello from stream!",
+    timestamp: new Date().toISOString(),
+  });
+  return { status: 200, body: "Message sent" };
 }
 
-register('/stream-test', 'streamTestPage', 'GET');
-register('/send-test', 'sendTestMessage', 'POST');
+register("/stream-test", "streamTestPage", "GET");
+register("/send-test", "sendTestMessage", "POST");
 ```
 
 ### Testing with Browser

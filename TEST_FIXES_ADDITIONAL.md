@@ -32,6 +32,7 @@ After running the full test suite (`make test`), 3 more tests failed:
 **Problem**: Unit tests were written assuming anonymous users never have `DeleteScripts` capability, but now they do in **development mode** (default).
 
 **Affected Tests**:
+
 - `test_anonymous_user_capabilities` - Expected no `DeleteScripts` capability
 - `test_capability_requirement` - Expected `require_capability(DeleteScripts)` to fail
 
@@ -40,13 +41,15 @@ After running the full test suite (`make test`), 3 more tests failed:
 **Problem**: The `deleteScriptMutation` function had leftover code from the old string-based return value.
 
 **Error**:
+
 ```
 assertion failed: delete_result["message"].is_string()
 ```
 
 The mutation was trying to use boolean `result` as the message:
+
 ```javascript
-message: result || `Script deleted successfully`  // ❌ result is boolean!
+message: result || `Script deleted successfully`; // ❌ result is boolean!
 ```
 
 ---
@@ -84,7 +87,7 @@ fn test_anonymous_user_capabilities() {
     assert!(!prod_user.has_capability(&Capability::ViewLogs)); // ❌ No logs
     assert!(!prod_user.has_capability(&Capability::WriteScripts)); // ❌ No write
     assert!(!prod_user.has_capability(&Capability::DeleteScripts)); // ❌ No delete
-    
+
     // Restore dev mode for other tests
     unsafe { std::env::set_var("AIWEBENGINE_MODE", "development"); }
 }
@@ -119,42 +122,44 @@ Fixed the `deleteScriptMutation` function to use proper string messages:
 
 ```javascript
 function deleteScriptMutation(args) {
-    try {
-        const result = deleteScript(args.uri);
-        // deleteScript now returns boolean: true if deleted, false if not found
-        
-        if (result) {
-            broadcastScriptUpdate(args.uri, 'removed', { via: 'graphql' });
-            
-            return JSON.stringify({
-                message: `Script deleted successfully: ${args.uri}`, // ✅ Proper message
-                uri: args.uri,
-                success: true
-            });
-        } else {
-            return JSON.stringify({
-                message: `Script not found: ${args.uri}`, // ✅ Proper message
-                uri: args.uri,
-                success: false
-            });
-        }
-    } catch (error) {
-        return JSON.stringify({
-            message: `Error: Failed to delete script: ${error.message}`,
-            uri: args.uri,
-            success: false
-        });
+  try {
+    const result = deleteScript(args.uri);
+    // deleteScript now returns boolean: true if deleted, false if not found
+
+    if (result) {
+      broadcastScriptUpdate(args.uri, "removed", { via: "graphql" });
+
+      return JSON.stringify({
+        message: `Script deleted successfully: ${args.uri}`, // ✅ Proper message
+        uri: args.uri,
+        success: true,
+      });
+    } else {
+      return JSON.stringify({
+        message: `Script not found: ${args.uri}`, // ✅ Proper message
+        uri: args.uri,
+        success: false,
+      });
     }
+  } catch (error) {
+    return JSON.stringify({
+      message: `Error: Failed to delete script: ${error.message}`,
+      uri: args.uri,
+      success: false,
+    });
+  }
 }
 ```
 
 **Before (BROKEN)**:
+
 ```javascript
 message: result || `Script deleted successfully: ${args.uri}`,
 // result is boolean true, so this evaluates to: true (not a string!)
 ```
 
 **After (FIXED)**:
+
 ```javascript
 message: `Script deleted successfully: ${args.uri}`,
 // Always returns proper string message
@@ -203,6 +208,7 @@ message: `Script deleted successfully: ${args.uri}`,
 ### All Modified Files
 
 #### Rust Source (5 files):
+
 1. `src/security/capabilities.rs` - Dev/prod mode capabilities + unit tests
 2. `src/security/secure_globals.rs` - Fixed getScript/deleteScript return types
 3. `src/security/secure_globals_simple.rs` - Fixed getScript/deleteScript return types
@@ -210,9 +216,11 @@ message: `Script deleted successfully: ${args.uri}`,
 5. `tests/script_streaming_integration.rs` - TestContext pattern
 
 #### JavaScript (1 file):
+
 1. `scripts/feature_scripts/core.js` - Updated handlers and mutations
 
 #### Documentation (3 files):
+
 1. `TEST_FAILURES_ANALYSIS.md` - Root cause analysis
 2. `TEST_FIXES_APPLIED.md` - Initial fix summary
 3. `TEST_FIXES_ADDITIONAL.md` - This document
@@ -222,6 +230,7 @@ message: `Script deleted successfully: ${args.uri}`,
 ## Verification Commands
 
 ### Run All Tests
+
 ```bash
 make test
 # or
@@ -229,6 +238,7 @@ cargo nextest run --all-features --no-fail-fast
 ```
 
 ### Run Specific Test Categories
+
 ```bash
 # Unit tests
 cargo nextest run --lib

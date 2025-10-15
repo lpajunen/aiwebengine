@@ -49,6 +49,9 @@ format:
 format-check:
 	cargo fmt --all -- --check
 
+format-markdown:
+	npx prettier --write "**/*.md"
+
 # Generate test coverage report
 coverage:
 	cargo llvm-cov --all-features --html

@@ -5,7 +5,7 @@ This guide covers aiwebengine's real-time streaming capabilities using Server-Se
 ## Table of Contents
 
 - [Overview](#overview)
-- [Architecture](#architecture)  
+- [Architecture](#architecture)
 - [Quick Start](#quick-start)
 - [API Reference](#api-reference)
 - [Client Integration](#client-integration)
@@ -48,7 +48,7 @@ JavaScript Script          Stream Registry          Connected Clients
      | registerWebStream()      |                         |
      |------------------------->|                         |
      |                          |                         |
-     |                          | <--- Client connects ---| 
+     |                          | <--- Client connects ---|
      |                          |                         |
      | sendStreamMessage()      |                         |
      |------------------------->|                         |
@@ -69,20 +69,20 @@ JavaScript Script          Stream Registry          Connected Clients
 
 ```javascript
 // Register a stream endpoint
-registerWebStream('/events');
+registerWebStream("/events");
 
 // Handler to send events
 function triggerEvent(req) {
-    sendStreamMessage({
-        type: 'event',
-        message: 'Something happened!',
-        timestamp: new Date().toISOString()
-    });
-    
-    return { status: 200, body: 'Event sent' };
+  sendStreamMessage({
+    type: "event",
+    message: "Something happened!",
+    timestamp: new Date().toISOString(),
+  });
+
+  return { status: 200, body: "Event sent" };
 }
 
-register('/trigger', 'triggerEvent', 'POST');
+register("/trigger", "triggerEvent", "POST");
 ```
 
 ### 2. Client-Side Connection
@@ -90,24 +90,26 @@ register('/trigger', 'triggerEvent', 'POST');
 ```html
 <!DOCTYPE html>
 <html>
-<head><title>Stream Example</title></head>
-<body>
+  <head>
+    <title>Stream Example</title>
+  </head>
+  <body>
     <div id="events"></div>
-    
+
     <script>
-        const eventSource = new EventSource('/events');
-        
-        eventSource.onmessage = function(event) {
-            const data = JSON.parse(event.data);
-            document.getElementById('events').innerHTML += 
-                '<p>' + data.message + ' at ' + data.timestamp + '</p>';
-        };
-        
-        eventSource.onerror = function(event) {
-            console.error('Stream error:', event);
-        };
+      const eventSource = new EventSource("/events");
+
+      eventSource.onmessage = function (event) {
+        const data = JSON.parse(event.data);
+        document.getElementById("events").innerHTML +=
+          "<p>" + data.message + " at " + data.timestamp + "</p>";
+      };
+
+      eventSource.onerror = function (event) {
+        console.error("Stream error:", event);
+      };
     </script>
-</body>
+  </body>
 </html>
 ```
 
@@ -136,9 +138,9 @@ Registers a Server-Sent Events endpoint that clients can connect to.
 **Example:**
 
 ```javascript
-registerWebStream('/notifications');
-registerWebStream('/chat/room1');
-registerWebStream('/status/server1');
+registerWebStream("/notifications");
+registerWebStream("/chat/room1");
+registerWebStream("/status/server1");
 ```
 
 **Path Requirements:**
@@ -162,11 +164,11 @@ Broadcasts a message to all clients connected to registered streams.
 
 ```javascript
 sendStreamMessage({
-    type: 'notification',
-    title: 'New Message',
-    body: 'You have a new message',
-    timestamp: new Date().toISOString(),
-    priority: 'high'
+  type: "notification",
+  title: "New Message",
+  body: "You have a new message",
+  timestamp: new Date().toISOString(),
+  priority: "high",
 });
 ```
 
@@ -193,23 +195,23 @@ Streams are automatically managed by the aiwebengine:
 The standard way to connect to streams from browsers:
 
 ```javascript
-const eventSource = new EventSource('/your-stream-path');
+const eventSource = new EventSource("/your-stream-path");
 
 // Handle messages
-eventSource.onmessage = function(event) {
-    const data = JSON.parse(event.data);
-    console.log('Received:', data);
+eventSource.onmessage = function (event) {
+  const data = JSON.parse(event.data);
+  console.log("Received:", data);
 };
 
 // Handle connection opened
-eventSource.onopen = function(event) {
-    console.log('Stream connected');
+eventSource.onopen = function (event) {
+  console.log("Stream connected");
 };
 
 // Handle errors
-eventSource.onerror = function(event) {
-    console.error('Stream error:', event);
-    // EventSource automatically attempts to reconnect
+eventSource.onerror = function (event) {
+  console.error("Stream error:", event);
+  // EventSource automatically attempts to reconnect
 };
 
 // Close connection when done
@@ -220,71 +222,71 @@ eventSource.onerror = function(event) {
 
 ```javascript
 class StreamManager {
-    constructor(streamPath, options = {}) {
-        this.streamPath = streamPath;
-        this.options = {
-            reconnectDelay: 3000,
-            maxReconnectAttempts: 5,
-            ...options
-        };
-        this.reconnectAttempts = 0;
-        this.eventSource = null;
-        this.messageHandlers = new Map();
+  constructor(streamPath, options = {}) {
+    this.streamPath = streamPath;
+    this.options = {
+      reconnectDelay: 3000,
+      maxReconnectAttempts: 5,
+      ...options,
+    };
+    this.reconnectAttempts = 0;
+    this.eventSource = null;
+    this.messageHandlers = new Map();
+  }
+
+  connect() {
+    this.eventSource = new EventSource(this.streamPath);
+
+    this.eventSource.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      this.handleMessage(data);
+    };
+
+    this.eventSource.onopen = () => {
+      console.log("Stream connected");
+      this.reconnectAttempts = 0;
+    };
+
+    this.eventSource.onerror = () => {
+      this.handleError();
+    };
+  }
+
+  handleMessage(data) {
+    const handler = this.messageHandlers.get(data.type);
+    if (handler) {
+      handler(data);
     }
-    
-    connect() {
-        this.eventSource = new EventSource(this.streamPath);
-        
-        this.eventSource.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            this.handleMessage(data);
-        };
-        
-        this.eventSource.onopen = () => {
-            console.log('Stream connected');
-            this.reconnectAttempts = 0;
-        };
-        
-        this.eventSource.onerror = () => {
-            this.handleError();
-        };
+  }
+
+  handleError() {
+    if (this.reconnectAttempts < this.options.maxReconnectAttempts) {
+      this.reconnectAttempts++;
+      setTimeout(() => {
+        console.log(`Reconnecting... (attempt ${this.reconnectAttempts})`);
+        this.connect();
+      }, this.options.reconnectDelay);
     }
-    
-    handleMessage(data) {
-        const handler = this.messageHandlers.get(data.type);
-        if (handler) {
-            handler(data);
-        }
+  }
+
+  on(messageType, handler) {
+    this.messageHandlers.set(messageType, handler);
+  }
+
+  disconnect() {
+    if (this.eventSource) {
+      this.eventSource.close();
     }
-    
-    handleError() {
-        if (this.reconnectAttempts < this.options.maxReconnectAttempts) {
-            this.reconnectAttempts++;
-            setTimeout(() => {
-                console.log(`Reconnecting... (attempt ${this.reconnectAttempts})`);
-                this.connect();
-            }, this.options.reconnectDelay);
-        }
-    }
-    
-    on(messageType, handler) {
-        this.messageHandlers.set(messageType, handler);
-    }
-    
-    disconnect() {
-        if (this.eventSource) {
-            this.eventSource.close();
-        }
-    }
+  }
 }
 
 // Usage
-const stream = new StreamManager('/notifications');
-stream.on('notification', (data) => {
-    showNotification(data.title, data.body);
+const stream = new StreamManager("/notifications");
+stream.on("notification", (data) => {
+  showNotification(data.title, data.body);
 });
-stream.on('update', (data) => {
-    updateUI(data);
+stream.on("update", (data) => {
+  updateUI(data);
 });
 stream.connect();
 ```
@@ -308,23 +310,23 @@ curl -X POST http://localhost:3000/trigger-notification
 Perfect for alerting users about important events:
 
 ```javascript
-registerWebStream('/notifications');
+registerWebStream("/notifications");
 
 function sendAlert(req) {
-    const { type, message, priority } = req.form;
-    
-    sendStreamMessage({
-        type: 'alert',
-        alertType: type,
-        message: message,
-        priority: priority || 'normal',
-        timestamp: new Date().toISOString()
-    });
-    
-    return { status: 200, body: 'Alert sent' };
+  const { type, message, priority } = req.form;
+
+  sendStreamMessage({
+    type: "alert",
+    alertType: type,
+    message: message,
+    priority: priority || "normal",
+    timestamp: new Date().toISOString(),
+  });
+
+  return { status: 200, body: "Alert sent" };
 }
 
-register('/send-alert', 'sendAlert', 'POST');
+register("/send-alert", "sendAlert", "POST");
 ```
 
 ### 2. Real-Time Dashboard
@@ -332,23 +334,23 @@ register('/send-alert', 'sendAlert', 'POST');
 Stream live metrics and status updates:
 
 ```javascript
-registerWebStream('/dashboard');
+registerWebStream("/dashboard");
 
 function updateMetrics(req) {
-    // Simulate gathering metrics
-    const metrics = {
-        type: 'metrics',
-        cpu: Math.random() * 100,
-        memory: Math.random() * 100,
-        requests: Math.floor(Math.random() * 1000),
-        timestamp: new Date().toISOString()
-    };
-    
-    sendStreamMessage(metrics);
-    return { status: 200, body: 'Metrics updated' };
+  // Simulate gathering metrics
+  const metrics = {
+    type: "metrics",
+    cpu: Math.random() * 100,
+    memory: Math.random() * 100,
+    requests: Math.floor(Math.random() * 1000),
+    timestamp: new Date().toISOString(),
+  };
+
+  sendStreamMessage(metrics);
+  return { status: 200, body: "Metrics updated" };
 }
 
-register('/update-metrics', 'updateMetrics', 'POST');
+register("/update-metrics", "updateMetrics", "POST");
 ```
 
 ### 3. Chat System
@@ -356,23 +358,23 @@ register('/update-metrics', 'updateMetrics', 'POST');
 Build real-time communication:
 
 ```javascript
-registerWebStream('/chat');
+registerWebStream("/chat");
 
 function sendMessage(req) {
-    const { user, room, message } = req.form;
-    
-    sendStreamMessage({
-        type: 'chat_message',
-        user: user,
-        room: room,
-        message: message,
-        timestamp: new Date().toISOString()
-    });
-    
-    return { status: 200, body: 'Message sent' };
+  const { user, room, message } = req.form;
+
+  sendStreamMessage({
+    type: "chat_message",
+    user: user,
+    room: room,
+    message: message,
+    timestamp: new Date().toISOString(),
+  });
+
+  return { status: 200, body: "Message sent" };
 }
 
-register('/chat/send', 'sendMessage', 'POST');
+register("/chat/send", "sendMessage", "POST");
 ```
 
 ### 4. Live Data Feed
@@ -380,24 +382,24 @@ register('/chat/send', 'sendMessage', 'POST');
 Stream continuous data updates:
 
 ```javascript
-registerWebStream('/data-feed');
+registerWebStream("/data-feed");
 
 function broadcastData(req) {
-    // Simulate real-time data
-    const data = {
-        type: 'data_update',
-        sensor_id: req.query.sensor,
-        value: Math.random() * 100,
-        unit: 'celsius',
-        location: 'server_room',
-        timestamp: new Date().toISOString()
-    };
-    
-    sendStreamMessage(data);
-    return { status: 200, body: 'Data broadcasted' };
+  // Simulate real-time data
+  const data = {
+    type: "data_update",
+    sensor_id: req.query.sensor,
+    value: Math.random() * 100,
+    unit: "celsius",
+    location: "server_room",
+    timestamp: new Date().toISOString(),
+  };
+
+  sendStreamMessage(data);
+  return { status: 200, body: "Data broadcasted" };
 }
 
-register('/broadcast-data', 'broadcastData', 'GET');
+register("/broadcast-data", "broadcastData", "GET");
 ```
 
 ## Best Practices
@@ -405,25 +407,29 @@ register('/broadcast-data', 'broadcastData', 'GET');
 ### Stream Design
 
 1. **Use Descriptive Path Names**
+
    ```javascript
    // Good
-   registerWebStream('/notifications/user123');
-   registerWebStream('/chat/room/general');
-   registerWebStream('/status/server/production');
-   
+   registerWebStream("/notifications/user123");
+   registerWebStream("/chat/room/general");
+   registerWebStream("/status/server/production");
+
    // Avoid
-   registerWebStream('/stream1');
-   registerWebStream('/s');
+   registerWebStream("/stream1");
+   registerWebStream("/s");
    ```
 
 2. **Structure Your Messages Consistently**
+
    ```javascript
    // Recommended message structure
    const message = {
-       type: 'message_type',        // Required: categorize messages
-       timestamp: new Date().toISOString(), // Recommended: for ordering
-       id: generateId(),            // Optional: for deduplication
-       data: { /* actual payload */ } // Your data
+     type: "message_type", // Required: categorize messages
+     timestamp: new Date().toISOString(), // Recommended: for ordering
+     id: generateId(), // Optional: for deduplication
+     data: {
+       /* actual payload */
+     }, // Your data
    };
    ```
 
@@ -442,33 +448,34 @@ register('/broadcast-data', 'broadcastData', 'GET');
    - Consider exponential backoff for reconnection attempts
 
 2. **Handle Message Types**
+
    ```javascript
-   eventSource.onmessage = function(event) {
-       const data = JSON.parse(event.data);
-       
-       switch(data.type) {
-           case 'notification':
-               showNotification(data);
-               break;
-           case 'update':
-               updateUI(data);
-               break;
-           case 'error':
-               handleError(data);
-               break;
-           default:
-               console.warn('Unknown message type:', data.type);
-       }
+   eventSource.onmessage = function (event) {
+     const data = JSON.parse(event.data);
+
+     switch (data.type) {
+       case "notification":
+         showNotification(data);
+         break;
+       case "update":
+         updateUI(data);
+         break;
+       case "error":
+         handleError(data);
+         break;
+       default:
+         console.warn("Unknown message type:", data.type);
+     }
    };
    ```
 
 3. **Clean Up Connections**
    ```javascript
    // Close connections when navigating away
-   window.addEventListener('beforeunload', function() {
-       if (eventSource) {
-           eventSource.close();
-       }
+   window.addEventListener("beforeunload", function () {
+     if (eventSource) {
+       eventSource.close();
+     }
    });
    ```
 
@@ -492,30 +499,31 @@ register('/broadcast-data', 'broadcastData', 'GET');
 ### Error Handling
 
 1. **Server-Side**
+
    ```javascript
    function safeHandler(req) {
-       try {
-           // Your logic here
-           sendStreamMessage({ type: 'success', data: result });
-           return { status: 200, body: 'OK' };
-       } catch (error) {
-           writeLog('Error in handler: ' + error.message);
-           sendStreamMessage({ 
-               type: 'error', 
-               message: 'Something went wrong',
-               timestamp: new Date().toISOString()
-           });
-           return { status: 500, body: 'Error occurred' };
-       }
+     try {
+       // Your logic here
+       sendStreamMessage({ type: "success", data: result });
+       return { status: 200, body: "OK" };
+     } catch (error) {
+       writeLog("Error in handler: " + error.message);
+       sendStreamMessage({
+         type: "error",
+         message: "Something went wrong",
+         timestamp: new Date().toISOString(),
+       });
+       return { status: 500, body: "Error occurred" };
+     }
    }
    ```
 
 2. **Client-Side**
    ```javascript
-   eventSource.onerror = function(event) {
-       console.error('Stream error:', event);
-       // Handle the error appropriately
-       showErrorMessage('Connection lost. Attempting to reconnect...');
+   eventSource.onerror = function (event) {
+     console.error("Stream error:", event);
+     // Handle the error appropriately
+     showErrorMessage("Connection lost. Attempting to reconnect...");
    };
    ```
 
@@ -538,25 +546,27 @@ register('/broadcast-data', 'broadcastData', 'GET');
 ### Common Issues
 
 1. **Stream Not Receiving Messages**
+
    ```javascript
    // Check if stream is registered
-   writeLog('Registering stream...');
-   registerWebStream('/my-stream');
-   writeLog('Stream registered');
-   
+   writeLog("Registering stream...");
+   registerWebStream("/my-stream");
+   writeLog("Stream registered");
+
    // Verify message sending
-   writeLog('Sending message...');
-   sendStreamMessage({ type: 'test', message: 'Hello' });
-   writeLog('Message sent');
+   writeLog("Sending message...");
+   sendStreamMessage({ type: "test", message: "Hello" });
+   writeLog("Message sent");
    ```
 
 2. **Client Connection Issues**
+
    ```javascript
    // Add detailed error handling
-   eventSource.onerror = function(event) {
-       console.error('EventSource failed:', event);
-       console.log('ReadyState:', eventSource.readyState);
-       // 0 = CONNECTING, 1 = OPEN, 2 = CLOSED
+   eventSource.onerror = function (event) {
+     console.error("EventSource failed:", event);
+     console.log("ReadyState:", eventSource.readyState);
+     // 0 = CONNECTING, 1 = OPEN, 2 = CLOSED
    };
    ```
 
@@ -568,15 +578,17 @@ register('/broadcast-data', 'broadcastData', 'GET');
 ### Debugging Tips
 
 1. **Server Logs**
+
    ```javascript
-   writeLog('Stream registered: /my-stream');
-   writeLog('Broadcasting message: ' + JSON.stringify(data));
+   writeLog("Stream registered: /my-stream");
+   writeLog("Broadcasting message: " + JSON.stringify(data));
    ```
 
 2. **Client Console**
+
    ```javascript
-   console.log('EventSource state:', eventSource.readyState);
-   console.log('Received message:', data);
+   console.log("EventSource state:", eventSource.readyState);
+   console.log("Received message:", data);
    ```
 
 3. **Network Inspection**
@@ -593,15 +605,15 @@ let messageCount = 0;
 let connectionCount = 0;
 
 eventSource.onopen = () => {
-    connectionCount++;
-    console.log('Connections:', connectionCount);
+  connectionCount++;
+  console.log("Connections:", connectionCount);
 };
 
 eventSource.onmessage = (event) => {
-    messageCount++;
-    if (messageCount % 100 === 0) {
-        console.log('Messages received:', messageCount);
-    }
+  messageCount++;
+  if (messageCount % 100 === 0) {
+    console.log("Messages received:", messageCount);
+  }
 };
 ```
 
@@ -613,29 +625,29 @@ When using multiple streams, coordinate them effectively:
 
 ```javascript
 // Register different streams for different data types
-registerWebStream('/notifications');  // User notifications
-registerWebStream('/system-status');  // System health
-registerWebStream('/chat');          // Chat messages
+registerWebStream("/notifications"); // User notifications
+registerWebStream("/system-status"); // System health
+registerWebStream("/chat"); // Chat messages
 
 // Send targeted messages based on context
 function handleUserAction(req) {
-    // Notify about user action
+  // Notify about user action
+  sendStreamMessage({
+    type: "user_action",
+    action: req.form.action,
+    user: req.form.user,
+  });
+
+  // Update system status if needed
+  if (req.form.action === "critical_operation") {
     sendStreamMessage({
-        type: 'user_action',
-        action: req.form.action,
-        user: req.form.user
+      type: "system_status",
+      status: "busy",
+      operation: req.form.action,
     });
-    
-    // Update system status if needed
-    if (req.form.action === 'critical_operation') {
-        sendStreamMessage({
-            type: 'system_status',
-            status: 'busy',
-            operation: req.form.action
-        });
-    }
-    
-    return { status: 200, body: 'Action processed' };
+  }
+
+  return { status: 200, body: "Action processed" };
 }
 ```
 
@@ -644,25 +656,25 @@ function handleUserAction(req) {
 Connect streams to external data sources:
 
 ```javascript
-registerWebStream('/external-updates');
+registerWebStream("/external-updates");
 
 // Webhook handler for external system notifications
 function webhookHandler(req) {
-    const webhookData = JSON.parse(req.body);
-    
-    // Transform external data for your stream
-    sendStreamMessage({
-        type: 'external_update',
-        source: 'github',
-        event: webhookData.action,
-        repository: webhookData.repository.name,
-        timestamp: new Date().toISOString()
-    });
-    
-    return { status: 200, body: 'Webhook processed' };
+  const webhookData = JSON.parse(req.body);
+
+  // Transform external data for your stream
+  sendStreamMessage({
+    type: "external_update",
+    source: "github",
+    event: webhookData.action,
+    repository: webhookData.repository.name,
+    timestamp: new Date().toISOString(),
+  });
+
+  return { status: 200, body: "Webhook processed" };
 }
 
-register('/webhook/github', 'webhookHandler', 'POST');
+register("/webhook/github", "webhookHandler", "POST");
 ```
 
 ## GraphQL Subscriptions
@@ -674,22 +686,25 @@ aiwebengine supports GraphQL subscriptions using the same SSE streaming infrastr
 ```javascript
 // Register a GraphQL subscription
 registerGraphQLSubscription(
-    "liveEvents", 
-    "type Subscription { liveEvents: String }", 
-    "liveEventsResolver"
+  "liveEvents",
+  "type Subscription { liveEvents: String }",
+  "liveEventsResolver",
 );
 
 // Subscription resolver
 function liveEventsResolver() {
-    return "Live events subscription active";
+  return "Live events subscription active";
 }
 
 // Send messages to subscribers
 function triggerEvent() {
-    sendSubscriptionMessage("liveEvents", JSON.stringify({
-        event: "user_joined",
-        timestamp: new Date().toISOString()
-    }));
+  sendSubscriptionMessage(
+    "liveEvents",
+    JSON.stringify({
+      event: "user_joined",
+      timestamp: new Date().toISOString(),
+    }),
+  );
 }
 ```
 
@@ -698,20 +713,19 @@ function triggerEvent() {
 ```javascript
 // Connect via GraphQL subscription
 const subscriptionQuery = {
-    query: `subscription { liveEvents }`
+  query: `subscription { liveEvents }`,
 };
 
-fetch('/graphql/sse', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(subscriptionQuery)
-})
-.then(response => {
-    // Handle SSE stream...
+fetch("/graphql/sse", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(subscriptionQuery),
+}).then((response) => {
+  // Handle SSE stream...
 });
 
 // Or connect directly to the auto-registered stream path
-const eventSource = new EventSource('/graphql/subscription/liveEvents');
+const eventSource = new EventSource("/graphql/subscription/liveEvents");
 ```
 
 For complete GraphQL subscription documentation, see [GraphQL Subscriptions Guide](graphql-subscriptions.md).

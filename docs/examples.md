@@ -47,7 +47,7 @@ This page showcases practical examples of aiwebengine scripts that demonstrate c
 
 ```javascript
 function blogHandler(req) {
-    const html = `
+  const html = `
     <!DOCTYPE html>
     <html>
     <head>
@@ -66,15 +66,15 @@ function blogHandler(req) {
         <!-- More content -->
     </body>
     </html>`;
-    
-    return {
-        status: 200,
-        body: html,
-        contentType: "text/html"
-    };
+
+  return {
+    status: 200,
+    body: html,
+    contentType: "text/html",
+  };
 }
 
-register('/blog', 'blogHandler', 'GET');
+register("/blog", "blogHandler", "GET");
 ```
 
 ### Feedback Form (`feedback.js`)
@@ -99,7 +99,7 @@ register('/blog', 'blogHandler', 'GET');
 
 ```javascript
 function feedbackFormHandler(req) {
-    const form = `
+  const form = `
     <form method="POST" action="/feedback">
         <label>Name: <input type="text" name="name" required></label><br>
         <label>Email: <input type="email" name="email" required></label><br>
@@ -115,40 +115,40 @@ function feedbackFormHandler(req) {
         <label>Comments: <textarea name="comments"></textarea></label><br>
         <button type="submit">Submit Feedback</button>
     </form>`;
-    
-    return {
-        status: 200,
-        body: form,
-        contentType: "text/html"
-    };
+
+  return {
+    status: 200,
+    body: form,
+    contentType: "text/html",
+  };
 }
 
 function feedbackSubmitHandler(req) {
-    // Process form data
-    const name = req.form.name;
-    const email = req.form.email;
-    const rating = req.form.rating;
-    const comments = req.form.comments;
-    
-    writeLog(`Feedback received from ${name} (${email}): ${rating} stars`);
-    
-    const response = `
+  // Process form data
+  const name = req.form.name;
+  const email = req.form.email;
+  const rating = req.form.rating;
+  const comments = req.form.comments;
+
+  writeLog(`Feedback received from ${name} (${email}): ${rating} stars`);
+
+  const response = `
     <h1>Thank you for your feedback!</h1>
     <p>Name: ${name}</p>
     <p>Email: ${email}</p>
     <p>Rating: ${rating} stars</p>
     <p>Comments: ${comments}</p>
     <a href="/feedback">Submit another response</a>`;
-    
-    return {
-        status: 200,
-        body: response,
-        contentType: "text/html"
-    };
+
+  return {
+    status: 200,
+    body: response,
+    contentType: "text/html",
+  };
 }
 
-register('/feedback', 'feedbackFormHandler', 'GET');
-register('/feedback', 'feedbackSubmitHandler', 'POST');
+register("/feedback", "feedbackFormHandler", "GET");
+register("/feedback", "feedbackSubmitHandler", "POST");
 ```
 
 ## Script Development Patterns
@@ -157,64 +157,64 @@ register('/feedback', 'feedbackSubmitHandler', 'POST');
 
 ```javascript
 function apiHandler(req) {
-    const data = {
-        message: "Hello from aiwebengine!",
-        timestamp: new Date().toISOString(),
-        path: req.path,
-        query: req.query
-    };
-    
-    return {
-        status: 200,
-        body: JSON.stringify(data),
-        contentType: "application/json"
-    };
+  const data = {
+    message: "Hello from aiwebengine!",
+    timestamp: new Date().toISOString(),
+    path: req.path,
+    query: req.query,
+  };
+
+  return {
+    status: 200,
+    body: JSON.stringify(data),
+    contentType: "application/json",
+  };
 }
 
-register('/api/hello', 'apiHandler', 'GET');
+register("/api/hello", "apiHandler", "GET");
 ```
 
 ### Dynamic Content with Query Parameters
 
 ```javascript
 function greetHandler(req) {
-    const name = req.query.name || 'World';
-    const greeting = `Hello, ${name}!`;
-    
-    return {
-        status: 200,
-        body: greeting,
-        contentType: "text/plain"
-    };
+  const name = req.query.name || "World";
+  const greeting = `Hello, ${name}!`;
+
+  return {
+    status: 200,
+    body: greeting,
+    contentType: "text/plain",
+  };
 }
 
-register('/greet', 'greetHandler', 'GET');
+register("/greet", "greetHandler", "GET");
 ```
 
 ### Form Processing
 
 ```javascript
 function contactHandler(req) {
-    if (req.method === 'GET') {
-        return {
-            status: 200,
-            body: '<form method="POST"><input name="message"><button>Send</button></form>',
-            contentType: "text/html"
-        };
-    } else {
-        const message = req.form.message;
-        writeLog(`Message received: ${message}`);
-        
-        return {
-            status: 200,
-            body: `Message "${message}" received!`,
-            contentType: "text/plain"
-        };
-    }
+  if (req.method === "GET") {
+    return {
+      status: 200,
+      body: '<form method="POST"><input name="message"><button>Send</button></form>',
+      contentType: "text/html",
+    };
+  } else {
+    const message = req.form.message;
+    writeLog(`Message received: ${message}`);
+
+    return {
+      status: 200,
+      body: `Message "${message}" received!`,
+      contentType: "text/plain",
+    };
+  }
 }
 
-register('/contact', 'contactHandler', 'GET');
-register('/contact', 'contactHandler', 'POST');
+register("/contact", "contactHandler", "GET");
+register("/contact", "contactHandler", "POST");
 ```
 
 ## Streaming Examples
@@ -225,11 +225,11 @@ register('/contact', 'contactHandler', 'POST');
 
 ```javascript
 // Register a notifications stream
-registerWebStream('/notifications');
+registerWebStream("/notifications");
 
 // Handler to display the notification page
 function notificationPage(req) {
-    const html = `
+  const html = `
     <!DOCTYPE html>
     <html>
     <head>
@@ -284,23 +284,23 @@ function notificationPage(req) {
         </script>
     </body>
     </html>`;
-    
-    return { status: 200, body: html, contentType: "text/html" };
+
+  return { status: 200, body: html, contentType: "text/html" };
 }
 
 // Handler to send notifications
 function sendNotification(req) {
-    sendStreamMessage({
-        type: 'info',
-        message: 'This is a test notification from the server!',
-        timestamp: new Date().toISOString()
-    });
-    
-    return { status: 200, body: 'Notification sent' };
+  sendStreamMessage({
+    type: "info",
+    message: "This is a test notification from the server!",
+    timestamp: new Date().toISOString(),
+  });
+
+  return { status: 200, body: "Notification sent" };
 }
 
-register('/notifications-demo', 'notificationPage', 'GET');
-register('/send-notification', 'sendNotification', 'POST');
+register("/notifications-demo", "notificationPage", "GET");
+register("/send-notification", "sendNotification", "POST");
 ```
 
 ### Live Chat System
@@ -309,11 +309,11 @@ register('/send-notification', 'sendNotification', 'POST');
 
 ```javascript
 // Register a chat stream
-registerWebStream('/chat');
+registerWebStream("/chat");
 
 // Chat page handler
 function chatPage(req) {
-    const html = `
+  const html = `
     <!DOCTYPE html>
     <html>
     <head>
@@ -424,30 +424,30 @@ function chatPage(req) {
         </script>
     </body>
     </html>`;
-    
-    return { status: 200, body: html, contentType: "text/html" };
+
+  return { status: 200, body: html, contentType: "text/html" };
 }
 
 // Send message handler
 function sendChatMessage(req) {
-    const { user, message } = req.form;
-    
-    if (!user || !message) {
-        return { status: 400, body: 'Missing user or message' };
-    }
-    
-    sendStreamMessage({
-        type: 'chat_message',
-        user: user,
-        message: message,
-        timestamp: new Date().toISOString()
-    });
-    
-    return { status: 200, body: 'Message sent' };
+  const { user, message } = req.form;
+
+  if (!user || !message) {
+    return { status: 400, body: "Missing user or message" };
+  }
+
+  sendStreamMessage({
+    type: "chat_message",
+    user: user,
+    message: message,
+    timestamp: new Date().toISOString(),
+  });
+
+  return { status: 200, body: "Message sent" };
 }
 
-register('/chat-demo', 'chatPage', 'GET');
-register('/chat/send', 'sendChatMessage', 'POST');
+register("/chat-demo", "chatPage", "GET");
+register("/chat/send", "sendChatMessage", "POST");
 ```
 
 ### System Status Dashboard
@@ -456,11 +456,11 @@ register('/chat/send', 'sendChatMessage', 'POST');
 
 ```javascript
 // Register a status stream
-registerWebStream('/status');
+registerWebStream("/status");
 
 // Status dashboard page
 function statusDashboard(req) {
-    const html = `
+  const html = `
     <!DOCTYPE html>
     <html>
     <head>
@@ -560,30 +560,30 @@ function statusDashboard(req) {
         </script>
     </body>
     </html>`;
-    
-    return { status: 200, body: html, contentType: "text/html" };
+
+  return { status: 200, body: html, contentType: "text/html" };
 }
 
 // Trigger status updates
 function triggerStatusUpdate(req) {
-    const services = ['Database', 'API Server', 'Cache', 'Message Queue'];
-    const statuses = ['online', 'warning', 'offline'];
-    
-    services.forEach(service => {
-        const status = statuses[Math.floor(Math.random() * statuses.length)];
-        sendStreamMessage({
-            type: 'status_update',
-            service: service,
-            status: status,
-            timestamp: new Date().toISOString()
-        });
+  const services = ["Database", "API Server", "Cache", "Message Queue"];
+  const statuses = ["online", "warning", "offline"];
+
+  services.forEach((service) => {
+    const status = statuses[Math.floor(Math.random() * statuses.length)];
+    sendStreamMessage({
+      type: "status_update",
+      service: service,
+      status: status,
+      timestamp: new Date().toISOString(),
     });
-    
-    return { status: 200, body: 'Status updates sent' };
+  });
+
+  return { status: 200, body: "Status updates sent" };
 }
 
-register('/status-dashboard', 'statusDashboard', 'GET');
-register('/trigger-status', 'triggerStatusUpdate', 'POST');
+register("/status-dashboard", "statusDashboard", "GET");
+register("/trigger-status", "triggerStatusUpdate", "POST");
 ```
 
 ## Best Practices from Examples

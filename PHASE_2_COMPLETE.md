@@ -14,6 +14,7 @@ Phase 2 implemented comprehensive OAuth2/OIDC provider support for the authentic
 **Purpose**: Provides a common interface for all OAuth2 providers
 
 **Key Features**:
+
 - `OAuth2Provider` trait with standardized methods:
   - `authorization_url()` - Generate OAuth2 authorization URLs
   - `exchange_code()` - Exchange authorization codes for tokens
@@ -26,6 +27,7 @@ Phase 2 implemented comprehensive OAuth2/OIDC provider support for the authentic
 - `ProviderFactory` - Factory for creating provider instances
 
 **Security Features**:
+
 - Configuration validation (client ID, secret, redirect URI)
 - URL validation
 - Provider-agnostic error handling
@@ -33,12 +35,14 @@ Phase 2 implemented comprehensive OAuth2/OIDC provider support for the authentic
 ### 2. Google OAuth2/OIDC Provider (`src/auth/providers/google.rs`)
 
 **Implementation Details**:
+
 - Full OpenID Connect (OIDC) support
 - ID token verification with RS256 signature validation
 - JWKS (JSON Web Key Set) fetching and validation
 - Supports both ID token and UserInfo endpoint
 
 **Features**:
+
 - Authorization URL generation with PKCE support
 - Token exchange with offline access (refresh tokens)
 - ID token verification against Google's public keys
@@ -48,6 +52,7 @@ Phase 2 implemented comprehensive OAuth2/OIDC provider support for the authentic
 **Scopes**: `openid`, `email`, `profile`
 
 **Endpoints**:
+
 - Auth: `https://accounts.google.com/o/oauth2/v2/auth`
 - Token: `https://oauth2.googleapis.com/token`
 - UserInfo: `https://www.googleapis.com/oauth2/v3/userinfo`
@@ -56,12 +61,14 @@ Phase 2 implemented comprehensive OAuth2/OIDC provider support for the authentic
 ### 3. Microsoft Azure AD Provider (`src/auth/providers/microsoft.rs`)
 
 **Implementation Details**:
+
 - Multi-tenant support (common, organizations, consumers, specific tenant)
 - Microsoft Graph API integration
 - ID token verification with tenant-specific issuers
 - Support for both personal and organizational accounts
 
 **Features**:
+
 - Configurable tenant ID (defaults to "common")
 - Authorization URL with tenant context
 - Token exchange with scope specification
@@ -72,6 +79,7 @@ Phase 2 implemented comprehensive OAuth2/OIDC provider support for the authentic
 **Scopes**: `openid`, `email`, `profile`, `User.Read`
 
 **Endpoints**:
+
 - Auth: `https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize`
 - Token: `https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token`
 - UserInfo: `https://graph.microsoft.com/v1.0/me`
@@ -80,12 +88,14 @@ Phase 2 implemented comprehensive OAuth2/OIDC provider support for the authentic
 ### 4. Apple Sign In Provider (`src/auth/providers/apple.rs`)
 
 **Implementation Details**:
+
 - Client secret generation using ES256 JWT signatures
 - ID token-only user information (no UserInfo endpoint)
 - Private email relay support
 - First login user information handling
 
 **Features**:
+
 - Client secret as signed JWT (required by Apple)
 - ES256 private key handling
 - ID token verification with RS256
@@ -96,11 +106,13 @@ Phase 2 implemented comprehensive OAuth2/OIDC provider support for the authentic
 **Scopes**: `openid`, `email`, `name`
 
 **Configuration Requirements**:
+
 - `team_id` - Apple Developer Team ID
 - `key_id` - Sign In with Apple Key ID
 - `private_key` - ES256 private key in PEM format
 
 **Endpoints**:
+
 - Auth: `https://appleid.apple.com/auth/authorize`
 - Token: `https://appleid.apple.com/auth/token`
 - Revoke: `https://appleid.apple.com/auth/revoke`
@@ -119,11 +131,13 @@ async-trait = "0.1"
 ## Error Handling
 
 Enhanced `AuthError` enum with:
+
 - `JwtError(String)` - JWT-specific errors
 - `OAuth2Error(String)` - General OAuth2 errors
 - `SessionError(String)` - Direct session errors
 
 All providers use consistent error mapping:
+
 - Network errors → `OAuth2Error`
 - JWT validation errors → `JwtError`
 - Configuration errors → `ConfigError`
@@ -131,36 +145,44 @@ All providers use consistent error mapping:
 ## Security Considerations
 
 ### Token Verification
+
 - **Google**: RS256 signature verification with JWKS
 - **Microsoft**: RS256 signature verification with tenant-specific JWKS
 - **Apple**: RS256 signature verification with JWKS
 
 ### CSRF Protection
+
 - State parameter validation in all providers
 - Nonce support for OIDC providers (optional but recommended)
 
 ### Client Secret Handling
+
 - **Google/Microsoft**: Static client secret
 - **Apple**: Dynamic JWT-signed client secret (regenerated per request)
 
 ### Rate Limiting
+
 - All HTTP requests use 30-second timeouts
 - Compatible with existing rate limiting infrastructure
 
 ### Audit Logging
+
 - Ready for integration with `AuthSecurityContext`
 - All authentication events can be logged
 
 ## Testing
 
 ### Unit Tests Included
+
 Each provider includes tests for:
+
 - Provider creation and configuration validation
 - Authorization URL generation
 - Provider name verification
 - Configuration edge cases
 
 ### Integration Tests Pending
+
 - Token exchange with real providers
 - ID token verification
 - User info retrieval
@@ -170,6 +192,7 @@ Each provider includes tests for:
 ## Usage Examples
 
 ### Google OAuth2
+
 ```rust
 use aiwebengine::auth::{OAuth2ProviderConfig, ProviderFactory};
 
@@ -189,6 +212,7 @@ let auth_url = provider.authorization_url("csrf-state-token", Some("nonce"))?;
 ```
 
 ### Microsoft Azure AD
+
 ```rust
 let mut extra_params = HashMap::new();
 extra_params.insert("tenant_id".to_string(), "your-tenant-id".to_string());
@@ -208,6 +232,7 @@ let provider = ProviderFactory::create_provider("microsoft", config)?;
 ```
 
 ### Apple Sign In
+
 ```rust
 let mut extra_params = HashMap::new();
 extra_params.insert("team_id".to_string(), "YOUR_TEAM_ID".to_string());
@@ -256,6 +281,7 @@ let provider = ProviderFactory::create_provider("apple", config)?;
 ## Compilation Status
 
 ✅ **Library compiles successfully**
+
 - No compilation errors
 - Minor warnings (unused futures in session.rs - to be fixed in Phase 1 cleanup)
 
@@ -286,12 +312,14 @@ let provider = ProviderFactory::create_provider("apple", config)?;
 ## Files Created/Modified
 
 ### Created Files
+
 - `src/auth/providers/mod.rs` (354 lines)
 - `src/auth/providers/google.rs` (592 lines)
 - `src/auth/providers/microsoft.rs` (600 lines)
 - `src/auth/providers/apple.rs` (673 lines)
 
 ### Modified Files
+
 - `src/auth/mod.rs` - Added providers module export
 - `src/auth/error.rs` - Added JWT and OAuth2 error variants
 - `Cargo.toml` - Added OAuth2/JWT dependencies

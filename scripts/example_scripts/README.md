@@ -44,19 +44,19 @@ Each script follows this basic pattern:
 ```javascript
 // Define handler functions
 function my_handler(req) {
-    // Process the request
-    // req contains: path, method, query, form, etc.
+  // Process the request
+  // req contains: path, method, query, form, etc.
 
-    return {
-        status: 200,        // HTTP status code
-        body: "response",   // Response content
-        contentType: "text/html"  // Optional content type
-    };
+  return {
+    status: 200, // HTTP status code
+    body: "response", // Response content
+    contentType: "text/html", // Optional content type
+  };
 }
 
 // Register routes
-register('/my-endpoint', 'my_handler', 'GET');
-register('/my-endpoint', 'my_handler', 'POST');
+register("/my-endpoint", "my_handler", "GET");
+register("/my-endpoint", "my_handler", "POST");
 ```
 
 ## Request Object

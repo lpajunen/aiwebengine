@@ -18,10 +18,10 @@ Registers a route that maps a URL path to a handler function.
 
 ```javascript
 function getUsers(req) {
-    return { status: 200, body: "User list", contentType: "text/plain" };
+  return { status: 200, body: "User list", contentType: "text/plain" };
 }
 
-register('/api/users', 'getUsers', 'GET');
+register("/api/users", "getUsers", "GET");
 ```
 
 ### writeLog(message)
@@ -36,8 +36,8 @@ Writes a message to the server log for debugging and monitoring.
 
 ```javascript
 function myHandler(req) {
-    writeLog("Handler called with path: " + req.path);
-    return { status: 200, body: "Logged", contentType: "text/plain" };
+  writeLog("Handler called with path: " + req.path);
+  return { status: 200, body: "Logged", contentType: "text/plain" };
 }
 ```
 
@@ -53,10 +53,10 @@ Registers a Server-Sent Events (SSE) stream endpoint that clients can connect to
 
 ```javascript
 // Register a stream for live notifications
-registerWebStream('/notifications');
+registerWebStream("/notifications");
 
 // Register a stream for chat messages
-registerWebStream('/chat/room1');
+registerWebStream("/chat/room1");
 ```
 
 **Notes:**
@@ -78,46 +78,46 @@ Broadcasts a message to all clients connected to registered streams.
 
 ```javascript
 function notifyHandler(req) {
-    // Send notification to all connected streams
-    sendStreamMessage({
-        type: 'notification',
-        message: 'New update available',
-        timestamp: new Date().toISOString(),
-        priority: 'high'
-    });
+  // Send notification to all connected streams
+  sendStreamMessage({
+    type: "notification",
+    message: "New update available",
+    timestamp: new Date().toISOString(),
+    priority: "high",
+  });
 
-    return { status: 200, body: 'Notification sent' };
+  return { status: 200, body: "Notification sent" };
 }
 
 // Register the handler
-register('/notify', 'notifyHandler', 'POST');
+register("/notify", "notifyHandler", "POST");
 ```
 
 **Real-time Chat Example:**
 
 ```javascript
 // Register a chat stream
-registerWebStream('/chat');
+registerWebStream("/chat");
 
 function sendMessage(req) {
-    const { user, message } = req.form;
-    
-    if (!user || !message) {
-        return { status: 400, body: 'Missing user or message' };
-    }
+  const { user, message } = req.form;
 
-    // Broadcast to all connected chat clients
-    sendStreamMessage({
-        type: 'chat_message',
-        user: user,
-        message: message,
-        timestamp: new Date().toISOString()
-    });
+  if (!user || !message) {
+    return { status: 400, body: "Missing user or message" };
+  }
 
-    return { status: 200, body: 'Message sent' };
+  // Broadcast to all connected chat clients
+  sendStreamMessage({
+    type: "chat_message",
+    user: user,
+    message: message,
+    timestamp: new Date().toISOString(),
+  });
+
+  return { status: 200, body: "Message sent" };
 }
 
-register('/chat/send', 'sendMessage', 'POST');
+register("/chat/send", "sendMessage", "POST");
 ```
 
 ## Streaming Connections
@@ -128,20 +128,20 @@ Clients connect to streams using the standard EventSource API:
 
 ```javascript
 // Connect to a stream from the browser
-const eventSource = new EventSource('/notifications');
+const eventSource = new EventSource("/notifications");
 
-eventSource.onmessage = function(event) {
-    const data = JSON.parse(event.data);
-    console.log('Received:', data);
-    
-    // Handle different message types
-    if (data.type === 'notification') {
-        showNotification(data.message);
-    }
+eventSource.onmessage = function (event) {
+  const data = JSON.parse(event.data);
+  console.log("Received:", data);
+
+  // Handle different message types
+  if (data.type === "notification") {
+    showNotification(data.message);
+  }
 };
 
-eventSource.onerror = function(event) {
-    console.error('Stream connection error:', event);
+eventSource.onerror = function (event) {
+  console.error("Stream connection error:", event);
 };
 ```
 
@@ -176,13 +176,13 @@ The `req` parameter passed to handler functions contains information about the H
 
 ```javascript
 function exampleHandler(req) {
-    // GET /search?q=javascript&page=1
-    console.log(req.method); // "GET"
-    console.log(req.path);   // "/search"
-    console.log(req.query);  // { q: "javascript", page: "1" }
-    console.log(req.form);   // {} (empty for GET)
+  // GET /search?q=javascript&page=1
+  console.log(req.method); // "GET"
+  console.log(req.path); // "/search"
+  console.log(req.query); // { q: "javascript", page: "1" }
+  console.log(req.form); // {} (empty for GET)
 
-    return { status: 200, body: "OK" };
+  return { status: 200, body: "OK" };
 }
 ```
 
@@ -190,10 +190,10 @@ For POST requests with form data:
 
 ```javascript
 function postHandler(req) {
-    // POST /submit with form fields: name=John&email=john@example.com
-    console.log(req.form); // { name: "John", email: "john@example.com" }
+  // POST /submit with form fields: name=John&email=john@example.com
+  console.log(req.form); // { name: "John", email: "john@example.com" }
 
-    return { status: 200, body: "Form received" };
+  return { status: 200, body: "Form received" };
 }
 ```
 
@@ -215,30 +215,30 @@ Handler functions must return a response object that defines how the server resp
 ```javascript
 // Simple text response
 return {
-    status: 200,
-    body: "Hello World",
-    contentType: "text/plain"
+  status: 200,
+  body: "Hello World",
+  contentType: "text/plain",
 };
 
 // JSON response
 return {
-    status: 200,
-    body: JSON.stringify({ message: "Success", data: [] }),
-    contentType: "application/json"
+  status: 200,
+  body: JSON.stringify({ message: "Success", data: [] }),
+  contentType: "application/json",
 };
 
 // HTML response
 return {
-    status: 200,
-    body: "<h1>Welcome</h1><p>This is HTML content.</p>",
-    contentType: "text/html"
+  status: 200,
+  body: "<h1>Welcome</h1><p>This is HTML content.</p>",
+  contentType: "text/html",
 };
 
 // Error response
 return {
-    status: 404,
-    body: "Not Found",
-    contentType: "text/plain"
+  status: 404,
+  body: "Not Found",
+  contentType: "text/plain",
 };
 ```
 
@@ -257,12 +257,12 @@ Standard JavaScript JSON object for parsing and stringifying JSON data.
 
 ```javascript
 function apiHandler(req) {
-    const data = { users: ["Alice", "Bob"], count: 2 };
-    return {
-        status: 200,
-        body: JSON.stringify(data),
-        contentType: "application/json"
-    };
+  const data = { users: ["Alice", "Bob"], count: 2 };
+  return {
+    status: 200,
+    body: JSON.stringify(data),
+    contentType: "application/json",
+  };
 }
 ```
 
@@ -279,10 +279,10 @@ Basic console logging (output goes to server logs).
 
 ```javascript
 function debugHandler(req) {
-    console.log("Request received: " + req.path);
-    console.error("This is an error message");
+  console.log("Request received: " + req.path);
+  console.error("This is an error message");
 
-    return { status: 200, body: "Check logs" };
+  return { status: 200, body: "Check logs" };
 }
 ```
 
@@ -322,17 +322,17 @@ Scripts run in a sandboxed environment. If a script throws an error:
 
 ```javascript
 function safeHandler(req) {
-    try {
-        // Your code here
-        if (!req.query.id) {
-            return { status: 400, body: "Missing id parameter" };
-        }
-
-        return { status: 200, body: "Success" };
-    } catch (error) {
-        writeLog("Error in handler: " + error.message);
-        return { status: 500, body: "Internal server error" };
+  try {
+    // Your code here
+    if (!req.query.id) {
+      return { status: 400, body: "Missing id parameter" };
     }
+
+    return { status: 200, body: "Success" };
+  } catch (error) {
+    writeLog("Error in handler: " + error.message);
+    return { status: 500, body: "Internal server error" };
+  }
 }
 ```
 

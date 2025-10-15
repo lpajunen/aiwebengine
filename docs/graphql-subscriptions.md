@@ -18,9 +18,9 @@ GraphQL subscriptions in aiwebengine now use the native `schema.execute_stream()
 
 ```javascript
 registerGraphQLSubscription(
-    "subscriptionName", 
-    "type Subscription { subscriptionName: String }", 
-    "resolverFunctionName"
+  "subscriptionName",
+  "type Subscription { subscriptionName: String }",
+  "resolverFunctionName",
 );
 ```
 
@@ -30,8 +30,8 @@ The subscription resolver is called when a client subscribes. It should return a
 
 ```javascript
 function mySubscriptionResolver() {
-    writeLog("Client subscribed to mySubscription");
-    return "Subscription initialized";
+  writeLog("Client subscribed to mySubscription");
+  return "Subscription initialized";
 }
 ```
 
@@ -40,15 +40,19 @@ function mySubscriptionResolver() {
 Use the convenience function (legacy compatibility):
 
 ```javascript
-sendSubscriptionMessage("subscriptionName", JSON.stringify({
+sendSubscriptionMessage(
+  "subscriptionName",
+  JSON.stringify({
     message: "Hello subscribers!",
-    timestamp: new Date().toISOString()
-}));
+    timestamp: new Date().toISOString(),
+  }),
+);
 ```
 
 **Note**: With the new execute_stream approach, this function maintains backward compatibility but logs a deprecation warning. For new development, consider generating subscription messages directly within subscription resolvers for better GraphQL compliance.
 sendStreamMessageToPath("/graphql/subscription/subscriptionName", JSON.stringify(data));
-```
+
+````
 
 ## Client-Side Usage
 
@@ -69,14 +73,14 @@ fetch('/graphql/sse', {
 .then(response => {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
-    
+
     function readStream() {
         reader.read().then(({ done, value }) => {
             if (done) return;
-            
+
             const chunk = decoder.decode(value);
             const lines = chunk.split('\\n');
-            
+
             lines.forEach(line => {
                 if (line.startsWith('data: ')) {
                     const data = JSON.parse(line.slice(6));
@@ -85,25 +89,25 @@ fetch('/graphql/sse', {
                     }
                 }
             });
-            
+
             readStream();
         });
     }
-    
+
     readStream();
 });
-```
+````
 
 ### Using EventSource (Alternative)
 
 You can also connect directly to the auto-registered stream path:
 
 ```javascript
-const eventSource = new EventSource('/graphql/subscription/mySubscription');
+const eventSource = new EventSource("/graphql/subscription/mySubscription");
 
-eventSource.onmessage = function(event) {
-    const data = JSON.parse(event.data);
-    console.log('Received message:', data);
+eventSource.onmessage = function (event) {
+  const data = JSON.parse(event.data);
+  console.log("Received message:", data);
 };
 ```
 
@@ -114,57 +118,60 @@ eventSource.onmessage = function(event) {
 ```javascript
 // Register the subscription
 registerGraphQLSubscription(
-    "liveNotifications", 
-    "type Subscription { liveNotifications: String }", 
-    "liveNotificationsResolver"
+  "liveNotifications",
+  "type Subscription { liveNotifications: String }",
+  "liveNotificationsResolver",
 );
 
 // Register a mutation to trigger notifications
 registerGraphQLMutation(
-    "sendNotification", 
-    "type Mutation { sendNotification(message: String!): String }", 
-    "sendNotificationResolver"
+  "sendNotification",
+  "type Mutation { sendNotification(message: String!): String }",
+  "sendNotificationResolver",
 );
 
 // Subscription resolver - called when clients subscribe
 function liveNotificationsResolver() {
-    writeLog("Client subscribed to live notifications");
-    return "Notification subscription active";
+  writeLog("Client subscribed to live notifications");
+  return "Notification subscription active";
 }
 
 // Mutation resolver - triggers subscription messages
 function sendNotificationResolver(args) {
-    const notification = {
-        id: Math.random().toString(36).substr(2, 9),
-        message: args.message,
-        timestamp: new Date().toISOString(),
-        type: "info"
-    };
-    
-    // Send to all subscription clients
-    sendSubscriptionMessage("liveNotifications", JSON.stringify(notification));
-    
-    return `Notification sent: ${args.message}`;
+  const notification = {
+    id: Math.random().toString(36).substr(2, 9),
+    message: args.message,
+    timestamp: new Date().toISOString(),
+    type: "info",
+  };
+
+  // Send to all subscription clients
+  sendSubscriptionMessage("liveNotifications", JSON.stringify(notification));
+
+  return `Notification sent: ${args.message}`;
 }
 
 // You can also trigger from HTTP endpoints or other events
-register('/trigger-notification', 'triggerNotificationHandler', 'POST');
+register("/trigger-notification", "triggerNotificationHandler", "POST");
 
 function triggerNotificationHandler(req) {
-    const message = req.body || "Default notification";
-    
-    sendSubscriptionMessage("liveNotifications", JSON.stringify({
-        id: Math.random().toString(36).substr(2, 9),
-        message: message,
-        timestamp: new Date().toISOString(),
-        type: "system"
-    }));
-    
-    return {
-        status: 200,
-        body: JSON.stringify({ success: true }),
-        contentType: "application/json"
-    };
+  const message = req.body || "Default notification";
+
+  sendSubscriptionMessage(
+    "liveNotifications",
+    JSON.stringify({
+      id: Math.random().toString(36).substr(2, 9),
+      message: message,
+      timestamp: new Date().toISOString(),
+      type: "system",
+    }),
+  );
+
+  return {
+    status: 200,
+    body: JSON.stringify({ success: true }),
+    contentType: "application/json",
+  };
 }
 ```
 
@@ -173,85 +180,85 @@ function triggerNotificationHandler(req) {
 ```html
 <!DOCTYPE html>
 <html>
-<head>
+  <head>
     <title>GraphQL Subscription Demo</title>
-</head>
-<body>
+  </head>
+  <body>
     <div id="notifications"></div>
     <button onclick="sendTestNotification()">Send Test Notification</button>
-    
+
     <script>
-        // Subscribe to notifications
-        const subscriptionQuery = {
-            query: \`subscription { liveNotifications }\`
-        };
-        
-        fetch('/graphql/sse', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(subscriptionQuery)
-        })
-        .then(response => {
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            
-            function readStream() {
-                reader.read().then(({ done, value }) => {
-                    if (done) return;
-                    
-                    const chunk = decoder.decode(value);
-                    const lines = chunk.split('\\n');
-                    
-                    lines.forEach(line => {
-                        if (line.startsWith('data: ')) {
-                            try {
-                                const data = JSON.parse(line.slice(6));
-                                if (data.data && data.data.liveNotifications) {
-                                    displayNotification(data.data.liveNotifications);
-                                }
-                            } catch (e) {
-                                console.log('Non-JSON data:', line);
-                            }
-                        }
-                    });
-                    
-                    readStream();
-                });
-            }
-            
-            readStream();
-        });
-        
-        function displayNotification(notification) {
-            const div = document.getElementById('notifications');
-            const notificationEl = document.createElement('div');
-            
-            try {
-                const data = JSON.parse(notification);
-                notificationEl.innerHTML = \`
-                    <p><strong>\${data.id}</strong> [\${data.timestamp}]</p>
-                    <p>\${data.message}</p>
-                \`;
-            } catch (e) {
-                notificationEl.textContent = notification;
-            }
-            
-            div.appendChild(notificationEl);
-        }
-        
-        function sendTestNotification() {
-            const mutation = {
-                query: \`mutation { sendNotification(message: "Test notification from client") }\`
-            };
-            
-            fetch('/graphql', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(mutation)
-            });
-        }
+      // Subscribe to notifications
+      const subscriptionQuery = {
+          query: \`subscription { liveNotifications }\`
+      };
+
+      fetch('/graphql/sse', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(subscriptionQuery)
+      })
+      .then(response => {
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+
+          function readStream() {
+              reader.read().then(({ done, value }) => {
+                  if (done) return;
+
+                  const chunk = decoder.decode(value);
+                  const lines = chunk.split('\\n');
+
+                  lines.forEach(line => {
+                      if (line.startsWith('data: ')) {
+                          try {
+                              const data = JSON.parse(line.slice(6));
+                              if (data.data && data.data.liveNotifications) {
+                                  displayNotification(data.data.liveNotifications);
+                              }
+                          } catch (e) {
+                              console.log('Non-JSON data:', line);
+                          }
+                      }
+                  });
+
+                  readStream();
+              });
+          }
+
+          readStream();
+      });
+
+      function displayNotification(notification) {
+          const div = document.getElementById('notifications');
+          const notificationEl = document.createElement('div');
+
+          try {
+              const data = JSON.parse(notification);
+              notificationEl.innerHTML = \`
+                  <p><strong>\${data.id}</strong> [\${data.timestamp}]</p>
+                  <p>\${data.message}</p>
+              \`;
+          } catch (e) {
+              notificationEl.textContent = notification;
+          }
+
+          div.appendChild(notificationEl);
+      }
+
+      function sendTestNotification() {
+          const mutation = {
+              query: \`mutation { sendNotification(message: "Test notification from client") }\`
+          };
+
+          fetch('/graphql', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(mutation)
+          });
+      }
     </script>
-</body>
+  </body>
 </html>
 ```
 

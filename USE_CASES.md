@@ -8,12 +8,14 @@ This document defines the primary use cases for the aiwebengine platform, focusi
 **Version**: 1.0
 
 **Target Audience**:
+
 - Web Developers using AI to build applications
 - API Developers creating backend services with AI assistance
 - Real-time Application Developers building collaborative features
 - AI Agents/Tools generating code for the platform
 
 **Key Principles**:
+
 - 🤖 **AI-First Development**: Engine supports patterns that AI can easily generate
 - 🔒 **Security by Default**: Engine enforces security, developers focus on business logic
 - 👥 **Collaboration-Ready**: Real-time features for multi-user scenarios
@@ -53,11 +55,13 @@ These are the most critical use cases that the engine MUST support excellently t
 **Goal**: Build a complete web application using AI-generated code without manual engine configuration
 
 **Preconditions**:
+
 - Engine is running and accessible
 - Developer has access to AI coding assistant
 - Developer has basic understanding of the application requirements
 
 **Main Flow**:
+
 1. Developer describes desired application to AI in natural language
 2. AI generates JavaScript handler code using aiwebengine APIs
 3. Developer deploys script via editor or deployer tool
@@ -67,6 +71,7 @@ These are the most critical use cases that the engine MUST support excellently t
 7. Application runs successfully with proper security enforcement
 
 **Expected Results**:
+
 - ✅ AI can generate valid, working code on first or second attempt
 - ✅ Engine errors are clear enough for AI to auto-correct
 - ✅ Security is enforced without developer needing deep knowledge
@@ -75,8 +80,9 @@ These are the most critical use cases that the engine MUST support excellently t
 **Related Requirements**: REQ-JS-001, REQ-JS-005, REQ-SEC-001, REQ-HTTP-003, REQ-DOC-001
 
 **Example Prompt to AI**:
+
 ```
-"Create a blog application with posts stored in a data repository. 
+"Create a blog application with posts stored in a data repository.
 Users should be able to view all posts and individual post details."
 ```
 
@@ -91,11 +97,13 @@ Users should be able to view all posts and individual post details."
 **Goal**: Build an application where multiple users interact in real-time
 
 **Preconditions**:
+
 - Engine supports GraphQL subscriptions
 - Engine supports stream management
 - AI understands real-time patterns
 
 **Main Flow**:
+
 1. Developer describes collaborative feature to AI (e.g., "shared todo list")
 2. AI generates code using GraphQL subscriptions or streaming APIs
 3. Multiple users connect to the application simultaneously
@@ -104,6 +112,7 @@ Users should be able to view all posts and individual post details."
 6. Engine enforces security per user session
 
 **Expected Results**:
+
 - ✅ Real-time updates work reliably across multiple clients
 - ✅ No race conditions or data corruption
 - ✅ Proper cleanup when users disconnect
@@ -112,6 +121,7 @@ Users should be able to view all posts and individual post details."
 **Related Requirements**: REQ-RT-001, REQ-RT-002, REQ-GQL-003, REQ-SEC-005, REQ-PERF-002
 
 **Example Scenarios**:
+
 - Collaborative document editing
 - Real-time chat application
 - Live dashboard with streaming metrics
@@ -236,10 +246,10 @@ Day 1, 5:00 PM  - Team: Deploys to production
 ```javascript
 // AI generates secure registration
 function register(req) {
-    const { username, password } = req.body;
-    // Engine ensures password is hashed automatically
-    Auth.register(username, password);
-    return Response.json({ success: true });
+  const { username, password } = req.body;
+  // Engine ensures password is hashed automatically
+  Auth.register(username, password);
+  return Response.json({ success: true });
 }
 ```
 
@@ -290,36 +300,36 @@ function register(req) {
 ```javascript
 // AI generates this when asked: "Create an inventory lookup tool"
 function initMCP() {
-    registerMCPTool(
-        "check_inventory",
-        "Check product inventory levels in our warehouse",
-        {
-            type: "object",
-            properties: {
-                productId: { 
-                    type: "string", 
-                    description: "Product SKU or ID" 
-                }
-            },
-            required: ["productId"]
+  registerMCPTool(
+    "check_inventory",
+    "Check product inventory levels in our warehouse",
+    {
+      type: "object",
+      properties: {
+        productId: {
+          type: "string",
+          description: "Product SKU or ID",
         },
-        async function(args) {
-            const product = await DataRepository.get("products", args.productId);
-            if (!product) {
-                return { 
-                    error: "Product not found",
-                    inStock: false 
-                };
-            }
-            return {
-                productId: args.productId,
-                productName: product.name,
-                inStock: product.quantity > 0,
-                quantity: product.quantity,
-                location: product.warehouseLocation
-            };
-        }
-    );
+      },
+      required: ["productId"],
+    },
+    async function (args) {
+      const product = await DataRepository.get("products", args.productId);
+      if (!product) {
+        return {
+          error: "Product not found",
+          inStock: false,
+        };
+      }
+      return {
+        productId: args.productId,
+        productName: product.name,
+        inStock: product.quantity > 0,
+        quantity: product.quantity,
+        location: product.warehouseLocation,
+      };
+    },
+  );
 }
 ```
 
@@ -377,25 +387,25 @@ function initMCP() {
 ```javascript
 // AI generates this when asked: "Create product support prompt"
 function initMCP() {
-    registerMCPPrompt(
-        "product_support_context",
-        "Provides comprehensive product context for customer support",
-        [
-            {
-                name: "productId",
-                description: "Product identifier",
-                required: true
-            },
-            {
-                name: "includeReviews",
-                description: "Include recent customer reviews",
-                required: false
-            }
-        ],
-        async function(args) {
-            const product = await DataRepository.get("products", args.productId);
-            
-            let context = `
+  registerMCPPrompt(
+    "product_support_context",
+    "Provides comprehensive product context for customer support",
+    [
+      {
+        name: "productId",
+        description: "Product identifier",
+        required: true,
+      },
+      {
+        name: "includeReviews",
+        description: "Include recent customer reviews",
+        required: false,
+      },
+    ],
+    async function (args) {
+      const product = await DataRepository.get("products", args.productId);
+
+      let context = `
 # Product Support Context
 
 ## Product Information
@@ -403,44 +413,48 @@ function initMCP() {
 - SKU: ${product.sku}
 - Category: ${product.category}
 - Price: $${product.price}
-- In Stock: ${product.quantity > 0 ? 'Yes' : 'No'}
+- In Stock: ${product.quantity > 0 ? "Yes" : "No"}
 
 ## Specifications
-${product.specs.map(s => `- ${s.name}: ${s.value}`).join('\n')}
+${product.specs.map((s) => `- ${s.name}: ${s.value}`).join("\n")}
 
 ## Common Issues & Solutions
-${product.faq.map(f => `
+${product.faq
+  .map(
+    (f) => `
 ### ${f.question}
 ${f.answer}
-`).join('\n')}
+`,
+  )
+  .join("\n")}
 `;
 
-            if (args.includeReviews) {
-                const reviews = await DataRepository.query("reviews", { 
-                    productId: args.productId,
-                    limit: 5,
-                    sort: "recent"
-                });
-                context += `\n## Recent Customer Reviews\n`;
-                context += reviews.map(r => 
-                    `- ${r.rating}⭐: "${r.comment}"`
-                ).join('\n');
-            }
+      if (args.includeReviews) {
+        const reviews = await DataRepository.query("reviews", {
+          productId: args.productId,
+          limit: 5,
+          sort: "recent",
+        });
+        context += `\n## Recent Customer Reviews\n`;
+        context += reviews
+          .map((r) => `- ${r.rating}⭐: "${r.comment}"`)
+          .join("\n");
+      }
 
-            return {
-                messages: [
-                    {
-                        role: "system",
-                        content: context
-                    },
-                    {
-                        role: "user", 
-                        content: "Please help with this product"
-                    }
-                ]
-            };
-        }
-    );
+      return {
+        messages: [
+          {
+            role: "system",
+            content: context,
+          },
+          {
+            role: "user",
+            content: "Please help with this product",
+          },
+        ],
+      };
+    },
+  );
 }
 ```
 
@@ -491,40 +505,41 @@ ${f.answer}
 ```javascript
 // Expose product catalog as MCP resource
 function initMCP() {
-    // Individual product resource
-    registerMCPResource(
-        "inventory://products/{productId}",
-        "Product Details",
-        "Detailed information about a specific product",
-        async function(uri) {
-            const match = uri.match(/products\/([^\/]+)/);
-            const productId = match[1];
-            const product = await DataRepository.get("products", productId);
-            
-            return {
-                mimeType: "application/json",
-                content: JSON.stringify(product, null, 2)
-            };
-        }
-    );
-    
-    // Product catalog list
-    registerMCPResource(
-        "inventory://products",
-        "Product Catalog",
-        "List of all available products",
-        async function(uri) {
-            const products = await DataRepository.list("products");
-            
-            return {
-                mimeType: "text/markdown",
-                content: `# Product Catalog\n\n` +
-                    products.map(p => 
-                        `- **${p.name}** (${p.sku}): $${p.price}`
-                    ).join('\n')
-            };
-        }
-    );
+  // Individual product resource
+  registerMCPResource(
+    "inventory://products/{productId}",
+    "Product Details",
+    "Detailed information about a specific product",
+    async function (uri) {
+      const match = uri.match(/products\/([^\/]+)/);
+      const productId = match[1];
+      const product = await DataRepository.get("products", productId);
+
+      return {
+        mimeType: "application/json",
+        content: JSON.stringify(product, null, 2),
+      };
+    },
+  );
+
+  // Product catalog list
+  registerMCPResource(
+    "inventory://products",
+    "Product Catalog",
+    "List of all available products",
+    async function (uri) {
+      const products = await DataRepository.list("products");
+
+      return {
+        mimeType: "text/markdown",
+        content:
+          `# Product Catalog\n\n` +
+          products
+            .map((p) => `- **${p.name}** (${p.sku}): $${p.price}`)
+            .join("\n"),
+      };
+    },
+  );
 }
 ```
 
@@ -548,10 +563,12 @@ Use cases for developers building web applications with HTML/CSS/JavaScript fron
 **Goal**: Create a form that collects user input and processes it server-side
 
 **Preconditions**:
+
 - Engine supports form data parsing
 - Engine supports both GET (display) and POST (submit) methods
 
 **Main Flow**:
+
 1. Developer asks AI to create feedback form
 2. AI generates GET handler returning HTML form
 3. AI generates POST handler processing form data
@@ -561,6 +578,7 @@ Use cases for developers building web applications with HTML/CSS/JavaScript fron
 7. Handler returns success/error response
 
 **Expected Results**:
+
 - ✅ Form data correctly parsed (urlencoded and multipart)
 - ✅ Input validation catches errors
 - ✅ Clear error messages displayed to user
@@ -579,10 +597,12 @@ Use cases for developers building web applications with HTML/CSS/JavaScript fron
 **Goal**: Serve CSS, JavaScript, images alongside HTML pages
 
 **Preconditions**:
+
 - Engine supports asset management
 - Assets are uploaded via editor or API
 
 **Main Flow**:
+
 1. Developer uploads HTML, CSS, JS files
 2. HTML references assets with `/assets/` paths
 3. Engine serves assets with correct Content-Type headers
@@ -590,6 +610,7 @@ Use cases for developers building web applications with HTML/CSS/JavaScript fron
 5. Assets are cached appropriately
 
 **Expected Results**:
+
 - ✅ Correct MIME types for all asset types
 - ✅ Assets load reliably
 - ✅ Performance is acceptable (caching works)
@@ -605,10 +626,12 @@ Use cases for developers building web applications with HTML/CSS/JavaScript fron
 **Goal**: Allow users to upload files and retrieve them later
 
 **Preconditions**:
+
 - Engine supports multipart/form-data parsing
 - Engine supports binary response data
 
 **Main Flow**:
+
 1. Developer asks AI to create file upload feature
 2. AI generates upload handler accepting multipart data
 3. User uploads file through web form
@@ -618,6 +641,7 @@ Use cases for developers building web applications with HTML/CSS/JavaScript fron
 7. Engine serves file with appropriate headers
 
 **Expected Results**:
+
 - ✅ Files upload successfully (any size within limits)
 - ✅ File metadata preserved (filename, content-type)
 - ✅ Downloads work correctly in all browsers
@@ -634,10 +658,12 @@ Use cases for developers building web applications with HTML/CSS/JavaScript fron
 **Goal**: Generate HTML dynamically based on data and user context
 
 **Preconditions**:
+
 - Engine supports JavaScript execution
 - Engine provides data access APIs
 
 **Main Flow**:
+
 1. Developer describes desired page to AI
 2. AI generates handler that fetches data
 3. AI generates HTML template logic
@@ -647,6 +673,7 @@ Use cases for developers building web applications with HTML/CSS/JavaScript fron
 7. Engine returns rendered HTML
 
 **Expected Results**:
+
 - ✅ Data correctly embedded in HTML
 - ✅ XSS protection (proper escaping)
 - ✅ Performance acceptable for dynamic rendering
@@ -669,11 +696,13 @@ Use cases for developers building REST or GraphQL APIs.
 **Goal**: Create a complete REST API for a resource (e.g., tasks, products)
 
 **Preconditions**:
+
 - Engine supports all HTTP methods (GET, POST, PUT, DELETE)
 - Engine provides data repository
 - AI knows REST conventions
 
 **Main Flow**:
+
 1. Developer: "Create a REST API for managing tasks"
 2. AI generates handlers:
    - GET /tasks → list all tasks
@@ -687,6 +716,7 @@ Use cases for developers building REST or GraphQL APIs.
 6. Engine validates requests and enforces security
 
 **Expected Results**:
+
 - ✅ All CRUD operations work correctly
 - ✅ Proper HTTP status codes (200, 201, 404, etc.)
 - ✅ JSON responses properly formatted
@@ -696,6 +726,7 @@ Use cases for developers building REST or GraphQL APIs.
 **Related Requirements**: REQ-HTTP-001, REQ-HTTP-002, REQ-HTTP-003, REQ-DATA-001 through REQ-DATA-005
 
 **Example Response**:
+
 ```json
 {
   "id": "123",
@@ -714,11 +745,13 @@ Use cases for developers building REST or GraphQL APIs.
 **Goal**: Create a GraphQL API with type-safe queries and mutations
 
 **Preconditions**:
+
 - Engine supports GraphQL
 - Engine provides schema definition capabilities
 - AI knows GraphQL syntax
 
 **Main Flow**:
+
 1. Developer describes data model to AI
 2. AI generates GraphQL schema
 3. AI generates resolvers for queries and mutations
@@ -729,6 +762,7 @@ Use cases for developers building REST or GraphQL APIs.
 8. Engine returns properly formatted GraphQL response
 
 **Expected Results**:
+
 - ✅ Schema validation works correctly
 - ✅ Queries return requested fields only
 - ✅ Mutations modify data correctly
@@ -746,10 +780,12 @@ Use cases for developers building REST or GraphQL APIs.
 **Goal**: Protect API endpoints with authentication and role-based access
 
 **Preconditions**:
+
 - Engine supports Auth APIs
 - Engine enforces security policies
 
 **Main Flow**:
+
 1. Developer: "Protect the API with JWT authentication"
 2. AI generates login endpoint returning JWT tokens
 3. AI generates middleware checking tokens
@@ -761,6 +797,7 @@ Use cases for developers building REST or GraphQL APIs.
 9. Engine allows/denies request based on authorization
 
 **Expected Results**:
+
 - ✅ Unauthenticated requests rejected (401)
 - ✅ Unauthorized requests rejected (403)
 - ✅ Valid tokens accepted
@@ -778,9 +815,11 @@ Use cases for developers building REST or GraphQL APIs.
 **Goal**: Prevent API abuse with rate limiting
 
 **Preconditions**:
+
 - Engine supports rate limiting configuration
 
 **Main Flow**:
+
 1. Developer configures rate limits (e.g., 100 req/min per user)
 2. Client makes multiple requests
 3. Engine tracks request count per user/IP
@@ -789,6 +828,7 @@ Use cases for developers building REST or GraphQL APIs.
 6. Engine includes Retry-After header
 
 **Expected Results**:
+
 - ✅ Legitimate usage not affected
 - ✅ Abuse prevented
 - ✅ Clear error messages
@@ -809,10 +849,12 @@ Use cases for building collaborative, real-time applications.
 **Goal**: Stream continuous data updates to connected clients
 
 **Preconditions**:
+
 - Engine supports streaming APIs
 - Engine manages stream lifecycle
 
 **Main Flow**:
+
 1. Developer: "Create a live metrics dashboard"
 2. AI generates streaming endpoint
 3. Multiple clients connect to stream
@@ -822,6 +864,7 @@ Use cases for building collaborative, real-time applications.
 7. Engine cleans up streams
 
 **Expected Results**:
+
 - ✅ All clients receive updates
 - ✅ No memory leaks
 - ✅ Backpressure handled
@@ -830,6 +873,7 @@ Use cases for building collaborative, real-time applications.
 **Related Requirements**: REQ-RT-001, REQ-RT-002, REQ-STREAM-001 through REQ-STREAM-005
 
 **Example Use Cases**:
+
 - Live sports scores
 - Stock price updates
 - Server monitoring dashboard
@@ -844,10 +888,12 @@ Use cases for building collaborative, real-time applications.
 **Goal**: Use GraphQL subscriptions for type-safe real-time updates
 
 **Preconditions**:
+
 - Engine supports GraphQL subscriptions
 - WebSocket or streaming transport available
 
 **Main Flow**:
+
 1. Developer describes real-time feature to AI
 2. AI generates GraphQL subscription schema
 3. AI generates subscription resolver
@@ -858,6 +904,7 @@ Use cases for building collaborative, real-time applications.
 8. Clients receive typed, filtered data
 
 **Expected Results**:
+
 - ✅ Subscriptions work reliably
 - ✅ Type safety maintained
 - ✅ Only relevant updates sent (filtering works)
@@ -866,6 +913,7 @@ Use cases for building collaborative, real-time applications.
 **Related Requirements**: REQ-GQL-003, REQ-RT-001, REQ-RT-002
 
 **Example**:
+
 ```graphql
 subscription OnMessageAdded($chatId: ID!) {
   messageAdded(chatId: $chatId) {
@@ -886,10 +934,12 @@ subscription OnMessageAdded($chatId: ID!) {
 **Goal**: Allow multiple users to edit shared content simultaneously
 
 **Preconditions**:
+
 - Engine supports real-time streams or subscriptions
 - Engine handles concurrent updates safely
 
 **Main Flow**:
+
 1. Multiple users open same document
 2. User A makes edit
 3. Edit sent to server
@@ -900,6 +950,7 @@ subscription OnMessageAdded($chatId: ID!) {
 8. Conflict resolution handles simultaneous edits
 
 **Expected Results**:
+
 - ✅ All users see consistent state
 - ✅ No data loss on concurrent edits
 - ✅ Latency is acceptable (< 100ms)
@@ -908,6 +959,7 @@ subscription OnMessageAdded($chatId: ID!) {
 **Related Requirements**: REQ-RT-001, REQ-DATA-002, REQ-DATA-005, REQ-PERF-002
 
 **Example Applications**:
+
 - Collaborative document editor (like Google Docs)
 - Shared spreadsheet
 - Multiplayer game state
@@ -922,10 +974,12 @@ subscription OnMessageAdded($chatId: ID!) {
 **Goal**: Show which users are currently online/active
 
 **Preconditions**:
+
 - Engine tracks active connections
 - Engine supports publishing presence events
 
 **Main Flow**:
+
 1. User connects to application
 2. System broadcasts "User X joined"
 3. Other users see User X appear online
@@ -936,6 +990,7 @@ subscription OnMessageAdded($chatId: ID!) {
 8. Other users see User X disappear
 
 **Expected Results**:
+
 - ✅ Presence state is accurate
 - ✅ Status updates in real-time
 - ✅ Disconnections detected promptly
@@ -954,6 +1009,7 @@ subscription OnMessageAdded($chatId: ID!) {
 **Goal**: Handle errors gracefully with clear feedback
 
 **Main Flow**:
+
 1. AI generates handler code
 2. Handler has bug or validation error
 3. User triggers error condition
@@ -963,6 +1019,7 @@ subscription OnMessageAdded($chatId: ID!) {
 7. AI helps fix error based on message
 
 **Expected Results**:
+
 - ✅ Errors don't crash engine
 - ✅ Error messages are actionable
 - ✅ AI can understand and fix errors
@@ -979,6 +1036,7 @@ subscription OnMessageAdded($chatId: ID!) {
 **Goal**: Configure engine behavior for different environments
 
 **Main Flow**:
+
 1. Admin defines configuration (dev/staging/prod)
 2. Configuration includes:
    - Memory limits
@@ -990,6 +1048,7 @@ subscription OnMessageAdded($chatId: ID!) {
 5. Scripts run within configured constraints
 
 **Expected Results**:
+
 - ✅ Configuration changes apply correctly
 - ✅ Different environments have different configs
 - ✅ Configuration validation prevents errors
@@ -1005,6 +1064,7 @@ subscription OnMessageAdded($chatId: ID!) {
 **Goal**: Debug issues and monitor application health
 
 **Main Flow**:
+
 1. Script uses `console.log()` for debugging
 2. Engine captures logs with context
 3. Logs include timestamps, request IDs
@@ -1013,6 +1073,7 @@ subscription OnMessageAdded($chatId: ID!) {
 6. Monitoring system tracks metrics
 
 **Expected Results**:
+
 - ✅ Logs are structured and searchable
 - ✅ Sensitive data not logged
 - ✅ Performance metrics available
@@ -1029,6 +1090,7 @@ subscription OnMessageAdded($chatId: ID!) {
 **Goal**: Deploy, update, and manage scripts without downtime
 
 **Main Flow**:
+
 1. Developer deploys initial script version
 2. Script receives traffic
 3. Developer makes improvements with AI
@@ -1039,6 +1101,7 @@ subscription OnMessageAdded($chatId: ID!) {
 8. No requests are dropped
 
 **Expected Results**:
+
 - ✅ Zero-downtime deployments
 - ✅ Version rollback possible
 - ✅ Clear deployment status
@@ -1059,6 +1122,7 @@ End-to-end scenarios combining multiple features.
 **Goal**: Build a full e-commerce site with AI assistance
 
 **Components**:
+
 - Product catalog (CRUD API)
 - Shopping cart (session management)
 - User authentication
@@ -1081,6 +1145,7 @@ End-to-end scenarios combining multiple features.
 **Goal**: Build Slack-like chat application
 
 **Components**:
+
 - User authentication
 - Channel management
 - Real-time message delivery (GraphQL subscriptions)
@@ -1103,6 +1168,7 @@ End-to-end scenarios combining multiple features.
 **Goal**: Build multi-tenant SaaS with API-first architecture
 
 **Components**:
+
 - Multi-tenant data isolation
 - API authentication (JWT)
 - Role-based access control
@@ -1156,17 +1222,14 @@ Customer <-> Web Portal <-> aiwebengine <-> AI Agent (via MCP)
    - AI generates MCP tools for actions
    - AI creates MCP prompts for context
    - AI exposes knowledge base as MCP resources
-   
 2. **System deployment**:
    - All components deployed to aiwebengine
    - AI agent connects via MCP
    - Agent discovers tools, prompts, resources
-   
 3. **Customer interaction**:
    - Customer logs into portal
    - Asks: "Where is my order #12345?"
    - Portal sends message to AI agent
-   
 4. **AI agent processing**:
    - Requests prompt "customer_context" with customer ID
    - Engine fetches customer history, preferences
@@ -1174,7 +1237,6 @@ Customer <-> Web Portal <-> aiwebengine <-> AI Agent (via MCP)
    - Engine queries order database
    - AI reads resource "policies://shipping" for policy info
    - AI synthesizes response with full context
-   
 5. **Response delivery**:
    - AI provides detailed, accurate answer
    - Can offer actions: "Would you like me to expedite shipping?"
@@ -1198,93 +1260,113 @@ Customer <-> Web Portal <-> aiwebengine <-> AI Agent (via MCP)
 
 ```javascript
 function initSupportSystem() {
-    // TOOLS: Actions AI can take
-    registerMCPTool("lookup_order", "Get order details", {
-        type: "object",
-        properties: {
-            orderId: { type: "string" }
-        }
-    }, async (args) => {
-        const order = await DataRepository.get("orders", args.orderId);
-        return {
-            orderId: order.id,
-            status: order.status,
-            items: order.items,
-            total: order.total,
-            estimatedDelivery: order.estimatedDelivery
-        };
-    });
-    
-    registerMCPTool("create_ticket", "Create support ticket", {
-        type: "object",
-        properties: {
-            customerId: { type: "string" },
-            subject: { type: "string" },
-            description: { type: "string" },
-            priority: { type: "string", enum: ["low", "medium", "high"] }
-        }
-    }, async (args) => {
-        const ticket = await DataRepository.create("tickets", {
-            ...args,
-            status: "open",
-            createdAt: new Date().toISOString()
-        });
-        return { ticketId: ticket.id };
-    });
-    
-    // PROMPTS: Context for AI
-    registerMCPPrompt("customer_context", "Full customer context", [
-        { name: "customerId", required: true }
-    ], async (args) => {
-        const customer = await DataRepository.get("customers", args.customerId);
-        const orders = await DataRepository.query("orders", { 
-            customerId: args.customerId 
-        });
-        const tickets = await DataRepository.query("tickets", { 
-            customerId: args.customerId,
-            status: "open"
-        });
-        
-        return {
-            messages: [{
-                role: "system",
-                content: `# Customer Profile
+  // TOOLS: Actions AI can take
+  registerMCPTool(
+    "lookup_order",
+    "Get order details",
+    {
+      type: "object",
+      properties: {
+        orderId: { type: "string" },
+      },
+    },
+    async (args) => {
+      const order = await DataRepository.get("orders", args.orderId);
+      return {
+        orderId: order.id,
+        status: order.status,
+        items: order.items,
+        total: order.total,
+        estimatedDelivery: order.estimatedDelivery,
+      };
+    },
+  );
+
+  registerMCPTool(
+    "create_ticket",
+    "Create support ticket",
+    {
+      type: "object",
+      properties: {
+        customerId: { type: "string" },
+        subject: { type: "string" },
+        description: { type: "string" },
+        priority: { type: "string", enum: ["low", "medium", "high"] },
+      },
+    },
+    async (args) => {
+      const ticket = await DataRepository.create("tickets", {
+        ...args,
+        status: "open",
+        createdAt: new Date().toISOString(),
+      });
+      return { ticketId: ticket.id };
+    },
+  );
+
+  // PROMPTS: Context for AI
+  registerMCPPrompt(
+    "customer_context",
+    "Full customer context",
+    [{ name: "customerId", required: true }],
+    async (args) => {
+      const customer = await DataRepository.get("customers", args.customerId);
+      const orders = await DataRepository.query("orders", {
+        customerId: args.customerId,
+      });
+      const tickets = await DataRepository.query("tickets", {
+        customerId: args.customerId,
+        status: "open",
+      });
+
+      return {
+        messages: [
+          {
+            role: "system",
+            content: `# Customer Profile
 Name: ${customer.name}
 Tier: ${customer.tier}
 Member Since: ${customer.memberSince}
 
 ## Recent Orders
-${orders.slice(0, 5).map(o => `- Order ${o.id}: ${o.status}`).join('\n')}
+${orders
+  .slice(0, 5)
+  .map((o) => `- Order ${o.id}: ${o.status}`)
+  .join("\n")}
 
 ## Open Tickets
-${tickets.map(t => `- ${t.subject} (${t.priority})`).join('\n') || 'None'}
+${tickets.map((t) => `- ${t.subject} (${t.priority})`).join("\n") || "None"}
 
 ## Preferences
 - Preferred Contact: ${customer.preferredContact}
 - Language: ${customer.language}
-`
-            }]
-        };
-    });
-    
-    // RESOURCES: Knowledge base
-    registerMCPResource("kb://policies/shipping", 
-        "Shipping Policy", 
-        "Company shipping and delivery policies",
-        async () => ({
-            mimeType: "text/markdown",
-            content: await DataRepository.get("content", "shipping-policy")
-        })
-    );
-    
-    registerMCPResource("kb://policies/refunds",
-        "Refund Policy",
-        "Company refund and return policies",
-        async () => ({
-            mimeType: "text/markdown",
-            content: await DataRepository.get("content", "refund-policy")
-        })
-    );
+`,
+          },
+        ],
+      };
+    },
+  );
+
+  // RESOURCES: Knowledge base
+  registerMCPResource(
+    "kb://policies/shipping",
+    "Shipping Policy",
+    "Company shipping and delivery policies",
+    async () => ({
+      mimeType: "text/markdown",
+      content: await DataRepository.get("content", "shipping-policy"),
+    }),
+  );
+
+  registerMCPResource(
+    "kb://policies/refunds",
+    "Refund Policy",
+    "Company refund and return policies",
+    async () => ({
+      mimeType: "text/markdown",
+      content: await DataRepository.get("content", "refund-policy"),
+    }),
+  );
 }
 ```
 
@@ -1307,6 +1389,7 @@ ${tickets.map(t => `- ${t.subject} (${t.priority})`).join('\n') || 'None'}
 **Goal**: Prevent security vulnerabilities from malicious input
 
 **Scenarios**:
+
 - SQL injection attempts → Blocked by parameterized queries
 - XSS attempts → Blocked by output escaping
 - Extremely large payloads → Rejected by size limits
@@ -1326,6 +1409,7 @@ ${tickets.map(t => `- ${t.subject} (${t.priority})`).join('\n') || 'None'}
 **Goal**: Prevent runaway scripts from crashing engine
 
 **Scenarios**:
+
 - Infinite loop → Terminated by timeout
 - Memory leak → Terminated by memory limit
 - Too many streams → Limited by configuration
@@ -1344,6 +1428,7 @@ ${tickets.map(t => `- ${t.subject} (${t.priority})`).join('\n') || 'None'}
 **Goal**: Gracefully handle connectivity issues
 
 **Scenarios**:
+
 - Client disconnects mid-stream → Cleanup happens
 - Database unavailable → Error returned, no corruption
 - Timeout during request → Proper timeout response
@@ -1356,46 +1441,46 @@ ${tickets.map(t => `- ${t.subject} (${t.priority})`).join('\n') || 'None'}
 
 ## Use Case Traceability Matrix
 
-| Use Case | Priority | Related Requirements | Status |
-|----------|----------|---------------------|--------|
-| **Primary Use Cases** ||||
-| UC-001 | CRITICAL | REQ-JS-001, REQ-JS-005, REQ-SEC-001, REQ-HTTP-003 | In Progress |
-| UC-002 | CRITICAL | REQ-RT-001, REQ-RT-002, REQ-GQL-003, REQ-SEC-005 | In Progress |
-| UC-003 | CRITICAL | REQ-DEPLOY-001-005, REQ-CONFIG-001, REQ-LOG-001 | Partial |
-| UC-004 | CRITICAL | REQ-AUTH-001-011, REQ-SEC-001-006 | Partial |
-| **MCP Use Cases** ||||
-| UC-005 | CRITICAL | REQ-MCP-001, REQ-MCP-002, REQ-MCP-003 | Planned |
-| UC-006 | HIGH | REQ-MCP-001, REQ-MCP-002, REQ-MCP-005 | Planned |
-| UC-007 | MEDIUM | REQ-MCP-001, REQ-MCP-002, REQ-MCP-004 | Planned |
-| **Web Developer** ||||
-| UC-101 | HIGH | REQ-HTTP-002, REQ-HTTP-008, REQ-JS-API-002 | Implemented |
-| UC-102 | HIGH | REQ-ASSET-001-006 | Implemented |
-| UC-103 | HIGH | REQ-HTTP-008, REQ-HTTP-010, REQ-DATA-004 | Partial |
-| UC-104 | MEDIUM | REQ-JS-005, REQ-SEC-004, REQ-DATA-001 | Implemented |
-| **API Developer** ||||
-| UC-201 | CRITICAL | REQ-HTTP-001-003, REQ-DATA-001-005 | Implemented |
-| UC-202 | HIGH | REQ-GQL-001, REQ-GQL-002, REQ-DATA-001 | Partial |
-| UC-203 | CRITICAL | REQ-AUTH-001-011, REQ-SEC-005-006 | Partial |
-| UC-204 | MEDIUM | REQ-SEC-003, REQ-PERF-001 | Planned |
-| **Real-Time Developer** ||||
-| UC-301 | CRITICAL | REQ-RT-001-002, REQ-STREAM-001-005 | Implemented |
-| UC-302 | CRITICAL | REQ-GQL-003, REQ-RT-001-002 | Implemented |
-| UC-303 | HIGH | REQ-RT-001, REQ-DATA-002, REQ-DATA-005 | Partial |
-| UC-304 | MEDIUM | REQ-RT-002, REQ-STREAM-003 | Partial |
-| **Feature-Specific** ||||
-| UC-401 | HIGH | REQ-ERROR-001-005, REQ-HTTP-003 | Implemented |
-| UC-402 | MEDIUM | REQ-CONFIG-001-005 | Implemented |
-| UC-403 | HIGH | REQ-LOG-001-006, REQ-MONITOR-001-004 | Partial |
-| UC-404 | HIGH | REQ-DEPLOY-001-005 | Partial |
-| **Integration** ||||
-| UC-501 | HIGH | Most requirements | Planned |
-| UC-502 | HIGH | REQ-AUTH, REQ-GQL-003, REQ-RT, REQ-DATA | Planned |
-| UC-503 | HIGH | REQ-AUTH, REQ-SEC, REQ-DATA, REQ-GQL | Planned |
-| UC-505 | HIGH | REQ-MCP-001-005, REQ-GQL, REQ-AUTH, REQ-RT | Planned |
-| **Edge Cases** ||||
-| UC-601 | CRITICAL | REQ-SEC-001-010 | In Progress |
-| UC-602 | CRITICAL | REQ-JS-002-004, REQ-PERF | Implemented |
-| UC-603 | HIGH | REQ-ERROR, REQ-RT-002 | Partial |
+| Use Case                | Priority | Related Requirements                              | Status      |
+| ----------------------- | -------- | ------------------------------------------------- | ----------- |
+| **Primary Use Cases**   |          |                                                   |             |
+| UC-001                  | CRITICAL | REQ-JS-001, REQ-JS-005, REQ-SEC-001, REQ-HTTP-003 | In Progress |
+| UC-002                  | CRITICAL | REQ-RT-001, REQ-RT-002, REQ-GQL-003, REQ-SEC-005  | In Progress |
+| UC-003                  | CRITICAL | REQ-DEPLOY-001-005, REQ-CONFIG-001, REQ-LOG-001   | Partial     |
+| UC-004                  | CRITICAL | REQ-AUTH-001-011, REQ-SEC-001-006                 | Partial     |
+| **MCP Use Cases**       |          |                                                   |             |
+| UC-005                  | CRITICAL | REQ-MCP-001, REQ-MCP-002, REQ-MCP-003             | Planned     |
+| UC-006                  | HIGH     | REQ-MCP-001, REQ-MCP-002, REQ-MCP-005             | Planned     |
+| UC-007                  | MEDIUM   | REQ-MCP-001, REQ-MCP-002, REQ-MCP-004             | Planned     |
+| **Web Developer**       |          |                                                   |             |
+| UC-101                  | HIGH     | REQ-HTTP-002, REQ-HTTP-008, REQ-JS-API-002        | Implemented |
+| UC-102                  | HIGH     | REQ-ASSET-001-006                                 | Implemented |
+| UC-103                  | HIGH     | REQ-HTTP-008, REQ-HTTP-010, REQ-DATA-004          | Partial     |
+| UC-104                  | MEDIUM   | REQ-JS-005, REQ-SEC-004, REQ-DATA-001             | Implemented |
+| **API Developer**       |          |                                                   |             |
+| UC-201                  | CRITICAL | REQ-HTTP-001-003, REQ-DATA-001-005                | Implemented |
+| UC-202                  | HIGH     | REQ-GQL-001, REQ-GQL-002, REQ-DATA-001            | Partial     |
+| UC-203                  | CRITICAL | REQ-AUTH-001-011, REQ-SEC-005-006                 | Partial     |
+| UC-204                  | MEDIUM   | REQ-SEC-003, REQ-PERF-001                         | Planned     |
+| **Real-Time Developer** |          |                                                   |             |
+| UC-301                  | CRITICAL | REQ-RT-001-002, REQ-STREAM-001-005                | Implemented |
+| UC-302                  | CRITICAL | REQ-GQL-003, REQ-RT-001-002                       | Implemented |
+| UC-303                  | HIGH     | REQ-RT-001, REQ-DATA-002, REQ-DATA-005            | Partial     |
+| UC-304                  | MEDIUM   | REQ-RT-002, REQ-STREAM-003                        | Partial     |
+| **Feature-Specific**    |          |                                                   |             |
+| UC-401                  | HIGH     | REQ-ERROR-001-005, REQ-HTTP-003                   | Implemented |
+| UC-402                  | MEDIUM   | REQ-CONFIG-001-005                                | Implemented |
+| UC-403                  | HIGH     | REQ-LOG-001-006, REQ-MONITOR-001-004              | Partial     |
+| UC-404                  | HIGH     | REQ-DEPLOY-001-005                                | Partial     |
+| **Integration**         |          |                                                   |             |
+| UC-501                  | HIGH     | Most requirements                                 | Planned     |
+| UC-502                  | HIGH     | REQ-AUTH, REQ-GQL-003, REQ-RT, REQ-DATA           | Planned     |
+| UC-503                  | HIGH     | REQ-AUTH, REQ-SEC, REQ-DATA, REQ-GQL              | Planned     |
+| UC-505                  | HIGH     | REQ-MCP-001-005, REQ-GQL, REQ-AUTH, REQ-RT        | Planned     |
+| **Edge Cases**          |          |                                                   |             |
+| UC-601                  | CRITICAL | REQ-SEC-001-010                                   | In Progress |
+| UC-602                  | CRITICAL | REQ-JS-002-004, REQ-PERF                          | Implemented |
+| UC-603                  | HIGH     | REQ-ERROR, REQ-RT-002                             | Partial     |
 
 ---
 

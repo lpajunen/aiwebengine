@@ -40,6 +40,7 @@ This document outlines the development practices, coding standards, and quality 
 #### Error Handling
 
 ✅ **DO**: Use `Result<T, E>` for fallible operations
+
 ```rust
 pub fn process_script(script: &str) -> Result<String, ScriptError> {
     // Process script with proper error propagation
@@ -48,12 +49,14 @@ pub fn process_script(script: &str) -> Result<String, ScriptError> {
 ```
 
 ❌ **DON'T**: Use `unwrap()` or `expect()` in production code
+
 ```rust
 // Avoid this in production
 let result = risky_operation().unwrap();
 ```
 
 ✅ **DO**: Use `?` operator for error propagation
+
 ```rust
 pub fn complex_operation() -> Result<Value, ProcessingError> {
     let step1 = first_step()?;
@@ -65,6 +68,7 @@ pub fn complex_operation() -> Result<Value, ProcessingError> {
 #### Resource Management
 
 ✅ **DO**: Use RAII and proper lifetimes
+
 ```rust
 pub struct SafeRepository {
     connection: Arc<Mutex<Connection>>,
@@ -81,6 +85,7 @@ impl SafeRepository {
 #### Type Safety
 
 ✅ **DO**: Use strong typing and avoid stringly-typed APIs
+
 ```rust
 #[derive(Debug, Clone)]
 pub struct RequestId(String);
@@ -172,7 +177,7 @@ mod tests {
     fn test_generate_request_id_creates_unique_ids() {
         let id1 = generate_request_id();
         let id2 = generate_request_id();
-        
+
         assert_ne!(id1, id2);
         assert!(id1.starts_with("req_"));
         assert!(id2.starts_with("req_"));
@@ -182,14 +187,14 @@ mod tests {
     fn test_generate_request_id_format_consistency() {
         let id = generate_request_id();
         let parts: Vec<&str> = id.split('_').collect();
-        
+
         assert_eq!(parts.len(), 3);
         assert_eq!(parts[0], "req");
-        
+
         // Timestamp should be parseable
         let timestamp: u128 = parts[1].parse().expect("Invalid timestamp format");
         assert!(timestamp > 0);
-        
+
         // Counter should be parseable
         let _counter: u64 = parts[2].parse().expect("Invalid counter format");
     }
@@ -211,6 +216,7 @@ mod tests {
 #### 2. Integration Tests (25% of tests)
 
 ✅ **Focus Areas**:
+
 - HTTP endpoint behavior
 - Database interactions
 - JavaScript engine integration
@@ -220,16 +226,16 @@ mod tests {
 #[tokio::test]
 async fn test_graphql_endpoint_with_registered_query() {
     let app = create_test_app().await;
-    
+
     // Register a GraphQL query via JavaScript
     let script = r#"
         registerGraphQLQuery('user', 'User', 'id: String!', function(args) {
             return { id: args.id, name: 'Test User' };
         });
     "#;
-    
+
     register_script(&app, "test-query", script).await;
-    
+
     // Execute GraphQL query
     let query = r#"{ user(id: "123") { id name } }"#;
     let response = app
@@ -239,7 +245,7 @@ async fn test_graphql_endpoint_with_registered_query() {
         .json(&json!({"query": query}))
         .send()
         .await;
-    
+
     assert_eq!(response.status(), StatusCode::OK);
     let body: Value = response.json().await;
     assert_eq!(body["data"]["user"]["id"], "123");
@@ -250,6 +256,7 @@ async fn test_graphql_endpoint_with_registered_query() {
 #### 3. End-to-End Tests (5% of tests)
 
 ✅ **Scenarios**:
+
 - Complete user workflows
 - Performance under load
 - Error recovery scenarios
@@ -289,17 +296,17 @@ impl TestScriptBuilder {
             path: "/test".to_string(),
         }
     }
-    
+
     fn with_content(mut self, content: &str) -> Self {
         self.content = content.to_string();
         self
     }
-    
+
     fn with_method(mut self, method: &str) -> Self {
         self.method = method.to_string();
         self
     }
-    
+
     fn build(self) -> Script {
         Script {
             content: self.content,
@@ -315,7 +322,7 @@ fn test_script_execution_with_custom_method() {
         .with_method("POST")
         .with_content("function handler() { return 'POST response'; }")
         .build();
-        
+
     let result = execute_script(&script);
     assert!(result.is_ok());
 }
@@ -372,10 +379,10 @@ mod property_tests {
 pub enum ApplicationError {
     #[error("Script execution failed: {0}")]
     ScriptExecution(#[from] ScriptError),
-    
+
     #[error("Configuration error: {0}")]
     Configuration(#[from] ConfigError),
-    
+
     #[error("Repository error: {0}")]
     Repository(#[from] RepositoryError),
 }
@@ -385,10 +392,10 @@ pub enum ApplicationError {
 pub enum ScriptError {
     #[error("Script not found: {script_id}")]
     NotFound { script_id: String },
-    
+
     #[error("Script execution timeout after {timeout_ms}ms")]
     Timeout { timeout_ms: u64 },
-    
+
     #[error("JavaScript runtime error: {message}")]
     RuntimeError { message: String },
 }
@@ -399,20 +406,20 @@ pub enum ScriptError {
 ```rust
 // Good: Rich error context
 pub fn execute_script_with_timeout(
-    script_id: &str, 
+    script_id: &str,
     timeout: Duration
 ) -> Result<ScriptResult, ScriptError> {
     let script = repository.get_script(script_id)
-        .map_err(|e| ScriptError::NotFound { 
-            script_id: script_id.to_string() 
+        .map_err(|e| ScriptError::NotFound {
+            script_id: script_id.to_string()
         })?;
-    
+
     let result = tokio::time::timeout(timeout, execute_script_internal(&script))
         .await
-        .map_err(|_| ScriptError::Timeout { 
-            timeout_ms: timeout.as_millis() as u64 
+        .map_err(|_| ScriptError::Timeout {
+            timeout_ms: timeout.as_millis() as u64
         })??;
-        
+
     Ok(result)
 }
 ```
@@ -445,6 +452,7 @@ pub struct ErrorDetails {
 ### Memory Management
 
 ✅ **DO**: Use appropriate data structures
+
 ```rust
 // Use Cow for potentially borrowed data
 pub fn process_content(content: Cow<'_, str>) -> ProcessedContent {
@@ -461,6 +469,7 @@ pub struct SharedConfig {
 ```
 
 ✅ **DO**: Implement efficient algorithms
+
 ```rust
 // Good: Use appropriate collections
 use std::collections::HashMap;
@@ -484,7 +493,7 @@ pub async fn process_requests_concurrently(
     requests: Vec<Request>
 ) -> Result<Vec<Response>, ProcessingError> {
     const MAX_CONCURRENT: usize = 10;
-    
+
     let semaphore = Semaphore::new(MAX_CONCURRENT);
     let futures = requests.into_iter().map(|req| {
         let semaphore = &semaphore;
@@ -493,7 +502,7 @@ pub async fn process_requests_concurrently(
             process_request(req).await
         }
     });
-    
+
     futures::future::try_join_all(futures).await
 }
 ```
@@ -519,16 +528,16 @@ impl ScriptCache {
                 return Ok(compiled.clone());
             }
         }
-        
+
         // Compile and cache
         let compiled = compile_script(source)?;
         let mut cache = self.compiled_scripts.write().await;
-        
+
         // Implement LRU eviction if needed
         if cache.len() >= self.max_size {
             self.evict_lru_entry(&mut cache);
         }
-        
+
         cache.insert(script_id.to_string(), compiled.clone());
         Ok(compiled)
     }
@@ -550,22 +559,22 @@ pub fn validate_script_registration(
     if !path.starts_with('/') {
         return Err(ValidationError::InvalidPath("Path must start with '/'".to_string()));
     }
-    
+
     if path.len() > MAX_PATH_LENGTH {
         return Err(ValidationError::PathTooLong(path.len()));
     }
-    
+
     // Method validation
     const ALLOWED_METHODS: &[&str] = &["GET", "POST", "PUT", "DELETE", "PATCH"];
     if !ALLOWED_METHODS.contains(&method.to_uppercase().as_str()) {
         return Err(ValidationError::InvalidMethod(method.to_string()));
     }
-    
+
     // Content validation
     if content.len() > MAX_SCRIPT_SIZE {
         return Err(ValidationError::ScriptTooLarge(content.len()));
     }
-    
+
     Ok(())
 }
 ```
@@ -583,20 +592,20 @@ pub struct SecureJsEngine {
 impl SecureJsEngine {
     pub fn new() -> Result<Self, JsEngineError> {
         let mut runtime = Runtime::new()?;
-        
+
         // Set memory limits
         runtime.set_memory_limit(MAX_JS_MEMORY);
-        
+
         // Disable dangerous APIs
         runtime.set_loader(SecureModuleLoader::new());
-        
+
         Ok(Self {
             runtime,
             max_memory: MAX_JS_MEMORY,
             execution_timeout: DEFAULT_JS_TIMEOUT,
         })
     }
-    
+
     pub async fn execute_safely(&mut self, script: &str) -> Result<Value, ExecutionError> {
         // Execute with timeout and resource limits
         tokio::time::timeout(
@@ -624,11 +633,11 @@ pub async fn authenticate_request(
 ) -> Result<Claims, AuthError> {
     let token = extract_bearer_token(headers)?;
     let claims = validate_jwt_token(&token)?;
-    
+
     if !claims.roles.contains(&required_role.to_string()) {
         return Err(AuthError::InsufficientPermissions);
     }
-    
+
     Ok(claims)
 }
 ```
@@ -637,7 +646,7 @@ pub async fn authenticate_request(
 
 ### Code Documentation
 
-```rust
+````rust
 /// Executes a JavaScript function with the given arguments and returns the result.
 ///
 /// This function provides a safe execution environment for JavaScript code with
@@ -694,7 +703,7 @@ pub fn execute_script(
 ) -> Result<ScriptExecutionResult, ScriptError> {
     // Implementation...
 }
-```
+````
 
 ### API Documentation
 
@@ -705,7 +714,7 @@ pub fn execute_script(
 
 ### Architecture Documentation
 
-```rust
+````rust
 //! # aiwebengine Core Architecture
 //!
 //! This module provides the core functionality for the aiwebengine web framework.
@@ -744,28 +753,30 @@ pub fn execute_script(
 //! - JavaScript sandbox with resource limits
 //! - Authentication and authorization middleware
 //! - Audit logging for security events
-```
+````
 
 ## Contribution Workflow
 
 ### Git Workflow
 
 1. **Branch Naming**: Use descriptive prefixes
+
    ```bash
    feature/graphql-subscriptions
-   fix/memory-leak-in-js-engine  
+   fix/memory-leak-in-js-engine
    refactor/error-handling-consolidation
    docs/api-documentation-update
    ```
 
 2. **Commit Messages**: Follow conventional commits
+
    ```
    feat: add GraphQL subscription support with Server-Sent Events
-   
+
    - Implement SSE endpoint for real-time GraphQL subscriptions
    - Add subscription registration API for JavaScript handlers
    - Include comprehensive tests for subscription lifecycle
-   
+
    Closes #123
    ```
 
@@ -812,7 +823,7 @@ Before merging, ensure:
 pub mod config;      // No internal dependencies
 pub mod error;       // Depends on: serde
 pub mod middleware;  // Depends on: error
-pub mod js_engine;   // Depends on: error, config  
+pub mod js_engine;   // Depends on: error, config
 pub mod graphql;     // Depends on: js_engine, error
 pub mod server;      // Depends on: all above
 ```
@@ -871,6 +882,7 @@ pub struct PluginManager {
 ### Before Release
 
 #### Code Quality
+
 - [ ] All code follows style guidelines
 - [ ] No `unwrap()` or `expect()` in production paths
 - [ ] Comprehensive error handling implemented
@@ -878,19 +890,22 @@ pub struct PluginManager {
 - [ ] Security audit completed
 
 #### Testing
+
 - [ ] Unit test coverage >80%
-- [ ] Integration tests cover major workflows  
+- [ ] Integration tests cover major workflows
 - [ ] Load testing under expected traffic
 - [ ] Security testing (penetration testing)
 - [ ] Chaos engineering/failure testing
 
 #### Documentation
+
 - [ ] API documentation complete and accurate
 - [ ] Deployment guides updated
 - [ ] Troubleshooting guides available
 - [ ] Architecture documentation current
 
 #### Observability
+
 - [ ] Structured logging implemented
 - [ ] Metrics collection configured
 - [ ] Health checks functional
@@ -898,6 +913,7 @@ pub struct PluginManager {
 - [ ] Dashboards created
 
 #### Security
+
 - [ ] Input validation comprehensive
 - [ ] Authentication/authorization working
 - [ ] Security headers configured
@@ -905,6 +921,7 @@ pub struct PluginManager {
 - [ ] Audit logging enabled
 
 #### Operations
+
 - [ ] Configuration management ready
 - [ ] Deployment automation tested
 - [ ] Backup/recovery procedures defined
@@ -914,6 +931,7 @@ pub struct PluginManager {
 ### Monitoring and Maintenance
 
 #### Key Metrics
+
 - Response time (p50, p95, p99)
 - Error rate by endpoint
 - JavaScript execution time
@@ -921,12 +939,14 @@ pub struct PluginManager {
 - Active connections
 
 #### Alerting Rules
+
 - Error rate >1% for 5 minutes
-- Response time p95 >500ms for 5 minutes  
+- Response time p95 >500ms for 5 minutes
 - Memory usage >80% for 10 minutes
 - JavaScript execution timeouts >5% for 5 minutes
 
 #### Regular Maintenance
+
 - Security updates applied monthly
 - Performance optimization quarterly
 - Dependency updates with testing
@@ -955,4 +975,4 @@ For questions about these guidelines or architectural decisions:
 
 ---
 
-*This document is a living guide that evolves with the project. Contributions and improvements are welcome through pull requests.*
+_This document is a living guide that evolves with the project. Contributions and improvements are welcome through pull requests._

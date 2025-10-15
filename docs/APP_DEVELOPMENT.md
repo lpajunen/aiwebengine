@@ -35,12 +35,12 @@ Handler functions receive a single `req` parameter containing request informatio
 
 ```javascript
 function myHandler(req) {
-    // Process the request
-    return {
-        status: 200,
-        body: "Hello World",
-        contentType: "text/plain"
-    };
+  // Process the request
+  return {
+    status: 200,
+    body: "Hello World",
+    contentType: "text/plain",
+  };
 }
 ```
 
@@ -74,9 +74,9 @@ Handlers must return an object with:
 
 ```javascript
 return {
-    status: 200,
-    body: JSON.stringify({ message: "Success" }),
-    contentType: "application/json"
+  status: 200,
+  body: JSON.stringify({ message: "Success" }),
+  contentType: "application/json",
 };
 ```
 
@@ -98,14 +98,14 @@ Examples:
 
 ```javascript
 // Register a GET handler for /api/users
-register('/api/users', 'getUsers', 'GET');
+register("/api/users", "getUsers", "GET");
 
 // Register a POST handler for /api/users
-register('/api/users', 'createUser', 'POST');
+register("/api/users", "createUser", "POST");
 
 // Register for multiple methods
-register('/api/data', 'handleData', 'GET');
-register('/api/data', 'handleData', 'POST');
+register("/api/data", "handleData", "GET");
+register("/api/data", "handleData", "POST");
 ```
 
 ## Handling Query Parameters
@@ -114,17 +114,17 @@ Query parameters are automatically parsed and available in `req.query`:
 
 ```javascript
 function searchHandler(req) {
-    const query = req.query.q || '';
-    const limit = parseInt(req.query.limit) || 10;
-    
-    return {
-        status: 200,
-        body: `Searching for: ${query}, limit: ${limit}`,
-        contentType: "text/plain"
-    };
+  const query = req.query.q || "";
+  const limit = parseInt(req.query.limit) || 10;
+
+  return {
+    status: 200,
+    body: `Searching for: ${query}, limit: ${limit}`,
+    contentType: "text/plain",
+  };
 }
 
-register('/api/search', 'searchHandler', 'GET');
+register("/api/search", "searchHandler", "GET");
 ```
 
 ## Handling Form Data
@@ -133,25 +133,25 @@ Form data from POST requests is automatically parsed and available in `req.form`
 
 ```javascript
 function createUserHandler(req) {
-    const name = req.form.name;
-    const email = req.form.email;
-    
-    if (!name || !email) {
-        return {
-            status: 400,
-            body: "Name and email are required",
-            contentType: "text/plain"
-        };
-    }
-    
+  const name = req.form.name;
+  const email = req.form.email;
+
+  if (!name || !email) {
     return {
-        status: 201,
-        body: `User created: ${name} (${email})`,
-        contentType: "text/plain"
+      status: 400,
+      body: "Name and email are required",
+      contentType: "text/plain",
     };
+  }
+
+  return {
+    status: 201,
+    body: `User created: ${name} (${email})`,
+    contentType: "text/plain",
+  };
 }
 
-register('/api/users', 'createUserHandler', 'POST');
+register("/api/users", "createUserHandler", "POST");
 ```
 
 ## Logging
@@ -160,16 +160,16 @@ Use the `writeLog()` function to write messages to the server's log:
 
 ```javascript
 function myHandler(req) {
-    writeLog(`Request received: ${req.method} ${req.path}`);
-    
-    // Your handler logic here
-    
-    writeLog('Request processed successfully');
-    
-    return {
-        status: 200,
-        body: "OK"
-    };
+  writeLog(`Request received: ${req.method} ${req.path}`);
+
+  // Your handler logic here
+
+  writeLog("Request processed successfully");
+
+  return {
+    status: 200,
+    body: "OK",
+  };
 }
 ```
 
@@ -179,33 +179,33 @@ Use `listLogs()` to retrieve recent log messages for the current script:
 
 ```javascript
 function logsHandler(req) {
-    const logs = listLogs();
-    
-    return {
-        status: 200,
-        body: JSON.stringify(logs),
-        contentType: "application/json"
-    };
+  const logs = listLogs();
+
+  return {
+    status: 200,
+    body: JSON.stringify(logs),
+    contentType: "application/json",
+  };
 }
 
-register('/api/logs', 'logsHandler', 'GET');
+register("/api/logs", "logsHandler", "GET");
 ```
 
 You can also retrieve logs for a specific script URI using `listLogsForUri(uri)`:
 
 ```javascript
 function logsForUriHandler(req) {
-    const uri = req.query.uri; // Get URI from query parameter
-    const logs = listLogsForUri(uri);
-    
-    return {
-        status: 200,
-        body: JSON.stringify(logs),
-        contentType: "application/json"
-    };
+  const uri = req.query.uri; // Get URI from query parameter
+  const logs = listLogsForUri(uri);
+
+  return {
+    status: 200,
+    body: JSON.stringify(logs),
+    contentType: "application/json",
+  };
 }
 
-register('/api/logs-for-uri', 'logsForUriHandler', 'GET');
+register("/api/logs-for-uri", "logsForUriHandler", "GET");
 ```
 
 ## Script Management
@@ -216,16 +216,16 @@ Use `listScripts()` to get a list of all loaded scripts:
 
 ```javascript
 function scriptsHandler(req) {
-    const scripts = listScripts();
-    
-    return {
-        status: 200,
-        body: JSON.stringify(scripts),
-        contentType: "application/json"
-    };
+  const scripts = listScripts();
+
+  return {
+    status: 200,
+    body: JSON.stringify(scripts),
+    contentType: "application/json",
+  };
 }
 
-register('/api/scripts', 'scriptsHandler', 'GET');
+register("/api/scripts", "scriptsHandler", "GET");
 ```
 
 ## Asset Management
@@ -250,124 +250,124 @@ Use the asset management functions to create, read, update, and delete assets pr
 
 ```javascript
 function listAssetsHandler(req) {
-    const assetPaths = listAssets();
-    
-    return {
-        status: 200,
-        body: JSON.stringify({ assets: assetPaths }),
-        contentType: "application/json"
-    };
+  const assetPaths = listAssets();
+
+  return {
+    status: 200,
+    body: JSON.stringify({ assets: assetPaths }),
+    contentType: "application/json",
+  };
 }
 
-register('/api/assets', 'listAssetsHandler', 'GET');
+register("/api/assets", "listAssetsHandler", "GET");
 ```
 
 #### Fetching Assets
 
 ```javascript
 function getAssetHandler(req) {
-    // Extract asset path from URL (e.g., /api/assets/logo.svg -> /logo.svg)
-    const assetPath = req.path.replace('/api/assets', '');
-    
-    try {
-        const assetJson = fetchAsset(assetPath);
-        
-        if (assetJson === 'null') {
-            return {
-                status: 404,
-                body: JSON.stringify({ error: 'Asset not found' }),
-                contentType: "application/json"
-            };
-        }
-        
-        return {
-            status: 200,
-            body: assetJson,
-            contentType: "application/json"
-        };
-    } catch (error) {
-        return {
-            status: 500,
-            body: JSON.stringify({ error: error.message }),
-            contentType: "application/json"
-        };
+  // Extract asset path from URL (e.g., /api/assets/logo.svg -> /logo.svg)
+  const assetPath = req.path.replace("/api/assets", "");
+
+  try {
+    const assetJson = fetchAsset(assetPath);
+
+    if (assetJson === "null") {
+      return {
+        status: 404,
+        body: JSON.stringify({ error: "Asset not found" }),
+        contentType: "application/json",
+      };
     }
+
+    return {
+      status: 200,
+      body: assetJson,
+      contentType: "application/json",
+    };
+  } catch (error) {
+    return {
+      status: 500,
+      body: JSON.stringify({ error: error.message }),
+      contentType: "application/json",
+    };
+  }
 }
 
-register('/api/assets/*', 'getAssetHandler', 'GET');
+register("/api/assets/*", "getAssetHandler", "GET");
 ```
 
 #### Creating/Updating Assets
 
 ```javascript
 function createAssetHandler(req) {
-    try {
-        const publicPath = req.form.publicPath; // e.g., "/my-image.png"
-        const mimetype = req.form.mimetype;     // e.g., "image/png"
-        const contentB64 = req.form.content;    // base64-encoded content
-        
-        if (!publicPath || !mimetype || !contentB64) {
-            return {
-                status: 400,
-                body: JSON.stringify({ 
-                    error: 'Missing required fields: publicPath, mimetype, content' 
-                }),
-                contentType: "application/json"
-            };
-        }
-        
-        upsertAsset(publicPath, mimetype, contentB64);
-        
-        return {
-            status: 201,
-            body: JSON.stringify({ message: 'Asset created/updated successfully' }),
-            contentType: "application/json"
-        };
-    } catch (error) {
-        return {
-            status: 500,
-            body: JSON.stringify({ error: error.message }),
-            contentType: "application/json"
-        };
+  try {
+    const publicPath = req.form.publicPath; // e.g., "/my-image.png"
+    const mimetype = req.form.mimetype; // e.g., "image/png"
+    const contentB64 = req.form.content; // base64-encoded content
+
+    if (!publicPath || !mimetype || !contentB64) {
+      return {
+        status: 400,
+        body: JSON.stringify({
+          error: "Missing required fields: publicPath, mimetype, content",
+        }),
+        contentType: "application/json",
+      };
     }
+
+    upsertAsset(publicPath, mimetype, contentB64);
+
+    return {
+      status: 201,
+      body: JSON.stringify({ message: "Asset created/updated successfully" }),
+      contentType: "application/json",
+    };
+  } catch (error) {
+    return {
+      status: 500,
+      body: JSON.stringify({ error: error.message }),
+      contentType: "application/json",
+    };
+  }
 }
 
-register('/api/assets', 'createAssetHandler', 'POST');
+register("/api/assets", "createAssetHandler", "POST");
 ```
 
 #### Deleting Assets
 
 ```javascript
 function deleteAssetHandler(req) {
-    // Extract asset path from URL
-    const assetPath = req.path.replace('/api/assets', '');
-    
-    try {
-        const deleted = deleteAsset(assetPath);
-        
-        if (deleted) {
-            return {
-                status: 200,
-                body: JSON.stringify({ message: 'Asset deleted successfully' }),
-                contentType: "application/json"
-            };
-        } else {
-            return {
-                status: 404,
-                body: JSON.stringify({ error: 'Asset not found' }),
-                contentType: "application/json"
-            };
-        }
-    } catch (error) {
-        return {
-            status: 500,
-            body: JSON.stringify({ error: error.message }),
-            contentType: "application/json"
-        };
+  // Extract asset path from URL
+  const assetPath = req.path.replace("/api/assets", "");
+
+  try {
+    const deleted = deleteAsset(assetPath);
+
+    if (deleted) {
+      return {
+        status: 200,
+        body: JSON.stringify({ message: "Asset deleted successfully" }),
+        contentType: "application/json",
+      };
+    } else {
+      return {
+        status: 404,
+        body: JSON.stringify({ error: "Asset not found" }),
+        contentType: "application/json",
+      };
     }
+  } catch (error) {
+    return {
+      status: 500,
+      body: JSON.stringify({ error: error.message }),
+      contentType: "application/json",
+    };
+  }
 }
 
-register('/api/assets/*', 'deleteAssetHandler', 'DELETE');
+register("/api/assets/*", "deleteAssetHandler", "DELETE");
 ```
 
 ### Asset API Examples
@@ -377,14 +377,19 @@ register('/api/assets/*', 'deleteAssetHandler', 'DELETE');
 ```html
 <!DOCTYPE html>
 <html>
-<body>
+  <body>
     <form action="/api/assets" method="POST" enctype="multipart/form-data">
-        <input type="text" name="publicPath" placeholder="/my-image.jpg" required>
-        <input type="text" name="mimetype" placeholder="image/jpeg" required>
-        <input type="file" name="content" accept="image/*" required>
-        <button type="submit">Upload Asset</button>
+      <input
+        type="text"
+        name="publicPath"
+        placeholder="/my-image.jpg"
+        required
+      />
+      <input type="text" name="mimetype" placeholder="image/jpeg" required />
+      <input type="file" name="content" accept="image/*" required />
+      <button type="submit">Upload Asset</button>
     </form>
-</body>
+  </body>
 </html>
 ```
 
@@ -392,41 +397,41 @@ register('/api/assets/*', 'deleteAssetHandler', 'DELETE');
 
 ```javascript
 function uploadAsset(file, publicPath) {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = function(e) {
-            const contentB64 = e.target.result.split(',')[1]; // Remove data URL prefix
-            
-            // Determine MIME type
-            const mimetype = file.type || 'application/octet-stream';
-            
-            // This would typically be sent via fetch to your asset creation endpoint
-            const assetData = {
-                publicPath: publicPath,
-                mimetype: mimetype,
-                content: contentB64
-            };
-            
-            console.log('Asset data prepared:', assetData);
-            resolve(assetData);
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-    });
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = function (e) {
+      const contentB64 = e.target.result.split(",")[1]; // Remove data URL prefix
+
+      // Determine MIME type
+      const mimetype = file.type || "application/octet-stream";
+
+      // This would typically be sent via fetch to your asset creation endpoint
+      const assetData = {
+        publicPath: publicPath,
+        mimetype: mimetype,
+        content: contentB64,
+      };
+
+      console.log("Asset data prepared:", assetData);
+      resolve(assetData);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 }
 
 // Usage
-const fileInput = document.getElementById('fileInput');
-fileInput.addEventListener('change', async (e) => {
-    const file = e.target.files[0];
-    if (file) {
-        try {
-            const assetData = await uploadAsset(file, `/uploads/${file.name}`);
-            // Send assetData to your server endpoint
-        } catch (error) {
-            console.error('Upload failed:', error);
-        }
+const fileInput = document.getElementById("fileInput");
+fileInput.addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (file) {
+    try {
+      const assetData = await uploadAsset(file, `/uploads/${file.name}`);
+      // Send assetData to your server endpoint
+    } catch (error) {
+      console.error("Upload failed:", error);
     }
+  }
 });
 ```
 
@@ -436,16 +441,16 @@ fileInput.addEventListener('change', async (e) => {
 
 ```javascript
 function helloHandler(req) {
-    const name = req.query.name || 'World';
-    
-    return {
-        status: 200,
-        body: `Hello, ${name}!`,
-        contentType: "text/plain"
-    };
+  const name = req.query.name || "World";
+
+  return {
+    status: 200,
+    body: `Hello, ${name}!`,
+    contentType: "text/plain",
+  };
 }
 
-register('/api/hello', 'helloHandler', 'GET');
+register("/api/hello", "helloHandler", "GET");
 ```
 
 ### User Management API
@@ -456,71 +461,71 @@ let users = [];
 let nextId = 1;
 
 function getUsersHandler(req) {
-    writeLog('Fetching all users');
-    
-    return {
-        status: 200,
-        body: JSON.stringify(users),
-        contentType: "application/json"
-    };
+  writeLog("Fetching all users");
+
+  return {
+    status: 200,
+    body: JSON.stringify(users),
+    contentType: "application/json",
+  };
 }
 
 function createUserHandler(req) {
-    const name = req.form.name;
-    const email = req.form.email;
-    
-    if (!name || !email) {
-        return {
-            status: 400,
-            body: JSON.stringify({ error: "Name and email are required" }),
-            contentType: "application/json"
-        };
-    }
-    
-    const user = { id: nextId++, name, email };
-    users.push(user);
-    
-    writeLog(`Created user: ${name} (${email})`);
-    
+  const name = req.form.name;
+  const email = req.form.email;
+
+  if (!name || !email) {
     return {
-        status: 201,
-        body: JSON.stringify(user),
-        contentType: "application/json"
+      status: 400,
+      body: JSON.stringify({ error: "Name and email are required" }),
+      contentType: "application/json",
     };
+  }
+
+  const user = { id: nextId++, name, email };
+  users.push(user);
+
+  writeLog(`Created user: ${name} (${email})`);
+
+  return {
+    status: 201,
+    body: JSON.stringify(user),
+    contentType: "application/json",
+  };
 }
 
 function getUserHandler(req) {
-    const id = parseInt(req.query.id);
-    
-    if (!id) {
-        return {
-            status: 400,
-            body: JSON.stringify({ error: "User ID is required" }),
-            contentType: "application/json"
-        };
-    }
-    
-    const user = users.find(u => u.id === id);
-    
-    if (!user) {
-        return {
-            status: 404,
-            body: JSON.stringify({ error: "User not found" }),
-            contentType: "application/json"
-        };
-    }
-    
+  const id = parseInt(req.query.id);
+
+  if (!id) {
     return {
-        status: 200,
-        body: JSON.stringify(user),
-        contentType: "application/json"
+      status: 400,
+      body: JSON.stringify({ error: "User ID is required" }),
+      contentType: "application/json",
     };
+  }
+
+  const user = users.find((u) => u.id === id);
+
+  if (!user) {
+    return {
+      status: 404,
+      body: JSON.stringify({ error: "User not found" }),
+      contentType: "application/json",
+    };
+  }
+
+  return {
+    status: 200,
+    body: JSON.stringify(user),
+    contentType: "application/json",
+  };
 }
 
 // Register routes
-register('/api/users', 'getUsersHandler', 'GET');
-register('/api/users', 'createUserHandler', 'POST');
-register('/api/users/single', 'getUserHandler', 'GET');
+register("/api/users", "getUsersHandler", "GET");
+register("/api/users", "createUserHandler", "POST");
+register("/api/users/single", "getUserHandler", "GET");
 ```
 
 ## Error Handling
@@ -529,24 +534,24 @@ Always handle errors gracefully in your handlers:
 
 ```javascript
 function riskyHandler(req) {
-    try {
-        // Some operation that might fail
-        const result = someRiskyOperation();
-        
-        return {
-            status: 200,
-            body: JSON.stringify({ result }),
-            contentType: "application/json"
-        };
-    } catch (error) {
-        writeLog(`Error in riskyHandler: ${error.message}`);
-        
-        return {
-            status: 500,
-            body: JSON.stringify({ error: "Internal server error" }),
-            contentType: "application/json"
-        };
-    }
+  try {
+    // Some operation that might fail
+    const result = someRiskyOperation();
+
+    return {
+      status: 200,
+      body: JSON.stringify({ result }),
+      contentType: "application/json",
+    };
+  } catch (error) {
+    writeLog(`Error in riskyHandler: ${error.message}`);
+
+    return {
+      status: 500,
+      body: JSON.stringify({ error: "Internal server error" }),
+      contentType: "application/json",
+    };
+  }
 }
 ```
 

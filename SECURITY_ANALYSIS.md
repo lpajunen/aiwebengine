@@ -32,23 +32,26 @@ As a Senior Security Engineer, I have conducted a comprehensive security analysi
 ### 1. **Input Validation & Injection Prevention**
 
 **Current State**: ❌ **INADEQUATE**
+
 - No comprehensive input sanitization framework
 - JavaScript execution allows arbitrary code injection
 - Form data and query parameters lack validation
 - No SQL injection prevention (future database features)
 
 **Critical Vulnerabilities Found**:
+
 ```javascript
 // From scripts/feature_scripts/core.js - Line 81
 function upsert_script_handler(req) {
-    let uri = req.form.uri;     // ❌ No validation
-    let content = req.form.content; // ❌ Allows arbitrary code execution
-    
-    // Missing: URI sanitization, content validation, code injection prevention
+  let uri = req.form.uri; // ❌ No validation
+  let content = req.form.content; // ❌ Allows arbitrary code execution
+
+  // Missing: URI sanitization, content validation, code injection prevention
 }
 ```
 
 **Required Security Controls**:
+
 ```rust
 // Must implement comprehensive input validation
 pub fn validate_script_input(uri: &str, content: &str) -> Result<(), SecurityError> {
@@ -56,17 +59,17 @@ pub fn validate_script_input(uri: &str, content: &str) -> Result<(), SecurityErr
     if !uri.matches(SAFE_URI_PATTERN) {
         return Err(SecurityError::InvalidUri);
     }
-    
+
     // Content sanitization
     if contains_dangerous_patterns(content) {
         return Err(SecurityError::DangerousCode);
     }
-    
+
     // Size limits
     if content.len() > MAX_SAFE_SCRIPT_SIZE {
         return Err(SecurityError::ContentTooLarge);
     }
-    
+
     Ok(())
 }
 ```
@@ -74,34 +77,37 @@ pub fn validate_script_input(uri: &str, content: &str) -> Result<(), SecurityErr
 ### 2. **Cross-Site Scripting (XSS) Prevention**
 
 **Current State**: ❌ **VULNERABLE**
+
 - No output encoding in JavaScript handlers
 - HTML responses can include unescaped user data
 - No Content Security Policy implementation
 
 **Example Vulnerability**:
+
 ```javascript
 // From feedback.js example - potential XSS
 function feedback_submit_handler(req) {
-    let name = req.form?.name || 'Anonymous'; // ❌ No sanitization
-    
-    return {
-        body: `<h1>Thank you, ${name}!</h1>` // ❌ Direct HTML injection
-    };
+  let name = req.form?.name || "Anonymous"; // ❌ No sanitization
+
+  return {
+    body: `<h1>Thank you, ${name}!</h1>`, // ❌ Direct HTML injection
+  };
 }
 ```
 
 **Required Mitigation**:
+
 ```javascript
 // Must implement output encoding
 function safe_feedback_handler(req) {
-    let name = htmlEscape(req.form?.name || 'Anonymous');
-    
-    return {
-        body: `<h1>Thank you, ${name}!</h1>`,
-        headers: {
-            'Content-Security-Policy': "default-src 'self'; script-src 'self'"
-        }
-    };
+  let name = htmlEscape(req.form?.name || "Anonymous");
+
+  return {
+    body: `<h1>Thank you, ${name}!</h1>`,
+    headers: {
+      "Content-Security-Policy": "default-src 'self'; script-src 'self'",
+    },
+  };
 }
 ```
 
@@ -110,6 +116,7 @@ function safe_feedback_handler(req) {
 **Current State**: ❌ **CRITICAL GAPS**
 
 **Missing Security Controls**:
+
 - No session fixation protection
 - No concurrent session limits
 - No brute force protection on auth endpoints
@@ -117,6 +124,7 @@ function safe_feedback_handler(req) {
 - No suspicious activity detection
 
 **Required Implementation**:
+
 ```rust
 // Session security enhancement needed
 pub struct SecureSessionManager {
@@ -128,16 +136,16 @@ impl SecureSessionManager {
     pub async fn create_session_safely(&self, user_id: &str, ip: &str) -> Result<String, AuthError> {
         // Check for brute force attempts
         self.check_rate_limits(ip)?;
-        
+
         // Invalidate old sessions if needed
         self.enforce_session_limits(user_id).await?;
-        
+
         // Generate new session with rotation
         let token = self.generate_secure_token()?;
-        
+
         // Log security event
         security_audit_log(SecurityEvent::SessionCreated { user_id, ip, token: &token[..8] });
-        
+
         Ok(token)
     }
 }
@@ -148,12 +156,14 @@ impl SecureSessionManager {
 **Current State**: ❌ **INSUFFICIENT**
 
 **Critical Vulnerabilities**:
+
 - Global functions expose internal APIs without authorization
 - No proper capability-based security model
 - Script management functions allow arbitrary code execution
 - Asset management functions can be abused for file system access
 
 **Example Risk**:
+
 ```javascript
 // From js_engine.rs - dangerous global functions
 global.set("upsertScript", upsert_script)?; // ❌ No auth check
@@ -162,6 +172,7 @@ global.set("getScript", get_script)?;       // ❌ Information disclosure
 ```
 
 **Required Security Model**:
+
 ```rust
 // Implement capability-based security
 pub struct SecureJSRuntime {
@@ -178,7 +189,7 @@ pub enum Capability {
 }
 
 impl SecureJSRuntime {
-    pub fn register_function_with_capability<F>(&mut self, name: &str, capability: Capability, func: F) 
+    pub fn register_function_with_capability<F>(&mut self, name: &str, capability: Capability, func: F)
     where F: Fn() -> Result<Value, Error> {
         if self.capabilities.contains(&capability) {
             self.runtime.register_function(name, func);
@@ -192,19 +203,22 @@ impl SecureJSRuntime {
 **Current State**: ❌ **HIGH RISK**
 
 **Identified Issues**:
+
 - Logs may contain sensitive user data
 - Debug information exposure in error messages
 - No data classification or handling policies
 - Insufficient data retention controls
 
 **Example Data Leakage**:
+
 ```javascript
 // From feedback.js - logging sensitive data
-writeLog('Email: ' + email);     // ❌ PII in logs
-writeLog('Message: ' + message); // ❌ Sensitive content in logs
+writeLog("Email: " + email); // ❌ PII in logs
+writeLog("Message: " + message); // ❌ Sensitive content in logs
 ```
 
 **Required Data Protection**:
+
 ```rust
 // Implement secure logging with data classification
 pub enum DataClassification {
@@ -231,6 +245,7 @@ pub fn secure_log(level: Level, classification: DataClassification, msg: &str) {
 **Current State**: ❌ **INCOMPLETE**
 
 **Missing Security Headers**:
+
 - X-Frame-Options (Clickjacking protection)
 - X-Content-Type-Options (MIME sniffing protection)
 - X-XSS-Protection
@@ -239,11 +254,12 @@ pub fn secure_log(level: Level, classification: DataClassification, msg: &str) {
 - Permissions-Policy
 
 **Required Implementation**:
+
 ```rust
 // Comprehensive security headers middleware
 pub async fn security_headers_middleware(request: Request<Body>, next: Next) -> Response {
     let mut response = next.run(request).await;
-    
+
     let headers = response.headers_mut();
     headers.insert("X-Frame-Options", HeaderValue::from_static("DENY"));
     headers.insert("X-Content-Type-Options", HeaderValue::from_static("nosniff"));
@@ -251,7 +267,7 @@ pub async fn security_headers_middleware(request: Request<Body>, next: Next) -> 
     headers.insert("Strict-Transport-Security", HeaderValue::from_static("max-age=31536000; includeSubDomains"));
     headers.insert("Referrer-Policy", HeaderValue::from_static("strict-origin-when-cross-origin"));
     headers.insert("Permissions-Policy", HeaderValue::from_static("camera=(), microphone=(), geolocation=()"));
-    
+
     response
 }
 ```
@@ -261,6 +277,7 @@ pub async fn security_headers_middleware(request: Request<Body>, next: Next) -> 
 ### Phase 0: Security Foundation (URGENT - Week 0)
 
 #### 0.1 Input Validation Framework
+
 ```rust
 // src/security/validation.rs
 pub struct InputValidator;
@@ -270,12 +287,12 @@ impl InputValidator {
         // Implement strict URI validation
         // Prevent path traversal, injection, etc.
     }
-    
+
     pub fn validate_script_content(content: &str) -> Result<(), ValidationError> {
         // AST-based validation for dangerous patterns
         // Sandbox escape prevention
     }
-    
+
     pub fn sanitize_html_output(content: &str) -> String {
         // HTML encoding for XSS prevention
     }
@@ -283,6 +300,7 @@ impl InputValidator {
 ```
 
 #### 0.2 Security Monitoring & Logging
+
 ```rust
 // src/security/audit.rs
 pub enum SecurityEvent {
@@ -300,6 +318,7 @@ pub fn security_audit_log(event: SecurityEvent) {
 ```
 
 #### 0.3 Rate Limiting & DDoS Protection
+
 ```rust
 // src/security/rate_limiting.rs
 pub struct RateLimiter {
@@ -318,6 +337,7 @@ impl RateLimiter {
 ### Enhanced Authentication Security Controls
 
 #### 1. Multi-Factor Authentication Support
+
 ```rust
 // src/auth/mfa.rs
 pub enum MFAMethod {
@@ -333,6 +353,7 @@ pub struct MFAManager {
 ```
 
 #### 2. Advanced Session Security
+
 ```rust
 // src/auth/session.rs - Enhanced
 pub struct SessionSecurity {
@@ -345,6 +366,7 @@ pub struct SessionSecurity {
 ```
 
 #### 3. OAuth2 Security Enhancements
+
 ```rust
 // src/auth/oauth2_security.rs
 pub struct OAuth2SecurityConfig {
@@ -359,6 +381,7 @@ pub struct OAuth2SecurityConfig {
 ### JavaScript Sandbox Security Hardening
 
 #### 1. Capability-Based Security Model
+
 ```rust
 // src/js_engine/capabilities.rs
 pub struct CapabilityManager {
@@ -375,6 +398,7 @@ pub enum Role {
 ```
 
 #### 2. Resource Monitoring & Control
+
 ```rust
 // src/js_engine/resource_monitor.rs
 pub struct ResourceMonitor {
@@ -388,22 +412,26 @@ pub struct ResourceMonitor {
 ## 🎯 **Security Implementation Priorities**
 
 ### CRITICAL (Week 0-1) - Before Any Authentication Work
+
 1. **Input Validation Framework** - Prevent code injection
 2. **XSS Protection** - Output encoding and CSP
 3. **Security Headers** - Basic hardening
 4. **Security Audit Logging** - Visibility into attacks
 
 ### HIGH (Week 1-2) - Parallel with Auth Phase 1
+
 1. **Rate Limiting** - Brute force protection
 2. **Session Security** - Fixation and hijacking prevention
 3. **Capability-Based JS Security** - Sandbox hardening
 
 ### MEDIUM (Week 3-4) - Parallel with Auth Phases 2-3
+
 1. **Advanced Monitoring** - Anomaly detection
 2. **MFA Framework** - Additional authentication factors
 3. **Data Classification** - Proper data handling
 
 ### LOW (Week 5+) - Post-MVP Enhancements
+
 1. **Zero-Trust Architecture** - Comprehensive access control
 2. **Threat Intelligence Integration** - Advanced threat detection
 3. **Compliance Framework** - GDPR, SOC2, etc.
@@ -411,6 +439,7 @@ pub struct ResourceMonitor {
 ## 📋 **Security Testing Requirements**
 
 ### Penetration Testing Checklist
+
 - [ ] SQL Injection testing (future database features)
 - [ ] XSS testing across all user inputs
 - [ ] CSRF testing on state management
@@ -423,6 +452,7 @@ pub struct ResourceMonitor {
 - [ ] Information disclosure testing
 
 ### Security Code Review Focus Areas
+
 - [ ] All user input handling code
 - [ ] Authentication and session management
 - [ ] JavaScript execution engine
@@ -433,6 +463,7 @@ pub struct ResourceMonitor {
 ## 📈 **Security Metrics & Monitoring**
 
 ### Required Security Dashboards
+
 1. **Authentication Metrics**
    - Failed login attempts by IP/user
    - Session creation/destruction rates
@@ -452,12 +483,14 @@ pub struct ResourceMonitor {
 ## 🔒 **Compliance & Regulatory Considerations**
 
 ### GDPR Requirements
+
 - [ ] User consent management for OAuth data
 - [ ] Data subject rights implementation (access, deletion)
 - [ ] Data processing lawfulness documentation
 - [ ] Privacy by design implementation
 
 ### Security Standards Alignment
+
 - [ ] OWASP Top 10 mitigation strategies
 - [ ] NIST Cybersecurity Framework alignment
 - [ ] SOC 2 Type II control implementation
@@ -466,6 +499,7 @@ pub struct ResourceMonitor {
 ## 📞 **Incident Response Preparation**
 
 ### Security Incident Types to Prepare For
+
 1. **Authentication Bypass** - Immediate session invalidation
 2. **Data Breach** - User notification and regulatory reporting
 3. **Code Injection** - System isolation and forensics
@@ -477,11 +511,12 @@ pub struct ResourceMonitor {
 The AUTH_TODO.md plan provides a solid foundation for OAuth2/OIDC authentication but **MUST** be enhanced with comprehensive security controls before production deployment. The identified security gaps represent **CRITICAL VULNERABILITIES** that could lead to:
 
 - Complete system compromise through code injection
-- User data theft through XSS and session hijacking  
+- User data theft through XSS and session hijacking
 - Authentication bypass and privilege escalation
 - Regulatory compliance violations
 
 ### Immediate Actions Required:
+
 1. **STOP** any production deployment until security gaps are addressed
 2. **IMPLEMENT** input validation framework immediately
 3. **ADD** XSS protection and security headers

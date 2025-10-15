@@ -10,10 +10,12 @@
 ## Overview
 
 Implement support for an optional `init()` function in JavaScript scripts that is called:
+
 1. When a script is registered or updated via `upsert_script`
 2. When the server starts for all registered scripts
 
 This allows scripts to perform initialization tasks such as:
+
 - Registering HTTP route handlers
 - Setting up subscriptions or background tasks
 - Initializing script-level state
@@ -25,6 +27,7 @@ This allows scripts to perform initialization tasks such as:
 ## Requirements Summary
 
 From REQ-JS-010:
+
 - ✅ Call `init()` function when script is upserted (if it exists)
 - ✅ Call `init()` function for all scripts on server startup
 - ✅ Make `init()` function optional
@@ -40,6 +43,7 @@ From REQ-JS-010:
 ### Phase 1: Core Infrastructure (Week 1)
 
 #### 1.1 Add Script Metadata Tracking
+
 **File**: `src/repository.rs`
 
 - Add `initialized` field to script metadata
@@ -59,6 +63,7 @@ pub struct ScriptMetadata {
 ```
 
 #### 1.2 Create Initialization Module
+
 **New File**: `src/script_init.rs`
 
 Create a new module to handle script initialization:
@@ -84,6 +89,7 @@ pub struct InitResult {
 ```
 
 **Tasks**:
+
 - [x] Create module structure
 - [ ] Implement `initialize_script` method
 - [ ] Implement `initialize_all_scripts` method
@@ -92,6 +98,7 @@ pub struct InitResult {
 - [ ] Add timeout enforcement
 
 #### 1.3 Modify JsEngine for Init Context
+
 **File**: `src/js_engine.rs`
 
 Add method to check for and call `init()` function:
@@ -106,7 +113,7 @@ impl JsEngine {
     ) -> Result<bool, Error> {
         // Returns true if init was called, false if no init function exists
     }
-    
+
     /// Prepare init context with metadata
     fn prepare_init_context(&self, script_name: &str) -> InitContext {
         // Provide script metadata to init function
@@ -121,6 +128,7 @@ pub struct InitContext {
 ```
 
 **Tasks**:
+
 - [ ] Implement `call_init_if_exists` method
 - [ ] Add function existence check (check for `init` in global scope)
 - [ ] Create execution context for init
@@ -133,6 +141,7 @@ pub struct InitContext {
 ### Phase 2: Integration with Script Management (Week 2)
 
 #### 2.1 Update Script Upsert Flow
+
 **File**: `src/repository.rs` and handlers
 
 Modify the upsert operation to call init:
@@ -146,7 +155,7 @@ pub async fn upsert_script_with_init(
 ) -> Result<(), Error> {
     // 1. Store/update script
     self.upsert_script(name.clone(), code)?;
-    
+
     // 2. Call init function
     match initializer.initialize_script(&name).await {
         Ok(_) => {
@@ -160,12 +169,13 @@ pub async fn upsert_script_with_init(
             warn!("Script {} init failed: {}", name, e);
         }
     }
-    
+
     Ok(())
 }
 ```
 
 **Tasks**:
+
 - [ ] Update GraphQL mutation `upsertScript` to call init
 - [ ] Update any other script registration endpoints
 - [ ] Add init status to upsert response
@@ -173,6 +183,7 @@ pub async fn upsert_script_with_init(
 - [ ] Log initialization attempts and results
 
 #### 2.2 Server Startup Script Initialization
+
 **File**: `src/main.rs`
 
 Add initialization phase during server startup:
@@ -181,28 +192,29 @@ Add initialization phase during server startup:
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ... existing setup ...
-    
+
     // Initialize all scripts
     info!("Initializing registered scripts...");
     let initializer = ScriptInitializer::new(js_engine.clone(), repository.clone());
     let init_results = initializer.initialize_all_scripts().await?;
-    
+
     // Log results
     for result in init_results {
         if result.success {
-            info!("✓ Script '{}' initialized in {}ms", 
+            info!("✓ Script '{}' initialized in {}ms",
                   result.script_name, result.duration_ms);
         } else {
-            warn!("✗ Script '{}' init failed: {}", 
+            warn!("✗ Script '{}' init failed: {}",
                   result.script_name, result.error.unwrap_or_default());
         }
     }
-    
+
     // Continue with server startup...
 }
 ```
 
 **Tasks**:
+
 - [ ] Add initialization phase before server starts
 - [ ] Make initialization order deterministic (alphabetical or by dependency)
 - [ ] Add configuration for initialization timeout
@@ -215,6 +227,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Phase 3: JavaScript API Enhancements (Week 2-3)
 
 #### 3.1 Expose Init Context to JavaScript
+
 **File**: `src/js_engine.rs`
 
 Make script metadata available in the init function:
@@ -222,13 +235,14 @@ Make script metadata available in the init function:
 ```javascript
 // What the init function receives
 function init(context) {
-    console.log("Initializing script:", context.scriptName);
-    console.log("Init timestamp:", context.timestamp);
-    // Future: context.config, context.serverInfo, etc.
+  console.log("Initializing script:", context.scriptName);
+  console.log("Init timestamp:", context.timestamp);
+  // Future: context.config, context.serverInfo, etc.
 }
 ```
 
 **Tasks**:
+
 - [ ] Create `InitContext` object in JavaScript global scope during init
 - [ ] Add `scriptName` property
 - [ ] Add `timestamp` property
@@ -236,6 +250,7 @@ function init(context) {
 - [ ] Document context object structure
 
 #### 3.2 Add Helper Functions for Init
+
 **File**: `src/safe_helpers.rs` and `src/js_engine.rs`
 
 Consider adding init-specific utilities:
@@ -243,18 +258,19 @@ Consider adding init-specific utilities:
 ```javascript
 // Example helpers that might be useful
 function init(context) {
-    // Check if we're initializing at startup or on update
-    if (context.isStartup) {
-        // Different behavior on startup vs. update
-    }
-    
-    // Register handlers
-    registerHandler('GET', '/api/users', handleUsers);
-    registerGraphQLQuery('users', schema, resolveUsers);
+  // Check if we're initializing at startup or on update
+  if (context.isStartup) {
+    // Different behavior on startup vs. update
+  }
+
+  // Register handlers
+  registerHandler("GET", "/api/users", handleUsers);
+  registerGraphQLQuery("users", schema, resolveUsers);
 }
 ```
 
 **Tasks**:
+
 - [ ] Document best practices for init functions
 - [ ] Consider adding `isReInit()` helper
 - [ ] Add validation utilities for init
@@ -283,7 +299,7 @@ impl ScriptInitializer {
         let timeout_duration = Duration::from_millis(
             self.config.script_timeout_ms
         );
-        
+
         match timeout(timeout_duration, self.call_init_internal(script_name)).await {
             Ok(Ok(result)) => Ok(result),
             Ok(Err(e)) => {
@@ -302,6 +318,7 @@ impl ScriptInitializer {
 ```
 
 **Tasks**:
+
 - [ ] Implement timeout handling
 - [ ] Catch JavaScript exceptions
 - [ ] Log all init errors with context
@@ -315,20 +332,21 @@ Add GraphQL queries to inspect init status:
 
 ```graphql
 type ScriptInitStatus {
-    scriptName: String!
-    initialized: Boolean!
-    lastInitTime: String
-    initError: String
-    initDurationMs: Int
+  scriptName: String!
+  initialized: Boolean!
+  lastInitTime: String
+  initError: String
+  initDurationMs: Int
 }
 
 type Query {
-    scriptInitStatus(name: String!): ScriptInitStatus
-    allScriptsInitStatus: [ScriptInitStatus!]!
+  scriptInitStatus(name: String!): ScriptInitStatus
+  allScriptsInitStatus: [ScriptInitStatus!]!
 }
 ```
 
 **Tasks**:
+
 - [ ] Add GraphQL query for init status
 - [ ] Add REST endpoint for init status (optional)
 - [ ] Include init status in script list responses
@@ -339,9 +357,11 @@ type Query {
 ### Phase 5: Testing (Week 3-4)
 
 #### 5.1 Unit Tests
+
 **New File**: `tests/script_init_test.rs`
 
 Test cases:
+
 - [ ] Script with `init()` function is called on upsert
 - [ ] Script without `init()` function works normally
 - [ ] Init function receives correct context
@@ -358,23 +378,23 @@ Test cases:
 async fn test_init_function_called_on_upsert() {
     let script = r#"
         let initCalled = false;
-        
+
         function init(context) {
             initCalled = true;
             writeLog("Init called for: " + context.scriptName);
         }
-        
+
         function testHandler(request) {
-            return { 
-                status: 200, 
+            return {
+                status: 200,
                 body: JSON.stringify({ initCalled: initCalled })
             };
         }
     "#;
-    
+
     // Upsert script
     upsert_script("test", script).await.unwrap();
-    
+
     // Verify init was called
     let status = get_script_init_status("test").await.unwrap();
     assert!(status.initialized);
@@ -384,6 +404,7 @@ async fn test_init_function_called_on_upsert() {
 #### 5.2 Integration Tests
 
 Test real-world scenarios:
+
 - [ ] Init registers HTTP handlers that work
 - [ ] Init sets up GraphQL subscriptions
 - [ ] Init errors are recoverable
@@ -398,14 +419,14 @@ async fn test_init_registers_handler() {
         function init(context) {
             register('/dynamic', 'handleDynamic', 'GET');
         }
-        
+
         function handleDynamic(request) {
             return { status: 200, body: "Registered in init!" };
         }
     "#;
-    
+
     upsert_script("dynamic", script).await.unwrap();
-    
+
     // Test that the handler works
     let response = test_get("/dynamic").await;
     assert_eq!(response.status, 200);
@@ -416,6 +437,7 @@ async fn test_init_registers_handler() {
 #### 5.3 Error Handling Tests
 
 Test error scenarios:
+
 - [ ] Init function that throws error
 - [ ] Init function that times out
 - [ ] Init function with infinite loop
@@ -427,6 +449,7 @@ Test error scenarios:
 ### Phase 6: Documentation (Week 4)
 
 #### 6.1 Update User Documentation
+
 **File**: `docs/javascript-apis.md`
 
 Add section on script initialization:
@@ -435,6 +458,7 @@ Add section on script initialization:
 ## Script Initialization
 
 Scripts can optionally define an `init()` function that is called:
+
 - When the script is first registered or updated
 - When the server starts
 
@@ -442,20 +466,21 @@ Scripts can optionally define an `init()` function that is called:
 
 \`\`\`javascript
 function init(context) {
-    // context.scriptName - Name of this script
-    // context.timestamp - When init was called
-    // context.isStartup - true if server startup, false if upsert
-    
+// context.scriptName - Name of this script
+// context.timestamp - When init was called
+// context.isStartup - true if server startup, false if upsert
+
     // Register HTTP handlers
     register('/api/users', 'handleUsers', 'GET');
-    
+
     // Register GraphQL resolvers
     registerGraphQLQuery('users', schema, resolveUsers);
-    
+
     // Set up initial state
     globalState.initialized = true;
-    
+
     writeLog("Script initialized: " + context.scriptName);
+
 }
 \`\`\`
 
@@ -466,10 +491,11 @@ function init(context) {
 3. Don't rely on external services in init
 4. Handle init errors gracefully
 5. Use init for registration, not heavy computation
-...
+   ...
 ```
 
 **Tasks**:
+
 - [ ] Add init() documentation to API reference
 - [ ] Add examples of common init patterns
 - [ ] Document init context object
@@ -477,6 +503,7 @@ function init(context) {
 - [ ] Update APP_DEVELOPMENT.md with init patterns
 
 #### 6.2 Create Example Scripts
+
 **New File**: `scripts/example_scripts/init_example.js`
 
 Create comprehensive examples:
@@ -484,23 +511,24 @@ Create comprehensive examples:
 ```javascript
 // Example 1: Basic init with handler registration
 function init(context) {
-    writeLog("Initializing " + context.scriptName);
-    
-    // Register multiple handlers
-    register('/api/hello', 'handleHello', 'GET');
-    register('/api/data', 'handleData', 'POST');
+  writeLog("Initializing " + context.scriptName);
+
+  // Register multiple handlers
+  register("/api/hello", "handleHello", "GET");
+  register("/api/data", "handleData", "POST");
 }
 
 function handleHello(request) {
-    return { status: 200, body: "Hello from initialized script!" };
+  return { status: 200, body: "Hello from initialized script!" };
 }
 
 function handleData(request) {
-    return { status: 200, body: JSON.stringify(request.body) };
+  return { status: 200, body: JSON.stringify(request.body) };
 }
 ```
 
 **Tasks**:
+
 - [ ] Create basic init example
 - [ ] Create GraphQL init example
 - [ ] Create state initialization example
@@ -508,6 +536,7 @@ function handleData(request) {
 - [ ] Add examples to docs/examples.md
 
 #### 6.3 Update Requirements Documentation
+
 **File**: `REQUIREMENTS.md`
 
 - [x] REQ-JS-010 already added
@@ -543,19 +572,21 @@ init_retry_delay_ms = 1000   # Delay between retry attempts
 ### For New Features
 
 Scripts that currently use patterns like this:
+
 ```javascript
 // Old pattern - runs on every request
 if (!globalState.initialized) {
-    register('/api/users', 'handleUsers', 'GET');
-    globalState.initialized = true;
+  register("/api/users", "handleUsers", "GET");
+  globalState.initialized = true;
 }
 ```
 
 Can be refactored to:
+
 ```javascript
 // New pattern - runs once on init
 function init(context) {
-    register('/api/users', 'handleUsers', 'GET');
+  register("/api/users", "handleUsers", "GET");
 }
 ```
 
@@ -578,14 +609,14 @@ function init(context) {
 
 ## Timeline
 
-| Week | Phase | Deliverables |
-|------|-------|--------------|
-| 1 | Phase 1 | Core infrastructure, ScriptInitializer module |
-| 2 | Phase 2 | Integration with upsert and startup |
-| 2-3 | Phase 3 | JavaScript API enhancements |
-| 3 | Phase 4 | Error handling and recovery |
-| 3-4 | Phase 5 | Comprehensive testing |
-| 4 | Phase 6 | Documentation and examples |
+| Week | Phase   | Deliverables                                  |
+| ---- | ------- | --------------------------------------------- |
+| 1    | Phase 1 | Core infrastructure, ScriptInitializer module |
+| 2    | Phase 2 | Integration with upsert and startup           |
+| 2-3  | Phase 3 | JavaScript API enhancements                   |
+| 3    | Phase 4 | Error handling and recovery                   |
+| 3-4  | Phase 5 | Comprehensive testing                         |
+| 4    | Phase 6 | Documentation and examples                    |
 
 **Total Estimated Time**: 4 weeks
 
@@ -593,13 +624,13 @@ function init(context) {
 
 ## Risks and Mitigations
 
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| Init functions hang indefinitely | High | Enforce strict timeouts |
-| Init errors break server startup | High | Graceful error handling, continue with other scripts |
-| Race conditions in parallel init | Medium | Deterministic initialization order |
-| Breaking existing scripts | High | Thorough backward compatibility testing |
-| Performance impact on startup | Medium | Parallel initialization, monitoring |
+| Risk                             | Impact | Mitigation                                           |
+| -------------------------------- | ------ | ---------------------------------------------------- |
+| Init functions hang indefinitely | High   | Enforce strict timeouts                              |
+| Init errors break server startup | High   | Graceful error handling, continue with other scripts |
+| Race conditions in parallel init | Medium | Deterministic initialization order                   |
+| Breaking existing scripts        | High   | Thorough backward compatibility testing              |
+| Performance impact on startup    | Medium | Parallel initialization, monitoring                  |
 
 ---
 
@@ -620,7 +651,7 @@ After initial implementation, consider:
 ## References
 
 - **Requirement**: REQ-JS-010 in REQUIREMENTS.md
-- **Related Requirements**: 
+- **Related Requirements**:
   - REQ-JS-007: Script Management
   - REQ-JS-003: Execution Timeout
   - REQ-JS-006: Error Handling
@@ -636,6 +667,7 @@ After initial implementation, consider:
 ## Implementation Checklist
 
 ### Week 1: Core Infrastructure
+
 - [ ] Create `src/script_init.rs` module
 - [ ] Add metadata fields to ScriptMetadata
 - [ ] Implement ScriptInitializer struct
@@ -646,6 +678,7 @@ After initial implementation, consider:
 - [ ] Add basic error handling
 
 ### Week 2: Integration
+
 - [ ] Update upsert_script to call init
 - [ ] Add server startup initialization
 - [ ] Add init status tracking
@@ -654,6 +687,7 @@ After initial implementation, consider:
 - [ ] Update GraphQL mutations
 
 ### Week 3: Polish
+
 - [ ] Add InitContext to JavaScript
 - [ ] Implement comprehensive error handling
 - [ ] Add retry logic (optional)
@@ -662,6 +696,7 @@ After initial implementation, consider:
 - [ ] Write integration tests
 
 ### Week 4: Documentation
+
 - [ ] Update API documentation
 - [ ] Create example scripts
 - [ ] Update user guides

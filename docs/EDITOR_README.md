@@ -13,6 +13,7 @@ A web-based editor for managing scripts and assets in aiwebengine.
 ## Getting Started
 
 1. **Start the server**:
+
    ```bash
    cargo run
    ```
@@ -65,21 +66,23 @@ scripts/
 The editor provides the following REST API endpoints:
 
 ### Scripts
+
 - `GET /api/scripts` - List all scripts
 - `GET /api/scripts/:name` - Get script content
 - `POST /api/scripts/:name` - Save/update script
 - `DELETE /api/scripts/:name` - Delete script
 
 ### Assets
+
 - `GET /api/assets` - List all assets
 - `GET /api/assets/:path` - Get asset data
 - `POST /api/assets` - Upload asset
 - `DELETE /api/assets/:path` - Delete asset
 
 ### Logs
+
 - `GET /api/logs` - Get recent logs
 - `GET /script_logs?uri=<script-uri>` - Get logs for a specific script
-
 
 ## Technical Details
 
@@ -99,6 +102,7 @@ The editor provides the following REST API endpoints:
 ## Development
 
 The editor is built using:
+
 - **Monaco Editor**: For code editing with syntax highlighting
 - **Handlebars**: For templating dynamic content
 - **Fetch API**: For making HTTP requests
@@ -114,16 +118,19 @@ The editor is built using:
 ## Troubleshooting
 
 ### Editor not loading
+
 - Ensure the server is running
 - Check that `editor.js` is in the `scripts/` directory
 - Verify that `editor.html`, `editor.css`, and `editor.js` are in the `assets/` directory
 
 ### Scripts not saving
+
 - Check server logs for error messages
 - Ensure the script name doesn't contain invalid characters
 - Verify server has write permissions
 
 ### Assets not uploading
+
 - Check file size limits
 - Ensure supported file types
 - Verify server has write permissions to assets directory

@@ -16,9 +16,9 @@ Indicates whether the current request is from an authenticated user.
 
 ```javascript
 if (auth.isAuthenticated) {
-    console.log("User is logged in");
+  console.log("User is logged in");
 } else {
-    console.log("Anonymous user");
+  console.log("Anonymous user");
 }
 ```
 
@@ -28,7 +28,7 @@ The unique identifier of the authenticated user, or `null` if not authenticated.
 
 ```javascript
 if (auth.userId) {
-    console.log(`User ID: ${auth.userId}`);
+  console.log(`User ID: ${auth.userId}`);
 }
 ```
 
@@ -38,7 +38,7 @@ The email address of the authenticated user, or `null` if not available.
 
 ```javascript
 if (auth.userEmail) {
-    console.log(`Email: ${auth.userEmail}`);
+  console.log(`Email: ${auth.userEmail}`);
 }
 ```
 
@@ -48,7 +48,7 @@ The display name of the authenticated user, or `null` if not available.
 
 ```javascript
 if (auth.userName) {
-    console.log(`Welcome, ${auth.userName}!`);
+  console.log(`Welcome, ${auth.userName}!`);
 }
 ```
 
@@ -58,7 +58,7 @@ The OAuth2 provider used for authentication (`"google"`, `"microsoft"`, or `"app
 
 ```javascript
 if (auth.provider === "google") {
-    console.log("Authenticated via Google");
+  console.log("Authenticated via Google");
 }
 ```
 
@@ -69,6 +69,7 @@ if (auth.provider === "google") {
 Returns an object with complete user information if authenticated, or `null` if not authenticated.
 
 **Returns:**
+
 ```typescript
 {
     id: string,
@@ -80,15 +81,16 @@ Returns an object with complete user information if authenticated, or `null` if 
 ```
 
 **Example:**
+
 ```javascript
 const user = auth.currentUser();
 if (user) {
-    console.log(`User ${user.id} logged in via ${user.provider}`);
-    if (user.email) {
-        console.log(`Email: ${user.email}`);
-    }
+  console.log(`User ${user.id} logged in via ${user.provider}`);
+  if (user.email) {
+    console.log(`Email: ${user.email}`);
+  }
 } else {
-    console.log("No user logged in");
+  console.log("No user logged in");
 }
 ```
 
@@ -99,6 +101,7 @@ Returns the current user object if authenticated, or **throws an error** if not 
 Use this in handlers that require authentication - it will automatically reject anonymous requests.
 
 **Returns:**
+
 ```typescript
 {
     id: string,
@@ -112,19 +115,20 @@ Use this in handlers that require authentication - it will automatically reject 
 **Throws:** `Error` with message `"Authentication required. Please login to access this resource."`
 
 **Example:**
+
 ```javascript
 // Protected endpoint - only accessible to authenticated users
-register("/api/protected", function(request) {
-    // This will throw an error if not authenticated
-    const user = auth.requireAuth();
-    
-    return {
-        message: `Hello ${user.name || user.id}!`,
-        data: {
-            userId: user.id,
-            provider: user.provider
-        }
-    };
+register("/api/protected", function (request) {
+  // This will throw an error if not authenticated
+  const user = auth.requireAuth();
+
+  return {
+    message: `Hello ${user.name || user.id}!`,
+    data: {
+      userId: user.id,
+      provider: user.provider,
+    },
+  };
 });
 ```
 
@@ -133,119 +137,119 @@ register("/api/protected", function(request) {
 ### Public Endpoint (Optional Authentication)
 
 ```javascript
-register("/api/greeting", function(request) {
-    if (auth.isAuthenticated) {
-        return {
-            message: `Hello, ${auth.userName || auth.userId}!`,
-            personalized: true
-        };
-    } else {
-        return {
-            message: "Hello, Guest!",
-            personalized: false
-        };
-    }
+register("/api/greeting", function (request) {
+  if (auth.isAuthenticated) {
+    return {
+      message: `Hello, ${auth.userName || auth.userId}!`,
+      personalized: true,
+    };
+  } else {
+    return {
+      message: "Hello, Guest!",
+      personalized: false,
+    };
+  }
 });
 ```
 
 ### Protected Endpoint (Required Authentication)
 
 ```javascript
-register("/api/profile", function(request) {
-    const user = auth.requireAuth(); // Throws if not authenticated
-    
-    return {
-        profile: {
-            id: user.id,
-            email: user.email,
-            name: user.name,
-            provider: user.provider
-        }
-    };
+register("/api/profile", function (request) {
+  const user = auth.requireAuth(); // Throws if not authenticated
+
+  return {
+    profile: {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      provider: user.provider,
+    },
+  };
 });
 ```
 
 ### Conditional Logic Based on Provider
 
 ```javascript
-register("/api/data", function(request) {
-    const user = auth.currentUser();
-    
-    if (!user) {
-        return { error: "Authentication required" };
-    }
-    
-    // Different behavior based on OAuth provider
-    let dataSource;
-    switch (user.provider) {
-        case "google":
-            dataSource = "Google Workspace";
-            break;
-        case "microsoft":
-            dataSource = "Microsoft 365";
-            break;
-        case "apple":
-            dataSource = "iCloud";
-            break;
-        default:
-            dataSource = "Unknown";
-    }
-    
-    return {
-        message: `Data from ${dataSource}`,
-        user: user.id
-    };
+register("/api/data", function (request) {
+  const user = auth.currentUser();
+
+  if (!user) {
+    return { error: "Authentication required" };
+  }
+
+  // Different behavior based on OAuth provider
+  let dataSource;
+  switch (user.provider) {
+    case "google":
+      dataSource = "Google Workspace";
+      break;
+    case "microsoft":
+      dataSource = "Microsoft 365";
+      break;
+    case "apple":
+      dataSource = "iCloud";
+      break;
+    default:
+      dataSource = "Unknown";
+  }
+
+  return {
+    message: `Data from ${dataSource}`,
+    user: user.id,
+  };
 });
 ```
 
 ### User-Specific Resources
 
 ```javascript
-register("/api/user-data", function(request) {
-    if (!auth.isAuthenticated) {
-        return {
-            status: 401,
-            body: { error: "Unauthorized" }
-        };
-    }
-    
-    // Use user ID to fetch user-specific data
-    const userData = getUserData(auth.userId);
-    
+register("/api/user-data", function (request) {
+  if (!auth.isAuthenticated) {
     return {
-        userId: auth.userId,
-        data: userData
+      status: 401,
+      body: { error: "Unauthorized" },
     };
+  }
+
+  // Use user ID to fetch user-specific data
+  const userData = getUserData(auth.userId);
+
+  return {
+    userId: auth.userId,
+    data: userData,
+  };
 });
 ```
 
 ### Graceful Degradation
 
 ```javascript
-register("/api/content", function(request) {
-    const user = auth.currentUser();
-    
-    // Public content available to everyone
-    const publicContent = getPublicContent();
-    
-    if (user) {
-        // Additional private content for authenticated users
-        const privateContent = getPrivateContent(user.id);
-        
-        return {
-            public: publicContent,
-            private: privateContent,
-            user: {
-                id: user.id,
-                name: user.name
-            }
-        };
-    } else {
-        return {
-            public: publicContent,
-            message: "Login to see more content"
-        };
-    }
+register("/api/content", function (request) {
+  const user = auth.currentUser();
+
+  // Public content available to everyone
+  const publicContent = getPublicContent();
+
+  if (user) {
+    // Additional private content for authenticated users
+    const privateContent = getPrivateContent(user.id);
+
+    return {
+      public: publicContent,
+      private: privateContent,
+      user: {
+        id: user.id,
+        name: user.name,
+      },
+    };
+  } else {
+    return {
+      public: publicContent,
+      message: "Login to see more content",
+    };
+  }
 });
 ```
 
@@ -254,24 +258,24 @@ register("/api/content", function(request) {
 ### Handling `requireAuth()` Errors
 
 ```javascript
-register("/api/secure", function(request) {
-    try {
-        const user = auth.requireAuth();
-        
-        return {
-            message: "Access granted",
-            userId: user.id
-        };
-    } catch (error) {
-        // This will catch authentication errors
-        return {
-            status: 401,
-            body: {
-                error: error.message,
-                loginUrl: "/auth/login"
-            }
-        };
-    }
+register("/api/secure", function (request) {
+  try {
+    const user = auth.requireAuth();
+
+    return {
+      message: "Access granted",
+      userId: user.id,
+    };
+  } catch (error) {
+    // This will catch authentication errors
+    return {
+      status: 401,
+      body: {
+        error: error.message,
+        loginUrl: "/auth/login",
+      },
+    };
+  }
 });
 ```
 
@@ -279,25 +283,26 @@ register("/api/secure", function(request) {
 
 ```javascript
 function requireUser() {
-    if (!auth.isAuthenticated) {
-        throw new Error("Please login to access this resource");
-    }
-    return auth.currentUser();
+  if (!auth.isAuthenticated) {
+    throw new Error("Please login to access this resource");
+  }
+  return auth.currentUser();
 }
 
-register("/api/custom-protected", function(request) {
-    const user = requireUser();
-    
-    return {
-        message: "Authenticated!",
-        user: user.id
-    };
+register("/api/custom-protected", function (request) {
+  const user = requireUser();
+
+  return {
+    message: "Authenticated!",
+    user: user.id,
+  };
 });
 ```
 
 ## Integration with Request Context
 
 The authentication context is automatically extracted from:
+
 1. `Authorization: Bearer <token>` header
 2. `session` cookie
 
@@ -309,16 +314,16 @@ The middleware handles authentication before your JavaScript handler runs, so th
 
 ```javascript
 // ❌ BAD - Don't trust user-provided data
-register("/api/bad-example", function(request) {
-    const userId = request.query.userId; // DON'T DO THIS
-    // Attacker could impersonate any user
+register("/api/bad-example", function (request) {
+  const userId = request.query.userId; // DON'T DO THIS
+  // Attacker could impersonate any user
 });
 
 // ✅ GOOD - Use authenticated user ID
-register("/api/good-example", function(request) {
-    const user = auth.requireAuth();
-    const userId = user.id; // This is verified by the server
-    // Safe to use for authorization
+register("/api/good-example", function (request) {
+  const user = auth.requireAuth();
+  const userId = user.id; // This is verified by the server
+  // Safe to use for authorization
 });
 ```
 
@@ -326,16 +331,16 @@ register("/api/good-example", function(request) {
 
 ```javascript
 // ❌ RISKY - Checking if userId exists
-register("/api/risky", function(request) {
-    if (auth.userId) {
-        // This is okay but requireAuth() is clearer
-    }
+register("/api/risky", function (request) {
+  if (auth.userId) {
+    // This is okay but requireAuth() is clearer
+  }
 });
 
 // ✅ BETTER - Use requireAuth() for clarity
-register("/api/better", function(request) {
-    const user = auth.requireAuth();
-    // Intent is clear - authentication required
+register("/api/better", function (request) {
+  const user = auth.requireAuth();
+  // Intent is clear - authentication required
 });
 ```
 
@@ -343,20 +348,20 @@ register("/api/better", function(request) {
 
 ```javascript
 // Public endpoint
-register("/api/public/status", function(request) {
-    return { status: "online" };
+register("/api/public/status", function (request) {
+  return { status: "online" };
 });
 
 // Private endpoint
-register("/api/private/admin", function(request) {
-    const user = auth.requireAuth();
-    
-    // Add additional authorization checks
-    if (!isAdmin(user.id)) {
-        throw new Error("Admin access required");
-    }
-    
-    return { admin: true };
+register("/api/private/admin", function (request) {
+  const user = auth.requireAuth();
+
+  // Add additional authorization checks
+  if (!isAdmin(user.id)) {
+    throw new Error("Admin access required");
+  }
+
+  return { admin: true };
 });
 ```
 
@@ -376,7 +381,7 @@ All user information properties (`userId`, `userEmail`, `userName`, `provider`) 
 
 ```javascript
 if (auth.userName) {
-    // userName is available and not null
+  // userName is available and not null
 }
 ```
 

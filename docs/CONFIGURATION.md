@@ -36,6 +36,7 @@ export APP_SECURITY_REQUIRE_HTTPS="true"
 ## Configuration Files
 
 The system automatically looks for configuration files in this order:
+
 - `config.toml`
 - `config.yaml`
 - `config.yml`
@@ -46,7 +47,7 @@ The system automatically looks for configuration files in this order:
 # Development
 cp config.dev.toml config.toml
 
-# Staging  
+# Staging
 cp config.staging.toml config.toml
 
 # Production
@@ -56,6 +57,7 @@ cp config.prod.toml config.toml
 ## Configuration Structure
 
 ### Server Configuration
+
 ```toml
 [server]
 host = "127.0.0.1"              # Bind address
@@ -65,6 +67,7 @@ max_body_size_mb = 1            # Maximum request body size in MB
 ```
 
 ### Logging Configuration
+
 ```toml
 [logging]
 level = "info"                   # Log level: trace, debug, info, warn, error
@@ -76,6 +79,7 @@ retention_days = 7               # Days to keep old log files
 ```
 
 ### JavaScript Engine Configuration
+
 ```toml
 [javascript]
 max_memory_mb = 16              # Maximum memory per JS context
@@ -84,13 +88,14 @@ max_stack_size = 65536          # Maximum stack size
 enable_console = true            # Enable console.log in scripts
 allowed_apis = [                # Available APIs for scripts
     "fetch",                    # HTTP requests
-    "database",                 # Database operations  
+    "database",                 # Database operations
     "logging",                  # Logging functions
     "filesystem"                # File operations (dev only)
 ]
 ```
 
 ### Repository Configuration
+
 ```toml
 [repository]
 database_type = "sqlite"         # Database type: sqlite, postgresql
@@ -101,6 +106,7 @@ auto_migrate = true              # Auto-run database migrations
 ```
 
 ### Security Configuration
+
 ```toml
 [security]
 enable_cors = true               # Enable CORS headers
@@ -115,6 +121,7 @@ allowed_content_types = [        # Allowed request content types
 ```
 
 ### Performance Configuration
+
 ```toml
 [performance]
 cache_size_mb = 10              # Cache size in MB
@@ -146,22 +153,26 @@ Configuration validation failed: Server port 99999 is out of valid range (1-6553
 ## Best Practices
 
 ### Development
+
 - Use `config.dev.toml` with verbose logging and relaxed security
 - Enable console logging and filesystem APIs for debugging
 - Use SQLite for simple local development
 
 ### Staging
+
 - Use `config.staging.toml` that mirrors production structure
 - Enable auto-migrations for testing schema changes
 - Use moderate security settings for integration testing
 
 ### Production
+
 - Use `config.prod.toml` with minimal logging and strict security
 - Disable auto-migrations and console APIs
 - Use PostgreSQL with connection pooling
 - Set secrets via environment variables, not config files
 
 ### Environment Variables in Production
+
 ```bash
 # Never put secrets in config files
 export APP_SECURITY_API_KEY="$(cat /etc/secrets/api-key)"
@@ -171,6 +182,7 @@ export APP_REPOSITORY_DATABASE_URL="postgresql://$(cat /etc/secrets/db-user):$(c
 ## Configuration Testing
 
 Test your configuration with:
+
 ```bash
 # Validate configuration without starting server
 cargo run --bin server -- --validate-config

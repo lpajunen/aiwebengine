@@ -21,6 +21,7 @@ cargo nextest run
 **Root Cause**: Your integration tests spawn servers that never shut down (`Box::leak()` in `start_server_without_shutdown()`). After running several tests, you have dozens of zombie servers competing for ports and resources.
 
 **Symptoms**:
+
 - Tests hang (especially `test_concurrent_session_limit`)
 - "has been running for over 60 seconds" warnings
 - Must manually kill processes: `pkill -9 aiwebengine`
@@ -28,14 +29,16 @@ cargo nextest run
 ## ✅ What Was Fixed
 
 ### Files Created:
+
 1. **`tests/common/mod.rs`** - New test utilities with proper shutdown
-2. **`.cargo/config.toml`** - Build optimizations  
+2. **`.cargo/config.toml`** - Build optimizations
 3. **`.config/nextest.toml`** - Test runner config with timeouts
 4. **`TEST_ANALYSIS_SUMMARY.md`** - Complete analysis & migration guide
 5. **`tests/health_integration_optimized.rs`** - Example migration
 6. **`scripts/fix_tests.sh`** - Helper script
 
 ### Key Improvements:
+
 - ✅ Servers with graceful shutdown support
 - ✅ Smart server readiness detection (no more 10-30s sleeps)
 - ✅ Parallel test execution (4 threads)
@@ -47,6 +50,7 @@ cargo nextest run
 ### Pattern: Before → After
 
 **❌ Before** (leaks resources):
+
 ```rust
 #[tokio::test]
 async fn test_something() {
@@ -55,13 +59,14 @@ async fn test_something() {
         tokio::time::sleep(Duration::from_secs(10)).await;  // Wastes 10s
     });
     tokio::time::sleep(Duration::from_millis(1000)).await;  // Wastes 1s
-    
+
     // test code
     // No cleanup - server runs forever!
 }
 ```
 
 **✅ After** (clean & fast):
+
 ```rust
 mod common;
 
@@ -70,9 +75,9 @@ async fn test_something() {
     let context = common::TestContext::new();
     let port = context.start_server().await.unwrap();
     common::wait_for_server(port, 20).await.unwrap();  // Max 1s
-    
+
     // test code
-    
+
     context.cleanup().await.unwrap();  // Shuts down server
 }
 ```
@@ -80,25 +85,28 @@ async fn test_something() {
 ### Migration Checklist
 
 1. **Add module import** at top of each test file:
+
    ```rust
    mod common;
    ```
 
 2. **Replace server startup**:
+
    ```rust
    // Old:
    let port = start_server_without_shutdown().await.unwrap();
-   
+
    // New:
    let context = common::TestContext::new();
    let port = context.start_server().await.unwrap();
    ```
 
 3. **Replace sleep with wait**:
+
    ```rust
    // Old:
    tokio::time::sleep(Duration::from_secs(10)).await;
-   
+
    // New:
    common::wait_for_server(port, 20).await.unwrap();
    ```
@@ -120,12 +128,12 @@ Start with these (they have 10-30s sleeps):
 
 ## 🚀 Performance Gains
 
-| Metric | Before | After | Improvement |
-|--------|--------|-------|-------------|
-| Unit tests | 0.3s | 0.3s | Same ✅ |
-| Integration tests | 5+ min or HANG | < 30s | **10-60x faster** |
-| Per test | 10-30s | 0.5-2s | **10-30x faster** |
-| Resource leaks | ❌ Yes | ✅ None | Fixed |
+| Metric            | Before         | After   | Improvement       |
+| ----------------- | -------------- | ------- | ----------------- |
+| Unit tests        | 0.3s           | 0.3s    | Same ✅           |
+| Integration tests | 5+ min or HANG | < 30s   | **10-60x faster** |
+| Per test          | 10-30s         | 0.5-2s  | **10-30x faster** |
+| Resource leaks    | ❌ Yes         | ✅ None | Fixed             |
 
 ## 📚 Documentation
 
@@ -137,6 +145,7 @@ Start with these (they have 10-30s sleeps):
 ## 🐛 Troubleshooting
 
 ### Tests still hang?
+
 ```bash
 # Kill all processes
 pkill -9 aiwebengine
@@ -149,7 +158,9 @@ RUST_LOG=debug cargo nextest run test_name --no-capture
 ```
 
 ### Specific test hanging?
+
 Add timeout wrapper:
+
 ```rust
 #[tokio::test]
 async fn test_something() {
@@ -162,7 +173,9 @@ async fn test_something() {
 ```
 
 ### Port conflicts?
+
 The new utilities use port 0 (auto-assign), so conflicts are rare. If they happen:
+
 ```bash
 # Find what's using ports
 lsof -i :8080
