@@ -1,9 +1,17 @@
 // Test script for sendStreamMessage functionality
 // This script demonstrates how to register a stream and send messages to it
 
-// Register a stream endpoint
-registerWebStream('/notifications');
-registerWebStream('/chat');
+// Initialization function - called once when script is loaded
+function init(context) {
+    writeLog('Initializing send_stream_message_test.js at ' + new Date().toISOString());
+    
+    // Register stream endpoints
+    registerWebStream('/notifications');
+    registerWebStream('/chat');
+    
+    writeLog('Stream endpoints registered successfully');
+    return { success: true };
+}
 
 // Send different types of messages
 function sendTestMessages() {

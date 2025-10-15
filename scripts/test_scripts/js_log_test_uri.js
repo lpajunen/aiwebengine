@@ -18,4 +18,11 @@ function list_logs_for_uri_handler(req) {
     return { status: 500, body: String(e) };
   }
 }
-register('/js-list-for-uri', 'list_logs_for_uri_handler', 'GET');
+
+// Initialization function
+function init(context) {
+  writeLog('Initializing js_log_test_uri.js at ' + new Date().toISOString());
+  register('/js-list-for-uri', 'list_logs_for_uri_handler', 'GET');
+  writeLog('JS log test URI endpoint registered');
+  return { success: true };
+}

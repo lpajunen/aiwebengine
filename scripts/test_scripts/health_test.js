@@ -32,5 +32,10 @@ function health_test_handler(req) {
     }
 }
 
-// Register the test endpoint
-register('/health-test', 'health_test_handler', 'GET');
+// Initialization function
+function init(context) {
+    writeLog('Initializing health_test.js at ' + new Date().toISOString());
+    register('/health-test', 'health_test_handler', 'GET');
+    writeLog('Health test endpoint registered');
+    return { success: true };
+}

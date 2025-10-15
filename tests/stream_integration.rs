@@ -20,12 +20,6 @@ async fn test_stream_endpoints() {
 
     // Create a script that registers a stream
     let script_content = r#"
-        // Register a stream endpoint
-        registerWebStream('/test-stream');
-        
-        // Register a regular handler to test stream vs regular route handling
-        register('/regular-endpoint', 'handleRegular', 'GET');
-        
         function handleRegular(req) {
             return { 
                 status: 200, 
@@ -34,11 +28,26 @@ async fn test_stream_endpoints() {
             };
         }
         
-        writeLog('Stream and regular endpoints registered');
+        function init(context) {
+            writeLog('Initializing stream integration test');
+            // Register a stream endpoint
+            registerWebStream('/test-stream');
+            // Register a regular handler to test stream vs regular route handling
+            register('/regular-endpoint', 'handleRegular', 'GET');
+            writeLog('Stream and regular endpoints registered');
+            return { success: true };
+        }
     "#;
 
     // Upsert the test script
     let _ = repository::upsert_script("stream-test", script_content);
+
+    // Initialize the script to register endpoints
+    let initializer = aiwebengine::script_init::ScriptInitializer::new(5000);
+    initializer
+        .initialize_script("stream-test", false)
+        .await
+        .expect("Failed to initialize stream test script");
 
     // Execute the script to register the endpoints
     let result = js_engine::execute_script("stream-test", script_content);
@@ -121,14 +130,6 @@ async fn test_stream_messaging() {
 
     // Create a script that registers a stream and a sender endpoint
     let script_content = r#"
-        // Register a stream endpoint
-        registerWebStream('/notification-stream');
-        
-        // Register an endpoint to send messages for both GET and POST
-        register('/send-notification', 'sendNotification', 'POST');
-        register('/send-notification', 'sendNotificationGet', 'GET');
-        writeLog('Registered POST and GET /send-notification');
-        
         function sendNotification(req) {
             var message = {
                 type: "notification",
@@ -163,11 +164,28 @@ async fn test_stream_messaging() {
             };
         }
         
-        writeLog('Notification system registered');
+        function init(context) {
+            writeLog('Initializing notification system');
+            // Register a stream endpoint
+            registerWebStream('/notification-stream');
+            // Register an endpoint to send messages for both GET and POST
+            register('/send-notification', 'sendNotification', 'POST');
+            register('/send-notification', 'sendNotificationGet', 'GET');
+            writeLog('Registered POST and GET /send-notification');
+            writeLog('Notification system initialized');
+            return { success: true };
+        }
     "#;
 
     // Upsert the test script
     let _ = repository::upsert_script("notification-test", script_content);
+
+    // Initialize the script to register endpoints
+    let initializer = aiwebengine::script_init::ScriptInitializer::new(5000);
+    initializer
+        .initialize_script("notification-test", false)
+        .await
+        .expect("Failed to initialize notification test script");
 
     // Test sendStreamMessage in isolation first
     let minimal_test = r#"

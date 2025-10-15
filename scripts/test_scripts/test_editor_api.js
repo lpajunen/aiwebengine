@@ -19,5 +19,10 @@ function testEditorAPI(req) {
     };
 }
 
-// Register the test endpoint
-register('/test-editor-api', 'testEditorAPI', 'GET');
+// Initialization function
+function init(context) {
+    writeLog('Initializing test_editor_api.js at ' + new Date().toISOString());
+    register('/test-editor-api', 'testEditorAPI', 'GET');
+    writeLog('Editor API test endpoint registered');
+    return { success: true };
+}

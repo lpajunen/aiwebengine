@@ -1,4 +1,4 @@
-use aiwebengine::{js_engine, repository, stream_registry::GLOBAL_STREAM_REGISTRY};
+use aiwebengine::{js_engine, repository, script_init, stream_registry::GLOBAL_STREAM_REGISTRY};
 use std::time::Duration;
 use tokio::time::{sleep, timeout};
 use tracing::info;
@@ -21,6 +21,16 @@ async fn test_core_js_script_streaming() {
         result.success,
         "Core script execution failed: {:?}",
         result.error
+    );
+
+    // Initialize the script to register streams and routes
+    let init_context = script_init::InitContext::new("core.js".to_string(), false);
+    let registrations =
+        js_engine::call_init_if_exists("core.js", &core_script_content, init_context)
+            .expect("Failed to call init on core.js");
+    assert!(
+        registrations.is_some(),
+        "Core.js should have an init() function"
     );
 
     // Verify the /script_updates stream was registered
@@ -165,6 +175,16 @@ async fn test_script_stream_health_and_stats() {
     let _ = repository::upsert_script("core_health.js", &core_script_content);
     let result = js_engine::execute_script("core_health.js", &core_script_content);
     assert!(result.success, "Core script execution failed");
+
+    // Initialize the script to register streams
+    let init_context = script_init::InitContext::new("core_health.js".to_string(), false);
+    let registrations =
+        js_engine::call_init_if_exists("core_health.js", &core_script_content, init_context)
+            .expect("Failed to call init on core_health.js");
+    assert!(
+        registrations.is_some(),
+        "Core.js should have an init() function"
+    );
 
     // Test stream health and statistics
     let health = GLOBAL_STREAM_REGISTRY

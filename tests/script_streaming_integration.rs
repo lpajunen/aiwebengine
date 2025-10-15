@@ -104,8 +104,6 @@ async fn test_script_update_message_format() {
 
     let core_script_content = r#"
         // Register stream for message format testing
-        registerWebStream('/script_updates_format_test');
-
         function broadcastScriptUpdate(uri, action, details = {}) {
             const message = {
                 type: 'script_update',
@@ -143,14 +141,26 @@ async fn test_script_update_message_format() {
             };
         }
 
-        register('/test_message_format', 'test_message_format', 'GET');
-        writeLog('Message format test script loaded');
+        function init(context) {
+            writeLog('Initializing message format test script at ' + new Date().toISOString());
+            registerWebStream('/script_updates_format_test');
+            register('/test_message_format', 'test_message_format', 'GET');
+            writeLog('Message format test script initialized');
+            return { success: true };
+        }
     "#;
 
     let _ = aiwebengine::repository::upsert_script(
         "https://example.com/message_format_test",
         core_script_content,
     );
+
+    // Initialize the script to register routes and streams
+    let initializer = aiwebengine::script_init::ScriptInitializer::new(5000);
+    initializer
+        .initialize_script("https://example.com/message_format_test", false)
+        .await
+        .expect("Failed to initialize message format test script");
 
     // Start server using TestContext
     let context = common::TestContext::new();

@@ -17,5 +17,10 @@ function form_handler(req) {
     };
 }
 
-// Register handler for form test
-register('/api/form', 'form_handler', 'POST');
+// Initialization function
+function init(context) {
+    writeLog('Initializing form_test.js at ' + new Date().toISOString());
+    register('/api/form', 'form_handler', 'POST');
+    writeLog('Form test endpoint registered');
+    return { success: true };
+}

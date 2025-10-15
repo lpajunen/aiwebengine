@@ -17,5 +17,10 @@ function query_handler(req) {
     };
 }
 
-// Register handler for query test
-register('/api/query', 'query_handler', 'GET');
+// Initialization function
+function init(context) {
+    writeLog('Initializing query_test.js at ' + new Date().toISOString());
+    register('/api/query', 'query_handler', 'GET');
+    writeLog('Query test endpoint registered');
+    return { success: true };
+}

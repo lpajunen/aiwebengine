@@ -1109,7 +1109,7 @@ mod tests {
             include_str!("../scripts/test_scripts/test_editor_api.js"),
         );
 
-        // Test that the editor script can be executed without errors
+        // Test that the editor script can be executed without errors and has init()
         let result = js_engine::execute_script(
             "https://example.com/editor",
             include_str!("../scripts/feature_scripts/editor.js"),
@@ -1119,9 +1119,23 @@ mod tests {
             "Editor script should execute successfully: {:?}",
             result.error
         );
+
+        // Test that calling init() on editor script captures registrations
+        let init_context =
+            crate::script_init::InitContext::new("https://example.com/editor".to_string(), false);
+        let editor_registrations = js_engine::call_init_if_exists(
+            "https://example.com/editor",
+            include_str!("../scripts/feature_scripts/editor.js"),
+            init_context,
+        )
+        .expect("Editor script init() should succeed");
         assert!(
-            !result.registrations.is_empty(),
-            "Editor script should register routes"
+            editor_registrations.is_some(),
+            "Editor script should have init() function"
+        );
+        assert!(
+            !editor_registrations.unwrap().is_empty(),
+            "Editor script should register routes in init()"
         );
 
         // Test that the test_editor script can be executed without errors
@@ -1134,9 +1148,25 @@ mod tests {
             "Test editor script should execute successfully: {:?}",
             test_editor_result.error
         );
+
+        // Test that calling init() on test_editor script captures registrations
+        let test_init_context = crate::script_init::InitContext::new(
+            "https://example.com/test_editor".to_string(),
+            false,
+        );
+        let test_editor_registrations = js_engine::call_init_if_exists(
+            "https://example.com/test_editor",
+            include_str!("../scripts/test_scripts/test_editor.js"),
+            test_init_context,
+        )
+        .expect("Test editor script init() should succeed");
         assert!(
-            !test_editor_result.registrations.is_empty(),
-            "Test editor script should register routes"
+            test_editor_registrations.is_some(),
+            "Test editor script should have init() function"
+        );
+        assert!(
+            !test_editor_registrations.unwrap().is_empty(),
+            "Test editor script should register routes in init()"
         );
     }
 

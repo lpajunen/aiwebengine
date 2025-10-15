@@ -14,30 +14,37 @@ function stream_test_handler(req) {
     };
 }
 
-// Test registerWebStream function
-try {
-    registerWebStream('/test-stream');
-    writeLog('Successfully registered stream /test-stream');
-} catch (e) {
-    writeLog('Error registering stream: ' + String(e));
+// Initialization function - called once when script is loaded
+function init(context) {
+    writeLog('Initializing register_stream_test.js at ' + new Date().toISOString());
+    
+    // Test registerWebStream function
+    try {
+        registerWebStream('/test-stream');
+        writeLog('Successfully registered stream /test-stream');
+    } catch (e) {
+        writeLog('Error registering stream: ' + String(e));
+    }
+
+    // Test invalid stream paths
+    try {
+        registerWebStream('invalid-path-no-slash');
+        writeLog('ERROR: Should have failed for invalid path');
+    } catch (e) {
+        writeLog('Expected error for invalid path: ' + String(e));
+    }
+
+    try {
+        registerWebStream('');
+        writeLog('ERROR: Should have failed for empty path');
+    } catch (e) {
+        writeLog('Expected error for empty path: ' + String(e));
+    }
+
+    // Register a regular handler for testing
+    register('/stream-test', 'stream_test_handler', 'GET');
+
+    writeLog('registerWebStream test script initialized successfully');
+    
+    return { success: true };
 }
-
-// Test invalid stream paths
-try {
-    registerWebStream('invalid-path-no-slash');
-    writeLog('ERROR: Should have failed for invalid path');
-} catch (e) {
-    writeLog('Expected error for invalid path: ' + String(e));
-}
-
-try {
-    registerWebStream('');
-    writeLog('ERROR: Should have failed for empty path');
-} catch (e) {
-    writeLog('Expected error for empty path: ' + String(e));
-}
-
-// Register a regular handler for testing
-register('/stream-test', 'stream_test_handler', 'GET');
-
-writeLog('registerWebStream test script loaded successfully');

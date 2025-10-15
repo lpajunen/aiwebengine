@@ -37,4 +37,11 @@ function js_mgmt_check(req) {
     return { status: 500, body: String(e) };
   }
 }
-register('/js-mgmt-check', 'js_mgmt_check', 'GET');
+
+// Initialization function
+function init(context) {
+  writeLog('Initializing js_script_mgmt_test.js at ' + new Date().toISOString());
+  register('/js-mgmt-check', 'js_mgmt_check', 'GET');
+  writeLog('JS script management test endpoint registered');
+  return { success: true };
+}

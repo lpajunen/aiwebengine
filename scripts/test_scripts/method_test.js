@@ -15,8 +15,14 @@ function delete_handler(req) {
     return { status: 204, body: '' };
 }
 
-// Register handlers for different methods on the same path
-register('/api/test', 'get_handler', 'GET');
-register('/api/test', 'post_handler', 'POST');
-register('/api/test', 'put_handler', 'PUT');
-register('/api/test', 'delete_handler', 'DELETE');
+// Initialization function
+function init(context) {
+    writeLog('Initializing method_test.js at ' + new Date().toISOString());
+    // Register handlers for different methods on the same path
+    register('/api/test', 'get_handler', 'GET');
+    register('/api/test', 'post_handler', 'POST');
+    register('/api/test', 'put_handler', 'PUT');
+    register('/api/test', 'delete_handler', 'DELETE');
+    writeLog('HTTP method test endpoints registered');
+    return { success: true };
+}

@@ -692,10 +692,15 @@ function apiGetAssets(req) {
     }
 }
 
-// Register routes
-register('/editor', 'serveEditor', 'GET');
-register('/api/scripts', 'apiListScripts', 'GET');
-register('/api/scripts/*', 'apiGetScript', 'GET');
-register('/api/scripts/*', 'apiSaveScript', 'POST');
-register('/api/logs', 'apiGetLogs', 'GET');
-register('/api/assets', 'apiGetAssets', 'GET');
+// Initialization function
+function init(context) {
+    writeLog('Initializing editor.js at ' + new Date().toISOString());
+    register('/editor', 'serveEditor', 'GET');
+    register('/api/scripts', 'apiListScripts', 'GET');
+    register('/api/scripts/*', 'apiGetScript', 'GET');
+    register('/api/scripts/*', 'apiSaveScript', 'POST');
+    register('/api/logs', 'apiGetLogs', 'GET');
+    register('/api/assets', 'apiGetAssets', 'GET');
+    writeLog('Editor endpoints registered');
+    return { success: true };
+}

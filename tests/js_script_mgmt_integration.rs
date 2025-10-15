@@ -120,7 +120,11 @@ async fn test_upsert_script_endpoint() {
 function test_endpoint_handler(req) {
     return { status: 200, body: 'Test endpoint works!' };
 }
-register('/test-endpoint', 'test_endpoint_handler', 'GET');
+
+function init(context) {
+    register('/test-endpoint', 'test_endpoint_handler', 'GET');
+    return { success: true };
+}
 "#;
 
     let upsert_request = client
@@ -160,7 +164,7 @@ register('/test-endpoint', 'test_endpoint_handler', 'GET');
     );
 
     // Verify the script was actually upserted by calling the new endpoint
-    tokio::time::sleep(Duration::from_millis(100)).await; // Give time for script to be processed
+    tokio::time::sleep(Duration::from_millis(500)).await; // Give time for script to be processed and initialized
 
     let test_endpoint_request = client
         .get(format!("http://127.0.0.1:{}/test-endpoint", port))
@@ -219,7 +223,11 @@ async fn test_delete_script_endpoint() {
 function delete_test_handler(req) {
     return { status: 200, body: 'Delete test endpoint works!' };
 }
-register('/delete-test-endpoint', 'delete_test_handler', 'GET');
+
+function init(context) {
+    register('/delete-test-endpoint', 'delete_test_handler', 'GET');
+    return { success: true };
+}
 "#;
 
     let upsert_request = client
@@ -381,7 +389,11 @@ async fn test_script_lifecycle_via_http_api() {
 function lifecycle_test_handler(req) {
     return { status: 200, body: 'Lifecycle test successful!' };
 }
-register('/lifecycle-test', 'lifecycle_test_handler', 'GET');
+
+function init(context) {
+    register('/lifecycle-test', 'lifecycle_test_handler', 'GET');
+    return { success: true };
+}
 "#;
 
     // 1. Create script via HTTP API
@@ -502,7 +514,11 @@ async fn test_read_script_endpoint() {
 function read_test_handler(req) {
     return { status: 200, body: 'Read test endpoint works!' };
 }
-register('/read-test-endpoint', 'read_test_handler', 'GET');
+
+function init(context) {
+    register('/read-test-endpoint', 'read_test_handler', 'GET');
+    return { success: true };
+}
 "#;
 
     let upsert_request = client
