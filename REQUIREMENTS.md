@@ -475,6 +475,20 @@ The engine SHOULD support incident response:
 - **Breach notification** capabilities
 - **Forensics and logging** for investigation
 
+#### REQ-SEC-016: Tenant-Based Rate Limiting
+**Priority**: HIGH
+**Status**: PLANNED
+
+The engine MUST support per-tenant rate limiting for multi-tenant applications:
+- Configure different rate limits per tenant/organization
+- Track usage and enforce limits per tenant
+- Throttle based on tenant plan/tier (free, basic, premium, enterprise)
+- Per-tenant rate limit configuration API
+- Usage reporting and analytics per tenant
+- Tenant-specific burst allowances
+- Rate limit headers in responses (X-RateLimit-Tenant-*)
+- Fair-use enforcement across tenants
+
 ---
 
 ### Authentication & Authorization
@@ -627,6 +641,20 @@ The engine MUST implement account security features:
 - **Account recovery security** with verified contact methods
 - **Login history** and activity logs for users
 
+#### REQ-AUTH-010: Role-Based Script Management
+**Priority**: HIGH
+**Status**: PLANNED
+
+The engine MUST support role-based access control for script and asset management:
+- **Developer role**: Can create, edit, and delete scripts and endpoints
+- **Designer role**: Can edit assets (HTML, CSS, JS files) only
+- **Tester role**: Read-only access to scripts, can trigger test executions
+- **Admin role**: Full access including configuration and user management
+- **Viewer role**: Read-only access for monitoring and observability
+- Role assignment and management API exposed to JavaScript
+- Role checking middleware for sensitive operations
+- Audit logging of role-based actions
+
 ---
 
 ### Configuration Management
@@ -760,6 +788,21 @@ The engine SHOULD support alerting:
 - **Alert escalation policies**
 - Integration with monitoring systems
 
+#### REQ-LOG-008: Audit Trail
+**Priority**: MEDIUM
+**Status**: PLANNED
+
+The engine SHOULD maintain comprehensive audit logs for compliance and security:
+- Track all script changes (who, what, when, from where)
+- Track all configuration changes
+- Track authentication and authorization events
+- Track API key creation, usage, and revocation
+- Track admin actions and privileged operations
+- Audit log query API with filtering and search
+- Immutable audit log storage
+- Audit log retention policies
+- Export audit logs for compliance reporting
+
 ---
 
 ## Real-Time Features
@@ -785,6 +828,20 @@ The engine MUST:
 - Handle client disconnections gracefully
 - Support stream-specific routing
 - Provide stream status information
+
+### REQ-RT-003: Real-Time Consistency
+**Priority**: HIGH  
+**Status**: PLANNED
+
+The engine MUST ensure real-time data consistency across connected clients:
+- Broadcast updates to all connected clients reliably
+- Guaranteed message delivery order per connection
+- Handle client disconnections gracefully without data loss
+- Synchronize state on client reconnection
+- Maximum latency targets (< 100ms for real-time updates)
+- Conflict-free state synchronization for collaborative features
+- Support for causal ordering of events
+- Message acknowledgment and retry mechanisms
 
 ---
 
@@ -990,6 +1047,47 @@ The engine SHOULD support:
 - User data storage
 - Asset metadata storage
 
+### REQ-DATA-005: Version History
+**Priority**: MEDIUM  
+**Status**: PLANNED
+
+The engine SHOULD maintain version history for scripts and data:
+- Script version tracking with metadata (author, timestamp, description)
+- Rollback to previous versions
+- Compare versions (diff functionality)
+- Version retention policy configuration
+- Version query and retrieval API
+- Support for tagging versions (e.g., "production", "staging")
+- Automatic versioning on script updates
+- Version audit trail for compliance
+
+### REQ-DATA-006: Concurrent Edit Handling
+**Priority**: MEDIUM  
+**Status**: PLANNED
+
+The engine SHOULD support safe concurrent data modifications:
+- Optimistic locking with version checking
+- Conflict detection on concurrent updates
+- Conflict resolution strategies (last-write-wins, merge, reject)
+- Atomic operations for critical updates
+- Transaction support for complex operations
+- Clear error messages when conflicts occur
+- JavaScript API for handling conflicts
+
+### REQ-DATA-007: Multi-Tenancy Support
+**Priority**: HIGH  
+**Status**: PLANNED
+
+The engine SHOULD support multi-tenant applications:
+- Tenant isolation at data layer
+- Tenant identification (subdomain, header, JWT claim)
+- Per-tenant configuration and settings
+- Tenant provisioning and deprovisioning
+- Cross-tenant data access prevention
+- Tenant context in JavaScript handlers
+- Data migration between tenants (with authorization)
+- Tenant-scoped data queries and operations
+
 ---
 
 ## JavaScript APIs
@@ -1079,6 +1177,20 @@ The project SHOULD maintain consistent JavaScript API naming:
 - Consider: `registerGraphQLSubscription` → `registerSubscriptionHandler`
 
 Note: API renaming is a breaking change and requires careful migration planning.
+
+### REQ-JSAPI-009: Webhook Support
+**Priority**: MEDIUM  
+**Status**: PLANNED
+
+The engine SHOULD provide webhook functionality to JavaScript:
+- `registerWebhook(event, url, options)` - Register webhook for events
+- Deliver events via HTTP POST to registered URLs
+- Retry failed deliveries with exponential backoff
+- Webhook authentication (HMAC signatures)
+- Webhook management API (list, update, delete)
+- Event filtering and subscription options
+- Webhook delivery logs and status tracking
+- Timeout and error handling for webhook calls
 
 ---
 
@@ -1582,6 +1694,22 @@ The engine SHOULD support distributed tracing:
 - **Service mesh integration** capabilities
 - Span creation and management
 
+### REQ-DEPLOY-009: Multi-Environment Support
+**Priority**: HIGH
+**Status**: PLANNED
+
+The engine MUST support multiple isolated deployment environments:
+- **Development environment** per developer with isolation
+- **Shared staging environment** for integration testing
+- **Production environment** with production-grade configuration
+- **Environment-specific configuration** loading
+- **Data isolation** between environments
+- **Easy environment switching** and identification
+- **Environment indicators** in logs and monitoring
+- **Environment-specific feature flags**
+- **Per-environment secrets management**
+- Support for custom environment names beyond dev/staging/prod
+
 ---
 
 ## Compliance and Standards
@@ -1671,6 +1799,7 @@ Example documentation:
 |---------|------|---------|
 | 1.0 | 2025-10-14 | Initial requirements document |
 | 1.1 | 2025-10-14 | Added 41 requirements from gap analysis: Security enhancements (REQ-SEC-008 through REQ-SEC-015), Authentication improvements (REQ-AUTH-008, REQ-AUTH-009), Configuration enhancements, Logging extensions (REQ-LOG-006, REQ-LOG-007), Development standards (REQ-DEV-005 through REQ-DEV-009), Testing requirements (REQ-TEST-007 through REQ-TEST-011), Performance requirements (REQ-PERF-006 through REQ-PERF-008), Deployment requirements (REQ-DEPLOY-006 through REQ-DEPLOY-008), JavaScript runtime (REQ-JS-009), HTTP streaming (REQ-HTTP-010), and API naming standards (REQ-JSAPI-008) |
+| 1.2 | 2025-10-15 | Added 10 requirements from USE_CASES.md gap analysis to support team collaboration, multi-tenancy, and operational features: Data management (REQ-DATA-005, REQ-DATA-006, REQ-DATA-007), Real-time consistency (REQ-RT-003), Authentication (REQ-AUTH-010), Security (REQ-SEC-016), Logging (REQ-LOG-008), JavaScript APIs (REQ-JSAPI-009), and Deployment (REQ-DEPLOY-009) |
 
 ---
 
