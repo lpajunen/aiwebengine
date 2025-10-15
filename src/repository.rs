@@ -17,7 +17,10 @@ pub enum RepositoryError {
     InvalidData(String),
 }
 
-/// Script metadata for tracking initialization status
+/// Route registration: (path, method) -> handler_name
+pub type RouteRegistrations = HashMap<(String, String), String>;
+
+/// Script metadata for tracking initialization status and registrations
 #[derive(Debug, Clone)]
 pub struct ScriptMetadata {
     pub uri: String,
@@ -27,6 +30,8 @@ pub struct ScriptMetadata {
     pub initialized: bool,
     pub init_error: Option<String>,
     pub last_init_time: Option<SystemTime>,
+    /// Cached route registrations from init() function
+    pub registrations: RouteRegistrations,
 }
 
 impl ScriptMetadata {
@@ -41,6 +46,7 @@ impl ScriptMetadata {
             initialized: false,
             init_error: None,
             last_init_time: None,
+            registrations: HashMap::new(),
         }
     }
 
@@ -49,6 +55,14 @@ impl ScriptMetadata {
         self.initialized = true;
         self.init_error = None;
         self.last_init_time = Some(SystemTime::now());
+    }
+
+    /// Mark script as initialized successfully with registrations
+    pub fn mark_initialized_with_registrations(&mut self, registrations: RouteRegistrations) {
+        self.initialized = true;
+        self.init_error = None;
+        self.last_init_time = Some(SystemTime::now());
+        self.registrations = registrations;
     }
 
     /// Mark script initialization as failed
@@ -65,6 +79,8 @@ impl ScriptMetadata {
         // Reset initialization status when code changes
         self.initialized = false;
         self.init_error = None;
+        // Clear cached registrations when code changes
+        self.registrations.clear();
     }
 }
 
@@ -292,6 +308,22 @@ pub fn mark_script_initialized(uri: &str) -> Result<(), RepositoryError> {
     if let Some(metadata) = guard.get_mut(uri) {
         metadata.mark_initialized();
         debug!("Marked script as initialized: {}", uri);
+        Ok(())
+    } else {
+        Err(RepositoryError::ScriptNotFound(uri.to_string()))
+    }
+}
+
+/// Mark a script as initialized with registrations from init()
+pub fn mark_script_initialized_with_registrations(
+    uri: &str,
+    registrations: RouteRegistrations,
+) -> Result<(), RepositoryError> {
+    let mut guard = safe_lock_scripts()?;
+
+    if let Some(metadata) = guard.get_mut(uri) {
+        metadata.mark_initialized_with_registrations(registrations);
+        debug!("Marked script as initialized with registrations: {}", uri);
         Ok(())
     } else {
         Err(RepositoryError::ScriptNotFound(uri.to_string()))

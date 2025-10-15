@@ -29,10 +29,9 @@ async fn test_init_function_called_successfully() {
     let result = call_init_if_exists(script_uri, script_content, context);
 
     assert!(result.is_ok(), "Should execute without error");
-    assert_eq!(
-        result.unwrap(),
-        true,
-        "Should return true indicating init was called"
+    assert!(
+        result.unwrap().is_some(),
+        "Should return Some(registrations) indicating init was called"
     );
 
     // Note: call_init_if_exists doesn't update metadata - that's done by ScriptInitializer
@@ -86,10 +85,9 @@ async fn test_script_without_init_function() {
     let result = call_init_if_exists(script_uri, script_content, context);
 
     assert!(result.is_ok(), "Should execute without error");
-    assert_eq!(
-        result.unwrap(),
-        false,
-        "Should return false when no init function exists"
+    assert!(
+        result.unwrap().is_none(),
+        "Should return None when no init function exists"
     );
 }
 
@@ -208,5 +206,5 @@ async fn test_init_context_properties() {
     let result = call_init_if_exists(script_uri, script_content, context);
 
     assert!(result.is_ok(), "Should execute successfully");
-    assert_eq!(result.unwrap(), true, "Init should be called");
+    assert!(result.unwrap().is_some(), "Init should be called");
 }

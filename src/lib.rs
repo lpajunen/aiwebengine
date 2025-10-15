@@ -140,29 +140,34 @@ async fn handle_stream_request(path: String) -> Response {
     sse.into_response()
 }
 
-/// Dynamically find a route handler by checking all current scripts
+/// Dynamically find a route handler by checking cached registrations from init()
 fn find_route_handler(path: &str, method: &str) -> Option<(String, String)> {
-    let scripts = repository::fetch_scripts();
+    // Fetch all script metadata which includes cached registrations from init()
+    let all_metadata = match repository::get_all_script_metadata() {
+        Ok(metadata) => metadata,
+        Err(e) => {
+            error!("Failed to fetch script metadata: {}", e);
+            return None;
+        }
+    };
 
-    for (uri, content) in scripts.into_iter() {
-        // Execute the script to get its route registrations
-        let result = js_engine::execute_script(&uri, &content);
-
-        if result.success {
+    for metadata in all_metadata {
+        // Use cached registrations from init() function
+        if metadata.initialized && !metadata.registrations.is_empty() {
             // Check for exact match
-            if let Some(handler) = result
+            if let Some(handler) = metadata
                 .registrations
                 .get(&(path.to_string(), method.to_string()))
             {
-                return Some((uri, handler.clone()));
+                return Some((metadata.uri.clone(), handler.clone()));
             }
 
             // Check for wildcard matches
-            for ((pattern, reg_method), handler) in &result.registrations {
+            for ((pattern, reg_method), handler) in &metadata.registrations {
                 if reg_method == method && pattern.ends_with("/*") {
                     let prefix = &pattern[..pattern.len() - 1]; // Remove the *
                     if path.starts_with(prefix) {
-                        return Some((uri.clone(), handler.clone()));
+                        return Some((metadata.uri.clone(), handler.clone()));
                     }
                 }
             }
@@ -174,19 +179,20 @@ fn find_route_handler(path: &str, method: &str) -> Option<(String, String)> {
 
 /// Check if any script registers a route for the given path (used for 405 responses)
 fn path_has_any_route(path: &str) -> bool {
-    let scripts = repository::fetch_scripts();
+    let all_metadata = match repository::get_all_script_metadata() {
+        Ok(metadata) => metadata,
+        Err(_) => return false,
+    };
 
-    for (uri, content) in scripts.into_iter() {
-        let result = js_engine::execute_script(&uri, &content);
-
-        if result.success {
+    for metadata in all_metadata {
+        if metadata.initialized && !metadata.registrations.is_empty() {
             // Check for exact match
-            if result.registrations.keys().any(|(p, _)| p == path) {
+            if metadata.registrations.keys().any(|(p, _)| p == path) {
                 return true;
             }
 
             // Check for wildcard matches
-            for (pattern, _) in result.registrations.keys() {
+            for (pattern, _) in metadata.registrations.keys() {
                 if pattern.ends_with("/*") {
                     let prefix = &pattern[..pattern.len() - 1]; // Remove the *
                     if path.starts_with(prefix) {

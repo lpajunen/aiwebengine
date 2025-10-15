@@ -1,6 +1,6 @@
+use crate::repository;
 use crate::repository::{
     RepositoryError, get_all_script_metadata, get_script_metadata, mark_script_init_failed,
-    mark_script_initialized,
 };
 use std::time::{Duration, SystemTime};
 use tokio::time::timeout;
@@ -122,11 +122,17 @@ impl ScriptInitializer {
         let duration_ms = start_time.elapsed().as_millis() as u64;
 
         match result {
-            Ok(Ok(init_called_result)) => match init_called_result {
-                Ok(true) => {
-                    // Init function was called successfully
-                    if let Err(e) = mark_script_initialized(script_uri) {
-                        warn!("Failed to mark script as initialized: {}", e);
+            Ok(Ok(init_result)) => match init_result {
+                Ok(Some(registrations)) => {
+                    // Init function was called successfully and returned registrations
+                    if let Err(e) = repository::mark_script_initialized_with_registrations(
+                        script_uri,
+                        registrations,
+                    ) {
+                        warn!(
+                            "Failed to mark script as initialized with registrations: {}",
+                            e
+                        );
                     }
                     info!(
                         "✓ Script '{}' initialized successfully in {}ms",
@@ -134,7 +140,7 @@ impl ScriptInitializer {
                     );
                     Ok(InitResult::success(script_uri.to_string(), duration_ms))
                 }
-                Ok(false) => {
+                Ok(None) => {
                     // No init function found - this is OK
                     debug!("Script '{}' has no init() function (skipped)", script_uri);
                     Ok(InitResult::skipped(script_uri.to_string()))

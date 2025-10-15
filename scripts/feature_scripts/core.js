@@ -10,9 +10,6 @@ function core_root(req) {
 	return { status: 200, body: 'Core handler: OK' };
 }
 
-register('/', 'core_root', 'GET');
-register('/', 'core_root', 'POST');
-
 // Health check endpoint
 function health_check(req) {
 	return { 
@@ -29,18 +26,6 @@ function health_check(req) {
 		contentType: 'application/json'
 	};
 }
-
-register('/health', 'health_check', 'GET');
-
-// Register script updates stream endpoint
-registerWebStream('/script_updates');
-
-// Register GraphQL subscription for script updates
-registerGraphQLSubscription(
-	"scriptUpdates", 
-	"type ScriptUpdate { type: String!, uri: String!, action: String!, timestamp: String!, contentLength: Int, previousExists: Boolean, via: String } type Subscription { scriptUpdates: ScriptUpdate! }", 
-	"scriptUpdatesResolver"
-);
 
 // GraphQL subscription resolver for script updates
 function scriptUpdatesResolver() {
@@ -164,8 +149,6 @@ function upsert_script_handler(req) {
 	}
 }
 
-register('/upsert_script', 'upsert_script_handler', 'POST');
-
 // Script deletion endpoint
 function delete_script_handler(req) {
 	try {
@@ -238,8 +221,6 @@ function delete_script_handler(req) {
 	}
 }
 
-register('/delete_script', 'delete_script_handler', 'POST');
-
 // Script reading endpoint
 function read_script_handler(req) {
 	try {
@@ -300,8 +281,6 @@ function read_script_handler(req) {
 	}
 }
 
-register('/read_script', 'read_script_handler', 'GET');
-
 // Script logs endpoint
 function script_logs_handler(req) {
 	try {
@@ -352,16 +331,6 @@ function script_logs_handler(req) {
 		};
 	}
 }
-
-register('/script_logs', 'script_logs_handler', 'GET');
-
-// GraphQL operations for script management  
-registerGraphQLQuery("scripts", "type ScriptInfo { uri: String!, chars: Int! } type Query { scripts: [ScriptInfo!]! }", "scriptsQuery");
-registerGraphQLQuery("script", "type ScriptDetail { uri: String!, content: String!, contentLength: Int!, logs: [String!]! } type Query { script(uri: String!): ScriptDetail }", "scriptQuery");
-registerGraphQLQuery("scriptInitStatus", "type ScriptInitStatus { scriptName: String!, initialized: Boolean!, initError: String, lastInitTime: Float, createdAt: Float, updatedAt: Float } type Query { scriptInitStatus(uri: String!): ScriptInitStatus }", "scriptInitStatusQuery");
-registerGraphQLQuery("allScriptsInitStatus", "type ScriptInitStatus { scriptName: String!, initialized: Boolean!, initError: String, lastInitTime: Float, createdAt: Float, updatedAt: Float } type Query { allScriptsInitStatus: [ScriptInitStatus!]! }", "allScriptsInitStatusQuery");
-registerGraphQLMutation("upsertScript", "type UpsertScriptResponse { message: String!, uri: String!, chars: Int!, success: Boolean! } type Mutation { upsertScript(uri: String!, content: String!): UpsertScriptResponse! }", "upsertScriptMutation");
-registerGraphQLMutation("deleteScript", "type DeleteScriptResponse { message: String!, uri: String!, success: Boolean! } type Mutation { deleteScript(uri: String!): DeleteScriptResponse! }", "deleteScriptMutation");
 
 // GraphQL resolvers
 function scriptsQuery() {
@@ -514,6 +483,55 @@ function deleteScriptMutation(args) {
 }
 
 // GraphQL resolvers are now handled in a separate script
+
+// Initialization function - called when script is loaded or updated
+function init(context) {
+	try {
+		writeLog(`Initializing core.js script at ${new Date().toISOString()}`);
+		writeLog(`Init context: ${JSON.stringify(context)}`);
+		
+		// Register HTTP endpoints
+		register('/', 'core_root', 'GET');
+		register('/', 'core_root', 'POST');
+		register('/health', 'health_check', 'GET');
+		register('/upsert_script', 'upsert_script_handler', 'POST');
+		register('/delete_script', 'delete_script_handler', 'POST');
+		register('/read_script', 'read_script_handler', 'GET');
+		register('/script_logs', 'script_logs_handler', 'GET');
+		
+		// Register WebSocket stream endpoint
+		registerWebStream('/script_updates');
+		
+		// Register GraphQL subscription
+		registerGraphQLSubscription(
+			"scriptUpdates", 
+			"type ScriptUpdate { type: String!, uri: String!, action: String!, timestamp: String!, contentLength: Int, previousExists: Boolean, via: String } type Subscription { scriptUpdates: ScriptUpdate! }", 
+			"scriptUpdatesResolver"
+		);
+		
+		// Register GraphQL queries
+		registerGraphQLQuery("scripts", "type ScriptInfo { uri: String!, chars: Int! } type Query { scripts: [ScriptInfo!]! }", "scriptsQuery");
+		registerGraphQLQuery("script", "type ScriptDetail { uri: String!, content: String!, contentLength: Int!, logs: [String!]! } type Query { script(uri: String!): ScriptDetail }", "scriptQuery");
+		registerGraphQLQuery("scriptInitStatus", "type ScriptInitStatus { scriptName: String!, initialized: Boolean!, initError: String, lastInitTime: Float, createdAt: Float, updatedAt: Float } type Query { scriptInitStatus(uri: String!): ScriptInitStatus }", "scriptInitStatusQuery");
+		registerGraphQLQuery("allScriptsInitStatus", "type ScriptInitStatus { scriptName: String!, initialized: Boolean!, initError: String, lastInitTime: Float, createdAt: Float, updatedAt: Float } type Query { allScriptsInitStatus: [ScriptInitStatus!]! }", "allScriptsInitStatusQuery");
+		
+		// Register GraphQL mutations
+		registerGraphQLMutation("upsertScript", "type UpsertScriptResponse { message: String!, uri: String!, chars: Int!, success: Boolean! } type Mutation { upsertScript(uri: String!, content: String!): UpsertScriptResponse! }", "upsertScriptMutation");
+		registerGraphQLMutation("deleteScript", "type DeleteScriptResponse { message: String!, uri: String!, success: Boolean! } type Mutation { deleteScript(uri: String!): DeleteScriptResponse! }", "deleteScriptMutation");
+		
+		writeLog('Core script initialized successfully');
+		
+		return {
+			success: true,
+			message: 'Core script initialized successfully',
+			registeredEndpoints: 7,
+			registeredGraphQLOperations: 8
+		};
+	} catch (error) {
+		writeLog(`Core script initialization failed: ${error.message}`);
+		throw error;
+	}
+}
 
 try {
 	if (typeof writeLog === 'function') {

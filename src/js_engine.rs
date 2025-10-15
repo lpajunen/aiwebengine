@@ -767,79 +767,124 @@ pub fn call_init_if_exists(
     script_uri: &str,
     script_content: &str,
     context: crate::script_init::InitContext,
-) -> Result<bool, String> {
+) -> Result<Option<HashMap<(String, String), String>>, String> {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
     debug!("Checking for init() function in script: {}", script_uri);
 
     let rt = Runtime::new().map_err(|e| format!("Failed to create runtime: {}", e))?;
     let ctx = Context::full(&rt).map_err(|e| format!("Failed to create context: {}", e))?;
 
-    ctx.with(|ctx| -> Result<bool, rquickjs::Error> {
-        // Set up secure global functions with minimal config for init
-        let config = GlobalSecurityConfig {
-            enable_audit_logging: false,
-            enable_graphql_registration: true,
-            enable_streams: true,
-            ..Default::default()
-        };
+    // Create registrations map to capture register() calls during init
+    let registrations = Rc::new(RefCell::new(HashMap::new()));
+    let uri_owned = script_uri.to_string();
 
-        // Init runs with admin context to allow script registration operations
-        setup_secure_global_functions(
-            &ctx,
-            script_uri,
-            UserContext::admin("script-init".to_string()),
-            &config,
-            None,
-            None,
-        )?;
+    let result = ctx
+        .with(|ctx| -> Result<bool, rquickjs::Error> {
+            // Set up secure global functions with minimal config for init
+            let config = GlobalSecurityConfig {
+                enable_audit_logging: false,
+                enable_graphql_registration: true,
+                enable_streams: true,
+                ..Default::default()
+            };
 
-        // Execute the script to define functions
-        ctx.eval::<(), _>(script_content)?;
+            // Create the register function that captures registrations
+            let regs_clone = Rc::clone(&registrations);
+            let uri_clone = uri_owned.clone();
+            let register_impl = Box::new(
+                move |path: &str,
+                      handler: &str,
+                      method: Option<&str>|
+                      -> Result<(), rquickjs::Error> {
+                    let method = method.unwrap_or("GET");
+                    debug!(
+                        "Registering route {} {} -> {} for script {} during init()",
+                        method, path, handler, uri_clone
+                    );
+                    if let Ok(mut regs) = regs_clone.try_borrow_mut() {
+                        regs.insert((path.to_string(), method.to_string()), handler.to_string());
+                    }
+                    Ok(())
+                },
+            );
 
-        // Check if init function exists
-        let globals = ctx.globals();
-        let init_value: rquickjs::Value = match globals.get("init") {
-            Ok(v) => v,
-            Err(_) => {
-                // No init function defined - this is OK
-                debug!("No init() function found in script: {}", script_uri);
+            // Init runs with admin context to allow script registration operations
+            setup_secure_global_functions(
+                &ctx,
+                script_uri,
+                UserContext::admin("script-init".to_string()),
+                &config,
+                Some(register_impl),
+                None,
+            )?;
+
+            // Execute the script to define functions
+            ctx.eval::<(), _>(script_content)?;
+
+            // Check if init function exists
+            let globals = ctx.globals();
+            let init_value: rquickjs::Value = match globals.get("init") {
+                Ok(v) => v,
+                Err(_) => {
+                    // No init function defined - this is OK
+                    debug!("No init() function found in script: {}", script_uri);
+                    return Ok(false);
+                }
+            };
+
+            // Check if it's actually a function
+            if !init_value.is_function() {
+                debug!(
+                    "init exists but is not a function in script: {}",
+                    script_uri
+                );
                 return Ok(false);
             }
-        };
 
-        // Check if it's actually a function
-        if !init_value.is_function() {
-            debug!(
-                "init exists but is not a function in script: {}",
-                script_uri
-            );
-            return Ok(false);
+            let init_func = init_value
+                .as_function()
+                .ok_or_else(|| rquickjs::Error::new_from_js("init", "not a function"))?;
+
+            // Create context object to pass to init()
+            let context_obj = rquickjs::Object::new(ctx.clone())?;
+            context_obj.set("scriptName", context.script_name.clone())?;
+
+            // Convert SystemTime to milliseconds since UNIX_EPOCH
+            let timestamp_ms = context
+                .timestamp
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as f64;
+            context_obj.set("timestamp", timestamp_ms)?;
+            context_obj.set("isStartup", context.is_startup)?;
+
+            // Call init function with context
+            debug!("Calling init() function for script: {}", script_uri);
+            init_func.call::<_, ()>((context_obj,))?;
+
+            info!("Successfully called init() for script: {}", script_uri);
+            Ok(true)
+        })
+        .map_err(|e| format!("Init function error: {}", e))?;
+
+    // Return registrations if init was called
+    if result {
+        match registrations.try_borrow() {
+            Ok(regs) => {
+                let reg_count = regs.len();
+                info!(
+                    "Init() for script {} registered {} routes",
+                    script_uri, reg_count
+                );
+                Ok(Some(regs.clone()))
+            }
+            Err(_) => Err("Failed to access registrations".to_string()),
         }
-
-        let init_func = init_value
-            .as_function()
-            .ok_or_else(|| rquickjs::Error::new_from_js("init", "not a function"))?;
-
-        // Create context object to pass to init()
-        let context_obj = rquickjs::Object::new(ctx.clone())?;
-        context_obj.set("scriptName", context.script_name.clone())?;
-
-        // Convert SystemTime to milliseconds since UNIX_EPOCH
-        let timestamp_ms = context
-            .timestamp
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as f64;
-        context_obj.set("timestamp", timestamp_ms)?;
-        context_obj.set("isStartup", context.is_startup)?;
-
-        // Call init function with context
-        debug!("Calling init() function for script: {}", script_uri);
-        init_func.call::<_, ()>((context_obj,))?;
-
-        info!("Successfully called init() for script: {}", script_uri);
-        Ok(true)
-    })
-    .map_err(|e| format!("Init function error: {}", e))
+    } else {
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
