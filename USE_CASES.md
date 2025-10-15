@@ -25,12 +25,20 @@ This document defines the primary use cases for the aiwebengine platform, focusi
 ## Table of Contents
 
 1. [Primary Use Cases](#primary-use-cases)
-2. [Web Developer Use Cases](#web-developer-use-cases)
-3. [API Developer Use Cases](#api-developer-use-cases)
-4. [Real-Time Application Developer Use Cases](#real-time-application-developer-use-cases)
-5. [Feature-Specific Use Cases](#feature-specific-use-cases)
-6. [Integration Use Cases](#integration-use-cases)
-7. [Edge Cases & Error Scenarios](#edge-cases--error-scenarios)
+   - UC-001: AI-Assisted Web Application Development
+   - UC-002: Multi-User Collaborative Application
+   - UC-003: Multi-Role Team Collaboration
+   - UC-004: Secure User Authentication System
+2. [MCP (Model Context Protocol) Use Cases](#uc-005-ai-tool-development-with-mcp)
+   - UC-005: AI Tool Development with MCP
+   - UC-006: AI Prompt Engineering with MCP
+   - UC-007: MCP Resource Publishing
+3. [Web Developer Use Cases](#web-developer-use-cases)
+4. [API Developer Use Cases](#api-developer-use-cases)
+5. [Real-Time Application Developer Use Cases](#real-time-application-developer-use-cases)
+6. [Feature-Specific Use Cases](#feature-specific-use-cases)
+7. [Integration Use Cases](#integration-use-cases)
+8. [Edge Cases & Error Scenarios](#edge-cases--error-scenarios)
 
 ---
 
@@ -234,6 +242,298 @@ function register(req) {
     return Response.json({ success: true });
 }
 ```
+
+---
+
+### UC-005: AI Tool Development with MCP
+
+**Priority**: CRITICAL  
+**Actors**: Developer + AI, AI Agents/LLMs (Claude, GPT, etc.)  
+**Goal**: Create custom MCP tools that extend AI agent capabilities with domain-specific functionality
+
+**Preconditions**:
+
+- Engine supports MCP server functionality
+- Engine exposes `registerMCPTool` JavaScript API
+- AI agent (Claude, GPT, etc.) can connect via MCP protocol
+
+**Main Flow**:
+
+1. **Developer identifies need**: "AI needs to access our inventory database"
+2. **Developer + AI creates MCP tool**:
+   - AI generates tool definition (name, description, schema)
+   - AI generates handler function using DataRepository
+   - Developer deploys script with MCP tool registration
+3. **Engine registers tool** and advertises via MCP protocol
+4. **AI agent connects** to engine as MCP client
+5. **AI agent discovers tool** via `tools/list` request
+6. **User asks AI**: "Check if product XYZ is in stock"
+7. **AI agent calls tool** via `tools/call` with product ID
+8. **Engine executes handler**, queries database
+9. **Engine returns result** in MCP format
+10. **AI agent incorporates result** in response to user
+
+**Expected Results**:
+
+- ✅ AI agent can discover and call custom tools
+- ✅ Tools execute securely within engine constraints
+- ✅ Tool schema validation prevents errors
+- ✅ Developer can create tools without MCP protocol knowledge
+- ✅ AI can generate tool definitions from natural language descriptions
+- ✅ Multiple tools can be registered in same script
+- ✅ Tool execution errors handled gracefully
+
+**Related Requirements**: REQ-MCP-001, REQ-MCP-002, REQ-MCP-003, REQ-SEC-001, REQ-DATA-001
+
+**Example Code**:
+
+```javascript
+// AI generates this when asked: "Create an inventory lookup tool"
+function initMCP() {
+    registerMCPTool(
+        "check_inventory",
+        "Check product inventory levels in our warehouse",
+        {
+            type: "object",
+            properties: {
+                productId: { 
+                    type: "string", 
+                    description: "Product SKU or ID" 
+                }
+            },
+            required: ["productId"]
+        },
+        async function(args) {
+            const product = await DataRepository.get("products", args.productId);
+            if (!product) {
+                return { 
+                    error: "Product not found",
+                    inStock: false 
+                };
+            }
+            return {
+                productId: args.productId,
+                productName: product.name,
+                inStock: product.quantity > 0,
+                quantity: product.quantity,
+                location: product.warehouseLocation
+            };
+        }
+    );
+}
+```
+
+**Real-World Scenarios**:
+
+- **Customer Support AI**: Tools for order lookup, refund processing, ticket creation
+- **DevOps AI**: Tools for deployment status, log analysis, server metrics
+- **Sales AI**: Tools for CRM queries, lead scoring, quote generation
+- **Analytics AI**: Tools for running reports, querying metrics, generating insights
+
+---
+
+### UC-006: AI Prompt Engineering with MCP
+
+**Priority**: HIGH  
+**Actors**: Developer + AI, Content Designer, AI Agents/LLMs  
+**Goal**: Create reusable prompt templates that provide context and structure for AI interactions
+
+**Preconditions**:
+
+- Engine supports MCP prompt functionality
+- Engine exposes `registerMCPPrompt` JavaScript API
+- AI agent can request prompts via MCP protocol
+
+**Main Flow**:
+
+1. **Developer/Designer identifies pattern**: "We always need product context for support queries"
+2. **Developer + AI creates prompt template**:
+   - Define prompt name and arguments
+   - Create template with placeholders
+   - Add dynamic context fetching (e.g., from database)
+3. **Engine registers prompt** via MCP
+4. **AI agent connects** and discovers prompts via `prompts/list`
+5. **User initiates conversation** about a specific product
+6. **AI agent requests prompt** via `prompts/get` with product ID
+7. **Engine executes prompt handler**:
+   - Fetches product data from repository
+   - Generates rich context (specs, reviews, FAQs)
+   - Returns formatted prompt with embedded data
+8. **AI agent uses prompt** to provide informed response
+
+**Expected Results**:
+
+- ✅ Prompts provide consistent, rich context to AI
+- ✅ Dynamic data embedded in prompts
+- ✅ Prompt arguments validated
+- ✅ Reusable across different AI interactions
+- ✅ Non-technical staff can define prompts with AI help
+- ✅ Prompts updated without AI agent reconfiguration
+
+**Related Requirements**: REQ-MCP-001, REQ-MCP-002, REQ-MCP-005, REQ-DATA-001
+
+**Example Code**:
+
+```javascript
+// AI generates this when asked: "Create product support prompt"
+function initMCP() {
+    registerMCPPrompt(
+        "product_support_context",
+        "Provides comprehensive product context for customer support",
+        [
+            {
+                name: "productId",
+                description: "Product identifier",
+                required: true
+            },
+            {
+                name: "includeReviews",
+                description: "Include recent customer reviews",
+                required: false
+            }
+        ],
+        async function(args) {
+            const product = await DataRepository.get("products", args.productId);
+            
+            let context = `
+# Product Support Context
+
+## Product Information
+- Name: ${product.name}
+- SKU: ${product.sku}
+- Category: ${product.category}
+- Price: $${product.price}
+- In Stock: ${product.quantity > 0 ? 'Yes' : 'No'}
+
+## Specifications
+${product.specs.map(s => `- ${s.name}: ${s.value}`).join('\n')}
+
+## Common Issues & Solutions
+${product.faq.map(f => `
+### ${f.question}
+${f.answer}
+`).join('\n')}
+`;
+
+            if (args.includeReviews) {
+                const reviews = await DataRepository.query("reviews", { 
+                    productId: args.productId,
+                    limit: 5,
+                    sort: "recent"
+                });
+                context += `\n## Recent Customer Reviews\n`;
+                context += reviews.map(r => 
+                    `- ${r.rating}⭐: "${r.comment}"`
+                ).join('\n');
+            }
+
+            return {
+                messages: [
+                    {
+                        role: "system",
+                        content: context
+                    },
+                    {
+                        role: "user", 
+                        content: "Please help with this product"
+                    }
+                ]
+            };
+        }
+    );
+}
+```
+
+**Use Case Scenarios**:
+
+- **Customer Support**: Product context, user history, common solutions
+- **Sales**: Prospect information, company data, competitive analysis
+- **Technical Docs**: Code context, API references, architecture diagrams
+- **Content Creation**: Brand guidelines, style guides, previous examples
+
+---
+
+### UC-007: MCP Resource Publishing
+
+**Priority**: MEDIUM  
+**Actors**: Developer + AI, AI Agents/LLMs  
+**Goal**: Expose application data and content as MCP resources that AI can discover and read
+
+**Preconditions**:
+
+- Engine supports MCP resource functionality
+- Engine exposes `registerMCPResource` JavaScript API
+
+**Main Flow**:
+
+1. **Developer wants to expose data** to AI agents
+2. **Developer + AI creates resource definitions**:
+   - Define resource URIs (e.g., `inventory://products/*`)
+   - Create handler to fetch/format data
+   - Register resources with metadata
+3. **AI agent discovers resources** via `resources/list`
+4. **AI agent reads resource** via `resources/read` with specific URI
+5. **Engine executes handler** and returns formatted data
+6. **AI agent uses data** to answer user queries or take actions
+
+**Expected Results**:
+
+- ✅ Application data discoverable by AI
+- ✅ Structured data formats (JSON, markdown, etc.)
+- ✅ URI templates support patterns
+- ✅ Resources can be dynamic (database queries)
+- ✅ Security enforced (AI only sees authorized data)
+
+**Related Requirements**: REQ-MCP-001, REQ-MCP-002, REQ-MCP-004, REQ-SEC-005
+
+**Example Code**:
+
+```javascript
+// Expose product catalog as MCP resource
+function initMCP() {
+    // Individual product resource
+    registerMCPResource(
+        "inventory://products/{productId}",
+        "Product Details",
+        "Detailed information about a specific product",
+        async function(uri) {
+            const match = uri.match(/products\/([^\/]+)/);
+            const productId = match[1];
+            const product = await DataRepository.get("products", productId);
+            
+            return {
+                mimeType: "application/json",
+                content: JSON.stringify(product, null, 2)
+            };
+        }
+    );
+    
+    // Product catalog list
+    registerMCPResource(
+        "inventory://products",
+        "Product Catalog",
+        "List of all available products",
+        async function(uri) {
+            const products = await DataRepository.list("products");
+            
+            return {
+                mimeType: "text/markdown",
+                content: `# Product Catalog\n\n` +
+                    products.map(p => 
+                        `- **${p.name}** (${p.sku}): $${p.price}`
+                    ).join('\n')
+            };
+        }
+    );
+}
+```
+
+**Use Case Scenarios**:
+
+- **Documentation**: Expose API docs, guides, FAQs as resources
+- **Data Access**: Product catalogs, user directories, reports
+- **Configuration**: System settings, feature flags, pricing tiers
+- **Content**: Blog posts, knowledge base articles, templates
 
 ---
 
@@ -819,6 +1119,185 @@ End-to-end scenarios combining multiple features.
 
 ---
 
+### UC-505: AI-Powered Customer Support System (Complete MCP Integration)
+
+**Priority**: HIGH  
+**Actors**: Support Team, Customers, AI Agent (Claude/GPT), Developer + AI  
+**Goal**: Build a complete AI-powered support system where AI agent has full context and capabilities
+
+**Components Integrated**:
+
+- Web application (customer portal)
+- GraphQL API (for data access)
+- MCP Tools (order lookup, ticket creation, refund processing)
+- MCP Prompts (product context, customer history)
+- MCP Resources (knowledge base, FAQ, policies)
+- Real-time chat (GraphQL subscriptions)
+- Authentication (customer login)
+
+**Architecture**:
+
+```
+Customer <-> Web Portal <-> aiwebengine <-> AI Agent (via MCP)
+                                |
+                                v
+                         [Data Repository]
+                         - Orders
+                         - Tickets
+                         - Customers
+                         - Products
+```
+
+**Main Flow**:
+
+1. **Developer + AI builds system**:
+   - AI generates customer portal (HTML/JS)
+   - AI creates GraphQL schema for data
+   - AI generates MCP tools for actions
+   - AI creates MCP prompts for context
+   - AI exposes knowledge base as MCP resources
+   
+2. **System deployment**:
+   - All components deployed to aiwebengine
+   - AI agent connects via MCP
+   - Agent discovers tools, prompts, resources
+   
+3. **Customer interaction**:
+   - Customer logs into portal
+   - Asks: "Where is my order #12345?"
+   - Portal sends message to AI agent
+   
+4. **AI agent processing**:
+   - Requests prompt "customer_context" with customer ID
+   - Engine fetches customer history, preferences
+   - AI calls tool "lookup_order" with order ID
+   - Engine queries order database
+   - AI reads resource "policies://shipping" for policy info
+   - AI synthesizes response with full context
+   
+5. **Response delivery**:
+   - AI provides detailed, accurate answer
+   - Can offer actions: "Would you like me to expedite shipping?"
+   - If customer agrees, AI calls tool "expedite_order"
+   - Engine processes action, updates database
+   - Customer sees real-time update via subscription
+
+**Expected Results**:
+
+- ✅ Complete working system in hours, not weeks
+- ✅ AI has full context (customer, order, policies)
+- ✅ AI can take actions (create tickets, process refunds)
+- ✅ All data access is secure and validated
+- ✅ Real-time updates for customers
+- ✅ Support team can monitor AI interactions
+- ✅ System maintains audit trail
+
+**Related Requirements**: All MCP, GraphQL, Auth, Real-time, Security requirements
+
+**Example MCP Setup**:
+
+```javascript
+function initSupportSystem() {
+    // TOOLS: Actions AI can take
+    registerMCPTool("lookup_order", "Get order details", {
+        type: "object",
+        properties: {
+            orderId: { type: "string" }
+        }
+    }, async (args) => {
+        const order = await DataRepository.get("orders", args.orderId);
+        return {
+            orderId: order.id,
+            status: order.status,
+            items: order.items,
+            total: order.total,
+            estimatedDelivery: order.estimatedDelivery
+        };
+    });
+    
+    registerMCPTool("create_ticket", "Create support ticket", {
+        type: "object",
+        properties: {
+            customerId: { type: "string" },
+            subject: { type: "string" },
+            description: { type: "string" },
+            priority: { type: "string", enum: ["low", "medium", "high"] }
+        }
+    }, async (args) => {
+        const ticket = await DataRepository.create("tickets", {
+            ...args,
+            status: "open",
+            createdAt: new Date().toISOString()
+        });
+        return { ticketId: ticket.id };
+    });
+    
+    // PROMPTS: Context for AI
+    registerMCPPrompt("customer_context", "Full customer context", [
+        { name: "customerId", required: true }
+    ], async (args) => {
+        const customer = await DataRepository.get("customers", args.customerId);
+        const orders = await DataRepository.query("orders", { 
+            customerId: args.customerId 
+        });
+        const tickets = await DataRepository.query("tickets", { 
+            customerId: args.customerId,
+            status: "open"
+        });
+        
+        return {
+            messages: [{
+                role: "system",
+                content: `# Customer Profile
+Name: ${customer.name}
+Tier: ${customer.tier}
+Member Since: ${customer.memberSince}
+
+## Recent Orders
+${orders.slice(0, 5).map(o => `- Order ${o.id}: ${o.status}`).join('\n')}
+
+## Open Tickets
+${tickets.map(t => `- ${t.subject} (${t.priority})`).join('\n') || 'None'}
+
+## Preferences
+- Preferred Contact: ${customer.preferredContact}
+- Language: ${customer.language}
+`
+            }]
+        };
+    });
+    
+    // RESOURCES: Knowledge base
+    registerMCPResource("kb://policies/shipping", 
+        "Shipping Policy", 
+        "Company shipping and delivery policies",
+        async () => ({
+            mimeType: "text/markdown",
+            content: await DataRepository.get("content", "shipping-policy")
+        })
+    );
+    
+    registerMCPResource("kb://policies/refunds",
+        "Refund Policy",
+        "Company refund and return policies",
+        async () => ({
+            mimeType: "text/markdown",
+            content: await DataRepository.get("content", "refund-policy")
+        })
+    );
+}
+```
+
+**Key Insights**:
+
+- MCP transforms aiwebengine from web server to **AI development platform**
+- Developers build capabilities, AI agents use them intelligently
+- Same infrastructure serves humans (web) and AI (MCP)
+- Security, validation, and correctness enforced by engine
+- Complete systems built with natural language + AI assistance
+
+---
+
 ## Edge Cases & Error Scenarios
 
 ### UC-601: Handle Malicious Input
@@ -879,19 +1358,44 @@ End-to-end scenarios combining multiple features.
 
 | Use Case | Priority | Related Requirements | Status |
 |----------|----------|---------------------|--------|
+| **Primary Use Cases** ||||
 | UC-001 | CRITICAL | REQ-JS-001, REQ-JS-005, REQ-SEC-001, REQ-HTTP-003 | In Progress |
 | UC-002 | CRITICAL | REQ-RT-001, REQ-RT-002, REQ-GQL-003, REQ-SEC-005 | In Progress |
 | UC-003 | CRITICAL | REQ-DEPLOY-001-005, REQ-CONFIG-001, REQ-LOG-001 | Partial |
 | UC-004 | CRITICAL | REQ-AUTH-001-011, REQ-SEC-001-006 | Partial |
+| **MCP Use Cases** ||||
+| UC-005 | CRITICAL | REQ-MCP-001, REQ-MCP-002, REQ-MCP-003 | Planned |
+| UC-006 | HIGH | REQ-MCP-001, REQ-MCP-002, REQ-MCP-005 | Planned |
+| UC-007 | MEDIUM | REQ-MCP-001, REQ-MCP-002, REQ-MCP-004 | Planned |
+| **Web Developer** ||||
 | UC-101 | HIGH | REQ-HTTP-002, REQ-HTTP-008, REQ-JS-API-002 | Implemented |
 | UC-102 | HIGH | REQ-ASSET-001-006 | Implemented |
 | UC-103 | HIGH | REQ-HTTP-008, REQ-HTTP-010, REQ-DATA-004 | Partial |
+| UC-104 | MEDIUM | REQ-JS-005, REQ-SEC-004, REQ-DATA-001 | Implemented |
+| **API Developer** ||||
 | UC-201 | CRITICAL | REQ-HTTP-001-003, REQ-DATA-001-005 | Implemented |
 | UC-202 | HIGH | REQ-GQL-001, REQ-GQL-002, REQ-DATA-001 | Partial |
 | UC-203 | CRITICAL | REQ-AUTH-001-011, REQ-SEC-005-006 | Partial |
+| UC-204 | MEDIUM | REQ-SEC-003, REQ-PERF-001 | Planned |
+| **Real-Time Developer** ||||
 | UC-301 | CRITICAL | REQ-RT-001-002, REQ-STREAM-001-005 | Implemented |
 | UC-302 | CRITICAL | REQ-GQL-003, REQ-RT-001-002 | Implemented |
 | UC-303 | HIGH | REQ-RT-001, REQ-DATA-002, REQ-DATA-005 | Partial |
+| UC-304 | MEDIUM | REQ-RT-002, REQ-STREAM-003 | Partial |
+| **Feature-Specific** ||||
+| UC-401 | HIGH | REQ-ERROR-001-005, REQ-HTTP-003 | Implemented |
+| UC-402 | MEDIUM | REQ-CONFIG-001-005 | Implemented |
+| UC-403 | HIGH | REQ-LOG-001-006, REQ-MONITOR-001-004 | Partial |
+| UC-404 | HIGH | REQ-DEPLOY-001-005 | Partial |
+| **Integration** ||||
+| UC-501 | HIGH | Most requirements | Planned |
+| UC-502 | HIGH | REQ-AUTH, REQ-GQL-003, REQ-RT, REQ-DATA | Planned |
+| UC-503 | HIGH | REQ-AUTH, REQ-SEC, REQ-DATA, REQ-GQL | Planned |
+| UC-505 | HIGH | REQ-MCP-001-005, REQ-GQL, REQ-AUTH, REQ-RT | Planned |
+| **Edge Cases** ||||
+| UC-601 | CRITICAL | REQ-SEC-001-010 | In Progress |
+| UC-602 | CRITICAL | REQ-JS-002-004, REQ-PERF | Implemented |
+| UC-603 | HIGH | REQ-ERROR, REQ-RT-002 | Partial |
 
 ---
 
