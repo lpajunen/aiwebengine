@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Instant;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::repository;
 use crate::security::UserContext;
@@ -752,6 +752,94 @@ pub fn execute_graphql_resolver(
 
         Ok(result_string)
     }).map_err(|e| format!("JavaScript execution error: {}", e))
+}
+
+/// Calls the init() function in a script if it exists
+///
+/// This function executes a script and checks if it has an `init()` function defined.
+/// If found, it calls the function with the provided context.
+///
+/// Returns:
+/// - Ok(true) if init() was found and called successfully
+/// - Ok(false) if no init() function exists (not an error)
+/// - Err(String) if init() exists but threw an error
+pub fn call_init_if_exists(
+    script_uri: &str,
+    script_content: &str,
+    context: crate::script_init::InitContext,
+) -> Result<bool, String> {
+    debug!("Checking for init() function in script: {}", script_uri);
+
+    let rt = Runtime::new().map_err(|e| format!("Failed to create runtime: {}", e))?;
+    let ctx = Context::full(&rt).map_err(|e| format!("Failed to create context: {}", e))?;
+
+    ctx.with(|ctx| -> Result<bool, rquickjs::Error> {
+        // Set up secure global functions with minimal config for init
+        let config = GlobalSecurityConfig {
+            enable_audit_logging: false,
+            enable_graphql_registration: true,
+            enable_streams: true,
+            ..Default::default()
+        };
+
+        // Init runs with admin context to allow script registration operations
+        setup_secure_global_functions(
+            &ctx,
+            script_uri,
+            UserContext::admin("script-init".to_string()),
+            &config,
+            None,
+            None,
+        )?;
+
+        // Execute the script to define functions
+        ctx.eval::<(), _>(script_content)?;
+
+        // Check if init function exists
+        let globals = ctx.globals();
+        let init_value: rquickjs::Value = match globals.get("init") {
+            Ok(v) => v,
+            Err(_) => {
+                // No init function defined - this is OK
+                debug!("No init() function found in script: {}", script_uri);
+                return Ok(false);
+            }
+        };
+
+        // Check if it's actually a function
+        if !init_value.is_function() {
+            debug!(
+                "init exists but is not a function in script: {}",
+                script_uri
+            );
+            return Ok(false);
+        }
+
+        let init_func = init_value
+            .as_function()
+            .ok_or_else(|| rquickjs::Error::new_from_js("init", "not a function"))?;
+
+        // Create context object to pass to init()
+        let context_obj = rquickjs::Object::new(ctx.clone())?;
+        context_obj.set("scriptName", context.script_name.clone())?;
+
+        // Convert SystemTime to milliseconds since UNIX_EPOCH
+        let timestamp_ms = context
+            .timestamp
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as f64;
+        context_obj.set("timestamp", timestamp_ms)?;
+        context_obj.set("isStartup", context.is_startup)?;
+
+        // Call init function with context
+        debug!("Calling init() function for script: {}", script_uri);
+        init_func.call::<_, ()>((context_obj,))?;
+
+        info!("Successfully called init() for script: {}", script_uri);
+        Ok(true)
+    })
+    .map_err(|e| format!("Init function error: {}", e))
 }
 
 #[cfg(test)]

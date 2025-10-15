@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock, PoisonError};
+use std::time::SystemTime;
 use tracing::{debug, error, warn};
 
 /// Defines the types of repository errors that can occur
@@ -16,6 +17,57 @@ pub enum RepositoryError {
     InvalidData(String),
 }
 
+/// Script metadata for tracking initialization status
+#[derive(Debug, Clone)]
+pub struct ScriptMetadata {
+    pub uri: String,
+    pub code: String,
+    pub created_at: SystemTime,
+    pub updated_at: SystemTime,
+    pub initialized: bool,
+    pub init_error: Option<String>,
+    pub last_init_time: Option<SystemTime>,
+}
+
+impl ScriptMetadata {
+    /// Create a new script metadata instance
+    pub fn new(uri: String, code: String) -> Self {
+        let now = SystemTime::now();
+        Self {
+            uri,
+            code,
+            created_at: now,
+            updated_at: now,
+            initialized: false,
+            init_error: None,
+            last_init_time: None,
+        }
+    }
+
+    /// Mark script as initialized successfully
+    pub fn mark_initialized(&mut self) {
+        self.initialized = true;
+        self.init_error = None;
+        self.last_init_time = Some(SystemTime::now());
+    }
+
+    /// Mark script initialization as failed
+    pub fn mark_init_failed(&mut self, error: String) {
+        self.initialized = false;
+        self.init_error = Some(error);
+        self.last_init_time = Some(SystemTime::now());
+    }
+
+    /// Update script code
+    pub fn update_code(&mut self, new_code: String) {
+        self.code = new_code;
+        self.updated_at = SystemTime::now();
+        // Reset initialization status when code changes
+        self.initialized = false;
+        self.init_error = None;
+    }
+}
+
 /// Asset representation
 #[derive(Debug, Clone)]
 pub struct Asset {
@@ -24,13 +76,13 @@ pub struct Asset {
     pub content: Vec<u8>,
 }
 
-static DYNAMIC_SCRIPTS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+static DYNAMIC_SCRIPTS: OnceLock<Mutex<HashMap<String, ScriptMetadata>>> = OnceLock::new();
 static DYNAMIC_LOGS: OnceLock<Mutex<HashMap<String, Vec<String>>>> = OnceLock::new();
 static DYNAMIC_ASSETS: OnceLock<Mutex<HashMap<String, Asset>>> = OnceLock::new();
 
 /// Safe mutex access with recovery from poisoned state
 fn safe_lock_scripts()
--> Result<std::sync::MutexGuard<'static, HashMap<String, String>>, RepositoryError> {
+-> Result<std::sync::MutexGuard<'static, HashMap<String, ScriptMetadata>>, RepositoryError> {
     let store = DYNAMIC_SCRIPTS.get_or_init(|| Mutex::new(HashMap::new()));
 
     match store.lock() {
@@ -110,8 +162,8 @@ pub fn fetch_scripts() -> HashMap<String, String> {
     // Safely merge in any dynamically upserted scripts
     match safe_lock_scripts() {
         Ok(guard) => {
-            for (k, v) in guard.iter() {
-                m.insert(k.to_string(), v.to_string());
+            for (k, metadata) in guard.iter() {
+                m.insert(k.to_string(), metadata.code.to_string());
             }
         }
         Err(e) => {
@@ -136,7 +188,7 @@ pub fn fetch_script(uri: &str) -> Option<String> {
 
     // Then check dynamic scripts
     match safe_lock_scripts() {
-        Ok(guard) => guard.get(uri).cloned(),
+        Ok(guard) => guard.get(uri).map(|metadata| metadata.code.clone()),
         Err(e) => {
             error!("Failed to access dynamic scripts for URI {}: {}", uri, e);
             None
@@ -218,6 +270,47 @@ pub fn prune_log_messages() -> Result<(), RepositoryError> {
     Ok(())
 }
 
+/// Get script metadata for a specific URI
+pub fn get_script_metadata(uri: &str) -> Result<ScriptMetadata, RepositoryError> {
+    let guard = safe_lock_scripts()?;
+    guard
+        .get(uri)
+        .cloned()
+        .ok_or_else(|| RepositoryError::ScriptNotFound(uri.to_string()))
+}
+
+/// Get all script metadata
+pub fn get_all_script_metadata() -> Result<Vec<ScriptMetadata>, RepositoryError> {
+    let guard = safe_lock_scripts()?;
+    Ok(guard.values().cloned().collect())
+}
+
+/// Mark a script as initialized successfully
+pub fn mark_script_initialized(uri: &str) -> Result<(), RepositoryError> {
+    let mut guard = safe_lock_scripts()?;
+
+    if let Some(metadata) = guard.get_mut(uri) {
+        metadata.mark_initialized();
+        debug!("Marked script as initialized: {}", uri);
+        Ok(())
+    } else {
+        Err(RepositoryError::ScriptNotFound(uri.to_string()))
+    }
+}
+
+/// Mark a script initialization as failed
+pub fn mark_script_init_failed(uri: &str, error: String) -> Result<(), RepositoryError> {
+    let mut guard = safe_lock_scripts()?;
+
+    if let Some(metadata) = guard.get_mut(uri) {
+        metadata.mark_init_failed(error.clone());
+        debug!("Marked script init as failed: {} - {}", uri, error);
+        Ok(())
+    } else {
+        Err(RepositoryError::ScriptNotFound(uri.to_string()))
+    }
+}
+
 /// Upsert script with error handling
 pub fn upsert_script(uri: &str, content: &str) -> Result<(), RepositoryError> {
     if uri.trim().is_empty() {
@@ -235,8 +328,18 @@ pub fn upsert_script(uri: &str, content: &str) -> Result<(), RepositoryError> {
 
     let mut guard = safe_lock_scripts()?;
 
-    guard.insert(uri.to_string(), content.to_string());
-    debug!("Upserted script: {} ({} bytes)", uri, content.len());
+    // Check if script already exists
+    if let Some(existing) = guard.get_mut(uri) {
+        // Update existing script
+        existing.update_code(content.to_string());
+        debug!("Updated script: {} ({} bytes)", uri, content.len());
+    } else {
+        // Insert new script
+        let metadata = ScriptMetadata::new(uri.to_string(), content.to_string());
+        guard.insert(uri.to_string(), metadata);
+        debug!("Created new script: {} ({} bytes)", uri, content.len());
+    }
+
     Ok(())
 }
 
