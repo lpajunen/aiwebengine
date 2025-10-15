@@ -271,6 +271,38 @@ The engine MUST implement robust lock management:
 - Retry mechanisms with exponential backoff
 - Automatic recovery from deadlocks
 
+#### REQ-JS-010: Script Initialization Function
+**Priority**: HIGH  
+**Status**: PLANNED
+
+The engine MUST support script initialization through an `init` function:
+- When a script is registered or updated via `upsert_script`, the engine MUST call an `init()` function if it exists in the script
+- When the server starts, the engine MUST call the `init()` function for all registered scripts
+- The `init()` function SHOULD be optional - scripts without it should work normally
+- The `init()` function SHOULD be used for:
+  - Initializing script-level state or configuration
+  - Registering HTTP route handlers
+  - Setting up subscriptions or background tasks
+  - Performing one-time setup operations
+- The engine MUST handle errors in `init()` functions gracefully:
+  - Log initialization errors with script name and details
+  - Continue initializing other scripts if one fails
+  - Mark scripts with failed initialization appropriately
+  - Optionally retry initialization with exponential backoff
+- The engine SHOULD provide context to the `init()` function:
+  - Script metadata (name, version, registration time)
+  - Configuration values if applicable
+  - Server state information
+- The `init()` function MUST complete within the configured script timeout
+- Multiple calls to `upsert_script` for the same script SHOULD re-run the `init()` function
+
+**Use Cases**:
+- Registering HTTP handlers: `registerHandler('GET', '/api/users', handleUsers)`
+- Setting up periodic tasks or timers
+- Initializing database connections or external service clients
+- Loading configuration or precomputing values
+- Registering GraphQL resolvers or subscriptions
+
 ---
 
 ### Security
