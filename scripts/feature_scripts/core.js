@@ -358,6 +358,8 @@ register('/script_logs', 'script_logs_handler', 'GET');
 // GraphQL operations for script management  
 registerGraphQLQuery("scripts", "type ScriptInfo { uri: String!, chars: Int! } type Query { scripts: [ScriptInfo!]! }", "scriptsQuery");
 registerGraphQLQuery("script", "type ScriptDetail { uri: String!, content: String!, contentLength: Int!, logs: [String!]! } type Query { script(uri: String!): ScriptDetail }", "scriptQuery");
+registerGraphQLQuery("scriptInitStatus", "type ScriptInitStatus { scriptName: String!, initialized: Boolean!, initError: String, lastInitTime: Float, createdAt: Float, updatedAt: Float } type Query { scriptInitStatus(uri: String!): ScriptInitStatus }", "scriptInitStatusQuery");
+registerGraphQLQuery("allScriptsInitStatus", "type ScriptInitStatus { scriptName: String!, initialized: Boolean!, initError: String, lastInitTime: Float, createdAt: Float, updatedAt: Float } type Query { allScriptsInitStatus: [ScriptInitStatus!]! }", "allScriptsInitStatusQuery");
 registerGraphQLMutation("upsertScript", "type UpsertScriptResponse { message: String!, uri: String!, chars: Int!, success: Boolean! } type Mutation { upsertScript(uri: String!, content: String!): UpsertScriptResponse! }", "upsertScriptMutation");
 registerGraphQLMutation("deleteScript", "type DeleteScriptResponse { message: String!, uri: String!, success: Boolean! } type Mutation { deleteScript(uri: String!): DeleteScriptResponse! }", "deleteScriptMutation");
 
@@ -406,6 +408,41 @@ function scriptQuery(args) {
 			contentLength: 0,
 			logs: []
 		});
+	}
+}
+
+function scriptInitStatusQuery(args) {
+	try {
+		const status = getScriptInitStatus(args.uri);
+		if (status) {
+			return status; // Already JSON string
+		} else {
+			// Script not found or no metadata
+			return JSON.stringify(null);
+		}
+	} catch (error) {
+		writeLog(`Script init status query failed: ${error.message}`);
+		return JSON.stringify(null);
+	}
+}
+
+function allScriptsInitStatusQuery() {
+	try {
+		const scripts = listScripts();
+		const statusArray = [];
+		
+		for (const uri of Object.keys(scripts)) {
+			const statusStr = getScriptInitStatus(uri);
+			if (statusStr) {
+				const status = JSON.parse(statusStr);
+				statusArray.push(status);
+			}
+		}
+		
+		return JSON.stringify(statusArray);
+	} catch (error) {
+		writeLog(`All scripts init status query failed: ${error.message}`);
+		return JSON.stringify([]);
 	}
 }
 

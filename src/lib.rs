@@ -381,6 +381,62 @@ pub async fn start_server_with_config(
         }
     }
 
+    // Initialize all scripts by calling their init() functions if they exist
+    if config.javascript.enable_init_functions {
+        info!("Initializing all scripts...");
+        let init_timeout = config
+            .javascript
+            .init_timeout_ms
+            .unwrap_or(config.javascript.execution_timeout_ms);
+        let initializer = script_init::ScriptInitializer::new(init_timeout);
+        match initializer.initialize_all_scripts().await {
+            Ok(results) => {
+                let successful = results.iter().filter(|r| r.success).count();
+                let failed = results
+                    .iter()
+                    .filter(|r| !r.success && r.error.is_some())
+                    .count();
+                let skipped = results
+                    .iter()
+                    .filter(|r| r.success && r.duration_ms == 0)
+                    .count();
+                info!(
+                    "Script initialization complete: {} successful, {} failed, {} skipped (no init function)",
+                    successful, failed, skipped
+                );
+
+                // Log any failures for visibility
+                for result in results.iter().filter(|r| !r.success) {
+                    if let Some(ref error) = result.error {
+                        warn!(
+                            "Script '{}' initialization failed: {}",
+                            result.script_uri, error
+                        );
+                    }
+                }
+
+                // Fail startup if configured and any script failed
+                if config.javascript.fail_startup_on_init_error && failed > 0 {
+                    anyhow::bail!(
+                        "Server startup aborted: {} script(s) failed initialization",
+                        failed
+                    );
+                }
+            }
+            Err(e) => {
+                error!("Failed to initialize scripts: {}", e);
+                if config.javascript.fail_startup_on_init_error {
+                    anyhow::bail!(
+                        "Server startup aborted: script initialization failed: {}",
+                        e
+                    );
+                }
+            }
+        }
+    } else {
+        info!("Script init() functions are disabled in configuration");
+    }
+
     // Create GraphQL schema after scripts have been executed
     let schema = match graphql::build_schema() {
         Ok(schema) => schema,

@@ -102,6 +102,21 @@ pub struct JavaScriptConfig {
 
     /// Script execution stack size in bytes
     pub stack_size_bytes: usize,
+
+    /// Enable script init() function calls
+    #[serde(default = "default_enable_init_functions")]
+    pub enable_init_functions: bool,
+
+    /// Init function timeout in milliseconds (defaults to execution_timeout_ms if not set)
+    pub init_timeout_ms: Option<u64>,
+
+    /// Fail server startup if any script init fails
+    #[serde(default)]
+    pub fail_startup_on_init_error: bool,
+}
+
+fn default_enable_init_functions() -> bool {
+    true
 }
 
 /// Repository configuration
@@ -225,6 +240,9 @@ impl Default for JavaScriptConfig {
             enable_compilation_cache: true,
             max_cached_scripts: 1000,
             stack_size_bytes: 1024 * 1024, // 1MB
+            enable_init_functions: true,
+            init_timeout_ms: None, // Use execution_timeout_ms by default
+            fail_startup_on_init_error: false,
         }
     }
 }

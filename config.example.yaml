@@ -25,6 +25,10 @@ javascript:
     - "fetch"
     - "database"
     - "logging"
+  # Script initialization settings
+  enable_init_functions: true           # Enable calling init() functions in scripts
+  init_timeout_ms: 5000                 # Timeout for init() function (defaults to execution_timeout_ms)
+  fail_startup_on_init_error: false     # Fail server startup if any script init fails
 
 repository:
   database_type: "sqlite"

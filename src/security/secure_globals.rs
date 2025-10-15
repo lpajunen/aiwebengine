@@ -331,6 +331,54 @@ impl SecureGlobalContext {
         )?;
         global.set("getScript", get_script)?;
 
+        // Secure getScriptInitStatus function - returns init metadata
+        let user_ctx_meta = user_context.clone();
+        let get_script_init_status = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, script_name: String| -> JsResult<Option<String>> {
+                // Check capability - same as getScript
+                if let Err(_e) =
+                    user_ctx_meta.require_capability(&crate::security::Capability::ReadScripts)
+                {
+                    return Ok(None);
+                }
+
+                debug!(
+                    user_id = ?user_ctx_meta.user_id,
+                    script_name = %script_name,
+                    "Secure getScriptInitStatus called"
+                );
+
+                // Get script metadata from repository
+                match repository::get_script_metadata(&script_name) {
+                    Ok(metadata) => {
+                        // Create a JSON object with init status
+                        let status = serde_json::json!({
+                            "scriptName": metadata.uri,
+                            "initialized": metadata.initialized,
+                            "initError": metadata.init_error,
+                            "lastInitTime": metadata.last_init_time.and_then(|t| {
+                                t.duration_since(std::time::UNIX_EPOCH)
+                                    .ok()
+                                    .map(|d| d.as_millis() as f64)
+                            }),
+                            "createdAt": metadata.created_at
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .ok()
+                                .map(|d| d.as_millis() as f64),
+                            "updatedAt": metadata.updated_at
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .ok()
+                                .map(|d| d.as_millis() as f64),
+                        });
+                        Ok(Some(status.to_string()))
+                    }
+                    Err(_) => Ok(None),
+                }
+            },
+        )?;
+        global.set("getScriptInitStatus", get_script_init_status)?;
+
         // Secure upsertScript function
         let user_ctx_upsert = user_context.clone();
         let _config_upsert = self.config.clone();
@@ -362,6 +410,37 @@ impl SecureGlobalContext {
                     user_id = ?user_ctx_upsert.user_id,
                     "Secure upsertScript called"
                 );
+
+                // Initialize the script asynchronously in the background
+                // This calls the init() function if it exists
+                let script_name_for_init = script_name.clone();
+                tokio::task::spawn(async move {
+                    let initializer = crate::script_init::ScriptInitializer::new(5000); // 5s timeout
+                    match initializer
+                        .initialize_script(&script_name_for_init, false)
+                        .await
+                    {
+                        Ok(result) => {
+                            if result.success {
+                                debug!(
+                                    "Script '{}' initialized after upsert",
+                                    script_name_for_init
+                                );
+                            } else if let Some(err) = result.error {
+                                warn!(
+                                    "Script '{}' init failed after upsert: {}",
+                                    script_name_for_init, err
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Failed to initialize script '{}' after upsert: {}",
+                                script_name_for_init, e
+                            );
+                        }
+                    }
+                });
 
                 Ok(format!("Script '{}' upserted successfully", script_name))
             },
