@@ -3,72 +3,72 @@
 
 // Register a GraphQL subscription
 registerGraphQLSubscription(
-    "liveMessages", 
-    "type Subscription { liveMessages: String }", 
-    "liveMessagesResolver"
+  "liveMessages",
+  "type Subscription { liveMessages: String }",
+  "liveMessagesResolver",
 );
 
 // Register a GraphQL mutation to trigger the subscription
 registerGraphQLMutation(
-    "sendMessage", 
-    "type Mutation { sendMessage(text: String!): String }", 
-    "sendMessageResolver"
+  "sendMessage",
+  "type Mutation { sendMessage(text: String!): String }",
+  "sendMessageResolver",
 );
 
 // The subscription resolver - called when a client subscribes
 function liveMessagesResolver() {
-    writeLog("Client subscribed to liveMessages");
-    return "Subscription initialized - waiting for messages...";
+  writeLog("Client subscribed to liveMessages");
+  return "Subscription initialized - waiting for messages...";
 }
 
 // The mutation resolver - triggers subscription messages
 function sendMessageResolver(args) {
-    const message = args.text;
-    const timestamp = new Date().toISOString();
-    
-    // Create the message data
-    const messageData = {
-        id: Math.random().toString(36).substr(2, 9),
-        text: message,
-        timestamp: timestamp,
-        sender: "system"
-    };
-    
-    writeLog(`Sending message to liveMessages subscribers: ${message}`);
-    
-    // Send the message to the subscription using the convenience function
-    // This will broadcast to all clients subscribed to the 'liveMessages' subscription
-    sendSubscriptionMessage("liveMessages", JSON.stringify(messageData));
-    
-    return `Message sent: ${message}`;
+  const message = args.text;
+  const timestamp = new Date().toISOString();
+
+  // Create the message data
+  const messageData = {
+    id: Math.random().toString(36).substr(2, 9),
+    text: message,
+    timestamp: timestamp,
+    sender: "system",
+  };
+
+  writeLog(`Sending message to liveMessages subscribers: ${message}`);
+
+  // Send the message to the subscription using the convenience function
+  // This will broadcast to all clients subscribed to the 'liveMessages' subscription
+  sendSubscriptionMessage("liveMessages", JSON.stringify(messageData));
+
+  return `Message sent: ${message}`;
 }
 
 // Optional: You can also use the lower-level API
 // sendStreamMessageToPath("/graphql/subscription/liveMessages", JSON.stringify(messageData));
 
 // Register HTTP endpoints for testing
-register('/trigger-message', 'triggerMessageHandler', 'POST');
+register("/trigger-message", "triggerMessageHandler", "POST");
 
 function triggerMessageHandler(req) {
-    const message = req.body || "Hello from HTTP trigger!";
-    
-    // Trigger the subscription by calling the mutation resolver
-    sendMessageResolver({ text: message });
-    
-    return {
-        status: 200,
-        body: JSON.stringify({ success: true, message: "Message broadcasted" }),
-        contentType: "application/json"
-    };
+  const message = req.body || "Hello from HTTP trigger!";
+
+  // Trigger the subscription by calling the mutation resolver
+  sendMessageResolver({ text: message });
+
+  return {
+    status: 200,
+    body: JSON.stringify({ success: true, message: "Message broadcasted" }),
+    contentType: "application/json",
+  };
 }
 
 // Test page to demonstrate subscription usage
-register('/subscription-demo', 'subscriptionDemoPage', 'GET');
+register("/subscription-demo", "subscriptionDemoPage", "GET");
 
 function subscriptionDemoPage(req) {
-    return {
-        status: 200,
-        body: `
+  return {
+    status: 200,
+    body: `
         <!DOCTYPE html>
         <html>
         <head>
@@ -253,8 +253,8 @@ function subscriptionDemoPage(req) {
             </script>
         </body>
         </html>`,
-        contentType: "text/html"
-    };
+    contentType: "text/html",
+  };
 }
 
 writeLog("GraphQL subscription example script loaded successfully");

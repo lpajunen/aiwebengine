@@ -88,6 +88,7 @@ FROM debian:bookworm-slim
 ```
 
 Benefits:
+
 - Small final image size (~50MB vs ~2GB)
 - Cached dependency layer for faster rebuilds
 - Security: No build tools in production image

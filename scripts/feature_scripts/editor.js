@@ -3,7 +3,7 @@
 
 // Serve the editor HTML page
 function serveEditor(req) {
-    const html = `<!DOCTYPE html>
+  const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -500,207 +500,212 @@ function serveEditor(req) {
 </body>
 </html>`;
 
-    return {
-        status: 200,
-        body: html,
-        contentType: 'text/html'
-    };
+  return {
+    status: 200,
+    body: html,
+    contentType: "text/html",
+  };
 }
 
 // API: List all scripts
 function apiListScripts(req) {
-    try {
-        const scripts = (typeof listScripts === 'function') ? listScripts() : [];
-        const scriptDetails = scripts.map(name => ({
-            name: name,
-            size: 0,
-            lastModified: new Date().toISOString()
-        }));
+  try {
+    const scripts = typeof listScripts === "function" ? listScripts() : [];
+    const scriptDetails = scripts.map((name) => ({
+      name: name,
+      size: 0,
+      lastModified: new Date().toISOString(),
+    }));
 
-        return {
-            status: 200,
-            body: JSON.stringify(scriptDetails),
-            contentType: 'application/json'
-        };
-    } catch (error) {
-        return {
-            status: 500,
-            body: JSON.stringify({ error: error.message }),
-            contentType: 'application/json'
-        };
-    }
+    return {
+      status: 200,
+      body: JSON.stringify(scriptDetails),
+      contentType: "application/json",
+    };
+  } catch (error) {
+    return {
+      status: 500,
+      body: JSON.stringify({ error: error.message }),
+      contentType: "application/json",
+    };
+  }
 }
 
 // API: Get script content
 function apiGetScript(req) {
-    try {
-        // Extract the script name from the path
-        // The path will be something like /api/scripts/https://example.com/core
-        let scriptName = req.path.replace('/api/scripts/', '');
+  try {
+    // Extract the script name from the path
+    // The path will be something like /api/scripts/https://example.com/core
+    let scriptName = req.path.replace("/api/scripts/", "");
 
-        // URL decode the script name in case it contains encoded characters
-        scriptName = decodeURIComponent(scriptName);
+    // URL decode the script name in case it contains encoded characters
+    scriptName = decodeURIComponent(scriptName);
 
-        // If it's already a full URI, use it as-is
-        // If it's just a short name, convert it to full URI
-        let fullUri;
-        if (scriptName.startsWith('https://')) {
-            fullUri = scriptName;
-        } else {
-            fullUri = 'https://example.com/' + scriptName;
-        }
-
-        let content = '';
-
-        if (typeof getScript === 'function') {
-            content = getScript(fullUri) || '';
-        } else {
-            return {
-                status: 500,
-                body: 'getScript function not available',
-                contentType: 'text/plain'
-            };
-        }
-
-        if (!content) {
-            return {
-                status: 404,
-                body: 'Script not found',
-                contentType: 'text/plain'
-            };
-        }
-
-        return {
-            status: 200,
-            body: content,
-            contentType: 'text/plain'
-        };
-    } catch (error) {
-        return {
-            status: 500,
-            body: 'Error: ' + error.message,
-            contentType: 'text/plain'
-        };
+    // If it's already a full URI, use it as-is
+    // If it's just a short name, convert it to full URI
+    let fullUri;
+    if (scriptName.startsWith("https://")) {
+      fullUri = scriptName;
+    } else {
+      fullUri = "https://example.com/" + scriptName;
     }
+
+    let content = "";
+
+    if (typeof getScript === "function") {
+      content = getScript(fullUri) || "";
+    } else {
+      return {
+        status: 500,
+        body: "getScript function not available",
+        contentType: "text/plain",
+      };
+    }
+
+    if (!content) {
+      return {
+        status: 404,
+        body: "Script not found",
+        contentType: "text/plain",
+      };
+    }
+
+    return {
+      status: 200,
+      body: content,
+      contentType: "text/plain",
+    };
+  } catch (error) {
+    return {
+      status: 500,
+      body: "Error: " + error.message,
+      contentType: "text/plain",
+    };
+  }
 }
 
 // API: Save/update script
 function apiSaveScript(req) {
-    try {
-        // Extract the script name from the path
-        let scriptName = req.path.replace('/api/scripts/', '');
+  try {
+    // Extract the script name from the path
+    let scriptName = req.path.replace("/api/scripts/", "");
 
-        // URL decode the script name in case it contains encoded characters
-        scriptName = decodeURIComponent(scriptName);
+    // URL decode the script name in case it contains encoded characters
+    scriptName = decodeURIComponent(scriptName);
 
-        // If it's already a full URI, use it as-is
-        // If it's just a short name, convert it to full URI
-        let fullUri;
-        if (scriptName.startsWith('https://')) {
-            fullUri = scriptName;
-        } else {
-            fullUri = 'https://example.com/' + scriptName;
-        }
-
-        if (typeof upsertScript === 'function') {
-            // Check if script already exists to determine action
-            const existingScript = getScript ? getScript(fullUri) : null;
-            const action = existingScript ? 'updated' : 'inserted';
-            
-            upsertScript(fullUri, req.body);
-            
-            // Broadcast the script update notification
-            if (typeof sendStreamMessageToPath === 'function') {
-                try {
-                    const message = {
-                        type: 'script_update',
-                        uri: fullUri,
-                        action: action,
-                        timestamp: new Date().toISOString(),
-                        contentLength: req.body.length,
-                        previousExists: !!existingScript,
-                        via: 'editor'
-                    };
-                    sendStreamMessageToPath('/script_updates', JSON.stringify(message));
-                    writeLog('Broadcasted script update from editor: ' + action + ' ' + fullUri);
-                } catch (broadcastError) {
-                    writeLog('Failed to broadcast script update from editor: ' + broadcastError.message);
-                }
-            }
-        }
-
-        return {
-            status: 200,
-            body: JSON.stringify({ message: 'Script saved' }),
-            contentType: 'application/json'
-        };
-    } catch (error) {
-        return {
-            status: 500,
-            body: JSON.stringify({ error: error.message }),
-            contentType: 'application/json'
-        };
+    // If it's already a full URI, use it as-is
+    // If it's just a short name, convert it to full URI
+    let fullUri;
+    if (scriptName.startsWith("https://")) {
+      fullUri = scriptName;
+    } else {
+      fullUri = "https://example.com/" + scriptName;
     }
+
+    if (typeof upsertScript === "function") {
+      // Check if script already exists to determine action
+      const existingScript = getScript ? getScript(fullUri) : null;
+      const action = existingScript ? "updated" : "inserted";
+
+      upsertScript(fullUri, req.body);
+
+      // Broadcast the script update notification
+      if (typeof sendStreamMessageToPath === "function") {
+        try {
+          const message = {
+            type: "script_update",
+            uri: fullUri,
+            action: action,
+            timestamp: new Date().toISOString(),
+            contentLength: req.body.length,
+            previousExists: !!existingScript,
+            via: "editor",
+          };
+          sendStreamMessageToPath("/script_updates", JSON.stringify(message));
+          writeLog(
+            "Broadcasted script update from editor: " + action + " " + fullUri,
+          );
+        } catch (broadcastError) {
+          writeLog(
+            "Failed to broadcast script update from editor: " +
+              broadcastError.message,
+          );
+        }
+      }
+    }
+
+    return {
+      status: 200,
+      body: JSON.stringify({ message: "Script saved" }),
+      contentType: "application/json",
+    };
+  } catch (error) {
+    return {
+      status: 500,
+      body: JSON.stringify({ error: error.message }),
+      contentType: "application/json",
+    };
+  }
 }
 
 // API: Get logs
 function apiGetLogs(req) {
-    try {
-        const logs = (typeof listLogs === 'function') ? listLogs() : [];
-        const formattedLogs = logs.map(log => ({
-            timestamp: new Date().toISOString(),
-            level: 'info',
-            message: log
-        }));
+  try {
+    const logs = typeof listLogs === "function" ? listLogs() : [];
+    const formattedLogs = logs.map((log) => ({
+      timestamp: new Date().toISOString(),
+      level: "info",
+      message: log,
+    }));
 
-        return {
-            status: 200,
-            body: JSON.stringify(formattedLogs),
-            contentType: 'application/json'
-        };
-    } catch (error) {
-        return {
-            status: 500,
-            body: JSON.stringify({ error: error.message }),
-            contentType: 'application/json'
-        };
-    }
+    return {
+      status: 200,
+      body: JSON.stringify(formattedLogs),
+      contentType: "application/json",
+    };
+  } catch (error) {
+    return {
+      status: 500,
+      body: JSON.stringify({ error: error.message }),
+      contentType: "application/json",
+    };
+  }
 }
 
 // API: Get assets
 function apiGetAssets(req) {
-    try {
-        const assets = (typeof listAssets === 'function') ? listAssets() : [];
-        const assetDetails = assets.map(path => ({
-            path: path,
-            name: path.split('/').pop(),
-            size: 0,
-            type: 'application/octet-stream'
-        }));
+  try {
+    const assets = typeof listAssets === "function" ? listAssets() : [];
+    const assetDetails = assets.map((path) => ({
+      path: path,
+      name: path.split("/").pop(),
+      size: 0,
+      type: "application/octet-stream",
+    }));
 
-        return {
-            status: 200,
-            body: JSON.stringify({ assets: assetDetails }),
-            contentType: 'application/json'
-        };
-    } catch (error) {
-        return {
-            status: 500,
-            body: JSON.stringify({ error: error.message }),
-            contentType: 'application/json'
-        };
-    }
+    return {
+      status: 200,
+      body: JSON.stringify({ assets: assetDetails }),
+      contentType: "application/json",
+    };
+  } catch (error) {
+    return {
+      status: 500,
+      body: JSON.stringify({ error: error.message }),
+      contentType: "application/json",
+    };
+  }
 }
 
 // Initialization function
 function init(context) {
-    writeLog('Initializing editor.js at ' + new Date().toISOString());
-    register('/editor', 'serveEditor', 'GET');
-    register('/api/scripts', 'apiListScripts', 'GET');
-    register('/api/scripts/*', 'apiGetScript', 'GET');
-    register('/api/scripts/*', 'apiSaveScript', 'POST');
-    register('/api/logs', 'apiGetLogs', 'GET');
-    register('/api/assets', 'apiGetAssets', 'GET');
-    writeLog('Editor endpoints registered');
-    return { success: true };
+  writeLog("Initializing editor.js at " + new Date().toISOString());
+  register("/editor", "serveEditor", "GET");
+  register("/api/scripts", "apiListScripts", "GET");
+  register("/api/scripts/*", "apiGetScript", "GET");
+  register("/api/scripts/*", "apiSaveScript", "POST");
+  register("/api/logs", "apiGetLogs", "GET");
+  register("/api/assets", "apiGetAssets", "GET");
+  writeLog("Editor endpoints registered");
+  return { success: true };
 }

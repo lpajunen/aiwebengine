@@ -2,7 +2,7 @@
 // This script registers a /blog endpoint that serves a sample blog post
 
 function blog_handler(req) {
-    const html = `<!DOCTYPE html>
+  const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -136,12 +136,12 @@ register('/hello', 'hello_handler', 'GET');
 </body>
 </html>`;
 
-    return {
-        status: 200,
-        body: html,
-        contentType: "text/html"
-    };
+  return {
+    status: 200,
+    body: html,
+    contentType: "text/html",
+  };
 }
 
 // Register the blog endpoint
-register('/blog', 'blog_handler', 'GET');
+register("/blog", "blog_handler", "GET");

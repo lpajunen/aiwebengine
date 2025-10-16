@@ -1,12 +1,12 @@
 // GraphQL Script Updates Demo Page
 // This example demonstrates real-time script updates using GraphQL subscriptions
 
-register('/script-updates-demo', 'scriptUpdatesDemoPage', 'GET');
+register("/script-updates-demo", "scriptUpdatesDemoPage", "GET");
 
 function scriptUpdatesDemoPage(req) {
-	return {
-		status: 200,
-		body: `
+  return {
+    status: 200,
+    body: `
 <!DOCTYPE html>
 <html>
 <head>
@@ -335,6 +335,6 @@ function scriptUpdatesDemoPage(req) {
 	</script>
 </body>
 </html>`,
-		contentType: "text/html"
-	};
+    contentType: "text/html",
+  };
 }

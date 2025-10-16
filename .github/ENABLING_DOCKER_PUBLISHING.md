@@ -5,6 +5,7 @@
 🟡 **Docker publishing is DISABLED during development**
 
 The GitHub Actions workflow currently:
+
 - ✅ Builds Docker images on every push
 - ✅ Validates Dockerfile and build process
 - ✅ Uses layer caching for faster builds
@@ -14,6 +15,7 @@ The GitHub Actions workflow currently:
 ## When to Enable Publishing
 
 Enable Docker image publishing when:
+
 - ✅ Version 1.0.0 is ready for release
 - ✅ All security requirements are met
 - ✅ Documentation is complete
@@ -27,6 +29,7 @@ Enable Docker image publishing when:
 Edit `.github/workflows/docker.yml`:
 
 #### 1.1 Update workflow name (line 1)
+
 ```yaml
 # Change from:
 name: Docker Build and Test
@@ -36,13 +39,15 @@ name: Docker Build and Push
 ```
 
 #### 1.2 Enable version tag triggers (line 14-16)
+
 ```yaml
 # Uncomment:
 tags:
-  - 'v*'
+  - "v*"
 ```
 
 #### 1.3 Enable registry login (line 32-39)
+
 ```yaml
 # Uncomment the entire "Log in to Container Registry" step
 - name: Log in to Container Registry
@@ -55,6 +60,7 @@ tags:
 ```
 
 #### 1.4 Enable image push (line 57)
+
 ```yaml
 # Change from:
 push: false
@@ -64,12 +70,14 @@ push: ${{ github.event_name != 'pull_request' }}
 ```
 
 #### 1.5 Remove load option (line 64)
+
 ```yaml
 # Remove this line:
 load: true
 ```
 
 #### 1.6 Enable security scan (lines 76-101)
+
 ```yaml
 # Uncomment the entire "security-scan" job
 security-scan:
@@ -89,7 +97,7 @@ git push origin v1.0.0
 
 After pushing the tag:
 
-1. **Check GitHub Actions**: 
+1. **Check GitHub Actions**:
    - Go to: https://github.com/lpajunen/aiwebengine/actions
    - Verify workflow runs successfully
 
@@ -115,7 +123,8 @@ Update these files to reflect published images:
 3. **DOCKER_QUICK_REFERENCE.md**: Add pull commands
 
 Example README section:
-```markdown
+
+````markdown
 ## Installation
 
 ### Using Docker (Recommended)
@@ -124,7 +133,9 @@ Example README section:
 docker pull ghcr.io/lpajunen/aiwebengine:latest
 docker run -p 3000:3000 ghcr.io/lpajunen/aiwebengine:latest
 ```
-```
+````
+
+````
 
 ## Image Tagging Strategy
 
@@ -159,15 +170,17 @@ Add to workflow after the build step:
   run: |
     echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
     # Set package visibility to private
-```
+````
 
 Then manually set visibility in GitHub:
+
 1. Go to package settings
 2. Change visibility to private
 
 ## Security Scanning
 
 Once publishing is enabled, Trivy will:
+
 - ✅ Scan for CVEs in base images
 - ✅ Scan for vulnerabilities in dependencies
 - ✅ Report to GitHub Security tab
@@ -176,6 +189,7 @@ Once publishing is enabled, Trivy will:
 ### To make security scan required:
 
 Change in workflow:
+
 ```yaml
 security-scan:
   runs-on: ubuntu-latest
@@ -188,6 +202,7 @@ security-scan:
 To test publishing without making it permanent:
 
 1. Create a test tag:
+
    ```bash
    git tag v0.9.0-beta
    git push origin v0.9.0-beta
@@ -198,6 +213,7 @@ To test publishing without making it permanent:
 3. Verify everything works
 
 4. Delete the test tag and image:
+
    ```bash
    git tag -d v0.9.0-beta
    git push --delete origin v0.9.0-beta
@@ -215,7 +231,8 @@ To test publishing without making it permanent:
 ### Image not visible in registry
 
 **Problem**: Image is built but not showing up
-**Solution**: 
+**Solution**:
+
 - Check workflow logs
 - Verify `push: true` is set
 - Ensure login step succeeded
@@ -224,6 +241,7 @@ To test publishing without making it permanent:
 
 **Problem**: Trivy finds vulnerabilities
 **Solution**:
+
 - Review security report in GitHub Security tab
 - Update base image in Dockerfile
 - Update dependencies in Cargo.toml
@@ -272,6 +290,7 @@ git push origin v1.0.0
 ## Support
 
 If you encounter issues enabling publishing:
+
 - Check GitHub Actions logs
 - Review workflow syntax
 - Check GitHub token permissions

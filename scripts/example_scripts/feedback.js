@@ -2,7 +2,7 @@
 // This script registers a /feedback endpoint with GET (form) and POST (submission) handlers
 
 function feedback_form_handler(req) {
-    const html = `<!DOCTYPE html>
+  const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -178,30 +178,30 @@ function feedback_form_handler(req) {
 </body>
 </html>`;
 
-    return {
-        status: 200,
-        body: html,
-        contentType: "text/html"
-    };
+  return {
+    status: 200,
+    body: html,
+    contentType: "text/html",
+  };
 }
 
 function feedback_submit_handler(req) {
-    // Extract form data
-    let name = req.form?.name || 'Anonymous';
-    let email = req.form?.email || '';
-    let rating = req.form?.rating || '5';
-    let category = req.form?.category || 'general';
-    let message = req.form?.message || '';
+  // Extract form data
+  let name = req.form?.name || "Anonymous";
+  let email = req.form?.email || "";
+  let rating = req.form?.rating || "5";
+  let category = req.form?.category || "general";
+  let message = req.form?.message || "";
 
-    // Log the feedback (in a real app, you'd store this in a database)
-    writeLog('Feedback received:');
-    writeLog('Name: ' + name);
-    writeLog('Email: ' + email);
-    writeLog('Rating: ' + rating);
-    writeLog('Category: ' + category);
-    writeLog('Message: ' + message);
+  // Log the feedback (in a real app, you'd store this in a database)
+  writeLog("Feedback received:");
+  writeLog("Name: " + name);
+  writeLog("Email: " + email);
+  writeLog("Rating: " + rating);
+  writeLog("Category: " + category);
+  writeLog("Message: " + message);
 
-    const thankYouHtml = `<!DOCTYPE html>
+  const thankYouHtml = `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -273,13 +273,13 @@ function feedback_submit_handler(req) {
 </body>
 </html>`;
 
-    return {
-        status: 200,
-        body: thankYouHtml,
-        contentType: "text/html"
-    };
+  return {
+    status: 200,
+    body: thankYouHtml,
+    contentType: "text/html",
+  };
 }
 
 // Register both GET (form) and POST (submission) handlers
-register('/feedback', 'feedback_form_handler', 'GET');
-register('/feedback', 'feedback_submit_handler', 'POST');
+register("/feedback", "feedback_form_handler", "GET");
+register("/feedback", "feedback_submit_handler", "POST");

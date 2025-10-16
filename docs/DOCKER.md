@@ -23,12 +23,14 @@ This guide explains how to deploy aiwebengine using Docker and Docker Compose.
 ### Production Deployment
 
 1. **Clone the repository:**
+
    ```bash
    git clone <repository-url>
    cd aiwebengine
    ```
 
 2. **Configure environment variables:**
+
    ```bash
    cp .env.example .env
    # Edit .env and set your OAuth credentials and secrets
@@ -36,11 +38,13 @@ This guide explains how to deploy aiwebengine using Docker and Docker Compose.
    ```
 
 3. **Build and start the services:**
+
    ```bash
    docker-compose up -d
    ```
 
 4. **Check the logs:**
+
    ```bash
    docker-compose logs -f aiwebengine
    ```
@@ -58,6 +62,7 @@ docker-compose -f docker-compose.dev.yml up
 ```
 
 This will start the development server with:
+
 - Hot-reload on code changes
 - Debug logging enabled
 - Source code mounted as volumes
@@ -105,17 +110,19 @@ docker-compose down -v
 ### Production Configuration
 
 1. **Create a production config file:**
+
    ```bash
    cp config.example.yaml config.prod.toml
    # Edit config.prod.toml for production settings
    ```
 
 2. **Set environment variables in `.env`:**
+
    ```bash
    # Required for OAuth
    GOOGLE_CLIENT_ID=your-actual-client-id
    GOOGLE_CLIENT_SECRET=your-actual-secret
-   
+
    # Generate strong secrets
    JWT_SECRET=$(openssl rand -base64 32)
    SESSION_SECRET=$(openssl rand -base64 32)
@@ -192,10 +199,10 @@ Production mounts:
 
 ```yaml
 volumes:
-  - ./logs:/app/logs              # Log persistence
-  - ./scripts:/app/scripts:ro     # Script directory (read-only)
-  - ./data:/app/data              # Database and data files
-  - ./config.prod.toml:/app/config.yaml:ro  # Configuration
+  - ./logs:/app/logs # Log persistence
+  - ./scripts:/app/scripts:ro # Script directory (read-only)
+  - ./data:/app/data # Database and data files
+  - ./config.prod.toml:/app/config.yaml:ro # Configuration
 ```
 
 ## Services
@@ -459,6 +466,7 @@ docker run --rm -v aiwebengine_postgres-data:/data -v $(pwd):/backup \
 ## Support
 
 For issues and questions:
+
 - Check logs: `docker-compose logs -f`
 - Review configuration files
 - Check GitHub issues

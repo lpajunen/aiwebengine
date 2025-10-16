@@ -65,6 +65,9 @@ format-check:
 format-markdown:
 	npx prettier --write "**/*.md"
 
+format-javascript:
+	npx prettier --write "**/*.js"
+
 # Generate test coverage report
 coverage:
 	cargo llvm-cov --all-features --html

@@ -23,49 +23,49 @@ make docker-stop
 
 ### Setup & Build
 
-| Command | Description |
-|---------|-------------|
-| `make docker-setup` | First-time setup (creates .env, builds image) |
-| `make docker-build` | Build production Docker image |
-| `make docker-build-dev` | Build development Docker image |
-| `make docker-env` | Create .env from .env.example |
+| Command                 | Description                                   |
+| ----------------------- | --------------------------------------------- |
+| `make docker-setup`     | First-time setup (creates .env, builds image) |
+| `make docker-build`     | Build production Docker image                 |
+| `make docker-build-dev` | Build development Docker image                |
+| `make docker-env`       | Create .env from .env.example                 |
 
 ### Running Services
 
-| Command | Description |
-|---------|-------------|
-| `make docker-prod` | Start production environment (detached) |
-| `make docker-dev` | Start development environment (attached) |
-| `make docker-dev-bg` | Start development environment (detached) |
-| `make docker-stop` | Stop all Docker containers |
-| `make docker-restart` | Restart production containers |
+| Command               | Description                              |
+| --------------------- | ---------------------------------------- |
+| `make docker-prod`    | Start production environment (detached)  |
+| `make docker-dev`     | Start development environment (attached) |
+| `make docker-dev-bg`  | Start development environment (detached) |
+| `make docker-stop`    | Stop all Docker containers               |
+| `make docker-restart` | Restart production containers            |
 
 ### Logs & Monitoring
 
-| Command | Description |
-|---------|-------------|
-| `make docker-logs` | View production logs (follow) |
+| Command                | Description                    |
+| ---------------------- | ------------------------------ |
+| `make docker-logs`     | View production logs (follow)  |
 | `make docker-logs-dev` | View development logs (follow) |
-| `make docker-logs-all` | View all service logs |
-| `make docker-ps` | Check container status |
-| `make docker-stats` | Show resource usage |
+| `make docker-logs-all` | View all service logs          |
+| `make docker-ps`       | Check container status         |
+| `make docker-stats`    | Show resource usage            |
 
 ### Development
 
-| Command | Description |
-|---------|-------------|
-| `make docker-shell` | Open shell in production container |
+| Command                 | Description                         |
+| ----------------------- | ----------------------------------- |
+| `make docker-shell`     | Open shell in production container  |
 | `make docker-shell-dev` | Open shell in development container |
-| `make docker-test` | Run tests in Docker container |
+| `make docker-test`      | Run tests in Docker container       |
 
 ### Cleanup
 
-| Command | Description |
-|---------|-------------|
-| `make docker-clean` | Stop containers and remove volumes |
-| `make docker-clean-images` | Remove Docker images |
-| `make docker-clean-all` | Full cleanup (containers + images) |
-| `make docker-rebuild` | Rebuild and restart production |
+| Command                    | Description                        |
+| -------------------------- | ---------------------------------- |
+| `make docker-clean`        | Stop containers and remove volumes |
+| `make docker-clean-images` | Remove Docker images               |
+| `make docker-clean-all`    | Full cleanup (containers + images) |
+| `make docker-rebuild`      | Rebuild and restart production     |
 
 ## Raw Docker Commands
 
@@ -120,14 +120,14 @@ POSTGRES_PASSWORD=secure-password
 
 ## Service URLs
 
-| Service | URL | Notes |
-|---------|-----|-------|
-| Application | http://localhost:3000 | Main API |
-| Health Check | http://localhost:3000/health | Status endpoint |
-| PostgreSQL | localhost:5432 | Database (optional) |
-| Redis | localhost:6379 | Cache (optional) |
-| Prometheus | http://localhost:9090 | Metrics (optional) |
-| Grafana | http://localhost:3001 | Dashboards (optional) |
+| Service      | URL                          | Notes                 |
+| ------------ | ---------------------------- | --------------------- |
+| Application  | http://localhost:3000        | Main API              |
+| Health Check | http://localhost:3000/health | Status endpoint       |
+| PostgreSQL   | localhost:5432               | Database (optional)   |
+| Redis        | localhost:6379               | Cache (optional)      |
+| Prometheus   | http://localhost:9090        | Metrics (optional)    |
+| Grafana      | http://localhost:3001        | Dashboards (optional) |
 
 ## Troubleshooting
 
@@ -173,16 +173,16 @@ docker system df
 
 ## Configuration Files
 
-| File | Purpose |
-|------|---------|
-| `Dockerfile` | Production image build |
-| `Dockerfile.dev` | Development image build |
-| `docker-compose.yml` | Production stack |
-| `docker-compose.dev.yml` | Development stack |
-| `.dockerignore` | Files excluded from build |
-| `.env` | Environment variables (create from .env.example) |
-| `config.prod.toml` | Production configuration |
-| `config.dev.toml` | Development configuration |
+| File                     | Purpose                                          |
+| ------------------------ | ------------------------------------------------ |
+| `Dockerfile`             | Production image build                           |
+| `Dockerfile.dev`         | Development image build                          |
+| `docker-compose.yml`     | Production stack                                 |
+| `docker-compose.dev.yml` | Development stack                                |
+| `.dockerignore`          | Files excluded from build                        |
+| `.env`                   | Environment variables (create from .env.example) |
+| `config.prod.toml`       | Production configuration                         |
+| `config.dev.toml`        | Development configuration                        |
 
 ## Best Practices
 
