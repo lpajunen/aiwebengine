@@ -4,7 +4,7 @@ This page showcases practical examples of aiwebengine scripts that demonstrate c
 
 ## Example Resources
 
-- **[Example Scripts Reference](examples/index.md)** - Complete guide to all available example scripts  
+- **[Example Scripts Reference](examples/index.md)** - Complete guide to all available example scripts
 - **[Deployer Tool Guide](examples/deployer.md)** - Learn how to use the deployer for rapid development
 - **[Example Scripts Source Code](../../../scripts/example_scripts/)** - View the actual script files
 

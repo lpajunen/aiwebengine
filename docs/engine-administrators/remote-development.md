@@ -137,8 +137,6 @@ The editor provides REST API endpoints for programmatic access:
 
 ## Next Steps
 
-
 - Learn about [local development](local-development.md) for file-based workflows
 - Check [examples](../solution-developers/examples.md) for script patterns
 - Review [JavaScript APIs](../solution-developers/javascript-apis.md) for available functions
-

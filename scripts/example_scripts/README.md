@@ -15,7 +15,7 @@ Or upload via the built-in editor at http://localhost:3000/editor
 ## Available Scripts
 
 - **blog.js** - Sample blog with modern styling
-- **feedback.js** - Interactive feedback form with GET/POST handling  
+- **feedback.js** - Interactive feedback form with GET/POST handling
 - **graphql_subscription_demo.js** - GraphQL subscription example
 - **script_updates_demo.js** - Script update demonstration
 

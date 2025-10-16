@@ -20,7 +20,7 @@
    - [ ] DevOps/Platform Engineer
    - [ ] Technical Lead/Architect
    - [ ] Product Manager
-   - [ ] Other: ******\_\_\_******
+   - [ ] Other: **\*\***\_\_\_**\*\***
 
 2. **How many years of professional development experience do you have?**
    - [ ] Less than 1 year
@@ -37,7 +37,7 @@
    - [ ] Java
    - [ ] C#/.NET
    - [ ] PHP
-   - [ ] Other: ******\_\_\_******
+   - [ ] Other: **\*\***\_\_\_**\*\***
 
 4. **What web frameworks/platforms do you currently use?** (Select all that apply)
    - [ ] Node.js (Express, Fastify, etc.)
@@ -48,7 +48,7 @@
    - [ ] Spring Boot
    - [ ] ASP.NET
    - [ ] Serverless (AWS Lambda, etc.)
-   - [ ] Other: ******\_\_\_******
+   - [ ] Other: **\*\***\_\_\_**\*\***
 
 ---
 
@@ -63,7 +63,7 @@
    - [ ] Ensuring security best practices
    - [ ] Performance optimization
    - [ ] Deployment and DevOps complexity
-   - [ ] Other: ******\_\_\_******
+   - [ ] Other: **\*\***\_\_\_**\*\***
 
 6. **How much time do you typically spend on initial project setup and configuration?**
    - [ ] Less than 1 hour
@@ -80,7 +80,7 @@
    - [ ] Session management
    - [ ] Input validation
    - [ ] Dependency vulnerabilities
-   - [ ] Other: ******\_\_\_******
+   - [ ] Other: **\*\***\_\_\_**\*\***
 
 ### 2.2 AI-Assisted Development
 
@@ -97,7 +97,7 @@
    - [ ] Claude
    - [ ] Cursor
    - [ ] Amazon CodeWhisperer
-   - [ ] Other: ******\_\_\_******
+   - [ ] Other: **\*\***\_\_\_**\*\***
 
 10. **What are the main challenges when using AI to generate code?**
     - [ ] Generated code lacks security best practices
@@ -107,7 +107,7 @@
     - [ ] Too much boilerplate
     - [ ] Hard to validate correctness
     - [ ] Not applicable / Don't use AI
-    - [ ] Other: ******\_\_\_******
+    - [ ] Other: **\*\***\_\_\_**\*\***
 
 ---
 
@@ -138,7 +138,7 @@
     - [ ] Easy for AI to generate
     - [ ] Quick prototyping
     - [ ] Nothing appeals to me
-    - [ ] Other: ******\_\_\_******
+    - [ ] Other: **\*\***\_\_\_**\*\***
 
 ### 3.2 Real-Time Features
 
@@ -157,7 +157,7 @@
     - [ ] Real-time data feeds
     - [ ] WebSocket-based APIs
     - [ ] Server-Sent Events (SSE)
-    - [ ] Other: ******\_\_\_******
+    - [ ] Other: **\*\***\_\_\_**\*\***
 
 16. **How challenging is implementing real-time features in your current stack?**
     - [ ] Very challenging - significant time investment
@@ -192,7 +192,7 @@
     - [ ] OAuth/OIDC providers
     - [ ] JWT tokens
     - [ ] Session-based
-    - [ ] Other: ******\_\_\_******
+    - [ ] Other: **\*\***\_\_\_**\*\***
 
 20. **Would you trust a platform that handles security automatically (authentication, authorization, input validation)?**
     - [ ] Yes, if well-documented and auditable
@@ -209,7 +209,7 @@
     - [ ] API key authentication
     - [ ] Token refresh mechanisms
     - [ ] Session management
-    - [ ] Other: ******\_\_\_******
+    - [ ] Other: **\*\***\_\_\_**\*\***
 
 ---
 
@@ -232,7 +232,7 @@
     - [ ] Conflict resolution
     - [ ] Activity feeds
     - [ ] Not applicable
-    - [ ] Other: ******\_\_\_******
+    - [ ] Other: **\*\***\_\_\_**\*\***
 
 ### 4.2 Model Context Protocol (MCP)
 
@@ -277,7 +277,7 @@
     - [ ] Better documentation
     - [ ] Lower cost
     - [ ] Active community
-    - [ ] Other: ******\_\_\_******
+    - [ ] Other: **\*\***\_\_\_**\*\***
 
 ---
 
@@ -292,7 +292,7 @@
     - [ ] Platform-as-a-Service (Heroku, Railway, etc.)
     - [ ] Bare metal servers
     - [ ] Edge computing
-    - [ ] Other: ******\_\_\_******
+    - [ ] Other: **\*\***\_\_\_**\*\***
 
 30. **How important is low memory/CPU usage for your applications?**
     - [ ] Critical - we optimize heavily
@@ -316,7 +316,7 @@
     - [ ] Code-based configuration
     - [ ] GUI/dashboard
     - [ ] Infrastructure as Code (Terraform, etc.)
-    - [ ] Other: ******\_\_\_******
+    - [ ] Other: **\*\***\_\_\_**\*\***
 
 33. **What's your preferred deployment method?**
     - [ ] Docker containers
@@ -325,7 +325,7 @@
     - [ ] Platform-specific tools
     - [ ] Kubernetes
     - [ ] Serverless deployment
-    - [ ] Other: ******\_\_\_******
+    - [ ] Other: **\*\***\_\_\_**\*\***
 
 34. **How important is Docker support for your workflow?**
     - [ ] Essential - we use it for everything
@@ -344,7 +344,7 @@
     - [ ] API testing tools
     - [ ] Code generation/scaffolding
     - [ ] Visual editor/GUI
-    - [ ] Other: ******\_\_\_******
+    - [ ] Other: **\*\***\_\_\_**\*\***
 
 ---
 
@@ -357,7 +357,7 @@
     - [ ] Video tutorials
     - [ ] Interactive playground
     - [ ] Community forums
-    - [ ] Other: ******\_\_\_******
+    - [ ] Other: **\*\***\_\_\_**\*\***
 
 37. **What documentation would you need before adopting a new platform?** (Select all that apply)
     - [ ] Quick start guide
@@ -368,7 +368,7 @@
     - [ ] Migration guides
     - [ ] Troubleshooting guides
     - [ ] Performance optimization tips
-    - [ ] Other: ******\_\_\_******
+    - [ ] Other: **\*\***\_\_\_**\*\***
 
 38. **How important is AI-friendly documentation (clear, structured, easy for AI to parse)?**
     - [ ] Very important - I use AI heavily
@@ -396,7 +396,7 @@
     - [ ] AI tool development (MCP servers)
     - [ ] Learning/experimentation
     - [ ] Internal tools
-    - [ ] Other: ******\_\_\_******
+    - [ ] Other: **\*\***\_\_\_**\*\***
 
 41. **What concerns would prevent you from adopting aiwebengine?** (Select all that apply)
     - [ ] Maturity/production readiness
@@ -408,7 +408,7 @@
     - [ ] Vendor lock-in
     - [ ] Documentation gaps
     - [ ] No concerns
-    - [ ] Other: ******\_\_\_******
+    - [ ] Other: **\*\***\_\_\_**\*\***
 
 42. **What price point would you expect for a hosted/managed version of this platform?**
     - [ ] Free tier with paid add-ons
@@ -493,10 +493,10 @@
 
 If you'd like to be contacted about aiwebengine or participate in future research:
 
-- **Name**: ******\_\_\_******
-- **Email**: ******\_\_\_******
-- **Company/Organization**: ******\_\_\_******
-- **Preferred contact method**: ******\_\_\_******
+- **Name**: **\*\***\_\_\_**\*\***
+- **Email**: **\*\***\_\_\_**\*\***
+- **Company/Organization**: **\*\***\_\_\_**\*\***
+- **Preferred contact method**: **\*\***\_\_\_**\*\***
 
 ---
 

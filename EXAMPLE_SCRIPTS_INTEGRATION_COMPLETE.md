@@ -34,27 +34,29 @@ Created `/docs/solution-developers/examples/` to house all example-related docum
 - `README.md` → `index.md` (renamed for clarity)
   - Updated to reference actual script location
   - Added navigation links to other docs
-  
 - `DEPLOYER_README.md` → `deployer.md` (renamed for consistency)
   - Complete deployer tool guide preserved
 
 ### 3. Created New README in Scripts Folder
 
 Created `/scripts/example_scripts/README.md` that:
+
 - Lists available scripts
-- Shows quick start commands  
+- Shows quick start commands
 - Points to documentation in `/docs/solution-developers/examples/`
 - Maintains separation between code and docs
 
 ### 4. Updated Cross-References
 
 **Updated `/docs/solution-developers/examples.md`**:
+
 - Added "Example Resources" section at top
 - Links to example scripts reference
 - Links to deployer guide
 - Links to actual script source code
 
 **Updated `/docs/INDEX.md`**:
+
 - Added entries for Example Scripts Reference
 - Added entry for Deployer Tool
 - All under Solution Developers section
@@ -85,12 +87,14 @@ Solution Developer Journey:
 ### 1. Clear Separation of Concerns
 
 **`/scripts/example_scripts/`**:
+
 - Contains only executable code
 - Ready for deployment
 - Clean, focused directory
 
 **`/docs/solution-developers/examples/`**:
-- Complete documentation  
+
+- Complete documentation
 - Usage guides
 - Learning materials
 
@@ -103,6 +107,7 @@ Solution Developer Journey:
 ### 3. Scalability
 
 Easy to add:
+
 - More example scripts → just add `.js` files
 - More documentation → add `.md` files in `/docs/`
 - Individual script guides → `examples/blog.md`, `examples/feedback.md`, etc.
@@ -110,6 +115,7 @@ Easy to add:
 ### 4. Consistency
 
 Aligns with the overall documentation strategy:
+
 - Role-based organization
 - Documentation separate from implementation
 - Clear navigation paths
@@ -131,6 +137,7 @@ docs/solution-developers/examples/
 ```
 
 Each would include:
+
 - Complete code walkthrough
 - Line-by-line explanations
 - Variations and customizations
@@ -146,6 +153,7 @@ docs/solution-developers/examples/quick-reference.md
 ```
 
 With:
+
 - Cheat sheet of common patterns
 - Code snippets
 - Quick copy-paste examples

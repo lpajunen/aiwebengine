@@ -8,13 +8,13 @@
 
 Understanding the different roles in the aiwebengine ecosystem:
 
-| Role | Description | Primary Activities |
-|------|-------------|-------------------|
-| **End Users** | People using websites, applications, and AI tools built on aiwebengine | Interact with solutions through web browsers or APIs |
-| **Solution Developers** | Developers building solutions (websites, web apps, AI tools) using aiwebengine | Write and edit JavaScript scripts, design application logic, create user interfaces |
-| **Solution Administrators** | People deploying and managing individual solutions built on aiwebengine | Configure solution settings, monitor performance, manage deployments |
-| **Engine Administrators** | People deploying and managing aiwebengine instances | Install and configure aiwebengine, manage infrastructure, ensure security and availability |
-| **Engine Contributors** | Developers contributing to the aiwebengine core project | Implement features, fix bugs, improve performance, enhance documentation |
+| Role                        | Description                                                                    | Primary Activities                                                                         |
+| --------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| **End Users**               | People using websites, applications, and AI tools built on aiwebengine         | Interact with solutions through web browsers or APIs                                       |
+| **Solution Developers**     | Developers building solutions (websites, web apps, AI tools) using aiwebengine | Write and edit JavaScript scripts, design application logic, create user interfaces        |
+| **Solution Administrators** | People deploying and managing individual solutions built on aiwebengine        | Configure solution settings, monitor performance, manage deployments                       |
+| **Engine Administrators**   | People deploying and managing aiwebengine instances                            | Install and configure aiwebengine, manage infrastructure, ensure security and availability |
+| **Engine Contributors**     | Developers contributing to the aiwebengine core project                        | Implement features, fix bugs, improve performance, enhance documentation                   |
 
 **Note**: The same person may fulfill multiple roles. For example, a Solution Developer might also be an Engine Administrator for their deployment.
 

@@ -33,6 +33,7 @@ docs/
 **File:** `/docs/INDEX.md`
 
 Features:
+
 - Complete inventory of all current documentation
 - Organized by user role (Solution Developers, Engine Administrators, Engine Contributors)
 - Engine Contributors split into Planning and Implementation sections
@@ -45,6 +46,7 @@ Features:
 **File:** `/archive/README.md`
 
 Documents:
+
 - What's in the archive and why
 - When to archive documents
 - When to reference archived documents
@@ -63,10 +65,12 @@ Documents:
 ### Root-Level Documents (Still Active)
 
 **For All Users:**
+
 - `README.md` - Project overview and quick start
 - `LICENSE` - Project license
 
 **For Engine Contributors - Planning:**
+
 - `REQUIREMENTS.md` - Core requirements ✅
 - `USE_CASES.md` - Use case documentation ✅
 - `SECURITY_ANALYSIS.md` - Security architecture ✅
@@ -74,6 +78,7 @@ Documents:
 - `CUSTOMER_SURVEY.md` - Customer research ⚠️
 
 **For Engine Contributors - Implementing:**
+
 - `TODO.md` - Development roadmap ✅
 - `DEVELOPMENT.md` - Development guidelines ✅
 - `SECURITY_TODO.md` - Security tasks ✅
@@ -81,6 +86,7 @@ Documents:
 - `URGENT_TODO.md` - High-priority tasks ⚠️
 
 **For Engine Administrators:**
+
 - `DOCKER_QUICK_REFERENCE.md` - Docker commands ✅
 - `DOCKER_PUBLISHING_STATUS.md` - Docker image info ⚠️
 
@@ -89,6 +95,7 @@ Documents:
 Current location: `/docs/`
 
 **Solution Developers:**
+
 - `APP_DEVELOPMENT.md` ✅
 - `javascript-apis.md` ✅
 - `AUTH_JS_API.md` ✅
@@ -98,12 +105,14 @@ Current location: `/docs/`
 - `EDITOR_README.md` ✅
 
 **Engine Administrators:**
+
 - `DOCKER.md` ✅
 - `CONFIGURATION.md` ✅
 - `local-development.md` ✅
 - `remote-development.md` ✅
 
 **Needs Review:**
+
 - `README.md` - Old docs overview ⚠️
 
 ## 🎯 Next Steps (For Review)
@@ -122,13 +131,14 @@ Once you approve the structure, we can:
 ### Phase 3: Content Review & Consolidation
 
 1. Review documents marked ⚠️ for updates or consolidation
-2. Consolidate DOCKER_*.md files if needed
-3. Review and update *_TODO.md files
+2. Consolidate DOCKER\_\*.md files if needed
+3. Review and update \*\_TODO.md files
 4. Update outdated content
 
 ### Phase 4: Add Missing Documentation
 
 Based on roles, identify and create missing docs:
+
 - Solution deployment guides
 - API reference improvements
 - Troubleshooting guides
