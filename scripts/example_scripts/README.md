@@ -1,93 +1,29 @@
 # Example Scripts
 
-This directory contains example JavaScript scripts that demonstrate how to create external scripts for aiwebengine. These scripts can be uploaded via the HTTP API or GraphQL API to extend the server's functionality.
+This folder contains working example JavaScript scripts for aiwebengine.
 
-## How to Upload Scripts
+## Quick Start
 
-### Via HTTP API
+Deploy scripts using the deployer tool:
 
 ```bash
-# Upload a script
-curl -X POST http://localhost:3000/api/scripts \
-  -F "uri=https://example.com/my-script" \
-  -F "content=<script_content>"
+cargo run --bin deployer --uri "https://example.com/blog" --file "scripts/example_scripts/blog.js"
 ```
 
-### Via the Built-in Editor
+Or upload via the built-in editor at http://localhost:3000/editor
 
-1. Open the editor at `http://localhost:3000/editor`
-2. Navigate to the Scripts tab
-3. Click "New Script"
-4. Paste your JavaScript code
-5. Save the script
+## Available Scripts
 
-## Available Examples
+- **blog.js** - Sample blog with modern styling
+- **feedback.js** - Interactive feedback form with GET/POST handling  
+- **graphql_subscription_demo.js** - GraphQL subscription example
+- **script_updates_demo.js** - Script update demonstration
 
-### blog.js
+## Documentation
 
-- **Endpoint**: `/blog`
-- **Method**: GET
-- **Description**: Serves a sample blog post about aiwebengine capabilities with modern styling
-- **Features**: HTML templating, CSS styling, feature showcase
+For complete documentation, see:
 
-### feedback.js
+- [Example Scripts Reference](../../docs/solution-developers/examples/index.md)
+- [Deployer Tool Guide](../../docs/solution-developers/examples/deployer.md)
 
-- **Endpoints**: `/feedback`
-- **Methods**: GET (form), POST (submission)
-- **Description**: A complete feedback form with rating system and submission handling
-- **Features**: Form handling, POST data processing, HTML responses, logging
-
-## Script Structure
-
-Each script follows this basic pattern:
-
-```javascript
-// Define handler functions
-function my_handler(req) {
-  // Process the request
-  // req contains: path, method, query, form, etc.
-
-  return {
-    status: 200, // HTTP status code
-    body: "response", // Response content
-    contentType: "text/html", // Optional content type
-  };
-}
-
-// Register routes
-register("/my-endpoint", "my_handler", "GET");
-register("/my-endpoint", "my_handler", "POST");
-```
-
-## Request Object
-
-The `req` parameter contains:
-
-- `path`: The request path
-- `method`: HTTP method (GET, POST, etc.)
-- `query`: Query parameters object
-- `form`: Form data object (for POST requests)
-- `headers`: Request headers
-
-## Response Object
-
-Return an object with:
-
-- `status`: HTTP status code (required)
-- `body`: Response content (required)
-- `contentType`: MIME type (optional, defaults to "text/plain")
-
-## Built-in Functions
-
-- `register(path, handlerFunction, method)`: Register a route
-- `writeLog(message)`: Write to the server log
-- `JSON.stringify(obj)`: Convert objects to JSON strings
-
-## Testing the Examples
-
-1. Start the aiwebengine server
-2. Upload the example scripts via the editor or API
-3. Visit `http://localhost:3000/blog` to see the blog
-4. Visit `http://localhost:3000/feedback` to test the feedback form
-
-These examples demonstrate the power and flexibility of aiwebengine's JavaScript execution environment!
+All documentation has been moved to `/docs/solution-developers/examples/` for better organization.

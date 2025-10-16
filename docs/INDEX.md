@@ -14,6 +14,8 @@ Building websites, APIs, web applications, and AI tools on aiwebengine.
 | [JavaScript APIs](solution-developers/javascript-apis.md) | ✅ Current | Available JavaScript APIs for solution development |
 | [Authentication API](solution-developers/AUTH_JS_API.md) | ✅ Current | JavaScript authentication and authorization APIs |
 | [Examples](solution-developers/examples.md) | ✅ Current | Code examples and common patterns |
+| [Example Scripts Reference](solution-developers/examples/index.md) | ✅ Current | Guide to all example scripts in `/scripts/example_scripts/` |
+| [Deployer Tool](solution-developers/examples/deployer.md) | ✅ Current | Deployer tool for rapid development |
 | [GraphQL Subscriptions](solution-developers/graphql-subscriptions.md) | ✅ Current | Real-time GraphQL subscription support |
 | [Streaming](solution-developers/streaming.md) | ✅ Current | Server-sent events and streaming responses |
 | [Editor Guide](solution-developers/EDITOR_README.md) | ✅ Current | Using the built-in script editor |
