@@ -1,8 +1,6 @@
 // GraphQL Script Updates Demo Page
 // This example demonstrates real-time script updates using GraphQL subscriptions
 
-register("/script-updates-demo", "scriptUpdatesDemoPage", "GET");
-
 function scriptUpdatesDemoPage(req) {
   return {
     status: 200,
@@ -337,4 +335,30 @@ function scriptUpdatesDemoPage(req) {
 </html>`,
     contentType: "text/html",
   };
+}
+
+// Initialization function - called when script is loaded or updated
+function init(context) {
+  try {
+    writeLog(
+      `Initializing script_updates_demo.js script at ${new Date().toISOString()}`,
+    );
+    writeLog(`Init context: ${JSON.stringify(context)}`);
+
+    // Register the demo page endpoint
+    register("/script-updates-demo", "scriptUpdatesDemoPage", "GET");
+
+    writeLog("Script updates demo script initialized successfully");
+
+    return {
+      success: true,
+      message: "Script updates demo script initialized successfully",
+      registeredEndpoints: 1,
+    };
+  } catch (error) {
+    writeLog(
+      `Script updates demo script initialization failed: ${error.message}`,
+    );
+    throw error;
+  }
 }

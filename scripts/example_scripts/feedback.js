@@ -280,6 +280,25 @@ function feedback_submit_handler(req) {
   };
 }
 
-// Register both GET (form) and POST (submission) handlers
-register("/feedback", "feedback_form_handler", "GET");
-register("/feedback", "feedback_submit_handler", "POST");
+// Initialization function - called when script is loaded or updated
+function init(context) {
+  try {
+    writeLog(`Initializing feedback.js script at ${new Date().toISOString()}`);
+    writeLog(`Init context: ${JSON.stringify(context)}`);
+
+    // Register both GET (form) and POST (submission) handlers
+    register("/feedback", "feedback_form_handler", "GET");
+    register("/feedback", "feedback_submit_handler", "POST");
+
+    writeLog("Feedback script initialized successfully");
+
+    return {
+      success: true,
+      message: "Feedback script initialized successfully",
+      registeredEndpoints: 2,
+    };
+  } catch (error) {
+    writeLog(`Feedback script initialization failed: ${error.message}`);
+    throw error;
+  }
+}

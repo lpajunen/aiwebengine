@@ -1,20 +1,6 @@
 // GraphQL Subscription Example with Streaming
 // This script shows how to create GraphQL subscriptions that work with Server-Sent Events
 
-// Register a GraphQL subscription
-registerGraphQLSubscription(
-  "liveMessages",
-  "type Subscription { liveMessages: String }",
-  "liveMessagesResolver",
-);
-
-// Register a GraphQL mutation to trigger the subscription
-registerGraphQLMutation(
-  "sendMessage",
-  "type Mutation { sendMessage(text: String!): String }",
-  "sendMessageResolver",
-);
-
 // The subscription resolver - called when a client subscribes
 function liveMessagesResolver() {
   writeLog("Client subscribed to liveMessages");
@@ -46,9 +32,6 @@ function sendMessageResolver(args) {
 // Optional: You can also use the lower-level API
 // sendStreamMessageToPath("/graphql/subscription/liveMessages", JSON.stringify(messageData));
 
-// Register HTTP endpoints for testing
-register("/trigger-message", "triggerMessageHandler", "POST");
-
 function triggerMessageHandler(req) {
   const message = req.body || "Hello from HTTP trigger!";
 
@@ -61,9 +44,6 @@ function triggerMessageHandler(req) {
     contentType: "application/json",
   };
 }
-
-// Test page to demonstrate subscription usage
-register("/subscription-demo", "subscriptionDemoPage", "GET");
 
 function subscriptionDemoPage(req) {
   return {
@@ -257,4 +237,46 @@ function subscriptionDemoPage(req) {
   };
 }
 
-writeLog("GraphQL subscription example script loaded successfully");
+// Initialization function - called when script is loaded or updated
+function init(context) {
+  try {
+    writeLog(
+      `Initializing graphql_subscription_demo.js script at ${new Date().toISOString()}`,
+    );
+    writeLog(`Init context: ${JSON.stringify(context)}`);
+
+    // Register a GraphQL subscription
+    registerGraphQLSubscription(
+      "liveMessages",
+      "type Subscription { liveMessages: String }",
+      "liveMessagesResolver",
+    );
+
+    // Register a GraphQL mutation to trigger the subscription
+    registerGraphQLMutation(
+      "sendMessage",
+      "type Mutation { sendMessage(text: String!): String }",
+      "sendMessageResolver",
+    );
+
+    // Register HTTP endpoints for testing
+    register("/trigger-message", "triggerMessageHandler", "POST");
+
+    // Test page to demonstrate subscription usage
+    register("/subscription-demo", "subscriptionDemoPage", "GET");
+
+    writeLog("GraphQL subscription example script initialized successfully");
+
+    return {
+      success: true,
+      message: "GraphQL subscription example script initialized successfully",
+      registeredEndpoints: 2,
+      registeredGraphQLOperations: 2,
+    };
+  } catch (error) {
+    writeLog(
+      `GraphQL subscription example script initialization failed: ${error.message}`,
+    );
+    throw error;
+  }
+}
