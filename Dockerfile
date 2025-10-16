@@ -24,8 +24,10 @@ RUN mkdir -p src/bin && \
     cargo build --release && \
     rm -rf src
 
-# Copy source code
+# Copy source code and compile-time assets
 COPY src ./src
+COPY scripts ./scripts
+COPY assets ./assets
 COPY tests ./tests
 
 # Build the actual application
