@@ -66,7 +66,14 @@ The project roadmap includes planned enhancements such as:
 
 ### Documentation
 
-For comprehensive development guidance, including detailed API documentation, examples, and best practices, please refer to our [Developer Guide](docs/APP_DEVELOPMENT.md).
+Comprehensive documentation is available for all user roles:
+
+- **📚 [Documentation Index](docs/INDEX.md)** - Complete guide to all documentation
+- **👥 Solution Developers** - [Getting Started Guide](docs/APP_DEVELOPMENT.md)
+- **🔧 Engine Administrators** - [Docker Deployment](docs/DOCKER.md) | [Configuration](docs/CONFIGURATION.md)
+- **🛠️ Engine Contributors** - [Requirements](REQUIREMENTS.md) | [Development Roadmap](TODO.md)
+
+For quick reference, see the role-based organization in the [Documentation Index](docs/INDEX.md).
 
 ### Installation
 
