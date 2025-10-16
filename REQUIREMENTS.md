@@ -1508,7 +1508,7 @@ The project MUST maintain code quality:
 ### REQ-DEV-007: Development Tooling
 
 **Priority**: MEDIUM
-**Status**: PLANNED
+**Status**: IMPLEMENTED
 
 The project SHOULD provide development tools:
 
@@ -1521,7 +1521,7 @@ The project SHOULD provide development tools:
 ### REQ-DEV-008: Development Environment
 
 **Priority**: MEDIUM
-**Status**: PLANNED
+**Status**: IMPLEMENTED
 
 The project SHOULD ensure environment consistency:
 
@@ -1884,7 +1884,7 @@ The project MUST:
 ### REQ-DEPLOY-002: Container Support
 
 **Priority**: MEDIUM  
-**Status**: PLANNED
+**Status**: IMPLEMENTED
 
 The project SHOULD:
 

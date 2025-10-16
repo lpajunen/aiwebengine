@@ -59,6 +59,40 @@ cargo build --release
 cargo run
 ```
 
+### Docker Deployment
+
+The easiest way to get started is with Docker:
+
+```bash
+# Quick start with Docker Compose
+make docker-setup
+make docker-prod
+
+# Or manually
+cp .env.example .env
+# Edit .env with your configuration
+docker-compose up -d
+```
+
+For detailed Docker deployment instructions, see [docs/DOCKER.md](docs/DOCKER.md).
+
+### Development
+
+For local development:
+
+```bash
+# Install development tools
+make deps
+
+# Run development server with hot-reload
+make dev
+
+# Or use Docker for development
+make docker-dev
+```
+
+See [docs/local-development.md](docs/local-development.md) for more details.
+
 ## Architecture
 
 The engine consists of several key components:

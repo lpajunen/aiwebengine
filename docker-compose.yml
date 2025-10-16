@@ -1,0 +1,129 @@
+version: '3.8'
+
+services:
+  # Production deployment
+  aiwebengine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aiwebengine
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      # Persist logs
+      - ./logs:/app/logs
+      # Persist scripts
+      - ./scripts:/app/scripts:ro
+      # Persist database
+      - ./data:/app/data
+      # Mount custom configuration
+      - ./config.prod.toml:/app/config.yaml:ro
+    environment:
+      - RUST_LOG=info
+      - CONFIG_FILE=/app/config.yaml
+      # OAuth configuration (set these in .env file)
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID:-}
+      - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET:-}
+      - APPLE_CLIENT_ID=${APPLE_CLIENT_ID:-}
+      - APPLE_CLIENT_SECRET=${APPLE_CLIENT_SECRET:-}
+      - JWT_SECRET=${JWT_SECRET:-change-this-in-production}
+      - SESSION_SECRET=${SESSION_SECRET:-change-this-in-production}
+    networks:
+      - aiwebengine-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  # Optional: PostgreSQL database (if using postgres instead of sqlite)
+  postgres:
+    image: postgres:16-alpine
+    container_name: aiwebengine-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=aiwebengine
+      - POSTGRES_USER=aiwebengine
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-change-this-password}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - aiwebengine-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aiwebengine"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Uncomment to expose PostgreSQL port
+    # ports:
+    #   - "5432:5432"
+
+  # Optional: Redis for caching and session storage (future enhancement)
+  redis:
+    image: redis:7-alpine
+    container_name: aiwebengine-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    networks:
+      - aiwebengine-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Uncomment to expose Redis port
+    # ports:
+    #   - "6379:6379"
+
+  # Optional: Prometheus for metrics (future enhancement)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: aiwebengine-prometheus
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - aiwebengine-network
+    ports:
+      - "9090:9090"
+    depends_on:
+      - aiwebengine
+
+  # Optional: Grafana for visualization (future enhancement)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: aiwebengine-grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    networks:
+      - aiwebengine-network
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+
+networks:
+  aiwebengine-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:
+  prometheus-data:
+  grafana-data:

@@ -1,0 +1,91 @@
+# Git
+.git
+.gitignore
+
+# Documentation and markdown files
+*.md
+docs/
+TODO.md
+URGENT_TODO.md
+AUTH_TODO.md
+SECURITY_TODO.md
+DEVELOPMENT.md
+REQUIREMENTS.md
+REQUIREMENTS_*.md
+PHASE_*.md
+FIXES_APPLIED.md
+TEST_*.md
+SCRIPT_INIT_IMPLEMENTATION_PLAN.md
+RUST_VS_JS_SECURITY_ANALYSIS.md
+SECURITY_ANALYSIS.md
+EDITOR_API_FIX.md
+QUICK_START_TEST_FIX.md
+CACHED_REGISTRATIONS_IMPLEMENTATION.md
+MISSING_AUTH_COMPONENTS.md
+USE_CASES.md
+
+# Rust build artifacts
+target/
+**/*.rs.bk
+*.pdb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Data and database files
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Environment files
+.env
+.env.*
+
+# Test artifacts
+.coverage
+htmlcov/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Lock files (we copy these explicitly)
+# Cargo.lock is needed for reproducible builds
+
+# Config files (we copy specific ones)
+config.*.toml
+config.*.yaml
+!config.example.yaml
+
+# Scripts (mounted as volume in production)
+# scripts/
+
+# Makefile
+Makefile
+
+# Editor temporary files
+.cargo/
+.config/
