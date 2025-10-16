@@ -16,9 +16,11 @@ WORKDIR /app
 # Copy dependency manifests
 COPY Cargo.toml Cargo.lock ./
 
-# Create a dummy main to cache dependencies
-RUN mkdir src && \
-    echo "fn main() {}" > src/main.rs && \
+# Create dummy source files to cache dependencies
+RUN mkdir -p src/bin && \
+    echo "fn main() {}" > src/lib.rs && \
+    echo "fn main() {}" > src/bin/server.rs && \
+    echo "fn main() {}" > src/bin/deployer.rs && \
     cargo build --release && \
     rm -rf src
 
@@ -27,8 +29,8 @@ COPY src ./src
 COPY tests ./tests
 
 # Build the actual application
-RUN touch src/main.rs && \
-    cargo build --release
+RUN touch src/lib.rs src/bin/server.rs && \
+    cargo build --release --bin server
 
 # Runtime stage
 FROM debian:bookworm-slim
@@ -46,7 +48,7 @@ RUN useradd -m -u 1000 -s /bin/bash aiwebengine
 WORKDIR /app
 
 # Copy binary from builder
-COPY --from=builder /app/target/release/aiwebengine /usr/local/bin/aiwebengine
+COPY --from=builder /app/target/release/server /usr/local/bin/aiwebengine
 
 # Create necessary directories
 RUN mkdir -p /app/logs /app/scripts /app/assets /app/data && \
