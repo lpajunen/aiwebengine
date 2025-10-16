@@ -2,11 +2,34 @@
 
 ## Overview
 
-**aiwebengine** is a lightweight web application engine built in Rust that enables developers to create dynamic web content using JavaScript scripts. The project leverages the QuickJS JavaScript runtime to provide a simple yet powerful platform for building web applications with minimal overhead.
+**aiwebengine** is a lightweight web application engine built in Rust that enables developers to create secure solutions using JavaScript scripts. The project leverages the QuickJS JavaScript runtime to provide a simple yet powerful platform for building websites, GraphQL APIs, web applications, and AI tools with minimal overhead.
+
+## User Roles
+
+Understanding the different roles in the aiwebengine ecosystem:
+
+| Role | Description | Primary Activities |
+|------|-------------|-------------------|
+| **End Users** | People using websites, applications, and AI tools built on aiwebengine | Interact with solutions through web browsers or APIs |
+| **Solution Developers** | Developers building solutions (websites, web apps, AI tools) using aiwebengine | Write and edit JavaScript scripts, design application logic, create user interfaces |
+| **Solution Administrators** | People deploying and managing individual solutions built on aiwebengine | Configure solution settings, monitor performance, manage deployments |
+| **Engine Administrators** | People deploying and managing aiwebengine instances | Install and configure aiwebengine, manage infrastructure, ensure security and availability |
+| **Engine Contributors** | Developers contributing to the aiwebengine core project | Implement features, fix bugs, improve performance, enhance documentation |
+
+**Note**: The same person may fulfill multiple roles. For example, a Solution Developer might also be an Engine Administrator for their deployment.
+
+### What are "Solutions"?
+
+In the context of aiwebengine, a **solution** refers to any website, GraphQL API, web application, or AI tool built using the engine. Solutions are created by writing JavaScript scripts that handle HTTP requests, process data, and generate responses. Examples include:
+
+- Public-facing websites and blogs
+- RESTful and GraphQL APIs
+- AI-powered tools and services
+- Custom web applications with dynamic content
 
 ## Key Features
 
-- **JavaScript-Powered Content Creation**: Write web application logic using familiar JavaScript syntax
+- **JavaScript-Powered Solutions**: Build complete solutions using familiar JavaScript syntax
 - **Lightweight Architecture**: Built with Rust for high performance and low resource consumption
 - **Embedded JavaScript Runtime**: Utilizes QuickJS for efficient server-side JavaScript execution
 - **RESTful API Support**: Handle HTTP requests and responses with JavaScript handlers
