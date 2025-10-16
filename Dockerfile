@@ -2,7 +2,7 @@
 # This Dockerfile creates a minimal production image with the aiwebengine server
 
 # Build stage
-FROM rust:1.83-slim-bookworm AS builder
+FROM rustlang/rust:nightly-slim AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
