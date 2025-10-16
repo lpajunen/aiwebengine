@@ -50,7 +50,7 @@ make docker-prod
 make docker-dev
 ```
 
-See **[docs/DOCKER.md](docs/DOCKER.md)** for complete Docker documentation.
+See **[DOCKER.md](DOCKER.md)** for complete Docker documentation.
 
 ---
 

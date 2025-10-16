@@ -10,15 +10,15 @@ Building websites, APIs, web applications, and AI tools on aiwebengine.
 
 | Document | Status | Description |
 |----------|--------|-------------|
-| [Getting Started](APP_DEVELOPMENT.md) | ✅ Current | Complete guide to building solutions with aiwebengine |
-| [JavaScript APIs](javascript-apis.md) | ✅ Current | Available JavaScript APIs for solution development |
-| [Authentication API](AUTH_JS_API.md) | ✅ Current | JavaScript authentication and authorization APIs |
-| [Examples](examples.md) | ✅ Current | Code examples and common patterns |
-| [GraphQL Subscriptions](graphql-subscriptions.md) | ✅ Current | Real-time GraphQL subscription support |
-| [Streaming](streaming.md) | ✅ Current | Server-sent events and streaming responses |
-| [Editor Guide](EDITOR_README.md) | ✅ Current | Using the built-in script editor |
+| [Getting Started](solution-developers/APP_DEVELOPMENT.md) | ✅ Current | Complete guide to building solutions with aiwebengine |
+| [JavaScript APIs](solution-developers/javascript-apis.md) | ✅ Current | Available JavaScript APIs for solution development |
+| [Authentication API](solution-developers/AUTH_JS_API.md) | ✅ Current | JavaScript authentication and authorization APIs |
+| [Examples](solution-developers/examples.md) | ✅ Current | Code examples and common patterns |
+| [GraphQL Subscriptions](solution-developers/graphql-subscriptions.md) | ✅ Current | Real-time GraphQL subscription support |
+| [Streaming](solution-developers/streaming.md) | ✅ Current | Server-sent events and streaming responses |
+| [Editor Guide](solution-developers/EDITOR_README.md) | ✅ Current | Using the built-in script editor |
 
-**📁 Suggested location**: `docs/solution-developers/`
+**📁 Location**: `docs/solution-developers/`
 
 ---
 
@@ -28,14 +28,14 @@ Deploying, configuring, and managing aiwebengine instances.
 
 | Document | Status | Description |
 |----------|--------|-------------|
-| [Docker Deployment](DOCKER.md) | ✅ Current | Complete Docker deployment guide |
-| [Configuration](CONFIGURATION.md) | ✅ Current | Configuration options and environment variables |
-| [Local Development](local-development.md) | ✅ Current | Setting up local development environment |
-| [Remote Development](remote-development.md) | ✅ Current | Remote development and deployment strategies |
-| [Docker Quick Reference](../DOCKER_QUICK_REFERENCE.md) | ✅ Current | Quick Docker commands and troubleshooting |
-| [Docker Publishing Status](../DOCKER_PUBLISHING_STATUS.md) | ⚠️ Review | Docker image publishing information |
+| [Docker Deployment](engine-administrators/DOCKER.md) | ✅ Current | Complete Docker deployment guide |
+| [Configuration](engine-administrators/CONFIGURATION.md) | ✅ Current | Configuration options and environment variables |
+| [Local Development](engine-administrators/local-development.md) | ✅ Current | Setting up local development environment |
+| [Remote Development](engine-administrators/remote-development.md) | ✅ Current | Remote development and deployment strategies |
+| [Docker Quick Reference](engine-administrators/DOCKER_QUICK_REFERENCE.md) | ✅ Current | Quick Docker commands and troubleshooting |
+| [Docker Publishing Status](engine-administrators/DOCKER_PUBLISHING_STATUS.md) | ⚠️ Review | Docker image publishing information |
 
-**📁 Suggested location**: `docs/engine-administrators/`
+**📁 Location**: `docs/engine-administrators/`
 
 ---
 
@@ -47,26 +47,26 @@ Contributing to aiwebengine core development.
 
 | Document | Status | Description |
 |----------|--------|-------------|
-| [Requirements](../REQUIREMENTS.md) | ✅ Current | Core requirements and feature specifications |
-| [Use Cases](../USE_CASES.md) | ✅ Current | User scenarios and use case documentation |
-| [Security Analysis](../SECURITY_ANALYSIS.md) | ✅ Current | Security architecture and analysis |
-| [Rust vs JS Security](../RUST_VS_JS_SECURITY_ANALYSIS.md) | ✅ Current | Security considerations for language boundaries |
-| [Customer Survey](../CUSTOMER_SURVEY.md) | ⚠️ Review | Customer research and feedback |
+| [Requirements](engine-contributors/planning/REQUIREMENTS.md) | ✅ Current | Core requirements and feature specifications |
+| [Use Cases](engine-contributors/planning/USE_CASES.md) | ✅ Current | User scenarios and use case documentation |
+| [Security Analysis](engine-contributors/planning/SECURITY_ANALYSIS.md) | ✅ Current | Security architecture and analysis |
+| [Rust vs JS Security](engine-contributors/planning/RUST_VS_JS_SECURITY_ANALYSIS.md) | ✅ Current | Security considerations for language boundaries |
+| [Customer Survey](engine-contributors/planning/CUSTOMER_SURVEY.md) | ⚠️ Review | Customer research and feedback |
 
-**📁 Suggested location**: `docs/engine-contributors/planning/`
+**📁 Location**: `docs/engine-contributors/planning/`
 
 #### Implementation & Development
 
 | Document | Status | Description |
 |----------|--------|-------------|
-| [TODO / Roadmap](../TODO.md) | ✅ Current | Development roadmap and task tracking |
-| [Development Guide](../DEVELOPMENT.md) | ✅ Current | Core development guidelines and setup |
-| [Security TODO](../SECURITY_TODO.md) | ✅ Current | Security-related implementation tasks |
-| [Auth TODO](../AUTH_TODO.md) | ⚠️ Review | Authentication implementation tasks |
-| [Urgent TODO](../URGENT_TODO.md) | ⚠️ Review | High-priority implementation tasks |
+| [TODO / Roadmap](engine-contributors/implementing/TODO.md) | ✅ Current | Development roadmap and task tracking |
+| [Development Guide](engine-contributors/implementing/DEVELOPMENT.md) | ✅ Current | Core development guidelines and setup |
+| [Security TODO](engine-contributors/implementing/SECURITY_TODO.md) | ✅ Current | Security-related implementation tasks |
+| [Auth TODO](engine-contributors/implementing/AUTH_TODO.md) | ⚠️ Review | Authentication implementation tasks |
+| [Urgent TODO](engine-contributors/implementing/URGENT_TODO.md) | ⚠️ Review | High-priority implementation tasks |
 | [Docs README](README.md) | ⚠️ Review | Documentation overview (needs update) |
 
-**📁 Suggested location**: `docs/engine-contributors/implementing/`
+**📁 Location**: `docs/engine-contributors/implementing/`
 
 ---
 
@@ -99,9 +99,9 @@ These documents provide historical context but are no longer actively maintained
 
 ### If you're new to aiwebengine
 
-1. **Solution Developer?** Start with [Getting Started](APP_DEVELOPMENT.md)
-2. **Administrator?** Check [Docker Deployment](DOCKER.md)
-3. **Contributor?** Read [Requirements](../REQUIREMENTS.md) and [TODO](../TODO.md)
+1. **Solution Developer?** Start with [Getting Started](solution-developers/APP_DEVELOPMENT.md)
+2. **Administrator?** Check [Docker Deployment](engine-administrators/DOCKER.md)
+3. **Contributor?** Read [Requirements](engine-contributors/planning/REQUIREMENTS.md) and [TODO](engine-contributors/implementing/TODO.md)
 
 ### Documentation Improvement Plan
 

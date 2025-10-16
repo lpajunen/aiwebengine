@@ -97,19 +97,19 @@ Want to add real-time features? Here's how to create a live notification system:
 
 ## Documentation Sections
 
-- **[Local Development](local-development.md)**: Setting up your development environment and using the deployer tool
-- **[Remote Development](remote-development.md)**: Using the built-in web editor for script management
-- **[JavaScript APIs](javascript-apis.md)**: Complete reference for available JavaScript functions and objects
-- **[Real-Time Streaming](streaming.md)**: Guide to building live, interactive applications with Server-Sent Events
-- **[Examples](examples.md)**: Sample scripts demonstrating common patterns and use cases
+- **[Local Development](engine-administrators/local-development.md)**: Setting up your development environment and using the deployer tool
+- **[Remote Development](engine-administrators/remote-development.md)**: Using the built-in web editor for script management
+- **[JavaScript APIs](solution-developers/javascript-apis.md)**: Complete reference for available JavaScript functions and objects
+- **[Real-Time Streaming](solution-developers/streaming.md)**: Guide to building live, interactive applications with Server-Sent Events
+- **[Examples](solution-developers/examples.md)**: Sample scripts demonstrating common patterns and use cases
 
 ## Getting Help
 
-- Check the [examples](examples.md) for common patterns
-- Review the [JavaScript APIs](javascript-apis.md) for available functions
-- Learn about [real-time streaming](streaming.md) for interactive features
-- See [local development](local-development.md) for development workflows
-- Use the [remote editor](remote-development.md) for quick prototyping
+- Check the [examples](solution-developers/examples.md) for common patterns
+- Review the [JavaScript APIs](solution-developers/javascript-apis.md) for available functions
+- Learn about [real-time streaming](solution-developers/streaming.md) for interactive features
+- See [local development](engine-administrators/local-development.md) for development workflows
+- Use the [remote editor](engine-administrators/remote-development.md) for quick prototyping
 
 ## Project Status
 

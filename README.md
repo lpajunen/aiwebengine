@@ -69,9 +69,9 @@ The project roadmap includes planned enhancements such as:
 Comprehensive documentation is available for all user roles:
 
 - **📚 [Documentation Index](docs/INDEX.md)** - Complete guide to all documentation
-- **👥 Solution Developers** - [Getting Started Guide](docs/APP_DEVELOPMENT.md)
-- **🔧 Engine Administrators** - [Docker Deployment](docs/DOCKER.md) | [Configuration](docs/CONFIGURATION.md)
-- **🛠️ Engine Contributors** - [Requirements](REQUIREMENTS.md) | [Development Roadmap](TODO.md)
+- **👥 Solution Developers** - [Getting Started Guide](docs/solution-developers/APP_DEVELOPMENT.md)
+- **🔧 Engine Administrators** - [Docker Deployment](docs/engine-administrators/DOCKER.md) | [Configuration](docs/engine-administrators/CONFIGURATION.md)
+- **🛠️ Engine Contributors** - [Requirements](docs/engine-contributors/planning/REQUIREMENTS.md) | [Development Roadmap](docs/engine-contributors/implementing/TODO.md)
 
 For quick reference, see the role-based organization in the [Documentation Index](docs/INDEX.md).
 
@@ -121,7 +121,7 @@ make dev
 make docker-dev
 ```
 
-See [docs/local-development.md](docs/local-development.md) for more details.
+See [docs/engine-administrators/local-development.md](docs/engine-administrators/local-development.md) for more details.
 
 ## Architecture
 
@@ -141,7 +141,7 @@ This project welcomes contributions! As it's in active development, there are ma
 - Add comprehensive tests
 - Enhance performance and security
 
-Please see `TODO.md` for detailed information about planned features and development priorities.
+Please see [docs/engine-contributors/implementing/TODO.md](docs/engine-contributors/implementing/TODO.md) for detailed information about planned features and development priorities.
 
 ## License
 

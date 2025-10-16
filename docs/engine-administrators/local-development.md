@@ -283,6 +283,6 @@ Common issues and solutions:
 
 ## Next Steps
 
-- Check out the [examples](../examples.md) for common patterns
-- Learn about [JavaScript APIs](../javascript-apis.md) for advanced features
-- Try the [remote editor](../remote-development.md) for quick prototyping
+- Check out the [examples](../solution-developers/examples.md) for common patterns
+- Learn about [JavaScript APIs](../solution-developers/javascript-apis.md) for advanced features
+- Try the [remote editor](remote-development.md) for quick prototyping

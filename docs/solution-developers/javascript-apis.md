@@ -347,6 +347,6 @@ function safeHandler(req) {
 
 ## Next Steps
 
-- See [examples](../examples.md) for practical usage patterns
-- Learn about [local development](../local-development.md) workflows
-- Try the [remote editor](../remote-development.md) for testing
+- See [examples](examples.md) for practical usage patterns
+- Learn about [local development](../engine-administrators/local-development.md) workflows
+- Try the [remote editor](../engine-administrators/remote-development.md) for testing
