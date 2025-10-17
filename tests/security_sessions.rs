@@ -1,3 +1,16 @@
+//! Session and Authentication Security Tests
+//!
+//! This module contains all tests related to session management and authentication security:
+//! - Session lifecycle management
+//! - Session fingerprinting and validation
+//! - IP change tolerance
+//! - Concurrent session limits
+//! - Session encryption and integrity
+//! - CSRF token generation and validation
+//! - OAuth state management
+//! - Full authentication flow simulation
+//! - Concurrent user isolation
+
 // Integration tests for Phase 0.5 security modules
 // Tests session management, CSRF protection, and data encryption
 
