@@ -8,31 +8,69 @@ class AIWebEngineEditor {
   }
 
   async init() {
+    console.log('[Editor] Starting initialization...');
     this.compileTemplates();
+    console.log('[Editor] Templates compiled');
     this.setupEventListeners();
-    this.setupMonacoEditor();
+    console.log('[Editor] Event listeners set up');
+    await this.setupMonacoEditor();
+    console.log('[Editor] Monaco editor ready');
     this.loadInitialData();
+    console.log('[Editor] Loading initial data...');
 
     // Auto-refresh logs every 5 seconds
     setInterval(() => this.loadLogs(), 5000);
   }
 
   compileTemplates() {
-    const templateIds = [
-      "script-item-template",
-      "asset-item-template",
-      "log-entry-template",
-      "route-item-template",
-    ];
-
-    templateIds.forEach((id) => {
-      const templateElement = document.getElementById(id);
-      if (templateElement) {
-        this.templates[id.replace("-template", "")] = Handlebars.compile(
-          templateElement.innerHTML,
-        );
-      }
-    });
+    // Using plain JavaScript template functions instead of Handlebars
+    this.templates = {
+      'script-item': (data) => `
+        <div class="script-item ${data.active ? 'active' : ''}" data-script="${data.name}">
+          <div class="script-icon">📄</div>
+          <div class="script-info">
+            <div class="script-name">${data.name}</div>
+            <div class="script-meta">${data.size} bytes</div>
+          </div>
+        </div>
+      `,
+      'asset-item': (data) => `
+        <div class="asset-item" data-path="${data.path}">
+          <div class="asset-preview">
+            ${data.isImage 
+              ? `<img src="/api/assets${data.path}" alt="${data.name}" loading="lazy">`
+              : `<div class="asset-icon">${data.icon}</div>`
+            }
+          </div>
+          <div class="asset-info">
+            <div class="asset-name">${data.name}</div>
+            <div class="asset-meta">${data.size} • ${data.type}</div>
+          </div>
+          <div class="asset-actions">
+            <button class="btn btn-small btn-secondary download-btn" data-path="${data.path}">↓</button>
+            <button class="btn btn-small btn-danger delete-btn" data-path="${data.path}">×</button>
+          </div>
+        </div>
+      `,
+      'log-entry': (data) => `
+        <div class="log-entry log-${data.level}">
+          <span class="log-time">${data.time}</span>
+          <span class="log-level">${data.level}</span>
+          <span class="log-message">${data.message}</span>
+        </div>
+      `,
+      'route-item': (data) => `
+        <div class="route-item">
+          <div class="route-method ${data.method}">${data.method}</div>
+          <div class="route-path">${data.path}</div>
+          <div class="route-handler">${data.handler}</div>
+          <div class="route-actions">
+            <button class="btn btn-small btn-secondary test-btn" data-path="${data.path}" data-method="${data.method}">Test</button>
+          </div>
+        </div>
+      `
+    };
+    console.log('[Editor] Templates compiled (using plain JS)');
   }
 
   setupEventListeners() {
@@ -83,27 +121,31 @@ class AIWebEngineEditor {
 
   async setupMonacoEditor() {
     // Load Monaco Editor
-    require.config({
-      paths: { vs: "https://unpkg.com/monaco-editor@0.45.0/min/vs" },
-    });
+    return new Promise((resolve) => {
+      require.config({
+        paths: { vs: "https://unpkg.com/monaco-editor@0.45.0/min/vs" },
+      });
 
-    require(["vs/editor/editor.main"], () => {
-      this.monacoEditor = monaco.editor.create(
-        document.getElementById("monaco-editor"),
-        {
-          value: "// Select a script to edit",
-          language: "javascript",
-          theme: "vs-dark",
-          fontSize: 14,
-          minimap: { enabled: true },
-          scrollBeyondLastLine: false,
-          automaticLayout: true,
-          wordWrap: "on",
-        },
-      );
+      require(["vs/editor/editor.main"], () => {
+        this.monacoEditor = monaco.editor.create(
+          document.getElementById("monaco-editor"),
+          {
+            value: "// Select a script to edit",
+            language: "javascript",
+            theme: "vs-dark",
+            fontSize: 14,
+            minimap: { enabled: true },
+            scrollBeyondLastLine: false,
+            automaticLayout: true,
+            wordWrap: "on",
+          },
+        );
 
-      this.monacoEditor.onDidChangeModelContent(() => {
-        this.updateSaveButton();
+        this.monacoEditor.onDidChangeModelContent(() => {
+          this.updateSaveButton();
+        });
+        
+        resolve();
       });
     });
   }
@@ -140,9 +182,12 @@ class AIWebEngineEditor {
 
   // Script Management
   async loadScripts() {
+    console.log('[Editor] loadScripts() called');
     try {
       const response = await fetch("/api/scripts");
+      console.log('[Editor] API response status:', response.status);
       const scripts = await response.json();
+      console.log('[Editor] Loaded scripts:', scripts);
 
       const scriptsList = document.getElementById("scripts-list");
       scriptsList.innerHTML = "";
@@ -169,16 +214,23 @@ class AIWebEngineEditor {
   }
 
   async loadScript(scriptName) {
+    console.log('[Editor] loadScript() called for:', scriptName);
     try {
-      const response = await fetch(`/api/scripts/${scriptName}`);
+      const encodedScriptName = encodeURIComponent(scriptName);
+      const response = await fetch(`/api/scripts/${encodedScriptName}`);
+      console.log('[Editor] loadScript response status:', response.status);
       const content = await response.text();
+      console.log('[Editor] Script content length:', content.length);
 
       this.currentScript = scriptName;
       document.getElementById("current-script-name").textContent = scriptName;
 
       if (this.monacoEditor) {
+        console.log('[Editor] Setting Monaco editor value...');
         this.monacoEditor.setValue(content);
         this.updateSaveButton();
+      } else {
+        console.error('[Editor] Monaco editor not available!');
       }
 
       // Update active state in list
@@ -200,8 +252,9 @@ class AIWebEngineEditor {
       ? scriptName
       : scriptName + ".js";
 
-    // Create empty script
-    fetch(`/api/scripts/${fullName}`, {
+    // Create empty script with proper init() pattern
+    const encodedScriptName = encodeURIComponent(fullName);
+    fetch(`/api/scripts/${encodedScriptName}`, {
       method: "POST",
       body: `// ${fullName}
 // New script created at ${new Date().toISOString()}
@@ -214,7 +267,12 @@ function handler(req) {
     };
 }
 
-register('/', 'handler', 'GET');`,
+function init(context) {
+    writeLog('Initializing ${fullName} at ' + new Date().toISOString());
+    register('/', 'handler', 'GET');
+    writeLog('${fullName} endpoints registered');
+    return { success: true };
+}`,
     })
       .then(() => {
         this.loadScripts();
@@ -230,8 +288,9 @@ register('/', 'handler', 'GET');`,
     if (!this.currentScript || !this.monacoEditor) return;
 
     const content = this.monacoEditor.getValue();
+    const encodedScriptName = encodeURIComponent(this.currentScript);
 
-    fetch(`/api/scripts/${this.currentScript}`, {
+    fetch(`/api/scripts/${encodedScriptName}`, {
       method: "POST",
       body: content,
     })
@@ -250,7 +309,8 @@ register('/', 'handler', 'GET');`,
     if (!confirm(`Are you sure you want to delete ${this.currentScript}?`))
       return;
 
-    fetch(`/api/scripts/${this.currentScript}`, {
+    const encodedScriptName = encodeURIComponent(this.currentScript);
+    fetch(`/api/scripts/${encodedScriptName}`, {
       method: "DELETE",
     })
       .then(() => {
@@ -472,6 +532,11 @@ register('/', 'handler', 'GET');`,
 }
 
 // Initialize the editor when the page loads
-document.addEventListener("DOMContentLoaded", () => {
+function initEditor() {
+  console.log('[Editor] initEditor() called, DOM ready');
+  console.log('[Editor] Creating AIWebEngineEditor instance...');
   window.editor = new AIWebEngineEditor();
-});
+}
+
+console.log('[Editor] Script loaded, waiting for DOMContentLoaded...');
+document.addEventListener("DOMContentLoaded", initEditor);

@@ -3,10 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>aiwebengine Editor</title>
+    <title>Editor</title>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <link rel="stylesheet" href="/editor.css">
-    <script src="https://unpkg.com/monaco-editor@0.45.0/min/vs/loader.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/handlebars.js/4.7.7/handlebars.min.js"></script>
 </head>
 <body>
     <div class="editor-container">
@@ -124,56 +123,9 @@
         </footer>
     </div>
 
-    <!-- Templates -->
-    <script id="script-item-template" type="text/x-handlebars-template">
-        <div class="script-item {{#if active}}active{{/if}}" data-script="{{name}}">
-            <div class="script-icon">📄</div>
-            <div class="script-info">
-                <div class="script-name">{{name}}</div>
-                <div class="script-meta">{{size}} bytes</div>
-            </div>
-        </div>
-    </script>
-
-    <script id="asset-item-template" type="text/x-handlebars-template">
-        <div class="asset-item" data-path="{{path}}">
-            <div class="asset-preview">
-                {{#if isImage}}
-                    <img src="/api/assets{{path}}" alt="{{name}}" loading="lazy">
-                {{else}}
-                    <div class="asset-icon">{{icon}}</div>
-                {{/if}}
-            </div>
-            <div class="asset-info">
-                <div class="asset-name">{{name}}</div>
-                <div class="asset-meta">{{size}} • {{type}}</div>
-            </div>
-            <div class="asset-actions">
-                <button class="btn btn-small btn-secondary download-btn" data-path="{{path}}">↓</button>
-                <button class="btn btn-small btn-danger delete-btn" data-path="{{path}}">×</button>
-            </div>
-        </div>
-    </script>
-
-    <script id="log-entry-template" type="text/x-handlebars-template">
-        <div class="log-entry log-{{level}}">
-            <span class="log-time">{{time}}</span>
-            <span class="log-level">{{level}}</span>
-            <span class="log-message">{{message}}</span>
-        </div>
-    </script>
-
-    <script id="route-item-template" type="text/x-handlebars-template">
-        <div class="route-item">
-            <div class="route-method {{method}}">{{method}}</div>
-            <div class="route-path">{{path}}</div>
-            <div class="route-handler">{{handler}}</div>
-            <div class="route-actions">
-                <button class="btn btn-small btn-secondary test-btn" data-path="{{path}}" data-method="{{method}}">Test</button>
-            </div>
-        </div>
-    </script>
-
+    <!-- Load Monaco Editor -->
+    <script src="https://unpkg.com/monaco-editor@0.45.0/min/vs/loader.js"></script>
+    
     <!-- Main JavaScript -->
     <script src="/editor.js"></script>
 </body>

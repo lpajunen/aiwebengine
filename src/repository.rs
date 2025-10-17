@@ -432,6 +432,14 @@ fn get_static_assets() -> HashMap<String, Asset> {
     };
     m.insert("/editor.js".to_string(), editor_js);
 
+    let favicon_content = include_bytes!("../assets/favicon.ico").to_vec();
+    let favicon = Asset {
+        public_path: "/favicon.ico".to_string(),
+        mimetype: "image/x-icon".to_string(),
+        content: favicon_content,
+    };
+    m.insert("/favicon.ico".to_string(), favicon);
+
     m
 }
 
