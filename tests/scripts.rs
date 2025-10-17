@@ -1,8 +1,356 @@
+//! Script Management and Execution Tests
+//!
+//! This module contains all tests related to JavaScript script management and execution:
+//! - QuickJS integration and route registration
+//! - Core script initialization
+//! - Script init() function handling
+//! - JavaScript logging functionality
+//! - Script management API (CRUD operations)
+
 mod common;
 
-use aiwebengine::repository;
+use aiwebengine::js_engine::call_init_if_exists;
+use aiwebengine::repository::{get_script_metadata, upsert_script};
+use aiwebengine::script_init::{InitContext, ScriptInitializer};
+use aiwebengine::{js_engine, repository};
+use common::{TestContext, wait_for_server};
 use std::time::Duration;
 use tokio::time::timeout;
+
+// ============================================================================
+// QuickJS Integration Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_js_registered_route_returns_expected() {
+    let context = TestContext::new();
+    let port = context
+        .start_server()
+        .await
+        .expect("Server failed to start");
+
+    common::wait_for_server(port, 40)
+        .await
+        .expect("Server not ready");
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("Failed to create HTTP client");
+
+    // First verify /health works (confirms core.js is loaded)
+    let health_res = client
+        .get(format!("http://127.0.0.1:{}/health", port))
+        .send()
+        .await
+        .expect("Health check failed");
+
+    assert_eq!(
+        health_res.status(),
+        reqwest::StatusCode::OK,
+        "Health endpoint should be OK"
+    );
+
+    // Test the root endpoint registered by core.js
+    let res = client
+        .get(format!("http://127.0.0.1:{}/", port))
+        .send()
+        .await
+        .expect("Request to / failed");
+
+    let status = res.status();
+    let body = res.text().await.expect("Failed to read response body");
+
+    assert_eq!(
+        status,
+        reqwest::StatusCode::OK,
+        "Expected 200 OK status for /, got {} with body: {}",
+        status,
+        body
+    );
+
+    assert!(
+        body.contains("Core handler: OK"),
+        "Expected 'Core handler: OK' in response, got: {}",
+        body
+    );
+
+    context.cleanup().await.expect("Failed to cleanup");
+}
+
+#[tokio::test]
+async fn test_core_js_registers_root_path() {
+    // Ensure core.js contains a registration for '/'
+    let core = repository::fetch_script("https://example.com/core").expect("core script missing");
+    assert!(
+        core.contains("register('/") || core.contains("register(\"/\""),
+        "core.js must register '/' path"
+    );
+}
+
+// ============================================================================
+// Core Script Initialization Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_core_script_init_called() {
+    let context = TestContext::new();
+
+    let _ = repository::upsert_script(
+        "https://example.com/core",
+        include_str!("../scripts/feature_scripts/core.js"),
+    );
+
+    let port = context
+        .start_server()
+        .await
+        .expect("server failed to start");
+
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+    let client = reqwest::Client::new();
+
+    let init_status_result = repository::get_script_metadata("https://example.com/core");
+    println!("Init status via repository: {:?}", init_status_result);
+
+    let health_response = client
+        .get(format!("http://127.0.0.1:{}/health", port))
+        .send()
+        .await
+        .expect("Health check request failed");
+
+    let status = health_response.status();
+    println!("Health response status: {}", status);
+
+    let health_body = health_response
+        .text()
+        .await
+        .expect("Failed to read health response");
+
+    println!("Health response body: {}", health_body);
+
+    assert_eq!(status, 200, "Health endpoint should return 200");
+
+    context.cleanup().await.expect("Failed to cleanup");
+}
+
+// ============================================================================
+// JavaScript Logging Tests
+// ============================================================================
+
+#[tokio::test]
+async fn js_write_log_and_listlogs() {
+    // upsert the js_log_test script so it registers its routes
+    let _ = repository::upsert_script(
+        "https://example.com/js-log-test",
+        include_str!("../scripts/test_scripts/js_log_test.js"),
+    );
+
+    // Use the new TestContext pattern for proper server lifecycle management
+    let context = common::TestContext::new();
+    let port = context
+        .start_server()
+        .await
+        .expect("Server failed to start");
+
+    // Wait for server to be ready and scripts to be executed
+    common::wait_for_server(port, 40)
+        .await
+        .expect("Server not ready");
+
+    // Give extra time for JavaScript scripts to execute and register routes
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    println!("Server started on port: {}", port);
+
+    let client = reqwest::Client::new();
+
+    // Call the route which should call writeLog with timeout
+    let log_request = client
+        .get(format!("http://127.0.0.1:{}/js-log-test", port))
+        .send();
+
+    let res = match timeout(Duration::from_secs(5), log_request).await {
+        Ok(Ok(response)) => response,
+        Ok(Err(e)) => panic!("Log test request failed: {:?}", e),
+        Err(_) => panic!("Log test request timed out"),
+    };
+
+    let body = match timeout(Duration::from_secs(5), res.text()).await {
+        Ok(Ok(text)) => text,
+        Ok(Err(e)) => panic!("Failed to read log test response: {:?}", e),
+        Err(_) => panic!("Reading log test response timed out"),
+    };
+
+    assert!(
+        body.contains("logged"),
+        "Expected 'logged' in response, got: {}",
+        body
+    );
+
+    // Verify the log message was written via Rust API
+    let msgs = repository::fetch_log_messages("https://example.com/js-log-test");
+    assert!(
+        msgs.iter().any(|m| m == "js-log-test-called"),
+        "Expected log entry 'js-log-test-called' not found in logs: {:?}",
+        msgs
+    );
+
+    // Verify via JS-exposed route that calls listLogs()
+    // Retry a few times to allow any small propagation/timing delays
+    let mut found = false;
+    let mut last_body = String::new();
+
+    for i in 0..10 {
+        let list_request = client
+            .get(format!("http://127.0.0.1:{}/js-list", port))
+            .send();
+
+        let res2 = match timeout(Duration::from_secs(5), list_request).await {
+            Ok(Ok(response)) => response,
+            Ok(Err(e)) => {
+                println!("attempt {}: request failed: {:?}", i, e);
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                continue;
+            }
+            Err(_) => {
+                println!("attempt {}: request timed out", i);
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                continue;
+            }
+        };
+
+        let body2 = match timeout(Duration::from_secs(5), res2.text()).await {
+            Ok(Ok(text)) => text,
+            Ok(Err(e)) => {
+                println!("attempt {}: failed to read response: {:?}", i, e);
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                continue;
+            }
+            Err(_) => {
+                println!("attempt {}: reading response timed out", i);
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                continue;
+            }
+        };
+
+        println!("attempt {}: /js-list -> {}", i, body2);
+        last_body = body2.clone();
+
+        if body2.contains("js-log-test-called") {
+            found = true;
+            break;
+        }
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    if !found {
+        println!("/js-list last body: {}", last_body);
+        context.cleanup().await.expect("Failed to cleanup");
+        panic!(
+            "Expected log entry 'js-log-test-called' not found in /js-list output after 10 attempts"
+        );
+    }
+
+    // Proper cleanup
+    context.cleanup().await.expect("Failed to cleanup");
+}
+
+#[tokio::test]
+async fn js_list_logs_for_uri() {
+    // Insert some test log messages for different URIs
+    repository::insert_log_message("https://example.com/js-log-test-uri", "test-message-1");
+    repository::insert_log_message("https://example.com/js-log-test-uri", "test-message-2");
+    repository::insert_log_message("https://example.com/other-script", "other-message");
+
+    // upsert the js_log_test_uri script so it registers its routes
+    let _ = repository::upsert_script(
+        "https://example.com/js-log-test-uri-script",
+        include_str!("../scripts/test_scripts/js_log_test_uri.js"),
+    );
+
+    // Use the new TestContext pattern for proper server lifecycle management
+    let context = common::TestContext::new();
+    let port = context
+        .start_server()
+        .await
+        .expect("Server failed to start");
+
+    // Wait for server to be ready and scripts to be executed
+    common::wait_for_server(port, 40)
+        .await
+        .expect("Server not ready");
+
+    // Give extra time for JavaScript scripts to execute and register routes
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    println!("Server started on port: {}", port);
+
+    let client = reqwest::Client::new();
+
+    // Call the route which should call listLogsForUri
+    let list_request = client
+        .get(format!("http://127.0.0.1:{}/js-list-for-uri", port))
+        .send();
+
+    let res = match timeout(Duration::from_secs(5), list_request).await {
+        Ok(Ok(response)) => response,
+        Ok(Err(e)) => panic!("List logs for URI request failed: {:?}", e),
+        Err(_) => panic!("List logs for URI request timed out"),
+    };
+
+    let body = match timeout(Duration::from_secs(5), res.text()).await {
+        Ok(Ok(text)) => text,
+        Ok(Err(e)) => panic!("Failed to read list logs for URI response: {:?}", e),
+        Err(_) => panic!("Reading list logs for URI response timed out"),
+    };
+
+    println!("Response body: {}", body);
+
+    // Parse the JSON response
+    let response: serde_json::Value =
+        serde_json::from_str(&body).expect("Failed to parse JSON response");
+
+    // Check that current logs contain the expected messages
+    let current_logs = response["current"]
+        .as_array()
+        .expect("current should be an array");
+    assert!(
+        current_logs.iter().any(|v| v == "test-message-1"),
+        "Expected 'test-message-1' in current logs"
+    );
+    assert!(
+        current_logs.iter().any(|v| v == "test-message-2"),
+        "Expected 'test-message-2' in current logs"
+    );
+
+    // Check that other logs contain the expected message
+    let other_logs = response["other"]
+        .as_array()
+        .expect("other should be an array");
+    assert!(
+        other_logs.iter().any(|v| v == "other-message"),
+        "Expected 'other-message' in other logs"
+    );
+
+    // Verify that logs are properly separated by URI
+    assert!(
+        !current_logs.iter().any(|v| v == "other-message"),
+        "Current logs should not contain messages from other URI"
+    );
+    assert!(
+        !other_logs.iter().any(|v| v == "test-message-1"),
+        "Other logs should not contain messages from current URI"
+    );
+
+    // Proper cleanup
+    context.cleanup().await.expect("Failed to cleanup");
+}
+
+// ============================================================================
+// Script Management API Tests
+// ============================================================================
 
 #[tokio::test]
 async fn js_script_mgmt_functions_work() {
@@ -644,4 +992,215 @@ function init(context) {
 
     // Proper cleanup
     context.cleanup().await.expect("Failed to cleanup");
+}
+
+// ============================================================================
+// Script Init Function Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_init_function_called_successfully() {
+    let script_uri = "test://init-success";
+    let script_content = r#"
+        let initWasCalled = false;
+        
+        function init(context) {
+            initWasCalled = true;
+            writeLog("Init called for: " + context.scriptName);
+            writeLog("Is startup: " + context.isStartup);
+        }
+        
+        function getInitStatus() {
+            return initWasCalled;
+        }
+    "#;
+
+    // Upsert the script first
+    upsert_script(script_uri, script_content).expect("Should upsert script");
+
+    // Create init context
+    let context = InitContext::new(script_uri.to_string(), true);
+
+    // Call init function directly (without ScriptInitializer)
+    let result = call_init_if_exists(script_uri, script_content, context);
+
+    assert!(result.is_ok(), "Should execute without error");
+    assert!(
+        result.unwrap().is_some(),
+        "Should return Some(registrations) indicating init was called"
+    );
+
+    // Note: call_init_if_exists doesn't update metadata - that's done by ScriptInitializer
+}
+
+#[tokio::test]
+async fn test_script_initializer_updates_metadata() {
+    let script_uri = "test://init-metadata";
+    let script_content = r#"
+        function init(context) {
+            writeLog("Updating metadata test");
+        }
+    "#;
+
+    upsert_script(script_uri, script_content).expect("Should upsert script");
+
+    // Use ScriptInitializer which handles metadata updates
+    let initializer = ScriptInitializer::new(5000);
+    let result = initializer
+        .initialize_script(script_uri, true)
+        .await
+        .expect("Should initialize");
+
+    assert!(result.success, "Initialization should succeed");
+
+    // Now verify metadata was updated
+    let metadata = get_script_metadata(script_uri).expect("Should get metadata");
+    assert!(
+        metadata.initialized,
+        "Script should be marked as initialized"
+    );
+    assert!(metadata.init_error.is_none(), "Should have no init error");
+    assert!(
+        metadata.last_init_time.is_some(),
+        "Should have init timestamp"
+    );
+}
+
+#[tokio::test]
+async fn test_script_without_init_function() {
+    let script_uri = "test://no-init";
+    let script_content = r#"
+        function handleRequest(request) {
+            return { status: 200, body: "Hello" };
+        }
+    "#;
+
+    upsert_script(script_uri, script_content).expect("Should upsert script");
+
+    let context = InitContext::new(script_uri.to_string(), false);
+    let result = call_init_if_exists(script_uri, script_content, context);
+
+    assert!(result.is_ok(), "Should execute without error");
+    assert!(
+        result.unwrap().is_none(),
+        "Should return None when no init function exists"
+    );
+}
+
+#[tokio::test]
+async fn test_init_function_with_error() {
+    let script_uri = "test://init-error";
+    let script_content = r#"
+        function init(context) {
+            throw new Error("Init failed intentionally");
+        }
+    "#;
+
+    upsert_script(script_uri, script_content).expect("Should upsert script");
+
+    // Use ScriptInitializer to handle errors properly
+    let initializer = ScriptInitializer::new(5000);
+    let result = initializer
+        .initialize_script(script_uri, true)
+        .await
+        .expect("Should return InitResult");
+
+    assert!(!result.success, "Initialization should fail");
+    assert!(result.error.is_some(), "Should have error message");
+
+    // Debug print
+    println!("Error message: {:?}", result.error);
+
+    let error_msg = result.error.unwrap();
+    assert!(
+        error_msg.contains("Init") || error_msg.contains("failed"),
+        "Error message should contain init-related text, got: {}",
+        error_msg
+    );
+
+    // Verify metadata was updated with error
+    let metadata = get_script_metadata(script_uri).expect("Should get metadata");
+    assert!(
+        !metadata.initialized,
+        "Script should not be marked as initialized"
+    );
+    assert!(metadata.init_error.is_some(), "Should have init error");
+}
+
+#[tokio::test]
+async fn test_script_initializer_single_script() {
+    let script_uri = "test://initializer-test";
+    let script_content = r#"
+        function init(context) {
+            writeLog("Initialized: " + context.scriptName);
+        }
+    "#;
+
+    upsert_script(script_uri, script_content).expect("Should upsert script");
+
+    let initializer = ScriptInitializer::new(5000); // 5 second timeout
+    let result = initializer
+        .initialize_script(script_uri, true)
+        .await
+        .expect("Should initialize");
+
+    assert!(result.success, "Initialization should succeed");
+    assert!(result.error.is_none(), "Should have no error");
+    assert!(result.duration_ms > 0, "Should have measurable duration");
+}
+
+#[tokio::test]
+async fn test_script_initializer_all_scripts() {
+    // Create multiple test scripts
+    let scripts = vec![
+        (
+            "test://multi-init-1",
+            r#"function init(ctx) { writeLog("Init 1"); }"#,
+        ),
+        (
+            "test://multi-init-2",
+            r#"function init(ctx) { writeLog("Init 2"); }"#,
+        ),
+        ("test://multi-no-init", r#"function handler() { }"#),
+    ];
+
+    for (uri, content) in &scripts {
+        upsert_script(uri, content).expect("Should upsert script");
+    }
+
+    let initializer = ScriptInitializer::new(5000);
+    let results = initializer
+        .initialize_all_scripts()
+        .await
+        .expect("Should initialize all");
+
+    // Should have initialized all dynamic scripts (not static ones)
+    assert!(results.len() >= 3, "Should have at least 3 results");
+
+    // Count successful initializations
+    let successful = results.iter().filter(|r| r.success).count();
+    assert!(successful >= 3, "At least 3 scripts should succeed");
+}
+
+#[tokio::test]
+async fn test_init_context_properties() {
+    let script_uri = "test://context-test";
+    let script_content = r#"
+        let capturedContext = null;
+        
+        function init(context) {
+            capturedContext = context;
+            writeLog("ScriptName: " + context.scriptName);
+            writeLog("IsStartup: " + context.isStartup);
+            writeLog("Timestamp: " + context.timestamp);
+        }
+    "#;
+
+    upsert_script(script_uri, script_content).expect("Should upsert script");
+
+    let context = InitContext::new(script_uri.to_string(), true);
+    let result = call_init_if_exists(script_uri, script_content, context);
+
+    assert!(result.is_ok(), "Should execute successfully");
+    assert!(result.unwrap().is_some(), "Init should be called");
 }
