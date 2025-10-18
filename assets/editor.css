@@ -606,6 +606,135 @@ body {
     100% { transform: rotate(360deg); }
 }
 
+/* AI Assistant Section */
+.ai-assistant {
+    background-color: var(--darker-bg);
+    border-top: 2px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    max-height: 400px;
+    min-height: 200px;
+}
+
+.ai-assistant.collapsed .ai-assistant-content {
+    display: none;
+}
+
+.ai-assistant.collapsed {
+    max-height: 40px;
+    min-height: 40px;
+}
+
+.ai-assistant-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--border-color);
+    background-color: var(--light-bg);
+    cursor: pointer;
+    user-select: none;
+}
+
+.ai-assistant-header:hover {
+    background-color: var(--hover-bg);
+}
+
+.ai-assistant-header h3 {
+    font-size: 14px;
+    font-weight: 600;
+    margin: 0;
+}
+
+.ai-assistant-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.ai-assistant-body {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding: 15px;
+    gap: 15px;
+    overflow: hidden;
+}
+
+.ai-response-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.ai-response-header {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.ai-response {
+    flex: 1;
+    background-color: var(--dark-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    padding: 12px;
+    overflow-y: auto;
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+.ai-placeholder {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.ai-response.loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+}
+
+.ai-prompt-container {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.ai-prompt {
+    background-color: var(--dark-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    padding: 12px;
+    color: var(--text-color);
+    font-family: var(--font-family);
+    font-size: 13px;
+    resize: vertical;
+    min-height: 60px;
+    max-height: 120px;
+}
+
+.ai-prompt:focus {
+    outline: none;
+    border-color: var(--primary-color);
+}
+
+.ai-prompt::placeholder {
+    color: var(--text-muted);
+}
+
+.ai-prompt-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
 /* Utility Classes */
 .hidden {
     display: none !important;

@@ -118,6 +118,25 @@ class AIWebEngineEditor {
     document
       .getElementById("test-endpoint-btn")
       .addEventListener("click", () => this.testEndpoint());
+
+    // AI Assistant
+    document
+      .getElementById("toggle-ai-assistant")
+      .addEventListener("click", () => this.toggleAIAssistant());
+    document
+      .getElementById("submit-prompt-btn")
+      .addEventListener("click", () => this.submitAIPrompt());
+    document
+      .getElementById("clear-prompt-btn")
+      .addEventListener("click", () => this.clearAIPrompt());
+
+    // Allow Enter key to submit (Shift+Enter for new line)
+    document.getElementById("ai-prompt").addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        this.submitAIPrompt();
+      }
+    });
   }
 
   async setupMonacoEditor() {
@@ -529,6 +548,95 @@ function init(context) {
     if (type.includes("javascript")) return "📜";
     if (type.includes("json")) return "📋";
     return "📁";
+  }
+
+  // AI Assistant Methods
+  toggleAIAssistant() {
+    const aiAssistant = document.querySelector(".ai-assistant");
+    const toggleBtn = document.getElementById("toggle-ai-assistant");
+
+    aiAssistant.classList.toggle("collapsed");
+
+    if (aiAssistant.classList.contains("collapsed")) {
+      toggleBtn.textContent = "▲";
+    } else {
+      toggleBtn.textContent = "▼";
+    }
+  }
+
+  async submitAIPrompt() {
+    const promptInput = document.getElementById("ai-prompt");
+    const responseDiv = document.getElementById("ai-response");
+    const submitBtn = document.getElementById("submit-prompt-btn");
+
+    const prompt = promptInput.value.trim();
+
+    if (!prompt) {
+      this.showStatus("Please enter a prompt", "error");
+      return;
+    }
+
+    // Disable submit button and show loading state
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Submitting...";
+    responseDiv.innerHTML =
+      '<p class="ai-placeholder">Processing your request...</p>';
+    responseDiv.classList.add("loading");
+
+    try {
+      const response = await fetch("/api/ai-assistant", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ prompt }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      // Display the response
+      responseDiv.classList.remove("loading");
+      responseDiv.innerHTML = `
+        <div class="ai-response-content">
+          <p><strong>You asked:</strong> ${this.escapeHtml(prompt)}</p>
+          <hr style="border-color: var(--border-color); margin: 10px 0;">
+          <p><strong>Response:</strong> ${this.escapeHtml(data.response)}</p>
+          <p style="color: var(--text-muted); font-size: 11px; margin-top: 10px;">
+            ${new Date(data.timestamp).toLocaleString()}
+          </p>
+        </div>
+      `;
+
+      this.showStatus("AI response received", "success");
+    } catch (error) {
+      responseDiv.classList.remove("loading");
+      responseDiv.innerHTML = `
+        <p style="color: var(--danger-color);">
+          <strong>Error:</strong> ${this.escapeHtml(error.message)}
+        </p>
+      `;
+      this.showStatus("Failed to get AI response", "error");
+    } finally {
+      // Re-enable submit button
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Submit";
+    }
+  }
+
+  clearAIPrompt() {
+    const promptInput = document.getElementById("ai-prompt");
+    promptInput.value = "";
+    promptInput.focus();
+  }
+
+  escapeHtml(text) {
+    const div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
   }
 }
 

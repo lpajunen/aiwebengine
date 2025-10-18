@@ -119,6 +119,31 @@ function serveEditor(req) {
             </div>
         </main>
 
+        <!-- AI Assistant Section -->
+        <div class="ai-assistant">
+            <div class="ai-assistant-header">
+                <h3>🤖 AI Assistant</h3>
+                <button id="toggle-ai-assistant" class="btn btn-secondary btn-small">▼</button>
+            </div>
+            <div class="ai-assistant-content">
+                <div class="ai-assistant-body">
+                    <div class="ai-response-container">
+                        <div class="ai-response-header">Response</div>
+                        <div id="ai-response" class="ai-response">
+                            <p class="ai-placeholder">AI responses will appear here...</p>
+                        </div>
+                    </div>
+                    <div class="ai-prompt-container">
+                        <textarea id="ai-prompt" class="ai-prompt" placeholder="Ask the AI assistant for help with your scripts..."></textarea>
+                        <div class="ai-prompt-actions">
+                            <button id="clear-prompt-btn" class="btn btn-secondary btn-small">Clear</button>
+                            <button id="submit-prompt-btn" class="btn btn-primary">Submit</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Status Bar -->
         <footer class="editor-footer">
             <div class="status-info">
@@ -335,6 +360,28 @@ function apiGetAssets(req) {
   }
 }
 
+// API: AI Assistant prompt handler
+function apiAIAssistant(req) {
+  const body = JSON.parse(req.body || "{}");
+  const prompt = body.prompt || "";
+
+  // For now, return a placeholder response
+  // Later this will be integrated with actual AI capabilities
+  const response = {
+    success: true,
+    response: "Response under development",
+    prompt: prompt,
+    rawBody: req.body, // Debug: show what we received
+    timestamp: new Date().toISOString(),
+  };
+
+  return {
+    status: 200,
+    body: JSON.stringify(response),
+    contentType: "application/json",
+  };
+}
+
 // Initialization function
 function init(context) {
   writeLog("Initializing editor.js at " + new Date().toISOString());
@@ -344,6 +391,7 @@ function init(context) {
   register("/api/scripts/*", "apiSaveScript", "POST");
   register("/api/logs", "apiGetLogs", "GET");
   register("/api/assets", "apiGetAssets", "GET");
+  register("/api/ai-assistant", "apiAIAssistant", "POST");
   writeLog("Editor endpoints registered");
   return { success: true };
 }
