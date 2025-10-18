@@ -53,13 +53,15 @@ A web-based editor for managing scripts and assets in aiwebengine.
 
 ```
 assets/
-├── editor.html      # Main editor interface
-├── editor.css       # Styling
-└── editor.js        # Client-side functionality
+├── editor.css       # Styling (public asset)
+└── editor.js        # Client-side functionality (public asset)
 
 scripts/
-└── editor.js        # Backend API handlers
+└── feature_scripts/
+    └── editor.js    # Backend API handlers + serves editor UI
 ```
+
+Note: The editor HTML is embedded in `scripts/feature_scripts/editor.js` to provide a single unified endpoint at `/editor`.
 
 ## API Endpoints
 
@@ -120,8 +122,8 @@ The editor is built using:
 ### Editor not loading
 
 - Ensure the server is running
-- Check that `editor.js` is in the `scripts/` directory
-- Verify that `editor.html`, `editor.css`, and `editor.js` are in the `assets/` directory
+- Check that `editor.js` is in the `scripts/feature_scripts/` directory
+- Verify that `editor.css` and `editor.js` are in the `assets/` directory
 
 ### Scripts not saving
 

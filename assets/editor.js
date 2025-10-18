@@ -8,15 +8,15 @@ class AIWebEngineEditor {
   }
 
   async init() {
-    console.log('[Editor] Starting initialization...');
+    console.log("[Editor] Starting initialization...");
     this.compileTemplates();
-    console.log('[Editor] Templates compiled');
+    console.log("[Editor] Templates compiled");
     this.setupEventListeners();
-    console.log('[Editor] Event listeners set up');
+    console.log("[Editor] Event listeners set up");
     await this.setupMonacoEditor();
-    console.log('[Editor] Monaco editor ready');
+    console.log("[Editor] Monaco editor ready");
     this.loadInitialData();
-    console.log('[Editor] Loading initial data...');
+    console.log("[Editor] Loading initial data...");
 
     // Auto-refresh logs every 5 seconds
     setInterval(() => this.loadLogs(), 5000);
@@ -25,8 +25,8 @@ class AIWebEngineEditor {
   compileTemplates() {
     // Using plain JavaScript template functions instead of Handlebars
     this.templates = {
-      'script-item': (data) => `
-        <div class="script-item ${data.active ? 'active' : ''}" data-script="${data.name}">
+      "script-item": (data) => `
+        <div class="script-item ${data.active ? "active" : ""}" data-script="${data.name}">
           <div class="script-icon">📄</div>
           <div class="script-info">
             <div class="script-name">${data.name}</div>
@@ -34,12 +34,13 @@ class AIWebEngineEditor {
           </div>
         </div>
       `,
-      'asset-item': (data) => `
+      "asset-item": (data) => `
         <div class="asset-item" data-path="${data.path}">
           <div class="asset-preview">
-            ${data.isImage 
-              ? `<img src="/api/assets${data.path}" alt="${data.name}" loading="lazy">`
-              : `<div class="asset-icon">${data.icon}</div>`
+            ${
+              data.isImage
+                ? `<img src="/api/assets${data.path}" alt="${data.name}" loading="lazy">`
+                : `<div class="asset-icon">${data.icon}</div>`
             }
           </div>
           <div class="asset-info">
@@ -52,14 +53,14 @@ class AIWebEngineEditor {
           </div>
         </div>
       `,
-      'log-entry': (data) => `
+      "log-entry": (data) => `
         <div class="log-entry log-${data.level}">
           <span class="log-time">${data.time}</span>
           <span class="log-level">${data.level}</span>
           <span class="log-message">${data.message}</span>
         </div>
       `,
-      'route-item': (data) => `
+      "route-item": (data) => `
         <div class="route-item">
           <div class="route-method ${data.method}">${data.method}</div>
           <div class="route-path">${data.path}</div>
@@ -68,9 +69,9 @@ class AIWebEngineEditor {
             <button class="btn btn-small btn-secondary test-btn" data-path="${data.path}" data-method="${data.method}">Test</button>
           </div>
         </div>
-      `
+      `,
     };
-    console.log('[Editor] Templates compiled (using plain JS)');
+    console.log("[Editor] Templates compiled (using plain JS)");
   }
 
   setupEventListeners() {
@@ -144,7 +145,7 @@ class AIWebEngineEditor {
         this.monacoEditor.onDidChangeModelContent(() => {
           this.updateSaveButton();
         });
-        
+
         resolve();
       });
     });
@@ -182,12 +183,12 @@ class AIWebEngineEditor {
 
   // Script Management
   async loadScripts() {
-    console.log('[Editor] loadScripts() called');
+    console.log("[Editor] loadScripts() called");
     try {
       const response = await fetch("/api/scripts");
-      console.log('[Editor] API response status:', response.status);
+      console.log("[Editor] API response status:", response.status);
       const scripts = await response.json();
-      console.log('[Editor] Loaded scripts:', scripts);
+      console.log("[Editor] Loaded scripts:", scripts);
 
       const scriptsList = document.getElementById("scripts-list");
       scriptsList.innerHTML = "";
@@ -214,23 +215,23 @@ class AIWebEngineEditor {
   }
 
   async loadScript(scriptName) {
-    console.log('[Editor] loadScript() called for:', scriptName);
+    console.log("[Editor] loadScript() called for:", scriptName);
     try {
       const encodedScriptName = encodeURIComponent(scriptName);
       const response = await fetch(`/api/scripts/${encodedScriptName}`);
-      console.log('[Editor] loadScript response status:', response.status);
+      console.log("[Editor] loadScript response status:", response.status);
       const content = await response.text();
-      console.log('[Editor] Script content length:', content.length);
+      console.log("[Editor] Script content length:", content.length);
 
       this.currentScript = scriptName;
       document.getElementById("current-script-name").textContent = scriptName;
 
       if (this.monacoEditor) {
-        console.log('[Editor] Setting Monaco editor value...');
+        console.log("[Editor] Setting Monaco editor value...");
         this.monacoEditor.setValue(content);
         this.updateSaveButton();
       } else {
-        console.error('[Editor] Monaco editor not available!');
+        console.error("[Editor] Monaco editor not available!");
       }
 
       // Update active state in list
@@ -533,10 +534,10 @@ function init(context) {
 
 // Initialize the editor when the page loads
 function initEditor() {
-  console.log('[Editor] initEditor() called, DOM ready');
-  console.log('[Editor] Creating AIWebEngineEditor instance...');
+  console.log("[Editor] initEditor() called, DOM ready");
+  console.log("[Editor] Creating AIWebEngineEditor instance...");
   window.editor = new AIWebEngineEditor();
 }
 
-console.log('[Editor] Script loaded, waiting for DOMContentLoaded...');
+console.log("[Editor] Script loaded, waiting for DOMContentLoaded...");
 document.addEventListener("DOMContentLoaded", initEditor);

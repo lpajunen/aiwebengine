@@ -408,13 +408,9 @@ fn get_static_assets() -> HashMap<String, Asset> {
     m.insert("/logo.svg".to_string(), logo);
 
     // Editor assets
-    let editor_html_content = include_bytes!("../assets/editor.html").to_vec();
-    let editor_html = Asset {
-        public_path: "/editor.html".to_string(),
-        mimetype: "text/html".to_string(),
-        content: editor_html_content,
-    };
-    m.insert("/editor.html".to_string(), editor_html);
+    // Note: editor.html is NOT registered as a public asset
+    // It's served exclusively through the /editor route in editor.js
+    // This simplifies the API surface and provides a single entry point
 
     let editor_css_content = include_bytes!("../assets/editor.css").to_vec();
     let editor_css = Asset {

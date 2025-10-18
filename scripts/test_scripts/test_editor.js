@@ -22,13 +22,10 @@ function testEditorAPI(req) {
 
     // Test 4: Check if editor files exist
     testResults.push("Checking editor files...");
-    const editorHtml = fetchAsset("/editor.html");
+    // Note: editor.html is not a public asset - it's served via /editor endpoint
     const editorCss = fetchAsset("/editor.css");
     const editorJs = fetchAsset("/editor.js");
 
-    testResults.push(
-      `Editor HTML: ${editorHtml !== "null" ? "Found" : "Missing"}`,
-    );
     testResults.push(
       `Editor CSS: ${editorCss !== "null" ? "Found" : "Missing"}`,
     );

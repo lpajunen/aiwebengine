@@ -410,6 +410,7 @@ The engine MUST:
 The engine MUST provide comprehensive secret management:
 
 **Core Requirements**:
+
 - Load secrets from environment variables
 - Support encrypted configuration files
 - Store secrets in secure vault (in-memory or external)
@@ -418,11 +419,13 @@ The engine MUST provide comprehensive secret management:
 - Support secret rotation without downtime
 
 **Dual Configuration Path**:
+
 - Engine administrators can configure secrets via configuration files/environment
 - Solution developers can add secrets via editor interface
 - Both paths store secrets in the same secure vault
 
 **Access Control**:
+
 - Scripts can access secrets by identifier only via JavaScript API
 - Scripts cannot read actual secret values directly
 - Scripts can check if a secret exists without seeing its value
@@ -430,6 +433,7 @@ The engine MUST provide comprehensive secret management:
 - Secrets cannot be retrieved via any API after storage
 
 **Audit and Security**:
+
 - Log all secret access attempts (identifier, script, timestamp)
 - Track secret creation, updates, and deletions
 - Never include secret values in audit logs
@@ -437,6 +441,7 @@ The engine MUST provide comprehensive secret management:
 - Alert on suspicious secret access patterns
 
 **Future**:
+
 - Integration with external secret managers (HashiCorp Vault, AWS Secrets Manager)
 - Automatic secret rotation
 - Secret versioning and rollback
@@ -1362,12 +1367,14 @@ The engine SHOULD expose:
 The engine MUST expose HTTP client functionality for external API integration:
 
 **Core API**:
+
 - `fetch(url, options)` - HTTP client compatible with Web Fetch API standard
 - Support for all HTTP methods (GET, POST, PUT, DELETE, PATCH)
 - Request/response streaming for large payloads
 - Configurable timeout (default and per-request)
 
 **Request Configuration**:
+
 - Custom headers (including Authorization)
 - Request body (JSON, form data, binary, stream)
 - Query parameter handling
@@ -1375,6 +1382,7 @@ The engine MUST expose HTTP client functionality for external API integration:
 - User-Agent configuration
 
 **Response Handling**:
+
 - Status code and status text
 - Response headers access
 - Response body parsing (JSON, text, binary, stream)
@@ -1382,6 +1390,7 @@ The engine MUST expose HTTP client functionality for external API integration:
 - Redirect handling (automatic and manual modes)
 
 **Security and Reliability**:
+
 - TLS/SSL certificate validation
 - Request timeout enforcement
 - Maximum response size limits
@@ -1390,11 +1399,13 @@ The engine MUST expose HTTP client functionality for external API integration:
 - DNS resolution caching
 
 **Integration with Secrets**:
+
 - Seamless integration with `Secrets.get()` for API keys
 - Automatic redaction of secrets from request logs
 - Support for common auth patterns (Bearer token, API key header)
 
 **Error Handling**:
+
 - Network errors (connection refused, timeout, DNS failure)
 - HTTP error responses (4xx, 5xx)
 - Certificate errors
@@ -1408,11 +1419,13 @@ The engine MUST expose HTTP client functionality for external API integration:
 The engine MUST expose secrets management API to JavaScript:
 
 **Core API**:
+
 - `Secrets.get(identifier)` - Retrieve secret value by identifier
 - `Secrets.exists(identifier)` - Check if secret exists without retrieving value
 - `Secrets.list()` - List available secret identifiers (not values)
 
 **Security Constraints**:
+
 - Scripts can only access secrets via `Secrets.get()` API
 - Actual secret values never exposed directly to JavaScript context
 - Secret identifiers are strings (e.g., "stripe_api_key", "sendgrid_token")
@@ -1421,21 +1434,23 @@ The engine MUST expose secrets management API to JavaScript:
 - Secrets automatically redacted from error stack traces
 
 **Error Handling**:
+
 - Throw clear error if secret identifier not found
 - Never expose which secrets exist in error messages to unauthorized users
 - Log secret access attempts for audit trail
 
 **Usage Patterns**:
+
 ```javascript
 // Correct usage - secret used directly in request
-const response = await fetch('https://api.example.com/data', {
+const response = await fetch("https://api.example.com/data", {
   headers: {
-    'Authorization': `Bearer ${Secrets.get('api_token')}`
-  }
+    Authorization: `Bearer ${Secrets.get("api_token")}`,
+  },
 });
 
 // Check existence before use
-if (Secrets.exists('optional_api_key')) {
+if (Secrets.exists("optional_api_key")) {
   // Use optional integration
 }
 
@@ -1445,6 +1460,7 @@ const availableSecrets = Secrets.list();
 ```
 
 **Implementation Notes**:
+
 - Secrets resolved at runtime, not at script load time
 - Secret values never logged or stored in JS heap
 - Integration with REQ-SEC-005 vault implementation
@@ -1563,6 +1579,7 @@ The engine MUST provide web-based editor for script deployment:
 The engine MUST provide secure interface for secrets management:
 
 **Secret Creation**:
+
 - Web-based form for adding new secrets
 - Secret identifier input (e.g., "stripe_api_key")
 - Secret value input with masking
@@ -1571,6 +1588,7 @@ The engine MUST provide secure interface for secrets management:
 - Confirmation before creation
 
 **Secret Listing**:
+
 - List all available secret identifiers
 - Show metadata (created date, created by, description)
 - Never show actual secret values
@@ -1578,6 +1596,7 @@ The engine MUST provide secure interface for secrets management:
 - Indicate which secrets are in use by scripts
 
 **Secret Management**:
+
 - Update secret values (with confirmation)
 - Delete secrets (with dependency check and confirmation)
 - Check secret existence without revealing value
@@ -1585,6 +1604,7 @@ The engine MUST provide secure interface for secrets management:
 - Export secret identifiers (not values) for documentation
 
 **Security Requirements**:
+
 - Authentication required for all operations
 - Authorization based on user roles
 - All operations logged for audit
@@ -1594,6 +1614,7 @@ The engine MUST provide secure interface for secrets management:
 - Rate limiting on secret operations
 
 **API Endpoints**:
+
 ```
 GET    /editor/api/secrets           - List secret identifiers
 POST   /editor/api/secrets           - Create new secret
@@ -1604,6 +1625,7 @@ GET    /editor/api/secrets/:id/usage - Check which scripts use this secret
 ```
 
 **Response Format**:
+
 ```json
 {
   "secrets": [

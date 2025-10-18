@@ -1272,10 +1272,7 @@ async function submitContactForm(req) {
 
   // Validate input
   if (!name || !email || !message) {
-    return Response.json(
-      { error: "All fields are required" },
-      { status: 400 },
-    );
+    return Response.json({ error: "All fields are required" }, { status: 400 });
   }
 
   try {
@@ -1287,7 +1284,7 @@ async function submitContactForm(req) {
     const response = await fetch("https://api.sendgrid.com/v3/mail/send", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${apiKey}`,
+        Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
