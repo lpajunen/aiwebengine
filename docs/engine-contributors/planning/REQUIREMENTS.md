@@ -4,8 +4,8 @@
 
 This document defines the complete requirements for the aiwebengine project, covering both the core engine functionality and development on top of the engine. All features, tests, and development work should align with these requirements.
 
-**Last Updated**: October 14, 2025  
-**Version**: 1.1
+**Last Updated**: October 18, 2025  
+**Version**: 1.3
 
 ---
 
@@ -25,11 +25,12 @@ This document defines the complete requirements for the aiwebengine project, cov
 6. [Data Management](#data-management)
 7. [JavaScript APIs](#javascript-apis)
 8. [Asset Management](#asset-management)
-9. [Development Requirements](#development-requirements)
-10. [Documentation Requirements](#documentation-requirements)
-11. [Testing Requirements](#testing-requirements)
-12. [Performance Requirements](#performance-requirements)
-13. [Deployment Requirements](#deployment-requirements)
+9. [Editor and Developer Tools](#editor-and-developer-tools)
+10. [Development Requirements](#development-requirements)
+11. [Documentation Requirements](#documentation-requirements)
+12. [Testing Requirements](#testing-requirements)
+13. [Performance Requirements](#performance-requirements)
+14. [Deployment Requirements](#deployment-requirements)
 
 ---
 
@@ -404,14 +405,41 @@ The engine MUST:
 #### REQ-SEC-005: Secret Management
 
 **Priority**: CRITICAL  
-**Status**: IMPLEMENTED
+**Status**: PARTIAL
 
-The engine MUST:
+The engine MUST provide comprehensive secret management:
 
+**Core Requirements**:
 - Load secrets from environment variables
-- Never log or expose secrets
 - Support encrypted configuration files
-- Rotate secrets without downtime (future)
+- Store secrets in secure vault (in-memory or external)
+- Never log or expose secret values
+- Redact secrets from error messages and logs
+- Support secret rotation without downtime
+
+**Dual Configuration Path**:
+- Engine administrators can configure secrets via configuration files/environment
+- Solution developers can add secrets via editor interface
+- Both paths store secrets in the same secure vault
+
+**Access Control**:
+- Scripts can access secrets by identifier only via JavaScript API
+- Scripts cannot read actual secret values directly
+- Scripts can check if a secret exists without seeing its value
+- Editor interface shows secret identifiers but never reveals values after creation
+- Secrets cannot be retrieved via any API after storage
+
+**Audit and Security**:
+- Log all secret access attempts (identifier, script, timestamp)
+- Track secret creation, updates, and deletions
+- Never include secret values in audit logs
+- Support secret expiration dates
+- Alert on suspicious secret access patterns
+
+**Future**:
+- Integration with external secret managers (HashiCorp Vault, AWS Secrets Manager)
+- Automatic secret rotation
+- Secret versioning and rollback
 
 #### REQ-SEC-006: Rate Limiting
 
@@ -1328,17 +1356,100 @@ The engine SHOULD expose:
 
 ### REQ-JSAPI-007: HTTP Client API
 
-**Priority**: MEDIUM  
+**Priority**: HIGH  
 **Status**: PLANNED
 
-The engine SHOULD expose:
+The engine MUST expose HTTP client functionality for external API integration:
 
-- `fetch(url, options)` - HTTP client
-- Support for all HTTP methods
-- Request/response streaming
-- Timeout configuration
+**Core API**:
+- `fetch(url, options)` - HTTP client compatible with Web Fetch API standard
+- Support for all HTTP methods (GET, POST, PUT, DELETE, PATCH)
+- Request/response streaming for large payloads
+- Configurable timeout (default and per-request)
 
-### REQ-JSAPI-008: API Naming Standards
+**Request Configuration**:
+- Custom headers (including Authorization)
+- Request body (JSON, form data, binary, stream)
+- Query parameter handling
+- Content-Type automatic detection and override
+- User-Agent configuration
+
+**Response Handling**:
+- Status code and status text
+- Response headers access
+- Response body parsing (JSON, text, binary, stream)
+- Error handling for network failures
+- Redirect handling (automatic and manual modes)
+
+**Security and Reliability**:
+- TLS/SSL certificate validation
+- Request timeout enforcement
+- Maximum response size limits
+- Automatic retry with exponential backoff (configurable)
+- Connection pooling and reuse
+- DNS resolution caching
+
+**Integration with Secrets**:
+- Seamless integration with `Secrets.get()` for API keys
+- Automatic redaction of secrets from request logs
+- Support for common auth patterns (Bearer token, API key header)
+
+**Error Handling**:
+- Network errors (connection refused, timeout, DNS failure)
+- HTTP error responses (4xx, 5xx)
+- Certificate errors
+- Detailed error messages for debugging
+
+### REQ-JSAPI-008: Secrets API
+
+**Priority**: CRITICAL  
+**Status**: PLANNED
+
+The engine MUST expose secrets management API to JavaScript:
+
+**Core API**:
+- `Secrets.get(identifier)` - Retrieve secret value by identifier
+- `Secrets.exists(identifier)` - Check if secret exists without retrieving value
+- `Secrets.list()` - List available secret identifiers (not values)
+
+**Security Constraints**:
+- Scripts can only access secrets via `Secrets.get()` API
+- Actual secret values never exposed directly to JavaScript context
+- Secret identifiers are strings (e.g., "stripe_api_key", "sendgrid_token")
+- `Secrets.get()` returns value at runtime, value never stored in JS variables
+- Engine automatically redacts secrets from console.log() output
+- Secrets automatically redacted from error stack traces
+
+**Error Handling**:
+- Throw clear error if secret identifier not found
+- Never expose which secrets exist in error messages to unauthorized users
+- Log secret access attempts for audit trail
+
+**Usage Patterns**:
+```javascript
+// Correct usage - secret used directly in request
+const response = await fetch('https://api.example.com/data', {
+  headers: {
+    'Authorization': `Bearer ${Secrets.get('api_token')}`
+  }
+});
+
+// Check existence before use
+if (Secrets.exists('optional_api_key')) {
+  // Use optional integration
+}
+
+// List available secrets (identifiers only)
+const availableSecrets = Secrets.list();
+// Returns: ['stripe_api_key', 'sendgrid_token', 'openai_api_key']
+```
+
+**Implementation Notes**:
+- Secrets resolved at runtime, not at script load time
+- Secret values never logged or stored in JS heap
+- Integration with REQ-SEC-005 vault implementation
+
+### REQ-JSAPI-010: API Naming Standards
 
 **Priority**: MEDIUM
 **Status**: PLANNED
@@ -1359,7 +1470,7 @@ The project SHOULD maintain consistent JavaScript API naming:
 
 Note: API renaming is a breaking change and requires careful migration planning.
 
-### REQ-JSAPI-009: Webhook Support
+### REQ-JSAPI-011: Webhook Support
 
 **Priority**: MEDIUM  
 **Status**: PLANNED
@@ -1426,6 +1537,128 @@ The engine MAY support:
 - Image format conversion
 - Thumbnail generation
 - Image optimization
+
+---
+
+## Editor and Developer Tools
+
+### REQ-EDITOR-001: Script Deployment Interface
+
+**Priority**: HIGH  
+**Status**: IMPLEMENTED
+
+The engine MUST provide web-based editor for script deployment:
+
+- Script upload and editing interface
+- Syntax validation and error reporting
+- Script testing and preview capabilities
+- Version history and rollback
+- Script management (list, update, delete)
+
+### REQ-EDITOR-002: Secrets Management Interface
+
+**Priority**: CRITICAL  
+**Status**: PLANNED
+
+The engine MUST provide secure interface for secrets management:
+
+**Secret Creation**:
+- Web-based form for adding new secrets
+- Secret identifier input (e.g., "stripe_api_key")
+- Secret value input with masking
+- Optional description/metadata
+- Validation of identifier format
+- Confirmation before creation
+
+**Secret Listing**:
+- List all available secret identifiers
+- Show metadata (created date, created by, description)
+- Never show actual secret values
+- Search and filter capabilities
+- Indicate which secrets are in use by scripts
+
+**Secret Management**:
+- Update secret values (with confirmation)
+- Delete secrets (with dependency check and confirmation)
+- Check secret existence without revealing value
+- Audit log of all secret operations
+- Export secret identifiers (not values) for documentation
+
+**Security Requirements**:
+- Authentication required for all operations
+- Authorization based on user roles
+- All operations logged for audit
+- Values masked in UI (never displayed after creation)
+- Secure form submission (HTTPS required)
+- CSRF protection on all endpoints
+- Rate limiting on secret operations
+
+**API Endpoints**:
+```
+GET    /editor/api/secrets           - List secret identifiers
+POST   /editor/api/secrets           - Create new secret
+GET    /editor/api/secrets/:id       - Get secret metadata (not value)
+PUT    /editor/api/secrets/:id       - Update secret value
+DELETE /editor/api/secrets/:id       - Delete secret
+GET    /editor/api/secrets/:id/usage - Check which scripts use this secret
+```
+
+**Response Format**:
+```json
+{
+  "secrets": [
+    {
+      "id": "stripe_api_key",
+      "description": "Stripe payment processing API key",
+      "createdAt": "2025-10-18T10:00:00Z",
+      "createdBy": "admin@example.com",
+      "lastUsed": "2025-10-18T14:30:00Z",
+      "usageCount": 42
+    }
+  ]
+}
+```
+
+### REQ-EDITOR-003: Asset Management Interface
+
+**Priority**: HIGH  
+**Status**: IMPLEMENTED
+
+The editor MUST provide asset management:
+
+- File upload interface (HTML, CSS, JS, images)
+- Asset preview and editing
+- Asset organization (folders, tags)
+- Asset versioning
+- Asset usage tracking
+
+### REQ-EDITOR-004: Testing and Debugging Tools
+
+**Priority**: MEDIUM  
+**Status**: PARTIAL
+
+The editor SHOULD provide testing tools:
+
+- Request simulator (test endpoints without external client)
+- Log viewer with real-time updates
+- Performance profiler
+- Error reporting and stack traces
+- GraphQL query/mutation tester
+- Subscription testing interface
+
+### REQ-EDITOR-005: Collaboration Features
+
+**Priority**: MEDIUM  
+**Status**: PLANNED
+
+The editor SHOULD support team collaboration:
+
+- Multi-user concurrent editing
+- Change notifications
+- Comments and annotations
+- Code review workflow
+- Deployment approval process
+- Team activity log
 
 ---
 
@@ -2084,6 +2317,7 @@ _Requirements: REQ-HTTP-001, REQ-HTTP-002_
 | 1.0     | 2025-10-14 | Initial requirements document                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | 1.1     | 2025-10-14 | Added 41 requirements from gap analysis: Security enhancements (REQ-SEC-008 through REQ-SEC-015), Authentication improvements (REQ-AUTH-008, REQ-AUTH-009), Configuration enhancements, Logging extensions (REQ-LOG-006, REQ-LOG-007), Development standards (REQ-DEV-005 through REQ-DEV-009), Testing requirements (REQ-TEST-007 through REQ-TEST-011), Performance requirements (REQ-PERF-006 through REQ-PERF-008), Deployment requirements (REQ-DEPLOY-006 through REQ-DEPLOY-008), JavaScript runtime (REQ-JS-009), HTTP streaming (REQ-HTTP-010), and API naming standards (REQ-JSAPI-008) |
 | 1.2     | 2025-10-15 | Added 10 requirements from USE_CASES.md gap analysis to support team collaboration, multi-tenancy, and operational features: Data management (REQ-DATA-005, REQ-DATA-006, REQ-DATA-007), Real-time consistency (REQ-RT-003), Authentication (REQ-AUTH-010), Security (REQ-SEC-016), Logging (REQ-LOG-008), JavaScript APIs (REQ-JSAPI-009), and Deployment (REQ-DEPLOY-009)                                                                                                                                                                                                                       |
+| 1.3     | 2025-10-18 | Enhanced requirements for UC-504 (External API Integration with Secure Credentials): Expanded REQ-SEC-005 (Secret Management) with vault-based storage, dual configuration paths, and visibility model; Enhanced REQ-JSAPI-007 (HTTP Client API) with comprehensive fetch() specification; Added REQ-JSAPI-008 (Secrets API) for JavaScript secrets access; Added Editor section with REQ-EDITOR-001 through REQ-EDITOR-005 covering script deployment, secrets management interface, asset management, testing tools, and collaboration features                                                 |
 
 ---
 
