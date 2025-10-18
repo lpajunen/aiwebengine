@@ -365,13 +365,39 @@ function apiAIAssistant(req) {
   const body = JSON.parse(req.body || "{}");
   const prompt = body.prompt || "";
 
+  // Check if Anthropic API key is configured
+  const hasAnthropicKey = Secrets.exists("anthropic_api_key");
+  const availableSecrets = Secrets.list();
+  
+  writeLog(`AI Assistant: Checking for Anthropic API key...`);
+  writeLog(`AI Assistant: anthropic_api_key exists: ${hasAnthropicKey}`);
+  writeLog(`AI Assistant: Available secrets: ${JSON.stringify(availableSecrets)}`);
+
+  // If API key is not configured, return helpful error
+  if (!hasAnthropicKey) {
+    writeLog(`AI Assistant: ERROR - Anthropic API key not configured`);
+    const errorResponse = {
+      success: false,
+      error: "Anthropic API key not configured",
+      message: "Please set SECRET_ANTHROPIC_API_KEY environment variable or configure secrets.values.anthropic_api_key in config file",
+      availableSecrets: availableSecrets,
+    };
+    return {
+      status: 503, // Service Unavailable
+      body: JSON.stringify(errorResponse),
+      contentType: "application/json",
+    };
+  }
+
+  writeLog(`AI Assistant: API key is configured, processing request`);
+
   // For now, return a placeholder response
   // Later this will be integrated with actual AI capabilities
   const response = {
     success: true,
-    response: "Response under development",
+    response: "Response under development (API key detected)",
     prompt: prompt,
-    rawBody: req.body, // Debug: show what we received
+    hasApiKey: hasAnthropicKey,
     timestamp: new Date().toISOString(),
   };
 

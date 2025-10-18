@@ -1276,15 +1276,21 @@ async function submitContactForm(req) {
   }
 
   try {
-    // Get API key from vault - script never sees the actual value
-    // Engine provides the value at runtime
-    const apiKey = Secrets.get("sendgrid_api_key");
+    // Check if API key is configured
+    if (!Secrets.exists("sendgrid_api_key")) {
+      return Response.json(
+        { error: "Email service not configured" },
+        { status: 503 }
+      );
+    }
 
     // Make request to external service
+    // Engine injects the actual API key value at runtime via template syntax
+    // The secret value never enters JavaScript context
     const response = await fetch("https://api.sendgrid.com/v3/mail/send", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: "Bearer {{secret:sendgrid_api_key}}",
         "Content-Type": "application/json",
       },
       body: JSON.stringify({

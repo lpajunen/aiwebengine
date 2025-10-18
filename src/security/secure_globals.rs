@@ -1,8 +1,10 @@
 use base64::Engine;
 use rquickjs::{Function, Result as JsResult};
+use std::sync::Arc;
 use tracing::{debug, warn};
 
 use crate::repository;
+use crate::secrets::SecretsManager;
 use crate::security::{
     SecureOperations, SecurityAuditor, SecurityEventType, SecuritySeverity, UserContext,
 };
@@ -13,6 +15,7 @@ pub struct SecureGlobalContext {
     secure_ops: SecureOperations,
     auditor: SecurityAuditor,
     config: GlobalSecurityConfig,
+    secrets_manager: Option<Arc<SecretsManager>>,
 }
 
 #[derive(Debug, Clone)]
@@ -22,6 +25,7 @@ pub struct GlobalSecurityConfig {
     pub enable_streams: bool,
     pub enable_script_management: bool,
     pub enable_logging: bool,
+    pub enable_secrets: bool,
     pub enforce_strict_validation: bool,
     pub enable_audit_logging: bool, // New flag to disable audit logging in tests
 }
@@ -34,6 +38,7 @@ impl Default for GlobalSecurityConfig {
             enable_asset_management: true,
             enable_script_management: true,
             enable_logging: true,
+            enable_secrets: true,
             enforce_strict_validation: true,
             enable_audit_logging: true, // Enable by default
         }
@@ -47,6 +52,7 @@ impl SecureGlobalContext {
             secure_ops: SecureOperations::new(),
             auditor: SecurityAuditor::new(),
             config: GlobalSecurityConfig::default(),
+            secrets_manager: None,
         }
     }
 
@@ -56,6 +62,21 @@ impl SecureGlobalContext {
             secure_ops: SecureOperations::new(),
             auditor: SecurityAuditor::new(),
             config,
+            secrets_manager: None,
+        }
+    }
+
+    pub fn new_with_secrets(
+        user_context: UserContext,
+        config: GlobalSecurityConfig,
+        secrets_manager: Arc<SecretsManager>,
+    ) -> Self {
+        Self {
+            user_context,
+            secure_ops: SecureOperations::new(),
+            auditor: SecurityAuditor::new(),
+            config,
+            secrets_manager: Some(secrets_manager),
         }
     }
 
@@ -84,6 +105,10 @@ impl SecureGlobalContext {
 
         if self.config.enable_asset_management {
             self.setup_asset_management_functions(ctx, script_uri)?;
+        }
+
+        if self.config.enable_secrets {
+            self.setup_secrets_functions(ctx, script_uri)?;
         }
 
         // Always setup GraphQL functions, but they will be no-ops if disabled
@@ -713,6 +738,62 @@ impl SecureGlobalContext {
             },
         )?;
         global.set("deleteAsset", delete_asset)?;
+        Ok(())
+    }
+
+    /// Setup secure secrets functions
+    /// 
+    /// Exposes a read-only JavaScript API for secrets management:
+    /// - Secrets.exists(identifier): boolean - Check if a secret exists
+    /// - Secrets.list(): string[] - List all secret identifiers
+    /// 
+    /// SECURITY: Secret values are NEVER exposed to JavaScript. Only existence checks
+    /// and identifier listing are allowed. Actual secret values are injected by Rust
+    /// into HTTP requests using the {{secret:identifier}} template syntax.
+    fn setup_secrets_functions(&self, ctx: &rquickjs::Ctx<'_>, _script_uri: &str) -> JsResult<()> {
+        let global = ctx.globals();
+        
+        // Get the secrets manager if available
+        let secrets_manager = self.secrets_manager.clone();
+        
+        // Create the Secrets namespace object
+        let secrets_obj = rquickjs::Object::new(ctx.clone())?;
+        
+        // Secrets.exists(identifier) - Check if a secret exists
+        let secrets_mgr_exists = secrets_manager.clone();
+        let exists_fn = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, identifier: String| -> JsResult<bool> {
+                if let Some(ref mgr) = secrets_mgr_exists {
+                    Ok(mgr.exists(&identifier))
+                } else {
+                    // No secrets manager available
+                    Ok(false)
+                }
+            },
+        )?;
+        secrets_obj.set("exists", exists_fn)?;
+        
+        // Secrets.list() - List all secret identifiers
+        let secrets_mgr_list = secrets_manager.clone();
+        let list_fn = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<Vec<String>> {
+                if let Some(ref mgr) = secrets_mgr_list {
+                    Ok(mgr.list_identifiers())
+                } else {
+                    // No secrets manager available
+                    Ok(Vec::new())
+                }
+            },
+        )?;
+        secrets_obj.set("list", list_fn)?;
+        
+        // Set the Secrets object on the global scope
+        global.set("Secrets", secrets_obj)?;
+        
+        debug!("Secrets JavaScript API initialized (read-only interface)");
+        
         Ok(())
     }
 

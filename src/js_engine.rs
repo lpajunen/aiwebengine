@@ -76,8 +76,13 @@ fn setup_secure_global_functions(
     config: &GlobalSecurityConfig,
     register_fn: Option<RegisterFunctionType>,
     auth_context: Option<crate::auth::JsAuthContext>,
+    secrets_manager: Option<std::sync::Arc<crate::secrets::SecretsManager>>,
 ) -> Result<(), rquickjs::Error> {
-    let secure_context = SecureGlobalContext::new_with_config(user_context, config.clone());
+    let secure_context = if let Some(secrets) = secrets_manager {
+        SecureGlobalContext::new_with_secrets(user_context, config.clone(), secrets)
+    } else {
+        SecureGlobalContext::new_with_config(user_context, config.clone())
+    };
 
     // Setup secure functions with proper capability validation
     secure_context.setup_secure_functions(ctx, script_uri, register_fn)?;
@@ -199,6 +204,7 @@ pub fn execute_script_secure(
                         &security_config,
                         Some(register_impl),
                         None, // No auth context during script execution with config
+                        None, // No secrets manager yet
                     )?;
 
                     // Execute the script
@@ -303,6 +309,7 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                                 &config,
                                 Some(register_impl),
                                 None, // No auth context during script registration
+                                None, // No secrets manager yet
                             )?; // Execute the script
                             ctx.eval::<(), _>(content)?;
                             Ok(())
@@ -385,6 +392,7 @@ pub fn execute_script_for_request_secure(
             &security_config,
             None,
             params.auth_context, // Pass auth context for request handling
+            None, // No secrets manager yet
         )?;
 
         Ok(())
@@ -526,6 +534,7 @@ pub fn execute_script_for_request(
             &config,
             None,
             Some(auth_ctx), // Provide anonymous auth context
+            None, // No secrets manager yet
         )?;
 
         Ok(())
@@ -639,7 +648,7 @@ pub fn execute_graphql_resolver(
 
         // GraphQL resolvers run with admin context to allow script management operations
         // In production, this should be secured via GraphQL-level authentication/authorization
-        setup_secure_global_functions(&ctx, &script_uri_owned, UserContext::admin("graphql-resolver".to_string()), &config, None, None)?;
+        setup_secure_global_functions(&ctx, &script_uri_owned, UserContext::admin("graphql-resolver".to_string()), &config, None, None, None)?;
 
         // Override specific functions that have different signatures for GraphQL resolver context
         let global = ctx.globals();
@@ -818,6 +827,7 @@ pub fn call_init_if_exists(
                 &config,
                 Some(register_impl),
                 None,
+                None, // No secrets manager yet
             )?;
 
             // Execute the script to define functions

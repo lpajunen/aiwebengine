@@ -4,7 +4,7 @@ use figment::{
     providers::{Env, Format, Serialized, Toml, Yaml},
 };
 use serde::{Deserialize, Serialize};
-use std::{net::SocketAddr, path::PathBuf, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, path::PathBuf, time::Duration};
 
 /// Application configuration with comprehensive settings for all components
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -30,6 +30,41 @@ pub struct AppConfig {
     /// Authentication configuration (optional)
     #[serde(default)]
     pub auth: Option<crate::auth::AuthConfig>,
+
+    /// Secrets configuration (optional)
+    /// Secrets can be loaded from configuration files or environment variables
+    /// Environment variables prefixed with SECRET_ will also be loaded
+    #[serde(default)]
+    pub secrets: SecretsConfig,
+}
+
+/// Secrets configuration
+///
+/// Stores secret identifiers and values from configuration files.
+/// Values can reference environment variables using ${VAR_NAME} syntax.
+///
+/// # Example (YAML)
+///
+/// ```yaml
+/// secrets:
+///   anthropic_api_key: "${ANTHROPIC_API_KEY}"
+///   sendgrid_api_key: "SG.actual-key-value"
+/// ```
+///
+/// # Example (TOML)
+///
+/// ```toml
+/// [secrets]
+/// anthropic_api_key = "${ANTHROPIC_API_KEY}"
+/// sendgrid_api_key = "SG.actual-key-value"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SecretsConfig {
+    /// Map of secret identifiers to values
+    /// Keys are identifiers (e.g., "anthropic_api_key")
+    /// Values are the actual secrets or environment variable references
+    #[serde(flatten)]
+    pub values: HashMap<String, String>,
 }
 
 /// Server-specific configuration

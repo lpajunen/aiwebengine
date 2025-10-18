@@ -407,6 +407,15 @@ The engine MUST:
 **Priority**: CRITICAL  
 **Status**: PARTIAL
 
+**Critical Security Principle - Trust Boundary**:
+
+Secrets MUST NEVER cross the Rust/JavaScript trust boundary. This is a fundamental security architecture requirement.
+
+- **Rust Layer (Trusted)**: Stores and manages actual secret values
+- **JavaScript Layer (Untrusted)**: Can only reference secrets by identifier
+- **Injection at Point of Use**: Rust injects secrets during HTTP requests, database connections, etc.
+- **No Direct Access**: No JavaScript API returns secret values under any circumstances
+
 The engine MUST provide comprehensive secret management:
 
 **Core Requirements**:
@@ -424,13 +433,22 @@ The engine MUST provide comprehensive secret management:
 - Solution developers can add secrets via editor interface
 - Both paths store secrets in the same secure vault
 
-**Access Control**:
+**Access Control and Security Architecture**:
 
-- Scripts can access secrets by identifier only via JavaScript API
-- Scripts cannot read actual secret values directly
-- Scripts can check if a secret exists without seeing its value
+- **JavaScript can only reference secrets by identifier** - Never retrieve values
+- **Rust layer injects secrets at point of use** - HTTP requests (via template syntax), AI API calls, database connections
+- Scripts can check if a secret exists (`Secrets.exists()`) without seeing its value
+- Scripts can list secret identifiers (`Secrets.list()`) but never values
 - Editor interface shows secret identifiers but never reveals values after creation
-- Secrets cannot be retrieved via any API after storage
+- No API (JavaScript, REST, or otherwise) can retrieve secret values after storage
+
+**Secret Injection Points**:
+
+1. **HTTP Client (fetch)**: Via template syntax `{{secret:identifier}}` in headers
+2. **AI APIs**: Automatic injection based on provider configuration (e.g., `AI.chat()` uses `anthropic_api_key`)
+3. **Email APIs** (future): Automatic injection based on provider
+4. **Database connections**: Managed in Rust layer, never exposed to JavaScript
+5. **OAuth providers**: Managed in Rust authentication layer
 
 **Audit and Security**:
 
@@ -1400,16 +1418,71 @@ The engine MUST expose HTTP client functionality for external API integration:
 
 **Integration with Secrets**:
 
-- Seamless integration with `Secrets.get()` for API keys
-- Automatic redaction of secrets from request logs
-- Support for common auth patterns (Bearer token, API key header)
+The engine MUST support secure secret injection in HTTP requests without exposing secret values to JavaScript:
+
+**Method 1: Template Syntax** (Recommended)
+
+JavaScript code references secrets using template syntax `{{secret:identifier}}` in header values:
+
+```javascript
+const response = await fetch("https://api.anthropic.com/v1/messages", {
+  method: "POST",
+  headers: {
+    "x-api-key": "{{secret:anthropic_api_key}}",
+    "content-type": "application/json"
+  },
+  body: JSON.stringify({
+    model: "claude-3-haiku-20240307",
+    messages: [{ role: "user", content: "Hello" }]
+  })
+});
+```
+
+The Rust layer:
+1. Detects `{{secret:identifier}}` pattern in header values
+2. Looks up secret from SecretsManager
+3. Replaces template with actual secret value
+4. Makes HTTP request with injected secret
+5. Returns response to JavaScript (secret never in JS context)
+
+**Method 2: Dedicated Secrets Parameter** (Alternative)
+
+```javascript
+const response = await fetch("https://api.example.com/v1/data", {
+  method: "POST",
+  headers: {
+    "content-type": "application/json"
+  },
+  body: JSON.stringify({ query: "..." }),
+  secrets: {
+    "x-api-key": "api_key_identifier",  // Maps header name to secret ID
+    "authorization": "Bearer token_identifier"
+  }
+});
+```
+
+**Security Guarantees**:
+
+- Secret values NEVER cross the Rust/JavaScript boundary
+- Secrets only injected at HTTP request time by Rust layer
+- Secret access logged for audit trail (identifier only, never values)
+- Automatic redaction of secrets from all logs and error messages
+- Error thrown if referenced secret doesn't exist (before HTTP request)
+
+**Common Authentication Patterns**:
+
+- Bearer token: `"Authorization": "Bearer {{secret:api_token}}"`
+- API key header: `"x-api-key": "{{secret:api_key}}"`
+- Basic auth: `"Authorization": "Basic {{secret:credentials_base64}}"`
+- Custom headers: `"custom-auth": "{{secret:custom_token}}"`
 
 **Error Handling**:
 
 - Network errors (connection refused, timeout, DNS failure)
 - HTTP error responses (4xx, 5xx)
 - Certificate errors
-- Detailed error messages for debugging
+- Secret not found errors (clear message, doesn't reveal which secrets exist)
+- Detailed error messages for debugging (with secrets redacted)
 
 ### REQ-JSAPI-008: Secrets API
 
@@ -1420,50 +1493,67 @@ The engine MUST expose secrets management API to JavaScript:
 
 **Core API**:
 
-- `Secrets.get(identifier)` - Retrieve secret value by identifier
-- `Secrets.exists(identifier)` - Check if secret exists without retrieving value
-- `Secrets.list()` - List available secret identifiers (not values)
+- `Secrets.exists(identifier)` - Check if secret exists without retrieving value (returns boolean)
+- `Secrets.list()` - List available secret identifiers (not values, returns array of strings)
+- ~~`Secrets.get(identifier)`~~ - **REMOVED** - JavaScript must never retrieve secret values directly
+
+**Critical Security Principle**:
+
+JavaScript code can ONLY check if secrets exist or list their identifiers. JavaScript can NEVER retrieve actual secret values. Secret values remain in the Rust layer and are injected at point of use (HTTP requests, database connections, AI API calls, etc.) by the engine.
 
 **Security Constraints**:
 
-- Scripts can only access secrets via `Secrets.get()` API
-- Actual secret values never exposed directly to JavaScript context
+- Secret values NEVER cross the Rust/JavaScript boundary
+- Scripts reference secrets by identifier only
 - Secret identifiers are strings (e.g., "stripe_api_key", "sendgrid_token")
-- `Secrets.get()` returns value at runtime, value never stored in JS variables
-- Engine automatically redacts secrets from console.log() output
+- Secrets are injected by Rust layer during HTTP requests via template syntax
+- Engine automatically redacts secrets from all output (logs, errors, responses)
 - Secrets automatically redacted from error stack traces
 
 **Error Handling**:
 
-- Throw clear error if secret identifier not found
+- Throw clear error if referenced secret identifier not found during injection
 - Never expose which secrets exist in error messages to unauthorized users
-- Log secret access attempts for audit trail
+- Log secret access attempts for audit trail (identifier only, never values)
 
 **Usage Patterns**:
 
 ```javascript
-// Correct usage - secret used directly in request
-const response = await fetch("https://api.example.com/data", {
-  headers: {
-    Authorization: `Bearer ${Secrets.get("api_token")}`,
-  },
-});
-
-// Check existence before use
-if (Secrets.exists("optional_api_key")) {
-  // Use optional integration
+// Check if secret is configured before using a feature
+if (Secrets.exists("sendgrid_api_key")) {
+  // Enable email integration
+  // Actual secret will be injected by Rust during fetch()
+} else {
+  return Response.json({
+    error: "Email feature not configured"
+  }, { status: 503 });
 }
 
-// List available secrets (identifiers only)
+// List available secrets (identifiers only) for feature discovery
 const availableSecrets = Secrets.list();
-// Returns: ['stripe_api_key', 'sendgrid_token', 'openai_api_key']
+// Returns: ['stripe_api_key', 'sendgrid_token', 'anthropic_api_key']
+
+// Use secrets in HTTP requests via template syntax (see REQ-JSAPI-007)
+const response = await fetch("https://api.example.com/data", {
+  headers: {
+    Authorization: "Bearer {{secret:api_token}}"  // Rust injects value
+  }
+});
+
+// Or use high-level APIs that handle secrets automatically
+const aiResponse = await AI.chat("prompt", {
+  provider: "claude"  // Rust automatically uses anthropic_api_key
+});
 ```
 
 **Implementation Notes**:
 
-- Secrets resolved at runtime, not at script load time
-- Secret values never logged or stored in JS heap
+- Only `exists()` and `list()` functions exposed to JavaScript
+- No function that returns secret values to JavaScript context
+- Secret injection handled by Rust layer in `fetch()` implementation
+- High-level APIs (AI, Email, etc.) manage secrets internally
 - Integration with REQ-SEC-005 vault implementation
+- Aligns with REQ-SEC-008 (security enforced in Rust, not JavaScript)
 
 ### REQ-JSAPI-010: API Naming Standards
 

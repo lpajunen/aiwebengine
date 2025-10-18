@@ -17,6 +17,7 @@ pub mod middleware;
 pub mod repository;
 pub mod safe_helpers;
 pub mod script_init;
+pub mod secrets;
 pub mod security;
 pub mod stream_manager;
 pub mod stream_registry;
