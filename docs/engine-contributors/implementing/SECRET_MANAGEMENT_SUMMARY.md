@@ -7,12 +7,14 @@
 ## The Core Problem
 
 **Original Approach** (Insecure):
+
 ```javascript
-const apiKey = Secrets.get("api_key");  // Returns actual secret value!
-fetch(url, { headers: { "x-api-key": apiKey } });  // Secret in JS memory
+const apiKey = Secrets.get("api_key"); // Returns actual secret value!
+fetch(url, { headers: { "x-api-key": apiKey } }); // Secret in JS memory
 ```
 
 **Why This is Bad**:
+
 - Secret value exists in JavaScript memory
 - Can be logged, inspected with debugger, or accidentally leaked
 - Violates REQ-SEC-008 (security must be in Rust, not JS)
@@ -26,12 +28,12 @@ fetch(url, { headers: { "x-api-key": apiKey } });  // Secret in JS memory
 // JavaScript only knows the identifier, never the value
 fetch(url, {
   headers: {
-    "x-api-key": "{{secret:anthropic_api_key}}"  // Template syntax
-  }
+    "x-api-key": "{{secret:anthropic_api_key}}", // Template syntax
+  },
 });
 
 // Or use high-level API that handles secrets automatically
-AI.chat("prompt");  // Rust injects the right secret
+AI.chat("prompt"); // Rust injects the right secret
 ```
 
 ## Required Changes
@@ -39,9 +41,11 @@ AI.chat("prompt");  // Rust injects the right secret
 ### 1. JavaScript APIs
 
 **Remove**:
+
 - ❌ `Secrets.get(identifier)` - Never return values to JavaScript
 
 **Keep/Add**:
+
 - ✅ `Secrets.exists(identifier)` - Check if secret is configured
 - ✅ `Secrets.list()` - List available secret identifiers
 
@@ -61,6 +65,7 @@ fetch("https://api.anthropic.com/v1/messages", {
 ```
 
 Rust layer:
+
 1. Detects `{{secret:*}}` pattern in headers
 2. Looks up secret from SecretsManager
 3. Replaces with actual value
@@ -74,8 +79,8 @@ Rust layer:
 ```javascript
 // High-level API - JavaScript never sees secret
 AI.chat("What is Rust?", {
-  provider: "claude",  // Rust knows to use "anthropic_api_key"
-  model: "claude-3-haiku-20240307"
+  provider: "claude", // Rust knows to use "anthropic_api_key"
+  model: "claude-3-haiku-20240307",
 });
 ```
 
@@ -84,24 +89,29 @@ This is the right pattern - Rust handles all secret management internally.
 ### 4. Documentation Updates
 
 **Use Case UC-504**: Fix example code
+
 - Remove: `const apiKey = Secrets.get(...)`
 - Replace with: Template syntax or high-level APIs
 
 **REQ-JSAPI-008**: Remove `Secrets.get()`
+
 - Only expose `exists()` and `list()`
 - Never expose `get()`
 
 **REQ-JSAPI-007**: Add secret injection spec
+
 - Document template syntax: `"{{secret:id}}"`
 - Alternative: `secrets` parameter in fetch options
 
 **REQ-SEC-005**: Clarify boundary
+
 - Secrets never cross Rust/JavaScript boundary
 - JavaScript can only reference by identifier
 
 ## Implementation Impact
 
 ### Phases Not Affected
+
 - ✅ Phase 1: SecretsManager (Rust side unchanged)
 - ✅ Phase 3: AI Integration (already using correct pattern)
 - ✅ Phase 4: Editor Backend (uses AI.chat, which is secure)
@@ -109,30 +119,31 @@ This is the right pattern - Rust handles all secret management internally.
 - ✅ Phase 6: Testing (test secure implementation)
 
 ### Phases Requiring Changes
+
 - ⚠️ **Phase 2: HTTP Client** - Add secret injection logic
   - Parse template syntax `{{secret:*}}`
   - Look up and inject secrets in Rust
   - Return error if secret not found
-  
+
 ### New JavaScript API (Simplified)
 
 ```javascript
 // Only two secret functions exposed
-Secrets.exists("anthropic_api_key")  // Returns: true/false
-Secrets.list()                       // Returns: ["anthropic_api_key", ...]
+Secrets.exists("anthropic_api_key"); // Returns: true/false
+Secrets.list(); // Returns: ["anthropic_api_key", ...]
 
 // No Secrets.get() !
 
 // Using secrets in fetch
 fetch(url, {
   headers: {
-    "authorization": "Bearer {{secret:api_token}}"  // Template
-  }
+    authorization: "Bearer {{secret:api_token}}", // Template
+  },
 });
 
 // Using secrets in high-level APIs (automatic)
-AI.chat(prompt, { provider: "claude" })  // Rust handles secret
-Email.send({ to, from, subject, body, provider: "sendgrid" })  // Future
+AI.chat(prompt, { provider: "claude" }); // Rust handles secret
+Email.send({ to, from, subject, body, provider: "sendgrid" }); // Future
 ```
 
 ## Security Benefits
@@ -156,6 +167,7 @@ Email.send({ to, from, subject, body, provider: "sendgrid" })  // Future
 5. Add tests to verify secrets never enter JavaScript context
 
 **Timeline impact**: Minimal
+
 - Phase 2 implementation slightly more complex (secret injection logic)
 - Overall timeline: Still 12-17 days
 - Security: Significantly improved ✅

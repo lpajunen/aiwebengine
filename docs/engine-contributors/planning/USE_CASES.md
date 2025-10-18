@@ -1280,7 +1280,7 @@ async function submitContactForm(req) {
     if (!Secrets.exists("sendgrid_api_key")) {
       return Response.json(
         { error: "Email service not configured" },
-        { status: 503 }
+        { status: 503 },
       );
     }
 

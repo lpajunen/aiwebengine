@@ -77,6 +77,7 @@ Once configured:
 4. Get intelligent responses about your code
 
 The AI assistant can help you:
+
 - Write JavaScript functions
 - Debug errors
 - Explain API usage
@@ -86,6 +87,7 @@ The AI assistant can help you:
 ### Checking AI Status
 
 The AI assistant will display its configuration status:
+
 - ✅ **Ready**: API key is configured
 - ⚠️ **Not Configured**: Shows setup instructions
 
@@ -93,10 +95,10 @@ You can also check programmatically:
 
 ```javascript
 // In your scripts
-if (Secrets.exists('anthropic_api_key')) {
-  writeLog('AI assistant is available');
+if (Secrets.exists("anthropic_api_key")) {
+  writeLog("AI assistant is available");
 } else {
-  writeLog('AI assistant not configured - set SECRET_ANTHROPIC_API_KEY');
+  writeLog("AI assistant not configured - set SECRET_ANTHROPIC_API_KEY");
 }
 ```
 

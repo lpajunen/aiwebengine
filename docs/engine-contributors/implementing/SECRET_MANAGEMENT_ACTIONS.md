@@ -11,12 +11,14 @@ The original approach of exposing secret values to JavaScript (`Secrets.get()` r
 ## Immediate Actions Required
 
 ### 1. Update Use Case UC-504
+
 **File**: `docs/engine-contributors/planning/USE_CASES.md`  
 **Lines**: ~1256-1320
 
 **Change Required**: Fix the example code to use secure approach
 
 **Current (Insecure)**:
+
 ```javascript
 const apiKey = Secrets.get("sendgrid_api_key");  // ❌ Returns value
 
@@ -31,6 +33,7 @@ const response = await fetch("https://api.sendgrid.com/v3/mail/send", {
 ```
 
 **Should Be (Secure)**:
+
 ```javascript
 // Option 1: Template syntax
 const response = await fetch("https://api.sendgrid.com/v3/mail/send", {
@@ -57,21 +60,24 @@ const response = await Email.send({
 ---
 
 ### 2. Update Requirement REQ-JSAPI-008
+
 **File**: `docs/engine-contributors/planning/REQUIREMENTS.md`  
 **Lines**: ~1415-1470
 
 **Change Required**: Remove `Secrets.get()`, clarify constraints
 
 **Current Spec**:
+
 ```markdown
 **Core API**:
 
-- `Secrets.get(identifier)` - Retrieve secret value by identifier  ❌
+- `Secrets.get(identifier)` - Retrieve secret value by identifier ❌
 - `Secrets.exists(identifier)` - Check if secret exists
 - `Secrets.list()` - List available secret identifiers
 ```
 
 **Should Be**:
+
 ```markdown
 **Core API**:
 
@@ -89,43 +95,49 @@ JavaScript can ONLY check if secrets exist or list identifiers. JavaScript can N
 ---
 
 ### 3. Update Requirement REQ-JSAPI-007
+
 **File**: `docs/engine-contributors/planning/REQUIREMENTS.md`  
 **Lines**: ~1364-1410
 
 **Change Required**: Add secret injection specification
 
 **Add Section**:
-```markdown
+
+````markdown
 **Integration with Secrets**:
 
 The engine MUST support secure secret injection in HTTP requests:
 
 **Method 1: Template Syntax** (Recommended)
+
 ```javascript
 fetch("https://api.example.com/v1/data", {
   headers: {
-    "authorization": "Bearer {{secret:api_key}}",
-    "x-api-key": "{{secret:api_key}}"
-  }
+    authorization: "Bearer {{secret:api_key}}",
+    "x-api-key": "{{secret:api_key}}",
+  },
 });
 ```
+````
 
 Rust detects `{{secret:identifier}}` pattern, looks up secret from SecretsManager, replaces with actual value before making HTTP request. Secret never enters JavaScript context.
 
 **Method 2: Dedicated Secrets Parameter** (Alternative)
+
 ```javascript
 fetch("https://api.example.com/v1/data", {
   headers: {
-    "content-type": "application/json"
+    "content-type": "application/json",
   },
   secrets: {
-    "authorization": "Bearer api_key",  // Maps header name to secret ID
-    "x-api-key": "api_key"
-  }
+    authorization: "Bearer api_key", // Maps header name to secret ID
+    "x-api-key": "api_key",
+  },
 });
 ```
 
 **Security Guarantees**:
+
 - Secret values never cross Rust/JavaScript boundary
 - Secrets only injected at HTTP request time by Rust layer
 - Secret access logged for audit trail (identifier only)
@@ -133,17 +145,19 @@ fetch("https://api.example.com/v1/data", {
 - Automatic secret redaction from all logs
 
 **Error Handling**:
+
 - Clear error if secret identifier not found: "Secret 'api_key' not configured"
 - Never reveal which secrets exist to unauthorized contexts
 - Log secret access attempts with script ID and URL
-```
+
+````
 
 **Impact**: High - Specifies new functionality for `fetch()`
 
 ---
 
 ### 4. Clarify Requirement REQ-SEC-005
-**File**: `docs/engine-contributors/planning/REQUIREMENTS.md`  
+**File**: `docs/engine-contributors/planning/REQUIREMENTS.md`
 **Lines**: ~420-460
 
 **Change Required**: Add explicit trust boundary principle
@@ -152,7 +166,7 @@ fetch("https://api.example.com/v1/data", {
 ```markdown
 ### REQ-SEC-005: Secret Management
 
-**Priority**: CRITICAL  
+**Priority**: CRITICAL
 **Status**: PLANNED
 
 **Critical Security Principle**:
@@ -172,34 +186,40 @@ JavaScript layer responsibilities:
 **Architecture Principle**: Trust boundary enforcement is non-negotiable. Secrets stay in Rust, references cross to JavaScript.
 
 [...rest of existing content...]
-```
+````
 
 **Impact**: High - Clarifies fundamental security architecture
 
 ---
 
 ### 5. Update Implementation Plan
+
 **File**: `docs/engine-contributors/implementing/AI_ASSISTANT_IMPLEMENTATION_PLAN.md`  
 **Multiple sections**
 
 **Changes Required**:
 
 #### Phase 1.2 - JavaScript API Changes
-```markdown
+
+````markdown
 **Add Global `Secrets` Object**:
+
 ```javascript
 // Available in all scripts
-Secrets.exists("anthropic_api_key")   // Returns boolean
-Secrets.list()                        // Returns array of identifiers
+Secrets.exists("anthropic_api_key"); // Returns boolean
+Secrets.list(); // Returns array of identifiers
 
 // NO Secrets.get() - Never expose values!
 ```
+````
 
 **Rust Implementation**:
+
 - Create `secrets_exists()` and `secrets_list()` functions ONLY
 - DO NOT implement `secrets_get()` that returns values
 - Expose to JavaScript runtime via `deno_core::extension!`
-```
+
+````
 
 #### Phase 2.2 - Fetch with Secret Injection (NEW SECTION)
 ```markdown
@@ -213,7 +233,7 @@ pub async fn js_fetch(
     options: FetchOptions,
 ) -> Result<FetchResponse, HttpError> {
     let mut final_headers = HashMap::new();
-    
+
     // Process headers and inject secrets
     for (key, value) in options.headers.unwrap_or_default() {
         if value.starts_with("{{secret:") && value.ends_with("}}") {
@@ -224,17 +244,17 @@ pub async fn js_fetch(
                 .strip_suffix("}}")
                 .unwrap()
                 .trim();
-            
+
             // Look up secret (stays in Rust)
             let secret_value = SECRETS_MANAGER
                 .read()
                 .unwrap()
                 .get(secret_id)
                 .ok_or_else(|| HttpError::SecretNotFound(secret_id.to_string()))?;
-            
+
             // Inject actual value
             final_headers.insert(key, secret_value);
-            
+
             // Audit log
             audit_log::log_secret_access(secret_id, "fetch", &url);
         } else {
@@ -242,7 +262,7 @@ pub async fn js_fetch(
             final_headers.insert(key, value);
         }
     }
-    
+
     // Make HTTP request with injected secrets
     let response = HTTP_CLIENT
         .request(options.method.as_str(), &url)
@@ -250,17 +270,19 @@ pub async fn js_fetch(
         .body(options.body.unwrap_or_default())
         .send()
         .await?;
-    
+
     Ok(FetchResponse::from(response).await?)
 }
-```
+````
 
 **Testing**:
+
 - Verify secrets never appear in JavaScript context
 - Verify template syntax correctly parsed and injected
 - Verify errors for missing secrets
 - Verify audit logging works
-```
+
+````
 
 #### Phase 4 - Editor Changes (MINOR)
 ```markdown
@@ -274,10 +296,11 @@ if (!Secrets.exists("anthropic_api_key")) {
     configured: false
   }, { status: 503 });
 }
-```
+````
 
 The rest of Phase 4 is already correct (uses `AI.chat()` which is secure).
-```
+
+````
 
 **Impact**: Critical - Fundamental implementation approach change
 
@@ -308,9 +331,10 @@ fn test_secret_not_found_error() {
     // Verify clear error when secret doesn't exist
     // Verify error doesn't list available secrets
 }
-```
+````
 
 #### 2. Security Tests
+
 ```rust
 #[test]
 fn test_secret_not_in_logs() {
@@ -333,38 +357,39 @@ fn test_audit_trail() {
 ```
 
 #### 3. JavaScript API Tests
+
 ```javascript
 // Test in test script
 function testSecrets(req) {
   const tests = [];
-  
+
   // Test exists() returns boolean
   tests.push({
     name: "Secrets.exists() works",
-    passed: typeof Secrets.exists("anthropic_api_key") === "boolean"
+    passed: typeof Secrets.exists("anthropic_api_key") === "boolean",
   });
-  
+
   // Test list() returns array
   tests.push({
     name: "Secrets.list() works",
-    passed: Array.isArray(Secrets.list())
+    passed: Array.isArray(Secrets.list()),
   });
-  
+
   // Test get() doesn't exist or throws
   try {
     const value = Secrets.get("anthropic_api_key");
     tests.push({
       name: "Secrets.get() should not exist",
       passed: false,
-      error: "get() should not be available"
+      error: "get() should not be available",
     });
   } catch (e) {
     tests.push({
       name: "Secrets.get() correctly unavailable",
-      passed: true
+      passed: true,
     });
   }
-  
+
   return Response.json({ tests });
 }
 ```
@@ -374,9 +399,11 @@ function testSecrets(req) {
 ## Documentation Updates
 
 ### 1. Create Security Guide
+
 **New File**: `docs/solution-developers/SECRETS_SECURITY.md`
 
 Content should explain:
+
 - Why secrets never appear in JavaScript
 - How to use template syntax in fetch()
 - How to use high-level APIs (AI.chat, etc.)
@@ -385,10 +412,12 @@ Content should explain:
 - Common mistakes to avoid
 
 ### 2. Update Editor Documentation
+
 **File**: `docs/solution-developers/EDITOR_README.md`
 
 Add section on AI assistant configuration:
-```markdown
+
+````markdown
 ## AI Assistant Setup
 
 The editor includes an AI assistant powered by Claude. To enable it:
@@ -400,11 +429,14 @@ The editor includes an AI assistant powered by Claude. To enable it:
    secrets:
      anthropic_api_key: "${ANTHROPIC_API_KEY}"
    ```
+````
+
 4. Restart server
 5. Open editor and use AI assistant panel
 
 **Security Note**: The API key is managed securely by the Rust layer and never exposed to JavaScript code.
-```
+
+````
 
 ### 3. Update API Documentation
 **File**: `docs/solution-developers/javascript-apis.md`
@@ -427,7 +459,7 @@ const secrets = Secrets.list();
 
 // Note: You cannot retrieve secret values in JavaScript.
 // Use template syntax in fetch() or high-level APIs that handle secrets automatically.
-```
+````
 
 ### Using Secrets in HTTP Requests
 
@@ -435,22 +467,23 @@ const secrets = Secrets.list();
 // Template syntax (recommended)
 const response = await fetch("https://api.example.com/data", {
   headers: {
-    "authorization": "Bearer {{secret:api_key}}"
-  }
+    authorization: "Bearer {{secret:api_key}}",
+  },
 });
 
 // High-level API (best for common services)
 const response = await AI.chat("Hello", {
-  provider: "claude"  // Automatically uses anthropic_api_key
+  provider: "claude", // Automatically uses anthropic_api_key
 });
 ```
+
 ```
 
 ---
 
 ## Timeline Impact
 
-**Original Estimate**: 12-17 days  
+**Original Estimate**: 12-17 days
 **Updated Estimate**: 12-17 days (no change)
 
 **Reasoning**:
@@ -540,3 +573,4 @@ If you have questions about this analysis:
 3. Review `SECRET_MANAGEMENT_SUMMARY.md` for quick overview
 
 All documents are in: `docs/engine-contributors/implementing/`
+```

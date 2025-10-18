@@ -120,6 +120,169 @@ function sendMessage(req) {
 register("/chat/send", "sendMessage", "POST");
 ```
 
+### fetch(url, options)
+
+Makes HTTP requests to external APIs with built-in security features including secret injection for API keys.
+
+**Parameters:**
+
+- `url` (string): The URL to request
+- `options` (string, optional): JSON string containing request options
+
+**Options Object:**
+
+- `method` (string, optional): HTTP method - `"GET"`, `"POST"`, `"PUT"`, `"DELETE"`, `"PATCH"`. Default: `"GET"`
+- `headers` (object, optional): Request headers as key-value pairs
+- `body` (string, optional): Request body for POST/PUT/PATCH requests
+- `timeout_ms` (number, optional): Timeout in milliseconds. Default: 30000 (30 seconds)
+
+**Returns:** JSON string with response object containing:
+
+- `status` (number): HTTP status code
+- `ok` (boolean): `true` if status is 2xx
+- `headers` (object): Response headers
+- `body` (string): Response body
+
+**Example - Simple GET Request:**
+
+```javascript
+function fetchExample(req) {
+  try {
+    // Make a GET request
+    const responseJson = fetch("https://api.example.com/data");
+    const response = JSON.parse(responseJson);
+
+    if (response.ok) {
+      writeLog("Fetch successful: " + response.status);
+      return {
+        status: 200,
+        body: response.body,
+        contentType: "application/json",
+      };
+    } else {
+      return {
+        status: response.status,
+        body: "External API error",
+        contentType: "text/plain",
+      };
+    }
+  } catch (error) {
+    writeLog("Fetch error: " + error);
+    return { status: 500, body: "Request failed" };
+  }
+}
+```
+
+**Example - POST with JSON:**
+
+```javascript
+function createResource(req) {
+  const requestData = {
+    name: "New Item",
+    description: "Created via API",
+  };
+
+  const options = JSON.stringify({
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(requestData),
+  });
+
+  const responseJson = fetch("https://api.example.com/items", options);
+  const response = JSON.parse(responseJson);
+
+  return {
+    status: response.ok ? 200 : 502,
+    body: response.body,
+    contentType: "application/json",
+  };
+}
+```
+
+**Example - Using Secret Injection for API Keys:**
+
+The fetch function supports secure secret injection using template syntax `{{secret:identifier}}`. This allows you to use API keys stored in the server's secrets manager without exposing them in your script code.
+
+```javascript
+function callSecureAPI(req) {
+  // Use {{secret:identifier}} syntax to inject secrets securely
+  const options = JSON.stringify({
+    method: "GET",
+    headers: {
+      Authorization: "{{secret:api_key}}", // Secret injected by server
+      "X-API-Key": "{{secret:external_api_key}}", // Another secret
+    },
+  });
+
+  const responseJson = fetch("https://secure-api.example.com/data", options);
+  const response = JSON.parse(responseJson);
+
+  return {
+    status: 200,
+    body: response.body,
+    contentType: "application/json",
+  };
+}
+```
+
+**Security Features:**
+
+- **Secret Injection**: Use `{{secret:identifier}}` in headers to securely inject API keys. The secret values never appear in your JavaScript code.
+- **URL Validation**: Blocks requests to localhost, private IPs (192.168.x.x, 10.x.x.x, etc.), and local networks
+- **Protocol Restrictions**: Only HTTP and HTTPS are allowed (blocks file://, ftp://, etc.)
+- **Response Size Limits**: Responses are limited to 10MB to prevent memory exhaustion
+- **Timeout Enforcement**: All requests have a timeout (default 30 seconds)
+- **TLS/SSL Validation**: HTTPS certificates are validated
+
+**Error Handling:**
+
+```javascript
+function robustFetch(req) {
+  try {
+    const responseJson = fetch("https://api.example.com/data");
+    const response = JSON.parse(responseJson);
+
+    // Handle different response statuses
+    if (response.status === 200) {
+      return { status: 200, body: response.body };
+    } else if (response.status === 404) {
+      return { status: 404, body: "Resource not found" };
+    } else if (response.status === 429) {
+      return { status: 429, body: "Rate limit exceeded" };
+    } else {
+      return { status: 502, body: "Upstream error" };
+    }
+  } catch (error) {
+    // Fetch errors (network, timeout, blocked URL, etc.)
+    writeLog("Fetch failed: " + error);
+    return { status: 500, body: "Request failed" };
+  }
+}
+```
+
+**Blocked URLs:**
+
+These URLs will be rejected for security reasons:
+
+- `http://localhost/api` - Localhost
+- `http://127.0.0.1/api` - Loopback address
+- `http://192.168.1.1/api` - Private network
+- `http://10.0.0.1/api` - Private network
+- `file:///etc/passwd` - File protocol
+- `ftp://example.com/file` - FTP protocol
+
+**Best Practices:**
+
+1. **Always use try-catch**: Network requests can fail in many ways
+2. **Check response.ok**: Don't assume requests always succeed
+3. **Use secrets for API keys**: Never hardcode API keys in scripts
+4. **Set appropriate timeouts**: Adjust `timeout_ms` based on expected response time
+5. **Handle rate limits**: Implement retry logic for 429 responses
+6. **Log errors**: Use `writeLog()` to track fetch failures
+7. **Validate response data**: Parse and validate JSON responses before using them
+
 ## Streaming Connections
 
 ### Client-Side Connection

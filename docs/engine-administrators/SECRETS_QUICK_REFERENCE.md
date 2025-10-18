@@ -34,11 +34,11 @@ export SECRET_ANTHROPIC_API_KEY="$(cat /etc/secrets/anthropic-key)"
 
 Any environment variable with `SECRET_` prefix becomes a secret:
 
-| Environment Variable | Secret Identifier |
-|---------------------|-------------------|
+| Environment Variable       | Secret Identifier   |
+| -------------------------- | ------------------- |
 | `SECRET_ANTHROPIC_API_KEY` | `anthropic_api_key` |
-| `SECRET_OPENAI_API_KEY` | `openai_api_key` |
-| `SECRET_MY_SERVICE_TOKEN` | `my_service_token` |
+| `SECRET_OPENAI_API_KEY`    | `openai_api_key`    |
+| `SECRET_MY_SERVICE_TOKEN`  | `my_service_token`  |
 | `SECRET_DATABASE_PASSWORD` | `database_password` |
 
 **Rule**: Identifier = lowercase(everything after `SECRET_`)
@@ -52,7 +52,7 @@ Any environment variable with `SECRET_` prefix becomes a secret:
 secrets:
   values:
     anthropic_api_key: "sk-ant-api03-..."
-    openai_api_key: "${OPENAI_API_KEY}"  # Reference env var
+    openai_api_key: "${OPENAI_API_KEY}" # Reference env var
 ```
 
 Or in TOML:
@@ -70,10 +70,10 @@ openai_api_key = "${OPENAI_API_KEY}"
 
 ```javascript
 // ✅ Check if a secret exists
-Secrets.exists('anthropic_api_key')  // returns true/false
+Secrets.exists("anthropic_api_key"); // returns true/false
 
 // ✅ List all secret identifiers
-Secrets.list()  // returns ['anthropic_api_key', 'openai_api_key']
+Secrets.list(); // returns ['anthropic_api_key', 'openai_api_key']
 
 // ❌ Get secret value - NOT AVAILABLE
 // Secrets.get('anthropic_api_key')  // This function does not exist!
@@ -87,17 +87,17 @@ Secret values are **never** accessible from JavaScript. They can only be used vi
 
 ```javascript
 // Template syntax: {{secret:identifier}}
-const response = await fetch('https://api.anthropic.com/v1/messages', {
-  method: 'POST',
+const response = await fetch("https://api.anthropic.com/v1/messages", {
+  method: "POST",
   headers: {
     // ✅ Secret injected by Rust before request is sent
-    'x-api-key': '{{secret:anthropic_api_key}}',
-    'content-type': 'application/json'
+    "x-api-key": "{{secret:anthropic_api_key}}",
+    "content-type": "application/json",
   },
   body: JSON.stringify({
-    model: 'claude-3-haiku-20240307',
-    messages: [{ role: 'user', content: 'Hello!' }]
-  })
+    model: "claude-3-haiku-20240307",
+    messages: [{ role: "user", content: "Hello!" }],
+  }),
 });
 ```
 
@@ -106,15 +106,15 @@ const response = await fetch('https://api.anthropic.com/v1/messages', {
 ```javascript
 function apiHandler(req) {
   // Check if required secret exists
-  if (!Secrets.exists('anthropic_api_key')) {
-    writeLog('ERROR: Anthropic API key not configured');
+  if (!Secrets.exists("anthropic_api_key")) {
+    writeLog("ERROR: Anthropic API key not configured");
     return {
       status: 503,
       body: JSON.stringify({
-        error: 'Service Unavailable',
-        message: 'Please configure SECRET_ANTHROPIC_API_KEY'
+        error: "Service Unavailable",
+        message: "Please configure SECRET_ANTHROPIC_API_KEY",
       }),
-      contentType: 'application/json'
+      contentType: "application/json",
     };
   }
 
@@ -175,27 +175,31 @@ export SECRET_MONGODB_PASSWORD="mongo-password"
 ### ✅ DO
 
 1. **Use environment variables in production**
+
    ```bash
    export SECRET_ANTHROPIC_API_KEY="$(vault kv get -field=key secret/anthropic)"
    ```
 
 2. **Use different keys for dev/staging/prod**
+
    ```bash
    # Development
    export SECRET_STRIPE_API_KEY="sk_test_..."
-   
+
    # Production
    export SECRET_STRIPE_API_KEY="sk_live_..."
    ```
 
 3. **Check secret availability before using**
+
    ```javascript
-   if (!Secrets.exists('required_key')) {
-     throw new Error('Configuration error');
+   if (!Secrets.exists("required_key")) {
+     throw new Error("Configuration error");
    }
    ```
 
 4. **Add .env to .gitignore**
+
    ```bash
    echo ".env" >> .gitignore
    ```
@@ -203,6 +207,7 @@ export SECRET_MONGODB_PASSWORD="mongo-password"
 5. **Document required secrets in README**
    ```markdown
    ## Required Secrets
+
    - `SECRET_ANTHROPIC_API_KEY` - Anthropic API key for AI features
    - `SECRET_DATABASE_PASSWORD` - PostgreSQL password
    ```
@@ -210,24 +215,27 @@ export SECRET_MONGODB_PASSWORD="mongo-password"
 ### ❌ DON'T
 
 1. **Don't commit secrets to Git**
+
    ```yaml
    # ❌ BAD - Never do this!
    secrets:
      values:
-       api_key: "sk-ant-api03-actual-key"  # Will be in Git history!
+       api_key: "sk-ant-api03-actual-key" # Will be in Git history!
    ```
 
 2. **Don't log secret values**
+
    ```javascript
    // ❌ BAD - But won't work anyway (Secrets.get doesn't exist)
    // const key = Secrets.get('api_key');
    // writeLog('API Key: ' + key);
-   
+
    // ✅ GOOD - The engine redacts secrets automatically
-   writeLog('API key configured: ' + Secrets.exists('api_key'));
+   writeLog("API key configured: " + Secrets.exists("api_key"));
    ```
 
 3. **Don't use config files for production secrets**
+
    ```toml
    # ❌ BAD - Production secrets in config file
    [secrets.values]
@@ -245,18 +253,20 @@ export SECRET_MONGODB_PASSWORD="mongo-password"
 When rotating secrets:
 
 1. **Update environment variable**
+
    ```bash
    export SECRET_ANTHROPIC_API_KEY="sk-ant-api03-new-key"
    ```
 
 2. **Restart the application**
+
    ```bash
    # Systemd
    sudo systemctl restart aiwebengine
-   
+
    # Docker
    docker-compose restart
-   
+
    # Manual
    pkill aiwebengine && ./aiwebengine
    ```
@@ -273,7 +283,9 @@ When rotating secrets:
 **Symptom**: JavaScript reports `Secrets.exists('key') === false`
 
 **Solutions**:
+
 1. Check environment variable is set:
+
    ```bash
    echo $SECRET_ANTHROPIC_API_KEY
    ```
@@ -289,6 +301,7 @@ When rotating secrets:
 **Symptom**: API returns 401 Unauthorized
 
 **Solutions**:
+
 1. Verify the secret value is correct
 2. Check for extra spaces or newlines:
    ```bash
@@ -302,6 +315,7 @@ When rotating secrets:
 **Symptom**: `{{secret:key}}` appears in request literally
 
 **Solutions**:
+
 1. Verify secret exists: `Secrets.exists('key')`
 2. Check template syntax (no spaces, correct identifier)
 3. Update to latest version (feature may not be implemented yet)
@@ -362,7 +376,7 @@ function aiChatHandler(req) {
   }
 
   const body = JSON.parse(req.body);
-  
+
   // Make API call with secret injection
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -394,18 +408,18 @@ register('/api/ai-chat', 'aiChatHandler', 'POST');
 function init() {
   // Check what services are available
   const services = [];
-  
-  if (Secrets.exists('anthropic_api_key')) {
-    services.push('claude');
-    register('/api/claude', 'claudeHandler', 'POST');
+
+  if (Secrets.exists("anthropic_api_key")) {
+    services.push("claude");
+    register("/api/claude", "claudeHandler", "POST");
   }
-  
-  if (Secrets.exists('openai_api_key')) {
-    services.push('openai');
-    register('/api/openai', 'openaiHandler', 'POST');
+
+  if (Secrets.exists("openai_api_key")) {
+    services.push("openai");
+    register("/api/openai", "openaiHandler", "POST");
   }
-  
-  writeLog('Available AI services: ' + services.join(', '));
+
+  writeLog("Available AI services: " + services.join(", "));
 }
 ```
 
@@ -414,21 +428,25 @@ function init() {
 ```javascript
 function debugSecretsHandler(req) {
   const secrets = Secrets.list();
-  
+
   return {
     status: 200,
-    body: JSON.stringify({
-      configured_secrets: secrets,
-      count: secrets.length,
-      // Check specific secrets
-      has_anthropic: Secrets.exists('anthropic_api_key'),
-      has_openai: Secrets.exists('openai_api_key'),
-    }, null, 2),
-    contentType: 'application/json'
+    body: JSON.stringify(
+      {
+        configured_secrets: secrets,
+        count: secrets.length,
+        // Check specific secrets
+        has_anthropic: Secrets.exists("anthropic_api_key"),
+        has_openai: Secrets.exists("openai_api_key"),
+      },
+      null,
+      2,
+    ),
+    contentType: "application/json",
   };
 }
 
-register('/debug/secrets', 'debugSecretsHandler', 'GET');
+register("/debug/secrets", "debugSecretsHandler", "GET");
 ```
 
 ## Further Reading

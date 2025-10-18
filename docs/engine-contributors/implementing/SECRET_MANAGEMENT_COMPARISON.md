@@ -120,17 +120,18 @@
 
 ```javascript
 // JavaScript code
-const apiKey = Secrets.get("anthropic_api_key");  // Returns "sk-ant-..."
-console.log(apiKey);  // ❌ Secret logged!
+const apiKey = Secrets.get("anthropic_api_key"); // Returns "sk-ant-..."
+console.log(apiKey); // ❌ Secret logged!
 
 const response = await fetch("https://api.anthropic.com/v1/messages", {
   headers: {
-    "x-api-key": apiKey  // ❌ Secret in JS variable
-  }
+    "x-api-key": apiKey, // ❌ Secret in JS variable
+  },
 });
 ```
 
 **Problems**:
+
 - Secret value exists in JavaScript memory
 - Can be logged, inspected, or leaked
 - Developer mistakes can expose it
@@ -144,13 +145,13 @@ const response = await fetch("https://api.anthropic.com/v1/messages", {
 // Option 1: Template syntax
 const response = await fetch("https://api.anthropic.com/v1/messages", {
   headers: {
-    "x-api-key": "{{secret:anthropic_api_key}}"  // ✅ Just a reference
-  }
+    "x-api-key": "{{secret:anthropic_api_key}}", // ✅ Just a reference
+  },
 });
 
 // Option 2: High-level API (best)
 const response = await AI.chat("What is Rust?", {
-  provider: "claude"  // ✅ Rust handles secret automatically
+  provider: "claude", // ✅ Rust handles secret automatically
 });
 
 // Check if secret exists (doesn't expose value)
@@ -161,10 +162,11 @@ if (Secrets.exists("anthropic_api_key")) {
 }
 
 // List available secrets (identifiers only)
-const secrets = Secrets.list();  // ["anthropic_api_key", "sendgrid_api_key"]
+const secrets = Secrets.list(); // ["anthropic_api_key", "sendgrid_api_key"]
 ```
 
 **Benefits**:
+
 - Secret value never enters JavaScript
 - Impossible to log or leak
 - Rust enforces security
@@ -218,66 +220,72 @@ const secrets = Secrets.list();  // ["anthropic_api_key", "sendgrid_api_key"]
 ### ❌ Insecure Approach - Attack Vectors
 
 1. **Logging Attack**:
+
    ```javascript
    const key = Secrets.get("api_key");
-   console.log("Using key:", key);  // ❌ Secret logged!
+   console.log("Using key:", key); // ❌ Secret logged!
    ```
 
 2. **Error Leak**:
+
    ```javascript
    const key = Secrets.get("api_key");
    try {
      // Something fails
    } catch (e) {
-     throw new Error(`Failed with key ${key}`);  // ❌ Secret in error!
+     throw new Error(`Failed with key ${key}`); // ❌ Secret in error!
    }
    ```
 
 3. **Response Leak**:
+
    ```javascript
    const key = Secrets.get("api_key");
-   return Response.json({ 
-     debug: { apiKey: key }  // ❌ Secret sent to client!
+   return Response.json({
+     debug: { apiKey: key }, // ❌ Secret sent to client!
    });
    ```
 
 4. **Debugger Inspection**:
    ```javascript
    const key = Secrets.get("api_key");
-   debugger;  // ❌ Developer can inspect 'key' variable
+   debugger; // ❌ Developer can inspect 'key' variable
    ```
 
 ### ✅ Secure Approach - Attack Vectors Mitigated
 
 1. **Logging Attack** - Mitigated ✅:
+
    ```javascript
    // No secret value to log!
    fetch(url, { headers: { "x-api-key": "{{secret:key}}" } });
-   console.log("Making request");  // ✅ No secret in scope
+   console.log("Making request"); // ✅ No secret in scope
    ```
 
 2. **Error Leak** - Mitigated ✅:
+
    ```javascript
    // No secret value to include in error
    try {
      await fetch(url, { headers: { "x-api-key": "{{secret:key}}" } });
    } catch (e) {
-     throw new Error("Request failed");  // ✅ No secret accessible
+     throw new Error("Request failed"); // ✅ No secret accessible
    }
    ```
 
 3. **Response Leak** - Mitigated ✅:
+
    ```javascript
    // No secret value to send
    const result = await AI.chat(prompt);
-   return Response.json({ result });  // ✅ No secret in scope
+   return Response.json({ result }); // ✅ No secret in scope
    ```
 
 4. **Debugger Inspection** - Mitigated ✅:
    ```javascript
    // No secret value in JavaScript memory
-   debugger;  // ✅ No secret variables to inspect
-   const response = await AI.chat(prompt);  // Secret in Rust only
+   debugger; // ✅ No secret variables to inspect
+   const response = await AI.chat(prompt); // Secret in Rust only
    ```
 
 ## Implementation Patterns
@@ -287,9 +295,9 @@ const secrets = Secrets.list();  // ["anthropic_api_key", "sendgrid_api_key"]
 ```javascript
 // AI Assistant
 const response = await AI.chat("Explain Rust", {
-  provider: "claude",  // Rust uses "anthropic_api_key"
+  provider: "claude", // Rust uses "anthropic_api_key"
   model: "claude-3-haiku-20240307",
-  maxTokens: 1024
+  maxTokens: 1024,
 });
 
 // Future: Email API
@@ -298,7 +306,7 @@ const result = await Email.send({
   from: "app@example.com",
   subject: "Welcome",
   body: "Hello!",
-  provider: "sendgrid"  // Rust uses "sendgrid_api_key"
+  provider: "sendgrid", // Rust uses "sendgrid_api_key"
 });
 
 // Future: Payment API
@@ -306,11 +314,12 @@ const charge = await Payment.charge({
   amount: 1999,
   currency: "usd",
   source: token,
-  provider: "stripe"  // Rust uses "stripe_api_key"
+  provider: "stripe", // Rust uses "stripe_api_key"
 });
 ```
 
 **Benefits**:
+
 - Most secure - no secret handling in JavaScript at all
 - Simplest developer experience
 - Consistent API across services
@@ -322,14 +331,15 @@ const charge = await Payment.charge({
 const response = await fetch("https://api.custom-service.com/v1/data", {
   method: "POST",
   headers: {
-    "authorization": "Bearer {{secret:custom_api_key}}",
-    "content-type": "application/json"
+    authorization: "Bearer {{secret:custom_api_key}}",
+    "content-type": "application/json",
   },
-  body: JSON.stringify({ query: "..." })
+  body: JSON.stringify({ query: "..." }),
 });
 ```
 
 **Benefits**:
+
 - Flexible for any external API
 - Still secure - secret never in JavaScript
 - Easy to audit - grep for `{{secret:`
@@ -352,12 +362,13 @@ if (Secrets.exists("stripe_api_key")) {
   features.push("payments");
 }
 
-return Response.json({ 
-  available_features: features 
+return Response.json({
+  available_features: features,
 });
 ```
 
 **Benefits**:
+
 - Feature discovery without exposing values
 - Graceful degradation
 - Clear user feedback
@@ -366,17 +377,17 @@ return Response.json({
 
 ### Key Differences
 
-| Aspect | Insecure (❌) | Secure (✅) |
-|--------|--------------|-------------|
-| Secret in JS memory | Yes - exposed | No - stays in Rust |
-| Can be logged | Yes | No |
-| Can be debugged | Yes | No |
-| Can be leaked | Yes | No |
-| Violates REQ-SEC-008 | Yes | No |
-| Aligns with "script never sees value" | No | Yes |
-| Defense in depth | No | Yes |
-| Audit trail | Partial | Complete |
-| Developer mistakes | Can expose secrets | Cannot expose secrets |
+| Aspect                                | Insecure (❌)      | Secure (✅)           |
+| ------------------------------------- | ------------------ | --------------------- |
+| Secret in JS memory                   | Yes - exposed      | No - stays in Rust    |
+| Can be logged                         | Yes                | No                    |
+| Can be debugged                       | Yes                | No                    |
+| Can be leaked                         | Yes                | No                    |
+| Violates REQ-SEC-008                  | Yes                | No                    |
+| Aligns with "script never sees value" | No                 | Yes                   |
+| Defense in depth                      | No                 | Yes                   |
+| Audit trail                           | Partial            | Complete              |
+| Developer mistakes                    | Can expose secrets | Cannot expose secrets |
 
 ### The Right Way
 

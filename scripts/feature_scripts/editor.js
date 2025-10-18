@@ -368,10 +368,12 @@ function apiAIAssistant(req) {
   // Check if Anthropic API key is configured
   const hasAnthropicKey = Secrets.exists("anthropic_api_key");
   const availableSecrets = Secrets.list();
-  
+
   writeLog(`AI Assistant: Checking for Anthropic API key...`);
   writeLog(`AI Assistant: anthropic_api_key exists: ${hasAnthropicKey}`);
-  writeLog(`AI Assistant: Available secrets: ${JSON.stringify(availableSecrets)}`);
+  writeLog(
+    `AI Assistant: Available secrets: ${JSON.stringify(availableSecrets)}`,
+  );
 
   // If API key is not configured, return helpful error
   if (!hasAnthropicKey) {
@@ -379,7 +381,8 @@ function apiAIAssistant(req) {
     const errorResponse = {
       success: false,
       error: "Anthropic API key not configured",
-      message: "Please set SECRET_ANTHROPIC_API_KEY environment variable or configure secrets.values.anthropic_api_key in config file",
+      message:
+        "Please set SECRET_ANTHROPIC_API_KEY environment variable or configure secrets.values.anthropic_api_key in config file",
       availableSecrets: availableSecrets,
     };
     return {

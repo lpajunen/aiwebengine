@@ -111,6 +111,9 @@ impl SecureGlobalContext {
             self.setup_secrets_functions(ctx, script_uri)?;
         }
 
+        // Setup fetch() function for HTTP requests
+        self.setup_fetch_function(ctx, script_uri)?;
+
         // Always setup GraphQL functions, but they will be no-ops if disabled
         self.setup_graphql_functions(ctx, script_uri)?;
 
@@ -742,24 +745,26 @@ impl SecureGlobalContext {
     }
 
     /// Setup secure secrets functions
-    /// 
+    ///
     /// Exposes a read-only JavaScript API for secrets management:
     /// - Secrets.exists(identifier): boolean - Check if a secret exists
     /// - Secrets.list(): string[] - List all secret identifiers
-    /// 
+    ///
     /// SECURITY: Secret values are NEVER exposed to JavaScript. Only existence checks
     /// and identifier listing are allowed. Actual secret values are injected by Rust
     /// into HTTP requests using the {{secret:identifier}} template syntax.
     fn setup_secrets_functions(&self, ctx: &rquickjs::Ctx<'_>, _script_uri: &str) -> JsResult<()> {
         let global = ctx.globals();
-        
+
         // Get the secrets manager - try instance first, then fall back to global
-        let secrets_manager = self.secrets_manager.clone()
+        let secrets_manager = self
+            .secrets_manager
+            .clone()
             .or_else(|| crate::secrets::get_global_secrets_manager());
-        
+
         // Create the Secrets namespace object
         let secrets_obj = rquickjs::Object::new(ctx.clone())?;
-        
+
         // Secrets.exists(identifier) - Check if a secret exists
         let secrets_mgr_exists = secrets_manager.clone();
         let exists_fn = Function::new(
@@ -774,7 +779,7 @@ impl SecureGlobalContext {
             },
         )?;
         secrets_obj.set("exists", exists_fn)?;
-        
+
         // Secrets.list() - List all secret identifiers
         let secrets_mgr_list = secrets_manager.clone();
         let list_fn = Function::new(
@@ -789,12 +794,12 @@ impl SecureGlobalContext {
             },
         )?;
         secrets_obj.set("list", list_fn)?;
-        
+
         // Set the Secrets object on the global scope
         global.set("Secrets", secrets_obj)?;
-        
+
         debug!("Secrets JavaScript API initialized (read-only interface)");
-        
+
         Ok(())
     }
 
@@ -1515,6 +1520,70 @@ impl SecureGlobalContext {
             },
         )?;
         global.set("sendSubscriptionMessage", send_subscription_message)?;
+
+        Ok(())
+    }
+
+    /// Setup fetch() function for HTTP requests with secret injection
+    fn setup_fetch_function(&self, ctx: &rquickjs::Ctx<'_>, _script_uri: &str) -> JsResult<()> {
+        let global = ctx.globals();
+
+        // Create the fetch function (synchronous version)
+        let fetch_fn = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  url: String,
+                  options_json: Option<String>|
+                  -> JsResult<String> {
+                // Parse options from JSON string
+                let options: crate::http_client::FetchOptions = if let Some(json_str) = options_json
+                {
+                    serde_json::from_str(&json_str).map_err(|e| {
+                        rquickjs::Error::new_from_js_message(
+                            "options",
+                            "FetchOptions",
+                            &format!("Invalid fetch options: {}", e),
+                        )
+                    })?
+                } else {
+                    Default::default()
+                };
+
+                tracing::debug!("Fetching URL: {}", url);
+
+                // Create HTTP client
+                let client = crate::http_client::HttpClient::new().map_err(|e| {
+                    rquickjs::Error::new_from_js_message(
+                        "fetch",
+                        "client_init",
+                        &format!("Failed to create HTTP client: {}", e),
+                    )
+                })?;
+
+                // Perform the fetch (synchronous)
+                let response = client.fetch(url.clone(), options).map_err(|e| {
+                    rquickjs::Error::new_from_js_message(
+                        "fetch",
+                        "request_failed",
+                        &format!("Fetch error: {}", e),
+                    )
+                })?;
+
+                // Convert response to JSON string
+                let response_json = serde_json::to_string(&response).map_err(|e| {
+                    rquickjs::Error::new_from_js_message(
+                        "fetch",
+                        "serialize",
+                        &format!("Failed to serialize response: {}", e),
+                    )
+                })?;
+
+                Ok(response_json)
+            },
+        )?;
+
+        global.set("fetch", fetch_fn)?;
+        debug!("fetch() function initialized with secret injection support");
 
         Ok(())
     }

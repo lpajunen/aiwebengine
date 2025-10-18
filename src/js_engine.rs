@@ -392,7 +392,7 @@ pub fn execute_script_for_request_secure(
             &security_config,
             None,
             params.auth_context, // Pass auth context for request handling
-            None, // No secrets manager yet
+            None,                // No secrets manager yet
         )?;
 
         Ok(())
@@ -534,7 +534,7 @@ pub fn execute_script_for_request(
             &config,
             None,
             Some(auth_ctx), // Provide anonymous auth context
-            None, // No secrets manager yet
+            None,           // No secrets manager yet
         )?;
 
         Ok(())

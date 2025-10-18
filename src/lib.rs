@@ -12,6 +12,7 @@ use tracing::{debug, error, info, warn};
 pub mod config;
 pub mod error;
 pub mod graphql;
+pub mod http_client;
 pub mod js_engine;
 pub mod middleware;
 pub mod repository;
@@ -370,39 +371,48 @@ pub async fn start_server_with_config(
     // Initialize secrets manager
     info!("Initializing secrets manager...");
     let secrets_manager = secrets::SecretsManager::new();
-    
+
     // Load secrets from environment variables (SECRET_* prefix)
     secrets_manager.load_from_env();
     let env_secrets_count = secrets_manager.list_identifiers().len();
     if env_secrets_count > 0 {
-        info!("Loaded {} secret(s) from environment variables", env_secrets_count);
-        debug!("Available secrets: {:?}", secrets_manager.list_identifiers());
+        info!(
+            "Loaded {} secret(s) from environment variables",
+            env_secrets_count
+        );
+        debug!(
+            "Available secrets: {:?}",
+            secrets_manager.list_identifiers()
+        );
     } else {
         info!("No secrets loaded from environment variables");
     }
-    
+
     // Load secrets from configuration file if available
     if !config.secrets.values.is_empty() {
         secrets_manager.load_from_map(config.secrets.values.clone());
         let total_secrets = secrets_manager.list_identifiers().len();
         let config_secrets = total_secrets - env_secrets_count;
         if config_secrets > 0 {
-            info!("Loaded {} additional secret(s) from configuration file", config_secrets);
+            info!(
+                "Loaded {} additional secret(s) from configuration file",
+                config_secrets
+            );
         }
         info!("Total secrets configured: {}", total_secrets);
     } else if env_secrets_count == 0 {
         debug!("No secrets configured from environment or config file");
     }
-    
+
     let secrets_manager = std::sync::Arc::new(secrets_manager);
-    
+
     // Set as global secrets manager for access from js_engine
     if secrets::initialize_global_secrets_manager(secrets_manager.clone()) {
         info!("Global secrets manager initialized successfully");
     } else {
         warn!("Global secrets manager was already initialized");
     }
-    
+
     // Clone the timeout value to avoid borrow checker issues in async closures
     let script_timeout_ms = config.script_timeout_ms();
 

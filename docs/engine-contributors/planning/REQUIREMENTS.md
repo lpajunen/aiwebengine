@@ -1429,16 +1429,17 @@ const response = await fetch("https://api.anthropic.com/v1/messages", {
   method: "POST",
   headers: {
     "x-api-key": "{{secret:anthropic_api_key}}",
-    "content-type": "application/json"
+    "content-type": "application/json",
   },
   body: JSON.stringify({
     model: "claude-3-haiku-20240307",
-    messages: [{ role: "user", content: "Hello" }]
-  })
+    messages: [{ role: "user", content: "Hello" }],
+  }),
 });
 ```
 
 The Rust layer:
+
 1. Detects `{{secret:identifier}}` pattern in header values
 2. Looks up secret from SecretsManager
 3. Replaces template with actual secret value
@@ -1451,13 +1452,13 @@ The Rust layer:
 const response = await fetch("https://api.example.com/v1/data", {
   method: "POST",
   headers: {
-    "content-type": "application/json"
+    "content-type": "application/json",
   },
   body: JSON.stringify({ query: "..." }),
   secrets: {
-    "x-api-key": "api_key_identifier",  // Maps header name to secret ID
-    "authorization": "Bearer token_identifier"
-  }
+    "x-api-key": "api_key_identifier", // Maps header name to secret ID
+    authorization: "Bearer token_identifier",
+  },
 });
 ```
 
@@ -1524,9 +1525,12 @@ if (Secrets.exists("sendgrid_api_key")) {
   // Enable email integration
   // Actual secret will be injected by Rust during fetch()
 } else {
-  return Response.json({
-    error: "Email feature not configured"
-  }, { status: 503 });
+  return Response.json(
+    {
+      error: "Email feature not configured",
+    },
+    { status: 503 },
+  );
 }
 
 // List available secrets (identifiers only) for feature discovery
@@ -1536,13 +1540,13 @@ const availableSecrets = Secrets.list();
 // Use secrets in HTTP requests via template syntax (see REQ-JSAPI-007)
 const response = await fetch("https://api.example.com/data", {
   headers: {
-    Authorization: "Bearer {{secret:api_token}}"  // Rust injects value
-  }
+    Authorization: "Bearer {{secret:api_token}}", // Rust injects value
+  },
 });
 
 // Or use high-level APIs that handle secrets automatically
 const aiResponse = await AI.chat("prompt", {
-  provider: "claude"  // Rust automatically uses anthropic_api_key
+  provider: "claude", // Rust automatically uses anthropic_api_key
 });
 ```
 

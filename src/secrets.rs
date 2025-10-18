@@ -67,15 +67,12 @@ impl SecretsManager {
     /// ```
     pub fn load_from_env(&self) {
         let mut count = 0;
-        
+
         for (key, value) in std::env::vars() {
             if key.starts_with("SECRET_") {
                 // Convert SECRET_ANTHROPIC_API_KEY to anthropic_api_key
-                let secret_id = key
-                    .strip_prefix("SECRET_")
-                    .unwrap()
-                    .to_lowercase();
-                
+                let secret_id = key.strip_prefix("SECRET_").unwrap().to_lowercase();
+
                 if !value.is_empty() {
                     self.set(secret_id.clone(), value);
                     count += 1;
@@ -83,7 +80,7 @@ impl SecretsManager {
                 }
             }
         }
-        
+
         if count > 0 {
             info!(count = count, "Loaded secrets from environment variables");
         } else {
@@ -98,14 +95,14 @@ impl SecretsManager {
     /// * `secrets` - HashMap of secret identifiers to values
     pub fn load_from_map(&self, secrets: HashMap<String, String>) {
         let count = secrets.len();
-        
+
         for (key, value) in secrets {
             if !value.is_empty() {
                 self.set(key.clone(), value);
                 info!(secret_id = %key, "Loaded secret from configuration");
             }
         }
-        
+
         if count > 0 {
             info!(count = count, "Loaded secrets from configuration");
         }
@@ -217,21 +214,19 @@ impl SecretsManager {
     pub fn looks_like_secret(value: &str) -> bool {
         // Common secret patterns
         let patterns = [
-            "sk-", // OpenAI, Anthropic
-            "SG.", // SendGrid
+            "sk-",  // OpenAI, Anthropic
+            "SG.",  // SendGrid
             "key_", // Stripe
-            "api_key",
-            "apikey",
-            "secret",
-            "token",
-            "password",
-            "Bearer ",
+            "api_key", "apikey", "secret", "token", "password", "Bearer ",
         ];
 
         let value_lower = value.to_lowercase();
-        
+
         // Check for common patterns
-        if patterns.iter().any(|p| value_lower.contains(&p.to_lowercase())) {
+        if patterns
+            .iter()
+            .any(|p| value_lower.contains(&p.to_lowercase()))
+        {
             // Must be reasonably long to be a real secret
             if value.len() >= 20 {
                 return true;
@@ -263,13 +258,13 @@ impl SecretsManager {
     pub fn redact(&self, text: &str) -> String {
         let secrets = self.secrets.read().unwrap();
         let mut result = text.to_string();
-        
+
         for value in secrets.values() {
             if value.len() >= 8 {
                 result = result.replace(value, "[REDACTED]");
             }
         }
-        
+
         result
     }
 }
@@ -294,7 +289,7 @@ mod tests {
     fn test_set_and_get() {
         let manager = SecretsManager::new();
         manager.set("test_key".to_string(), "test_value".to_string());
-        
+
         assert_eq!(manager.get("test_key"), Some("test_value".to_string()));
         assert_eq!(manager.count(), 1);
     }
@@ -302,11 +297,11 @@ mod tests {
     #[test]
     fn test_exists() {
         let manager = SecretsManager::new();
-        
+
         assert!(!manager.exists("test_key"));
-        
+
         manager.set("test_key".to_string(), "test_value".to_string());
-        
+
         assert!(manager.exists("test_key"));
         assert!(!manager.exists("nonexistent"));
     }
@@ -314,13 +309,13 @@ mod tests {
     #[test]
     fn test_list_identifiers() {
         let manager = SecretsManager::new();
-        
+
         manager.set("key1".to_string(), "value1".to_string());
         manager.set("key2".to_string(), "value2".to_string());
         manager.set("key3".to_string(), "value3".to_string());
-        
+
         let identifiers = manager.list_identifiers();
-        
+
         assert_eq!(identifiers.len(), 3);
         assert!(identifiers.contains(&"key1".to_string()));
         assert!(identifiers.contains(&"key2".to_string()));
@@ -330,13 +325,13 @@ mod tests {
     #[test]
     fn test_delete() {
         let manager = SecretsManager::new();
-        
+
         manager.set("test_key".to_string(), "test_value".to_string());
         assert!(manager.exists("test_key"));
-        
+
         assert!(manager.delete("test_key"));
         assert!(!manager.exists("test_key"));
-        
+
         // Deleting non-existent key returns false
         assert!(!manager.delete("test_key"));
     }
@@ -344,14 +339,14 @@ mod tests {
     #[test]
     fn test_clear() {
         let manager = SecretsManager::new();
-        
+
         manager.set("key1".to_string(), "value1".to_string());
         manager.set("key2".to_string(), "value2".to_string());
-        
+
         assert_eq!(manager.count(), 2);
-        
+
         manager.clear();
-        
+
         assert_eq!(manager.count(), 0);
         assert!(!manager.exists("key1"));
         assert!(!manager.exists("key2"));
@@ -360,13 +355,13 @@ mod tests {
     #[test]
     fn test_load_from_map() {
         let manager = SecretsManager::new();
-        
+
         let mut secrets = HashMap::new();
         secrets.insert("api_key".to_string(), "sk-test123".to_string());
         secrets.insert("db_password".to_string(), "secret123".to_string());
-        
+
         manager.load_from_map(secrets);
-        
+
         assert_eq!(manager.count(), 2);
         assert!(manager.exists("api_key"));
         assert!(manager.exists("db_password"));
@@ -375,13 +370,19 @@ mod tests {
     #[test]
     fn test_looks_like_secret() {
         // Should detect common secret patterns
-        assert!(SecretsManager::looks_like_secret("sk-ant-api03-1234567890abcdef"));
-        assert!(SecretsManager::looks_like_secret("SG.1234567890abcdefghijklmnop"));
-        assert!(SecretsManager::looks_like_secret("Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"));
-        
+        assert!(SecretsManager::looks_like_secret(
+            "sk-ant-api03-1234567890abcdef"
+        ));
+        assert!(SecretsManager::looks_like_secret(
+            "SG.1234567890abcdefghijklmnop"
+        ));
+        assert!(SecretsManager::looks_like_secret(
+            "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+        ));
+
         // Long random strings should be detected
         assert!(SecretsManager::looks_like_secret("a".repeat(40).as_str()));
-        
+
         // Short strings or normal text should not be detected
         assert!(!SecretsManager::looks_like_secret("hello"));
         assert!(!SecretsManager::looks_like_secret("test"));
@@ -391,13 +392,13 @@ mod tests {
     #[test]
     fn test_redact() {
         let manager = SecretsManager::new();
-        
+
         manager.set("api_key".to_string(), "sk-test123456".to_string());
         manager.set("password".to_string(), "secret123".to_string());
-        
+
         let text = "Using API key sk-test123456 and password secret123";
         let redacted = manager.redact(text);
-        
+
         assert_eq!(redacted, "Using API key [REDACTED] and password [REDACTED]");
         assert!(!redacted.contains("sk-test123456"));
         assert!(!redacted.contains("secret123"));
@@ -406,17 +407,17 @@ mod tests {
     #[test]
     fn test_thread_safety() {
         use std::thread;
-        
+
         let manager = SecretsManager::new();
         let manager_clone = manager.clone();
-        
+
         // Write from one thread
         let writer = thread::spawn(move || {
             for i in 0..100 {
                 manager_clone.set(format!("key_{}", i), format!("value_{}", i));
             }
         });
-        
+
         // Read from another thread
         let manager_clone2 = manager.clone();
         let reader = thread::spawn(move || {
@@ -424,10 +425,10 @@ mod tests {
                 manager_clone2.exists(&format!("key_{}", i));
             }
         });
-        
+
         writer.join().unwrap();
         reader.join().unwrap();
-        
+
         // Should have all 100 keys
         assert_eq!(manager.count(), 100);
     }

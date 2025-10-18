@@ -9,6 +9,7 @@ This document outlines the plan to integrate AI capabilities into the aiwebengin
 ## Current State
 
 ### ✅ Already Implemented
+
 - **UI Components**: AI assistant panel in `/editor` with:
   - Collapsible panel at bottom of editor
   - Text input for prompts
@@ -22,6 +23,7 @@ This document outlines the plan to integrate AI capabilities into the aiwebengin
   - Error handling and UI feedback
 
 ### ❌ Not Yet Implemented
+
 - Backend endpoint `/api/ai-assistant` (called by UI but doesn't exist)
 - Secrets management system (for storing API keys)
 - HTTP client for making external API calls
@@ -81,12 +83,14 @@ This document outlines the plan to integrate AI capabilities into the aiwebengin
 ## Implementation Phases
 
 ### Phase 1: Secrets Management Foundation
+
 **Priority**: CRITICAL  
 **Estimated Time**: 2-3 days
 
 #### 1.1 Create Secrets Module (`src/secrets.rs`)
 
 **Features**:
+
 - In-memory secrets store (initial implementation)
 - Load secrets from configuration (environment variables, config file)
 - API for storing/retrieving secrets
@@ -94,20 +98,23 @@ This document outlines the plan to integrate AI capabilities into the aiwebengin
 - Automatic redaction in logs
 
 **Configuration Support**:
+
 ```yaml
 # config.yaml
 secrets:
-  anthropic_api_key: "sk-ant-api03-..."  # From environment or direct config
-  openai_api_key: "sk-proj-..."          # For future expansion
+  anthropic_api_key: "sk-ant-api03-..." # From environment or direct config
+  openai_api_key: "sk-proj-..." # For future expansion
 ```
 
 Or via environment variables:
+
 ```bash
 SECRET_ANTHROPIC_API_KEY=sk-ant-api03-...
 SECRET_OPENAI_API_KEY=sk-proj-...
 ```
 
 **API Design**:
+
 ```rust
 pub struct SecretsManager {
     secrets: Arc<RwLock<HashMap<String, String>>>,
@@ -128,16 +135,18 @@ impl SecretsManager {
 #### 1.2 Integrate Secrets into JavaScript Runtime (`src/js_engine.rs`)
 
 **Add Global `Secrets` Object** (LIMITED API - Security Critical):
+
 ```javascript
 // Available in all scripts
-Secrets.exists("anthropic_api_key")   // Returns boolean
-Secrets.list()                        // Returns array of identifiers
+Secrets.exists("anthropic_api_key"); // Returns boolean
+Secrets.list(); // Returns array of identifiers
 
 // NOTE: NO Secrets.get() - JavaScript must never retrieve secret values!
 // Secrets are injected by Rust layer at point of use (HTTP requests, etc.)
 ```
 
 **Rust Implementation**:
+
 - Create `secrets_exists()` and `secrets_list()` helper functions ONLY
 - DO NOT implement `secrets_get()` that returns values
 - Expose to JavaScript runtime via `deno_core::extension!`
@@ -148,6 +157,7 @@ Secrets.list()                        // Returns array of identifiers
 #### 1.3 Configuration Schema Updates (`src/config.rs`)
 
 Add secrets configuration:
+
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -166,12 +176,14 @@ pub struct SecretsConfig {
 ---
 
 ### Phase 2: HTTP Client Implementation
+
 **Priority**: CRITICAL  
 **Estimated Time**: 3-4 days
 
 #### 2.1 Create HTTP Client Module (`src/http_client.rs`)
 
 **Features**:
+
 - Async HTTP client using `reqwest`
 - Support all HTTP methods (GET, POST, PUT, DELETE, PATCH)
 - Request/response body handling (JSON, text, binary)
@@ -181,6 +193,7 @@ pub struct SecretsConfig {
 - Certificate validation
 
 **API Design**:
+
 ```rust
 pub struct HttpClient {
     client: reqwest::Client,
@@ -214,32 +227,34 @@ pub struct FetchResponse {
 #### 2.2 Expose fetch() to JavaScript with Secret Injection (`src/js_engine.rs`)
 
 **JavaScript API** (Web Fetch API compatible with secure secret injection):
+
 ```javascript
 const response = await fetch("https://api.anthropic.com/v1/messages", {
   method: "POST",
   headers: {
     "Content-Type": "application/json",
-    "x-api-key": "{{secret:anthropic_api_key}}",  // Template syntax
-    "anthropic-version": "2023-06-01"
+    "x-api-key": "{{secret:anthropic_api_key}}", // Template syntax
+    "anthropic-version": "2023-06-01",
   },
   body: JSON.stringify({
     model: "claude-3-haiku-20240307",
     max_tokens: 1024,
-    messages: [{ role: "user", content: "Hello" }]
-  })
+    messages: [{ role: "user", content: "Hello" }],
+  }),
 });
 
 const data = await response.json();
 ```
 
 **Rust Implementation - Secret Injection**:
+
 ```rust
 pub async fn js_fetch(
     url: String,
     options: FetchOptions,
 ) -> Result<FetchResponse, HttpError> {
     let mut final_headers = HashMap::new();
-    
+
     // Process headers and inject secrets
     for (key, value) in options.headers.unwrap_or_default() {
         // Check for template syntax: "{{secret:identifier}}"
@@ -251,17 +266,17 @@ pub async fn js_fetch(
                 .strip_suffix("}}")
                 .unwrap()
                 .trim();
-            
+
             // Look up secret in SecretsManager (stays in Rust)
             let secret_value = SECRETS_MANAGER
                 .read()
                 .unwrap()
                 .get(secret_id)
                 .ok_or_else(|| HttpError::SecretNotFound(secret_id.to_string()))?;
-            
+
             // Inject actual secret value
             final_headers.insert(key, secret_value);
-            
+
             // Audit log (identifier only, never value)
             audit_log::log_secret_access(secret_id, "fetch", &url);
         } else {
@@ -269,7 +284,7 @@ pub async fn js_fetch(
             final_headers.insert(key, value);
         }
     }
-    
+
     // Make HTTP request with injected secrets
     let response = HTTP_CLIENT
         .request(options.method.as_str(), &url)
@@ -277,13 +292,14 @@ pub async fn js_fetch(
         .body(options.body.unwrap_or_default())
         .send()
         .await?;
-    
+
     // Return response (no secrets in it)
     Ok(FetchResponse::from(response).await?)
 }
 ```
 
 **Key Implementation Points**:
+
 - Detect `{{secret:identifier}}` pattern in header values
 - Look up secret from SecretsManager (value never crosses to JavaScript)
 - Replace template with actual value before HTTP request
@@ -296,6 +312,7 @@ pub async fn js_fetch(
 #### 2.3 Security & Validation
 
 **Implement in HTTP Client**:
+
 - URL validation (block local addresses, private IPs)
 - Header validation (check for malicious content)
 - Response size limits
@@ -306,12 +323,14 @@ pub async fn js_fetch(
 ---
 
 ### Phase 3: AI Integration Module
+
 **Priority**: HIGH  
 **Estimated Time**: 3-4 days
 
 #### 3.1 Create AI Module (`src/ai/mod.rs`, `src/ai/providers.rs`)
 
 **Structure**:
+
 ```
 src/ai/
 ├── mod.rs           # Public API
@@ -321,6 +340,7 @@ src/ai/
 ```
 
 **Provider Trait**:
+
 ```rust
 #[async_trait]
 pub trait AIProvider: Send + Sync {
@@ -329,7 +349,7 @@ pub trait AIProvider: Send + Sync {
         messages: Vec<Message>,
         options: ChatOptions,
     ) -> Result<ChatResponse, AIError>;
-    
+
     fn name(&self) -> &str;
     fn supports_streaming(&self) -> bool;
 }
@@ -362,6 +382,7 @@ pub struct TokenUsage {
 #### 3.2 Claude Provider Implementation (`src/ai/claude.rs`)
 
 **Features**:
+
 - Anthropic Messages API integration
 - Claude Haiku model support
 - Error handling (rate limits, API errors, network issues)
@@ -369,6 +390,7 @@ pub struct TokenUsage {
 - Request/response logging (with secret redaction)
 
 **Implementation**:
+
 ```rust
 pub struct ClaudeProvider {
     http_client: Arc<HttpClient>,
@@ -405,6 +427,7 @@ impl AIProvider for ClaudeProvider {
 ```
 
 **API Endpoint**:
+
 ```
 POST https://api.anthropic.com/v1/messages
 Headers:
@@ -425,6 +448,7 @@ Body:
 #### 3.3 AI Manager (`src/ai/mod.rs`)
 
 **Central AI Service**:
+
 ```rust
 pub struct AIManager {
     providers: HashMap<String, Arc<dyn AIProvider>>,
@@ -434,20 +458,20 @@ pub struct AIManager {
 
 impl AIManager {
     pub fn new(secrets: Arc<SecretsManager>) -> Self;
-    
+
     pub fn register_provider(
         &mut self,
         name: String,
         provider: Arc<dyn AIProvider>
     );
-    
+
     pub async fn chat(
         &self,
         provider: Option<String>,
         messages: Vec<Message>,
         options: ChatOptions,
     ) -> Result<ChatResponse, AIError>;
-    
+
     pub fn initialize_providers(&mut self) -> Result<(), AIError> {
         // Auto-detect available API keys and initialize providers
         if let Some(anthropic_key) = self.secrets.get("anthropic_api_key") {
@@ -464,6 +488,7 @@ impl AIManager {
 #### 3.4 Expose AI API to JavaScript (`src/js_engine.rs`)
 
 **JavaScript API**:
+
 ```javascript
 // Simple chat API
 const response = await AI.chat("What is Rust?");
@@ -499,6 +524,7 @@ const response = await AI.chat([
 ```
 
 **Rust Implementation**:
+
 - Create `js_ai_chat()` async function
 - Handle both string and array message formats
 - Convert JavaScript objects to Rust types
@@ -507,6 +533,7 @@ const response = await AI.chat([
 ---
 
 ### Phase 4: Editor Backend Endpoint
+
 **Priority**: HIGH  
 **Estimated Time**: 1-2 days
 
@@ -522,10 +549,7 @@ async function apiAIAssistant(req) {
   try {
     // Validate request
     if (req.method !== "POST") {
-      return Response.json(
-        { error: "Method not allowed" },
-        { status: 405 }
-      );
+      return Response.json({ error: "Method not allowed" }, { status: 405 });
     }
 
     const body = req.body;
@@ -534,25 +558,26 @@ async function apiAIAssistant(req) {
     if (!prompt || typeof prompt !== "string") {
       return Response.json(
         { error: "Prompt is required and must be a string" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
     if (prompt.length > 4000) {
       return Response.json(
         { error: "Prompt is too long (max 4000 characters)" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
     // Check if AI API key is configured
     if (!Secrets.exists("anthropic_api_key")) {
       return Response.json(
-        { 
-          error: "AI assistant is not configured. Please add 'anthropic_api_key' to secrets.",
-          configured: false
+        {
+          error:
+            "AI assistant is not configured. Please add 'anthropic_api_key' to secrets.",
+          configured: false,
         },
-        { status: 503 }
+        { status: 503 },
       );
     }
 
@@ -565,7 +590,7 @@ Keep your responses concise and practical. Focus on code examples when relevant.
       model: "claude-3-haiku-20240307",
       maxTokens: 1024,
       temperature: 0.7,
-      systemPrompt: systemPrompt
+      systemPrompt: systemPrompt,
     });
 
     // Return response
@@ -573,15 +598,14 @@ Keep your responses concise and practical. Focus on code examples when relevant.
       response: response.content,
       timestamp: new Date().toISOString(),
       model: response.model,
-      usage: response.usage
+      usage: response.usage,
     });
-
   } catch (error) {
     writeLog("AI Assistant error: " + error.message);
-    
+
     // Provide helpful error messages
     let errorMessage = "An error occurred while processing your request.";
-    
+
     if (error.message.includes("rate_limit")) {
       errorMessage = "Rate limit exceeded. Please try again in a moment.";
     } else if (error.message.includes("timeout")) {
@@ -591,11 +615,11 @@ Keep your responses concise and practical. Focus on code examples when relevant.
     }
 
     return Response.json(
-      { 
+      {
         error: errorMessage,
-        details: error.message 
+        details: error.message,
       },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }
@@ -609,7 +633,7 @@ function init(context) {
   register("/api/scripts/*", "apiSaveScript", "POST");
   register("/api/logs", "apiGetLogs", "GET");
   register("/api/assets", "apiGetAssets", "GET");
-  register("/api/ai-assistant", "apiAIAssistant", "POST");  // NEW
+  register("/api/ai-assistant", "apiAIAssistant", "POST"); // NEW
   writeLog("Editor endpoints registered");
   return { success: true };
 }
@@ -618,6 +642,7 @@ function init(context) {
 #### 4.2 Error Handling & User Feedback
 
 **Handle various scenarios**:
+
 - API key not configured → Clear error message with setup instructions
 - Rate limits → Friendly retry message
 - Network errors → Suggest checking connection
@@ -627,12 +652,14 @@ function init(context) {
 ---
 
 ### Phase 5: Configuration & Setup
+
 **Priority**: HIGH  
 **Estimated Time**: 1 day
 
 #### 5.1 Update Configuration Files
 
 **Add to `config.example.yaml`**:
+
 ```yaml
 # AI Configuration
 ai:
@@ -648,12 +675,13 @@ ai:
 # Secrets (DO NOT commit actual values)
 secrets:
   # Get your API key from: https://console.anthropic.com/
-  anthropic_api_key: "${ANTHROPIC_API_KEY}"  # Load from environment
+  anthropic_api_key: "${ANTHROPIC_API_KEY}" # Load from environment
   # Future providers:
   # openai_api_key: "${OPENAI_API_KEY}"
 ```
 
 **Environment Variable Support**:
+
 ```bash
 # .env.example
 ANTHROPIC_API_KEY=sk-ant-api03-...
@@ -662,6 +690,7 @@ ANTHROPIC_API_KEY=sk-ant-api03-...
 #### 5.2 Documentation
 
 **Create `docs/solution-developers/AI_ASSISTANT.md`**:
+
 - How to set up API keys
 - How to use the AI assistant in the editor
 - API reference for `AI.chat()` in scripts
@@ -670,6 +699,7 @@ ANTHROPIC_API_KEY=sk-ant-api03-...
 - Troubleshooting guide
 
 **Update `docs/engine-administrators/CONFIGURATION.md`**:
+
 - AI configuration options
 - Secrets management setup
 - Environment variable configuration
@@ -678,12 +708,14 @@ ANTHROPIC_API_KEY=sk-ant-api03-...
 ---
 
 ### Phase 6: Testing & Quality Assurance
+
 **Priority**: HIGH  
 **Estimated Time**: 2-3 days
 
 #### 6.1 Unit Tests
 
 **Test Secrets Manager** (`tests/secrets.rs`):
+
 ```rust
 #[test]
 fn test_secrets_get_set() { }
@@ -699,6 +731,7 @@ fn test_secrets_from_env() { }
 ```
 
 **Test HTTP Client** (`tests/http_client.rs`):
+
 ```rust
 #[tokio::test]
 async fn test_fetch_get() { }
@@ -714,6 +747,7 @@ async fn test_fetch_invalid_url() { }
 ```
 
 **Test AI Integration** (`tests/ai_integration.rs`):
+
 ```rust
 #[tokio::test]
 async fn test_claude_chat() { }
@@ -728,6 +762,7 @@ async fn test_multiple_messages() { }
 #### 6.2 Integration Tests
 
 **Test Editor Endpoint** (`tests/api_editor.rs`):
+
 ```rust
 #[tokio::test]
 async fn test_ai_assistant_endpoint() {
@@ -745,25 +780,26 @@ async fn test_ai_assistant_rate_limiting() {
 #### 6.3 JavaScript API Tests
 
 **Test in `scripts/test_scripts/test_ai.js`**:
+
 ```javascript
 async function testAIChat(req) {
   const tests = [];
-  
+
   // Test 1: Simple chat
   try {
     const response = await AI.chat("Say hello");
     tests.push({
       name: "Simple chat",
-      passed: response.content && response.content.length > 0
+      passed: response.content && response.content.length > 0,
     });
   } catch (error) {
     tests.push({ name: "Simple chat", passed: false, error: error.message });
   }
-  
+
   // Test 2: Chat with options
   // Test 3: Check providers
   // Test 4: Secrets integration
-  
+
   return Response.json({ tests });
 }
 ```
@@ -786,12 +822,14 @@ async function testAIChat(req) {
 ---
 
 ### Phase 7: Enhancements & Future Work
+
 **Priority**: MEDIUM  
 **Estimated Time**: Ongoing
 
 #### 7.1 Context-Aware Assistance (Future)
 
 **Provide editor context to AI**:
+
 - Current script being edited
 - Available functions and APIs
 - Recent logs
@@ -800,20 +838,20 @@ async function testAIChat(req) {
 ```javascript
 async function apiAIAssistant(req) {
   // ... existing code ...
-  
+
   // Add context
   const context = {
-    currentScript: getCurrentScript(),  // If editing a script
+    currentScript: getCurrentScript(), // If editing a script
     availableAPIs: listAvailableAPIs(),
-    recentLogs: getRecentLogs(10)
+    recentLogs: getRecentLogs(10),
   };
-  
+
   const enhancedPrompt = `
 Context: ${JSON.stringify(context, null, 2)}
 
 User Question: ${prompt}
 `;
-  
+
   const response = await AI.chat(enhancedPrompt, options);
 }
 ```
@@ -821,6 +859,7 @@ User Question: ${prompt}
 #### 7.2 Conversation History (Future)
 
 **Store conversation history**:
+
 - Keep last N messages in browser localStorage
 - Send context with new prompts
 - Clear history button
@@ -828,6 +867,7 @@ User Question: ${prompt}
 #### 7.3 Code Generation Improvements (Future)
 
 **Special handling for code requests**:
+
 - Detect when user asks for code
 - Format code snippets nicely
 - Provide "Insert into editor" button
@@ -836,6 +876,7 @@ User Question: ${prompt}
 #### 7.4 Multiple Provider Support (Future)
 
 **Add more providers**:
+
 - OpenAI (GPT-4, GPT-3.5-turbo)
 - Google (Gemini)
 - Local models (Ollama)
@@ -844,6 +885,7 @@ User Question: ${prompt}
 #### 7.5 Cost Tracking & Monitoring (Future)
 
 **Track usage and costs**:
+
 ```rust
 pub struct UsageStats {
     pub total_requests: u64,
@@ -860,6 +902,7 @@ pub struct UsageStats {
 #### 7.6 Streaming Responses (Future)
 
 **Stream AI responses**:
+
 - Use Server-Sent Events (SSE)
 - Update UI as tokens arrive
 - Better UX for long responses
@@ -871,6 +914,7 @@ pub struct UsageStats {
 ### New Rust Crates
 
 Add to `Cargo.toml`:
+
 ```toml
 [dependencies]
 reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
@@ -882,6 +926,7 @@ async-trait = "0.1"
 ### API Key Requirements
 
 **Anthropic Claude API**:
+
 - Sign up at: https://console.anthropic.com/
 - Create API key
 - Models available:
@@ -890,6 +935,7 @@ async-trait = "0.1"
   - `claude-3-opus-20240229` - Most capable (future)
 
 **Pricing (as of 2024)**:
+
 - Claude Haiku: $0.25/M input tokens, $1.25/M output tokens
 - Very affordable for development and small-scale use
 
@@ -898,6 +944,7 @@ async-trait = "0.1"
 ## Security Considerations
 
 ### 1. Secrets Management
+
 - ✅ Never log API keys
 - ✅ Never expose keys in error messages
 - ✅ Never return keys in API responses
@@ -906,12 +953,14 @@ async-trait = "0.1"
 - ✅ Implement audit logging for secret access
 
 ### 2. Input Validation
+
 - ✅ Validate prompt length (max 4000 chars)
 - ✅ Sanitize user input
 - ✅ Rate limit API calls (per user, per IP)
 - ✅ Prevent prompt injection attacks
 
 ### 3. HTTP Client Security
+
 - ✅ Validate URLs (block local addresses)
 - ✅ TLS/SSL certificate validation
 - ✅ Timeout enforcement
@@ -919,6 +968,7 @@ async-trait = "0.1"
 - ✅ Block private IP ranges
 
 ### 4. Error Handling
+
 - ✅ Never expose internal errors to end users
 - ✅ Log detailed errors server-side
 - ✅ Return generic errors to clients
@@ -929,6 +979,7 @@ async-trait = "0.1"
 ## Testing Strategy
 
 ### Development Testing
+
 1. **Local Testing**: Use personal API key during development
 2. **Mock Responses**: Create mock AI provider for tests without API calls
 3. **Integration Tests**: Use test API key with small quotas
@@ -962,7 +1013,7 @@ impl AIProvider for MockAIProvider {
             .get(idx % self.responses.len())
             .cloned()
             .unwrap_or_else(|| "Mock response".to_string());
-            
+
         Ok(ChatResponse {
             content,
             model: "mock-model".to_string(),
@@ -973,7 +1024,7 @@ impl AIProvider for MockAIProvider {
             finish_reason: "stop".to_string(),
         })
     }
-    
+
     fn name(&self) -> &str { "mock" }
     fn supports_streaming(&self) -> bool { false }
 }
@@ -986,6 +1037,7 @@ impl AIProvider for MockAIProvider {
 ### Adding a New Provider (e.g., OpenAI)
 
 1. **Create provider implementation** (`src/ai/openai.rs`):
+
 ```rust
 pub struct OpenAIProvider {
     http_client: Arc<HttpClient>,
@@ -1002,6 +1054,7 @@ impl AIProvider for OpenAIProvider {
 ```
 
 2. **Register in AIManager**:
+
 ```rust
 impl AIManager {
     pub fn initialize_providers(&mut self) -> Result<(), AIError> {
@@ -1009,18 +1062,19 @@ impl AIManager {
         if let Some(key) = self.secrets.get("anthropic_api_key") {
             self.register_provider("claude", ClaudeProvider::new(key));
         }
-        
+
         // OpenAI
         if let Some(key) = self.secrets.get("openai_api_key") {
             self.register_provider("openai", OpenAIProvider::new(key));
         }
-        
+
         Ok(())
     }
 }
 ```
 
 3. **Update configuration**:
+
 ```yaml
 secrets:
   openai_api_key: "${OPENAI_API_KEY}"
@@ -1033,6 +1087,7 @@ secrets:
 ## Success Criteria
 
 ### Phase 1-4 Complete When:
+
 - ✅ Secrets can be loaded from configuration
 - ✅ `Secrets.get()` works in JavaScript
 - ✅ `fetch()` works for HTTPS requests
@@ -1044,6 +1099,7 @@ secrets:
 - ✅ Documentation is complete
 
 ### Production Ready When:
+
 - ✅ All tests passing
 - ✅ Security audit complete
 - ✅ Rate limiting implemented
@@ -1056,17 +1112,17 @@ secrets:
 
 ## Timeline Estimate
 
-| Phase | Duration | Dependencies |
-|-------|----------|--------------|
-| Phase 1: Secrets Management | 2-3 days | None |
-| Phase 2: HTTP Client | 3-4 days | None (parallel with Phase 1) |
-| Phase 3: AI Integration | 3-4 days | Phases 1 & 2 |
-| Phase 4: Editor Endpoint | 1-2 days | Phase 3 |
-| Phase 5: Configuration | 1 day | All above |
-| Phase 6: Testing | 2-3 days | All above |
-| **Total** | **12-17 days** | |
+| Phase                       | Duration       | Dependencies                 |
+| --------------------------- | -------------- | ---------------------------- |
+| Phase 1: Secrets Management | 2-3 days       | None                         |
+| Phase 2: HTTP Client        | 3-4 days       | None (parallel with Phase 1) |
+| Phase 3: AI Integration     | 3-4 days       | Phases 1 & 2                 |
+| Phase 4: Editor Endpoint    | 1-2 days       | Phase 3                      |
+| Phase 5: Configuration      | 1 day          | All above                    |
+| Phase 6: Testing            | 2-3 days       | All above                    |
+| **Total**                   | **12-17 days** |                              |
 
-*Note: Phases 1 and 2 can be developed in parallel*
+_Note: Phases 1 and 2 can be developed in parallel_
 
 ---
 
@@ -1086,6 +1142,6 @@ secrets:
 - **Anthropic API Docs**: https://docs.anthropic.com/claude/reference/
 - **Claude Models**: https://docs.anthropic.com/claude/docs/models-overview
 - **Web Fetch API**: https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API
-- **Requirements**: 
+- **Requirements**:
   - `docs/engine-contributors/planning/REQUIREMENTS.md` (REQ-JSAPI-007, REQ-JSAPI-008, REQ-SEC-005)
   - `docs/engine-contributors/planning/USE_CASES.md` (UC-504)
