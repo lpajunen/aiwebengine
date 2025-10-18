@@ -165,6 +165,123 @@ Your scripts have access to several built-in functions:
 - `sendStreamMessage(data)`: Send real-time messages to connected stream clients
 - `JSON.stringify(obj)`: Convert objects to JSON
 
+## Secrets Management for Local Development
+
+AIWebEngine includes a secure secrets management system for API keys and other sensitive values.
+
+### Setting Up Secrets
+
+For local development, set secrets using environment variables with the `SECRET_` prefix:
+
+```bash
+# Set secrets before starting the server
+export SECRET_ANTHROPIC_API_KEY="sk-ant-api03-..."
+export SECRET_OPENAI_API_KEY="sk-..."
+
+# Start the server
+cargo run
+```
+
+Or create a `.env` file (make sure it's in `.gitignore`):
+
+```bash
+# .env file (DO NOT commit this!)
+SECRET_ANTHROPIC_API_KEY=sk-ant-api03-...
+SECRET_OPENAI_API_KEY=sk-...
+SECRET_MY_SERVICE_TOKEN=token123
+```
+
+Then load it before starting:
+
+```bash
+# Load .env and start server
+set -a; source .env; set +a
+cargo run
+```
+
+### Using Secrets in Your Scripts
+
+JavaScript code can check if secrets are configured, but **cannot** access their values directly:
+
+```javascript
+function myApiHandler(req) {
+  // ✅ Check if a secret exists
+  if (!Secrets.exists('anthropic_api_key')) {
+    return {
+      status: 503,
+      body: JSON.stringify({
+        error: 'API key not configured',
+        message: 'Please set SECRET_ANTHROPIC_API_KEY environment variable'
+      }),
+      contentType: 'application/json'
+    };
+  }
+
+  // ✅ List available secrets (for debugging)
+  writeLog('Available secrets: ' + JSON.stringify(Secrets.list()));
+
+  // ✅ Use secrets in HTTP requests via template syntax
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': '{{secret:anthropic_api_key}}',  // Injected by Rust
+      'content-type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: 'claude-3-haiku-20240307',
+      messages: [{ role: 'user', content: 'Hello!' }]
+    })
+  });
+
+  // ❌ CANNOT do this - Secrets.get() does not exist!
+  // const apiKey = Secrets.get('anthropic_api_key');  // ERROR!
+
+  return {
+    status: 200,
+    body: await response.text(),
+    contentType: 'application/json'
+  };
+}
+
+register('/api/ai-chat', 'myApiHandler', 'POST');
+```
+
+### Common Secrets for Development
+
+```bash
+# AI Services
+export SECRET_ANTHROPIC_API_KEY="sk-ant-api03-..."   # Claude/Anthropic
+export SECRET_OPENAI_API_KEY="sk-..."                # OpenAI/ChatGPT
+export SECRET_GOOGLE_API_KEY="..."                   # Google/Gemini
+
+# External APIs
+export SECRET_STRIPE_API_KEY="sk_test_..."           # Stripe (test key)
+export SECRET_SENDGRID_API_KEY="SG..."               # SendGrid
+
+# Database credentials
+export SECRET_DATABASE_PASSWORD="dev-password"
+export SECRET_REDIS_PASSWORD="dev-redis"
+```
+
+### Security Notes for Development
+
+1. **Never commit secrets to Git**
+   - Add `.env` to `.gitignore`
+   - Use `config.example.yaml` with placeholders
+   - Document required secrets in README
+
+2. **Use test/development keys**
+   - Use separate API keys for development vs production
+   - Many services offer test mode keys (e.g., Stripe)
+
+3. **Secret values are never logged**
+   - The engine automatically redacts secret values from logs
+   - Safe to use `writeLog()` - secrets won't appear
+
+4. **Template injection happens in Rust**
+   - JavaScript never sees the actual secret values
+   - `{{secret:identifier}}` is replaced before the request is sent
+
 ## Debugging
 
 - Use `writeLog()` to output debug information

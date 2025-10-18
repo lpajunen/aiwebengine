@@ -8,6 +8,7 @@ aiwebengine includes a built-in web-based editor that allows you to manage scrip
 - **Asset Manager**: Upload, view, and manage static assets (images, CSS, files)
 - **Log Viewer**: Monitor server logs in real-time
 - **Route Explorer**: View registered API endpoints
+- **AI Assistant**: Get coding help with Claude integration (requires API key)
 - **Modern UI**: Dark theme with responsive design
 
 ## Getting Started
@@ -18,8 +19,86 @@ aiwebengine includes a built-in web-based editor that allows you to manage scrip
    cargo run
    ```
 
-2. **Access the editor**:
+2. **(Optional) Configure AI Assistant**:
+
+   ```bash
+   # Set Anthropic API key for AI assistant features
+   export SECRET_ANTHROPIC_API_KEY="sk-ant-api03-..."
+   cargo run
+   ```
+
+3. **Access the editor**:
    Open your browser and navigate to: `http://localhost:3000/editor`
+
+## AI Assistant Setup
+
+The editor includes an AI assistant powered by Anthropic Claude that can help you write and debug code.
+
+### Configuring the AI Assistant
+
+Before starting the server, set your Anthropic API key:
+
+```bash
+# Set the secret
+export SECRET_ANTHROPIC_API_KEY="sk-ant-api03-..."
+
+# Start the server
+cargo run
+```
+
+Or add it to your development environment file:
+
+```bash
+# .env file (add to .gitignore!)
+SECRET_ANTHROPIC_API_KEY=sk-ant-api03-your-actual-key-here
+```
+
+Then load and start:
+
+```bash
+set -a; source .env; set +a
+cargo run
+```
+
+### Getting an Anthropic API Key
+
+1. Sign up at [Anthropic Console](https://console.anthropic.com/)
+2. Navigate to API Keys section
+3. Create a new API key
+4. Copy the key (starts with `sk-ant-api03-`)
+
+### Using the AI Assistant
+
+Once configured:
+
+1. Open the editor at `http://localhost:3000/editor`
+2. Look for the AI Assistant panel on the right side
+3. Type your question or request
+4. Get intelligent responses about your code
+
+The AI assistant can help you:
+- Write JavaScript functions
+- Debug errors
+- Explain API usage
+- Suggest improvements
+- Generate example code
+
+### Checking AI Status
+
+The AI assistant will display its configuration status:
+- ✅ **Ready**: API key is configured
+- ⚠️ **Not Configured**: Shows setup instructions
+
+You can also check programmatically:
+
+```javascript
+// In your scripts
+if (Secrets.exists('anthropic_api_key')) {
+  writeLog('AI assistant is available');
+} else {
+  writeLog('AI assistant not configured - set SECRET_ANTHROPIC_API_KEY');
+}
+```
 
 ## Script Management
 

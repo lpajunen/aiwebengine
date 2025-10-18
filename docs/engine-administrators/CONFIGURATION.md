@@ -120,6 +120,104 @@ allowed_content_types = [        # Allowed request content types
 ]
 ```
 
+### Secrets Management Configuration
+
+AIWebEngine includes a secure secrets management system that keeps sensitive values (like API keys) in Rust and never exposes them to JavaScript code.
+
+#### Environment Variables (Recommended for Production)
+
+Any environment variable with the `SECRET_` prefix is automatically loaded as a secret:
+
+```bash
+# Anthropic API key for AI assistant
+export SECRET_ANTHROPIC_API_KEY="sk-ant-api03-..."
+
+# OpenAI API key (if using OpenAI)
+export SECRET_OPENAI_API_KEY="sk-..."
+
+# Custom secrets for your application
+export SECRET_MY_SERVICE_TOKEN="token123"
+export SECRET_DATABASE_ENCRYPTION_KEY="key456"
+```
+
+The identifier is the lowercase version of the part after `SECRET_`. For example:
+- `SECRET_ANTHROPIC_API_KEY` → identifier: `anthropic_api_key`
+- `SECRET_MY_SERVICE_TOKEN` → identifier: `my_service_token`
+
+#### Configuration File (Development Only)
+
+For local development, you can configure secrets in your config file:
+
+```toml
+[secrets]
+# Direct values (development only - never commit these!)
+[secrets.values]
+anthropic_api_key = "sk-ant-api03-..."
+openai_api_key = "sk-..."
+
+# Or reference environment variables
+[secrets.values]
+anthropic_api_key = "${ANTHROPIC_API_KEY}"
+database_password = "${DB_PASSWORD}"
+```
+
+**⚠️ SECURITY WARNING**: Never commit secrets to version control! Use environment variables in production.
+
+#### JavaScript API
+
+Scripts can check if secrets are configured without accessing their values:
+
+```javascript
+// Check if a secret exists
+if (Secrets.exists('anthropic_api_key')) {
+  console.log('API key is configured');
+} else {
+  console.log('Please configure SECRET_ANTHROPIC_API_KEY');
+}
+
+// List all configured secret identifiers
+const availableSecrets = Secrets.list();
+console.log('Available secrets:', availableSecrets);
+// Output: ['anthropic_api_key', 'openai_api_key']
+
+// ❌ Secret values are NOT accessible from JavaScript
+// Secrets.get('anthropic_api_key'); // This function does not exist!
+```
+
+Secret values are automatically injected by the Rust layer when making HTTP requests:
+
+```javascript
+// Secrets are injected using template syntax
+const response = await fetch('https://api.anthropic.com/v1/messages', {
+  method: 'POST',
+  headers: {
+    'x-api-key': '{{secret:anthropic_api_key}}',  // Injected by Rust
+    'content-type': 'application/json'
+  },
+  body: JSON.stringify({
+    model: 'claude-3-haiku-20240307',
+    messages: [{ role: 'user', content: 'Hello!' }]
+  })
+});
+```
+
+#### Common Secrets for AI Integration
+
+```bash
+# Anthropic Claude
+export SECRET_ANTHROPIC_API_KEY="sk-ant-api03-..."
+
+# OpenAI
+export SECRET_OPENAI_API_KEY="sk-..."
+
+# Google/Gemini
+export SECRET_GOOGLE_API_KEY="..."
+
+# Custom API services
+export SECRET_STRIPE_API_KEY="sk_live_..."
+export SECRET_SENDGRID_API_KEY="SG..."
+```
+
 ### Performance Configuration
 
 ```toml
@@ -170,14 +268,60 @@ Configuration validation failed: Server port 99999 is out of valid range (1-6553
 - Disable auto-migrations and console APIs
 - Use PostgreSQL with connection pooling
 - Set secrets via environment variables, not config files
+- **Never commit secrets to configuration files**
 
 ### Environment Variables in Production
 
 ```bash
-# Never put secrets in config files
+# Never put secrets in config files - use environment variables
 export APP_SECURITY_API_KEY="$(cat /etc/secrets/api-key)"
 export APP_REPOSITORY_DATABASE_URL="postgresql://$(cat /etc/secrets/db-user):$(cat /etc/secrets/db-pass)@localhost/aiwebengine"
+
+# Secret management for AI integration
+export SECRET_ANTHROPIC_API_KEY="$(cat /etc/secrets/anthropic-key)"
+export SECRET_OPENAI_API_KEY="$(cat /etc/secrets/openai-key)"
 ```
+
+### Secrets Management Best Practices
+
+1. **Always use environment variables in production**
+   ```bash
+   # Good - secrets from environment
+   export SECRET_ANTHROPIC_API_KEY="sk-ant-..."
+   
+   # Bad - secrets in config files
+   # [secrets.values]
+   # anthropic_api_key = "sk-ant-..."  # ❌ Never do this!
+   ```
+
+2. **Use secret stores in production**
+   ```bash
+   # AWS Secrets Manager
+   export SECRET_ANTHROPIC_API_KEY="$(aws secretsmanager get-secret-value --secret-id anthropic-key --query SecretString --output text)"
+   
+   # HashiCorp Vault
+   export SECRET_ANTHROPIC_API_KEY="$(vault kv get -field=key secret/anthropic)"
+   
+   # Kubernetes secrets
+   # Mount secrets as files or environment variables
+   ```
+
+3. **Rotate secrets regularly**
+   - Update environment variables
+   - Restart the application to load new values
+   - No code changes required
+
+4. **Test secret availability**
+   ```javascript
+   // In your JavaScript code
+   if (!Secrets.exists('anthropic_api_key')) {
+     throw new Error('Required secret anthropic_api_key not configured');
+   }
+   ```
+
+5. **Monitor secret usage**
+   - Check application logs for missing secret warnings
+   - The editor's AI assistant will report if API keys are not configured
 
 ## Configuration Testing
 

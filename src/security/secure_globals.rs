@@ -753,8 +753,9 @@ impl SecureGlobalContext {
     fn setup_secrets_functions(&self, ctx: &rquickjs::Ctx<'_>, _script_uri: &str) -> JsResult<()> {
         let global = ctx.globals();
         
-        // Get the secrets manager if available
-        let secrets_manager = self.secrets_manager.clone();
+        // Get the secrets manager - try instance first, then fall back to global
+        let secrets_manager = self.secrets_manager.clone()
+            .or_else(|| crate::secrets::get_global_secrets_manager());
         
         // Create the Secrets namespace object
         let secrets_obj = rquickjs::Object::new(ctx.clone())?;

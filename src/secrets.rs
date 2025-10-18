@@ -12,8 +12,30 @@
 //! 5. Secrets are automatically redacted from logs and error messages
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use tracing::{debug, info, warn};
+
+/// Global secrets manager instance
+///
+/// Initialized once at server startup and shared across all threads.
+/// Access via `get_global_secrets_manager()` function.
+static GLOBAL_SECRETS_MANAGER: OnceLock<Arc<SecretsManager>> = OnceLock::new();
+
+/// Get the global secrets manager instance
+///
+/// Returns None if secrets have not been initialized yet (before server startup).
+pub fn get_global_secrets_manager() -> Option<Arc<SecretsManager>> {
+    GLOBAL_SECRETS_MANAGER.get().cloned()
+}
+
+/// Initialize the global secrets manager
+///
+/// Should be called once during server startup. Subsequent calls are ignored.
+///
+/// Returns true if this was the first initialization, false if already initialized.
+pub fn initialize_global_secrets_manager(manager: Arc<SecretsManager>) -> bool {
+    GLOBAL_SECRETS_MANAGER.set(manager).is_ok()
+}
 
 /// Thread-safe secrets manager
 ///
