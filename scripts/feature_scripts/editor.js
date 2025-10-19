@@ -362,53 +362,132 @@ function apiGetAssets(req) {
 
 // API: AI Assistant prompt handler
 function apiAIAssistant(req) {
+  // Debug: Log the raw request body
+  writeLog(`AI Assistant: Raw request body: ${req.body}`);
+
   const body = JSON.parse(req.body || "{}");
+
+  // Debug: Log the parsed body
+  writeLog(`AI Assistant: Parsed body: ${JSON.stringify(body)}`);
+  writeLog(`AI Assistant: Prompt value: "${body.prompt}"`);
+  writeLog(
+    `AI Assistant: Prompt length: ${body.prompt ? body.prompt.length : 0}`,
+  );
+
   const prompt = body.prompt || "";
 
   // Check if Anthropic API key is configured
-  const hasAnthropicKey = Secrets.exists("anthropic_api_key");
-  const availableSecrets = Secrets.list();
-
-  writeLog(`AI Assistant: Checking for Anthropic API key...`);
-  writeLog(`AI Assistant: anthropic_api_key exists: ${hasAnthropicKey}`);
-  writeLog(
-    `AI Assistant: Available secrets: ${JSON.stringify(availableSecrets)}`,
-  );
-
-  // If API key is not configured, return helpful error
-  if (!hasAnthropicKey) {
+  if (!Secrets.exists("anthropic_api_key")) {
     writeLog(`AI Assistant: ERROR - Anthropic API key not configured`);
-    const errorResponse = {
-      success: false,
-      error: "Anthropic API key not configured",
-      message:
-        "Please set SECRET_ANTHROPIC_API_KEY environment variable or configure secrets.values.anthropic_api_key in config file",
-      availableSecrets: availableSecrets,
-    };
     return {
-      status: 503, // Service Unavailable
-      body: JSON.stringify(errorResponse),
+      status: 503,
+      body: JSON.stringify({
+        success: false,
+        error: "Anthropic API key not configured",
+        message:
+          "Please set SECRET_ANTHROPIC_API_KEY environment variable or configure secrets.values.anthropic_api_key in config file",
+      }),
       contentType: "application/json",
     };
   }
 
-  writeLog(`AI Assistant: API key is configured, processing request`);
+  // Validate prompt is not empty
+  if (!prompt || prompt.trim().length === 0) {
+    writeLog(`AI Assistant: ERROR - Empty prompt received`);
+    return {
+      status: 400,
+      body: JSON.stringify({
+        success: false,
+        error: "Empty prompt",
+        message: "Please provide a non-empty prompt",
+      }),
+      contentType: "application/json",
+    };
+  }
 
-  // For now, return a placeholder response
-  // Later this will be integrated with actual AI capabilities
-  const response = {
-    success: true,
-    response: "Response under development (API key detected)",
-    prompt: prompt,
-    hasApiKey: hasAnthropicKey,
-    timestamp: new Date().toISOString(),
-  };
+  writeLog(
+    `AI Assistant: Processing request with prompt: ${prompt.substring(0, 50)}...`,
+  );
 
-  return {
-    status: 200,
-    body: JSON.stringify(response),
-    contentType: "application/json",
-  };
+  try {
+    // Make request to Anthropic API with secret injection
+    const options = JSON.stringify({
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": "{{secret:anthropic_api_key}}",
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-3-haiku-20240307",
+        max_tokens: 1024,
+        messages: [
+          {
+            role: "user",
+            content: prompt,
+          },
+        ],
+      }),
+    });
+
+    const responseJson = fetch(
+      "https://api.anthropic.com/v1/messages",
+      options,
+    );
+    const response = JSON.parse(responseJson);
+
+    if (response.ok) {
+      const data = JSON.parse(response.body);
+      writeLog(`AI Assistant: Success - Model: ${data.model}`);
+      return {
+        status: 200,
+        body: JSON.stringify({
+          success: true,
+          response: data.content[0].text,
+          model: data.model,
+          usage: data.usage,
+        }),
+        contentType: "application/json",
+      };
+    } else {
+      // Log the full error response for debugging
+      writeLog(`AI Assistant: API error - Status: ${response.status}`);
+      writeLog(`AI Assistant: Error body: ${response.body}`);
+
+      let errorMessage = "API request failed";
+      try {
+        const errorData = JSON.parse(response.body);
+        errorMessage =
+          errorData.error?.message || errorData.message || errorMessage;
+        writeLog(`AI Assistant: Error details: ${errorMessage}`);
+      } catch (e) {
+        // If we can't parse the error, just log the raw body
+        writeLog(`AI Assistant: Could not parse error response`);
+      }
+
+      return {
+        status: response.status,
+        body: JSON.stringify({
+          success: false,
+          error: errorMessage,
+          status: response.status,
+          details: response.body,
+        }),
+        contentType: "application/json",
+      };
+    }
+  } catch (error) {
+    writeLog(`AI Assistant: Error - ${error}`);
+    return {
+      status: 500,
+      body: JSON.stringify({
+        success: false,
+        error: "Internal error",
+        message: String(error),
+      }),
+      contentType: "application/json",
+    };
+  }
 }
 
 // Initialization function

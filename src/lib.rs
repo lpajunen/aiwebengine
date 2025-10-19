@@ -791,24 +791,34 @@ pub async fn start_server_with_config(
             Err(_) => axum::body::Bytes::new(),
         };
 
-        // For POST requests to editor API, use raw body
-        let raw_body = if request_method == "POST" && path.starts_with("/api/scripts/") {
+        // Make raw body available for all POST/PUT/PATCH requests
+        let raw_body = if !body_bytes.is_empty()
+            && (request_method == "POST" || request_method == "PUT" || request_method == "PATCH")
+        {
             Some(String::from_utf8(body_bytes.to_vec()).unwrap_or_default())
         } else {
             None
         };
 
-        let form_data = if raw_body.is_some() {
-            // If we have raw body, don't parse as form data
-            HashMap::new()
-        } else {
+        // Parse form data if content type indicates form submission
+        let is_form_data = content_type
+            .as_ref()
+            .map(|ct| {
+                ct.contains("application/x-www-form-urlencoded")
+                    || ct.contains("multipart/form-data")
+            })
+            .unwrap_or(false);
+
+        let form_data = if is_form_data {
             // Parse form data from the bytes
-            let body = Body::from(body_bytes);
-            if let Some(ct) = content_type {
-                parse_form_data(Some(&ct), body).await.unwrap_or_default()
+            let body = Body::from(body_bytes.clone());
+            if let Some(ct) = content_type.as_ref() {
+                parse_form_data(Some(ct), body).await.unwrap_or_default()
             } else {
                 parse_form_data(None, body).await.unwrap_or_default()
             }
+        } else {
+            HashMap::new()
         };
 
         let path_clone = path.clone();

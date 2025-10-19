@@ -235,7 +235,9 @@ fn test_fetch_response_headers() {
 #[test]
 fn test_fetch_secret_template_syntax() {
     // Get or initialize secrets manager
-    use aiwebengine::secrets::{get_global_secrets_manager, initialize_global_secrets_manager, SecretsManager};
+    use aiwebengine::secrets::{
+        SecretsManager, get_global_secrets_manager, initialize_global_secrets_manager,
+    };
     use std::sync::Arc;
 
     // Try to get existing manager, or create new one
@@ -282,7 +284,9 @@ fn test_fetch_secret_template_syntax() {
 #[test]
 fn test_fetch_missing_secret_error() {
     // Get or initialize secrets manager
-    use aiwebengine::secrets::{get_global_secrets_manager, initialize_global_secrets_manager, SecretsManager};
+    use aiwebengine::secrets::{
+        SecretsManager, get_global_secrets_manager, initialize_global_secrets_manager,
+    };
     use std::sync::Arc;
 
     // Try to get existing manager, or create new one
@@ -318,6 +322,8 @@ fn test_fetch_missing_secret_error() {
     // Accept either error message depending on initialization state
     assert!(
         error.to_string().contains("Secret not found")
-            || error.to_string().contains("Secrets manager not initialized")
+            || error
+                .to_string()
+                .contains("Secrets manager not initialized")
     );
 }
