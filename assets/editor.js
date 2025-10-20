@@ -665,6 +665,15 @@ function init(context) {
     const code = parsed.code || "";
     const originalCode = parsed.original_code || "";
 
+    // Store the data for button clicks
+    this.pendingAIAction = {
+      type: actionType,
+      scriptName: scriptName,
+      code: code,
+      originalCode: originalCode,
+      message: message
+    };
+
     let html = `
       <div class="ai-response-content">
         <p><strong>You asked:</strong> ${this.escapeHtml(prompt)}</p>
@@ -685,7 +694,7 @@ function init(context) {
           <pre><code>${this.escapeHtml(code.substring(0, 300))}${code.length > 300 ? "..." : ""}</code></pre>
         </div>
         <div class="ai-action-buttons">
-          <button class="btn btn-success" onclick="window.editor.showDiffModal('${this.escapeJs(scriptName)}', '', ${this.escapeJs(JSON.stringify(code))}, '${this.escapeJs(message)}', 'create')">Preview & Create</button>
+          <button class="btn btn-success" onclick="window.editor.applyPendingAIAction()">Preview & Create</button>
         </div>
         </div>
       `;
@@ -693,7 +702,7 @@ function init(context) {
       html += `
         <p><strong>Script Name:</strong> <code>${this.escapeHtml(scriptName)}</code></p>
         <div class="ai-action-buttons">
-          <button class="btn btn-primary" onclick="window.editor.showDiffModal('${this.escapeJs(scriptName)}', ${this.escapeJs(JSON.stringify(originalCode))}, ${this.escapeJs(JSON.stringify(code))}, '${this.escapeJs(message)}', 'edit')">Preview Changes</button>
+          <button class="btn btn-primary" onclick="window.editor.applyPendingAIAction()">Preview Changes</button>
         </div>
         </div>
       `;
@@ -701,7 +710,7 @@ function init(context) {
       html += `
         <p><strong>Script Name:</strong> <code>${this.escapeHtml(scriptName)}</code></p>
         <div class="ai-action-buttons">
-          <button class="btn btn-danger" onclick="window.editor.confirmDeleteScript('${this.escapeJs(scriptName)}', '${this.escapeJs(message)}')">Confirm Delete</button>
+          <button class="btn btn-danger" onclick="window.editor.applyPendingAIAction()">Confirm Delete</button>
         </div>
         </div>
       `;
@@ -716,12 +725,21 @@ function init(context) {
     responseDiv.innerHTML = html;
   }
 
-  escapeJs(str) {
-    return str.replace(/\\/g, "\\\\")
-              .replace(/'/g, "\\'")
-              .replace(/"/g, '\\"')
-              .replace(/\n/g, "\\n")
-              .replace(/\r/g, "\\r");
+  async applyPendingAIAction() {
+    if (!this.pendingAIAction) {
+      this.showStatus("No pending action", "error");
+      return;
+    }
+
+    const { type, scriptName, code, originalCode, message } = this.pendingAIAction;
+
+    if (type === "create_script") {
+      await this.showDiffModal(scriptName, "", code, message, "create");
+    } else if (type === "edit_script") {
+      await this.showDiffModal(scriptName, originalCode || "", code, message, "edit");
+    } else if (type === "delete_script") {
+      this.confirmDeleteScript(scriptName, message);
+    }
   }
 
   async showDiffModal(scriptName, originalCode, newCode, explanation, action) {
@@ -742,7 +760,7 @@ function init(context) {
     modal.style.display = "flex";
 
     // Create diff editor
-    await this.createDiffEditor(originalCode, newCode);
+    await this.createDiffEditor(originalCode || "", newCode);
 
     // Store data for apply action
     this.pendingChange = {
