@@ -3,6 +3,38 @@
 
 // Serve the editor HTML page
 function serveEditor(req) {
+  // Debug logging for authentication
+  writeLog("=== Editor Authentication Check ===");
+  writeLog("auth object exists: " + (typeof auth !== "undefined"));
+  if (typeof auth !== "undefined") {
+    writeLog("auth.isAuthenticated: " + auth.isAuthenticated);
+    writeLog("auth.userId: " + auth.userId);
+    writeLog("auth.provider: " + auth.provider);
+  }
+
+  // Require authentication to access the editor
+  try {
+    const user = auth.requireAuth();
+    writeLog("Authentication successful for user: " + user.id);
+  } catch (error) {
+    writeLog("Authentication failed: " + error.message);
+    return {
+      status: 401,
+      body: JSON.stringify({
+        error: "Authentication required",
+        message: "Please login to access the editor",
+        loginUrl: "/auth/login",
+        debug: {
+          authExists: typeof auth !== "undefined",
+          isAuthenticated:
+            typeof auth !== "undefined" ? auth.isAuthenticated : null,
+          errorMessage: error.message,
+        },
+      }),
+      contentType: "application/json",
+    };
+  }
+
   // Serve the modern editor UI
   // Note: The HTML is embedded here to ensure /editor is the single entry point
   const html = `<!DOCTYPE html>
@@ -553,12 +585,15 @@ Remember: You are creating JavaScript scripts that run on the SERVER and handle 
 
   // Build contextual user prompt
   let contextualPrompt = "";
-  
+
   // Add context about current script if available
   if (currentScript && currentScriptContent) {
     contextualPrompt += "CURRENT SCRIPT CONTEXT:\\n";
     contextualPrompt += "Script Name: " + currentScript + "\\n";
-    contextualPrompt += "Script Content:\\n```javascript\\n" + currentScriptContent + "\\n```\\n\\n";
+    contextualPrompt +=
+      "Script Content:\\n```javascript\\n" +
+      currentScriptContent +
+      "\\n```\\n\\n";
   }
 
   // Add available scripts list
@@ -587,7 +622,7 @@ Remember: You are creating JavaScript scripts that run on the SERVER and handle 
       },
       body: JSON.stringify({
         model: "claude-haiku-4-5-20251001",
-        max_tokens: 8192*3,
+        max_tokens: 8192 * 3,
         system: systemPrompt,
         messages: [
           {
@@ -609,19 +644,23 @@ Remember: You are creating JavaScript scripts that run on the SERVER and handle 
       let aiResponse = data.content[0].text;
       writeLog(`AI Assistant: Success - Model: ${data.model}`);
       writeLog(`AI Assistant: Raw response length: ${aiResponse.length} chars`);
-      writeLog(`AI Assistant: Raw response start: ${aiResponse.substring(0, 100)}...`);
-      
+      writeLog(
+        `AI Assistant: Raw response start: ${aiResponse.substring(0, 100)}...`,
+      );
+
       // Check if response was truncated (stopped mid-response)
       const stopReason = data.stop_reason || "unknown";
       writeLog(`AI Assistant: Stop reason: ${stopReason}`);
-      
+
       if (stopReason === "max_tokens") {
-        writeLog(`AI Assistant: WARNING - Response truncated due to max_tokens limit`);
+        writeLog(
+          `AI Assistant: WARNING - Response truncated due to max_tokens limit`,
+        );
       }
-      
+
       // Clean up response - remove markdown code blocks if present
       let cleanedResponse = aiResponse.trim();
-      
+
       // Remove markdown code blocks (```json ... ``` or ``` ... ```)
       if (cleanedResponse.startsWith("```")) {
         writeLog(`AI Assistant: Removing markdown code blocks`);
@@ -630,17 +669,25 @@ Remember: You are creating JavaScript scripts that run on the SERVER and handle 
         // Remove closing ```
         cleanedResponse = cleanedResponse.replace(/\n?```\s*$/, "");
         cleanedResponse = cleanedResponse.trim();
-        writeLog(`AI Assistant: Cleaned response start: ${cleanedResponse.substring(0, 100)}...`);
+        writeLog(
+          `AI Assistant: Cleaned response start: ${cleanedResponse.substring(0, 100)}...`,
+        );
       }
-      
+
       // Try to parse AI response as JSON for structured commands
       let parsedResponse = null;
       try {
         parsedResponse = JSON.parse(cleanedResponse);
-        writeLog(`AI Assistant: Successfully parsed structured response of type: ${parsedResponse.type}`);
+        writeLog(
+          `AI Assistant: Successfully parsed structured response of type: ${parsedResponse.type}`,
+        );
       } catch (parseError) {
-        writeLog(`AI Assistant: Response is plain text, not JSON - Error: ${parseError}`);
-        writeLog(`AI Assistant: First 200 chars: ${cleanedResponse.substring(0, 200)}`);
+        writeLog(
+          `AI Assistant: Response is plain text, not JSON - Error: ${parseError}`,
+        );
+        writeLog(
+          `AI Assistant: First 200 chars: ${cleanedResponse.substring(0, 200)}`,
+        );
       }
 
       return {

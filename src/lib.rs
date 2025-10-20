@@ -777,9 +777,26 @@ pub async fn start_server_with_config(
             .map(|rid| rid.0.clone())
             .unwrap_or_else(|| "unknown".to_string());
 
+        // Extract authentication context from middleware
+        let auth_user = req.extensions().get::<auth::AuthUser>().cloned();
+
+        if let Some(ref user) = auth_user {
+            info!(
+                "[{}] Authentication context found: user_id={}, provider={}",
+                request_id, user.user_id, user.provider
+            );
+        } else {
+            info!("[{}] No authentication context in request", request_id);
+        }
+
         info!(
-            "[{}] Executing handler '{}' from script '{}' for {} {}",
-            request_id, handler_name, owner_uri, request_method, path
+            "[{}] Executing handler '{}' from script '{}' for {} {} (authenticated: {})",
+            request_id,
+            handler_name,
+            owner_uri,
+            request_method,
+            path,
+            auth_user.is_some()
         );
 
         // Extract content type before consuming the request
@@ -828,15 +845,34 @@ pub async fn start_server_with_config(
 
         let path_clone = path.clone();
         let worker = move || -> Result<(u16, String, Option<String>), String> {
-            js_engine::execute_script_for_request(
-                &owner_uri_cl,
-                &handler_cl,
-                &path_clone,
-                &request_method,
-                Some(&query_params),
-                Some(&form_data),
-                raw_body,
-            )
+            // Create authentication context for JavaScript
+            let auth_context = if let Some(ref auth_user) = auth_user {
+                // TODO: Get actual email, name, and provider from session
+                // For now, we only have user_id and provider from AuthUser
+                auth::JsAuthContext::authenticated(
+                    auth_user.user_id.clone(),
+                    None, // email - would need to be stored in session
+                    None, // name - would need to be stored in session
+                    auth_user.provider.clone(),
+                )
+            } else {
+                auth::JsAuthContext::anonymous()
+            };
+
+            // Use the secure execution path with authentication context
+            let params = js_engine::RequestExecutionParams {
+                script_uri: owner_uri_cl.clone(),
+                handler_name: handler_cl.clone(),
+                path: path_clone.clone(),
+                method: request_method.clone(),
+                query_params: Some(query_params.clone()),
+                form_data: Some(form_data.clone()),
+                raw_body: raw_body.clone(),
+                user_context: security::UserContext::anonymous(), // TODO: Extract from auth
+                auth_context: Some(auth_context),
+            };
+
+            js_engine::execute_script_for_request_secure(params)
         };
 
         let join = tokio::task::spawn_blocking(worker)
@@ -927,18 +963,11 @@ pub async fn start_server_with_config(
 
     // Mount authentication routes if auth is enabled
     if let Some(ref auth_mgr) = auth_manager {
-        info!("Mounting authentication routes at /auth");
+        info!("✅ Authentication ENABLED - mounting auth routes and middleware");
         let auth_router = auth::create_auth_router(Arc::clone(auth_mgr));
         app = app.nest("/auth", auth_router);
-
-        // Add optional auth middleware to all routes
-        let auth_mgr_for_middleware = Arc::clone(auth_mgr);
-        app = app.layer(axum::middleware::from_fn_with_state(
-            auth_mgr_for_middleware,
-            auth::optional_auth_middleware,
-        ));
     } else {
-        info!("Authentication disabled - no auth routes mounted");
+        warn!("⚠️  Authentication DISABLED - no auth routes or middleware");
     }
 
     // Add catch-all dynamic routes
@@ -954,8 +983,20 @@ pub async fn start_server_with_config(
             any(move |req: Request<Body>| async move {
                 handle_dynamic_request(req, script_timeout_ms).await
             }),
-        )
-        .layer(axum::middleware::from_fn(middleware::request_id_middleware));
+        );
+
+    // Add middleware layers (applied in reverse order to how they're added)
+    // So request_id runs first, then auth middleware
+    if let Some(ref auth_mgr) = auth_manager {
+        let auth_mgr_for_middleware = Arc::clone(auth_mgr);
+        info!("✅ Adding optional_auth_middleware layer to all routes");
+        app = app.layer(axum::middleware::from_fn_with_state(
+            auth_mgr_for_middleware,
+            auth::optional_auth_middleware,
+        ));
+    }
+
+    app = app.layer(axum::middleware::from_fn(middleware::request_id_middleware));
 
     let addr: std::net::SocketAddr = config
         .server_addr()

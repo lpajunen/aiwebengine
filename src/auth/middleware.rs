@@ -35,7 +35,7 @@ impl AuthUser {
 }
 
 /// Extract session token from request cookies or Authorization header
-fn extract_session_token(req: &Request) -> Option<String> {
+fn extract_session_token(req: &Request, cookie_name: &str) -> Option<String> {
     // Try Authorization header first (Bearer token)
     if let Some(auth_header) = req.headers().get(header::AUTHORIZATION)
         && let Ok(auth_str) = auth_header.to_str()
@@ -51,7 +51,7 @@ fn extract_session_token(req: &Request) -> Option<String> {
         for cookie in cookie_str.split(';') {
             let cookie = cookie.trim();
             if let Some((name, value)) = cookie.split_once('=')
-                && name == "auth_session"
+                && name == cookie_name
             {
                 return Some(value.to_string());
             }
@@ -97,7 +97,17 @@ pub async fn optional_auth_middleware(
     mut req: Request,
     next: Next,
 ) -> Response {
-    if let Some(session_token) = extract_session_token(&req) {
+    let path = req.uri().path().to_string();
+    tracing::debug!("🔐 optional_auth_middleware called for path: {}", path);
+
+    let cookie_name = &auth_manager.config().session_cookie_name;
+
+    if let Some(session_token) = extract_session_token(&req, cookie_name) {
+        tracing::debug!(
+            "🔑 Session token found for {}: {}...",
+            path,
+            &session_token[..20.min(session_token.len())]
+        );
         let ip_addr = extract_client_ip(&req);
         let user_agent = extract_user_agent(&req);
 
@@ -107,18 +117,27 @@ pub async fn optional_auth_middleware(
             .await
         {
             Ok(user_id) => {
+                tracing::info!("✅ Session validated for {}: user_id={}", path, user_id);
                 // Inject authenticated user into request
                 let auth_user = AuthUser::new(
-                    user_id,
+                    user_id.clone(),
                     "unknown".to_string(), // Would need to store provider in session
                     session_token,
                 );
                 req.extensions_mut().insert(auth_user);
+                tracing::debug!("✅ AuthUser injected into request extensions for {}", path);
             }
-            Err(_) => {
+            Err(e) => {
+                tracing::warn!("⚠️  Session validation failed for {}: {}", path, e);
                 // Invalid session, but we don't fail - just continue without auth
             }
         }
+    } else {
+        tracing::debug!(
+            "ℹ️  No session token found for {} (looking for cookie: {})",
+            path,
+            cookie_name
+        );
     }
 
     next.run(req).await
@@ -130,7 +149,8 @@ pub async fn required_auth_middleware(
     mut req: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let session_token = extract_session_token(&req).ok_or(StatusCode::UNAUTHORIZED)?;
+    let cookie_name = &auth_manager.config().session_cookie_name;
+    let session_token = extract_session_token(&req, cookie_name).ok_or(StatusCode::UNAUTHORIZED)?;
 
     let ip_addr = extract_client_ip(&req);
     let user_agent = extract_user_agent(&req);
@@ -224,7 +244,7 @@ mod tests {
             .body(Body::empty())
             .unwrap();
 
-        let token = extract_session_token(&req);
+        let token = extract_session_token(&req, "auth_session");
         assert_eq!(token, Some("test-token-123".to_string()));
     }
 
@@ -235,7 +255,7 @@ mod tests {
             .body(Body::empty())
             .unwrap();
 
-        let token = extract_session_token(&req);
+        let token = extract_session_token(&req, "auth_session");
         assert_eq!(token, Some("cookie-token-456".to_string()));
     }
 

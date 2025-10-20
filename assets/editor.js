@@ -599,7 +599,9 @@ function init(context) {
       const requestBody = {
         prompt: prompt,
         currentScript: this.currentScript,
-        currentScriptContent: this.monacoEditor ? this.monacoEditor.getValue() : null
+        currentScriptContent: this.monacoEditor
+          ? this.monacoEditor.getValue()
+          : null,
       };
 
       const response = await fetch("/api/ai-assistant", {
@@ -615,7 +617,7 @@ function init(context) {
       }
 
       const data = await response.json();
-      
+
       // Check if we got a structured response
       if (data.parsed && data.parsed.type) {
         this.handleStructuredAIResponse(data.parsed, prompt);
@@ -671,7 +673,7 @@ function init(context) {
       scriptName: scriptName,
       code: code,
       originalCode: originalCode,
-      message: message
+      message: message,
     };
 
     let html = `
@@ -731,12 +733,19 @@ function init(context) {
       return;
     }
 
-    const { type, scriptName, code, originalCode, message } = this.pendingAIAction;
+    const { type, scriptName, code, originalCode, message } =
+      this.pendingAIAction;
 
     if (type === "create_script") {
       await this.showDiffModal(scriptName, "", code, message, "create");
     } else if (type === "edit_script") {
-      await this.showDiffModal(scriptName, originalCode || "", code, message, "edit");
+      await this.showDiffModal(
+        scriptName,
+        originalCode || "",
+        code,
+        message,
+        "edit",
+      );
     } else if (type === "delete_script") {
       this.confirmDeleteScript(scriptName, message);
     }
@@ -746,7 +755,7 @@ function init(context) {
     const modal = document.getElementById("diff-modal");
     const title = document.getElementById("diff-modal-title");
     const explanationDiv = document.getElementById("diff-explanation");
-    
+
     // Set title based on action
     if (action === "create") {
       title.textContent = `Create Script: ${scriptName}`;
@@ -766,13 +775,13 @@ function init(context) {
     this.pendingChange = {
       scriptName: scriptName,
       newCode: newCode,
-      action: action
+      action: action,
     };
   }
 
   async createDiffEditor(originalCode, newCode) {
     const container = document.getElementById("monaco-diff-editor");
-    
+
     // Clear any existing content
     container.innerHTML = "";
 
@@ -789,7 +798,10 @@ function init(context) {
         fontSize: 13,
       });
 
-      const original = monaco.editor.createModel(originalCode || "// New file", "javascript");
+      const original = monaco.editor.createModel(
+        originalCode || "// New file",
+        "javascript",
+      );
       const modified = monaco.editor.createModel(newCode, "javascript");
 
       this.monacoDiffEditor.setModel({
@@ -804,12 +816,12 @@ function init(context) {
   closeDiffModal() {
     const modal = document.getElementById("diff-modal");
     modal.style.display = "none";
-    
+
     if (this.monacoDiffEditor) {
       this.monacoDiffEditor.dispose();
       this.monacoDiffEditor = null;
     }
-    
+
     this.pendingChange = null;
   }
 
@@ -830,9 +842,12 @@ function init(context) {
           throw new Error(`Failed to save script: ${response.status}`);
         }
 
-        this.showStatus(`Script ${action === "create" ? "created" : "updated"} successfully`, "success");
+        this.showStatus(
+          `Script ${action === "create" ? "created" : "updated"} successfully`,
+          "success",
+        );
         this.loadScripts();
-        
+
         // Load the script in editor
         this.loadScript(scriptName);
       }
@@ -844,7 +859,11 @@ function init(context) {
   }
 
   confirmDeleteScript(scriptName, explanation) {
-    if (confirm(`${explanation}\n\nAre you sure you want to delete ${scriptName}?`)) {
+    if (
+      confirm(
+        `${explanation}\n\nAre you sure you want to delete ${scriptName}?`,
+      )
+    ) {
       const encodedScriptName = encodeURIComponent(scriptName);
       fetch(`/api/scripts/${encodedScriptName}`, {
         method: "DELETE",
@@ -852,10 +871,11 @@ function init(context) {
         .then(() => {
           this.showStatus("Script deleted successfully", "success");
           this.loadScripts();
-          
+
           if (this.currentScript === scriptName) {
             this.currentScript = null;
-            document.getElementById("current-script-name").textContent = "No script selected";
+            document.getElementById("current-script-name").textContent =
+              "No script selected";
             if (this.monacoEditor) {
               this.monacoEditor.setValue("// Select a script to edit");
             }
