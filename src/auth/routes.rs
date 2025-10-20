@@ -261,6 +261,9 @@ async fn logout(
     Query(params): Query<LogoutParams>,
     headers: HeaderMap,
 ) -> Result<Response, ErrorResponse> {
+    let config = auth_manager.config();
+    let cookie_prefix = format!("{}=", config.session_cookie_name);
+
     // Extract session token from cookie
     let session_token = headers
         .get(header::COOKIE)
@@ -268,7 +271,7 @@ async fn logout(
         .and_then(|cookies| {
             cookies.split(';').find_map(|cookie| {
                 let cookie = cookie.trim();
-                cookie.strip_prefix("auth_session=")
+                cookie.strip_prefix(&cookie_prefix)
             })
         });
 
@@ -278,7 +281,6 @@ async fn logout(
     }
 
     // Clear cookie
-    let config = auth_manager.config();
     let cookie_value = format!(
         "{}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
         config.session_cookie_name
@@ -303,6 +305,9 @@ async fn auth_status(
     let ip_addr = get_client_ip(&headers);
     let user_agent = get_user_agent(&headers);
 
+    let config = auth_manager.config();
+    let cookie_prefix = format!("{}=", config.session_cookie_name);
+
     // Extract session token
     let session_token = headers
         .get(header::COOKIE)
@@ -310,7 +315,7 @@ async fn auth_status(
         .and_then(|cookies| {
             cookies.split(';').find_map(|cookie| {
                 let cookie = cookie.trim();
-                cookie.strip_prefix("auth_session=")
+                cookie.strip_prefix(&cookie_prefix)
             })
         });
 
