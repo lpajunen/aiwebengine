@@ -94,11 +94,14 @@ same_site = "lax"
 # OAuth2 providers configuration
 # Note: You'll need to register your app with each provider and add credentials
 
-# Google OAuth2 (uncomment and fill in to enable)
-# [auth.providers.google]
-# client_id = "your-google-client-id"
-# client_secret = "your-google-client-secret"
-# redirect_uri = "http://localhost:3000/auth/callback/google"
+# Google OAuth2 - Set values via environment variables (use double underscore __ for nesting):
+# APP_AUTH__PROVIDERS__GOOGLE__CLIENT_ID
+# APP_AUTH__PROVIDERS__GOOGLE__CLIENT_SECRET
+# APP_AUTH__PROVIDERS__GOOGLE__REDIRECT_URI
+[auth.providers.google]
+client_id = "your-google-client-id"
+client_secret = "your-google-client-secret"
+redirect_uri = "http://localhost:3000/auth/callback/google"
 
 # Microsoft OAuth2 (uncomment and fill in to enable)
 # [auth.providers.microsoft]

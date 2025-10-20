@@ -522,13 +522,18 @@ pub async fn start_server_with_config(
         config.auth.clone()
     {
         info!("Authentication is enabled, initializing AuthManager...");
+        debug!(
+            "Auth config: enabled={}, providers={:?}",
+            auth_config.enabled,
+            auth_config.providers.enabled_providers()
+        );
         match initialize_auth_manager(auth_config).await {
             Ok(manager) => {
                 info!("AuthManager initialized successfully");
                 Some(manager)
             }
             Err(e) => {
-                warn!(
+                error!(
                     "Failed to initialize AuthManager: {}. Authentication will be disabled.",
                     e
                 );

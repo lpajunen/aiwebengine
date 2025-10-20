@@ -340,7 +340,7 @@ pub fn create_auth_router(auth_manager: Arc<AuthManager>) -> Router {
     Router::new()
         .route("/login", get(login_page))
         .route("/login/{provider}", get(start_login))
-        .route("/callback", get(oauth_callback))
+        .route("/callback/{provider}", get(oauth_callback))
         .route("/logout", post(logout))
         .route("/status", get(auth_status))
         .with_state(auth_manager)

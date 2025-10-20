@@ -332,7 +332,7 @@ impl Default for PerformanceConfig {
 impl AppConfig {
     /// Load configuration from multiple sources with precedence:
     /// 1. Command line arguments
-    /// 2. Environment variables
+    /// 2. Environment variables (use double underscore __ for nesting)
     /// 3. Config file (TOML, YAML, JSON5, etc.)
     /// 4. Default values
     pub fn load() -> Result<Self, anyhow::Error> {
@@ -341,7 +341,7 @@ impl AppConfig {
             .merge(Toml::file("config.toml"))
             .merge(Yaml::file("config.yaml"))
             .merge(Yaml::file("config.yml"))
-            .merge(Env::prefixed("APP_"))
+            .merge(Env::prefixed("APP_").split("__"))
             .extract()?;
 
         // Validate the configuration
@@ -496,7 +496,21 @@ pub type Config = AppConfig;
 impl AppConfig {
     /// Backward compatibility method - equivalent to load()
     pub fn from_env() -> Self {
-        Self::load().unwrap_or_else(|_| Self::default())
+        match Self::load() {
+            Ok(config) => {
+                // Debug: log if auth is configured
+                if config.auth.is_some() {
+                    eprintln!("DEBUG: Auth configuration loaded successfully");
+                } else {
+                    eprintln!("DEBUG: No auth configuration found in loaded config");
+                }
+                config
+            }
+            Err(e) => {
+                eprintln!("DEBUG: Failed to load config: {}. Using defaults.", e);
+                Self::default()
+            }
+        }
     }
 
     /// Backward compatibility method for server address
