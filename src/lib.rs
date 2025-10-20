@@ -547,14 +547,33 @@ pub async fn start_server_with_config(
         None
     };
 
-    // GraphQL GET handler - serves GraphiQL
-    async fn graphql_get() -> impl IntoResponse {
+    // Determine if auth is enabled
+    let auth_enabled = auth_manager.is_some();
+
+    // GraphQL GET handler - serves GraphiQL (requires authentication when auth is enabled)
+    let graphql_get_handler = move |req: axum::http::Request<axum::body::Body>| async move {
+        // Check for authentication when auth is enabled
+        if auth_enabled && req.extensions().get::<auth::AuthUser>().is_none() {
+            return axum::response::Response::builder()
+                .status(StatusCode::UNAUTHORIZED)
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(
+                    serde_json::json!({"error": "Authentication required"}).to_string(),
+                ))
+                .unwrap_or_else(|err| {
+                    error!("Failed to build unauthorized response: {}", err);
+                    axum::response::Response::new(axum::body::Body::from("Unauthorized"))
+                })
+                .into_response();
+        }
+
         axum::response::Html(
             async_graphql::http::GraphiQLSource::build()
                 .endpoint("/graphql")
                 .finish(),
         )
-    }
+        .into_response()
+    };
 
     // GraphQL POST handler - executes queries
     async fn graphql_post(
@@ -951,7 +970,7 @@ pub async fn start_server_with_config(
     // Build the router
     let mut app = Router::new()
         // GraphQL endpoints
-        .route("/graphql", axum::routing::get(graphql_get))
+        .route("/graphql", axum::routing::get(graphql_get_handler))
         .route(
             "/graphql",
             axum::routing::post(move |req| graphql_post(schema_for_post, req)),
