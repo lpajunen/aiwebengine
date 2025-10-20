@@ -8,7 +8,7 @@ use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Redirect, Response},
-    routing::{get, post},
+    routing::get,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -277,7 +277,14 @@ async fn logout(
 
     if let Some(token) = session_token {
         // Destroy session
-        let _ = auth_manager.logout(token, false).await;
+        if let Err(e) = auth_manager.logout(token, false).await {
+            tracing::error!("Failed to logout session: {}", e);
+            // Continue anyway to clear the cookie
+        } else {
+            tracing::info!("Session successfully invalidated during logout");
+        }
+    } else {
+        tracing::warn!("Logout called but no session token found in cookies");
     }
 
     // Clear cookie
@@ -346,7 +353,7 @@ pub fn create_auth_router(auth_manager: Arc<AuthManager>) -> Router {
         .route("/login", get(login_page))
         .route("/login/{provider}", get(start_login))
         .route("/callback/{provider}", get(oauth_callback))
-        .route("/logout", post(logout))
+        .route("/logout", get(logout).post(logout))
         .route("/status", get(auth_status))
         .with_state(auth_manager)
 }
