@@ -485,10 +485,11 @@ RESPONSE FORMAT - YOU MUST RESPOND WITH ONLY THIS JSON STRUCTURE:
 
 CRITICAL JSON RULES:
 - Do NOT wrap your response in markdown code blocks (no \`\`\`json)
-- Do NOT add any text before or after the JSON
+- Do NOT add any text before or after the JSON  
 - Start your response with { and end with }
-- Escape newlines as \\n, quotes as \\" in strings
-- The "code" field contains the COMPLETE JavaScript script
+- Your response must be valid, parseable JSON
+- In the "code" field, use standard JSON escaping: newline = \\n, quote = \\", backslash = \\\\
+- Do NOT double-escape! A newline in your code should be represented as ONE \\n in the JSON, not \\\\n
 
 SCRIPT STRUCTURE - Every script MUST follow this pattern:
 // Script description
@@ -537,14 +538,16 @@ RULES:
 
 EXAMPLES OF CORRECT RESPONSES:
 
-For "create a simple web page":
-{"type":"create_script","message":"I'll create a script that serves a simple HTML web page at /hello","script_name":"hello-page.js","code":"// Simple web page script\\n\\nfunction servePage(req) {\\n  const html = '<!DOCTYPE html>\\\\n<html>\\\\n<head>\\\\n  <title>Hello</title>\\\\n</head>\\\\n<body>\\\\n  <h1>Hello World!</h1>\\\\n  <p>This is a simple web page.</p>\\\\n</body>\\\\n</html>';\\n  return {\\n    status: 200,\\n    body: html,\\n    contentType: 'text/html'\\n  };\\n}\\n\\nfunction init(context) {\\n  writeLog('Hello page script initialized');\\n  register('/hello', 'servePage', 'GET');\\n  return { success: true };\\n}"}
+Example 1 - Create web page:
+{"type":"create_script","message":"Creating a script that serves an HTML page","script_name":"hello-page.js","code":"// Hello page\\n\\nfunction servePage(req) {\\n  const html = '<!DOCTYPE html><html><head><title>Hello</title></head><body><h1>Hello World!</h1></body></html>';\\n  return { status: 200, body: html, contentType: 'text/html' };\\n}\\n\\nfunction init(context) {\\n  register('/hello', 'servePage', 'GET');\\n  return { success: true };\\n}"}
 
-For "create a JSON API":
-{"type":"create_script","message":"I'll create a REST API that returns user data","script_name":"users-api.js","code":"// Users API script\\n\\nfunction getUsers(req) {\\n  try {\\n    const users = [\\n      {id: 1, name: 'Alice'},\\n      {id: 2, name: 'Bob'}\\n    ];\\n    return {\\n      status: 200,\\n      body: JSON.stringify(users),\\n      contentType: 'application/json'\\n    };\\n  } catch (error) {\\n    writeLog('Error: ' + error);\\n    return { status: 500, body: JSON.stringify({error: 'Internal error'}) };\\n  }\\n}\\n\\nfunction init(context) {\\n  register('/api/users', 'getUsers', 'GET');\\n  return { success: true };\\n}"}
+Example 2 - Create JSON API:
+{"type":"create_script","message":"Creating a REST API endpoint","script_name":"users-api.js","code":"// Users API\\n\\nfunction getUsers(req) {\\n  const users = [{id: 1, name: 'Alice'}, {id: 2, name: 'Bob'}];\\n  return { status: 200, body: JSON.stringify(users), contentType: 'application/json' };\\n}\\n\\nfunction init(context) {\\n  register('/api/users', 'getUsers', 'GET');\\n  return { success: true };\\n}"}
 
-For "explain this script":
-{"type":"explanation","message":"This script registers a GET endpoint at /api/users that returns a JSON array of user objects. It includes error handling and proper content type headers."}
+Example 3 - Explanation:
+{"type":"explanation","message":"This script registers a GET endpoint that returns JSON user data with proper error handling and content type."}
+
+IMPORTANT: In these examples, each \\n represents ONE newline character in the JavaScript code. When you output JSON, a newline in the source code becomes \\n in the JSON string.
 
 Remember: You are creating JavaScript scripts that run on the SERVER and handle HTTP requests. When someone asks for a "web page", you create a script that SERVES that HTML page!`;
 
