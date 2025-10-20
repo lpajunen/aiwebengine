@@ -155,6 +155,24 @@ function serveEditor(req) {
         </footer>
     </div>
 
+    <!-- Diff Preview Modal -->
+    <div id="diff-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="diff-modal-title">Preview Changes</h3>
+                <button id="close-diff-modal" class="btn btn-secondary btn-small">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="diff-explanation" class="diff-explanation"></div>
+                <div id="monaco-diff-editor" class="monaco-diff-container"></div>
+            </div>
+            <div class="modal-footer">
+                <button id="reject-changes-btn" class="btn btn-danger">Reject</button>
+                <button id="apply-changes-btn" class="btn btn-success">Apply Changes</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Load Monaco Editor -->
     <script src="https://unpkg.com/monaco-editor@0.45.0/min/vs/loader.js"></script>
     
@@ -375,6 +393,8 @@ function apiAIAssistant(req) {
   );
 
   const prompt = body.prompt || "";
+  const currentScript = body.currentScript || null;
+  const currentScriptContent = body.currentScriptContent || null;
 
   // Check if Anthropic API key is configured
   if (!Secrets.exists("anthropic_api_key")) {
@@ -409,8 +429,133 @@ function apiAIAssistant(req) {
     `AI Assistant: Processing request with prompt: ${prompt.substring(0, 50)}...`,
   );
 
+  // Build system prompt with comprehensive API documentation
+  const systemPrompt = `You are an AI assistant for aiwebengine, a JavaScript-based web application engine.
+
+CRITICAL: You MUST respond with ONLY valid JSON. No markdown, no code blocks, no explanations outside the JSON.
+
+AVAILABLE JAVASCRIPT APIs:
+1. register(path, handlerName, method) - Register HTTP routes
+   - path: string (e.g., "/api/users")
+   - handlerName: string (name of handler function)
+   - method: "GET" | "POST" | "PUT" | "DELETE"
+
+2. writeLog(message) - Write to server logs
+   - message: string
+
+3. fetch(url, options) - Make HTTP requests with secret injection support
+   - url: string
+   - options: JSON string with {method, headers, body, timeout_ms}
+   - Supports {{secret:identifier}} in headers for secure API keys
+   - Returns: JSON string with {status, ok, headers, body}
+
+4. registerWebStream(path) - Register SSE stream endpoint
+   - path: string (must start with /)
+
+5. sendStreamMessage(data) - Broadcast to all stream clients
+   - data: object (will be JSON serialized)
+
+6. getSecret(key) - Retrieve secret value (use sparingly, prefer {{secret:}} in fetch)
+   - key: string
+   - Returns: string or null
+
+7. listScripts() - Get list of all script URIs
+   - Returns: array of strings
+
+8. getScript(uri) - Get script content
+   - uri: string (e.g., "https://example.com/blog")
+   - Returns: string (script content)
+
+RESPONSE FORMAT - YOU MUST RESPOND WITH ONLY THIS JSON STRUCTURE:
+{
+  "type": "explanation" | "create_script" | "edit_script" | "delete_script",
+  "message": "Human-readable explanation of what you're suggesting",
+  "script_name": "name.js",
+  "code": "complete script code here",
+  "original_code": "original code (for edits only)"
+}
+
+IMPORTANT: 
+- Do NOT wrap your response in markdown code blocks
+- Do NOT add any text before or after the JSON
+- Start your response with { and end with }
+- Escape all special characters in strings (newlines as \\n, quotes as \\")
+
+SCRIPT STRUCTURE - All scripts must follow this pattern:
+// Script description
+
+function handlerName(req) {
   try {
-    // Make request to Anthropic API with secret injection
+    // Your logic here
+    return {
+      status: 200,
+      body: 'response content',
+      contentType: 'text/plain'
+    };
+  } catch (error) {
+    writeLog('Error: ' + error);
+    return { status: 500, body: 'Internal error' };
+  }
+}
+
+function init(context) {
+  writeLog('Initializing script');
+  register('/path', 'handlerName', 'GET');
+  return { success: true };
+}
+
+RULES:
+1. ALWAYS respond with ONLY valid JSON - no other text
+2. Include complete, working code with proper error handling
+3. Use try-catch blocks in handlers
+4. Always include init() function that registers routes
+5. Use writeLog() for debugging
+6. For edits, include both original_code and code fields
+7. Never use Node.js APIs (fs, path, etc.) - they don't exist
+8. Never use browser APIs (localStorage, document, window) - they don't exist
+9. For API keys, use {{secret:identifier}} in fetch headers
+10. Escape newlines as \\n in JSON strings
+
+EXAMPLES OF CORRECT RESPONSES:
+
+For explanation:
+{"type":"explanation","message":"This script registers a GET endpoint at /api/users that returns a list of users in JSON format. It includes error handling and logging for debugging purposes."}
+
+For create:
+{"type":"create_script","message":"I'll create a simple hello world API endpoint","script_name":"hello.js","code":"function handleHello(req) {\\n  return {\\n    status: 200,\\n    body: 'Hello World!',\\n    contentType: 'text/plain'\\n  };\\n}\\n\\nfunction init(context) {\\n  register('/hello', 'handleHello', 'GET');\\n  return { success: true };\\n}"}
+
+For edit:
+{"type":"edit_script","message":"Adding error handling to make the code more robust","script_name":"api.js","original_code":"function handler(req) {\\n  return { status: 200, body: 'OK' };\\n}","code":"function handler(req) {\\n  try {\\n    return { status: 200, body: 'OK' };\\n  } catch (error) {\\n    writeLog('Error: ' + error);\\n    return { status: 500, body: 'Internal error' };\\n  }\\n}"}
+
+Remember: Response must be PURE JSON only, nothing else!`;
+
+  // Build contextual user prompt
+  let contextualPrompt = "";
+  
+  // Add context about current script if available
+  if (currentScript && currentScriptContent) {
+    contextualPrompt += "CURRENT SCRIPT CONTEXT:\\n";
+    contextualPrompt += "Script Name: " + currentScript + "\\n";
+    contextualPrompt += "Script Content:\\n```javascript\\n" + currentScriptContent + "\\n```\\n\\n";
+  }
+
+  // Add available scripts list
+  try {
+    const scripts = typeof listScripts === "function" ? listScripts() : [];
+    if (scripts.length > 0) {
+      contextualPrompt += "AVAILABLE SCRIPTS: " + scripts.join(", ") + "\\n\\n";
+    }
+  } catch (e) {
+    writeLog("Could not list scripts: " + e);
+  }
+
+  // Add user's actual prompt
+  contextualPrompt += "USER REQUEST: " + prompt;
+
+  writeLog("AI Assistant: Sending request with context...");
+
+  try {
+    // Make request to Anthropic API with secret injection and system prompt
     const options = JSON.stringify({
       method: "POST",
       headers: {
@@ -419,12 +564,13 @@ function apiAIAssistant(req) {
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-3-haiku-20240307",
-        max_tokens: 1024,
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 8192,
+        system: systemPrompt,
         messages: [
           {
             role: "user",
-            content: prompt,
+            content: contextualPrompt,
           },
         ],
       }),
@@ -438,14 +584,52 @@ function apiAIAssistant(req) {
 
     if (response.ok) {
       const data = JSON.parse(response.body);
+      let aiResponse = data.content[0].text;
       writeLog(`AI Assistant: Success - Model: ${data.model}`);
+      writeLog(`AI Assistant: Raw response length: ${aiResponse.length} chars`);
+      writeLog(`AI Assistant: Raw response start: ${aiResponse.substring(0, 100)}...`);
+      
+      // Check if response was truncated (stopped mid-response)
+      const stopReason = data.stop_reason || "unknown";
+      writeLog(`AI Assistant: Stop reason: ${stopReason}`);
+      
+      if (stopReason === "max_tokens") {
+        writeLog(`AI Assistant: WARNING - Response truncated due to max_tokens limit`);
+      }
+      
+      // Clean up response - remove markdown code blocks if present
+      let cleanedResponse = aiResponse.trim();
+      
+      // Remove markdown code blocks (```json ... ``` or ``` ... ```)
+      if (cleanedResponse.startsWith("```")) {
+        writeLog(`AI Assistant: Removing markdown code blocks`);
+        // Remove opening ```json or ```
+        cleanedResponse = cleanedResponse.replace(/^```(?:json)?\s*\n?/, "");
+        // Remove closing ```
+        cleanedResponse = cleanedResponse.replace(/\n?```\s*$/, "");
+        cleanedResponse = cleanedResponse.trim();
+        writeLog(`AI Assistant: Cleaned response start: ${cleanedResponse.substring(0, 100)}...`);
+      }
+      
+      // Try to parse AI response as JSON for structured commands
+      let parsedResponse = null;
+      try {
+        parsedResponse = JSON.parse(cleanedResponse);
+        writeLog(`AI Assistant: Successfully parsed structured response of type: ${parsedResponse.type}`);
+      } catch (parseError) {
+        writeLog(`AI Assistant: Response is plain text, not JSON - Error: ${parseError}`);
+        writeLog(`AI Assistant: First 200 chars: ${cleanedResponse.substring(0, 200)}`);
+      }
+
       return {
         status: 200,
         body: JSON.stringify({
           success: true,
-          response: data.content[0].text,
+          response: aiResponse,
+          parsed: parsedResponse,
           model: data.model,
           usage: data.usage,
+          stop_reason: stopReason,
         }),
         contentType: "application/json",
       };

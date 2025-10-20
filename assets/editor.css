@@ -735,6 +735,158 @@ body {
     gap: 8px;
 }
 
+/* Diff Preview Modal */
+.modal {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.7);
+    z-index: 10000;
+    align-items: center;
+    justify-content: center;
+}
+
+.modal-content {
+    background-color: var(--darker-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    width: 90%;
+    height: 85%;
+    max-width: 1400px;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 15px 20px;
+    border-bottom: 1px solid var(--border-color);
+    background-color: var(--light-bg);
+}
+
+.modal-header h3 {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-color);
+}
+
+.modal-body {
+    flex: 1;
+    padding: 20px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.diff-explanation {
+    background-color: var(--dark-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    padding: 12px 15px;
+    color: var(--text-color);
+    font-size: 13px;
+}
+
+.monaco-diff-container {
+    flex: 1;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    overflow: hidden;
+}
+
+.modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    padding: 15px 20px;
+    border-top: 1px solid var(--border-color);
+    background-color: var(--light-bg);
+}
+
+/* Enhanced AI Response Styles */
+.ai-response-content {
+    padding: 15px;
+}
+
+.ai-response-text {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    font-family: monospace;
+    background-color: var(--dark-bg);
+    padding: 12px;
+    border-radius: var(--border-radius);
+    border: 1px solid var(--border-color);
+    margin: 10px 0;
+}
+
+.ai-action-header {
+    margin: 10px 0;
+}
+
+.ai-action-type {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.ai-action-explanation {
+    background-color: var(--info-color);
+    color: white;
+}
+
+.ai-action-create_script {
+    background-color: var(--success-color);
+    color: white;
+}
+
+.ai-action-edit_script {
+    background-color: var(--primary-color);
+    color: white;
+}
+
+.ai-action-delete_script {
+    background-color: var(--danger-color);
+    color: white;
+}
+
+.ai-code-preview {
+    background-color: var(--dark-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    margin: 12px 0;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.ai-code-preview pre {
+    margin: 0;
+    padding: 12px;
+}
+
+.ai-code-preview code {
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-color);
+}
+
+.ai-action-buttons {
+    display: flex;
+    gap: 10px;
+    margin: 15px 0;
+}
+
 /* Utility Classes */
 .hidden {
     display: none !important;

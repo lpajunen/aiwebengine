@@ -137,6 +137,17 @@ class AIWebEngineEditor {
         this.submitAIPrompt();
       }
     });
+
+    // Diff modal controls
+    document
+      .getElementById("close-diff-modal")
+      .addEventListener("click", () => this.closeDiffModal());
+    document
+      .getElementById("reject-changes-btn")
+      .addEventListener("click", () => this.closeDiffModal());
+    document
+      .getElementById("apply-changes-btn")
+      .addEventListener("click", () => this.applyPendingChange());
   }
 
   async setupMonacoEditor() {
@@ -584,12 +595,19 @@ function init(context) {
     responseDiv.classList.add("loading");
 
     try {
+      // Include current script context
+      const requestBody = {
+        prompt: prompt,
+        currentScript: this.currentScript,
+        currentScriptContent: this.monacoEditor ? this.monacoEditor.getValue() : null
+      };
+
       const response = await fetch("/api/ai-assistant", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify(requestBody),
       });
 
       if (!response.ok) {
@@ -597,19 +615,14 @@ function init(context) {
       }
 
       const data = await response.json();
-
-      // Display the response
-      responseDiv.classList.remove("loading");
-      responseDiv.innerHTML = `
-        <div class="ai-response-content">
-          <p><strong>You asked:</strong> ${this.escapeHtml(prompt)}</p>
-          <hr style="border-color: var(--border-color); margin: 10px 0;">
-          <p><strong>Response:</strong> ${this.escapeHtml(data.response)}</p>
-          <p style="color: var(--text-muted); font-size: 11px; margin-top: 10px;">
-            ${new Date(data.timestamp).toLocaleString()}
-          </p>
-        </div>
-      `;
+      
+      // Check if we got a structured response
+      if (data.parsed && data.parsed.type) {
+        this.handleStructuredAIResponse(data.parsed, prompt);
+      } else {
+        // Display plain text response
+        this.displayPlainAIResponse(data.response, prompt);
+      }
 
       this.showStatus("AI response received", "success");
     } catch (error) {
@@ -624,6 +637,215 @@ function init(context) {
       // Re-enable submit button
       submitBtn.disabled = false;
       submitBtn.textContent = "Submit";
+    }
+  }
+
+  displayPlainAIResponse(responseText, prompt) {
+    const responseDiv = document.getElementById("ai-response");
+    responseDiv.classList.remove("loading");
+    responseDiv.innerHTML = `
+      <div class="ai-response-content">
+        <p><strong>You asked:</strong> ${this.escapeHtml(prompt)}</p>
+        <hr style="border-color: var(--border-color); margin: 10px 0;">
+        <div class="ai-response-text">${this.escapeHtml(responseText)}</div>
+        <p style="color: var(--text-muted); font-size: 11px; margin-top: 10px;">
+          ${new Date().toLocaleString()}
+        </p>
+      </div>
+    `;
+  }
+
+  handleStructuredAIResponse(parsed, prompt) {
+    const responseDiv = document.getElementById("ai-response");
+    responseDiv.classList.remove("loading");
+
+    const actionType = parsed.type;
+    const message = parsed.message || "AI suggestion";
+    const scriptName = parsed.script_name || "untitled.js";
+    const code = parsed.code || "";
+    const originalCode = parsed.original_code || "";
+
+    let html = `
+      <div class="ai-response-content">
+        <p><strong>You asked:</strong> ${this.escapeHtml(prompt)}</p>
+        <hr style="border-color: var(--border-color); margin: 10px 0;">
+        <div class="ai-action-header">
+          <span class="ai-action-type ai-action-${actionType}">${actionType.replace(/_/g, " ").toUpperCase()}</span>
+        </div>
+        <p><strong>AI Suggestion:</strong> ${this.escapeHtml(message)}</p>
+    `;
+
+    if (actionType === "explanation") {
+      // Just show the explanation, no actions needed
+      html += `</div>`;
+    } else if (actionType === "create_script") {
+      html += `
+        <p><strong>Script Name:</strong> <code>${this.escapeHtml(scriptName)}</code></p>
+        <div class="ai-code-preview">
+          <pre><code>${this.escapeHtml(code.substring(0, 300))}${code.length > 300 ? "..." : ""}</code></pre>
+        </div>
+        <div class="ai-action-buttons">
+          <button class="btn btn-success" onclick="window.editor.showDiffModal('${this.escapeJs(scriptName)}', '', ${this.escapeJs(JSON.stringify(code))}, '${this.escapeJs(message)}', 'create')">Preview & Create</button>
+        </div>
+        </div>
+      `;
+    } else if (actionType === "edit_script") {
+      html += `
+        <p><strong>Script Name:</strong> <code>${this.escapeHtml(scriptName)}</code></p>
+        <div class="ai-action-buttons">
+          <button class="btn btn-primary" onclick="window.editor.showDiffModal('${this.escapeJs(scriptName)}', ${this.escapeJs(JSON.stringify(originalCode))}, ${this.escapeJs(JSON.stringify(code))}, '${this.escapeJs(message)}', 'edit')">Preview Changes</button>
+        </div>
+        </div>
+      `;
+    } else if (actionType === "delete_script") {
+      html += `
+        <p><strong>Script Name:</strong> <code>${this.escapeHtml(scriptName)}</code></p>
+        <div class="ai-action-buttons">
+          <button class="btn btn-danger" onclick="window.editor.confirmDeleteScript('${this.escapeJs(scriptName)}', '${this.escapeJs(message)}')">Confirm Delete</button>
+        </div>
+        </div>
+      `;
+    }
+
+    html += `
+      <p style="color: var(--text-muted); font-size: 11px; margin-top: 10px;">
+        ${new Date().toLocaleString()}
+      </p>
+    `;
+
+    responseDiv.innerHTML = html;
+  }
+
+  escapeJs(str) {
+    return str.replace(/\\/g, "\\\\")
+              .replace(/'/g, "\\'")
+              .replace(/"/g, '\\"')
+              .replace(/\n/g, "\\n")
+              .replace(/\r/g, "\\r");
+  }
+
+  async showDiffModal(scriptName, originalCode, newCode, explanation, action) {
+    const modal = document.getElementById("diff-modal");
+    const title = document.getElementById("diff-modal-title");
+    const explanationDiv = document.getElementById("diff-explanation");
+    
+    // Set title based on action
+    if (action === "create") {
+      title.textContent = `Create Script: ${scriptName}`;
+    } else if (action === "edit") {
+      title.textContent = `Edit Script: ${scriptName}`;
+    }
+
+    explanationDiv.innerHTML = `<p>${this.escapeHtml(explanation)}</p>`;
+
+    // Show modal
+    modal.style.display = "flex";
+
+    // Create diff editor
+    await this.createDiffEditor(originalCode, newCode);
+
+    // Store data for apply action
+    this.pendingChange = {
+      scriptName: scriptName,
+      newCode: newCode,
+      action: action
+    };
+  }
+
+  async createDiffEditor(originalCode, newCode) {
+    const container = document.getElementById("monaco-diff-editor");
+    
+    // Clear any existing content
+    container.innerHTML = "";
+
+    return new Promise((resolve) => {
+      if (this.monacoDiffEditor) {
+        this.monacoDiffEditor.dispose();
+      }
+
+      this.monacoDiffEditor = monaco.editor.createDiffEditor(container, {
+        theme: "vs-dark",
+        readOnly: true,
+        automaticLayout: true,
+        renderSideBySide: true,
+        fontSize: 13,
+      });
+
+      const original = monaco.editor.createModel(originalCode || "// New file", "javascript");
+      const modified = monaco.editor.createModel(newCode, "javascript");
+
+      this.monacoDiffEditor.setModel({
+        original: original,
+        modified: modified,
+      });
+
+      resolve();
+    });
+  }
+
+  closeDiffModal() {
+    const modal = document.getElementById("diff-modal");
+    modal.style.display = "none";
+    
+    if (this.monacoDiffEditor) {
+      this.monacoDiffEditor.dispose();
+      this.monacoDiffEditor = null;
+    }
+    
+    this.pendingChange = null;
+  }
+
+  async applyPendingChange() {
+    if (!this.pendingChange) return;
+
+    const { scriptName, newCode, action } = this.pendingChange;
+
+    try {
+      if (action === "create" || action === "edit") {
+        const encodedScriptName = encodeURIComponent(scriptName);
+        const response = await fetch(`/api/scripts/${encodedScriptName}`, {
+          method: "POST",
+          body: newCode,
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to save script: ${response.status}`);
+        }
+
+        this.showStatus(`Script ${action === "create" ? "created" : "updated"} successfully`, "success");
+        this.loadScripts();
+        
+        // Load the script in editor
+        this.loadScript(scriptName);
+      }
+
+      this.closeDiffModal();
+    } catch (error) {
+      this.showStatus(`Error applying changes: ${error.message}`, "error");
+    }
+  }
+
+  confirmDeleteScript(scriptName, explanation) {
+    if (confirm(`${explanation}\n\nAre you sure you want to delete ${scriptName}?`)) {
+      const encodedScriptName = encodeURIComponent(scriptName);
+      fetch(`/api/scripts/${encodedScriptName}`, {
+        method: "DELETE",
+      })
+        .then(() => {
+          this.showStatus("Script deleted successfully", "success");
+          this.loadScripts();
+          
+          if (this.currentScript === scriptName) {
+            this.currentScript = null;
+            document.getElementById("current-script-name").textContent = "No script selected";
+            if (this.monacoEditor) {
+              this.monacoEditor.setValue("// Select a script to edit");
+            }
+          }
+        })
+        .catch((error) => {
+          this.showStatus("Error deleting script: " + error.message, "error");
+        });
     }
   }
 
