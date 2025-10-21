@@ -272,7 +272,7 @@ Request with Caddy:
 Caddy Container:
   Memory: ~10-50 MB
   CPU: <1% idle, <5% under load
-  
+
 aiwebengine Container:
   Memory: Depends on workload (~50-200 MB typical)
   CPU: Depends on JavaScript execution

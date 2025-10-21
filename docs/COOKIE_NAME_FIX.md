@@ -3,6 +3,7 @@
 ## Issue
 
 User was authenticated (verified by `/auth/status` returning success), but `/editor` returned 401 with:
+
 ```json
 {
   "debug": {
@@ -38,6 +39,7 @@ name = "session"  # ← Different value!
 - **`/editor`** (JavaScript route via middleware): Used hardcoded `"auth_session"` ❌
 
 The middleware was looking for the wrong cookie name, so it never extracted the session token, which meant:
+
 1. `AuthUser` was never added to request extensions
 2. `JsAuthContext` was created as anonymous
 3. JavaScript `auth.isAuthenticated` was always `false`

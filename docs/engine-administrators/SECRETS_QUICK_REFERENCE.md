@@ -205,6 +205,7 @@ export SECRET_MONGODB_PASSWORD="mongo-password"
    ```
 
 5. **Document required secrets in README**
+
    ```markdown
    ## Required Secrets
 

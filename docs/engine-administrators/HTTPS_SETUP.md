@@ -5,6 +5,7 @@ This guide explains how to set up HTTPS for aiwebengine using Caddy as a reverse
 ## Overview
 
 The production setup uses:
+
 - **Caddy** as a reverse proxy (handles HTTPS, certificates, redirects)
 - **aiwebengine** as the backend application server (HTTP only, internal)
 
@@ -15,7 +16,7 @@ The production setup uses:
 ✅ **Automatic redirects** - www and test subdomains redirect to main domain  
 ✅ **Security headers** - Caddy adds security headers automatically  
 ✅ **HTTP/3 support** - Modern protocol support out of the box  
-✅ **Compression** - Automatic gzip compression for responses  
+✅ **Compression** - Automatic gzip compression for responses
 
 ## Domain Configuration
 
@@ -66,6 +67,7 @@ CNAME test.softagen.com →  softagen.com
 ```
 
 **Verify DNS propagation:**
+
 ```bash
 # Check DNS resolution
 dig softagen.com
@@ -242,18 +244,21 @@ docker exec aiwebengine-caddy caddy reload --config /etc/caddy/Caddyfile
 **Solutions:**
 
 1. **Check DNS propagation:**
+
    ```bash
    dig softagen.com
    # Should show your server IP
    ```
 
 2. **Verify ports are open:**
+
    ```bash
    sudo netstat -tulpn | grep -E ':(80|443)'
    # Should show Caddy listening
    ```
 
 3. **Check Caddy logs:**
+
    ```bash
    docker-compose logs caddy
    # Look for errors like "challenge failed"
@@ -277,11 +282,13 @@ docker exec aiwebengine-caddy caddy reload --config /etc/caddy/Caddyfile
 **Solutions:**
 
 1. **Check aiwebengine is running:**
+
    ```bash
    docker-compose ps aiwebengine
    ```
 
 2. **Check network connectivity:**
+
    ```bash
    docker exec aiwebengine-caddy wget -O- http://aiwebengine:3000/health
    ```
@@ -410,6 +417,7 @@ docker exec aiwebengine-caddy ls -la /var/log/caddy/
 ### Metrics
 
 For production monitoring, consider adding:
+
 - Prometheus metrics from Caddy
 - Uptime monitoring (UptimeRobot, Pingdom)
 - SSL certificate monitoring
@@ -422,7 +430,7 @@ For production monitoring, consider adding:
 ✅ Regular security audits: https://www.ssllabs.com/ssltest/  
 ✅ Monitor certificate expiration  
 ✅ Keep backups of `caddy-data` volume  
-✅ Use fail2ban to prevent brute force attacks  
+✅ Use fail2ban to prevent brute force attacks
 
 ## Backup and Restore
 
@@ -449,6 +457,7 @@ docker run --rm -v aiwebengine_caddy-data:/data -v $(pwd):/backup alpine \
 Caddy configuration is much simpler. Compare:
 
 **Nginx:**
+
 ```nginx
 server {
     listen 80;
@@ -459,10 +468,10 @@ server {
 server {
     listen 443 ssl http2;
     server_name softagen.com;
-    
+
     ssl_certificate /etc/letsencrypt/live/softagen.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/softagen.com/privkey.pem;
-    
+
     location / {
         proxy_pass http://aiwebengine:3000;
         proxy_set_header Host $host;
@@ -472,6 +481,7 @@ server {
 ```
 
 **Caddy:**
+
 ```caddy
 softagen.com {
     reverse_proxy aiwebengine:3000
@@ -485,6 +495,7 @@ Similar simplification - Caddy handles HTTPS, certificates, and proxying with mi
 ## Support
 
 For issues specific to:
+
 - **Caddy:** https://caddy.community/
 - **Let's Encrypt:** https://community.letsencrypt.org/
 - **aiwebengine:** Check project documentation or GitHub issues

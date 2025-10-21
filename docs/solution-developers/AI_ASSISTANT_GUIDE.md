@@ -7,59 +7,73 @@ The aiwebengine editor now features an advanced AI assistant that can help you c
 ## Features
 
 ### 1. **Context-Aware AI Assistance**
+
 The AI assistant understands:
+
 - All available aiwebengine JavaScript APIs
 - Your current script and its content
 - All scripts in your workspace
 - Best practices for script development
 
 ### 2. **Structured Response Types**
+
 The AI can perform four types of actions:
 
 #### Explanation
+
 Ask the AI to explain scripts, APIs, or concepts.
 
 **Example Prompts:**
+
 - "Explain what this script does"
 - "How does the fetch API work?"
 - "What's the purpose of the init function?"
 
 #### Create Script
+
 The AI can generate complete, working scripts from scratch.
 
 **Example Prompts:**
+
 - "Create a hello world API"
 - "Create a REST API for managing blog posts"
 - "Create a script that fetches weather data from an external API"
 
 **Features:**
+
 - Complete script with proper structure
 - Error handling included
 - init() function with route registration
 - Preview before creating
 
 #### Edit Script
+
 The AI can modify existing scripts with surgical precision.
 
 **Example Prompts:**
+
 - "Add error handling to the current script"
 - "Add logging to all functions"
 - "Refactor this to use async/await"
 - "Add input validation"
 
 **Features:**
+
 - Side-by-side diff preview
 - See exactly what changes before applying
 - Original and modified code comparison
 
 #### Delete Script
+
 The AI can suggest script deletions with explanations.
 
 **Example Prompts:**
+
 - "Should I delete this script?"
 - "This script is obsolete, can you delete it?"
 
 **Features:**
+
 - Confirmation dialog with explanation
 - Safe deletion process
 
@@ -91,11 +105,13 @@ The AI can suggest script deletions with explanations.
 #### Creating a New API
 
 **Prompt:**
+
 ```
 Create a REST API for a todo list with endpoints to create, list, and delete todos
 ```
 
 **Result:**
+
 - AI generates complete script with all CRUD operations
 - Includes proper error handling
 - Uses JSON responses
@@ -105,11 +121,13 @@ Create a REST API for a todo list with endpoints to create, list, and delete tod
 #### Improving an Existing Script
 
 **Prompt:**
+
 ```
 Add try-catch error handling to all functions and log errors
 ```
 
 **Result:**
+
 - AI analyzes your current script
 - Adds error handling where needed
 - Shows diff with original vs modified code
@@ -118,11 +136,13 @@ Add try-catch error handling to all functions and log errors
 #### Understanding Code
 
 **Prompt:**
+
 ```
 Explain what this script does and how it works
 ```
 
 **Result:**
+
 - AI provides detailed explanation
 - Describes the purpose and functionality
 - Explains each major component
@@ -132,6 +152,7 @@ Explain what this script does and how it works
 The AI assistant is pre-configured with complete knowledge of:
 
 ### Available APIs
+
 - `register(path, handlerName, method)` - Register HTTP routes
 - `writeLog(message)` - Server logging
 - `fetch(url, options)` - HTTP requests with secret injection
@@ -142,7 +163,9 @@ The AI assistant is pre-configured with complete knowledge of:
 - `getScript(uri)` - Get script content
 
 ### Response Format
+
 The AI always responds in structured JSON:
+
 ```json
 {
   "type": "explanation|create_script|edit_script|delete_script",
@@ -154,7 +177,9 @@ The AI always responds in structured JSON:
 ```
 
 ### Script Structure
+
 The AI knows the required pattern:
+
 ```javascript
 // Script description
 
@@ -163,18 +188,18 @@ function handlerName(req) {
     // Logic here
     return {
       status: 200,
-      body: 'response',
-      contentType: 'text/plain'
+      body: "response",
+      contentType: "text/plain",
     };
   } catch (error) {
-    writeLog('Error: ' + error);
-    return { status: 500, body: 'Internal error' };
+    writeLog("Error: " + error);
+    return { status: 500, body: "Internal error" };
   }
 }
 
 function init(context) {
-  writeLog('Initializing script');
-  register('/path', 'handlerName', 'GET');
+  writeLog("Initializing script");
+  register("/path", "handlerName", "GET");
   return { success: true };
 }
 ```
@@ -184,6 +209,7 @@ function init(context) {
 ### Context Injection
 
 The AI automatically receives:
+
 ```javascript
 {
   prompt: "your request",
@@ -193,6 +219,7 @@ The AI automatically receives:
 ```
 
 This allows it to:
+
 - Understand what script you're working on
 - Make specific suggestions based on your code
 - Provide relevant examples
@@ -200,6 +227,7 @@ This allows it to:
 ### Diff Preview
 
 The Monaco diff editor provides:
+
 - **Side-by-side comparison**
 - **Syntax highlighting**
 - **Line-by-line changes**
@@ -215,19 +243,23 @@ The Monaco diff editor provides:
 ## Tips for Best Results
 
 ### Be Specific
+
 ❌ "Make it better"
 ✅ "Add error handling and input validation to the POST endpoint"
 
 ### Provide Context
+
 ❌ "Fix the bug"
 ✅ "The fetch request in handleAPI is failing, add timeout and retry logic"
 
 ### Use the Current Script Context
+
 ✅ Open the script you want to modify
 ✅ Then ask the AI to make changes
 ✅ The AI will see your code and make targeted suggestions
 
 ### Iterate
+
 - Start with broad requests
 - Review the suggestion
 - Ask for refinements
@@ -241,18 +273,21 @@ The Monaco diff editor provides:
 ## Technical Architecture
 
 ### Backend Enhancement
+
 - System prompt with full API documentation
 - Context injection (current script, all scripts)
 - Structured JSON response parsing
 - Enhanced error handling
 
 ### Frontend Features
+
 - Monaco diff editor integration
 - Modal-based preview system
 - Action button rendering
 - Real-time diff visualization
 
 ### CSS Styling
+
 - Dark theme modal
 - Responsive diff viewer
 - Action type badges
@@ -261,15 +296,18 @@ The Monaco diff editor provides:
 ## Troubleshooting
 
 ### AI Not Responding
+
 - Check that `SECRET_ANTHROPIC_API_KEY` is configured
 - Check server logs for API errors
 
 ### Changes Not Applying
+
 - Ensure you clicked "Apply Changes" in the diff modal
 - Check browser console for errors
 - Verify the script name is valid
 
 ### Diff Not Showing
+
 - Ensure Monaco editor loaded successfully
 - Check for JavaScript errors in console
 - Try refreshing the page
@@ -277,6 +315,7 @@ The Monaco diff editor provides:
 ## Configuration
 
 The AI uses Claude 3 Haiku by default:
+
 ```javascript
 model: "claude-3-haiku-20240307",
 max_tokens: 4096
@@ -289,43 +328,45 @@ You can modify this in `scripts/feature_scripts/editor.js` if needed.
 ### Example 1: Create Authentication API
 
 **Prompt:**
+
 ```
 Create a script that handles user authentication with login and logout endpoints
 ```
 
 **AI Creates:**
+
 ```javascript
 // auth.js - User authentication script
 
 function handleLogin(req) {
   try {
     const { username, password } = req.form;
-    
+
     if (!username || !password) {
       return {
         status: 400,
-        body: JSON.stringify({ error: 'Missing credentials' }),
-        contentType: 'application/json'
+        body: JSON.stringify({ error: "Missing credentials" }),
+        contentType: "application/json",
       };
     }
-    
+
     // Authentication logic here
-    writeLog('Login attempt for: ' + username);
-    
+    writeLog("Login attempt for: " + username);
+
     return {
       status: 200,
-      body: JSON.stringify({ success: true, token: 'abc123' }),
-      contentType: 'application/json'
+      body: JSON.stringify({ success: true, token: "abc123" }),
+      contentType: "application/json",
     };
   } catch (error) {
-    writeLog('Login error: ' + error);
-    return { status: 500, body: 'Internal error' };
+    writeLog("Login error: " + error);
+    return { status: 500, body: "Internal error" };
   }
 }
 
 function init(context) {
-  writeLog('Initializing auth script');
-  register('/api/login', 'handleLogin', 'POST');
+  writeLog("Initializing auth script");
+  register("/api/login", "handleLogin", "POST");
   return { success: true };
 }
 ```
@@ -333,6 +374,7 @@ function init(context) {
 ### Example 2: Add Rate Limiting
 
 **Prompt:**
+
 ```
 Add rate limiting to the current API endpoint
 ```
@@ -343,6 +385,7 @@ Shows diff with rate limiting logic added, tracking request counts, and returnin
 ### Example 3: Explain Complex Code
 
 **Prompt:**
+
 ```
 Explain how the WebSocket streaming works in this script
 ```
@@ -353,6 +396,7 @@ Provides detailed explanation of the streaming mechanism, how clients connect, h
 ## Summary
 
 The AI assistant transforms script development in aiwebengine by:
+
 - ✅ Understanding your platform's specific APIs
 - ✅ Generating working, production-ready code
 - ✅ Providing safe, reviewable changes

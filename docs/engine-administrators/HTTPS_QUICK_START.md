@@ -168,14 +168,14 @@ docker-compose up -d --build
 
 ## URLs Reference
 
-| URL                          | Behavior                          |
-|------------------------------|-----------------------------------|
-| `https://softagen.com`       | Main application (HTTPS)          |
-| `http://softagen.com`        | Redirects to HTTPS                |
-| `https://www.softagen.com`   | Redirects to softagen.com         |
-| `http://www.softagen.com`    | Redirects to https://softagen.com |
-| `https://test.softagen.com`  | Redirects to softagen.com         |
-| `http://test.softagen.com`   | Redirects to https://softagen.com |
+| URL                         | Behavior                          |
+| --------------------------- | --------------------------------- |
+| `https://softagen.com`      | Main application (HTTPS)          |
+| `http://softagen.com`       | Redirects to HTTPS                |
+| `https://www.softagen.com`  | Redirects to softagen.com         |
+| `http://www.softagen.com`   | Redirects to https://softagen.com |
+| `https://test.softagen.com` | Redirects to softagen.com         |
+| `http://test.softagen.com`  | Redirects to https://softagen.com |
 
 ## Security Features
 

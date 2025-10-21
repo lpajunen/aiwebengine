@@ -13,14 +13,17 @@ The "Preview & Create" and "Preview Changes" buttons were not working due to:
 ### Changed Button Implementation
 
 **Before (broken):**
+
 ```javascript
 <button onclick="window.editor.showDiffModal('${escapeJs(scriptName)}', '', ${escapeJs(JSON.stringify(code))}, ...)">
 ```
+
 - Too complex
 - Double escaping breaking JSON
 - Hard to debug
 
 **After (working):**
+
 ```javascript
 // Store data in memory
 this.pendingAIAction = {
@@ -28,11 +31,13 @@ this.pendingAIAction = {
   scriptName: scriptName,
   code: code,
   originalCode: originalCode,
-  message: message
+  message: message,
 };
 
 // Simple button
-<button onclick="window.editor.applyPendingAIAction()">Preview & Create</button>
+<button onclick="window.editor.applyPendingAIAction()">
+  Preview & Create
+</button>;
 ```
 
 ### Flow Now
@@ -55,6 +60,7 @@ Create a script that serves a welcome page
 ```
 
 **Expected:**
+
 1. ✅ AI responds with JSON
 2. ✅ Shows "CREATE SCRIPT" badge
 3. ✅ Shows "Preview & Create" button

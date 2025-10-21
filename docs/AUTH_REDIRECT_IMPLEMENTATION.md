@@ -46,6 +46,7 @@ pub async fn redirect_to_login_middleware(
 ```
 
 This middleware:
+
 - Checks if the user has a valid session
 - If authenticated, passes the request through
 - If not authenticated, redirects to `/auth/login?redirect={url}`
@@ -156,6 +157,7 @@ To test the redirect functionality:
 ### Future Enhancements
 
 Possible improvements:
+
 - Support for additional protected endpoints via configuration
 - Custom redirect logic per endpoint
 - Redirect URL validation (whitelist)
@@ -165,9 +167,11 @@ Possible improvements:
 ## Code Changes Summary
 
 ### New Files
+
 - None
 
 ### Modified Files
+
 - `src/auth/middleware.rs` - Added `redirect_to_login_middleware`
 - `src/auth/security.rs` - Added redirect URL storage and methods
 - `src/auth/manager.rs` - Added `start_login_with_redirect` and `get_redirect_url`
@@ -177,4 +181,5 @@ Possible improvements:
 - `Cargo.toml` - Added `urlencoding` dependency
 
 ### Dependencies Added
+
 - `urlencoding = "2.1.3"` - For safe URL encoding of redirect parameters

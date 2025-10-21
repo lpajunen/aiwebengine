@@ -34,12 +34,12 @@ function serveEditor(req) {
       body: JSON.stringify({
         error: "Authentication required",
         message: "Please login to access the editor",
-        loginUrl: "/auth/login"
+        loginUrl: "/auth/login",
       }),
-      contentType: "application/json"
+      contentType: "application/json",
     };
   }
-  
+
   // ... rest of the editor serving logic
 }
 ```
@@ -57,7 +57,7 @@ let auth_context = if let Some(ref auth_user) = auth_user {
     auth::JsAuthContext::authenticated(
         auth_user.user_id.clone(),
         None, // email - stored in session
-        None, // name - stored in session  
+        None, // name - stored in session
         auth_user.provider.clone(),
     )
 } else {

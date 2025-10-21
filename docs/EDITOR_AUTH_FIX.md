@@ -50,7 +50,7 @@ let auth_context = if let Some(ref auth_user) = auth_user {
     auth::JsAuthContext::authenticated(
         auth_user.user_id.clone(),
         None, // email - would be in session
-        None, // name - would be in session  
+        None, // name - would be in session
         auth_user.provider.clone(),
     )
 } else {
