@@ -279,15 +279,38 @@ impl AuthManager {
             ));
         }
 
-        // Create session
+        // Upsert user in repository (this handles bootstrap admin assignment)
+        let user_id = crate::user_repository::upsert_user(
+            user_info.email.clone(),
+            user_info.name.clone(),
+            provider_name.to_string(),
+            user_info.provider_user_id.clone(),
+        )
+        .map_err(|e| {
+            tracing::error!("Failed to upsert user: {}", e);
+            AuthError::Internal(format!("Failed to create/update user: {}", e))
+        })?;
+
+        // Get user from repository to check roles
+        let user = crate::user_repository::get_user(&user_id).map_err(|e| {
+            tracing::error!("User not found after upsert: {}", e);
+            AuthError::Internal("User not found after creation".to_string())
+        })?;
+
+        // Check if user has Administrator role
+        let is_admin = user
+            .roles
+            .contains(&crate::user_repository::UserRole::Administrator);
+
+        // Create session with correct admin status
         let session_token = self
             .session_manager
             .create_session(
-                user_info.provider_user_id.clone(),
+                user_id.clone(),
                 provider_name.to_string(),
                 Some(user_info.email.clone()),
                 user_info.name.clone(),
-                false, // is_admin - would need additional logic to determine
+                is_admin,
                 ip_addr.to_string(),
                 user_agent.to_string(),
             )
@@ -295,13 +318,13 @@ impl AuthManager {
 
         // Log successful authentication
         self.security_context
-            .log_auth_success(&user_info.provider_user_id, provider_name, Some(ip_addr))
+            .log_auth_success(&user_id, provider_name, Some(ip_addr))
             .await;
 
         Ok(session_token.token)
     }
 
-    /// Validate a session token
+    /// Validate session and return user ID
     ///
     /// # Arguments
     /// * `session_token` - Session token to validate
@@ -320,6 +343,26 @@ impl AuthManager {
             .get_session(session_token, ip_addr, user_agent)
             .await
             .map(|session| session.user_id)
+    }
+
+    /// Get full session information
+    ///
+    /// # Arguments
+    /// * `session_token` - Session token to validate
+    /// * `ip_addr` - Client IP address
+    /// * `user_agent` - Client user agent string
+    ///
+    /// # Returns
+    /// Complete AuthSession if valid
+    pub async fn get_session(
+        &self,
+        session_token: &str,
+        ip_addr: &str,
+        user_agent: &str,
+    ) -> Result<crate::auth::session::AuthSession, AuthError> {
+        self.session_manager
+            .get_session(session_token, ip_addr, user_agent)
+            .await
     }
 
     /// Refresh an OAuth2 access token

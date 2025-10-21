@@ -26,6 +26,9 @@ pub struct JsAuthContext {
 
     /// Whether user is authenticated
     pub is_authenticated: bool,
+
+    /// Whether user has administrator privileges
+    pub is_admin: bool,
 }
 
 impl JsAuthContext {
@@ -37,6 +40,7 @@ impl JsAuthContext {
             name: None,
             provider: None,
             is_authenticated: false,
+            is_admin: false,
         }
     }
 
@@ -46,6 +50,7 @@ impl JsAuthContext {
         email: Option<String>,
         name: Option<String>,
         provider: String,
+        is_admin: bool,
     ) -> Self {
         Self {
             user_id: Some(user_id),
@@ -53,6 +58,7 @@ impl JsAuthContext {
             name,
             provider: Some(provider),
             is_authenticated: true,
+            is_admin,
         }
     }
 
@@ -106,6 +112,7 @@ impl AuthJsApi {
 
         // Set authentication status properties
         auth_obj.set("isAuthenticated", auth_context.is_authenticated)?;
+        auth_obj.set("isAdmin", auth_context.is_admin)?;
 
         // Set user information properties (null if not available)
         if let Some(user_id) = &auth_context.user_id {
@@ -243,6 +250,7 @@ mod tests {
     fn test_js_auth_context_creation() {
         let anon = JsAuthContext::anonymous();
         assert!(!anon.is_authenticated);
+        assert!(!anon.is_admin);
         assert!(anon.user_id.is_none());
 
         let auth = JsAuthContext::authenticated(
@@ -250,16 +258,23 @@ mod tests {
             Some("user@example.com".to_string()),
             Some("Test User".to_string()),
             "google".to_string(),
+            false,
         );
         assert!(auth.is_authenticated);
+        assert!(!auth.is_admin);
         assert_eq!(auth.user_id, Some("user123".to_string()));
         assert_eq!(auth.email, Some("user@example.com".to_string()));
     }
 
     #[test]
     fn test_to_user_context() {
-        let auth =
-            JsAuthContext::authenticated("user123".to_string(), None, None, "google".to_string());
+        let auth = JsAuthContext::authenticated(
+            "user123".to_string(),
+            None,
+            None,
+            "google".to_string(),
+            false,
+        );
 
         let user_ctx = auth.to_user_context();
         assert!(user_ctx.is_authenticated);
@@ -283,6 +298,10 @@ mod tests {
             let is_authed: bool = ctx.eval("auth.isAuthenticated").unwrap();
             assert!(!is_authed);
 
+            // Test isAdmin is false
+            let is_admin: bool = ctx.eval("auth.isAdmin").unwrap();
+            assert!(!is_admin);
+
             // Test userId is null
             let user_id_is_null: bool = ctx.eval("auth.userId === null").unwrap();
             assert!(user_id_is_null);
@@ -300,12 +319,17 @@ mod tests {
                 Some("test@example.com".to_string()),
                 Some("Test User".to_string()),
                 "google".to_string(),
+                true, // is_admin
             );
             AuthJsApi::setup_auth_globals(&ctx, auth_context).unwrap();
 
             // Test isAuthenticated is true
             let is_authed: bool = ctx.eval("auth.isAuthenticated").unwrap();
             assert!(is_authed);
+
+            // Test isAdmin is true
+            let is_admin: bool = ctx.eval("auth.isAdmin").unwrap();
+            assert!(is_admin);
 
             // Test userId
             let user_id: String = ctx.eval("auth.userId").unwrap();
@@ -332,6 +356,7 @@ mod tests {
                 Some("test@example.com".to_string()),
                 Some("Test User".to_string()),
                 "google".to_string(),
+                false,
             );
             AuthJsApi::setup_auth_globals(&ctx, auth_context).unwrap();
 
@@ -403,6 +428,7 @@ mod tests {
                 Some("test@example.com".to_string()),
                 None,
                 "google".to_string(),
+                false,
             );
             AuthJsApi::setup_auth_globals(&ctx, auth_context).unwrap();
 

@@ -4,6 +4,8 @@
 
 The `user_repository` module provides persistent user management for the authentication system. It stores user data, manages user roles, and ensures users get consistent IDs across sign-ins.
 
+**🎉 As of the latest update, the user repository is now fully integrated with the OAuth authentication flow!** When users log in, their information is automatically saved, bootstrap admins are auto-promoted, and sessions are created with the correct role information.
+
 ## Features
 
 ### 1. User Management
@@ -364,6 +366,84 @@ cargo test user_repository::tests --lib -- --test-threads=1
 ```
 
 All tests use a global lock to serialize access to shared state.
+
+## OAuth Integration
+
+### How It Works
+
+The user repository is automatically integrated with the OAuth authentication flow. When a user completes OAuth login:
+
+1. **OAuth Callback Received** - The `handle_callback()` method in `src/auth/manager.rs` is called
+2. **User Upserted** - `user_repository::upsert_user()` is called with the user's email, name, provider, and provider ID
+3. **Bootstrap Admin Check** - If the email matches the `bootstrap_admins` configuration, the user automatically gets Administrator role
+4. **Roles Retrieved** - The user record is fetched to determine the current roles
+5. **Session Created** - A session is created with the correct `is_admin` flag based on the user's roles
+6. **Access Granted** - The user can now access role-protected resources like `/manager`
+
+### Code Flow
+
+In `src/auth/manager.rs`:
+
+```rust
+// After successful OAuth token exchange...
+
+// 1. Upsert user in repository (handles bootstrap admin)
+let user_id = crate::user_repository::upsert_user(
+    user_info.email.clone(),
+    user_info.name.clone(),
+    provider_name.to_string(),
+    user_info.provider_user_id.clone(),
+)?;
+
+// 2. Get user to check roles
+let user = crate::user_repository::get_user(&user_id)?;
+
+// 3. Check if user has Administrator role
+let is_admin = user.roles.contains(&crate::user_repository::UserRole::Administrator);
+
+// 4. Create session with correct admin status
+let session_token = self.session_manager.create_session(
+    user_id,          // Our persistent UUID
+    provider_name,
+    email,
+    name,
+    is_admin,         // Correct admin status from roles
+    ip_addr,
+    user_agent,
+)?;
+```
+
+### Bootstrap Admin Configuration
+
+To make a user an administrator on their first login:
+
+```toml
+[auth]
+bootstrap_admins = [
+    "admin@company.com"
+]
+```
+
+See [Bootstrap Admin Guide](./BOOTSTRAP_ADMIN.md) for detailed instructions.
+
+### Troubleshooting OAuth Integration
+
+**Problem**: "Redirected to login when accessing /manager"
+
+**Solution**: 
+1. Ensure your email is in `bootstrap_admins` in `config.toml`
+2. Rebuild the server: `cargo build --release`
+3. Restart the server
+4. Sign out completely (clear cookies)
+5. Sign back in with OAuth
+
+**Problem**: "User ID changes on each login"
+
+**Solution**: This was fixed by the integration. The system now uses `user_repository::upsert_user()` which returns the same UUID for each user, regardless of how many times they log in.
+
+**Problem**: "Admin status not reflected in session"
+
+**Solution**: The integration now correctly checks user roles and passes `is_admin` to session creation. Rebuild and restart to get the fix.
 
 ## Error Handling
 

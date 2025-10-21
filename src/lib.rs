@@ -879,13 +879,12 @@ pub async fn start_server_with_config(
         let worker = move || -> Result<js_engine::JsHttpResponse, String> {
             // Create authentication context for JavaScript
             let auth_context = if let Some(ref auth_user) = auth_user {
-                // TODO: Get actual email, name, and provider from session
-                // For now, we only have user_id and provider from AuthUser
                 auth::JsAuthContext::authenticated(
                     auth_user.user_id.clone(),
-                    None, // email - would need to be stored in session
-                    None, // name - would need to be stored in session
+                    auth_user.email.clone(),
+                    auth_user.name.clone(),
                     auth_user.provider.clone(),
+                    auth_user.is_admin,
                 )
             } else {
                 auth::JsAuthContext::anonymous()

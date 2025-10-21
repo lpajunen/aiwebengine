@@ -22,14 +22,33 @@ pub struct AuthUser {
 
     /// Session token
     pub session_token: String,
+
+    /// Whether user has administrator privileges
+    pub is_admin: bool,
+
+    /// User's email address (if available)
+    pub email: Option<String>,
+
+    /// User's display name (if available)
+    pub name: Option<String>,
 }
 
 impl AuthUser {
-    pub fn new(user_id: String, provider: String, session_token: String) -> Self {
+    pub fn new(
+        user_id: String,
+        provider: String,
+        session_token: String,
+        is_admin: bool,
+        email: Option<String>,
+        name: Option<String>,
+    ) -> Self {
         Self {
             user_id,
             provider,
             session_token,
+            is_admin,
+            email,
+            name,
         }
     }
 }
@@ -111,18 +130,26 @@ pub async fn optional_auth_middleware(
         let ip_addr = extract_client_ip(&req);
         let user_agent = extract_user_agent(&req);
 
-        // Validate session
+        // Get full session information
         match auth_manager
-            .validate_session(&session_token, &ip_addr, &user_agent)
+            .get_session(&session_token, &ip_addr, &user_agent)
             .await
         {
-            Ok(user_id) => {
-                tracing::info!("✅ Session validated for {}: user_id={}", path, user_id);
+            Ok(session) => {
+                tracing::info!(
+                    "✅ Session validated for {}: user_id={} is_admin={}",
+                    path,
+                    session.user_id,
+                    session.is_admin
+                );
                 // Inject authenticated user into request
                 let auth_user = AuthUser::new(
-                    user_id.clone(),
-                    "unknown".to_string(), // Would need to store provider in session
+                    session.user_id.clone(),
+                    session.provider.clone(),
                     session_token,
+                    session.is_admin,
+                    session.email.clone(),
+                    session.name.clone(),
                 );
                 req.extensions_mut().insert(auth_user);
                 tracing::debug!("✅ AuthUser injected into request extensions for {}", path);
@@ -155,17 +182,20 @@ pub async fn required_auth_middleware(
     let ip_addr = extract_client_ip(&req);
     let user_agent = extract_user_agent(&req);
 
-    // Validate session
-    let user_id = auth_manager
-        .validate_session(&session_token, &ip_addr, &user_agent)
+    // Get full session information
+    let session = auth_manager
+        .get_session(&session_token, &ip_addr, &user_agent)
         .await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
 
     // Inject authenticated user into request
     let auth_user = AuthUser::new(
-        user_id,
-        "unknown".to_string(), // Would need to store provider in session
+        session.user_id.clone(),
+        session.provider.clone(),
         session_token,
+        session.is_admin,
+        session.email.clone(),
+        session.name.clone(),
     );
     req.extensions_mut().insert(auth_user);
 
@@ -193,22 +223,26 @@ pub async fn redirect_to_login_middleware(
         let ip_addr = extract_client_ip(&req);
         let user_agent = extract_user_agent(&req);
 
-        // Validate session
+        // Get full session information
         match auth_manager
-            .validate_session(&session_token, &ip_addr, &user_agent)
+            .get_session(&session_token, &ip_addr, &user_agent)
             .await
         {
-            Ok(user_id) => {
+            Ok(session) => {
                 tracing::info!(
-                    "✅ Authenticated user accessing {}: user_id={}",
+                    "✅ Authenticated user accessing {}: user_id={} is_admin={}",
                     path,
-                    user_id
+                    session.user_id,
+                    session.is_admin
                 );
                 // Inject authenticated user into request
                 let auth_user = AuthUser::new(
-                    user_id,
-                    "unknown".to_string(), // Would need to store provider in session
+                    session.user_id.clone(),
+                    session.provider.clone(),
                     session_token,
+                    session.is_admin,
+                    session.email.clone(),
+                    session.name.clone(),
                 );
                 req.extensions_mut().insert(auth_user);
                 return next.run(req).await;
