@@ -1,9 +1,8 @@
 // Authentication Security Integration
 // Connects authentication with existing security infrastructure
 
-use std::collections::HashMap;
+use base64::Engine;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 use crate::security::{
     CsrfProtection, DataEncryption, RateLimitKey, RateLimiter, SecurityAuditor, SecurityEvent,
@@ -27,9 +26,6 @@ pub struct AuthSecurityContext {
 
     /// Data encryption for sensitive fields
     pub encryption: Arc<DataEncryption>,
-
-    /// Storage for redirect URLs keyed by state token
-    redirect_urls: Arc<RwLock<HashMap<String, String>>>,
 }
 
 impl AuthSecurityContext {
@@ -45,11 +41,11 @@ impl AuthSecurityContext {
             rate_limiter,
             csrf,
             encryption,
-            redirect_urls: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
-    /// Create OAuth state token with optional redirect URL
+    /// Create OAuth state token
+    /// Format: provider:ip:random
     pub async fn create_oauth_state(
         &self,
         provider: &str,
@@ -59,30 +55,57 @@ impl AuthSecurityContext {
         let random_part: u64 = rand::random();
         let state = format!("{}:{}:{}", provider, ip_addr.replace('.', "_"), random_part);
 
-        // Store in CSRF protection (reusing CSRF mechanism for OAuth state)
         Ok(state)
     }
 
-    /// Create OAuth state token with redirect URL
+    /// Create OAuth state token with redirect URL encoded in it
+    /// Format: provider:ip:random:base64(redirect_url)
+    /// This makes it stateless and works across load-balanced servers
     pub async fn create_oauth_state_with_redirect(
         &self,
         provider: &str,
         ip_addr: &str,
         redirect_url: String,
     ) -> Result<String, AuthError> {
-        let state = self.create_oauth_state(provider, ip_addr).await?;
+        // Generate base state
+        let random_part: u64 = rand::random();
 
-        // Store redirect URL keyed by state
-        let mut redirect_urls = self.redirect_urls.write().await;
-        redirect_urls.insert(state.clone(), redirect_url);
+        // Encode redirect URL as base64 (URL-safe variant)
+        let redirect_encoded =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(redirect_url.as_bytes());
+
+        // Format: provider:ip:random:redirect_base64
+        let state = format!(
+            "{}:{}:{}:{}",
+            provider,
+            ip_addr.replace('.', "_"),
+            random_part,
+            redirect_encoded
+        );
 
         Ok(state)
     }
 
-    /// Get and remove redirect URL for a state token
-    pub async fn take_redirect_url(&self, state: &str) -> Option<String> {
-        let mut redirect_urls = self.redirect_urls.write().await;
-        redirect_urls.remove(state)
+    /// Extract redirect URL from OAuth state token
+    /// Returns None if the state doesn't contain a redirect URL
+    pub fn extract_redirect_url(state: &str) -> Option<String> {
+        let parts: Vec<&str> = state.split(':').collect();
+
+        // If we have 4 parts, the last one is the base64-encoded redirect URL
+        if parts.len() == 4 {
+            let redirect_encoded = parts[3];
+
+            // Decode from base64
+            if let Ok(decoded_bytes) =
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(redirect_encoded)
+            {
+                if let Ok(redirect_url) = String::from_utf8(decoded_bytes) {
+                    return Some(redirect_url);
+                }
+            }
+        }
+
+        None
     }
 
     /// Validate OAuth state token
@@ -94,7 +117,9 @@ impl AuthSecurityContext {
     ) -> Result<bool, AuthError> {
         // Parse state token
         let parts: Vec<&str> = state.split(':').collect();
-        if parts.len() != 3 {
+
+        // State can be either 3 parts (provider:ip:random) or 4 parts (provider:ip:random:redirect)
+        if parts.len() < 3 || parts.len() > 4 {
             return Ok(false);
         }
 

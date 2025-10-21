@@ -195,11 +195,6 @@ impl AuthManager {
         Ok((auth_url, state))
     }
 
-    /// Get redirect URL for a state token
-    pub async fn get_redirect_url(&self, state: &str) -> Option<String> {
-        self.security_context.take_redirect_url(state).await
-    }
-
     /// Handle OAuth2 callback and complete authentication
     ///
     /// # Arguments

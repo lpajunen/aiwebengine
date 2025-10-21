@@ -2,7 +2,7 @@
 ///
 /// HTTP route handlers for OAuth2 authentication flow including
 /// login initiation, callback processing, and logout.
-use crate::auth::AuthManager;
+use crate::auth::{AuthManager, AuthSecurityContext};
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
@@ -245,8 +245,8 @@ async fn oauth_callback(
     let user_agent = get_user_agent(&headers);
 
     // Provider comes from the URL path parameter
-    // Get redirect URL before handling callback (it will be consumed)
-    let redirect_url = auth_manager.get_redirect_url(&state).await;
+    // Extract redirect URL from state (stateless approach)
+    let redirect_url = AuthSecurityContext::extract_redirect_url(&state);
 
     // Handle callback
     let session_token = auth_manager
