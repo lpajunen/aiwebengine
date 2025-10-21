@@ -1,7 +1,9 @@
 // Authentication Security Integration
 // Connects authentication with existing security infrastructure
 
+use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 use crate::security::{
     CsrfProtection, DataEncryption, RateLimitKey, RateLimiter, SecurityAuditor, SecurityEvent,
@@ -25,6 +27,9 @@ pub struct AuthSecurityContext {
 
     /// Data encryption for sensitive fields
     pub encryption: Arc<DataEncryption>,
+
+    /// Storage for redirect URLs keyed by state token
+    redirect_urls: Arc<RwLock<HashMap<String, String>>>,
 }
 
 impl AuthSecurityContext {
@@ -40,10 +45,11 @@ impl AuthSecurityContext {
             rate_limiter,
             csrf,
             encryption,
+            redirect_urls: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
-    /// Create OAuth state token
+    /// Create OAuth state token with optional redirect URL
     pub async fn create_oauth_state(
         &self,
         provider: &str,
@@ -55,6 +61,28 @@ impl AuthSecurityContext {
 
         // Store in CSRF protection (reusing CSRF mechanism for OAuth state)
         Ok(state)
+    }
+
+    /// Create OAuth state token with redirect URL
+    pub async fn create_oauth_state_with_redirect(
+        &self,
+        provider: &str,
+        ip_addr: &str,
+        redirect_url: String,
+    ) -> Result<String, AuthError> {
+        let state = self.create_oauth_state(provider, ip_addr).await?;
+
+        // Store redirect URL keyed by state
+        let mut redirect_urls = self.redirect_urls.write().await;
+        redirect_urls.insert(state.clone(), redirect_url);
+
+        Ok(state)
+    }
+
+    /// Get and remove redirect URL for a state token
+    pub async fn take_redirect_url(&self, state: &str) -> Option<String> {
+        let mut redirect_urls = self.redirect_urls.write().await;
+        redirect_urls.remove(state)
     }
 
     /// Validate OAuth state token

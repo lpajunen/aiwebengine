@@ -710,6 +710,7 @@ pub async fn start_server_with_config(
     async fn handle_dynamic_request(
         req: Request<Body>,
         script_timeout_ms: u64,
+        _auth_enabled: bool,
     ) -> impl IntoResponse {
         let path = req.uri().path().to_string();
         let request_method = req.method().to_string();
@@ -863,7 +864,7 @@ pub async fn start_server_with_config(
         };
 
         let path_clone = path.clone();
-        let worker = move || -> Result<(u16, String, Option<String>), String> {
+        let worker = move || -> Result<js_engine::JsHttpResponse, String> {
             // Create authentication context for JavaScript
             let auth_context = if let Some(ref auth_user) = auth_user {
                 // TODO: Get actual email, name, and provider from session
@@ -916,26 +917,38 @@ pub async fn start_server_with_config(
             };
 
         match timed {
-            Ok(Ok((status, body, content_type))) => {
+            Ok(Ok(js_response)) => {
                 info!(
-                    "[{}] ✅ Successfully executed handler '{}' - status: {}, body_length: {} bytes",
+                    "[{}] ✅ Successfully executed handler '{}' - status: {}, body_length: {} bytes, headers: {}",
                     request_id,
                     handler_name,
-                    status,
-                    body.len()
+                    js_response.status,
+                    js_response.body.len(),
+                    js_response.headers.len()
                 );
                 let mut response = (
-                    StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-                    body,
+                    StatusCode::from_u16(js_response.status)
+                        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                    js_response.body,
                 )
                     .into_response();
 
-                if let Some(ct) = content_type {
+                // Add content type if specified
+                if let Some(ct) = js_response.content_type {
                     response.headers_mut().insert(
                         axum::http::header::CONTENT_TYPE,
                         axum::http::HeaderValue::from_str(&ct)
                             .unwrap_or_else(|_| axum::http::HeaderValue::from_static("text/plain")),
                     );
+                }
+
+                // Add custom headers from JavaScript response
+                for (name, value) in js_response.headers {
+                    if let Ok(header_name) = axum::http::HeaderName::from_bytes(name.as_bytes()) {
+                        if let Ok(header_value) = axum::http::HeaderValue::from_str(&value) {
+                            response.headers_mut().insert(header_name, header_value);
+                        }
+                    }
                 }
 
                 response
@@ -968,39 +981,67 @@ pub async fn start_server_with_config(
     }
 
     // Build the router
-    let mut app = Router::new()
-        // GraphQL endpoints
-        .route("/graphql", axum::routing::get(graphql_get_handler))
-        .route(
-            "/graphql",
-            axum::routing::post(move |req| graphql_post(schema_for_post, req)),
-        )
-        .route(
-            "/graphql/sse",
-            axum::routing::post(move |req| graphql_sse(schema_for_sse, req)),
-        );
+    let mut app = Router::new();
 
-    // Mount authentication routes if auth is enabled
+    // Add GraphQL and editor routes with authentication requirement if auth is enabled
     if let Some(ref auth_mgr) = auth_manager {
         info!("✅ Authentication ENABLED - mounting auth routes and middleware");
+
+        // GraphQL endpoints with redirect-to-login middleware
+        let auth_mgr_for_graphql = Arc::clone(auth_mgr);
+        let graphql_router = Router::new()
+            .route("/graphql", axum::routing::get(graphql_get_handler))
+            .route(
+                "/graphql",
+                axum::routing::post(move |req| graphql_post(schema_for_post, req)),
+            )
+            .route(
+                "/graphql/sse",
+                axum::routing::post(move |req| graphql_sse(schema_for_sse, req)),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                auth_mgr_for_graphql,
+                auth::redirect_to_login_middleware,
+            ));
+
+        app = app.merge(graphql_router);
+
+        // Mount authentication routes
         let auth_router = auth::create_auth_router(Arc::clone(auth_mgr));
         app = app.nest("/auth", auth_router);
     } else {
         warn!("⚠️  Authentication DISABLED - no auth routes or middleware");
+
+        // GraphQL endpoints without authentication
+        app = app
+            .route("/graphql", axum::routing::get(graphql_get_handler))
+            .route(
+                "/graphql",
+                axum::routing::post(move |req| graphql_post(schema_for_post, req)),
+            )
+            .route(
+                "/graphql/sse",
+                axum::routing::post(move |req| graphql_sse(schema_for_sse, req)),
+            );
     }
 
     // Add catch-all dynamic routes
+    let auth_enabled_for_home = auth_enabled;
+    let auth_enabled_for_path = auth_enabled;
+    let script_timeout_for_home = script_timeout_ms;
+    let script_timeout_for_path = script_timeout_ms;
+
     app = app
         .route(
             "/",
             any(move |req: Request<Body>| async move {
-                handle_dynamic_request(req, script_timeout_ms).await
+                handle_dynamic_request(req, script_timeout_for_home, auth_enabled_for_home).await
             }),
         )
         .route(
             "/{*path}",
             any(move |req: Request<Body>| async move {
-                handle_dynamic_request(req, script_timeout_ms).await
+                handle_dynamic_request(req, script_timeout_for_path, auth_enabled_for_path).await
             }),
         );
 

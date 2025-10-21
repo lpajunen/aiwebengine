@@ -156,6 +156,50 @@ impl AuthManager {
         Ok((auth_url, state))
     }
 
+    /// Generate OAuth2 authorization URL with redirect URL
+    ///
+    /// # Arguments
+    /// * `provider_name` - Name of the OAuth2 provider
+    /// * `ip_addr` - Client IP address for CSRF state tracking
+    /// * `redirect_url` - URL to redirect to after successful authentication
+    ///
+    /// # Returns
+    /// Tuple of (authorization_url, csrf_state_token)
+    pub async fn start_login_with_redirect(
+        &self,
+        provider_name: &str,
+        ip_addr: &str,
+        redirect_url: String,
+    ) -> Result<(String, String), AuthError> {
+        let provider = self
+            .get_provider(provider_name)
+            .ok_or_else(|| AuthError::UnsupportedProvider(provider_name.to_string()))?;
+
+        // Generate CSRF state token with redirect URL
+        let state = self
+            .security_context
+            .create_oauth_state_with_redirect(provider_name, ip_addr, redirect_url)
+            .await?;
+
+        // Generate nonce for OIDC providers
+        let nonce = format!("nonce_{}", uuid::Uuid::new_v4());
+
+        // Generate authorization URL
+        let auth_url = provider.authorization_url(&state, Some(&nonce))?;
+
+        // Log authentication attempt
+        self.security_context
+            .log_auth_attempt(provider_name, ip_addr)
+            .await;
+
+        Ok((auth_url, state))
+    }
+
+    /// Get redirect URL for a state token
+    pub async fn get_redirect_url(&self, state: &str) -> Option<String> {
+        self.security_context.take_redirect_url(state).await
+    }
+
     /// Handle OAuth2 callback and complete authentication
     ///
     /// # Arguments

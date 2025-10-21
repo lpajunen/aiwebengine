@@ -32,10 +32,6 @@ pub struct OAuthCallbackParams {
 /// Login initiation parameters
 #[derive(Debug, Deserialize)]
 pub struct LoginParams {
-    /// OAuth2 provider name
-    #[allow(dead_code)]
-    provider: String,
-
     /// Optional redirect URL after successful login
     #[allow(dead_code)]
     redirect: Option<String>,
@@ -95,9 +91,21 @@ fn get_user_agent(headers: &HeaderMap) -> String {
         .to_string()
 }
 
+/// Login page parameters
+#[derive(Debug, Deserialize)]
+pub struct LoginPageParams {
+    /// Optional redirect URL after successful login
+    redirect: Option<String>,
+}
+
 /// Login page handler - displays available providers
-async fn login_page(State(auth_manager): State<Arc<AuthManager>>) -> Html<String> {
+async fn login_page(
+    State(auth_manager): State<Arc<AuthManager>>,
+    Query(params): Query<LoginPageParams>,
+) -> Html<String> {
     let providers = auth_manager.list_providers();
+    let redirect_param = params.redirect.unwrap_or_else(|| "/".to_string());
+    let encoded_redirect = urlencoding::encode(&redirect_param);
 
     let html = format!(
         r#"<!DOCTYPE html>
@@ -157,8 +165,9 @@ async fn login_page(State(auth_manager): State<Arc<AuthManager>>) -> Html<String
         providers
             .iter()
             .map(|p| format!(
-                r#"<a href="/auth/login/{}?redirect=/" class="provider-button {}">{}</a>"#,
+                r#"<a href="/auth/login/{}?redirect={}" class="provider-button {}">{}</a>"#,
                 p.to_lowercase(),
+                encoded_redirect,
                 p.to_lowercase(),
                 match p.as_str() {
                     "google" => "Sign in with Google",
@@ -178,18 +187,29 @@ async fn login_page(State(auth_manager): State<Arc<AuthManager>>) -> Html<String
 async fn start_login(
     State(auth_manager): State<Arc<AuthManager>>,
     Path(provider): Path<String>,
+    Query(params): Query<LoginParams>,
     headers: HeaderMap,
 ) -> Result<Redirect, ErrorResponse> {
     let ip_addr = get_client_ip(&headers);
 
-    // Generate authorization URL
-    let (auth_url, _state) = auth_manager
-        .start_login(&provider, &ip_addr)
-        .await
-        .map_err(|e| ErrorResponse {
-            error: "login_failed".to_string(),
-            message: e.to_string(),
-        })?;
+    // Generate authorization URL with or without redirect
+    let (auth_url, _state) = if let Some(redirect_url) = params.redirect {
+        auth_manager
+            .start_login_with_redirect(&provider, &ip_addr, redirect_url)
+            .await
+            .map_err(|e| ErrorResponse {
+                error: "login_failed".to_string(),
+                message: e.to_string(),
+            })?
+    } else {
+        auth_manager
+            .start_login(&provider, &ip_addr)
+            .await
+            .map_err(|e| ErrorResponse {
+                error: "login_failed".to_string(),
+                message: e.to_string(),
+            })?
+    };
 
     // Redirect to provider
     Ok(Redirect::temporary(&auth_url))
@@ -198,6 +218,7 @@ async fn start_login(
 /// Handle OAuth2 callback from provider
 async fn oauth_callback(
     State(auth_manager): State<Arc<AuthManager>>,
+    Path(provider): Path<String>,
     Query(params): Query<OAuthCallbackParams>,
     headers: HeaderMap,
 ) -> Result<Response, ErrorResponse> {
@@ -223,12 +244,13 @@ async fn oauth_callback(
     let ip_addr = get_client_ip(&headers);
     let user_agent = get_user_agent(&headers);
 
-    // Extract provider from state (state format: "provider:random")
-    let provider = state.split(':').next().unwrap_or("unknown");
+    // Provider comes from the URL path parameter
+    // Get redirect URL before handling callback (it will be consumed)
+    let redirect_url = auth_manager.get_redirect_url(&state).await;
 
     // Handle callback
     let session_token = auth_manager
-        .handle_callback(provider, &code, &state, &ip_addr, &user_agent)
+        .handle_callback(&provider, &code, &state, &ip_addr, &user_agent)
         .await
         .map_err(|e| ErrorResponse {
             error: "authentication_failed".to_string(),
@@ -245,8 +267,11 @@ async fn oauth_callback(
         if config.cookie_secure { "; Secure" } else { "" }
     );
 
+    // Redirect to stored URL or default to home
+    let redirect_target = redirect_url.as_deref().unwrap_or("/");
+
     // Return redirect with cookie
-    let response = Redirect::to("/").into_response();
+    let response = Redirect::to(redirect_target).into_response();
     let (mut parts, body) = response.into_parts();
     parts
         .headers

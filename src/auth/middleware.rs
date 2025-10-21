@@ -172,6 +172,68 @@ pub async fn required_auth_middleware(
     Ok(next.run(req).await)
 }
 
+/// Redirect to login middleware - redirects to login page if not authenticated
+/// This middleware is used for endpoints that require authentication and should
+/// redirect to the login page with the original URL preserved for redirect-back.
+pub async fn redirect_to_login_middleware(
+    State(auth_manager): State<Arc<AuthManager>>,
+    mut req: Request,
+    next: Next,
+) -> Response {
+    let path = req.uri().path().to_string();
+    let query = req
+        .uri()
+        .query()
+        .map(|q| format!("?{}", q))
+        .unwrap_or_default();
+    let cookie_name = &auth_manager.config().session_cookie_name;
+
+    // Check if user is authenticated
+    if let Some(session_token) = extract_session_token(&req, cookie_name) {
+        let ip_addr = extract_client_ip(&req);
+        let user_agent = extract_user_agent(&req);
+
+        // Validate session
+        match auth_manager
+            .validate_session(&session_token, &ip_addr, &user_agent)
+            .await
+        {
+            Ok(user_id) => {
+                tracing::info!(
+                    "✅ Authenticated user accessing {}: user_id={}",
+                    path,
+                    user_id
+                );
+                // Inject authenticated user into request
+                let auth_user = AuthUser::new(
+                    user_id,
+                    "unknown".to_string(), // Would need to store provider in session
+                    session_token,
+                );
+                req.extensions_mut().insert(auth_user);
+                return next.run(req).await;
+            }
+            Err(e) => {
+                tracing::warn!("⚠️  Session validation failed for {}: {}", path, e);
+                // Invalid session, redirect to login
+            }
+        }
+    }
+
+    // User is not authenticated, redirect to login with return URL
+    let full_path = format!("{}{}", path, query);
+    let return_url = urlencoding::encode(&full_path);
+    let login_url = format!("/auth/login?redirect={}", return_url);
+
+    tracing::info!(
+        "🔒 Redirecting unauthenticated user from {} to {}",
+        full_path,
+        login_url
+    );
+
+    axum::response::Redirect::to(&login_url).into_response()
+}
+
 /// Error response for authentication failures
 #[derive(Debug)]
 pub struct AuthErrorResponse {

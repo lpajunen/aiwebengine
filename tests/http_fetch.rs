@@ -186,7 +186,10 @@ fn test_fetch_different_methods() {
     );
     assert!(result.is_ok(), "PUT request failed: {:?}", result.err());
     let response = result.unwrap();
-    assert_eq!(response.status, 200, "PUT request returned unexpected status");
+    assert_eq!(
+        response.status, 200,
+        "PUT request returned unexpected status"
+    );
     assert!(response.ok, "PUT request ok flag should be true");
 
     // Test DELETE
@@ -201,7 +204,10 @@ fn test_fetch_different_methods() {
     );
     assert!(result.is_ok(), "DELETE request failed: {:?}", result.err());
     let response = result.unwrap();
-    assert_eq!(response.status, 200, "DELETE request returned unexpected status");
+    assert_eq!(
+        response.status, 200,
+        "DELETE request returned unexpected status"
+    );
     assert!(response.ok, "DELETE request ok flag should be true");
 
     // Test PATCH
@@ -216,7 +222,10 @@ fn test_fetch_different_methods() {
     );
     assert!(result.is_ok(), "PATCH request failed: {:?}", result.err());
     let response = result.unwrap();
-    assert_eq!(response.status, 200, "PATCH request returned unexpected status");
+    assert_eq!(
+        response.status, 200,
+        "PATCH request returned unexpected status"
+    );
     assert!(response.ok, "PATCH request ok flag should be true");
 }
 

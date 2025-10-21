@@ -614,10 +614,10 @@ async fn test_secure_request_execution() {
     let request_result = execute_script_for_request_secure(request_params);
 
     match request_result {
-        Ok((status, body, content_type)) => {
-            assert_eq!(status, 200);
-            assert!(body.contains("Secure request handled"));
-            assert_eq!(content_type, Some("application/json".to_string()));
+        Ok(response) => {
+            assert_eq!(response.status, 200);
+            assert!(response.body.contains("Secure request handled"));
+            assert_eq!(response.content_type, Some("application/json".to_string()));
         }
         Err(e) => panic!("Secure request execution failed: {}", e),
     }

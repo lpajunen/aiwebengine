@@ -17,7 +17,7 @@ pub use js_api::{AuthJsApi, JsAuthContext};
 pub use manager::{AuthManager, AuthManagerConfig, AuthenticatedUser, CookieSameSite};
 pub use middleware::{
     AuthUser, AuthenticatedUser as AuthUserExtractor, optional_auth_middleware,
-    required_auth_middleware,
+    redirect_to_login_middleware, required_auth_middleware,
 };
 pub use providers::{
     OAuth2Provider, OAuth2ProviderConfig, OAuth2TokenResponse, OAuth2UserInfo, ProviderFactory,

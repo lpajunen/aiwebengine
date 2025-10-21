@@ -18,20 +18,18 @@ function serveEditor(req) {
     writeLog("Authentication successful for user: " + user.id);
   } catch (error) {
     writeLog("Authentication failed: " + error.message);
+    // Redirect to login page with return URL
+    const currentPath = encodeURIComponent(req.path || "/editor");
+    const loginUrl = "/auth/login?redirect=" + currentPath;
+    writeLog("Redirecting to: " + loginUrl);
+
     return {
-      status: 401,
-      body: JSON.stringify({
-        error: "Authentication required",
-        message: "Please login to access the editor",
-        loginUrl: "/auth/login",
-        debug: {
-          authExists: typeof auth !== "undefined",
-          isAuthenticated:
-            typeof auth !== "undefined" ? auth.isAuthenticated : null,
-          errorMessage: error.message,
-        },
-      }),
-      contentType: "application/json",
+      status: 302,
+      headers: {
+        Location: loginUrl,
+      },
+      body: "",
+      contentType: "text/plain",
     };
   }
 

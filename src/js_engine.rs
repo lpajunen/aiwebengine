@@ -362,6 +362,36 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
     }
 }
 
+/// JavaScript HTTP response structure
+#[derive(Debug, Clone)]
+pub struct JsHttpResponse {
+    pub status: u16,
+    pub body: String,
+    pub content_type: Option<String>,
+    pub headers: std::collections::HashMap<String, String>,
+}
+
+impl JsHttpResponse {
+    pub fn new(status: u16, body: String) -> Self {
+        Self {
+            status,
+            body,
+            content_type: None,
+            headers: std::collections::HashMap::new(),
+        }
+    }
+
+    pub fn with_content_type(mut self, content_type: String) -> Self {
+        self.content_type = Some(content_type);
+        self
+    }
+
+    pub fn with_header(mut self, name: String, value: String) -> Self {
+        self.headers.insert(name, value);
+        self
+    }
+}
+
 /// Executes a JavaScript script for an HTTP request with secure global functions
 ///
 /// This function creates a QuickJS runtime, sets up secure host functions,
@@ -371,7 +401,7 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
 /// All global functions are secured with capability checking and input validation.
 pub fn execute_script_for_request_secure(
     params: RequestExecutionParams,
-) -> Result<(u16, String, Option<String>), String> {
+) -> Result<JsHttpResponse, String> {
     let script_uri_owned = params.script_uri.clone();
     let rt = Runtime::new().map_err(|e| format!("runtime new: {}", e))?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
@@ -405,96 +435,113 @@ pub fn execute_script_for_request_secure(
     ctx.with(|ctx| ctx.eval::<(), _>(owner_script.as_str()))
         .map_err(|e| format!("owner eval: {}", e))?;
 
-    let (status, body, content_type) =
-        ctx.with(|ctx| -> Result<(u16, String, Option<String>), String> {
-            let global = ctx.globals();
-            let func: Function = global
-                .get::<_, Function>(&params.handler_name)
-                .map_err(|e| format!("no handler {}: {}", params.handler_name, e))?;
+    ctx.with(|ctx| -> Result<JsHttpResponse, String> {
+        let global = ctx.globals();
+        let func: Function = global
+            .get::<_, Function>(&params.handler_name)
+            .map_err(|e| format!("no handler {}: {}", params.handler_name, e))?;
 
-            // Build the request object
-            let request_obj =
-                rquickjs::Object::new(ctx.clone()).map_err(|e| format!("create req obj: {}", e))?;
+        // Build the request object
+        let request_obj =
+            rquickjs::Object::new(ctx.clone()).map_err(|e| format!("create req obj: {}", e))?;
+        request_obj
+            .set("path", &params.path)
+            .map_err(|e| format!("set path: {}", e))?;
+        request_obj
+            .set("method", &params.method)
+            .map_err(|e| format!("set method: {}", e))?;
+
+        // Add query parameters if present
+        if let Some(ref query_params) = params.query_params {
+            let params_obj = rquickjs::Object::new(ctx.clone())
+                .map_err(|e| format!("create params obj: {}", e))?;
+            for (key, value) in query_params {
+                params_obj
+                    .set(key.as_str(), value.as_str())
+                    .map_err(|e| format!("set param {}: {}", key, e))?;
+            }
             request_obj
-                .set("path", &params.path)
-                .map_err(|e| format!("set path: {}", e))?;
+                .set("query", params_obj)
+                .map_err(|e| format!("set query: {}", e))?;
+        }
+
+        // Add form data if present
+        if let Some(ref form_data) = params.form_data {
+            let form_obj = rquickjs::Object::new(ctx.clone())
+                .map_err(|e| format!("create form obj: {}", e))?;
+            for (key, value) in form_data {
+                form_obj
+                    .set(key.as_str(), value.as_str())
+                    .map_err(|e| format!("set form {}: {}", key, e))?;
+            }
             request_obj
-                .set("method", &params.method)
-                .map_err(|e| format!("set method: {}", e))?;
+                .set("form", form_obj)
+                .map_err(|e| format!("set form: {}", e))?;
+        }
 
-            // Add query parameters if present
-            if let Some(ref query_params) = params.query_params {
-                let params_obj = rquickjs::Object::new(ctx.clone())
-                    .map_err(|e| format!("create params obj: {}", e))?;
-                for (key, value) in query_params {
-                    params_obj
-                        .set(key.as_str(), value.as_str())
-                        .map_err(|e| format!("set param {}: {}", key, e))?;
+        // Add raw body if present
+        if let Some(ref body) = params.raw_body {
+            request_obj
+                .set("body", body)
+                .map_err(|e| format!("set body: {}", e))?;
+        }
+
+        // Call the handler function
+        let result: Value = func
+            .call::<_, Value>((request_obj,))
+            .map_err(|e| format!("call handler: {}", e))?;
+
+        // Parse the response
+        if let Some(response_obj) = result.as_object() {
+            let status: i32 = response_obj
+                .get("status")
+                .map_err(|e| format!("missing status: {}", e))?;
+            let body: String = response_obj
+                .get("body")
+                .map_err(|e| format!("missing body: {}", e))?;
+            let content_type: Option<String> = response_obj.get("contentType").ok();
+
+            // Extract headers if present
+            let mut headers = std::collections::HashMap::new();
+            if let Ok(headers_obj) = response_obj.get::<_, rquickjs::Object>("headers") {
+                // Iterate over headers object properties
+                for item in headers_obj.props::<String, String>() {
+                    if let Ok((key, value)) = item {
+                        headers.insert(key, value);
+                    }
                 }
-                request_obj
-                    .set("query", params_obj)
-                    .map_err(|e| format!("set query: {}", e))?;
             }
 
-            // Add form data if present
-            if let Some(ref form_data) = params.form_data {
-                let form_obj = rquickjs::Object::new(ctx.clone())
-                    .map_err(|e| format!("create form obj: {}", e))?;
-                for (key, value) in form_data {
-                    form_obj
-                        .set(key.as_str(), value.as_str())
-                        .map_err(|e| format!("set form {}: {}", key, e))?;
-                }
-                request_obj
-                    .set("form", form_obj)
-                    .map_err(|e| format!("set form: {}", e))?;
+            debug!(
+                "Secure request handler {} returned status: {}, body length: {}, headers: {}",
+                params.handler_name,
+                status,
+                body.len(),
+                headers.len()
+            );
+
+            let mut response = JsHttpResponse::new(status as u16, body);
+            if let Some(ct) = content_type {
+                response = response.with_content_type(ct);
+            }
+            for (name, value) in headers {
+                response = response.with_header(name, value);
             }
 
-            // Add raw body if present
-            if let Some(ref body) = params.raw_body {
-                request_obj
-                    .set("body", body)
-                    .map_err(|e| format!("set body: {}", e))?;
-            }
-
-            // Call the handler function
-            let result: Value = func
-                .call::<_, Value>((request_obj,))
-                .map_err(|e| format!("call handler: {}", e))?;
-
-            // Parse the response
-            if let Some(response_obj) = result.as_object() {
-                let status: i32 = response_obj
-                    .get("status")
-                    .map_err(|e| format!("missing status: {}", e))?;
-                let body: String = response_obj
-                    .get("body")
-                    .map_err(|e| format!("missing body: {}", e))?;
-                let content_type: Option<String> = response_obj.get("contentType").ok();
-
-                debug!(
-                    "Secure request handler {} returned status: {}, body length: {}",
-                    params.handler_name,
-                    status,
-                    body.len()
-                );
-
-                Ok((status as u16, body, content_type))
+            Ok(response)
+        } else {
+            // If not an object, treat as string response
+            let body = if result.is_string() {
+                result
+                    .as_string()
+                    .and_then(|s| s.to_string().ok())
+                    .unwrap_or_else(|| "<conversion error>".to_string())
             } else {
-                // If not an object, treat as string response
-                let body = if result.is_string() {
-                    result
-                        .as_string()
-                        .and_then(|s| s.to_string().ok())
-                        .unwrap_or_else(|| "<conversion error>".to_string())
-                } else {
-                    "<no response>".to_string()
-                };
-                Ok((200, body, None))
-            }
-        })?;
-
-    Ok((status, body, content_type))
+                "<no response>".to_string()
+            };
+            Ok(JsHttpResponse::new(200, body))
+        }
+    })
 }
 
 /// Executes a JavaScript script for an HTTP request (LEGACY - has security vulnerabilities)
