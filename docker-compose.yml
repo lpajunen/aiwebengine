@@ -1,6 +1,31 @@
 version: '3.8'
 
 services:
+  # Caddy reverse proxy with automatic HTTPS
+  caddy:
+    image: caddy:2-alpine
+    container_name: aiwebengine-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"  # HTTP/3 support
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+      - caddy-logs:/var/log/caddy
+    networks:
+      - aiwebengine-network
+    depends_on:
+      - aiwebengine
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
   # Production deployment
   aiwebengine:
     build:
@@ -8,8 +33,12 @@ services:
       dockerfile: Dockerfile
     container_name: aiwebengine
     restart: unless-stopped
-    ports:
-      - "3000:3000"
+    # Expose port only to internal network (not to host)
+    expose:
+      - "3000"
+    # Use this if you want direct access for debugging (not recommended in production)
+    # ports:
+    #   - "127.0.0.1:3000:3000"
     volumes:
       # Persist logs
       - ./logs:/app/logs
@@ -123,6 +152,9 @@ networks:
     driver: bridge
 
 volumes:
+  caddy-data:      # Caddy certificates and data
+  caddy-config:    # Caddy configuration
+  caddy-logs:      # Caddy access logs
   postgres-data:
   redis-data:
   prometheus-data:

@@ -70,7 +70,7 @@ Comprehensive documentation is available for all user roles:
 
 - **📚 [Documentation Index](docs/INDEX.md)** - Complete guide to all documentation
 - **👥 Solution Developers** - [Getting Started Guide](docs/solution-developers/APP_DEVELOPMENT.md)
-- **🔧 Engine Administrators** - [Docker Deployment](docs/engine-administrators/DOCKER.md) | [Configuration](docs/engine-administrators/CONFIGURATION.md)
+- **🔧 Engine Administrators** - [Docker Deployment](docs/engine-administrators/DOCKER.md) | [Configuration](docs/engine-administrators/CONFIGURATION.md) | [HTTPS Setup](docs/engine-administrators/HTTPS_SETUP.md)
 - **🛠️ Engine Contributors** - [Requirements](docs/engine-contributors/planning/REQUIREMENTS.md) | [Development Roadmap](docs/engine-contributors/implementing/TODO.md)
 
 For quick reference, see the role-based organization in the [Documentation Index](docs/INDEX.md).

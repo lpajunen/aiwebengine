@@ -1,0 +1,39 @@
+# Caddyfile for aiwebengine production
+# Handles HTTPS automatically with Let's Encrypt
+
+# Main production domain
+softagen.com {
+    # Reverse proxy to aiwebengine container
+    reverse_proxy aiwebengine:3000
+    
+    # Enable gzip compression
+    encode gzip
+    
+    # Security headers
+    header {
+        # Prevent clickjacking
+        X-Frame-Options "SAMEORIGIN"
+        # XSS protection
+        X-Content-Type-Options "nosniff"
+        # Referrer policy
+        Referrer-Policy "strict-origin-when-cross-origin"
+        # Remove Server header for security
+        -Server
+    }
+    
+    # Access logging (optional, remove in production if not needed)
+    log {
+        output file /var/log/caddy/access.log
+        format json
+    }
+}
+
+# Redirect www to apex domain
+www.softagen.com {
+    redir https://softagen.com{uri} permanent
+}
+
+# Redirect test subdomain to main domain
+test.softagen.com {
+    redir https://softagen.com{uri} permanent
+}

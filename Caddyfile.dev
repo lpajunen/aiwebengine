@@ -1,0 +1,22 @@
+# Caddyfile for local development
+# Uses HTTP (no automatic HTTPS for localhost)
+
+:80 {
+    # Reverse proxy to aiwebengine container
+    reverse_proxy aiwebengine-dev:3000
+    
+    # Enable gzip compression
+    encode gzip
+    
+    # Access logging
+    log {
+        output stdout
+        format console
+    }
+}
+
+# Alternative: Use localhost
+localhost {
+    reverse_proxy aiwebengine-dev:3000
+    encode gzip
+}

@@ -1,6 +1,20 @@
 version: '3.8'
 
 services:
+  # Caddy reverse proxy for local development (HTTP only)
+  caddy-dev:
+    image: caddy:2-alpine
+    container_name: aiwebengine-caddy-dev
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./Caddyfile.dev:/etc/caddy/Caddyfile:ro
+    networks:
+      - aiwebengine-dev-network
+    depends_on:
+      - aiwebengine-dev
+
   # Development server with hot-reload
   aiwebengine-dev:
     build:
@@ -8,8 +22,12 @@ services:
       dockerfile: Dockerfile.dev
     container_name: aiwebengine-dev
     restart: unless-stopped
-    ports:
-      - "3000:3000"
+    # Expose port only to internal network
+    expose:
+      - "3000"
+    # Uncomment for direct access (bypassing Caddy)
+    # ports:
+    #   - "3000:3000"
     volumes:
       # Mount source code for hot-reload
       - ./src:/app/src:ro

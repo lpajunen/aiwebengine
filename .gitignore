@@ -2,3 +2,18 @@
 node_modules/
 config.toml
 .env
+
+# Caddy data (certificates and configuration)
+caddy-data/
+caddy-config/
+caddy-logs/
+
+# Logs
+logs/
+*.log
+
+# Database files
+data/
+*.db
+*.db-shm
+*.db-wal
