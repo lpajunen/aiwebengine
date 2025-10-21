@@ -35,6 +35,8 @@ pub struct HttpClient {
     client: reqwest::blocking::Client,
     default_timeout: Duration,
     max_response_size: usize,
+    /// Allow localhost/private IPs (test mode only)
+    allow_private: bool,
 }
 
 impl HttpClient {
@@ -50,6 +52,26 @@ impl HttpClient {
             client,
             default_timeout: DEFAULT_TIMEOUT,
             max_response_size: MAX_RESPONSE_SIZE,
+            allow_private: false,
+        })
+    }
+
+    /// Create a new HTTP client for testing (allows localhost/private IPs)
+    /// Only use this for test purposes!
+    #[doc(hidden)]
+    pub fn new_for_tests() -> Result<Self, HttpError> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(DEFAULT_TIMEOUT)
+            .use_rustls_tls()
+            .danger_accept_invalid_certs(true) // For testing with self-signed certs
+            .build()
+            .map_err(|e| HttpError::ClientInitialization(e.to_string()))?;
+
+        Ok(Self {
+            client,
+            default_timeout: DEFAULT_TIMEOUT,
+            max_response_size: MAX_RESPONSE_SIZE,
+            allow_private: true,
         })
     }
 
@@ -58,7 +80,11 @@ impl HttpClient {
     /// Supports secret injection via `{{secret:identifier}}` template syntax in headers.
     pub fn fetch(&self, url: String, options: FetchOptions) -> Result<FetchResponse, HttpError> {
         // Validate URL
-        let parsed_url = Self::validate_url(&url)?;
+        let parsed_url = if self.allow_private {
+            Self::validate_url_test(&url)?
+        } else {
+            Self::validate_url(&url)?
+        };
 
         // Parse HTTP method
         let method = Method::from_str(&options.method.to_uppercase())
@@ -141,6 +167,25 @@ impl HttpClient {
             )));
         }
 
+        Ok(parsed)
+    }
+
+    /// Validate URL for testing (allows localhost and private IPs)
+    fn validate_url_test(url: &str) -> Result<Url, HttpError> {
+        let parsed = Url::parse(url).map_err(|e| HttpError::InvalidUrl(e.to_string()))?;
+
+        // Only allow HTTP and HTTPS
+        match parsed.scheme() {
+            "http" | "https" => {}
+            _ => return Err(HttpError::InvalidUrlScheme(parsed.scheme().to_string())),
+        }
+
+        // Get host - just check it exists
+        let _host = parsed
+            .host_str()
+            .ok_or_else(|| HttpError::InvalidUrl("No host in URL".to_string()))?;
+
+        // In test mode, allow all hosts including localhost and private IPs
         Ok(parsed)
     }
 

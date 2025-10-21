@@ -1,77 +1,112 @@
+mod mock_server;
+
 use aiwebengine::http_client::{FetchOptions, HttpClient};
+use mock_server::MockServer;
 use std::collections::HashMap;
 
-#[test]
-fn test_fetch_get_request() {
-    // Test a simple GET request to httpbin.org
-    let client = HttpClient::new().expect("Failed to create client");
+#[tokio::test]
+async fn test_fetch_get_request() {
+    let mock = MockServer::start()
+        .await
+        .expect("Failed to start mock server");
+    let url = mock.url("/get");
 
-    let result = client.fetch(
-        "https://httpbin.org/get".to_string(),
-        FetchOptions::default(),
+    let result = tokio::task::spawn_blocking(move || {
+        let client = HttpClient::new_for_tests().expect("Failed to create client");
+        client.fetch(url, FetchOptions::default())
+    })
+    .await
+    .expect("Task panicked");
+
+    assert!(
+        result.is_ok(),
+        "GET request should succeed: {:?}",
+        result.err()
     );
-
-    assert!(result.is_ok(), "GET request should succeed");
     let response = result.unwrap();
     assert_eq!(response.status, 200);
     assert!(response.ok);
     assert!(!response.body.is_empty());
+
+    mock.shutdown().await;
 }
 
-#[test]
-fn test_fetch_post_with_json() {
-    let client = HttpClient::new().expect("Failed to create client");
+#[tokio::test]
+async fn test_fetch_post_with_json() {
+    let mock = MockServer::start()
+        .await
+        .expect("Failed to start mock server");
+    let url = mock.url("/post");
 
-    let mut headers = HashMap::new();
-    headers.insert("Content-Type".to_string(), "application/json".to_string());
+    let result = tokio::task::spawn_blocking(move || {
+        let client = HttpClient::new_for_tests().expect("Failed to create client");
+        let mut headers = HashMap::new();
+        headers.insert("Content-Type".to_string(), "application/json".to_string());
+        let body = r#"{"test": "data", "number": 42}"#;
 
-    let body = r#"{"test": "data", "number": 42}"#;
-
-    let result = client.fetch(
-        "https://httpbin.org/post".to_string(),
-        FetchOptions {
-            method: "POST".to_string(),
-            headers: Some(headers),
-            body: Some(body.to_string()),
-            timeout_ms: None,
-        },
-    );
+        client.fetch(
+            url,
+            FetchOptions {
+                method: "POST".to_string(),
+                headers: Some(headers),
+                body: Some(body.to_string()),
+                timeout_ms: None,
+            },
+        )
+    })
+    .await
+    .expect("Task panicked");
 
     assert!(result.is_ok(), "POST request should succeed");
     let response = result.unwrap();
     assert_eq!(response.status, 200);
     assert!(response.ok);
 
-    // httpbin echoes back the JSON we sent
+    // Mock server echoes back the JSON we sent
     assert!(response.body.contains("test"));
     assert!(response.body.contains("data"));
+
+    mock.shutdown().await;
 }
 
-#[test]
-fn test_fetch_custom_headers() {
-    let client = HttpClient::new().expect("Failed to create client");
+#[tokio::test]
+async fn test_fetch_custom_headers() {
+    let mock = MockServer::start()
+        .await
+        .expect("Failed to start mock server");
+    let url = mock.url("/headers");
 
-    let mut headers = HashMap::new();
-    headers.insert("X-Custom-Header".to_string(), "test-value".to_string());
-    headers.insert("User-Agent".to_string(), "aiwebengine/test".to_string());
+    let result = tokio::task::spawn_blocking(move || {
+        let client = HttpClient::new_for_tests().expect("Failed to create client");
+        let mut headers = HashMap::new();
+        headers.insert("x-custom-header".to_string(), "test-value".to_string());
+        headers.insert("user-agent".to_string(), "aiwebengine/test".to_string());
 
-    let result = client.fetch(
-        "https://httpbin.org/headers".to_string(),
-        FetchOptions {
-            method: "GET".to_string(),
-            headers: Some(headers),
-            body: None,
-            timeout_ms: None,
-        },
-    );
+        client.fetch(
+            url,
+            FetchOptions {
+                method: "GET".to_string(),
+                headers: Some(headers),
+                body: None,
+                timeout_ms: None,
+            },
+        )
+    })
+    .await
+    .expect("Task panicked");
 
     assert!(result.is_ok(), "Request with custom headers should succeed");
     let response = result.unwrap();
     assert_eq!(response.status, 200);
 
-    // httpbin echoes back our headers
-    assert!(response.body.contains("X-Custom-Header"));
+    // Mock server echoes back our headers (case-insensitive)
+    assert!(
+        response.body.to_lowercase().contains("x-custom-header")
+            || response.body.contains("X-Custom-Header")
+    );
     assert!(response.body.contains("test-value"));
+
+    mock.shutdown().await;
 }
 
 #[test]
@@ -152,14 +187,19 @@ fn test_fetch_invalid_url() {
     assert!(result.is_err(), "Invalid URL should be rejected");
 }
 
-#[test]
-fn test_fetch_404_not_found() {
-    let client = HttpClient::new().expect("Failed to create client");
+#[tokio::test]
+async fn test_fetch_404_not_found() {
+    let mock = MockServer::start()
+        .await
+        .expect("Failed to start mock server");
+    let url = mock.url("/status/404");
 
-    let result = client.fetch(
-        "https://httpbin.org/status/404".to_string(),
-        FetchOptions::default(),
-    );
+    let result = tokio::task::spawn_blocking(move || {
+        let client = HttpClient::new_for_tests().expect("Failed to create client");
+        client.fetch(url, FetchOptions::default())
+    })
+    .await
+    .expect("Task panicked");
 
     assert!(
         result.is_ok(),
@@ -168,87 +208,112 @@ fn test_fetch_404_not_found() {
     let response = result.unwrap();
     assert_eq!(response.status, 404);
     assert!(!response.ok); // ok should be false for 4xx/5xx
+
+    mock.shutdown().await;
 }
 
-#[test]
-fn test_fetch_different_methods() {
-    let client = HttpClient::new().expect("Failed to create client");
+#[tokio::test]
+async fn test_fetch_different_methods() {
+    let mock = MockServer::start()
+        .await
+        .expect("Failed to start mock server");
+    let base_url = format!("http://127.0.0.1:{}", mock.port);
 
-    // Test PUT
-    let result = client.fetch(
-        "https://httpbin.org/put".to_string(),
-        FetchOptions {
-            method: "PUT".to_string(),
-            headers: None,
-            body: Some("test data".to_string()),
-            timeout_ms: Some(10000), // 10 second timeout
-        },
-    );
-    assert!(result.is_ok(), "PUT request failed: {:?}", result.err());
-    let response = result.unwrap();
-    assert_eq!(
-        response.status, 200,
-        "PUT request returned unexpected status"
-    );
-    assert!(response.ok, "PUT request ok flag should be true");
+    tokio::task::spawn_blocking(move || {
+        let client = HttpClient::new_for_tests().expect("Failed to create client");
 
-    // Test DELETE
-    let result = client.fetch(
-        "https://httpbin.org/delete".to_string(),
-        FetchOptions {
-            method: "DELETE".to_string(),
-            headers: None,
-            body: None,
-            timeout_ms: Some(10000), // 10 second timeout
-        },
-    );
-    assert!(result.is_ok(), "DELETE request failed: {:?}", result.err());
-    let response = result.unwrap();
-    assert_eq!(
-        response.status, 200,
-        "DELETE request returned unexpected status"
-    );
-    assert!(response.ok, "DELETE request ok flag should be true");
+        // Test PUT
+        let result = client.fetch(
+            format!("{}/put", base_url),
+            FetchOptions {
+                method: "PUT".to_string(),
+                headers: None,
+                body: Some("test data".to_string()),
+                timeout_ms: Some(10000),
+            },
+        );
+        assert!(result.is_ok(), "PUT request failed: {:?}", result.err());
+        let response = result.unwrap();
+        assert_eq!(
+            response.status, 200,
+            "PUT request returned unexpected status"
+        );
+        assert!(response.ok, "PUT request ok flag should be true");
 
-    // Test PATCH
-    let result = client.fetch(
-        "https://httpbin.org/patch".to_string(),
-        FetchOptions {
-            method: "PATCH".to_string(),
-            headers: None,
-            body: Some("patch data".to_string()),
-            timeout_ms: Some(10000), // 10 second timeout
-        },
-    );
-    assert!(result.is_ok(), "PATCH request failed: {:?}", result.err());
-    let response = result.unwrap();
-    assert_eq!(
-        response.status, 200,
-        "PATCH request returned unexpected status"
-    );
-    assert!(response.ok, "PATCH request ok flag should be true");
+        // Test DELETE
+        let result = client.fetch(
+            format!("{}/delete", base_url),
+            FetchOptions {
+                method: "DELETE".to_string(),
+                headers: None,
+                body: None,
+                timeout_ms: Some(10000),
+            },
+        );
+        assert!(result.is_ok(), "DELETE request failed: {:?}", result.err());
+        let response = result.unwrap();
+        assert_eq!(
+            response.status, 200,
+            "DELETE request returned unexpected status"
+        );
+        assert!(response.ok, "DELETE request ok flag should be true");
+
+        // Test PATCH
+        let result = client.fetch(
+            format!("{}/patch", base_url),
+            FetchOptions {
+                method: "PATCH".to_string(),
+                headers: None,
+                body: Some("patch data".to_string()),
+                timeout_ms: Some(10000),
+            },
+        );
+        assert!(result.is_ok(), "PATCH request failed: {:?}", result.err());
+        let response = result.unwrap();
+        assert_eq!(
+            response.status, 200,
+            "PATCH request returned unexpected status"
+        );
+        assert!(response.ok, "PATCH request ok flag should be true");
+    })
+    .await
+    .expect("Task panicked");
+
+    mock.shutdown().await;
 }
 
-#[test]
-fn test_fetch_response_headers() {
-    let client = HttpClient::new().expect("Failed to create client");
+#[tokio::test]
+async fn test_fetch_response_headers() {
+    let mock = MockServer::start()
+        .await
+        .expect("Failed to start mock server");
+    let url = mock.url("/response-headers?custom-header=test-value");
 
-    let result = client.fetch(
-        "https://httpbin.org/response-headers?custom-header=test-value".to_string(),
-        FetchOptions::default(),
-    );
+    let result = tokio::task::spawn_blocking(move || {
+        let client = HttpClient::new_for_tests().expect("Failed to create client");
+        client.fetch(url, FetchOptions::default())
+    })
+    .await
+    .expect("Task panicked");
 
     assert!(result.is_ok());
     let response = result.unwrap();
     assert!(!response.headers.is_empty());
 
-    // httpbin should return our custom header
+    // Mock server should return our custom header
     assert!(response.headers.contains_key("custom-header"));
+
+    mock.shutdown().await;
 }
 
 // Test secret injection (requires secrets manager to be initialized)
-#[test]
-fn test_fetch_secret_template_syntax() {
+#[tokio::test]
+async fn test_fetch_secret_template_syntax() {
+    let mock = MockServer::start()
+        .await
+        .expect("Failed to start mock server");
+    let url = mock.url("/headers");
+
     // Get or initialize secrets manager
     use aiwebengine::secrets::{
         SecretsManager, get_global_secrets_manager, initialize_global_secrets_manager,
@@ -265,24 +330,26 @@ fn test_fetch_secret_template_syntax() {
     // Add our test secret to the manager
     manager.set("test_api_key".to_string(), "secret-key-12345".to_string());
 
-    // Now test fetch with secret template
-    let client = HttpClient::new().expect("Failed to create client");
+    let result = tokio::task::spawn_blocking(move || {
+        let client = HttpClient::new_for_tests().expect("Failed to create client");
+        let mut headers = HashMap::new();
+        headers.insert(
+            "authorization".to_string(),
+            "{{secret:test_api_key}}".to_string(),
+        );
 
-    let mut headers = HashMap::new();
-    headers.insert(
-        "Authorization".to_string(),
-        "{{secret:test_api_key}}".to_string(),
-    );
-
-    let result = client.fetch(
-        "https://httpbin.org/headers".to_string(),
-        FetchOptions {
-            method: "GET".to_string(),
-            headers: Some(headers),
-            body: None,
-            timeout_ms: None,
-        },
-    );
+        client.fetch(
+            url,
+            FetchOptions {
+                method: "GET".to_string(),
+                headers: Some(headers),
+                body: None,
+                timeout_ms: None,
+            },
+        )
+    })
+    .await
+    .expect("Task panicked");
 
     assert!(
         result.is_ok(),
@@ -293,11 +360,18 @@ fn test_fetch_secret_template_syntax() {
 
     // The secret value should have been injected
     assert!(response.body.contains("secret-key-12345"));
-    assert!(response.body.contains("Authorization"));
+    assert!(response.body.to_lowercase().contains("authorization"));
+
+    mock.shutdown().await;
 }
 
-#[test]
-fn test_fetch_missing_secret_error() {
+#[tokio::test]
+async fn test_fetch_missing_secret_error() {
+    let mock = MockServer::start()
+        .await
+        .expect("Failed to start mock server");
+    let url = mock.url("/headers");
+
     // Get or initialize secrets manager
     use aiwebengine::secrets::{
         SecretsManager, get_global_secrets_manager, initialize_global_secrets_manager,
@@ -314,23 +388,26 @@ fn test_fetch_missing_secret_error() {
     // Add a different secret (not the one we'll request)
     manager.set("some_other_key".to_string(), "other-value".to_string());
 
-    let client = HttpClient::new().expect("Failed to create client");
+    let result = tokio::task::spawn_blocking(move || {
+        let client = HttpClient::new_for_tests().expect("Failed to create client");
+        let mut headers = HashMap::new();
+        headers.insert(
+            "Authorization".to_string(),
+            "{{secret:nonexistent_key}}".to_string(),
+        );
 
-    let mut headers = HashMap::new();
-    headers.insert(
-        "Authorization".to_string(),
-        "{{secret:nonexistent_key}}".to_string(),
-    );
-
-    let result = client.fetch(
-        "https://httpbin.org/headers".to_string(),
-        FetchOptions {
-            method: "GET".to_string(),
-            headers: Some(headers),
-            body: None,
-            timeout_ms: None,
-        },
-    );
+        client.fetch(
+            url,
+            FetchOptions {
+                method: "GET".to_string(),
+                headers: Some(headers),
+                body: None,
+                timeout_ms: None,
+            },
+        )
+    })
+    .await
+    .expect("Task panicked");
 
     assert!(result.is_err(), "Missing secret should cause error");
     let error = result.unwrap_err();
@@ -341,4 +418,6 @@ fn test_fetch_missing_secret_error() {
                 .to_string()
                 .contains("Secrets manager not initialized")
     );
+
+    mock.shutdown().await;
 }

@@ -224,11 +224,11 @@ docker-compose logs --tail=100
 
 Document your emergency contacts:
 
-- [ ] Server provider support: ******\_\_\_******
-- [ ] DNS provider support: ******\_\_\_******
-- [ ] Team lead: ******\_\_\_******
-- [ ] On-call engineer: ******\_\_\_******
-- [ ] Backup administrator: ******\_\_\_******
+- [ ] Server provider support: **\*\***\_\_\_**\*\***
+- [ ] DNS provider support: **\*\***\_\_\_**\*\***
+- [ ] Team lead: **\*\***\_\_\_**\*\***
+- [ ] On-call engineer: **\*\***\_\_\_**\*\***
+- [ ] Backup administrator: **\*\***\_\_\_**\*\***
 
 ## Additional Resources
 
@@ -239,9 +239,9 @@ Document your emergency contacts:
 
 ## Sign-Off
 
-Deployment completed by: ******\_\_\_******  
-Date: ******\_\_\_******  
-Deployment version/commit: ******\_\_\_******  
+Deployment completed by: **\*\***\_\_\_**\*\***  
+Date: **\*\***\_\_\_**\*\***  
+Deployment version/commit: **\*\***\_\_\_**\*\***  
 All checks passed: [ ]  
 Post-deployment monitoring confirmed: [ ]
 
