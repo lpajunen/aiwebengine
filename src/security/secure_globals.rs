@@ -120,6 +120,9 @@ impl SecureGlobalContext {
         // Always setup stream functions, but they will be no-ops if disabled
         self.setup_stream_functions(ctx, script_uri)?;
 
+        // Setup user management functions (admin-only)
+        self.setup_user_management_functions(ctx, script_uri)?;
+
         Ok(())
     }
 
@@ -1585,6 +1588,192 @@ impl SecureGlobalContext {
         global.set("fetch", fetch_fn)?;
         debug!("fetch() function initialized with secret injection support");
 
+        Ok(())
+    }
+
+    /// Setup user management functions (admin-only)
+    fn setup_user_management_functions(
+        &self,
+        ctx: &rquickjs::Ctx<'_>,
+        _script_uri: &str,
+    ) -> JsResult<()> {
+        let global = ctx.globals();
+        let user_context = self.user_context.clone();
+
+        // listUsers - Get all users (admin only)
+        let user_ctx_list = user_context.clone();
+        let list_users = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
+                // Check if user has admin capabilities (DeleteScripts is admin-only)
+                if !user_ctx_list.has_capability(&crate::security::Capability::DeleteScripts) {
+                    return Err(rquickjs::Error::new_from_js_message(
+                        "listUsers",
+                        "permission_denied",
+                        "Administrator privileges required",
+                    ));
+                }
+
+                debug!(
+                    user_id = ?user_ctx_list.user_id,
+                    "listUsers called by admin"
+                );
+
+                // Get all users from repository
+                let users = crate::user_repository::list_users().map_err(|e| {
+                    rquickjs::Error::new_from_js_message(
+                        "listUsers",
+                        "error",
+                        &format!("Failed to list users: {}", e),
+                    )
+                })?;
+
+                // Convert users to JSON-friendly format
+                let users_json: Vec<serde_json::Value> = users
+                    .iter()
+                    .map(|user| {
+                        serde_json::json!({
+                            "id": user.id,
+                            "email": user.email,
+                            "name": user.name,
+                            "roles": user.roles.iter().map(|r| format!("{:?}", r)).collect::<Vec<_>>(),
+                            "created_at": format!("{:?}", user.created_at),
+                            "providers": user.providers.iter().map(|p| &p.provider_name).collect::<Vec<_>>(),
+                        })
+                    })
+                    .collect();
+
+                // Serialize to JSON string
+                serde_json::to_string(&users_json).map_err(|e| {
+                    rquickjs::Error::new_from_js_message(
+                        "listUsers",
+                        "serialize_error",
+                        &format!("Failed to serialize users: {}", e),
+                    )
+                })
+            },
+        )?;
+        global.set("listUsers", list_users)?;
+
+        // addUserRole - Add a role to a user (admin only)
+        let user_ctx_add = user_context.clone();
+        let add_user_role = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, user_id: String, role: String| -> JsResult<()> {
+                // Check if user has admin capabilities (DeleteScripts is admin-only)
+                if !user_ctx_add.has_capability(&crate::security::Capability::DeleteScripts) {
+                    return Err(rquickjs::Error::new_from_js_message(
+                        "addUserRole",
+                        "permission_denied",
+                        "Administrator privileges required",
+                    ));
+                }
+
+                debug!(
+                    admin_id = ?user_ctx_add.user_id,
+                    target_user = %user_id,
+                    role = %role,
+                    "addUserRole called by admin"
+                );
+
+                // Parse role
+                let user_role = match role.as_str() {
+                    "Editor" => crate::user_repository::UserRole::Editor,
+                    "Administrator" => crate::user_repository::UserRole::Administrator,
+                    "Authenticated" => crate::user_repository::UserRole::Authenticated,
+                    _ => {
+                        return Err(rquickjs::Error::new_from_js_message(
+                            "addUserRole",
+                            "invalid_role",
+                            &format!("Invalid role: {}. Must be Editor, Administrator, or Authenticated", role),
+                        ));
+                    }
+                };
+
+                // Add role
+                crate::user_repository::add_user_role(&user_id, user_role).map_err(|e| {
+                    rquickjs::Error::new_from_js_message(
+                        "addUserRole",
+                        "error",
+                        &format!("Failed to add role: {}", e),
+                    )
+                })?;
+
+                tracing::info!(
+                    admin_id = ?user_ctx_add.user_id,
+                    target_user = %user_id,
+                    role = %role,
+                    "Role added successfully"
+                );
+
+                Ok(())
+            },
+        )?;
+        global.set("addUserRole", add_user_role)?;
+
+        // removeUserRole - Remove a role from a user (admin only)
+        let user_ctx_remove = user_context.clone();
+        let remove_user_role = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, user_id: String, role: String| -> JsResult<()> {
+                // Check if user has admin capabilities (DeleteScripts is admin-only)
+                if !user_ctx_remove.has_capability(&crate::security::Capability::DeleteScripts) {
+                    return Err(rquickjs::Error::new_from_js_message(
+                        "removeUserRole",
+                        "permission_denied",
+                        "Administrator privileges required",
+                    ));
+                }
+
+                debug!(
+                    admin_id = ?user_ctx_remove.user_id,
+                    target_user = %user_id,
+                    role = %role,
+                    "removeUserRole called by admin"
+                );
+
+                // Parse role
+                let user_role = match role.as_str() {
+                    "Editor" => crate::user_repository::UserRole::Editor,
+                    "Administrator" => crate::user_repository::UserRole::Administrator,
+                    "Authenticated" => {
+                        return Err(rquickjs::Error::new_from_js_message(
+                            "removeUserRole",
+                            "invalid_operation",
+                            "Cannot remove Authenticated role",
+                        ));
+                    }
+                    _ => {
+                        return Err(rquickjs::Error::new_from_js_message(
+                            "removeUserRole",
+                            "invalid_role",
+                            &format!("Invalid role: {}. Must be Editor or Administrator", role),
+                        ));
+                    }
+                };
+
+                // Remove role
+                crate::user_repository::remove_user_role(&user_id, &user_role).map_err(|e| {
+                    rquickjs::Error::new_from_js_message(
+                        "removeUserRole",
+                        "error",
+                        &format!("Failed to remove role: {}", e),
+                    )
+                })?;
+
+                tracing::info!(
+                    admin_id = ?user_ctx_remove.user_id,
+                    target_user = %user_id,
+                    role = %role,
+                    "Role removed successfully"
+                );
+
+                Ok(())
+            },
+        )?;
+        global.set("removeUserRole", remove_user_role)?;
+
+        debug!("User management functions initialized (admin-only)");
         Ok(())
     }
 }

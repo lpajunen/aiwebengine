@@ -31,6 +31,11 @@ pub struct AuthConfig {
     /// Enable authentication (can be disabled for testing)
     #[serde(default = "default_true")]
     pub enabled: bool,
+
+    /// Bootstrap admin emails - users with these emails automatically get admin role
+    /// Use this to set up the first administrator who can then grant roles to others
+    #[serde(default)]
+    pub bootstrap_admins: Vec<String>,
 }
 
 impl AuthConfig {
@@ -108,6 +113,7 @@ impl Default for AuthConfig {
             cookie: CookieConfig::default(),
             providers: ProvidersConfig::default(),
             enabled: true,
+            bootstrap_admins: Vec::new(),
         }
     }
 }
@@ -374,6 +380,7 @@ mod tests {
             cookie: CookieConfig::default(),
             providers: ProvidersConfig::default(),
             enabled: true,
+            bootstrap_admins: Vec::new(),
         };
 
         assert!(config.validate().is_ok());

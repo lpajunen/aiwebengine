@@ -22,6 +22,7 @@ pub mod secrets;
 pub mod security;
 pub mod stream_manager;
 pub mod stream_registry;
+pub mod user_repository;
 
 // Authentication module (Phase 1 - Core Infrastructure)
 pub mod auth;
@@ -527,6 +528,17 @@ pub async fn start_server_with_config(
             auth_config.enabled,
             auth_config.providers.enabled_providers()
         );
+        
+        // Configure bootstrap admins for automatic admin role assignment
+        if !auth_config.bootstrap_admins.is_empty() {
+            info!(
+                "Configuring {} bootstrap admin(s): {:?}",
+                auth_config.bootstrap_admins.len(),
+                auth_config.bootstrap_admins
+            );
+            user_repository::set_bootstrap_admins(auth_config.bootstrap_admins.clone());
+        }
+        
         match initialize_auth_manager(auth_config).await {
             Ok(manager) => {
                 info!("AuthManager initialized successfully");

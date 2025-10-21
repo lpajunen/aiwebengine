@@ -155,6 +155,7 @@ pub fn fetch_scripts() -> HashMap<String, String> {
     let core = include_str!("../scripts/feature_scripts/core.js");
     let asset_mgmt = include_str!("../scripts/feature_scripts/asset_mgmt.js");
     let editor = include_str!("../scripts/feature_scripts/editor.js");
+    let manager = include_str!("../scripts/feature_scripts/manager.js");
 
     m.insert("https://example.com/core".to_string(), core.to_string());
     m.insert(
@@ -162,6 +163,7 @@ pub fn fetch_scripts() -> HashMap<String, String> {
         asset_mgmt.to_string(),
     );
     m.insert("https://example.com/editor".to_string(), editor.to_string());
+    m.insert("https://example.com/manager".to_string(), manager.to_string());
 
     // Include test scripts when appropriate
     let include_test_scripts =
