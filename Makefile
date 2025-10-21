@@ -36,6 +36,12 @@ deps:
 	cargo install cargo-watch
 	cargo install cargo-nextest
 	cargo install cargo-llvm-cov
+	@if [ ! -d "node_modules" ]; then \
+		echo "Installing npm dependencies..."; \
+		npm install; \
+	else \
+		echo "npm dependencies already installed"; \
+	fi
 	@echo "Development tools installed successfully!"
 
 # Run development server with auto-reload
@@ -63,10 +69,10 @@ format-check:
 	cargo fmt --all -- --check
 
 format-markdown:
-	npx prettier --write "**/*.md"
+	./node_modules/.bin/prettier --write "**/*.md"
 
 format-javascript:
-	npx prettier --write "**/*.js"
+	./node_modules/.bin/prettier --write "**/*.js"
 
 # Generate test coverage report
 coverage:

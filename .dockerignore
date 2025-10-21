@@ -2,6 +2,9 @@
 .git
 .gitignore
 
+# Node.js
+node_modules/
+
 # Documentation and markdown files
 *.md
 docs/

@@ -181,11 +181,13 @@ fn test_fetch_different_methods() {
             method: "PUT".to_string(),
             headers: None,
             body: Some("test data".to_string()),
-            timeout_ms: None,
+            timeout_ms: Some(10000), // 10 second timeout
         },
     );
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap().status, 200);
+    assert!(result.is_ok(), "PUT request failed: {:?}", result.err());
+    let response = result.unwrap();
+    assert_eq!(response.status, 200, "PUT request returned unexpected status");
+    assert!(response.ok, "PUT request ok flag should be true");
 
     // Test DELETE
     let result = client.fetch(
@@ -194,11 +196,13 @@ fn test_fetch_different_methods() {
             method: "DELETE".to_string(),
             headers: None,
             body: None,
-            timeout_ms: None,
+            timeout_ms: Some(10000), // 10 second timeout
         },
     );
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap().status, 200);
+    assert!(result.is_ok(), "DELETE request failed: {:?}", result.err());
+    let response = result.unwrap();
+    assert_eq!(response.status, 200, "DELETE request returned unexpected status");
+    assert!(response.ok, "DELETE request ok flag should be true");
 
     // Test PATCH
     let result = client.fetch(
@@ -207,11 +211,13 @@ fn test_fetch_different_methods() {
             method: "PATCH".to_string(),
             headers: None,
             body: Some("patch data".to_string()),
-            timeout_ms: None,
+            timeout_ms: Some(10000), // 10 second timeout
         },
     );
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap().status, 200);
+    assert!(result.is_ok(), "PATCH request failed: {:?}", result.err());
+    let response = result.unwrap();
+    assert_eq!(response.status, 200, "PATCH request returned unexpected status");
+    assert!(response.ok, "PATCH request ok flag should be true");
 }
 
 #[test]
