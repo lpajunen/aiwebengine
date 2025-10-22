@@ -545,8 +545,9 @@ function handleListUsers(request) {
     }
     
     try {
-        // Call Rust function to list users
-        const users = listUsers();
+        // Call Rust function to list users (returns JSON string)
+        const usersJson = listUsers();
+        const users = JSON.parse(usersJson);
         
         return {
             status: 200,
