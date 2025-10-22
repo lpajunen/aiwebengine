@@ -999,7 +999,7 @@ pub async fn start_server_with_config(
     if let Some(ref auth_mgr) = auth_manager {
         info!("✅ Authentication ENABLED - mounting auth routes and middleware");
 
-        // GraphQL endpoints with redirect-to-login middleware
+        // GraphQL endpoints with require_editor_or_admin_middleware
         let auth_mgr_for_graphql = Arc::clone(auth_mgr);
         let graphql_router = Router::new()
             .route("/graphql", axum::routing::get(graphql_get_handler))
@@ -1013,7 +1013,7 @@ pub async fn start_server_with_config(
             )
             .layer(axum::middleware::from_fn_with_state(
                 auth_mgr_for_graphql,
-                auth::redirect_to_login_middleware,
+                auth::require_editor_or_admin_middleware,
             ));
 
         app = app.merge(graphql_router);

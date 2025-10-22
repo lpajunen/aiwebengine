@@ -276,6 +276,101 @@ pub async fn redirect_to_login_middleware(
     axum::response::Redirect::to(&login_url).into_response()
 }
 
+/// Require editor or admin middleware - requires valid session with editor or admin role
+/// This middleware is used for endpoints that require either Editor or Administrator privileges.
+/// If the user is authenticated but doesn't have the required role, they are redirected to
+/// an insufficient permissions page. If they are not authenticated, they are redirected to login.
+pub async fn require_editor_or_admin_middleware(
+    State(auth_manager): State<Arc<AuthManager>>,
+    mut req: Request,
+    next: Next,
+) -> Response {
+    let path = req.uri().path().to_string();
+    let query = req
+        .uri()
+        .query()
+        .map(|q| format!("?{}", q))
+        .unwrap_or_default();
+    let cookie_name = &auth_manager.config().session_cookie_name;
+
+    // Check if user is authenticated
+    if let Some(session_token) = extract_session_token(&req, cookie_name) {
+        let ip_addr = extract_client_ip(&req);
+        let user_agent = extract_user_agent(&req);
+
+        // Get full session information
+        match auth_manager
+            .get_session(&session_token, &ip_addr, &user_agent)
+            .await
+        {
+            Ok(session) => {
+                // Check if user has editor or admin privileges
+                if session.is_editor || session.is_admin {
+                    tracing::info!(
+                        "✅ Authorized user accessing {}: user_id={} is_admin={} is_editor={}",
+                        path,
+                        session.user_id,
+                        session.is_admin,
+                        session.is_editor
+                    );
+                    // Inject authenticated user into request
+                    let auth_user = AuthUser::new(
+                        session.user_id.clone(),
+                        session.provider.clone(),
+                        session_token,
+                        session.is_admin,
+                        session.is_editor,
+                        session.email.clone(),
+                        session.name.clone(),
+                    );
+                    req.extensions_mut().insert(auth_user);
+                    return next.run(req).await;
+                } else {
+                    // User is authenticated but doesn't have required role
+                    tracing::warn!(
+                        "⚠️  Insufficient permissions for {}: user_id={} is_admin={} is_editor={}",
+                        path,
+                        session.user_id,
+                        session.is_admin,
+                        session.is_editor
+                    );
+
+                    let full_path = format!("{}{}", path, query);
+                    let return_url = urlencoding::encode(&full_path);
+                    let insufficient_permissions_url =
+                        format!("/insufficient-permissions?attempted={}", return_url);
+
+                    tracing::info!(
+                        "🚫 Redirecting user without required role from {} to {}",
+                        full_path,
+                        insufficient_permissions_url
+                    );
+
+                    return axum::response::Redirect::to(&insufficient_permissions_url)
+                        .into_response();
+                }
+            }
+            Err(e) => {
+                tracing::warn!("⚠️  Session validation failed for {}: {}", path, e);
+                // Invalid session, redirect to login
+            }
+        }
+    }
+
+    // User is not authenticated, redirect to login with return URL
+    let full_path = format!("{}{}", path, query);
+    let return_url = urlencoding::encode(&full_path);
+    let login_url = format!("/auth/login?redirect={}", return_url);
+
+    tracing::info!(
+        "🔒 Redirecting unauthenticated user from {} to {}",
+        full_path,
+        login_url
+    );
+
+    axum::response::Redirect::to(&login_url).into_response()
+}
+
 /// Error response for authentication failures
 #[derive(Debug)]
 pub struct AuthErrorResponse {

@@ -10,11 +10,14 @@ function serveEditor(req) {
     writeLog("auth.isAuthenticated: " + auth.isAuthenticated);
     writeLog("auth.userId: " + auth.userId);
     writeLog("auth.provider: " + auth.provider);
+    writeLog("auth.isEditor: " + auth.isEditor);
+    writeLog("auth.isAdmin: " + auth.isAdmin);
   }
 
   // Require authentication to access the editor
+  let user;
   try {
-    const user = auth.requireAuth();
+    user = auth.requireAuth();
     writeLog("Authentication successful for user: " + user.id);
   } catch (error) {
     writeLog("Authentication failed: " + error.message);
@@ -32,6 +35,37 @@ function serveEditor(req) {
       contentType: "text/plain",
     };
   }
+
+  // Check if user has Editor or Administrator role
+  if (!auth.isEditor && !auth.isAdmin) {
+    writeLog("User " + user.id + " does not have Editor or Administrator role");
+    writeLog("isEditor: " + auth.isEditor + ", isAdmin: " + auth.isAdmin);
+
+    // Redirect to insufficient permissions page
+    const currentPath = encodeURIComponent(req.path || "/editor");
+    const insufficientPermissionsUrl =
+      "/insufficient-permissions?attempted=" + currentPath;
+    writeLog("Redirecting to: " + insufficientPermissionsUrl);
+
+    return {
+      status: 302,
+      headers: {
+        Location: insufficientPermissionsUrl,
+      },
+      body: "",
+      contentType: "text/plain",
+    };
+  }
+
+  writeLog(
+    "User " +
+      user.id +
+      " has required permissions (isEditor: " +
+      auth.isEditor +
+      ", isAdmin: " +
+      auth.isAdmin +
+      ")",
+  );
 
   // Serve the modern editor UI
   // Note: The HTML is embedded here to ensure /editor is the single entry point
