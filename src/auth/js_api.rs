@@ -29,6 +29,9 @@ pub struct JsAuthContext {
 
     /// Whether user has administrator privileges
     pub is_admin: bool,
+
+    /// Whether user has editor privileges
+    pub is_editor: bool,
 }
 
 impl JsAuthContext {
@@ -41,6 +44,7 @@ impl JsAuthContext {
             provider: None,
             is_authenticated: false,
             is_admin: false,
+            is_editor: false,
         }
     }
 
@@ -51,6 +55,7 @@ impl JsAuthContext {
         name: Option<String>,
         provider: String,
         is_admin: bool,
+        is_editor: bool,
     ) -> Self {
         Self {
             user_id: Some(user_id),
@@ -59,6 +64,7 @@ impl JsAuthContext {
             provider: Some(provider),
             is_authenticated: true,
             is_admin,
+            is_editor,
         }
     }
 
@@ -113,6 +119,7 @@ impl AuthJsApi {
         // Set authentication status properties
         auth_obj.set("isAuthenticated", auth_context.is_authenticated)?;
         auth_obj.set("isAdmin", auth_context.is_admin)?;
+        auth_obj.set("isEditor", auth_context.is_editor)?;
 
         // Set user information properties (null if not available)
         if let Some(user_id) = &auth_context.user_id {
@@ -259,9 +266,11 @@ mod tests {
             Some("Test User".to_string()),
             "google".to_string(),
             false,
+            false,
         );
         assert!(auth.is_authenticated);
         assert!(!auth.is_admin);
+        assert!(!auth.is_editor);
         assert_eq!(auth.user_id, Some("user123".to_string()));
         assert_eq!(auth.email, Some("user@example.com".to_string()));
     }
@@ -273,6 +282,7 @@ mod tests {
             None,
             None,
             "google".to_string(),
+            false,
             false,
         );
 
@@ -302,6 +312,10 @@ mod tests {
             let is_admin: bool = ctx.eval("auth.isAdmin").unwrap();
             assert!(!is_admin);
 
+            // Test isEditor is false
+            let is_editor: bool = ctx.eval("auth.isEditor").unwrap();
+            assert!(!is_editor);
+
             // Test userId is null
             let user_id_is_null: bool = ctx.eval("auth.userId === null").unwrap();
             assert!(user_id_is_null);
@@ -319,7 +333,8 @@ mod tests {
                 Some("test@example.com".to_string()),
                 Some("Test User".to_string()),
                 "google".to_string(),
-                true, // is_admin
+                true,  // is_admin
+                false, // is_editor
             );
             AuthJsApi::setup_auth_globals(&ctx, auth_context).unwrap();
 
@@ -330,6 +345,10 @@ mod tests {
             // Test isAdmin is true
             let is_admin: bool = ctx.eval("auth.isAdmin").unwrap();
             assert!(is_admin);
+
+            // Test isEditor is false
+            let is_editor: bool = ctx.eval("auth.isEditor").unwrap();
+            assert!(!is_editor);
 
             // Test userId
             let user_id: String = ctx.eval("auth.userId").unwrap();
@@ -356,6 +375,7 @@ mod tests {
                 Some("test@example.com".to_string()),
                 Some("Test User".to_string()),
                 "google".to_string(),
+                false,
                 false,
             );
             AuthJsApi::setup_auth_globals(&ctx, auth_context).unwrap();
@@ -429,12 +449,70 @@ mod tests {
                 None,
                 "google".to_string(),
                 false,
+                false,
             );
             AuthJsApi::setup_auth_globals(&ctx, auth_context).unwrap();
 
             // Test requireAuth() returns user
             let user_id: String = ctx.eval("auth.requireAuth().id").unwrap();
             assert_eq!(user_id, "user123");
+        });
+    }
+
+    #[test]
+    fn test_is_editor_property() {
+        let rt = Runtime::new().unwrap();
+        let ctx = Context::full(&rt).unwrap();
+
+        ctx.with(|ctx| {
+            // Test editor user
+            let auth_context = JsAuthContext::authenticated(
+                "editor123".to_string(),
+                Some("editor@example.com".to_string()),
+                Some("Editor User".to_string()),
+                "google".to_string(),
+                false, // not admin
+                true,  // is editor
+            );
+            AuthJsApi::setup_auth_globals(&ctx, auth_context).unwrap();
+
+            // Test isEditor is true
+            let is_editor: bool = ctx.eval("auth.isEditor").unwrap();
+            assert!(is_editor);
+
+            // Test isAdmin is false
+            let is_admin: bool = ctx.eval("auth.isAdmin").unwrap();
+            assert!(!is_admin);
+
+            // Test isAuthenticated is true
+            let is_authed: bool = ctx.eval("auth.isAuthenticated").unwrap();
+            assert!(is_authed);
+        });
+    }
+
+    #[test]
+    fn test_admin_and_editor_combined() {
+        let rt = Runtime::new().unwrap();
+        let ctx = Context::full(&rt).unwrap();
+
+        ctx.with(|ctx| {
+            // Test user who is both admin and editor
+            let auth_context = JsAuthContext::authenticated(
+                "superuser".to_string(),
+                Some("super@example.com".to_string()),
+                Some("Super User".to_string()),
+                "google".to_string(),
+                true, // is admin
+                true, // is editor
+            );
+            AuthJsApi::setup_auth_globals(&ctx, auth_context).unwrap();
+
+            // Test both flags are true
+            let is_admin: bool = ctx.eval("auth.isAdmin").unwrap();
+            assert!(is_admin);
+
+            let is_editor: bool = ctx.eval("auth.isEditor").unwrap();
+            assert!(is_editor);
         });
     }
 }

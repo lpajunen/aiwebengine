@@ -302,7 +302,12 @@ impl AuthManager {
             .roles
             .contains(&crate::user_repository::UserRole::Administrator);
 
-        // Create session with correct admin status
+        // Check if user has Editor role
+        let is_editor = user
+            .roles
+            .contains(&crate::user_repository::UserRole::Editor);
+
+        // Create session with correct admin and editor status
         let session_token = self
             .session_manager
             .create_session(
@@ -311,6 +316,7 @@ impl AuthManager {
                 Some(user_info.email.clone()),
                 user_info.name.clone(),
                 is_admin,
+                is_editor,
                 ip_addr.to_string(),
                 user_agent.to_string(),
             )

@@ -528,7 +528,7 @@ pub async fn start_server_with_config(
             auth_config.enabled,
             auth_config.providers.enabled_providers()
         );
-        
+
         // Configure bootstrap admins for automatic admin role assignment
         if !auth_config.bootstrap_admins.is_empty() {
             info!(
@@ -538,7 +538,7 @@ pub async fn start_server_with_config(
             );
             user_repository::set_bootstrap_admins(auth_config.bootstrap_admins.clone());
         }
-        
+
         match initialize_auth_manager(auth_config).await {
             Ok(manager) => {
                 info!("AuthManager initialized successfully");
@@ -885,6 +885,7 @@ pub async fn start_server_with_config(
                     auth_user.name.clone(),
                     auth_user.provider.clone(),
                     auth_user.is_admin,
+                    auth_user.is_editor,
                 )
             } else {
                 auth::JsAuthContext::anonymous()

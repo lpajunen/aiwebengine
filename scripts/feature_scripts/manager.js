@@ -23,35 +23,37 @@
 //   * request.body (string) - raw request body
 
 function init(context) {
-    // Register routes for user management
-    register('/manager', 'handleManagerUI', 'GET');
-    register('/api/manager/users', 'handleListUsers', 'GET');
-    register('/api/manager/users/*', 'handleUpdateUserRole', 'POST');
-    
-    return { success: true };
+  // Register routes for user management
+  register("/manager", "handleManagerUI", "GET");
+  register("/api/manager/users", "handleListUsers", "GET");
+  register("/api/manager/users/*", "handleUpdateUserRole", "POST");
+
+  return { success: true };
 }
 
 // Serve the management UI (HTML page)
 function handleManagerUI(request) {
-    // Check if user is authenticated and is an administrator
-    // Note: 'auth' is a global object, not part of request
-    if (!auth || !auth.isAuthenticated) {
-        return {
-            status: 302,
-            headers: { 'Location': '/auth/login?redirect=/manager' },
-            body: ''
-        };
-    }
-    
-    if (!auth.isAdmin) {
-        return {
-            status: 403,
-            body: JSON.stringify({ error: 'Access denied. Administrator privileges required.' }),
-            contentType: 'application/json'
-        };
-    }
-    
-    const html = `<!DOCTYPE html>
+  // Check if user is authenticated and is an administrator
+  // Note: 'auth' is a global object, not part of request
+  if (!auth || !auth.isAuthenticated) {
+    return {
+      status: 302,
+      headers: { Location: "/auth/login?redirect=/manager" },
+      body: "",
+    };
+  }
+
+  if (!auth.isAdmin) {
+    return {
+      status: 403,
+      body: JSON.stringify({
+        error: "Access denied. Administrator privileges required.",
+      }),
+      contentType: "application/json",
+    };
+  }
+
+  const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -516,156 +518,166 @@ function handleManagerUI(request) {
     </script>
 </body>
 </html>`;
-    
-    return {
-        status: 200,
-        body: html,
-        contentType: 'text/html'
-    };
+
+  return {
+    status: 200,
+    body: html,
+    contentType: "text/html",
+  };
 }
 
 // API endpoint to list all users
 function handleListUsers(request) {
-    // Check if user is authenticated and is an administrator
-    // Note: 'auth' is a global object, not part of request
-    if (!auth || !auth.isAuthenticated) {
-        return {
-            status: 401,
-            body: JSON.stringify({ error: 'Authentication required' }),
-            contentType: 'application/json'
-        };
-    }
-    
-    if (!auth.isAdmin) {
-        return {
-            status: 403,
-            body: JSON.stringify({ error: 'Access denied. Administrator privileges required.' }),
-            contentType: 'application/json'
-        };
-    }
-    
-    try {
-        // Call Rust function to list users (returns JSON string)
-        const usersJson = listUsers();
-        const users = JSON.parse(usersJson);
-        
-        return {
-            status: 200,
-            body: JSON.stringify({
-                users: users,
-                total: users.length
-            }),
-            contentType: 'application/json'
-        };
-    } catch (error) {
-        return {
-            status: 500,
-            body: JSON.stringify({ 
-                error: 'Failed to list users',
-                details: error.toString()
-            }),
-            contentType: 'application/json'
-        };
-    }
+  // Check if user is authenticated and is an administrator
+  // Note: 'auth' is a global object, not part of request
+  if (!auth || !auth.isAuthenticated) {
+    return {
+      status: 401,
+      body: JSON.stringify({ error: "Authentication required" }),
+      contentType: "application/json",
+    };
+  }
+
+  if (!auth.isAdmin) {
+    return {
+      status: 403,
+      body: JSON.stringify({
+        error: "Access denied. Administrator privileges required.",
+      }),
+      contentType: "application/json",
+    };
+  }
+
+  try {
+    // Call Rust function to list users (returns JSON string)
+    const usersJson = listUsers();
+    const users = JSON.parse(usersJson);
+
+    return {
+      status: 200,
+      body: JSON.stringify({
+        users: users,
+        total: users.length,
+      }),
+      contentType: "application/json",
+    };
+  } catch (error) {
+    return {
+      status: 500,
+      body: JSON.stringify({
+        error: "Failed to list users",
+        details: error.toString(),
+      }),
+      contentType: "application/json",
+    };
+  }
 }
 
 // API endpoint to update user role
 function handleUpdateUserRole(request) {
-    // Check if user is authenticated and is an administrator
-    // Note: 'auth' is a global object, not part of request
-    if (!auth || !auth.isAuthenticated) {
-        return {
-            status: 401,
-            body: JSON.stringify({ error: 'Authentication required' }),
-            contentType: 'application/json'
-        };
-    }
-    
-    if (!auth.isAdmin) {
-        return {
-            status: 403,
-            body: JSON.stringify({ error: 'Access denied. Administrator privileges required.' }),
-            contentType: 'application/json'
-        };
-    }
-    
+  // Check if user is authenticated and is an administrator
+  // Note: 'auth' is a global object, not part of request
+  if (!auth || !auth.isAuthenticated) {
+    return {
+      status: 401,
+      body: JSON.stringify({ error: "Authentication required" }),
+      contentType: "application/json",
+    };
+  }
+
+  if (!auth.isAdmin) {
+    return {
+      status: 403,
+      body: JSON.stringify({
+        error: "Access denied. Administrator privileges required.",
+      }),
+      contentType: "application/json",
+    };
+  }
+
+  try {
+    // Parse request body
+    let body;
     try {
-        // Parse request body
-        let body;
-        try {
-            body = JSON.parse(request.body);
-        } catch (e) {
-            return {
-                status: 400,
-                body: JSON.stringify({ error: 'Invalid JSON in request body' }),
-                contentType: 'application/json'
-            };
-        }
-        
-        const { role, action } = body;
-        
-        // Validate parameters
-        if (!role || !action) {
-            return {
-                status: 400,
-                body: JSON.stringify({ error: 'Missing required fields: role, action' }),
-                contentType: 'application/json'
-            };
-        }
-        
-        if (!['add', 'remove'].includes(action)) {
-            return {
-                status: 400,
-                body: JSON.stringify({ error: 'Invalid action. Must be "add" or "remove"' }),
-                contentType: 'application/json'
-            };
-        }
-        
-        if (!['Editor', 'Administrator'].includes(role)) {
-            return {
-                status: 400,
-                body: JSON.stringify({ error: 'Invalid role. Must be "Editor" or "Administrator"' }),
-                contentType: 'application/json'
-            };
-        }
-        
-        // Extract userId from path
-        const pathParts = request.path.split('/');
-        const userId = pathParts[pathParts.indexOf('users') + 1];
-        
-        if (!userId) {
-            return {
-                status: 400,
-                body: JSON.stringify({ error: 'User ID is required' }),
-                contentType: 'application/json'
-            };
-        }
-        
-        // Call Rust function to update role
-        if (action === 'add') {
-            addUserRole(userId, role);
-        } else {
-            removeUserRole(userId, role);
-        }
-        
-        return {
-            status: 200,
-            body: JSON.stringify({
-                success: true,
-                userId: userId,
-                role: role,
-                action: action
-            }),
-            contentType: 'application/json'
-        };
-    } catch (error) {
-        return {
-            status: 500,
-            body: JSON.stringify({ 
-                error: 'Failed to update user role',
-                details: error.toString()
-            }),
-            contentType: 'application/json'
-        };
+      body = JSON.parse(request.body);
+    } catch (e) {
+      return {
+        status: 400,
+        body: JSON.stringify({ error: "Invalid JSON in request body" }),
+        contentType: "application/json",
+      };
     }
+
+    const { role, action } = body;
+
+    // Validate parameters
+    if (!role || !action) {
+      return {
+        status: 400,
+        body: JSON.stringify({
+          error: "Missing required fields: role, action",
+        }),
+        contentType: "application/json",
+      };
+    }
+
+    if (!["add", "remove"].includes(action)) {
+      return {
+        status: 400,
+        body: JSON.stringify({
+          error: 'Invalid action. Must be "add" or "remove"',
+        }),
+        contentType: "application/json",
+      };
+    }
+
+    if (!["Editor", "Administrator"].includes(role)) {
+      return {
+        status: 400,
+        body: JSON.stringify({
+          error: 'Invalid role. Must be "Editor" or "Administrator"',
+        }),
+        contentType: "application/json",
+      };
+    }
+
+    // Extract userId from path
+    const pathParts = request.path.split("/");
+    const userId = pathParts[pathParts.indexOf("users") + 1];
+
+    if (!userId) {
+      return {
+        status: 400,
+        body: JSON.stringify({ error: "User ID is required" }),
+        contentType: "application/json",
+      };
+    }
+
+    // Call Rust function to update role
+    if (action === "add") {
+      addUserRole(userId, role);
+    } else {
+      removeUserRole(userId, role);
+    }
+
+    return {
+      status: 200,
+      body: JSON.stringify({
+        success: true,
+        userId: userId,
+        role: role,
+        action: action,
+      }),
+      contentType: "application/json",
+    };
+  } catch (error) {
+    return {
+      status: 500,
+      body: JSON.stringify({
+        error: "Failed to update user role",
+        details: error.toString(),
+      }),
+      contentType: "application/json",
+    };
+  }
 }

@@ -18,6 +18,7 @@ pub struct AuthSession {
     pub name: Option<String>,
     pub picture: Option<String>,
     pub is_admin: bool,
+    pub is_editor: bool,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
 }
@@ -31,6 +32,7 @@ impl From<SessionData> for AuthSession {
             name: data.name,
             picture: None, // Can be added later
             is_admin: data.is_admin,
+            is_editor: data.is_editor,
             created_at: data.created_at,
             expires_at: data.expires_at,
         }
@@ -55,6 +57,7 @@ impl AuthSessionManager {
         email: Option<String>,
         name: Option<String>,
         is_admin: bool,
+        is_editor: bool,
         ip_addr: String,
         user_agent: String,
     ) -> Result<SessionToken, AuthError> {
@@ -62,7 +65,7 @@ impl AuthSessionManager {
         let token = self
             .session_manager
             .create_session(
-                user_id, provider, email, name, is_admin, ip_addr, user_agent,
+                user_id, provider, email, name, is_admin, is_editor, ip_addr, user_agent,
             )
             .await
             .map_err(AuthError::Session)?;
@@ -133,6 +136,7 @@ mod tests {
                 Some("user@example.com".to_string()),
                 Some("Test User".to_string()),
                 false,
+                false,
                 "192.168.1.1".to_string(),
                 "Mozilla/5.0".to_string(),
             )
@@ -148,6 +152,7 @@ mod tests {
         assert_eq!(session.provider, "google");
         assert_eq!(session.email, Some("user@example.com".to_string()));
         assert!(!session.is_admin);
+        assert!(!session.is_editor);
     }
 
     #[tokio::test]
@@ -160,6 +165,7 @@ mod tests {
                 "google".to_string(),
                 None,
                 None,
+                false,
                 false,
                 "192.168.1.1".to_string(),
                 "Mozilla/5.0".to_string(),
@@ -193,6 +199,7 @@ mod tests {
                     None,
                     None,
                     false,
+                    false,
                     format!("192.168.1.{}", i),
                     "Mozilla/5.0".to_string(),
                 )
@@ -217,7 +224,8 @@ mod tests {
                 "google".to_string(),
                 Some("admin@example.com".to_string()),
                 Some("Admin User".to_string()),
-                true, // is_admin
+                true,  // is_admin
+                false, // is_editor
                 "192.168.1.1".to_string(),
                 "Mozilla/5.0".to_string(),
             )

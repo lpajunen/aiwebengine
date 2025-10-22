@@ -26,6 +26,9 @@ pub struct AuthUser {
     /// Whether user has administrator privileges
     pub is_admin: bool,
 
+    /// Whether user has editor privileges
+    pub is_editor: bool,
+
     /// User's email address (if available)
     pub email: Option<String>,
 
@@ -39,6 +42,7 @@ impl AuthUser {
         provider: String,
         session_token: String,
         is_admin: bool,
+        is_editor: bool,
         email: Option<String>,
         name: Option<String>,
     ) -> Self {
@@ -47,6 +51,7 @@ impl AuthUser {
             provider,
             session_token,
             is_admin,
+            is_editor,
             email,
             name,
         }
@@ -148,6 +153,7 @@ pub async fn optional_auth_middleware(
                     session.provider.clone(),
                     session_token,
                     session.is_admin,
+                    session.is_editor,
                     session.email.clone(),
                     session.name.clone(),
                 );
@@ -194,6 +200,7 @@ pub async fn required_auth_middleware(
         session.provider.clone(),
         session_token,
         session.is_admin,
+        session.is_editor,
         session.email.clone(),
         session.name.clone(),
     );
@@ -241,6 +248,7 @@ pub async fn redirect_to_login_middleware(
                     session.provider.clone(),
                     session_token,
                     session.is_admin,
+                    session.is_editor,
                     session.email.clone(),
                     session.name.clone(),
                 );

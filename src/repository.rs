@@ -163,7 +163,10 @@ pub fn fetch_scripts() -> HashMap<String, String> {
         asset_mgmt.to_string(),
     );
     m.insert("https://example.com/editor".to_string(), editor.to_string());
-    m.insert("https://example.com/manager".to_string(), manager.to_string());
+    m.insert(
+        "https://example.com/manager".to_string(),
+        manager.to_string(),
+    );
 
     // Include test scripts when appropriate
     let include_test_scripts =

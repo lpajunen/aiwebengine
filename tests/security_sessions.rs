@@ -38,6 +38,7 @@ async fn test_session_lifecycle() {
             Some("user@example.com".to_string()),
             Some("Test User".to_string()),
             false,
+            false,
             "192.168.1.1".to_string(),
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64)".to_string(),
         )
@@ -86,6 +87,7 @@ async fn test_session_fingerprint_user_agent_mismatch() {
             None,
             None,
             false,
+            false,
             "192.168.1.1".to_string(),
             "Mozilla/5.0".to_string(),
         )
@@ -112,6 +114,7 @@ async fn test_session_ip_change_tolerance() {
             "google".to_string(),
             None,
             None,
+            false,
             false,
             "192.168.1.1".to_string(),
             "Mozilla/5.0".to_string(),
@@ -143,6 +146,7 @@ async fn test_concurrent_session_limit() {
                     "google".to_string(),
                     None,
                     None,
+                    false,
                     false,
                     format!("192.168.1.{}", i),
                     "Mozilla/5.0".to_string(),
@@ -176,7 +180,8 @@ async fn test_session_encryption_integrity() {
             "google".to_string(),
             Some("admin@example.com".to_string()),
             Some("Admin User".to_string()),
-            true, // is_admin
+            true,  // is_admin
+            false, // is_editor
             "192.168.1.1".to_string(),
             "Mozilla/5.0".to_string(),
         )
@@ -424,6 +429,7 @@ async fn test_full_auth_flow_simulation() {
             Some("user@gmail.com".to_string()),
             Some("Test User".to_string()),
             false,
+            false,
             "203.0.113.1".to_string(),
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)".to_string(),
         )
@@ -483,6 +489,7 @@ async fn test_concurrent_users_isolation() {
                 "google".to_string(),
                 None,
                 None,
+                false,
                 false,
                 format!("192.168.1.{}", user.len()),
                 "Mozilla/5.0".to_string(),

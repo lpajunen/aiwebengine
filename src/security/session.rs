@@ -52,6 +52,7 @@ pub struct SessionData {
     pub email: Option<String>,
     pub name: Option<String>,
     pub is_admin: bool,
+    pub is_editor: bool,
     pub created_at: DateTime<Utc>,
     pub last_access: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
@@ -174,6 +175,7 @@ impl SecureSessionManager {
         email: Option<String>,
         name: Option<String>,
         is_admin: bool,
+        is_editor: bool,
         ip_addr: String,
         user_agent: String,
     ) -> Result<SessionToken, SessionError> {
@@ -218,6 +220,7 @@ impl SecureSessionManager {
             email: email.clone(),
             name: name.clone(),
             is_admin,
+            is_editor,
             created_at: now,
             last_access: now,
             expires_at,
@@ -492,6 +495,7 @@ mod tests {
                 Some("user@example.com".to_string()),
                 Some("Test User".to_string()),
                 false,
+                false,
                 "192.168.1.1".to_string(),
                 "Mozilla/5.0".to_string(),
             )
@@ -506,6 +510,7 @@ mod tests {
         assert_eq!(session.user_id, "user123");
         assert_eq!(session.provider, "google");
         assert!(!session.is_admin);
+        assert!(!session.is_editor);
     }
 
     #[tokio::test]
@@ -518,6 +523,7 @@ mod tests {
                 "google".to_string(),
                 None,
                 None,
+                false,
                 false,
                 "192.168.1.1".to_string(),
                 "Mozilla/5.0".to_string(),
@@ -547,6 +553,7 @@ mod tests {
                         None,
                         None,
                         false,
+                        false,
                         "192.168.1.1".to_string(),
                         "Mozilla/5.0".to_string(),
                     )
@@ -575,6 +582,7 @@ mod tests {
                 "google".to_string(),
                 None,
                 None,
+                false,
                 false,
                 "192.168.1.1".to_string(),
                 "Mozilla/5.0".to_string(),

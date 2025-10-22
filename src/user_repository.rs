@@ -185,8 +185,8 @@ static USERS: OnceLock<Mutex<HashMap<String, User>>> = OnceLock::new();
 static USER_PROVIDER_INDEX: OnceLock<Mutex<HashMap<ProviderKey, String>>> = OnceLock::new();
 
 /// Safe mutex access with recovery from poisoned state
-fn safe_lock_users() -> Result<std::sync::MutexGuard<'static, HashMap<String, User>>, UserRepositoryError>
-{
+fn safe_lock_users()
+-> Result<std::sync::MutexGuard<'static, HashMap<String, User>>, UserRepositoryError> {
     let store = USERS.get_or_init(|| Mutex::new(HashMap::new()));
 
     match store.lock() {
@@ -201,8 +201,8 @@ fn safe_lock_users() -> Result<std::sync::MutexGuard<'static, HashMap<String, Us
     }
 }
 
-fn safe_lock_provider_index(
-) -> Result<std::sync::MutexGuard<'static, HashMap<ProviderKey, String>>, UserRepositoryError> {
+fn safe_lock_provider_index()
+-> Result<std::sync::MutexGuard<'static, HashMap<ProviderKey, String>>, UserRepositoryError> {
     let store = USER_PROVIDER_INDEX.get_or_init(|| Mutex::new(HashMap::new()));
 
     match store.lock() {
@@ -210,7 +210,10 @@ fn safe_lock_provider_index(
         Err(PoisonError { .. }) => {
             warn!("User provider index mutex was poisoned, recovering");
             store.lock().map_err(|e| {
-                error!("Failed to recover from poisoned provider index mutex: {}", e);
+                error!(
+                    "Failed to recover from poisoned provider index mutex: {}",
+                    e
+                );
                 UserRepositoryError::LockError(format!("Unrecoverable mutex poisoning: {}", e))
             })
         }
@@ -237,7 +240,13 @@ pub fn upsert_user(
     provider_user_id: String,
 ) -> Result<String, UserRepositoryError> {
     let bootstrap_admins = get_bootstrap_admins();
-    upsert_user_with_bootstrap(email, name, provider_name, provider_user_id, bootstrap_admins)
+    upsert_user_with_bootstrap(
+        email,
+        name,
+        provider_name,
+        provider_user_id,
+        bootstrap_admins,
+    )
 }
 
 /// Upsert a user with bootstrap admin configuration
@@ -305,13 +314,13 @@ pub fn upsert_user_with_bootstrap(
 
     // Create new user
     let mut user = User::new(email.clone(), name, provider_name, provider_user_id);
-    
+
     // Check if this email is in the bootstrap admins list
     let email_lower = email.to_lowercase();
     let is_bootstrap_admin = bootstrap_admins
         .iter()
         .any(|admin_email| admin_email.to_lowercase() == email_lower);
-    
+
     if is_bootstrap_admin {
         // Automatically grant Administrator role to bootstrap admins
         user.add_role(UserRole::Administrator);
@@ -320,7 +329,7 @@ pub fn upsert_user_with_bootstrap(
             user.id, email
         );
     }
-    
+
     let user_id = user.id.clone();
 
     // Store user
@@ -365,10 +374,7 @@ pub fn find_user_by_provider(
 ///
 /// Completely replaces the user's role set with the provided roles.
 /// Always ensures at least Authenticated role is present.
-pub fn update_user_roles(
-    user_id: &str,
-    roles: Vec<UserRole>,
-) -> Result<(), UserRepositoryError> {
+pub fn update_user_roles(user_id: &str, roles: Vec<UserRole>) -> Result<(), UserRepositoryError> {
     let mut users = safe_lock_users()?;
 
     let user = users
@@ -377,7 +383,10 @@ pub fn update_user_roles(
 
     // Ensure Authenticated role is always present
     let mut new_roles = roles;
-    if !new_roles.iter().any(|r| matches!(r, UserRole::Authenticated)) {
+    if !new_roles
+        .iter()
+        .any(|r| matches!(r, UserRole::Authenticated))
+    {
         new_roles.push(UserRole::Authenticated);
     }
 
@@ -483,7 +492,7 @@ mod tests {
     #[test]
     fn test_upsert_user_new() {
         let _lock = TEST_LOCK.lock().unwrap();
-        
+
         let user_id = upsert_user(
             "new@example.com".to_string(),
             Some("New User".to_string()),
@@ -500,7 +509,7 @@ mod tests {
     #[test]
     fn test_upsert_user_existing() {
         let _lock = TEST_LOCK.lock().unwrap();
-        
+
         // First insert
         let user_id1 = upsert_user(
             "existing@example.com".to_string(),
@@ -531,7 +540,7 @@ mod tests {
     #[test]
     fn test_role_management() {
         let _lock = TEST_LOCK.lock().unwrap();
-        
+
         let user_id = upsert_user(
             "roles@example.com".to_string(),
             None,
@@ -576,7 +585,7 @@ mod tests {
     #[test]
     fn test_cannot_remove_authenticated_role() {
         let _lock = TEST_LOCK.lock().unwrap();
-        
+
         let user_id = upsert_user(
             "auth@example.com".to_string(),
             None,
@@ -592,7 +601,7 @@ mod tests {
     #[test]
     fn test_find_user_by_provider() {
         let _lock = TEST_LOCK.lock().unwrap();
-        
+
         let user_id = upsert_user(
             "provider@example.com".to_string(),
             None,
@@ -613,7 +622,7 @@ mod tests {
     #[test]
     fn test_update_user_roles() {
         let _lock = TEST_LOCK.lock().unwrap();
-        
+
         let user_id = upsert_user(
             "update@example.com".to_string(),
             None,
@@ -623,11 +632,7 @@ mod tests {
         .unwrap();
 
         // Set roles to Editor and Administrator
-        update_user_roles(
-            &user_id,
-            vec![UserRole::Editor, UserRole::Administrator],
-        )
-        .unwrap();
+        update_user_roles(&user_id, vec![UserRole::Editor, UserRole::Administrator]).unwrap();
 
         let user = get_user(&user_id).unwrap();
         assert_eq!(user.roles.len(), 3); // Authenticated is auto-added
@@ -639,7 +644,7 @@ mod tests {
     #[test]
     fn test_delete_user() {
         let _lock = TEST_LOCK.lock().unwrap();
-        
+
         let user_id = upsert_user(
             "delete@example.com".to_string(),
             None,
@@ -666,39 +671,45 @@ mod tests {
     #[test]
     fn test_validation() {
         // Empty email
-        assert!(upsert_user(
-            "".to_string(),
-            None,
-            "google".to_string(),
-            "user123".to_string()
-        )
-        .is_err());
+        assert!(
+            upsert_user(
+                "".to_string(),
+                None,
+                "google".to_string(),
+                "user123".to_string()
+            )
+            .is_err()
+        );
 
         // Empty provider name
-        assert!(upsert_user(
-            "user@example.com".to_string(),
-            None,
-            "".to_string(),
-            "user123".to_string()
-        )
-        .is_err());
+        assert!(
+            upsert_user(
+                "user@example.com".to_string(),
+                None,
+                "".to_string(),
+                "user123".to_string()
+            )
+            .is_err()
+        );
 
         // Empty provider user ID
-        assert!(upsert_user(
-            "user@example.com".to_string(),
-            None,
-            "google".to_string(),
-            "".to_string()
-        )
-        .is_err());
+        assert!(
+            upsert_user(
+                "user@example.com".to_string(),
+                None,
+                "google".to_string(),
+                "".to_string()
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn test_bootstrap_admin() {
         let _lock = TEST_LOCK.lock().unwrap();
-        
+
         let bootstrap_admins = vec!["admin@example.com".to_string()];
-        
+
         // Create user with bootstrap admin email
         let admin_id = upsert_user_with_bootstrap(
             "admin@example.com".to_string(),
@@ -708,12 +719,12 @@ mod tests {
             &bootstrap_admins,
         )
         .unwrap();
-        
+
         // User should have Administrator role automatically
         let admin_user = get_user(&admin_id).unwrap();
         assert!(admin_user.has_role(&UserRole::Administrator));
         assert!(admin_user.has_role(&UserRole::Authenticated));
-        
+
         // Create regular user (not in bootstrap list)
         let user_id = upsert_user_with_bootstrap(
             "regular@example.com".to_string(),
@@ -723,7 +734,7 @@ mod tests {
             &bootstrap_admins,
         )
         .unwrap();
-        
+
         // User should NOT have Administrator role
         let regular_user = get_user(&user_id).unwrap();
         assert!(!regular_user.has_role(&UserRole::Administrator));
@@ -733,9 +744,9 @@ mod tests {
     #[test]
     fn test_bootstrap_admin_case_insensitive() {
         let _lock = TEST_LOCK.lock().unwrap();
-        
+
         let bootstrap_admins = vec!["Admin@Example.COM".to_string()];
-        
+
         // Create user with different case
         let admin_id = upsert_user_with_bootstrap(
             "admin@example.com".to_string(),
@@ -745,7 +756,7 @@ mod tests {
             &bootstrap_admins,
         )
         .unwrap();
-        
+
         // Should still get admin role (case-insensitive comparison)
         let admin_user = get_user(&admin_id).unwrap();
         assert!(admin_user.has_role(&UserRole::Administrator));

@@ -1685,7 +1685,10 @@ impl SecureGlobalContext {
                         return Err(rquickjs::Error::new_from_js_message(
                             "addUserRole",
                             "invalid_role",
-                            &format!("Invalid role: {}. Must be Editor, Administrator, or Authenticated", role),
+                            &format!(
+                                "Invalid role: {}. Must be Editor, Administrator, or Authenticated",
+                                role
+                            ),
                         ));
                     }
                 };
