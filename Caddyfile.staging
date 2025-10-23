@@ -1,0 +1,29 @@
+# Caddyfile for aiwebengine staging environment
+# Handles HTTPS automatically with Let's Encrypt
+
+# Staging domain (update with your actual staging domain)
+staging.softagen.com {
+    # Reverse proxy to aiwebengine container
+    reverse_proxy aiwebengine:3000
+    
+    # Enable gzip compression
+    encode gzip
+    
+    # Security headers
+    header {
+        # Prevent clickjacking
+        X-Frame-Options "SAMEORIGIN"
+        # XSS protection
+        X-Content-Type-Options "nosniff"
+        # Referrer policy
+        Referrer-Policy "strict-origin-when-cross-origin"
+        # Remove Server header for security
+        -Server
+    }
+    
+    # Access logging
+    log {
+        output file /var/log/caddy/access.log
+        format json
+    }
+}

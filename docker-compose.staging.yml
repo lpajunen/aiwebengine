@@ -11,7 +11,7 @@ services:
       - "443:443"
       - "443:443/udp"  # HTTP/3 support
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./Caddyfile.staging:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
       - caddy-logs:/var/log/caddy

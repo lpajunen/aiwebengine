@@ -9,7 +9,7 @@ services:
     ports:
       - "80:80"
     volumes:
-      - ./Caddyfile.dev:/etc/caddy/Caddyfile:ro
+      - ./Caddyfile.local:/etc/caddy/Caddyfile:ro
     networks:
       - aiwebengine-dev-network
     depends_on:
