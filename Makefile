@@ -1,7 +1,7 @@
 # Makefile for aiwebengine development
 
 .PHONY: help deps test dev build clean lint format coverage check ci
-.PHONY: docker-build docker-dev docker-prod docker-stop docker-logs docker-clean
+.PHONY: docker-build docker-local docker-staging docker-prod docker-stop docker-logs docker-clean
 
 help:
 	@echo "Available commands:"
@@ -21,14 +21,15 @@ help:
 	@echo "  make ci        - Run full CI pipeline (format, lint, test, coverage)"
 	@echo ""
 	@echo "Docker:"
-	@echo "  make docker-build    - Build production Docker image"
-	@echo "  make docker-dev      - Start development environment with Docker"
-	@echo "  make docker-prod     - Start production environment with Docker"
-	@echo "  make docker-stop     - Stop all Docker containers"
-	@echo "  make docker-logs     - View Docker container logs"
-	@echo "  make docker-clean    - Stop and remove all Docker containers and volumes"
-	@echo "  make docker-shell    - Open shell in running container"
-	@echo "  make docker-test     - Run tests in Docker container"
+	@echo "  make docker-build        - Build production Docker image"
+	@echo "  make docker-local        - Start local/development environment with Docker"
+	@echo "  make docker-staging      - Start staging environment with Docker"
+	@echo "  make docker-prod         - Start production environment with Docker"
+	@echo "  make docker-stop         - Stop all Docker containers"
+	@echo "  make docker-logs         - View Docker container logs"
+	@echo "  make docker-clean        - Stop and remove all Docker containers and volumes"
+	@echo "  make docker-shell        - Open shell in running container"
+	@echo "  make docker-test         - Run tests in Docker container"
 
 # Install development dependencies
 deps:
@@ -103,23 +104,36 @@ docker-build:
 	docker build -t aiwebengine:latest .
 	@echo "✓ Docker image built successfully!"
 
-# Build development Docker image
-docker-build-dev:
-	@echo "Building development Docker image..."
-	docker build -f Dockerfile.dev -t aiwebengine:dev .
-	@echo "✓ Development Docker image built successfully!"
+# Build local/development Docker image
+docker-build-local:
+	@echo "Building local/development Docker image..."
+	docker build -f Dockerfile.local -t aiwebengine:dev .
+	@echo "✓ Local/development Docker image built successfully!"
 
-# Start development environment with Docker Compose
-docker-dev:
-	@echo "Starting development environment..."
-	docker-compose -f docker-compose.dev.yml up
+# Build staging Docker image
+docker-build-staging:
+	@echo "Building staging Docker image..."
+	docker build -f Dockerfile.staging -t aiwebengine:staging .
+	@echo "✓ Staging Docker image built successfully!"
 
-# Start development environment in background
-docker-dev-bg:
-	@echo "Starting development environment in background..."
-	docker-compose -f docker-compose.dev.yml up -d
-	@echo "✓ Development environment started!"
-	@echo "View logs with: make docker-logs-dev"
+# Start local/development environment with Docker Compose
+docker-local:
+	@echo "Starting local/development environment..."
+	docker-compose -f docker-compose.local.yml up
+
+# Start local/development environment in background
+docker-local-bg:
+	@echo "Starting local/development environment in background..."
+	docker-compose -f docker-compose.local.yml up -d
+	@echo "✓ Local/development environment started!"
+	@echo "View logs with: make docker-logs-local"
+
+# Start staging environment with Docker Compose
+docker-staging:
+	@echo "Starting staging environment..."
+	docker-compose -f docker-compose.staging.yml up -d
+	@echo "✓ Staging environment started!"
+	@echo "View logs with: make docker-logs-staging"
 
 # Start production environment with Docker Compose
 docker-prod:
@@ -132,16 +146,21 @@ docker-prod:
 docker-stop:
 	@echo "Stopping Docker containers..."
 	docker-compose down
-	docker-compose -f docker-compose.dev.yml down
+	docker-compose -f docker-compose.staging.yml down
+	docker-compose -f docker-compose.local.yml down
 	@echo "✓ All containers stopped!"
 
 # View production logs
 docker-logs:
 	docker-compose logs -f aiwebengine
 
-# View development logs
-docker-logs-dev:
-	docker-compose -f docker-compose.dev.yml logs -f aiwebengine-dev
+# View local/development logs
+docker-logs-local:
+	docker-compose -f docker-compose.local.yml logs -f aiwebengine-dev
+
+# View staging logs
+docker-logs-staging:
+	docker-compose -f docker-compose.staging.yml logs -f aiwebengine-staging
 
 # View all service logs
 docker-logs-all:
@@ -151,13 +170,14 @@ docker-logs-all:
 docker-clean:
 	@echo "Cleaning up Docker containers and volumes..."
 	docker-compose down -v
-	docker-compose -f docker-compose.dev.yml down -v
+	docker-compose -f docker-compose.staging.yml down -v
+	docker-compose -f docker-compose.local.yml down -v
 	@echo "✓ Docker cleanup completed!"
 
 # Clean up Docker images
 docker-clean-images:
 	@echo "Removing Docker images..."
-	docker rmi aiwebengine:latest aiwebengine:dev 2>/dev/null || true
+	docker rmi aiwebengine:latest aiwebengine:staging aiwebengine:dev 2>/dev/null || true
 	@echo "✓ Docker images removed!"
 
 # Full Docker cleanup (containers, volumes, images)
@@ -168,21 +188,28 @@ docker-clean-all: docker-clean docker-clean-images
 docker-shell:
 	docker-compose exec aiwebengine /bin/bash
 
-# Open shell in running development container
-docker-shell-dev:
-	docker-compose -f docker-compose.dev.yml exec aiwebengine-dev /bin/bash
+# Open shell in running local/development container
+docker-shell-local:
+	docker-compose -f docker-compose.local.yml exec aiwebengine-dev /bin/bash
+
+# Open shell in running staging container
+docker-shell-staging:
+	docker-compose -f docker-compose.staging.yml exec aiwebengine-staging /bin/bash
 
 # Run tests in Docker container
 docker-test:
-	docker-compose -f docker-compose.dev.yml run --rm aiwebengine-dev cargo test
+	docker-compose -f docker-compose.local.yml run --rm aiwebengine-dev cargo test
 
 # Check Docker container status
 docker-ps:
 	@echo "Production containers:"
 	@docker-compose ps
 	@echo ""
-	@echo "Development containers:"
-	@docker-compose -f docker-compose.dev.yml ps
+	@echo "Staging containers:"
+	@docker-compose -f docker-compose.staging.yml ps
+	@echo ""
+	@echo "Local/development containers:"
+	@docker-compose -f docker-compose.local.yml ps
 
 # Restart production containers
 docker-restart:
