@@ -1,0 +1,81 @@
+# Staging Dockerfile for aiwebengine
+# This Dockerfile creates a staging image with additional debugging capabilities
+
+# Build stage
+FROM rustlang/rust:nightly-slim AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create app directory
+WORKDIR /app
+
+# Copy dependency manifests
+COPY Cargo.toml Cargo.lock ./
+
+# Create dummy source files to cache dependencies
+RUN mkdir -p src/bin && \
+    echo "fn main() {}" > src/lib.rs && \
+    echo "fn main() {}" > src/bin/server.rs && \
+    echo "fn main() {}" > src/bin/deployer.rs && \
+    cargo build --release && \
+    rm -rf src
+
+# Copy source code and compile-time assets
+COPY src ./src
+COPY scripts ./scripts
+COPY assets ./assets
+COPY tests ./tests
+
+# Build the actual application
+RUN touch src/lib.rs src/bin/server.rs && \
+    cargo build --release --bin server
+
+# Runtime stage
+FROM debian:bookworm-slim
+
+# Install runtime dependencies including debugging tools
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd -m -u 1000 -s /bin/bash aiwebengine
+
+# Create app directory
+WORKDIR /app
+
+# Copy binary from builder
+COPY --from=builder /app/target/release/server /usr/local/bin/aiwebengine
+
+# Create necessary directories
+RUN mkdir -p /app/logs /app/scripts /app/assets /app/data && \
+    chown -R aiwebengine:aiwebengine /app
+
+# Copy default configuration
+COPY config.example.yaml /app/config.yaml
+
+# Copy assets if they exist
+COPY assets /app/assets/
+
+# Switch to non-root user
+USER aiwebengine
+
+# Expose port
+EXPOSE 3000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:3000/health || exit 1
+
+# Set environment variables for staging
+ENV RUST_LOG=info
+ENV CONFIG_FILE=/app/config.yaml
+
+# Run the server
+CMD ["aiwebengine"]

@@ -254,14 +254,14 @@ pub enum SessionBackend {
 ### Step 2: Test in Development
 
 ```toml
-# config.dev.toml
+# config.local.toml
 session_backend = "jwt"
 ```
 
 ### Step 3: Deploy to Production
 
 ```toml
-# config.prod.toml
+# config.production.toml
 session_backend = "jwt"
 jwt_secret = "production-secret-from-env"
 ```

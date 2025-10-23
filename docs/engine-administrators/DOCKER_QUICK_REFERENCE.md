@@ -181,8 +181,8 @@ docker system df
 | `docker-compose.dev.yml` | Development stack                                |
 | `.dockerignore`          | Files excluded from build                        |
 | `.env`                   | Environment variables (create from .env.example) |
-| `config.prod.toml`       | Production configuration                         |
-| `config.dev.toml`        | Development configuration                        |
+| `config.production.toml` | Production configuration                         |
+| `config.local.toml`      | Development configuration                        |
 
 ## Best Practices
 

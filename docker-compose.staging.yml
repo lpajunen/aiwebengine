@@ -1,10 +1,10 @@
 version: '3.8'
 
 services:
-  # Caddy reverse proxy with automatic HTTPS
+  # Caddy reverse proxy with automatic HTTPS for staging
   caddy:
     image: caddy:2-alpine
-    container_name: aiwebengine-caddy
+    container_name: aiwebengine-caddy-staging
     restart: unless-stopped
     ports:
       - "80:80"
@@ -16,7 +16,7 @@ services:
       - caddy-config:/config
       - caddy-logs:/var/log/caddy
     networks:
-      - aiwebengine-network
+      - aiwebengine-staging-network
     depends_on:
       - aiwebengine
     healthcheck:
@@ -26,19 +26,19 @@ services:
       retries: 3
       start_period: 10s
 
-  # Production deployment
+  # Staging deployment
   aiwebengine:
     build:
       context: .
-      dockerfile: Dockerfile
-    container_name: aiwebengine
+      dockerfile: Dockerfile.staging
+    container_name: aiwebengine-staging
     restart: unless-stopped
     # Expose port only to internal network (not to host)
     expose:
       - "3000"
-    # Use this if you want direct access for debugging (not recommended in production)
-    # ports:
-    #   - "127.0.0.1:3000:3000"
+    # Use this if you want direct access for debugging
+    ports:
+      - "127.0.0.1:3000:3000"
     volumes:
       # Persist logs
       - ./logs:/app/logs
@@ -47,7 +47,7 @@ services:
       # Persist database
       - ./data:/app/data
       # Mount custom configuration
-      - ./config.production.toml:/app/config.yaml:ro
+      - ./config.staging.toml:/app/config.yaml:ro
     environment:
       - RUST_LOG=info
       - CONFIG_FILE=/app/config.yaml
@@ -58,10 +58,10 @@ services:
       - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET:-}
       - APPLE_CLIENT_ID=${APPLE_CLIENT_ID:-}
       - APPLE_CLIENT_SECRET=${APPLE_CLIENT_SECRET:-}
-      - JWT_SECRET=${JWT_SECRET:-change-this-in-production}
-      - SESSION_SECRET=${SESSION_SECRET:-change-this-in-production}
+      - JWT_SECRET=${JWT_SECRET:-staging-jwt-secret}
+      - SESSION_SECRET=${SESSION_SECRET:-staging-session-secret}
     networks:
-      - aiwebengine-network
+      - aiwebengine-staging-network
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
       interval: 30s
@@ -69,51 +69,51 @@ services:
       retries: 3
       start_period: 10s
 
-  # Optional: PostgreSQL database (if using postgres instead of sqlite)
+  # PostgreSQL database for staging
   postgres:
     image: postgres:16-alpine
-    container_name: aiwebengine-postgres
+    container_name: aiwebengine-postgres-staging
     restart: unless-stopped
     environment:
-      - POSTGRES_DB=aiwebengine
+      - POSTGRES_DB=aiwebengine_staging
       - POSTGRES_USER=aiwebengine
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-change-this-password}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-staging-password}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     networks:
-      - aiwebengine-network
+      - aiwebengine-staging-network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U aiwebengine"]
       interval: 10s
       timeout: 5s
       retries: 5
-    # Uncomment to expose PostgreSQL port
-    # ports:
-    #   - "5432:5432"
+    # Expose PostgreSQL port for debugging
+    ports:
+      - "5432:5432"
 
-  # Optional: Redis for caching and session storage (future enhancement)
+  # Redis for caching and session storage
   redis:
     image: redis:7-alpine
-    container_name: aiwebengine-redis
+    container_name: aiwebengine-redis-staging
     restart: unless-stopped
     command: redis-server --appendonly yes
     volumes:
       - redis-data:/data
     networks:
-      - aiwebengine-network
+      - aiwebengine-staging-network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
-    # Uncomment to expose Redis port
-    # ports:
-    #   - "6379:6379"
+    # Expose Redis port for debugging
+    ports:
+      - "6379:6379"
 
-  # Optional: Prometheus for metrics (future enhancement)
+  # Prometheus for metrics
   prometheus:
     image: prom/prometheus:latest
-    container_name: aiwebengine-prometheus
+    container_name: aiwebengine-prometheus-staging
     restart: unless-stopped
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
@@ -122,33 +122,33 @@ services:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
     networks:
-      - aiwebengine-network
+      - aiwebengine-staging-network
     ports:
       - "9090:9090"
     depends_on:
       - aiwebengine
 
-  # Optional: Grafana for visualization (future enhancement)
+  # Grafana for visualization
   grafana:
     image: grafana/grafana:latest
-    container_name: aiwebengine-grafana
+    container_name: aiwebengine-grafana-staging
     restart: unless-stopped
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-staging-admin}
       - GF_USERS_ALLOW_SIGN_UP=false
     volumes:
       - grafana-data:/var/lib/grafana
       - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
       - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
     networks:
-      - aiwebengine-network
+      - aiwebengine-staging-network
     ports:
       - "3001:3000"
     depends_on:
       - prometheus
 
 networks:
-  aiwebengine-network:
+  aiwebengine-staging-network:
     driver: bridge
 
 volumes:

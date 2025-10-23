@@ -38,7 +38,7 @@ Use this checklist when deploying aiwebengine to production with HTTPS.
   - [ ] Set OAuth credentials (if using authentication)
   - [ ] Set database password (if using PostgreSQL)
   - [ ] Set Grafana password (if using monitoring)
-- [ ] Review `config.prod.toml` settings
+- [ ] Review `config.production.toml` settings
 - [ ] Review `Caddyfile` - verify domains are correct
 - [ ] Ensure scripts directory has required scripts
 

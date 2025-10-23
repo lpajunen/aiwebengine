@@ -112,8 +112,8 @@ docker-compose down -v
 1. **Create a production config file:**
 
    ```bash
-   cp config.example.yaml config.prod.toml
-   # Edit config.prod.toml for production settings
+   cp config.production.toml config.toml
+   # Edit config.toml for production settings
    ```
 
 2. **Set environment variables in `.env`:**
@@ -128,10 +128,10 @@ docker-compose down -v
    SESSION_SECRET=$(openssl rand -base64 32)
    ```
 
-3. **Update docker-compose.yml** to use your config:
+3. **The docker-compose.yml already references the production config:**
    ```yaml
    volumes:
-     - ./config.prod.toml:/app/config.yaml:ro
+     - ./config.production.toml:/app/config.yaml:ro
    ```
 
 ## Development Deployment
@@ -202,7 +202,7 @@ volumes:
   - ./logs:/app/logs # Log persistence
   - ./scripts:/app/scripts:ro # Script directory (read-only)
   - ./data:/app/data # Database and data files
-  - ./config.prod.toml:/app/config.yaml:ro # Configuration
+  - ./config.production.toml:/app/config.yaml:ro # Configuration
 ```
 
 ## Services

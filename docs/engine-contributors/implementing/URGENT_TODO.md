@@ -616,7 +616,7 @@ services:
       - LOG_LEVEL=debug
       - ENVIRONMENT=development
     volumes:
-      - ./config.dev.toml:/app/config.toml:ro
+      - ./config.local.toml:/app/config.toml:ro
     depends_on:
       - redis
 
