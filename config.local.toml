@@ -93,7 +93,12 @@ max_concurrent_sessions = 10
 # Users with these emails will automatically receive Administrator role on first sign-in
 # This allows you to bootstrap the system with an initial admin who can then
 # grant roles to other users through the /manager UI
-# Add your own email here for local development
+#
+# FOR LOCAL DEVELOPMENT: Add your own email here
+# Example: bootstrap_admins = ["your-email@gmail.com", "another@example.com"]
+#
+# Note: To set via environment variable, use JSON array format:
+# export APP_AUTH_BOOTSTRAP_ADMINS='["your-email@gmail.com"]'
 bootstrap_admins = [
     "admin@example.com",
 ]

@@ -63,39 +63,82 @@ cp config.production.toml config.toml   # Production
 
 ## Environment Variables
 
-All configuration values can be overridden using environment variables with the `APP_` prefix. Use double underscores (`__`) for nested configuration:
+All configuration values can be overridden using environment variables with the `APP_` prefix. **Use double underscores (`__`) to represent nested configuration paths:**
 
 ```bash
 # Server configuration
-export APP_SERVER_HOST="0.0.0.0"
-export APP_SERVER_PORT="8080"
-export APP_SERVER_REQUEST_TIMEOUT_MS="30000"
+export APP_SERVER__HOST="0.0.0.0"
+export APP_SERVER__PORT="8080"
+export APP_SERVER__REQUEST_TIMEOUT_MS="30000"
 
 # Logging configuration
-export APP_LOGGING_LEVEL="info"
-export APP_LOGGING_FILE_PATH="/var/log/aiwebengine.log"
+export APP_LOGGING__LEVEL="info"
+export APP_LOGGING__FILE_PATH="/var/log/aiwebengine.log"
 
 # Database configuration
-export APP_REPOSITORY_DATABASE_URL="postgresql://user:pass@host/db"
-export APP_REPOSITORY_MAX_CONNECTIONS="50"
+export APP_REPOSITORY__DATABASE_URL="postgresql://user:pass@host/db"
+export APP_REPOSITORY__MAX_CONNECTIONS="50"
 
 # Security configuration
-export APP_SECURITY_API_KEY="your-secret-api-key"
-export APP_SECURITY_REQUIRE_HTTPS="true"
+export APP_SECURITY__API_KEY="your-secret-api-key"
+export APP_SECURITY__REQUIRE_HTTPS="true"
 
-# Authentication - OAuth providers
-export APP_AUTH_PROVIDERS_GOOGLE_CLIENT_ID="your-client-id.apps.googleusercontent.com"
-export APP_AUTH_PROVIDERS_GOOGLE_CLIENT_SECRET="your-client-secret"
+# Authentication - OAuth providers (note the double underscores!)
+export APP_AUTH__PROVIDERS__GOOGLE__CLIENT_ID="your-client-id.apps.googleusercontent.com"
+export APP_AUTH__PROVIDERS__GOOGLE__CLIENT_SECRET="your-client-secret"
+
+# Bootstrap admins (use JSON array format for arrays in environment variables)
+export APP_AUTH__BOOTSTRAP_ADMINS='["admin@example.com","your-email@example.com"]'
+```
+
+**Important:** The double underscore (`__`) is required to match nested TOML structure:
+- `APP_AUTH__JWT_SECRET` → `[auth]` → `jwt_secret`
+- `APP_AUTH__PROVIDERS__GOOGLE__CLIENT_ID` → `[auth.providers.google]` → `client_id`
+
+**Important Note on Array Environment Variables**: When setting array/list values via environment variables, you must use JSON array format:
+```bash
+# Correct - JSON array format
+export APP_AUTH_BOOTSTRAP_ADMINS='["email1@example.com","email2@example.com"]'
+
+# Incorrect - comma-separated won't work
+export APP_AUTH_BOOTSTRAP_ADMINS=email1@example.com,email2@example.com
+```
+
+Alternatively, set array values directly in your `config.toml` file:
+```toml
+[auth]
+bootstrap_admins = ["admin@example.com", "your-email@example.com"]
 ```
 
 ### Environment Variable Template
 
-See `.env.example` for a complete template of all available environment variables:
+See `.env.example` for a complete template of all available environment variables.
+
+**For local development with `.env` file:**
 
 ```bash
+# 1. Copy the template
 cp .env.example .env
-# Edit .env with your values
-source .env  # or use direnv for automatic loading
+
+# 2. Edit .env with your values (no 'export' keyword in .env files)
+# Example .env file contents:
+# APP_AUTH_JWT_SECRET=your-secret-here
+# APP_SECURITY_API_KEY=your-api-key
+
+# 3. Load variables and run
+source .env && cargo run
+
+# Or use direnv for automatic loading:
+# https://direnv.net/
+```
+
+**For staging/production (shell environment variables):**
+
+```bash
+# Set directly in shell using 'export'
+export APP_AUTH_JWT_SECRET="your-secret-here"
+export APP_SECURITY_API_KEY="your-api-key"
+cargo run
 ```
 
 ## Configuration Structure
