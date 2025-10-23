@@ -4,15 +4,66 @@
 
 AIWebEngine uses a flexible, hierarchical configuration system built with [Figment](https://docs.rs/figment/). This allows configuration from multiple sources with a clear precedence order.
 
+## Quick Start
+
+### Local Development
+
+```bash
+# 1. Copy the local development config
+cp config.local.toml config.toml
+
+# 2. Set up environment variables
+cp .env.example .env
+# Edit .env with your OAuth credentials and secrets
+
+# 3. Source environment variables and run
+source .env && cargo run
+```
+
+### Staging/Production
+
+```bash
+# 1. Choose appropriate config
+cp config.staging.toml config.toml      # or config.production.toml
+
+# 2. Set environment variables (use your secret management system)
+export APP_AUTH_JWT_SECRET="$(openssl rand -base64 48)"
+export APP_SECURITY_API_KEY="$(openssl rand -hex 32)"
+export APP_REPOSITORY_DATABASE_URL="postgresql://user:pass@host/db"
+# ... set other required variables
+
+# 3. Run the application
+cargo run --release
+```
+
+## Configuration Files
+
+AIWebEngine provides three environment-specific configuration files:
+
+| File | Purpose | Database | Security | Use Case |
+|------|---------|----------|----------|----------|
+| `config.local.toml` | Local development | SQLite | Relaxed | Development, debugging |
+| `config.staging.toml` | Testing environment | PostgreSQL | Moderate | Integration testing, QA |
+| `config.production.toml` | Production deployment | PostgreSQL | Strict | Production servers |
+
+**Usage**: Copy the appropriate file to `config.toml`:
+```bash
+cp config.local.toml config.toml        # Local development
+cp config.staging.toml config.toml      # Staging
+cp config.production.toml config.toml   # Production
+```
+
+**Best Practice**: Add `config.toml` to `.gitignore` to avoid committing environment-specific configurations.
+
 ## Configuration Sources (in order of precedence)
 
-1. **Environment Variables** (highest precedence)
-2. **Configuration Files** (TOML, YAML, JSON5)
-3. **Default Values** (lowest precedence)
+1. **Environment Variables** (highest precedence) - prefix with `APP_`
+2. **Configuration File** (`config.toml`) - TOML format
+3. **Default Values** (lowest precedence) - built into the application
 
 ## Environment Variables
 
-All configuration values can be overridden using environment variables with the `APP_` prefix:
+All configuration values can be overridden using environment variables with the `APP_` prefix. Use double underscores (`__`) for nested configuration:
 
 ```bash
 # Server configuration
@@ -31,27 +82,20 @@ export APP_REPOSITORY_MAX_CONNECTIONS="50"
 # Security configuration
 export APP_SECURITY_API_KEY="your-secret-api-key"
 export APP_SECURITY_REQUIRE_HTTPS="true"
+
+# Authentication - OAuth providers
+export APP_AUTH_PROVIDERS_GOOGLE_CLIENT_ID="your-client-id.apps.googleusercontent.com"
+export APP_AUTH_PROVIDERS_GOOGLE_CLIENT_SECRET="your-client-secret"
 ```
 
-## Configuration Files
+### Environment Variable Template
 
-The system automatically looks for configuration files in this order:
-
-- `config.toml`
-- `config.yaml`
-- `config.yml`
-
-### Example Usage
+See `.env.example` for a complete template of all available environment variables:
 
 ```bash
-# Development
-cp config.dev.toml config.toml
-
-# Staging
-cp config.staging.toml config.toml
-
-# Production
-cp config.prod.toml config.toml
+cp .env.example .env
+# Edit .env with your values
+source .env  # or use direnv for automatic loading
 ```
 
 ## Configuration Structure
@@ -251,37 +295,98 @@ Configuration validation failed: Server port 99999 is out of valid range (1-6553
 
 ## Best Practices
 
-### Development
+### Local Development (`config.local.toml`)
 
-- Use `config.dev.toml` with verbose logging and relaxed security
-- Enable console logging and filesystem APIs for debugging
-- Use SQLite for simple local development
-
-### Staging
-
-- Use `config.staging.toml` that mirrors production structure
-- Enable auto-migrations for testing schema changes
-- Use moderate security settings for integration testing
-
-### Production
-
-- Use `config.prod.toml` with minimal logging and strict security
-- Disable auto-migrations and console APIs
-- Use PostgreSQL with connection pooling
-- Set secrets via environment variables, not config files
-- **Never commit secrets to configuration files**
-
-### Environment Variables in Production
+- ✅ Use SQLite for simple setup (`database_type = "sqlite"`)
+- ✅ Enable verbose logging (`level = "debug"`)
+- ✅ Enable console and filesystem APIs for debugging
+- ✅ Use `.env` file for OAuth credentials (not committed to git)
+- ✅ Disable HTTPS requirement (`require_https = false`)
+- ✅ Add your email to `bootstrap_admins` array
 
 ```bash
-# Never put secrets in config files - use environment variables
-export APP_SECURITY_API_KEY="$(cat /etc/secrets/api-key)"
-export APP_REPOSITORY_DATABASE_URL="postgresql://$(cat /etc/secrets/db-user):$(cat /etc/secrets/db-pass)@localhost/aiwebengine"
-
-# Secret management for AI integration
-export SECRET_ANTHROPIC_API_KEY="$(cat /etc/secrets/anthropic-key)"
-export SECRET_OPENAI_API_KEY="$(cat /etc/secrets/openai-key)"
+# Local development setup
+cp config.local.toml config.toml
+cp .env.example .env
+# Edit .env with your OAuth credentials
+source .env && cargo run
 ```
+
+### Staging Environment (`config.staging.toml`)
+
+- ✅ Use PostgreSQL that mirrors production
+- ✅ Enable auto-migrations for testing schema changes
+- ✅ Use moderate security settings for integration testing
+- ✅ Set all secrets via environment variables
+- ✅ Use staging-specific OAuth callback URLs
+
+```bash
+# Staging setup
+cp config.staging.toml config.toml
+
+# Set environment variables in your CI/CD or deployment system
+export APP_AUTH_JWT_SECRET="$(openssl rand -base64 48)"
+export APP_REPOSITORY_DATABASE_URL="postgresql://user:pass@staging-db/aiwebengine"
+export APP_AUTH_PROVIDERS_GOOGLE_CLIENT_ID="..."
+export APP_AUTH_PROVIDERS_GOOGLE_CLIENT_SECRET="..."
+export APP_AUTH_PROVIDERS_GOOGLE_REDIRECT_URI="https://staging.yourdomain.com/auth/callback/google"
+
+cargo run --release
+```
+
+### Production Deployment (`config.production.toml`)
+
+- ✅ Use PostgreSQL with connection pooling
+- ✅ Disable auto-migrations (`auto_migrate = false`)
+- ✅ Disable console APIs (`enable_console = false`)
+- ✅ Use strict security settings
+- ✅ Require HTTPS (`require_https = true`)
+- ✅ Set ALL secrets via environment variables, NEVER in config files
+- ✅ Use secure session cookies (`secure = true`)
+- ✅ Use production secret management (AWS Secrets Manager, HashiCorp Vault, etc.)
+
+```bash
+# Production setup - NEVER put secrets in config files!
+cp config.production.toml config.toml
+
+# Use your secret management system
+export APP_AUTH_JWT_SECRET="$(aws secretsmanager get-secret-value --secret-id jwt-secret --query SecretString --output text)"
+export APP_SECURITY_API_KEY="$(aws secretsmanager get-secret-value --secret-id api-key --query SecretString --output text)"
+export APP_REPOSITORY_DATABASE_URL="postgresql://$(cat /etc/secrets/db-user):$(cat /etc/secrets/db-pass)@db.example.com/aiwebengine"
+
+# OAuth credentials from secret manager
+export APP_AUTH_PROVIDERS_GOOGLE_CLIENT_ID="$(aws secretsmanager get-secret-value --secret-id google-client-id --query SecretString --output text)"
+export APP_AUTH_PROVIDERS_GOOGLE_CLIENT_SECRET="$(aws secretsmanager get-secret-value --secret-id google-client-secret --query SecretString --output text)"
+export APP_AUTH_PROVIDERS_GOOGLE_REDIRECT_URI="https://yourdomain.com/auth/callback/google"
+
+cargo run --release
+```
+
+### Security Best Practices
+
+1. **Never commit secrets to version control**
+   - ✅ Use `.env` for local development (add to `.gitignore`)
+   - ✅ Use environment variables in staging/production
+   - ❌ Never hardcode secrets in config files
+
+2. **Use strong, randomly generated secrets**
+   ```bash
+   # JWT secret (base64, 48 bytes)
+   openssl rand -base64 48
+   
+   # API key (hex, 32 bytes)
+   openssl rand -hex 32
+   ```
+
+3. **Rotate secrets regularly**
+   - Update environment variables
+   - Restart the application
+   - No code changes required
+
+4. **Use different secrets per environment**
+   - Development uses weak secrets (convenience)
+   - Staging uses strong secrets (testing)
+   - Production uses strongest secrets (security)
 
 ### Secrets Management Best Practices
 

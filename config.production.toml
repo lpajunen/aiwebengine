@@ -1,0 +1,134 @@
+# Production Configuration
+# This configuration is optimized for production deployment with security and performance
+# Copy this file to config.toml for production: cp config.production.toml config.toml
+# ALL secrets MUST be set via environment variables (see .env.example)
+
+[server]
+# Bind to all interfaces in production
+host = "0.0.0.0"
+port = 8080
+# Longer timeout for production reliability
+request_timeout_ms = 30000
+# Larger body limit for production workloads
+max_body_size_mb = 10
+
+[logging]
+# Error level only for production performance
+level = "error"
+# Structured logging for production log aggregation
+structured = true
+# Log to file only in production
+targets = ["file"]
+file_path = "/var/log/aiwebengine/aiwebengine.log"
+# Rotate logs hourly for production volume
+rotation = "hourly"
+# Keep logs for 30 days for compliance
+retention_days = 30
+
+[javascript]
+# Larger memory limit for production workloads
+max_memory_mb = 128
+# Longer execution timeout for production
+execution_timeout_ms = 10000
+# Larger stack size for production
+max_stack_size = 262144
+# Disable console in production for security
+enable_console = false
+# Restrict APIs in production for security
+allowed_apis = ["fetch", "database", "logging"]
+
+[repository]
+# Use PostgreSQL for production scalability
+database_type = "postgresql"
+# MUST be set via APP_REPOSITORY_DATABASE_URL environment variable
+database_url = "${APP_REPOSITORY_DATABASE_URL}"
+# Large connection pool for production
+max_connections = 50
+# Longer timeout for production reliability
+connection_timeout_ms = 10000
+# Disable auto-migrate in production for safety
+auto_migrate = false
+
+[security]
+# Enable CORS with specific origins
+enable_cors = true
+# Restrict origins in production - MUST be set via APP_SECURITY_CORS_ORIGINS
+cors_origins = ["${APP_SECURITY_CORS_ORIGIN_1}", "${APP_SECURITY_CORS_ORIGIN_2}"]
+# Rate limiting in production
+rate_limit_per_minute = 1000
+# MUST be set via APP_SECURITY_API_KEY environment variable
+api_key = "${APP_SECURITY_API_KEY}"
+# Require HTTPS in production
+require_https = true
+# Restrict content types in production
+allowed_content_types = ["application/json", "application/x-www-form-urlencoded"]
+
+[performance]
+# Large cache for production performance
+cache_size_mb = 512
+# Longer cache TTL for production efficiency
+cache_ttl_seconds = 3600
+# Enable compression for production bandwidth
+enable_compression = true
+# Large worker pool for production concurrency
+worker_pool_size = 8
+# Large request queue for production load
+max_request_queue_size = 1000
+
+# Authentication Configuration
+[auth]
+# Enable authentication in production
+enabled = true
+
+# JWT secret for session management (minimum 32 characters)
+# MUST be set via APP_AUTH_JWT_SECRET environment variable
+# Use a strong, randomly generated secret in production!
+jwt_secret = "${APP_AUTH_JWT_SECRET}"
+
+# Session timeout in seconds (1 hour)
+session_timeout = 3600
+
+# Maximum concurrent sessions per user
+max_concurrent_sessions = 3
+
+# Bootstrap admin emails
+# MUST be set via APP_AUTH_BOOTSTRAP_ADMINS environment variable (comma-separated)
+# Only needed for initial setup, can be removed after first admin is created
+bootstrap_admins = []
+
+[auth.cookie]
+name = "aiwebengine_session"
+path = "/"
+# MUST use secure cookies in production (requires HTTPS)
+secure = true
+http_only = true
+same_site = "strict"
+
+# OAuth Providers Configuration
+# ALL secrets MUST be set via environment variables
+# Never hardcode secrets in production configuration files!
+
+[auth.providers.google]
+client_id = "${APP_AUTH_PROVIDERS_GOOGLE_CLIENT_ID}"
+client_secret = "${APP_AUTH_PROVIDERS_GOOGLE_CLIENT_SECRET}"
+redirect_uri = "${APP_AUTH_PROVIDERS_GOOGLE_REDIRECT_URI}"
+scopes = ["openid", "email", "profile"]
+
+# Optional: Microsoft Azure AD
+# Uncomment and set via environment variables to enable
+# [auth.providers.microsoft]
+# client_id = "${APP_AUTH_PROVIDERS_MICROSOFT_CLIENT_ID}"
+# client_secret = "${APP_AUTH_PROVIDERS_MICROSOFT_CLIENT_SECRET}"
+# redirect_uri = "${APP_AUTH_PROVIDERS_MICROSOFT_REDIRECT_URI}"
+# tenant_id = "${APP_AUTH_PROVIDERS_MICROSOFT_TENANT_ID}"
+# scopes = ["openid", "email", "profile"]
+
+# Optional: Apple Sign In
+# Uncomment and set via environment variables to enable
+# [auth.providers.apple]
+# client_id = "${APP_AUTH_PROVIDERS_APPLE_CLIENT_ID}"
+# client_secret = "${APP_AUTH_PROVIDERS_APPLE_CLIENT_SECRET}"
+# redirect_uri = "${APP_AUTH_PROVIDERS_APPLE_REDIRECT_URI}"
+# team_id = "${APP_AUTH_PROVIDERS_APPLE_TEAM_ID}"
+# key_id = "${APP_AUTH_PROVIDERS_APPLE_KEY_ID}"
+# private_key = """${APP_AUTH_PROVIDERS_APPLE_PRIVATE_KEY}"""

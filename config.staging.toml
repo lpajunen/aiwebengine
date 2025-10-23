@@ -1,5 +1,7 @@
 # Staging Configuration  
 # This configuration bridges development and production for testing
+# Copy this file to config.toml for staging deployments: cp config.staging.toml config.toml
+# Set secrets via environment variables (see .env.example)
 
 [server]
 host = "0.0.0.0"
@@ -27,7 +29,8 @@ allowed_apis = ["fetch", "database", "logging", "filesystem"]
 
 [repository]
 database_type = "postgresql"
-database_url = "postgresql://username:password@localhost/aiwebengine_staging"
+# Set via APP_REPOSITORY_DATABASE_URL environment variable
+database_url = "${APP_REPOSITORY_DATABASE_URL}"
 max_connections = 20
 connection_timeout_ms = 5000
 # Allow auto-migrate in staging for testing
@@ -39,7 +42,8 @@ enable_cors = true
 cors_origins = ["https://staging.yourdomain.com", "http://localhost:3000"]
 # Moderate rate limiting for staging
 rate_limit_per_minute = 500
-api_key = "${STAGING_API_KEY}"
+# Set via APP_SECURITY_API_KEY environment variable
+api_key = "${APP_SECURITY_API_KEY}"
 # HTTPS preferred but not required in staging
 require_https = false
 allowed_content_types = ["application/json", "application/x-www-form-urlencoded", "multipart/form-data"]
@@ -50,3 +54,47 @@ cache_ttl_seconds = 1800
 enable_compression = true
 worker_pool_size = 4
 max_request_queue_size = 200
+
+# Authentication Configuration
+[auth]
+# Enable authentication in staging
+enabled = true
+
+# JWT secret for session management (minimum 32 characters)
+# MUST be set via APP_AUTH_JWT_SECRET environment variable
+jwt_secret = "${APP_AUTH_JWT_SECRET}"
+
+# Session timeout in seconds (1 hour)
+session_timeout = 3600
+
+# Maximum concurrent sessions per user
+max_concurrent_sessions = 5
+
+# Bootstrap admin emails for staging environment
+# Set via APP_AUTH_BOOTSTRAP_ADMINS environment variable (comma-separated)
+bootstrap_admins = []
+
+[auth.cookie]
+name = "aiwebengine_session"
+path = "/"
+# Use secure cookies in staging if HTTPS is available
+secure = true
+http_only = true
+same_site = "lax"
+
+# OAuth Providers Configuration
+# All secrets MUST be set via environment variables
+
+[auth.providers.google]
+client_id = "${APP_AUTH_PROVIDERS_GOOGLE_CLIENT_ID}"
+client_secret = "${APP_AUTH_PROVIDERS_GOOGLE_CLIENT_SECRET}"
+redirect_uri = "${APP_AUTH_PROVIDERS_GOOGLE_REDIRECT_URI}"
+scopes = ["openid", "email", "profile"]
+
+# Optional: Microsoft Azure AD
+# [auth.providers.microsoft]
+# client_id = "${APP_AUTH_PROVIDERS_MICROSOFT_CLIENT_ID}"
+# client_secret = "${APP_AUTH_PROVIDERS_MICROSOFT_CLIENT_SECRET}"
+# redirect_uri = "${APP_AUTH_PROVIDERS_MICROSOFT_REDIRECT_URI}"
+# tenant_id = "${APP_AUTH_PROVIDERS_MICROSOFT_TENANT_ID}"
+# scopes = ["openid", "email", "profile"]

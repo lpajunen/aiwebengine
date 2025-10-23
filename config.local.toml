@@ -1,5 +1,6 @@
-# Development Configuration
+# Local Development Configuration
 # This configuration is optimized for local development with verbose logging and relaxed security
+# Copy this file to config.toml and customize as needed: cp config.local.toml config.toml
 
 [server]
 # Use localhost for development
@@ -53,7 +54,7 @@ enable_cors = true
 cors_origins = ["*"]
 # No rate limiting in development
 rate_limit_per_minute = 0
-# Simple API key for development
+# Simple API key for development (override with APP_SECURITY_API_KEY env var)
 api_key = "dev-api-key-12345"
 # No HTTPS required in development
 require_https = false
@@ -72,48 +73,67 @@ worker_pool_size = 2
 # Small request queue for development
 max_request_queue_size = 50
 
+# Authentication Configuration
 [auth]
 # Enable authentication in development
 enabled = true
-# Development JWT secret (change in production!)
+
+# JWT secret for session management (minimum 32 characters)
+# Override with APP_AUTH_JWT_SECRET environment variable
+# For production, ALWAYS use environment variables!
 jwt_secret = "dev-jwt-secret-minimum-32-characters-required-for-security"
+
 # Session timeout in seconds (1 hour)
 session_timeout = 3600
-# Max concurrent sessions per user
+
+# Maximum concurrent sessions per user
 max_concurrent_sessions = 10
+
+# Bootstrap admin emails
+# Users with these emails will automatically receive Administrator role on first sign-in
+# This allows you to bootstrap the system with an initial admin who can then
+# grant roles to other users through the /manager UI
+# Add your own email here for local development
+bootstrap_admins = [
+    "admin@example.com",
+]
 
 [auth.cookie]
 # Cookie settings for development
-name = "session"
+name = "aiwebengine_session"
 path = "/"
 secure = false  # Set to true in production with HTTPS
 http_only = true
 same_site = "lax"
 
-[auth.providers]
-# OAuth2 providers configuration
-# Note: You'll need to register your app with each provider and add credentials
+# OAuth Providers Configuration
+# Configure at least one provider to enable authentication
+# Set secrets via environment variables (see .env.example):
+#   APP_AUTH_PROVIDERS_GOOGLE_CLIENT_ID
+#   APP_AUTH_PROVIDERS_GOOGLE_CLIENT_SECRET
+#   APP_AUTH_PROVIDERS_GOOGLE_REDIRECT_URI
 
-# Google OAuth2 - Set values via environment variables (use double underscore __ for nesting):
-# APP_AUTH__PROVIDERS__GOOGLE__CLIENT_ID
-# APP_AUTH__PROVIDERS__GOOGLE__CLIENT_SECRET
-# APP_AUTH__PROVIDERS__GOOGLE__REDIRECT_URI
 [auth.providers.google]
-client_id = "your-google-client-id"
-client_secret = "your-google-client-secret"
+client_id = "${APP_AUTH_PROVIDERS_GOOGLE_CLIENT_ID}"
+client_secret = "${APP_AUTH_PROVIDERS_GOOGLE_CLIENT_SECRET}"
 redirect_uri = "http://localhost:3000/auth/callback/google"
+scopes = ["openid", "email", "profile"]
 
-# Microsoft OAuth2 (uncomment and fill in to enable)
+# Optional: Microsoft Azure AD
+# Uncomment and set via environment variables to enable
 # [auth.providers.microsoft]
-# client_id = "your-microsoft-client-id"
-# client_secret = "your-microsoft-client-secret"
+# client_id = "${APP_AUTH_PROVIDERS_MICROSOFT_CLIENT_ID}"
+# client_secret = "${APP_AUTH_PROVIDERS_MICROSOFT_CLIENT_SECRET}"
 # redirect_uri = "http://localhost:3000/auth/callback/microsoft"
-# tenant_id = "common"  # or your specific tenant ID
+# tenant_id = "common"  # or your tenant ID
+# scopes = ["openid", "email", "profile"]
 
-# Apple OAuth2 (uncomment and fill in to enable)
+# Optional: Apple Sign In
+# Uncomment and set via environment variables to enable
 # [auth.providers.apple]
-# client_id = "your-apple-client-id"
+# client_id = "${APP_AUTH_PROVIDERS_APPLE_CLIENT_ID}"
+# client_secret = "${APP_AUTH_PROVIDERS_APPLE_CLIENT_SECRET}"
 # redirect_uri = "http://localhost:3000/auth/callback/apple"
-# team_id = "your-team-id"
-# key_id = "your-key-id"
-# private_key = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
+# team_id = "${APP_AUTH_PROVIDERS_APPLE_TEAM_ID}"
+# key_id = "${APP_AUTH_PROVIDERS_APPLE_KEY_ID}"
+# private_key = """${APP_AUTH_PROVIDERS_APPLE_PRIVATE_KEY}"""

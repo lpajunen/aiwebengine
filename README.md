@@ -48,12 +48,12 @@ In the context of aiwebengine, a **solution** refers to any website, GraphQL API
 - Response generation with custom status codes and content types
 - In-memory logging system
 - Script repository management
+- Authentication and security middleware
 
 ### Roadmap
 
 The project roadmap includes planned enhancements such as:
 
-- Authentication and security middleware
 - Database integration
 - Testing framework integration
 
@@ -82,11 +82,16 @@ For quick reference, see the role-based organization in the [Documentation Index
 git clone https://github.com/lpajunen/aiwebengine.git
 cd aiwebengine
 
+# Set up configuration
+cp config.local.toml config.toml
+cp .env.example .env
+# Edit .env with your OAuth credentials and secrets
+
 # Build the project
 cargo build --release
 
 # Run the server
-cargo run
+source .env && cargo run
 ```
 
 ### Docker Deployment
@@ -104,24 +109,29 @@ cp .env.example .env
 docker-compose up -d
 ```
 
-For detailed Docker deployment instructions, see [docs/DOCKER.md](docs/DOCKER.md).
+For detailed Docker deployment instructions, see [docs/engine-administrators/DOCKER.md](docs/engine-administrators/DOCKER.md).
 
 ### Development
 
 For local development:
 
 ```bash
+# Set up local configuration
+cp config.local.toml config.toml
+cp .env.example .env
+# Edit .env with your development credentials
+
 # Install development tools
 make deps
 
-# Run development server with hot-reload
-make dev
+# Run development server
+source .env && cargo run
 
 # Or use Docker for development
 make docker-dev
 ```
 
-See [docs/engine-administrators/local-development.md](docs/engine-administrators/local-development.md) for more details.
+See [docs/engine-administrators/CONFIGURATION.md](docs/engine-administrators/CONFIGURATION.md) for detailed configuration options.
 
 ## Architecture
 
