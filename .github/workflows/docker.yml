@@ -60,7 +60,7 @@ jobs:
             type=semver,pattern={{major}}
             type=sha
 
-      - name: Build Docker image (no push - development mode)
+      - name: Build production Docker image (no push - development mode)
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -75,13 +75,23 @@ jobs:
           # Optionally load image into Docker for local testing
           load: true
 
-      - name: Build development image (no push)
+      - name: Build staging image (no push)
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile.dev
+          file: ./Dockerfile.staging
           push: false
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:dev
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:staging
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build local image (no push)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.local
+          push: false
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:local
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
