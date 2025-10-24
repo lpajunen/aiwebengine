@@ -17,16 +17,16 @@ Complete guide for deploying aiwebengine in local, staging, and production envir
 
 ### Environment Comparison
 
-| | Local | Staging | Production |
-|---|---|---|---|
-| **Purpose** | Development & debugging | Integration testing | Live deployment |
-| **Config File** | `config.local.toml` | `config.staging.toml` | `config.production.toml` |
-| **Security** | Relaxed | Moderate | Strict |
-| **Logging** | `debug` | `info` | `warn` or `error` |
-| **HTTPS** | Optional | Recommended | Required |
-| **Auto-migrate** | Enabled | Enabled | Disabled |
-| **Console API** | Enabled | Enabled | Disabled |
-| **Secrets** | `.env` file | Environment vars | Secret manager |
+|                  | Local                   | Staging               | Production               |
+| ---------------- | ----------------------- | --------------------- | ------------------------ |
+| **Purpose**      | Development & debugging | Integration testing   | Live deployment          |
+| **Config File**  | `config.local.toml`     | `config.staging.toml` | `config.production.toml` |
+| **Security**     | Relaxed                 | Moderate              | Strict                   |
+| **Logging**      | `debug`                 | `info`                | `warn` or `error`        |
+| **HTTPS**        | Optional                | Recommended           | Required                 |
+| **Auto-migrate** | Enabled                 | Enabled               | Disabled                 |
+| **Console API**  | Enabled                 | Enabled               | Disabled                 |
+| **Secrets**      | `.env` file             | Environment vars      | Secret manager           |
 
 ### Choosing Your Environment
 

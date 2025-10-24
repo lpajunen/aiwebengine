@@ -72,13 +72,13 @@ make docker-prod
 
 ### Critical Variables
 
-| Variable | Purpose | How to Generate |
-|----------|---------|----------------|
-| `APP_AUTH__JWT_SECRET` | JWT signing key | `openssl rand -base64 48` |
-| `APP_SECURITY__API_KEY` | API authentication | `openssl rand -hex 32` |
-| `APP_REPOSITORY__DATABASE_URL` | Database connection | Manual setup |
-| `APP_AUTH__PROVIDERS__GOOGLE__CLIENT_ID` | Google OAuth | Google Console |
-| `APP_AUTH__PROVIDERS__GOOGLE__CLIENT_SECRET` | Google OAuth | Google Console |
+| Variable                                     | Purpose             | How to Generate           |
+| -------------------------------------------- | ------------------- | ------------------------- |
+| `APP_AUTH__JWT_SECRET`                       | JWT signing key     | `openssl rand -base64 48` |
+| `APP_SECURITY__API_KEY`                      | API authentication  | `openssl rand -hex 32`    |
+| `APP_REPOSITORY__DATABASE_URL`               | Database connection | Manual setup              |
+| `APP_AUTH__PROVIDERS__GOOGLE__CLIENT_ID`     | Google OAuth        | Google Console            |
+| `APP_AUTH__PROVIDERS__GOOGLE__CLIENT_SECRET` | Google OAuth        | Google Console            |
 
 ### Naming Convention
 
@@ -158,14 +158,14 @@ cp config.production.toml config.toml
 
 ### Key Differences
 
-| Setting | Local | Staging | Production |
-|---------|-------|---------|------------|
-| `logging.level` | `debug` | `info` | `warn` |
-| `security.require_https` | `false` | `true` | `true` |
-| `security.cors_origins` | `["*"]` | Specific | Specific |
-| `javascript.enable_console` | `true` | `true` | `false` |
-| `repository.auto_migrate` | `true` | `true` | `false` |
-| Session cookie `secure` | `false` | `true` | `true` |
+| Setting                     | Local   | Staging  | Production |
+| --------------------------- | ------- | -------- | ---------- |
+| `logging.level`             | `debug` | `info`   | `warn`     |
+| `security.require_https`    | `false` | `true`   | `true`     |
+| `security.cors_origins`     | `["*"]` | Specific | Specific   |
+| `javascript.enable_console` | `true`  | `true`   | `false`    |
+| `repository.auto_migrate`   | `true`  | `true`   | `false`    |
+| Session cookie `secure`     | `false` | `true`   | `true`     |
 
 ---
 
@@ -298,7 +298,7 @@ docker-compose logs aiwebengine
 docker-compose exec postgres psql -U aiwebengine -d aiwebengine -c "SELECT 1;"
 
 # Should return:
-#  ?column? 
+#  ?column?
 # ----------
 #         1
 ```
@@ -435,12 +435,12 @@ docker-compose logs --tail=50 aiwebengine | grep -i error
 
 ### Default Ports
 
-| Service | Port | URL |
-|---------|------|-----|
-| aiwebengine | 3000 | `http://localhost:3000` |
-| PostgreSQL | 5432 | `postgresql://localhost:5432` |
-| Grafana | 3001 | `http://localhost:3001` (if enabled) |
-| Prometheus | 9090 | `http://localhost:9090` (if enabled) |
+| Service     | Port | URL                                  |
+| ----------- | ---- | ------------------------------------ |
+| aiwebengine | 3000 | `http://localhost:3000`              |
+| PostgreSQL  | 5432 | `postgresql://localhost:5432`        |
+| Grafana     | 3001 | `http://localhost:3001` (if enabled) |
+| Prometheus  | 9090 | `http://localhost:9090` (if enabled) |
 
 ### Important Endpoints
 

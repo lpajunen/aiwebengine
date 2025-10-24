@@ -388,7 +388,7 @@ docker-compose exec postgres psql -U postgres -c \
 
 # Kill idle connections
 docker-compose exec postgres psql -U aiwebengine -d aiwebengine -c \
-  "SELECT pg_terminate_backend(pid) FROM pg_stat_activity 
+  "SELECT pg_terminate_backend(pid) FROM pg_stat_activity
    WHERE datname='aiwebengine' AND state='idle' AND state_change < now() - interval '5 minutes';"
 
 # Increase connection pool in config.toml
@@ -511,8 +511,8 @@ docker stats aiwebengine
 
 # 2. Check database performance
 docker-compose exec postgres psql -U aiwebengine -d aiwebengine -c \
-  "SELECT pid, now() - query_start AS duration, query 
-   FROM pg_stat_activity 
+  "SELECT pid, now() - query_start AS duration, query
+   FROM pg_stat_activity
    WHERE query != '<IDLE>' ORDER BY duration DESC;"
 
 # 3. Increase worker threads

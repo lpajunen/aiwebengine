@@ -8,16 +8,16 @@ These documents have been consolidated and reorganized into the new documentatio
 
 ### Replaced by New Docs
 
-| Old Document | Content Now In |
-|--------------|----------------|
-| `CONFIGURATION.md` | [02-CONFIGURATION.md](../02-CONFIGURATION.md) |
-| `DOCKER.md` | [03-RUNNING-ENVIRONMENTS.md](../03-RUNNING-ENVIRONMENTS.md) |
-| `DOCKER_QUICK_REFERENCE.md` | [QUICK-REFERENCE.md](../QUICK-REFERENCE.md) |
-| `SECRETS_QUICK_REFERENCE.md` | [04-SECRETS-AND-SECURITY.md](../04-SECRETS-AND-SECURITY.md) |
-| `PRODUCTION_CHECKLIST.md` | [05-MONITORING-AND-MAINTENANCE.md](../05-MONITORING-AND-MAINTENANCE.md) |
-| `local-development.md` | [01-GETTING-STARTED.md](../01-GETTING-STARTED.md) + [03-RUNNING-ENVIRONMENTS.md](../03-RUNNING-ENVIRONMENTS.md) |
-| `HTTPS_SETUP.md` | [03-RUNNING-ENVIRONMENTS.md](../03-RUNNING-ENVIRONMENTS.md) |
-| `HTTPS_QUICK_START.md` | [03-RUNNING-ENVIRONMENTS.md](../03-RUNNING-ENVIRONMENTS.md) |
+| Old Document                 | Content Now In                                                                                                  |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `CONFIGURATION.md`           | [02-CONFIGURATION.md](../02-CONFIGURATION.md)                                                                   |
+| `DOCKER.md`                  | [03-RUNNING-ENVIRONMENTS.md](../03-RUNNING-ENVIRONMENTS.md)                                                     |
+| `DOCKER_QUICK_REFERENCE.md`  | [QUICK-REFERENCE.md](../QUICK-REFERENCE.md)                                                                     |
+| `SECRETS_QUICK_REFERENCE.md` | [04-SECRETS-AND-SECURITY.md](../04-SECRETS-AND-SECURITY.md)                                                     |
+| `PRODUCTION_CHECKLIST.md`    | [05-MONITORING-AND-MAINTENANCE.md](../05-MONITORING-AND-MAINTENANCE.md)                                         |
+| `local-development.md`       | [01-GETTING-STARTED.md](../01-GETTING-STARTED.md) + [03-RUNNING-ENVIRONMENTS.md](../03-RUNNING-ENVIRONMENTS.md) |
+| `HTTPS_SETUP.md`             | [03-RUNNING-ENVIRONMENTS.md](../03-RUNNING-ENVIRONMENTS.md)                                                     |
+| `HTTPS_QUICK_START.md`       | [03-RUNNING-ENVIRONMENTS.md](../03-RUNNING-ENVIRONMENTS.md)                                                     |
 
 ### Internal/Outdated Docs
 

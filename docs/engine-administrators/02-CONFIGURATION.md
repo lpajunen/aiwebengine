@@ -25,11 +25,11 @@ aiwebengine uses a flexible, hierarchical configuration system that combines mul
 
 ### When to Use Each
 
-| Method | Use Case | Example |
-|--------|----------|---------|
+| Method                    | Use Case                            | Example                          |
+| ------------------------- | ----------------------------------- | -------------------------------- |
 | **Environment Variables** | Secrets, deployment-specific values | OAuth credentials, database URLs |
-| **Configuration File** | Environment defaults, structure | Server settings, logging config |
-| **Default Values** | Development convenience | Testing with minimal setup |
+| **Configuration File**    | Environment defaults, structure     | Server settings, logging config  |
+| **Default Values**        | Development convenience             | Testing with minimal setup       |
 
 ---
 
@@ -52,17 +52,17 @@ cp config.production.toml config.toml
 
 ### Environment Comparison
 
-| Setting | Local | Staging | Production |
-|---------|-------|---------|------------|
-| **Purpose** | Development | Testing | Live deployment |
-| **Log Level** | `debug` | `info` | `warn` |
-| **Database** | PostgreSQL | PostgreSQL | PostgreSQL |
-| **Auto-migrate** | `true` | `true` | `false` |
-| **HTTPS Required** | `false` | `true` | `true` |
-| **CORS** | `["*"]` | Specific | Specific |
-| **Console API** | Enabled | Enabled | Disabled |
-| **Cookie Secure** | `false` | `true` | `true` |
-| **Rate Limiting** | Disabled | Enabled | Enabled |
+| Setting            | Local       | Staging    | Production      |
+| ------------------ | ----------- | ---------- | --------------- |
+| **Purpose**        | Development | Testing    | Live deployment |
+| **Log Level**      | `debug`     | `info`     | `warn`          |
+| **Database**       | PostgreSQL  | PostgreSQL | PostgreSQL      |
+| **Auto-migrate**   | `true`      | `true`     | `false`         |
+| **HTTPS Required** | `false`     | `true`     | `true`          |
+| **CORS**           | `["*"]`     | Specific   | Specific        |
+| **Console API**    | Enabled     | Enabled    | Disabled        |
+| **Cookie Secure**  | `false`     | `true`     | `true`          |
+| **Rate Limiting**  | Disabled    | Enabled    | Enabled         |
 
 ---
 
@@ -553,32 +553,32 @@ export APP_LOGGING__LEVEL="debug"
 
 Quick lookup for all available settings:
 
-| Section | Key | Type | Range/Options | Default |
-|---------|-----|------|---------------|---------|
-| `[server]` | `host` | string | IP address | `127.0.0.1` |
-| `[server]` | `port` | integer | 1-65535 | `3000` |
-| `[server]` | `request_timeout_ms` | integer | 100-300000 | `5000` |
-| `[server]` | `max_body_size_mb` | integer | 1-100 | `1` |
-| `[logging]` | `level` | string | trace/debug/info/warn/error | `info` |
-| `[logging]` | `structured` | boolean | true/false | `true` |
-| `[logging]` | `targets` | array | console, file | `["console"]` |
-| `[logging]` | `rotation` | string | hourly/daily/weekly | `daily` |
-| `[logging]` | `retention_days` | integer | 1-365 | `7` |
-| `[javascript]` | `max_memory_mb` | integer | 1-1024 | `16` |
-| `[javascript]` | `execution_timeout_ms` | integer | 100-60000 | `1000` |
-| `[javascript]` | `enable_console` | boolean | true/false | `true` |
-| `[repository]` | `database_type` | string | postgresql/memory | `postgresql` |
-| `[repository]` | `max_connections` | integer | 1-100 | `5` |
-| `[repository]` | `auto_migrate` | boolean | true/false | `true` |
-| `[security]` | `enable_cors` | boolean | true/false | `true` |
-| `[security]` | `require_https` | boolean | true/false | `false` |
-| `[security]` | `rate_limit_per_minute` | integer | 0-10000 | `0` |
-| `[auth]` | `enabled` | boolean | true/false | `true` |
-| `[auth]` | `session_timeout` | integer | 300-86400 | `3600` |
-| `[auth.cookie]` | `secure` | boolean | true/false | `false` |
-| `[performance]` | `cache_size_mb` | integer | 1-1024 | `10` |
-| `[performance]` | `enable_compression` | boolean | true/false | `false` |
-| `[performance]` | `worker_pool_size` | integer | 1-32 | `2` |
+| Section         | Key                     | Type    | Range/Options               | Default       |
+| --------------- | ----------------------- | ------- | --------------------------- | ------------- |
+| `[server]`      | `host`                  | string  | IP address                  | `127.0.0.1`   |
+| `[server]`      | `port`                  | integer | 1-65535                     | `3000`        |
+| `[server]`      | `request_timeout_ms`    | integer | 100-300000                  | `5000`        |
+| `[server]`      | `max_body_size_mb`      | integer | 1-100                       | `1`           |
+| `[logging]`     | `level`                 | string  | trace/debug/info/warn/error | `info`        |
+| `[logging]`     | `structured`            | boolean | true/false                  | `true`        |
+| `[logging]`     | `targets`               | array   | console, file               | `["console"]` |
+| `[logging]`     | `rotation`              | string  | hourly/daily/weekly         | `daily`       |
+| `[logging]`     | `retention_days`        | integer | 1-365                       | `7`           |
+| `[javascript]`  | `max_memory_mb`         | integer | 1-1024                      | `16`          |
+| `[javascript]`  | `execution_timeout_ms`  | integer | 100-60000                   | `1000`        |
+| `[javascript]`  | `enable_console`        | boolean | true/false                  | `true`        |
+| `[repository]`  | `database_type`         | string  | postgresql/memory           | `postgresql`  |
+| `[repository]`  | `max_connections`       | integer | 1-100                       | `5`           |
+| `[repository]`  | `auto_migrate`          | boolean | true/false                  | `true`        |
+| `[security]`    | `enable_cors`           | boolean | true/false                  | `true`        |
+| `[security]`    | `require_https`         | boolean | true/false                  | `false`       |
+| `[security]`    | `rate_limit_per_minute` | integer | 0-10000                     | `0`           |
+| `[auth]`        | `enabled`               | boolean | true/false                  | `true`        |
+| `[auth]`        | `session_timeout`       | integer | 300-86400                   | `3600`        |
+| `[auth.cookie]` | `secure`                | boolean | true/false                  | `false`       |
+| `[performance]` | `cache_size_mb`         | integer | 1-1024                      | `10`          |
+| `[performance]` | `enable_compression`    | boolean | true/false                  | `false`       |
+| `[performance]` | `worker_pool_size`      | integer | 1-32                        | `2`           |
 
 ---
 

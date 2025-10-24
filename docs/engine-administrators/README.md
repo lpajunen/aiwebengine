@@ -5,24 +5,25 @@ Welcome! This documentation helps you deploy, configure, and maintain aiwebengin
 ## Who Is This For?
 
 You're an **Engine Administrator** if you:
+
 - Deploy and manage aiwebengine servers
 - Configure infrastructure and security
 - Monitor system health and performance
 - Handle backups, updates, and maintenance
 
-> **Note:** If you're building applications *using* aiwebengine, see [Solution Developer Documentation](../solution-developers/).
+> **Note:** If you're building applications _using_ aiwebengine, see [Solution Developer Documentation](../solution-developers/).
 
 ## Quick Links
 
-| I want to... | Go to |
-|-------------|-------|
-| 🚀 Get started quickly | [01-GETTING-STARTED.md](01-GETTING-STARTED.md) |
-| 📋 See common commands | [QUICK-REFERENCE.md](QUICK-REFERENCE.md) |
-| ⚙️ Understand configuration | [02-CONFIGURATION.md](02-CONFIGURATION.md) |
-| 🏃 Run in local/staging/production | [03-RUNNING-ENVIRONMENTS.md](03-RUNNING-ENVIRONMENTS.md) |
-| 🔐 Set up OAuth and secrets | [04-SECRETS-AND-SECURITY.md](04-SECRETS-AND-SECURITY.md) |
-| 📊 Monitor and maintain | [05-MONITORING-AND-MAINTENANCE.md](05-MONITORING-AND-MAINTENANCE.md) |
-| 🔧 Fix problems | [06-TROUBLESHOOTING.md](06-TROUBLESHOOTING.md) |
+| I want to...                       | Go to                                                                |
+| ---------------------------------- | -------------------------------------------------------------------- |
+| 🚀 Get started quickly             | [01-GETTING-STARTED.md](01-GETTING-STARTED.md)                       |
+| 📋 See common commands             | [QUICK-REFERENCE.md](QUICK-REFERENCE.md)                             |
+| ⚙️ Understand configuration        | [02-CONFIGURATION.md](02-CONFIGURATION.md)                           |
+| 🏃 Run in local/staging/production | [03-RUNNING-ENVIRONMENTS.md](03-RUNNING-ENVIRONMENTS.md)             |
+| 🔐 Set up OAuth and secrets        | [04-SECRETS-AND-SECURITY.md](04-SECRETS-AND-SECURITY.md)             |
+| 📊 Monitor and maintain            | [05-MONITORING-AND-MAINTENANCE.md](05-MONITORING-AND-MAINTENANCE.md) |
+| 🔧 Fix problems                    | [06-TROUBLESHOOTING.md](06-TROUBLESHOOTING.md)                       |
 
 ## Documentation Structure
 
@@ -46,6 +47,7 @@ You're an **Engine Administrator** if you:
 ## Common Tasks
 
 ### Initial Setup
+
 ```bash
 # 1. Copy configuration
 cp config.local.toml config.toml
@@ -62,6 +64,7 @@ make docker-local
 ```
 
 ### Production Deployment
+
 ```bash
 # 1. Use production config
 cp config.production.toml config.toml
@@ -79,18 +82,21 @@ See [03-RUNNING-ENVIRONMENTS.md](03-RUNNING-ENVIRONMENTS.md) for complete guides
 ## System Requirements
 
 ### Minimum Requirements
+
 - **CPU**: 1 core
 - **RAM**: 512 MB
 - **Disk**: 1 GB
 - **OS**: Linux, macOS, or Windows with WSL2
 
 ### Recommended for Production
+
 - **CPU**: 2+ cores
 - **RAM**: 2+ GB
 - **Disk**: 10+ GB (for logs and data)
 - **OS**: Ubuntu 22.04 LTS or similar
 
 ### Software Requirements
+
 - **Docker**: 20.10+ (for containerized deployment)
 - **Rust**: Latest stable (for building from source)
 - **PostgreSQL**: 14+ (recommended for all environments)
@@ -99,26 +105,29 @@ See [03-RUNNING-ENVIRONMENTS.md](03-RUNNING-ENVIRONMENTS.md) for complete guides
 
 aiwebengine supports three pre-configured environments:
 
-| Environment | Config File | Use Case | Security |
-|------------|-------------|----------|----------|
-| **Local** | `config.local.toml` | Development, debugging | Relaxed |
-| **Staging** | `config.staging.toml` | Testing, QA | Moderate |
-| **Production** | `config.production.toml` | Live deployments | Strict |
+| Environment    | Config File              | Use Case               | Security |
+| -------------- | ------------------------ | ---------------------- | -------- |
+| **Local**      | `config.local.toml`      | Development, debugging | Relaxed  |
+| **Staging**    | `config.staging.toml`    | Testing, QA            | Moderate |
+| **Production** | `config.production.toml` | Live deployments       | Strict   |
 
 Each environment has optimized settings for its use case. See [02-CONFIGURATION.md](02-CONFIGURATION.md) for details.
 
 ## Getting Help
 
 ### Documentation
+
 - 📚 [Complete Documentation Index](../INDEX.md)
 - 👥 [Solution Developer Docs](../solution-developers/)
 - 🛠️ [Engine Contributor Docs](../engine-contributors/)
 
 ### Common Issues
+
 - [Troubleshooting Guide](06-TROUBLESHOOTING.md)
 - [GitHub Issues](https://github.com/lpajunen/aiwebengine/issues)
 
 ### Support Channels
+
 - Open an issue on GitHub for bugs or questions
 - Check existing documentation first
 - Include error messages and logs when reporting issues
@@ -126,6 +135,7 @@ Each environment has optimized settings for its use case. See [02-CONFIGURATION.
 ## Best Practices
 
 ✅ **DO:**
+
 - Use environment variables for secrets in production
 - Test in staging before deploying to production
 - Keep logs for debugging and auditing
@@ -134,6 +144,7 @@ Each environment has optimized settings for its use case. See [02-CONFIGURATION.
 - Keep Docker images and dependencies updated
 
 ❌ **DON'T:**
+
 - Commit secrets to version control
 - Use development configs in production
 - Skip testing before production deployment
@@ -210,4 +221,4 @@ See [04-SECRETS-AND-SECURITY.md](04-SECRETS-AND-SECURITY.md) for comprehensive s
 
 ---
 
-*Last updated: October 2025*
+_Last updated: October 2025_

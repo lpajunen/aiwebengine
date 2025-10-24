@@ -18,13 +18,13 @@ aiwebengine provides secure secrets management that keeps sensitive values (API 
 
 ### Types of Secrets
 
-| Type | Purpose | Examples |
-|------|---------|----------|
-| **Authentication** | JWT signing, session management | JWT secret, session secret |
-| **OAuth** | Third-party authentication | Google Client ID/Secret |
-| **API Keys** | External service access | Anthropic, OpenAI, Stripe |
-| **Database** | Database credentials | PostgreSQL password |
-| **Security** | API authentication | API key for endpoint protection |
+| Type               | Purpose                         | Examples                        |
+| ------------------ | ------------------------------- | ------------------------------- |
+| **Authentication** | JWT signing, session management | JWT secret, session secret      |
+| **OAuth**          | Third-party authentication      | Google Client ID/Secret         |
+| **API Keys**       | External service access         | Anthropic, OpenAI, Stripe       |
+| **Database**       | Database credentials            | PostgreSQL password             |
+| **Security**       | API authentication              | API key for endpoint protection |
 
 ### Security Model
 
@@ -69,16 +69,19 @@ Google OAuth is the easiest to set up and most commonly used.
 Add these redirect URIs based on your deployment:
 
 **Local Development:**
+
 ```
 http://localhost:3000/auth/callback/google
 ```
 
 **Staging:**
+
 ```
 https://staging.yourdomain.com/auth/callback/google
 ```
 
 **Production:**
+
 ```
 https://yourdomain.com/auth/callback/google
 ```
@@ -88,6 +91,7 @@ https://yourdomain.com/auth/callback/google
 #### Step 3: Save Credentials
 
 After creating, you'll get:
+
 - **Client ID** (ends with `.apps.googleusercontent.com`)
 - **Client Secret** (random string)
 
@@ -234,6 +238,7 @@ export APP_AUTH__JWT_SECRET="generated-secret-here"
 ```
 
 **Requirements:**
+
 - Minimum 32 characters (recommend 48+ bytes base64)
 - Unique per environment
 - Rotate regularly (see [Secret Rotation](#secret-rotation))
@@ -297,19 +302,19 @@ JavaScript code can check if secrets exist but CANNOT access values:
 
 ```javascript
 // ✅ Check if secret exists
-if (Secrets.exists('anthropic_api_key')) {
-  console.log('Anthropic API key is configured');
+if (Secrets.exists("anthropic_api_key")) {
+  console.log("Anthropic API key is configured");
 } else {
   return {
     status: 503,
-    body: 'Service Unavailable: Anthropic API key not configured',
-    contentType: 'text/plain'
+    body: "Service Unavailable: Anthropic API key not configured",
+    contentType: "text/plain",
   };
 }
 
 // ✅ List all available secrets
 const secrets = Secrets.list();
-console.log('Available secrets:', secrets);
+console.log("Available secrets:", secrets);
 // Output: ['anthropic_api_key', 'openai_api_key', 'stripe_api_key']
 
 // ❌ Cannot get secret values
@@ -422,12 +427,14 @@ export SECRET_GCP_SERVICE_ACCOUNT_KEY='{"type":"service_account",...}'
 ### Development
 
 ✅ **DO:**
+
 - Use `.env` files for local secrets (in `.gitignore`)
 - Use test/development API keys when available
 - Generate strong secrets even for development
 - Test with real OAuth providers
 
 ❌ **DON'T:**
+
 - Commit `.env` files to Git
 - Use production secrets in development
 - Share secrets in team chat or email
@@ -436,12 +443,14 @@ export SECRET_GCP_SERVICE_ACCOUNT_KEY='{"type":"service_account",...}'
 ### Staging
 
 ✅ **DO:**
+
 - Use environment variables (not files)
 - Use separate secrets from production
 - Use staging OAuth configurations
 - Test secret rotation procedures
 
 ❌ **DON'T:**
+
 - Reuse production secrets
 - Use weak secrets "because it's just staging"
 - Skip OAuth testing
@@ -449,6 +458,7 @@ export SECRET_GCP_SERVICE_ACCOUNT_KEY='{"type":"service_account",...}'
 ### Production
 
 ✅ **DO:**
+
 - Use secret management systems (AWS Secrets Manager, Vault, etc.)
 - Generate cryptographically strong secrets
 - Use different secrets per environment
@@ -460,6 +470,7 @@ export SECRET_GCP_SERVICE_ACCOUNT_KEY='{"type":"service_account",...}'
 - Use `secure = true` for cookies
 
 ❌ **DON'T:**
+
 - Store secrets in config files
 - Commit secrets to version control
 - Share secrets between environments

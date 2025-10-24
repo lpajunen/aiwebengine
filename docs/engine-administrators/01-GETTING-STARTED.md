@@ -396,10 +396,10 @@ aiwebengine/
 
 When using Docker:
 
-| Service | Container | Port | Purpose |
-|---------|-----------|------|---------|
+| Service     | Container         | Port | Purpose          |
+| ----------- | ----------------- | ---- | ---------------- |
 | aiwebengine | `aiwebengine-dev` | 3000 | Main application |
-| PostgreSQL | `postgres` | 5432 | Database |
+| PostgreSQL  | `postgres`        | 5432 | Database         |
 
 ### Configuration Active
 
