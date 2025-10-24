@@ -6,6 +6,7 @@ Complete guide for managing secrets, OAuth providers, and security configuration
 
 - [Secrets Management Overview](#secrets-management-overview)
 - [OAuth Provider Setup](#oauth-provider-setup)
+- [Bootstrap Admin Configuration](#bootstrap-admin-configuration)
 - [Managing Secrets](#managing-secrets)
 - [Security Best Practices](#security-best-practices)
 - [Secret Rotation](#secret-rotation)
@@ -212,6 +213,235 @@ MIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQg...
 ```
 
 **In config.toml**, uncomment the Apple section.
+
+---
+
+## Bootstrap Admin Configuration
+
+After setting up OAuth, you'll need administrator access to manage users. The bootstrap admin feature solves the "chicken and egg" problem of creating the first administrator.
+
+### The Problem
+
+Without bootstrap admins, you would face this dilemma:
+
+1. You need an admin to access `/manager` to grant admin roles
+2. But how do you make the first user an admin?
+3. Without an initial admin, no one can manage user roles
+
+### The Solution
+
+Configure bootstrap admin emails in your configuration file. When a user with a matching email signs in for the first time, they automatically receive the Administrator role.
+
+### Configuration
+
+Add `bootstrap_admins` to your `auth` section:
+
+**config.toml:**
+
+```toml
+[auth]
+jwt_secret = "${APP_AUTH__JWT_SECRET}"
+enabled = true
+
+# Bootstrap admin emails - case insensitive
+bootstrap_admins = [
+    "admin@example.com",
+    "you@company.com"
+]
+
+[auth.providers.google]
+client_id = "${APP_AUTH__PROVIDERS__GOOGLE__CLIENT_ID}"
+client_secret = "${APP_AUTH__PROVIDERS__GOOGLE__CLIENT_SECRET}"
+redirect_uri = "http://localhost:3000/auth/callback/google"
+```
+
+**Environment variable override:**
+
+```bash
+# JSON array format
+export APP_AUTH__BOOTSTRAP_ADMINS='["admin@example.com","you@company.com"]'
+```
+
+### How It Works
+
+#### 1. Server Startup
+
+When the server starts, it reads the `bootstrap_admins` configuration:
+
+```
+2025-10-24T10:00:00.123Z INFO  Configuring 1 bootstrap admin(s): ["admin@example.com"]
+```
+
+#### 2. First Sign-In
+
+When a user signs in for the first time via OAuth:
+
+1. User authenticates with OAuth provider (Google, Microsoft, Apple)
+2. System calls `user_repository::upsert_user()` with their email
+3. Email is compared (case-insensitive) with bootstrap admin list
+4. If match found, user automatically receives `Administrator` role
+5. User can now access `/manager` and grant roles to others
+
+```
+2025-10-24T10:05:00.456Z DEBUG Created new user: abc-123-def (admin@example.com)
+2025-10-24T10:05:00.457Z DEBUG Granted Administrator role to bootstrap admin: abc-123-def (admin@example.com)
+```
+
+#### 3. Subsequent Sign-Ins
+
+- User already exists in database
+- Roles are preserved (Administrator role remains)
+- No special processing needed
+
+### Features
+
+**Case-Insensitive Matching:** Email comparison is case-insensitive
+
+- `Admin@Example.COM` in config
+- Matches user signing in as `admin@example.com`
+
+**Multiple Admins:** You can specify multiple bootstrap admin emails
+
+```toml
+bootstrap_admins = [
+    "ceo@company.com",
+    "cto@company.com",
+    "devops@company.com"
+]
+```
+
+**Safe for Production:**
+
+- Only affects NEW users (first sign-in)
+- Existing users keep their current roles
+- No database migration needed
+- Can be changed in config and redeployed
+
+### Example Workflow
+
+#### Initial Setup
+
+**1. Configure bootstrap admin:**
+
+```toml
+# config.toml
+[auth]
+bootstrap_admins = ["you@company.com"]
+```
+
+**2. Start server:**
+
+```bash
+docker-compose up -d
+```
+
+**3. Sign in with OAuth:**
+
+- Navigate to your application
+- Click "Sign in with Google" (or other provider)
+- Use the email address you configured (`you@company.com`)
+
+**4. Verify admin access:**
+
+- Navigate to `/manager`
+- You should see the user management interface
+- You now have Administrator privileges
+
+#### Granting Admin to Others
+
+**5. Add more administrators:**
+
+- Access `/manager`
+- Find the user you want to promote
+- Click "Add Admin" button
+- They now have Administrator privileges
+
+**6. Remove bootstrap config (optional):**
+
+Once you have active administrators, you can optionally remove the `bootstrap_admins` configuration:
+
+```toml
+# config.toml
+[auth]
+# bootstrap_admins removed - no longer needed
+```
+
+Existing administrators keep their roles even after removing the bootstrap config.
+
+### Security Considerations
+
+**Best Practices:**
+
+✅ **DO:**
+
+- Use company email addresses you control
+- Limit to 1-3 bootstrap admins
+- Use work email domains you own
+- Remove bootstrap config after setup (optional)
+- Review server logs for bootstrap admin grants
+
+❌ **DON'T:**
+
+- Use public email domains (gmail.com, outlook.com) unless you control the specific address
+- Include test/demo email addresses
+- Share configuration files with bootstrap admin emails
+- Use the same email across multiple environments
+
+**Environment-Specific Configuration:**
+
+```bash
+# Development
+export APP_AUTH__BOOTSTRAP_ADMINS='["dev@localhost"]'
+
+# Staging
+export APP_AUTH__BOOTSTRAP_ADMINS='["admin@staging.company.com"]'
+
+# Production
+export APP_AUTH__BOOTSTRAP_ADMINS='["cto@company.com"]'
+```
+
+**Configuration Management:**
+
+Store bootstrap admin configuration securely:
+
+- Use environment variables
+- Use secret management systems (Vault, AWS Secrets Manager)
+- Don't commit real emails to public repositories
+
+### Troubleshooting
+
+**Problem:** Signed in but don't have admin access
+
+**Check:**
+
+1. Email matches exactly (case-insensitive)
+2. Check server logs for confirmation:
+
+   ```bash
+   docker-compose logs aiwebengine | grep "bootstrap admin"
+   ```
+
+3. Verify configuration loaded:
+
+   ```bash
+   docker-compose logs aiwebengine | grep "Configuring bootstrap admin"
+   ```
+
+**Problem:** Already signed in before adding bootstrap config
+
+**Solution:** 
+
+Delete your user from the database (development only), add bootstrap config, restart server, and sign in again. Or have an existing admin grant you the Administrator role manually.
+
+**Problem:** Multiple environments using same email
+
+**Solution:** Use environment-specific emails with `+` addressing:
+
+- Dev: `yourname+dev@company.com`
+- Staging: `yourname+staging@company.com`
+- Prod: `yourname@company.com`
+
+Gmail and many providers support `+` addressing.
 
 ---
 

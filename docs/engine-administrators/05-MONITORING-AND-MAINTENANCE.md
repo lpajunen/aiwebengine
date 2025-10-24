@@ -6,6 +6,7 @@ Guide for keeping your aiwebengine instance healthy, monitoring operations, and 
 
 - [Health Monitoring](#health-monitoring)
 - [Log Management](#log-management)
+- [User Management](#user-management)
 - [Database Maintenance](#database-maintenance)
 - [Backup and Restore](#backup-and-restore)
 - [Updates and Upgrades](#updates-and-upgrades)
@@ -220,6 +221,233 @@ Install CloudWatch agent and configure log streaming.
 #### Using Elasticsearch/Logstash
 
 Configure log forwarding via filebeat or similar.
+
+---
+
+## User Management
+
+The Manager UI (`/manager`) provides administrators with a web interface to view and manage user roles in the AIWebEngine system.
+
+### Access Control
+
+**Administrator Access Only:** The manager UI and its API endpoints are restricted to users with administrator privileges. Non-admin users will receive a 403 Forbidden error.
+
+### Getting Administrator Access
+
+To use the Manager UI, you need Administrator privileges. See the [Bootstrap Admin Configuration](04-SECRETS-AND-SECURITY.md#bootstrap-admin-configuration) section for setting up your first administrator account.
+
+Quick example:
+
+```toml
+# config.toml
+[auth]
+bootstrap_admins = ["your.email@company.com"]
+```
+
+After signing in with this email via OAuth, you'll automatically have Administrator access.
+
+### Accessing the Manager UI
+
+1. Ensure you're logged in as an administrator
+2. Navigate to `/manager` in your browser
+3. View the user list and statistics
+
+**Example:**
+
+```bash
+# Local
+open http://localhost:3000/manager
+
+# Production
+open https://yourdomain.com/manager
+```
+
+### Features
+
+#### 1. User Dashboard
+
+The main dashboard displays:
+
+- **Statistics Cards:**
+  - Total number of users
+  - Number of administrators
+  - Number of editors
+
+- **User Table:** Shows all users with:
+  - Email address
+  - Display name
+  - Current roles (with color-coded badges)
+  - OAuth providers used
+  - Account creation date
+  - Role management actions
+
+#### 2. Role Management
+
+Administrators can:
+
+- **Add Editor Role:** Grant editor privileges to a user
+- **Remove Editor Role:** Revoke editor privileges from a user
+- **Add Administrator Role:** Grant administrator privileges to a user
+- **Remove Administrator Role:** Revoke administrator privileges from a user
+
+**Note:** The `Authenticated` role cannot be removed as it's the base role for all users.
+
+#### 3. Visual Design
+
+The UI features:
+
+- Modern gradient background (purple theme)
+- Card-based layout
+- Responsive design (mobile-friendly)
+- Color-coded role badges:
+  - Blue for Authenticated
+  - Orange for Editor
+  - Pink for Administrator
+- Hover effects and smooth transitions
+- Real-time updates after role changes
+
+### Managing User Roles
+
+#### Adding Editor Role to a User
+
+1. Locate the user in the table
+2. Click "Add Editor" button
+3. The role is added immediately
+4. The button changes to "Remove Editor"
+
+#### Adding Administrator Role
+
+1. Find the user in the table
+2. Click "Add Admin" button
+3. Confirmation message appears
+4. Role is added to the user
+
+#### Removing Roles
+
+1. Find the user with the role you want to remove
+2. Click the appropriate "Remove" button (e.g., "Remove Admin")
+3. Confirmation message appears
+4. Role is removed from the user
+
+### API Endpoints
+
+The Manager UI uses these API endpoints (for reference):
+
+#### List Users
+
+**Endpoint:** `GET /api/manager/users`
+
+**Authentication:** Required (Admin only)
+
+**Response:**
+
+```json
+{
+  "users": [
+    {
+      "id": "uuid-here",
+      "email": "user@example.com",
+      "name": "John Doe",
+      "roles": ["Authenticated", "Editor"],
+      "created_at": "2025-10-24T12:00:00Z",
+      "providers": ["google"]
+    }
+  ],
+  "total": 1
+}
+```
+
+#### Update User Role
+
+**Endpoint:** `POST /api/manager/users/:userId/roles`
+
+**Authentication:** Required (Admin only)
+
+**Request Body:**
+
+```json
+{
+  "role": "Editor",
+  "action": "add"
+}
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "userId": "uuid-here",
+  "role": "Editor",
+  "action": "add"
+}
+```
+
+### Troubleshooting
+
+**Problem:** Cannot Access Manager UI (403 Forbidden)
+
+**Solution:** Ensure you're logged in as an administrator. Check:
+
+1. You've signed in with a bootstrap admin email
+2. Another admin has granted you Administrator role
+3. Check server logs for authentication errors
+
+```bash
+docker-compose logs aiwebengine | grep -i "manager\|admin"
+```
+
+**Problem:** Role Changes Not Persisting
+
+**Solution:** Check server logs for errors:
+
+```bash
+docker-compose logs aiwebengine | grep -i error
+```
+
+Ensure the database is functioning correctly and user repository is accessible.
+
+**Problem:** UI Not Loading
+
+**Solution:**
+
+1. Check browser console for JavaScript errors
+2. Verify manager.js script is loaded
+3. Ensure server is running and accessible
+4. Clear browser cache and reload
+
+### Security Considerations
+
+1. **Admin-Only Access:** All endpoints check for administrator capabilities
+2. **No Client-Side Bypass:** Authorization is enforced server-side
+3. **Audit Trail:** All role changes are logged with admin ID and timestamp
+4. **No Password Exposure:** User credentials are never transmitted or displayed
+5. **HTTPS Required:** Use HTTPS in production to protect session cookies
+
+### Best Practices
+
+✅ **DO:**
+
+- Use HTTPS for all manager access in production
+- Review role changes regularly
+- Limit the number of administrators (principle of least privilege)
+- Keep administrator accounts secure with strong passwords on OAuth providers
+- Log out when finished managing users
+
+❌ **DON'T:**
+
+- Share administrator accounts
+- Grant Administrator role unnecessarily
+- Access manager UI over insecure networks
+- Leave administrator sessions open on shared computers
+
+### Navigation
+
+The manager UI includes quick navigation links to:
+
+- **Home** (`/`) - Main application
+- **Editor** (`/editor`) - Script editor
+- **GraphQL** (`/graphql`) - GraphQL playground
 
 ---
 
