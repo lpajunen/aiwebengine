@@ -132,15 +132,16 @@ register("/hello", "helloHandler", "GET");
 
 | Document                                                                  | Description                                |
 | ------------------------------------------------------------------------- | ------------------------------------------ |
-| [Development Guide](engine-contributors/implementing/DEVELOPMENT.md)      | Core development guidelines and setup      |
-| [TODO / Roadmap](engine-contributors/implementing/TODO.md)                | Development roadmap and task tracking      |
-| [Security TODO](engine-contributors/implementing/SECURITY_TODO.md)        | Security-related implementation tasks      |
-| [Auth TODO](engine-contributors/implementing/AUTH_TODO.md)                | Authentication implementation tasks        |
-| [Urgent TODO](engine-contributors/implementing/URGENT_TODO.md)            | High-priority implementation tasks         |
-| [User Repository Implementation](engine-contributors/implementing/USER_REPOSITORY_IMPLEMENTATION.md) | User management system details |
-| [User Repository Integration](engine-contributors/implementing/USER_REPOSITORY_INTEGRATION.md) | Integration guide for user management |
-| [Auth Debugging Guide](engine-contributors/implementing/AUTH_DEBUGGING_GUIDE.md) | Debugging authentication issues |
-| [Secret Management Summary](engine-contributors/implementing/SECRET_MANAGEMENT_SUMMARY.md) | Secrets management architecture |
+| [Implementation Overview](engine-contributors/implementing/README.md)     | Navigation hub for implementation work     |
+| [Development Roadmap](engine-contributors/implementing/ROADMAP.md)        | Prioritized development roadmap            |
+| [Contributing Guide](engine-contributors/implementing/CONTRIBUTING.md)    | How to contribute features and improvements |
+| [Development Guidelines](engine-contributors/implementing/DEVELOPMENT.md) | Core development guidelines and standards   |
+
+**Implementation by Type:**
+
+- **Features:** [features/](engine-contributors/implementing/features/) - New functional capabilities to build
+- **Improvements:** [improvements/](engine-contributors/implementing/improvements/) - Quality, performance, and security enhancements
+- **Guides:** [guides/](engine-contributors/implementing/guides/) - Generic implementation best practices
 
 **📁 Location**: `docs/engine-contributors/implementing/`
 
