@@ -8,6 +8,7 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
+      - "443:443"
     volumes:
       - ./Caddyfile.local:/etc/caddy/Caddyfile:ro
     networks:
@@ -57,8 +58,13 @@ services:
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
       - JWT_SECRET=${JWT_SECRET:-dev-secret-key}
       - SESSION_SECRET=${SESSION_SECRET:-dev-session-secret}
+      # PostgreSQL connection
+      - APP_REPOSITORY_DATABASE_URL=postgresql://aiwebengine:devpassword@postgres-dev:5432/aiwebengine
     networks:
       - aiwebengine-dev-network
+    depends_on:
+      postgres-dev:
+        condition: service_healthy
     stdin_open: true
     tty: true
 
@@ -68,7 +74,7 @@ services:
     container_name: aiwebengine-postgres-dev
     restart: unless-stopped
     environment:
-      - POSTGRES_DB=aiwebengine_dev
+      - POSTGRES_DB=aiwebengine
       - POSTGRES_USER=aiwebengine
       - POSTGRES_PASSWORD=devpassword
     volumes:

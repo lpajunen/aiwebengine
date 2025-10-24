@@ -1,7 +1,15 @@
 # Caddyfile for local development
-# Uses HTTP (no automatic HTTPS for localhost)
+# Uses self-signed certificates for HTTPS on localhost and local.softagen.com
 
 :80 {
+    # Redirect HTTP to HTTPS
+    redir https://{host}{uri} permanent
+}
+
+localhost, local.softagen.com, :443 {
+    # Use self-signed TLS for local development
+    tls internal
+    
     # Reverse proxy to aiwebengine container
     reverse_proxy aiwebengine-dev:3000
     
@@ -13,10 +21,4 @@
         output stdout
         format console
     }
-}
-
-# Alternative: Use localhost
-localhost {
-    reverse_proxy aiwebengine-dev:3000
-    encode gzip
 }

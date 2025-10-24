@@ -3,8 +3,8 @@
 # Copy this file to config.toml and customize as needed: cp config.local.toml config.toml
 
 [server]
-# Use localhost for development
-host = "127.0.0.1"
+# Use 0.0.0.0 to be accessible from Caddy container
+host = "0.0.0.0"
 port = 3000
 # Short timeout for quick feedback during development
 request_timeout_ms = 5000
@@ -37,9 +37,9 @@ enable_console = true
 allowed_apis = ["fetch", "database", "logging", "filesystem"]
 
 [repository]
-# Use SQLite for simple development setup
-database_type = "sqlite"
-database_url = "./dev-database.db"
+# Use PostgreSQL for development (same as production/staging)
+database_type = "postgresql"
+database_url = "${APP_REPOSITORY_DATABASE_URL}"
 # Small connection limits for development
 max_connections = 5
 # Short timeout for development

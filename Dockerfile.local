@@ -9,20 +9,28 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     curl \
     git \
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # Install cargo-watch for hot-reload
 RUN cargo install cargo-watch
 
-# Create app directory
-WORKDIR /app
-
 # Create non-root user for development
-RUN useradd -m -u 1000 -s /bin/bash aiwebengine && \
-    chown -R aiwebengine:aiwebengine /app
+RUN useradd -m -u 1000 -s /bin/bash aiwebengine
 
-# Switch to non-root user
-USER aiwebengine
+# Create app directory and set ownership
+WORKDIR /app
+RUN mkdir -p /app/target && \
+    chown -R aiwebengine:aiwebengine /app && \
+    mkdir -p /usr/local/cargo/registry /usr/local/cargo/git && \
+    chown -R aiwebengine:aiwebengine /usr/local/cargo
+
+# Copy entrypoint script
+COPY docker-entrypoint-local.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint-local.sh
+
+# Don't switch user here - entrypoint will handle it
+# USER aiwebengine
 
 # Expose port
 EXPOSE 3000
@@ -32,5 +40,9 @@ ENV RUST_LOG=debug
 ENV RUST_BACKTRACE=1
 ENV CONFIG_FILE=/app/config.local.toml
 
+# Use entrypoint to fix permissions and switch to non-root user
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint-local.sh"]
+
 # Default command: watch for changes and rebuild
-CMD ["cargo", "watch", "-x", "run"]
+# Pass the config file explicitly to the server binary
+CMD ["cargo", "watch", "-x", "run --bin server -- -c /app/config.local.toml"]
