@@ -1,75 +1,116 @@
-# Archived Documentation
+# aiwebengine User Documentation
 
-This directory contains previous versions of engine administrator documentation that have been replaced by the new task-based structure.
+## Overview
 
-## What's Here
+**aiwebengine** is a lightweight web application engine built in Rust that enables developers to create dynamic web content using JavaScript scripts. It provides a simple yet powerful platform for building web applications by writing JavaScript handlers that process HTTP requests and generate responses.
 
-These documents have been consolidated and reorganized into the new documentation structure:
+The core concept is that you create JavaScript scripts that define how your web application behaves. These scripts contain handler functions that receive HTTP requests and return responses, allowing you to build APIs, serve HTML pages, handle forms, and more—all using familiar JavaScript syntax.
 
-### Replaced by New Docs
+## Key Concepts
 
-| Old Document                 | Content Now In                                                                                                  |
-| ---------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `CONFIGURATION.md`           | [02-CONFIGURATION.md](../02-CONFIGURATION.md)                                                                   |
-| `DOCKER.md`                  | [03-RUNNING-ENVIRONMENTS.md](../03-RUNNING-ENVIRONMENTS.md)                                                     |
-| `DOCKER_QUICK_REFERENCE.md`  | [QUICK-REFERENCE.md](../QUICK-REFERENCE.md)                                                                     |
-| `SECRETS_QUICK_REFERENCE.md` | [04-SECRETS-AND-SECURITY.md](../04-SECRETS-AND-SECURITY.md)                                                     |
-| `PRODUCTION_CHECKLIST.md`    | [05-MONITORING-AND-MAINTENANCE.md](../05-MONITORING-AND-MAINTENANCE.md)                                         |
-| `local-development.md`       | [01-GETTING-STARTED.md](../01-GETTING-STARTED.md) + [03-RUNNING-ENVIRONMENTS.md](../03-RUNNING-ENVIRONMENTS.md) |
-| `HTTPS_SETUP.md`             | [03-RUNNING-ENVIRONMENTS.md](../03-RUNNING-ENVIRONMENTS.md)                                                     |
-| `HTTPS_QUICK_START.md`       | [03-RUNNING-ENVIRONMENTS.md](../03-RUNNING-ENVIRONMENTS.md)                                                     |
+- **Scripts**: JavaScript files that contain your application logic
+- **Handlers**: Functions that process HTTP requests and return responses
+- **Routes**: URL paths mapped to specific handlers
+- **Assets**: Static files (images, CSS, etc.) served by the engine
 
-### Internal/Outdated Docs
+## Quick Start
 
-These documents are outdated or were internal development notes:
+1. **Install and run the server**:
 
-- `DOCKER_PUBLISHING_STATUS.md` - Internal status tracking
-- `DOCUMENTATION_UPDATES_SECRETS.md` - Internal update notes
-- `HTTPS_ARCHITECTURE.md` - Too detailed for admin docs (moved to contributors if needed)
-- `JWT_SESSION_IMPLEMENTATION.md` - Implementation details (contributor doc)
-- `remote-development.md` - Solution developer guide (wrong audience)
+   ```bash
+   git clone https://github.com/lpajunen/aiwebengine.git
+   cd aiwebengine
+   cargo build --release
+   cargo run
+   ```
 
-## New Documentation Structure
+2. **Create a simple script** (e.g., `scripts/hello.js`):
 
-The new engine administrator documentation is organized by task:
+   ```javascript
+   function helloHandler(req) {
+     return {
+       status: 200,
+       body: `Hello, ${req.query.name || "World"}!`,
+       contentType: "text/plain",
+     };
+   }
 
-1. **[README.md](../README.md)** - Overview and navigation
-2. **[QUICK-REFERENCE.md](../QUICK-REFERENCE.md)** - Fast command lookup
-3. **[01-GETTING-STARTED.md](../01-GETTING-STARTED.md)** - First-time setup
-4. **[02-CONFIGURATION.md](../02-CONFIGURATION.md)** - Configuration reference
-5. **[03-RUNNING-ENVIRONMENTS.md](../03-RUNNING-ENVIRONMENTS.md)** - Local/staging/production
-6. **[04-SECRETS-AND-SECURITY.md](../04-SECRETS-AND-SECURITY.md)** - Secrets and OAuth
-7. **[05-MONITORING-AND-MAINTENANCE.md](../05-MONITORING-AND-MAINTENANCE.md)** - Operations
-8. **[06-TROUBLESHOOTING.md](../06-TROUBLESHOOTING.md)** - Problem solving
+   register("/hello", "helloHandler", "GET");
+   ```
 
-## Why the Change?
+3. **Access your endpoint**: Visit `http://localhost:3000/hello?name=User`
 
-The previous documentation had several issues:
+## Quick Start: Real-Time Streaming
 
-- **Too many files** (13 documents) with overlapping content
-- **Unclear organization** - no obvious reading order
-- **Outdated information** - references to YAML configs when using TOML
-- **Mixed audiences** - admin and developer docs mixed together
-- **Duplication** - same information in multiple places
+Want to add real-time features? Here's how to create a live notification system:
 
-The new structure:
+1. **Create a streaming script** (e.g., `scripts/notifications.js`):
 
-- ✅ Clear, task-oriented organization
-- ✅ Progressive learning path (01 → 06)
-- ✅ Quick reference for experienced admins
-- ✅ Updated and accurate information
-- ✅ No duplication - each topic has one home
-- ✅ Focused on administrator tasks
+   ```javascript
+   // Register a stream endpoint for real-time notifications
+   registerWebStream("/notifications");
 
-## Need Old Content?
+   // Page that displays notifications in real-time
+   function notificationPage(req) {
+     return {
+       status: 200,
+       body: `
+           <!DOCTYPE html>
+           <html>
+           <head><title>Live Notifications</title></head>
+           <body>
+               <h1>Live Notifications</h1>
+               <button onclick="sendTest()">Send Test Notification</button>
+               <div id="messages"></div>
+               <script>
+                   const eventSource = new EventSource('/notifications');
+                   eventSource.onmessage = function(event) {
+                       const data = JSON.parse(event.data);
+                       document.getElementById('messages').innerHTML += 
+                           '<p><strong>' + data.type + ':</strong> ' + data.message + '</p>';
+                   };
+                   function sendTest() {
+                       fetch('/send-notification', { method: 'POST' });
+                   }
+               </script>
+           </body>
+           </html>`,
+       contentType: "text/html",
+     };
+   }
 
-If you need something specific from the old docs:
+   // Handler to send notifications to all connected clients
+   function sendNotification(req) {
+     sendStreamMessage({
+       type: "info",
+       message: "Hello from the server! " + new Date().toLocaleTimeString(),
+     });
+     return { status: 200, body: "Notification sent!" };
+   }
 
-1. Check the mapping table above to find where it moved
-2. If content is missing, these archived files are still here
-3. Open an issue on GitHub if you think something important was lost
+   register("/live-notifications", "notificationPage", "GET");
+   register("/send-notification", "sendNotification", "POST");
+   ```
 
----
+2. **Access your streaming app**: Visit `http://localhost:3000/live-notifications`
+3. **Click "Send Test Notification"** to see real-time updates in action!
 
-**Archived:** October 2025  
-**Reason:** Documentation restructure for clarity and usability
+## Documentation Sections
+
+- **[Local Development](engine-administrators/local-development.md)**: Setting up your development environment and using the deployer tool
+- **[Remote Development](engine-administrators/remote-development.md)**: Using the built-in web editor for script management
+- **[JavaScript APIs](solution-developers/javascript-apis.md)**: Complete reference for available JavaScript functions and objects
+- **[Real-Time Streaming](solution-developers/streaming.md)**: Guide to building live, interactive applications with Server-Sent Events
+- **[Examples](solution-developers/examples.md)**: Sample scripts demonstrating common patterns and use cases
+
+## Getting Help
+
+- Check the [examples](solution-developers/examples.md) for common patterns
+- Review the [JavaScript APIs](solution-developers/javascript-apis.md) for available functions
+- Learn about [real-time streaming](solution-developers/streaming.md) for interactive features
+- See [local development](engine-administrators/local-development.md) for development workflows
+- Use the [remote editor](engine-administrators/remote-development.md) for quick prototyping
+
+## Project Status
+
+⚠️ **Work in Progress**: aiwebengine is actively developed. Core features are stable, but some advanced features are still evolving.
