@@ -6,30 +6,18 @@ This directory contains **generic, cross-cutting guidance** for implementing any
 
 ---
 
-## 📚 Available Guides
+## Available Guides
 
-### Process Guides
+### Implementation Process
 
-| Guide                                              | Purpose                                  | Audience                 |
-| -------------------------------------------------- | ---------------------------------------- | ------------------------ |
-| [adding-new-features.md](./adding-new-features.md) | Step-by-step process for adding features | All contributors         |
-| [code-review-process.md](./code-review-process.md) | How code reviews work                    | Contributors & reviewers |
+- **[Adding New Features](adding-new-features.md)** - Step-by-step process for implementing new features
+- **[Testing Guidelines](testing-guidelines.md)** - How to write effective tests
 
-### Technical Guides
+### Quality & Standards
 
-| Guide                                                      | Purpose                         | Audience         |
-| ---------------------------------------------------------- | ------------------------------- | ---------------- |
-| [testing-guidelines.md](./testing-guidelines.md)           | Comprehensive testing practices | All contributors |
-| [security-checklist.md](./security-checklist.md)           | Security review checklist       | All contributors |
-| [performance-guidelines.md](./performance-guidelines.md)   | Writing performant code         | All contributors |
-| [error-handling-patterns.md](./error-handling-patterns.md) | Proper error handling in Rust   | All contributors |
-
-### Reference Guides
-
-| Guide                                                    | Purpose                    | Audience                   |
-| -------------------------------------------------------- | -------------------------- | -------------------------- |
-| [architecture-decisions.md](./architecture-decisions.md) | Key architectural patterns | Contributors & maintainers |
-| [debugging-techniques.md](./debugging-techniques.md)     | Debugging aiwebengine      | All contributors           |
+- **[Security Checklist](security-checklist.md)** - Security review checklist for all contributions
+- **[Code Review Process](code-review-process.md)** - How code reviews work and what reviewers look for
+- **[Performance Guidelines](performance-guidelines.md)** - Writing efficient code
 
 ---
 
