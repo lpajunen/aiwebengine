@@ -41,30 +41,48 @@ register("/hello", "helloHandler", "GET");
 
 #### Getting Started
 
-| Document                                                  | Description                                           |
-| --------------------------------------------------------- | ----------------------------------------------------- |
-| [App Development Guide](solution-developers/APP_DEVELOPMENT.md) | Complete guide to building solutions with aiwebengine |
-| [JavaScript APIs](solution-developers/javascript-apis.md) | Available JavaScript APIs for solution development    |
-| [Examples](solution-developers/examples.md)               | Code examples and common patterns                     |
+| Document                                                          | Description                                           |
+| ----------------------------------------------------------------- | ----------------------------------------------------- |
+| [Solution Developer Guide](solution-developers/README.md)         | Main navigation hub and quick start guide             |
+| [Your First Script](solution-developers/getting-started/01-first-script.md) | Create your first "Hello World" script      |
+| [Working with Editor](solution-developers/getting-started/02-working-with-editor.md) | Use the web-based editor              |
+| [Deployment Workflow](solution-developers/getting-started/03-deployment-workflow.md) | Deploy scripts to aiwebengine          |
 
-#### Core Features
+#### Development Guides
 
 | Document                                                              | Description                                                 |
 | --------------------------------------------------------------------- | ----------------------------------------------------------- |
-| [Authentication API](solution-developers/AUTH_JS_API.md)              | JavaScript authentication and authorization APIs            |
-| [Streaming](solution-developers/streaming.md)                         | Server-sent events and streaming responses                  |
-| [GraphQL Subscriptions](solution-developers/graphql-subscriptions.md) | Real-time GraphQL subscription support                      |
-| [Editor Guide](solution-developers/EDITOR_README.md)                  | Using the built-in script editor                            |
-| [Example Scripts Reference](solution-developers/examples/index.md)    | Guide to all example scripts in `/scripts/example_scripts/` |
-| [Deployer Tool](solution-developers/examples/deployer.md)             | Deployer tool for rapid development                         |
+| [Script Development](solution-developers/guides/scripts.md)           | Complete guide to writing scripts                           |
+| [Asset Management](solution-developers/guides/assets.md)              | Manage CSS, JS, images, and other assets                    |
+| [Logging & Debugging](solution-developers/guides/logging.md)          | Write logs and debug your scripts                           |
+| [AI-Assisted Development](solution-developers/guides/ai-development.md) | Use AI to generate and improve scripts                    |
+| [Streaming](solution-developers/guides/streaming.md)                  | Server-sent events and streaming responses                  |
+| [GraphQL Subscriptions](solution-developers/guides/graphql-subscriptions.md) | Real-time GraphQL subscription support           |
 
-#### AI Integration
+#### Tools
 
-| Document                                                             | Description                                        |
-| -------------------------------------------------------------------- | -------------------------------------------------- |
-| [AI Assistant Guide](solution-developers/AI_ASSISTANT_GUIDE.md)     | Building AI-powered features into your applications |
-| [AI Prompt Guide](solution-developers/AI_PROMPT_GUIDE.md)           | Best practices for AI prompt engineering           |
-| [Claude Model Guide](solution-developers/CLAUDE_MODEL_GUIDE.md)     | Using Anthropic Claude models                      |
+| Document                                                              | Description                                                 |
+| --------------------------------------------------------------------- | ----------------------------------------------------------- |
+| [Web Editor](solution-developers/tools/editor.md)                     | Comprehensive web editor guide                              |
+| [Deployer CLI](solution-developers/tools/deployer.md)                 | Command-line deployment tool                                |
+| [External Tools](solution-developers/tools/external-tools.md)         | VS Code, Git, CI/CD integration                             |
+
+#### API Reference
+
+| Document                                                              | Description                                                 |
+| --------------------------------------------------------------------- | ----------------------------------------------------------- |
+| [JavaScript APIs](solution-developers/reference/javascript-apis.md)   | Complete API reference for scripts                          |
+| [Authentication API](solution-developers/reference/auth-api.md)        | User authentication and authorization APIs                  |
+
+#### Examples
+
+| Document                                                              | Description                                                 |
+| --------------------------------------------------------------------- | ----------------------------------------------------------- |
+| [Basic API Examples](solution-developers/examples/basic-api.md)       | RESTful API patterns and CRUD operations                    |
+| [Forms & Data Handling](solution-developers/examples/forms-and-data.md) | Form submissions, validation, file uploads               |
+| [Real-Time Features](solution-developers/examples/real-time-features.md) | Chat, notifications, live updates                        |
+| [AI Integration](solution-developers/examples/ai-integration.md)      | AI-powered content generation and chatbots                  |
+| [Example Scripts Index](solution-developers/examples/index.md)        | Guide to all example scripts                                |
 
 **📁 Location**: `docs/solution-developers/`
 
@@ -132,11 +150,23 @@ register("/hello", "helloHandler", "GET");
 
 ### I want to...
 
+**Build my first script**
+→ Start with [Your First Script](solution-developers/getting-started/01-first-script.md)
+
 **Build a web application**
-→ Start with [App Development Guide](solution-developers/APP_DEVELOPMENT.md)
+→ Follow [Solution Developer Guide](solution-developers/README.md) and [Script Development](solution-developers/guides/scripts.md)
 
 **Create real-time features**
-→ Read [Streaming Guide](solution-developers/streaming.md)
+→ Read [Real-Time Features Examples](solution-developers/examples/real-time-features.md) and [Streaming Guide](solution-developers/guides/streaming.md)
+
+**Build APIs**
+→ Check [Basic API Examples](solution-developers/examples/basic-api.md)
+
+**Handle forms and data**
+→ See [Forms & Data Handling](solution-developers/examples/forms-and-data.md)
+
+**Integrate AI features**
+→ Follow [AI Integration Examples](solution-developers/examples/ai-integration.md) and [AI-Assisted Development](solution-developers/guides/ai-development.md)
 
 **Deploy to production**
 → Follow [Running Environments](engine-administrators/03-RUNNING-ENVIRONMENTS.md)
@@ -145,10 +175,13 @@ register("/hello", "helloHandler", "GET");
 → See [Secrets and Security](engine-administrators/04-SECRETS-AND-SECURITY.md)
 
 **Understand available APIs**
-→ Check [JavaScript APIs](solution-developers/javascript-apis.md)
+→ Check [JavaScript APIs](solution-developers/reference/javascript-apis.md)
 
-**See code examples**
-→ Browse [Examples](solution-developers/examples.md)
+**Use the web editor**
+→ Read [Web Editor Guide](solution-developers/tools/editor.md)
+
+**Deploy with CLI**
+→ Use [Deployer CLI](solution-developers/tools/deployer.md)
 
 **Troubleshoot issues**
 → Visit [Troubleshooting Guide](engine-administrators/06-TROUBLESHOOTING.md)
@@ -165,17 +198,37 @@ docs/
 ├── INDEX.md (this file)              # Main documentation index
 │
 ├── solution-developers/              # For building ON aiwebengine
-│   ├── APP_DEVELOPMENT.md            # Getting started building apps
-│   ├── javascript-apis.md            # JavaScript API reference
-│   ├── AUTH_JS_API.md                # Authentication APIs
-│   ├── streaming.md                  # Real-time streaming
-│   ├── graphql-subscriptions.md      # GraphQL subscriptions
-│   ├── examples.md                   # Code examples
-│   ├── EDITOR_README.md              # Built-in editor guide
-│   ├── AI_ASSISTANT_GUIDE.md         # AI integration guide
-│   └── examples/                     # Example scripts and tools
+│   ├── README.md                     # Main navigation hub and quick start
+│   │
+│   ├── getting-started/              # Tutorials for beginners
+│   │   ├── 01-first-script.md        # Your first "Hello World" script
+│   │   ├── 02-working-with-editor.md # Using the web editor
+│   │   └── 03-deployment-workflow.md # Deploying your scripts
+│   │
+│   ├── guides/                       # Comprehensive topic guides
+│   │   ├── scripts.md                # Script development guide
+│   │   ├── assets.md                 # Asset management
+│   │   ├── logging.md                # Logging and debugging
+│   │   ├── ai-development.md         # AI-assisted development
+│   │   ├── streaming.md              # Real-time streaming
+│   │   └── graphql-subscriptions.md  # GraphQL subscriptions
+│   │
+│   ├── tools/                        # Development tools
+│   │   ├── editor.md                 # Web editor comprehensive guide
+│   │   ├── deployer.md               # Deployer CLI tool
+│   │   └── external-tools.md         # VS Code, Git, CI/CD
+│   │
+│   ├── reference/                    # API reference documentation
+│   │   ├── javascript-apis.md        # Complete JavaScript API reference
+│   │   └── auth-api.md               # Authentication APIs
+│   │
+│   └── examples/                     # Practical examples
 │       ├── index.md                  # Example scripts index
-│       └── deployer.md               # Deployer tool guide
+│       ├── deployer.md               # Deployer tool usage
+│       ├── basic-api.md              # REST API patterns
+│       ├── forms-and-data.md         # Form handling examples
+│       ├── real-time-features.md     # Chat, notifications, streaming
+│       └── ai-integration.md         # AI-powered features
 │
 ├── engine-administrators/            # For deploying aiwebengine
 │   ├── README.md                     # Administrator overview
@@ -222,9 +275,10 @@ These documents provide historical context but are no longer actively maintained
 ### Scenario 1: First-Time Local Development
 
 1. Read [Getting Started](engine-administrators/01-GETTING-STARTED.md) to set up aiwebengine
-2. Follow [App Development Guide](solution-developers/APP_DEVELOPMENT.md) to create your first script
-3. Check [Examples](solution-developers/examples.md) for code patterns
-4. Use [JavaScript APIs](solution-developers/javascript-apis.md) as reference
+2. Follow [Your First Script](solution-developers/getting-started/01-first-script.md) to create your first script
+3. Learn [Working with Editor](solution-developers/getting-started/02-working-with-editor.md) for browser-based development
+4. Check [Basic API Examples](solution-developers/examples/basic-api.md) for code patterns
+5. Use [JavaScript APIs](solution-developers/reference/javascript-apis.md) as reference
 
 ### Scenario 2: Production Deployment
 
@@ -236,17 +290,16 @@ These documents provide historical context but are no longer actively maintained
 
 ### Scenario 3: Building a Real-Time Application
 
-1. Start with [App Development Guide](solution-developers/APP_DEVELOPMENT.md)
-2. Learn [Streaming](solution-developers/streaming.md) for SSE features
-3. Optionally add [GraphQL Subscriptions](solution-developers/graphql-subscriptions.md)
-4. Check [Example Scripts](solution-developers/examples/index.md) for real-time examples
+1. Start with [Your First Script](solution-developers/getting-started/01-first-script.md)
+2. Learn [Streaming](solution-developers/guides/streaming.md) for SSE features
+3. Explore [Real-Time Features Examples](solution-developers/examples/real-time-features.md) for chat, notifications, dashboards
+4. Optionally add [GraphQL Subscriptions](solution-developers/guides/graphql-subscriptions.md)
 
 ### Scenario 4: Adding AI Features
 
-1. Review [AI Assistant Guide](solution-developers/AI_ASSISTANT_GUIDE.md)
-2. Follow [AI Prompt Guide](solution-developers/AI_PROMPT_GUIDE.md) for best practices
-3. Check [Claude Model Guide](solution-developers/CLAUDE_MODEL_GUIDE.md) for specific models
-4. Set up API keys in [Secrets and Security](engine-administrators/04-SECRETS-AND-SECURITY.md)
+1. Review [AI Integration Examples](solution-developers/examples/ai-integration.md)
+2. Follow [AI-Assisted Development](solution-developers/guides/ai-development.md) for using the built-in AI assistant
+3. Set up API keys in [Secrets and Security](engine-administrators/04-SECRETS-AND-SECURITY.md)
 
 ---
 
