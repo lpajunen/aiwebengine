@@ -144,32 +144,38 @@ The script is created and immediately available.
 The Monaco editor provides:
 
 **Syntax Highlighting**
+
 - JavaScript keywords in color
 - Strings, numbers, comments differentiated
 - Error highlighting in red
 
 **Auto-completion**
+
 - Type to see suggestions
 - Tab to accept
 - Works for JavaScript built-ins
 
 **Error Detection**
+
 - Real-time syntax checking
 - Red squiggly lines for errors
 - Hover for error details
 
 **Find and Replace**
+
 - Cmd+F / Ctrl+F to find
 - Cmd+H / Ctrl+H to replace
 - Regex support
 - Case sensitive toggle
 
 **Multi-cursor Editing**
+
 - Alt+Click to add cursors
 - Edit multiple lines simultaneously
 - Cmd+D / Ctrl+D to select next occurrence
 
 **Code Formatting**
+
 - Click "Format" button
 - Or Shift+Alt+F / Shift+Option+F
 - Auto-indents and cleans code
@@ -177,11 +183,13 @@ The Monaco editor provides:
 #### Saving Changes
 
 **Manual Save:**
+
 - Click "Save" button
 - Or Cmd+S / Ctrl+S
 - Green indicator shows success
 
 **Auto-reload:**
+
 - Server automatically reloads script
 - Routes re-register
 - Changes take effect immediately
@@ -216,6 +224,7 @@ scripts/
 ```
 
 **Naming conventions:**
+
 - Use descriptive names
 - Use folders for organization
 - Lowercase with hyphens: `user-profile.js`
@@ -252,6 +261,7 @@ scripts/
 ### Viewing Assets
 
 **Asset Browser:**
+
 - Organized by folder
 - Type icons (image, CSS, JS, etc.)
 - Image previews
@@ -259,6 +269,7 @@ scripts/
 - Upload date
 
 **Actions per asset:**
+
 - 👁️ Preview (images)
 - ⬇️ Download
 - 🗑️ Delete
@@ -266,6 +277,7 @@ scripts/
 ### Organizing Assets
 
 **Create folder structure:**
+
 - Upload with paths: `css/main.css`
 - Upload with paths: `images/logo.png`
 - Folders created automatically
@@ -304,11 +316,11 @@ function homeHandler(req) {
     </body>
     </html>
   `;
-  
+
   return {
     status: 200,
     body: html,
-    contentType: "text/html"
+    contentType: "text/html",
   };
 }
 ```
@@ -322,16 +334,19 @@ function homeHandler(req) {
 ### Log Features
 
 **Real-time Updates:**
+
 - Logs refresh every 5 seconds
 - New entries appear at top
 - Auto-scroll to latest
 
 **Filtering:**
+
 - Filter by script (dropdown)
 - Search logs (text input)
 - Filter by level (if tagged)
 
 **Log Display:**
+
 - Timestamp for each entry
 - Script URI shown
 - Color-coded by level (if tagged)
@@ -368,6 +383,7 @@ Click "Refresh" button for immediate update.
 ### Overview
 
 The AI Assistant understands:
+
 - All aiwebengine JavaScript APIs
 - Your current script content
 - All scripts in workspace
@@ -387,6 +403,7 @@ The AI Assistant understands:
 **1. Explanation**
 
 Ask for understanding:
+
 ```
 Explain what this script does
 How does streaming work?
@@ -396,6 +413,7 @@ What is the fetch() function?
 **2. Code Generation**
 
 Create new scripts:
+
 ```
 Create a REST API for blog posts with CRUD operations
 Create a contact form with validation
@@ -407,6 +425,7 @@ Click **"Preview & Create"** to review before applying.
 **3. Code Editing**
 
 Modify existing code:
+
 ```
 Add error handling to all functions
 Add input validation
@@ -419,6 +438,7 @@ Review in **side-by-side diff** before applying.
 **4. Debugging**
 
 Fix issues:
+
 ```
 This script returns 500 errors, please fix
 Why isn't this form handler working?
@@ -430,12 +450,14 @@ Help me debug the authentication logic
 **Be specific:**
 
 ✅ Good:
+
 ```
-Create a user registration API that validates email, 
+Create a user registration API that validates email,
 checks for duplicates, hashes passwords, and returns a JWT token
 ```
 
 ❌ Bad:
+
 ```
 Create a registration API
 ```
@@ -443,12 +465,14 @@ Create a registration API
 **Provide context:**
 
 ✅ Good:
+
 ```
 Add authentication to this API using the built-in auth functions.
 Require login for all endpoints except /api/public
 ```
 
 ❌ Bad:
+
 ```
 Add authentication
 ```
@@ -456,6 +480,7 @@ Add authentication
 **Describe outcome:**
 
 ✅ Good:
+
 ```
 Refactor this script to:
 - Use helper functions for validation
@@ -465,6 +490,7 @@ Refactor this script to:
 ```
 
 ❌ Bad:
+
 ```
 Make this better
 ```
@@ -472,26 +498,31 @@ Make this better
 ### AI Workflow Example
 
 **1. Generate initial code:**
+
 ```
 Create a blog API with list and create endpoints
 ```
 
 **2. Review and apply:**
+
 - Check generated code
 - Click "Apply Changes"
 - Test the endpoints
 
 **3. Iterate with improvements:**
+
 ```
 Add pagination to the list endpoint
 ```
 
 **4. Add more features:**
+
 ```
 Add a search endpoint with query parameter
 ```
 
 **5. Enhance quality:**
+
 ```
 Add error handling and input validation
 ```
@@ -542,6 +573,7 @@ http://localhost:8080/
 ```
 
 **Use DevTools:**
+
 - F12 to open
 - Network tab to see requests
 - Console for JavaScript errors
@@ -551,31 +583,31 @@ http://localhost:8080/
 
 ### Editor Shortcuts
 
-| Action | Windows/Linux | macOS |
-|--------|--------------|-------|
-| Save script | Ctrl+S | Cmd+S |
-| Find | Ctrl+F | Cmd+F |
-| Replace | Ctrl+H | Cmd+H |
-| Find next | F3 | Cmd+G |
-| Select next occurrence | Ctrl+D | Cmd+D |
-| Select all occurrences | Ctrl+Shift+L | Cmd+Shift+L |
-| Comment line | Ctrl+/ | Cmd+/ |
-| Undo | Ctrl+Z | Cmd+Z |
-| Redo | Ctrl+Y | Cmd+Shift+Z |
-| Format code | Shift+Alt+F | Shift+Option+F |
-| Go to line | Ctrl+G | Cmd+G |
-| Multi-cursor | Alt+Click | Option+Click |
-| Column select | Shift+Alt+Drag | Shift+Option+Drag |
+| Action                 | Windows/Linux  | macOS             |
+| ---------------------- | -------------- | ----------------- |
+| Save script            | Ctrl+S         | Cmd+S             |
+| Find                   | Ctrl+F         | Cmd+F             |
+| Replace                | Ctrl+H         | Cmd+H             |
+| Find next              | F3             | Cmd+G             |
+| Select next occurrence | Ctrl+D         | Cmd+D             |
+| Select all occurrences | Ctrl+Shift+L   | Cmd+Shift+L       |
+| Comment line           | Ctrl+/         | Cmd+/             |
+| Undo                   | Ctrl+Z         | Cmd+Z             |
+| Redo                   | Ctrl+Y         | Cmd+Shift+Z       |
+| Format code            | Shift+Alt+F    | Shift+Option+F    |
+| Go to line             | Ctrl+G         | Cmd+G             |
+| Multi-cursor           | Alt+Click      | Option+Click      |
+| Column select          | Shift+Alt+Drag | Shift+Option+Drag |
 
 ### Navigation Shortcuts
 
-| Action | Shortcut |
-|--------|----------|
-| Focus editor | Click editor area |
-| Focus sidebar | Click sidebar |
-| Focus AI assistant | Click AI input |
-| Switch to Logs | Click Logs tab |
-| Switch to Test | Click Test tab |
+| Action             | Shortcut          |
+| ------------------ | ----------------- |
+| Focus editor       | Click editor area |
+| Focus sidebar      | Click sidebar     |
+| Focus AI assistant | Click AI input    |
+| Switch to Logs     | Click Logs tab    |
+| Switch to Test     | Click Test tab    |
 
 ## Advanced Features
 
@@ -589,7 +621,7 @@ function myHandler(req) {
   return {
     status: 200,
     body: "",
-    contentType: "text/plain"
+    contentType: "text/plain",
   };
 }
 
@@ -606,11 +638,13 @@ init();
 **Add cursor:** Alt+Click (Option+Click on Mac)
 
 **Edit multiple lines:**
+
 1. Alt+Click to place cursors
 2. Type simultaneously on all lines
 3. Press Escape to return to single cursor
 
 **Select all occurrences:**
+
 1. Select a word
 2. Ctrl+Shift+L (Cmd+Shift+L on Mac)
 3. All occurrences selected
@@ -635,6 +669,7 @@ init();
 ### 2. Use Folders
 
 Organize scripts logically:
+
 ```
 api/ - API endpoints
 pages/ - Web pages
@@ -680,12 +715,14 @@ utils/ - Helper scripts
 ### Editor Won't Load
 
 **Check:**
+
 - Server is running (`cargo run`)
 - Editor script is loaded
 - Navigate to correct URL
 - Check browser console for errors
 
 **Solutions:**
+
 - Restart server
 - Clear browser cache
 - Try different browser
@@ -694,12 +731,14 @@ utils/ - Helper scripts
 ### Can't Save Script
 
 **Check:**
+
 - Valid JavaScript syntax
 - No reserved filenames
 - Server has write permissions
 - Network connection stable
 
 **Solutions:**
+
 - Fix syntax errors (red squiggles)
 - Choose different filename
 - Check server logs
@@ -708,11 +747,13 @@ utils/ - Helper scripts
 ### Scripts Not Appearing
 
 **Check:**
+
 - Script was saved successfully
 - Refresh sidebar
 - Check scripts directory on server
 
 **Solutions:**
+
 - Click refresh in sidebar
 - Reload browser page
 - Verify file exists on server
@@ -720,11 +761,13 @@ utils/ - Helper scripts
 ### AI Not Responding
 
 **Check:**
+
 - AI service configured on server
 - Network connection
 - No errors in browser console
 
 **Solutions:**
+
 - Wait (AI can take a few seconds)
 - Refresh page
 - Try simpler prompt
@@ -733,12 +776,14 @@ utils/ - Helper scripts
 ### Assets Not Uploading
 
 **Check:**
+
 - File size limits
 - Supported file types
 - Server has write permissions
 - Network connection
 
 **Solutions:**
+
 - Compress large files
 - Check server settings
 - Try smaller file first
@@ -747,12 +792,14 @@ utils/ - Helper scripts
 ### Logs Not Showing
 
 **Check:**
+
 - Script has `writeLog()` calls
 - Script has been executed
 - Correct script selected in filter
 - Logs tab selected
 
 **Solutions:**
+
 - Add `writeLog()` to script
 - Execute script (make a request)
 - Select correct script
@@ -813,6 +860,7 @@ GET /script_logs?uri=/api/users
 ### 1. Quick Script Creation
 
 Use AI to generate complete scripts:
+
 ```
 Create a simple hello world API at /hello
 ```
@@ -822,6 +870,7 @@ Then customize as needed.
 ### 2. Bulk Editing
 
 Use Find & Replace (Ctrl+H / Cmd+H) to:
+
 - Rename functions across file
 - Update API paths
 - Change variable names
@@ -836,6 +885,7 @@ Use Find & Replace (Ctrl+H / Cmd+H) to:
 ### 4. Asset Preview
 
 Click asset in sidebar to preview:
+
 - Images show inline
 - Text files can be viewed
 - Download any asset
@@ -849,6 +899,7 @@ Click asset in sidebar to preview:
 ### 6. Log Filtering
 
 Add tags to logs:
+
 ```javascript
 writeLog("[INFO] User logged in");
 writeLog("[ERROR] Database connection failed");

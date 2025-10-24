@@ -10,26 +10,26 @@ This directory contains **generic, cross-cutting guidance** for implementing any
 
 ### Process Guides
 
-| Guide | Purpose | Audience |
-|-------|---------|----------|
-| [adding-new-features.md](./adding-new-features.md) | Step-by-step process for adding features | All contributors |
-| [code-review-process.md](./code-review-process.md) | How code reviews work | Contributors & reviewers |
+| Guide                                              | Purpose                                  | Audience                 |
+| -------------------------------------------------- | ---------------------------------------- | ------------------------ |
+| [adding-new-features.md](./adding-new-features.md) | Step-by-step process for adding features | All contributors         |
+| [code-review-process.md](./code-review-process.md) | How code reviews work                    | Contributors & reviewers |
 
 ### Technical Guides
 
-| Guide | Purpose | Audience |
-|-------|---------|----------|
-| [testing-guidelines.md](./testing-guidelines.md) | Comprehensive testing practices | All contributors |
-| [security-checklist.md](./security-checklist.md) | Security review checklist | All contributors |
-| [performance-guidelines.md](./performance-guidelines.md) | Writing performant code | All contributors |
-| [error-handling-patterns.md](./error-handling-patterns.md) | Proper error handling in Rust | All contributors |
+| Guide                                                      | Purpose                         | Audience         |
+| ---------------------------------------------------------- | ------------------------------- | ---------------- |
+| [testing-guidelines.md](./testing-guidelines.md)           | Comprehensive testing practices | All contributors |
+| [security-checklist.md](./security-checklist.md)           | Security review checklist       | All contributors |
+| [performance-guidelines.md](./performance-guidelines.md)   | Writing performant code         | All contributors |
+| [error-handling-patterns.md](./error-handling-patterns.md) | Proper error handling in Rust   | All contributors |
 
 ### Reference Guides
 
-| Guide | Purpose | Audience |
-|-------|---------|----------|
+| Guide                                                    | Purpose                    | Audience                   |
+| -------------------------------------------------------- | -------------------------- | -------------------------- |
 | [architecture-decisions.md](./architecture-decisions.md) | Key architectural patterns | Contributors & maintainers |
-| [debugging-techniques.md](./debugging-techniques.md) | Debugging aiwebengine | All contributors |
+| [debugging-techniques.md](./debugging-techniques.md)     | Debugging aiwebengine      | All contributors           |
 
 ---
 

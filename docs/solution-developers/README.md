@@ -18,55 +18,55 @@ After completing these guides, you'll be able to create, test, and deploy script
 
 Perfect for beginners who want a guided learning path:
 
-| Guide | Description | Time |
-|-------|-------------|------|
-| [01 - First Script](getting-started/01-first-script.md) | Create a "Hello World" script and understand the basics | 15 min |
-| [02 - Working with Editor](getting-started/02-working-with-editor.md) | Use the web editor for development and testing | 20 min |
-| [03 - Deployment Workflow](getting-started/03-deployment-workflow.md) | Deploy scripts using different methods | 15 min |
+| Guide                                                                 | Description                                             | Time   |
+| --------------------------------------------------------------------- | ------------------------------------------------------- | ------ |
+| [01 - First Script](getting-started/01-first-script.md)               | Create a "Hello World" script and understand the basics | 15 min |
+| [02 - Working with Editor](getting-started/02-working-with-editor.md) | Use the web editor for development and testing          | 20 min |
+| [03 - Deployment Workflow](getting-started/03-deployment-workflow.md) | Deploy scripts using different methods                  | 15 min |
 
 ### Core Guides (Main Topics)
 
 Deep dives into specific development areas:
 
-| Guide | What You'll Learn |
-|-------|-------------------|
-| [Script Development](guides/scripts.md) | Create handlers, register routes, manage state, error handling |
-| [Asset Management](guides/assets.md) | Upload and serve images, CSS, JavaScript, and other static files |
-| [Logging & Debugging](guides/logging.md) | Write logs, debug issues, monitor script behavior |
-| [Streaming & Real-time](guides/streaming.md) | Build real-time features with Server-Sent Events |
-| [GraphQL Subscriptions](guides/graphql-subscriptions.md) | Real-time data updates with GraphQL |
-| [AI-Assisted Development](guides/ai-development.md) | Use AI to generate, edit, and debug scripts |
+| Guide                                                    | What You'll Learn                                                |
+| -------------------------------------------------------- | ---------------------------------------------------------------- |
+| [Script Development](guides/scripts.md)                  | Create handlers, register routes, manage state, error handling   |
+| [Asset Management](guides/assets.md)                     | Upload and serve images, CSS, JavaScript, and other static files |
+| [Logging & Debugging](guides/logging.md)                 | Write logs, debug issues, monitor script behavior                |
+| [Streaming & Real-time](guides/streaming.md)             | Build real-time features with Server-Sent Events                 |
+| [GraphQL Subscriptions](guides/graphql-subscriptions.md) | Real-time data updates with GraphQL                              |
+| [AI-Assisted Development](guides/ai-development.md)      | Use AI to generate, edit, and debug scripts                      |
 
 ### Tools & Workflows
 
 Learn about development tools:
 
-| Tool | Purpose |
-|------|---------|
-| [Web Editor](tools/editor.md) | Browser-based IDE with AI assistant |
-| [Deployer Tool](tools/deployer.md) | CLI tool for rapid deployment |
+| Tool                                      | Purpose                              |
+| ----------------------------------------- | ------------------------------------ |
+| [Web Editor](tools/editor.md)             | Browser-based IDE with AI assistant  |
+| [Deployer Tool](tools/deployer.md)        | CLI tool for rapid deployment        |
 | [External Tools](tools/external-tools.md) | VS Code, Git, and other integrations |
 
 ### API Reference (Quick Lookup)
 
 Complete API documentation:
 
-| Reference | Content |
-|-----------|---------|
+| Reference                                       | Content                                 |
+| ----------------------------------------------- | --------------------------------------- |
 | [JavaScript APIs](reference/javascript-apis.md) | All available functions and their usage |
-| [Authentication API](reference/auth-api.md) | User authentication and authorization |
+| [Authentication API](reference/auth-api.md)     | User authentication and authorization   |
 
 ### Examples & Patterns
 
 Real-world code examples:
 
-| Examples | What's Included |
-|----------|----------------|
-| [Example Scripts Index](examples/index.md) | Complete guide to all example scripts |
-| [Basic APIs](examples/basic-api.md) | Simple REST endpoints and JSON responses |
-| [Forms & Data](examples/forms-and-data.md) | Form handling and data processing |
-| [Real-time Features](examples/real-time-features.md) | Chat, notifications, live updates |
-| [AI Integration](examples/ai-integration.md) | Using AI assistants and external AI APIs |
+| Examples                                             | What's Included                          |
+| ---------------------------------------------------- | ---------------------------------------- |
+| [Example Scripts Index](examples/index.md)           | Complete guide to all example scripts    |
+| [Basic APIs](examples/basic-api.md)                  | Simple REST endpoints and JSON responses |
+| [Forms & Data](examples/forms-and-data.md)           | Form handling and data processing        |
+| [Real-time Features](examples/real-time-features.md) | Chat, notifications, live updates        |
+| [AI Integration](examples/ai-integration.md)         | Using AI assistants and external AI APIs |
 
 ## 🎯 Find What You Need
 
@@ -232,31 +232,31 @@ function myHandler(req) {
   try {
     // Extract parameters
     const param = req.query.param;
-    
+
     // Validate
     if (!param) {
       return {
         status: 400,
         body: JSON.stringify({ error: "Missing parameter" }),
-        contentType: "application/json"
+        contentType: "application/json",
       };
     }
-    
+
     // Process
     const result = process(param);
-    
+
     // Return success
     return {
       status: 200,
       body: JSON.stringify({ result: result }),
-      contentType: "application/json"
+      contentType: "application/json",
     };
   } catch (error) {
     writeLog(`Error: ${error.message}`);
     return {
       status: 500,
       body: JSON.stringify({ error: "Internal error" }),
-      contentType: "application/json"
+      contentType: "application/json",
     };
   }
 }

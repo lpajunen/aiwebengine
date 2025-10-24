@@ -27,6 +27,7 @@ assets/docs/guide.pdf → http://yourserver.com/docs/guide.pdf
 ```
 
 The server automatically:
+
 - Sets correct MIME types based on file extensions
 - Handles HTTP GET requests for assets
 - Serves files efficiently
@@ -65,6 +66,7 @@ assets/
 5. Assets are immediately available
 
 **View assets:**
+
 - Browse in the Assets section
 - Preview images directly
 - Download or delete as needed
@@ -72,6 +74,7 @@ assets/
 **Example: Upload a stylesheet**
 
 1. Create `style.css` locally:
+
    ```css
    body {
      font-family: Arial, sans-serif;
@@ -98,7 +101,7 @@ assets/
          </body>
          </html>
        `,
-       contentType: "text/html"
+       contentType: "text/html",
      };
    }
    ```
@@ -137,9 +140,9 @@ console.log(asset.contentB64); // Base64 encoded content
 
 // Create or update asset
 upsertAsset(
-  "/new-image.png",           // Public path
-  "image/png",                 // MIME type
-  base64EncodedContent         // Base64 string
+  "/new-image.png", // Public path
+  "image/png", // MIME type
+  base64EncodedContent, // Base64 string
 );
 
 // Delete asset
@@ -151,28 +154,28 @@ console.log(deleted); // true if deleted
 
 ```javascript
 function uploadHandler(req) {
-  const publicPath = req.form.path;        // "/uploads/file.jpg"
-  const mimetype = req.form.mimetype;      // "image/jpeg"
-  const contentB64 = req.form.content;     // Base64 string
-  
+  const publicPath = req.form.path; // "/uploads/file.jpg"
+  const mimetype = req.form.mimetype; // "image/jpeg"
+  const contentB64 = req.form.content; // Base64 string
+
   try {
     upsertAsset(publicPath, mimetype, contentB64);
     writeLog(`Asset uploaded: ${publicPath}`);
-    
+
     return {
       status: 201,
-      body: JSON.stringify({ 
+      body: JSON.stringify({
         message: "Asset uploaded",
-        url: publicPath
+        url: publicPath,
       }),
-      contentType: "application/json"
+      contentType: "application/json",
     };
   } catch (error) {
     writeLog(`Upload failed: ${error.message}`);
     return {
       status: 500,
       body: JSON.stringify({ error: "Upload failed" }),
-      contentType: "application/json"
+      contentType: "application/json",
     };
   }
 }
@@ -200,11 +203,11 @@ function styledPageHandler(req) {
     </body>
     </html>
   `;
-  
+
   return {
     status: 200,
     body: html,
-    contentType: "text/html"
+    contentType: "text/html",
   };
 }
 ```
@@ -228,11 +231,11 @@ function appPageHandler(req) {
     </body>
     </html>
   `;
-  
+
   return {
     status: 200,
     body: html,
-    contentType: "text/html"
+    contentType: "text/html",
   };
 }
 ```
@@ -262,11 +265,11 @@ function galleryHandler(req) {
     </body>
     </html>
   `;
-  
+
   return {
     status: 200,
     body: html,
-    contentType: "text/html"
+    contentType: "text/html",
   };
 }
 ```
@@ -290,11 +293,11 @@ function resourcesHandler(req) {
     </body>
     </html>
   `;
-  
+
   return {
     status: 200,
     body: html,
-    contentType: "text/html"
+    contentType: "text/html",
   };
 }
 ```
@@ -362,23 +365,25 @@ assets/
 function assetGalleryHandler(req) {
   // Get all assets
   const assetPaths = listAssets();
-  
+
   // Filter for images
-  const images = assetPaths.filter(path => {
-    const ext = path.split('.').pop().toLowerCase();
-    return ['png', 'jpg', 'jpeg', 'gif', 'svg'].includes(ext);
+  const images = assetPaths.filter((path) => {
+    const ext = path.split(".").pop().toLowerCase();
+    return ["png", "jpg", "jpeg", "gif", "svg"].includes(ext);
   });
-  
+
   // Build HTML gallery
-  const imageCards = images.map(path => {
-    return `
+  const imageCards = images
+    .map((path) => {
+      return `
       <div class="image-card">
         <img src="${path}" alt="${path}">
         <p>${path}</p>
       </div>
     `;
-  }).join('');
-  
+    })
+    .join("");
+
   const html = `
     <!DOCTYPE html>
     <html>
@@ -398,11 +403,11 @@ function assetGalleryHandler(req) {
     </body>
     </html>
   `;
-  
+
   return {
     status: 200,
     body: html,
-    contentType: "text/html"
+    contentType: "text/html",
   };
 }
 
@@ -472,11 +477,11 @@ function uploadFormHandler(req) {
     </body>
     </html>
   `;
-  
+
   return {
     status: 200,
     body: html,
-    contentType: "text/html"
+    contentType: "text/html",
   };
 }
 
@@ -520,11 +525,12 @@ Creates or updates an asset.
 upsertAsset(
   "/images/new.png",
   "image/png",
-  "iVBORw0KGgoAAAANS..." // Base64 encoded
+  "iVBORw0KGgoAAAANS...", // Base64 encoded
 );
 ```
 
 **Parameters:**
+
 - `publicPath` - URL path (e.g., `/images/photo.jpg`)
 - `mimetype` - MIME type (e.g., `image/jpeg`)
 - `contentB64` - Base64 encoded file content
@@ -547,43 +553,48 @@ if (deleted) {
 Common MIME types for assets:
 
 ### Images
+
 ```javascript
-"image/jpeg"      // .jpg, .jpeg
-"image/png"       // .png
-"image/gif"       // .gif
-"image/svg+xml"   // .svg
-"image/webp"      // .webp
-"image/x-icon"    // .ico
+"image/jpeg"; // .jpg, .jpeg
+"image/png"; // .png
+"image/gif"; // .gif
+"image/svg+xml"; // .svg
+"image/webp"; // .webp
+"image/x-icon"; // .ico
 ```
 
 ### Stylesheets & Scripts
+
 ```javascript
-"text/css"                 // .css
-"application/javascript"   // .js
-"application/json"         // .json
+"text/css"; // .css
+"application/javascript"; // .js
+"application/json"; // .json
 ```
 
 ### Documents
+
 ```javascript
-"application/pdf"          // .pdf
-"text/plain"               // .txt
-"text/html"                // .html
-"text/markdown"            // .md
+"application/pdf"; // .pdf
+"text/plain"; // .txt
+"text/html"; // .html
+"text/markdown"; // .md
 ```
 
 ### Fonts
+
 ```javascript
-"font/woff"                // .woff
-"font/woff2"               // .woff2
-"font/ttf"                 // .ttf
-"font/otf"                 // .otf
+"font/woff"; // .woff
+"font/woff2"; // .woff2
+"font/ttf"; // .ttf
+"font/otf"; // .otf
 ```
 
 ### Archives
+
 ```javascript
-"application/zip"          // .zip
-"application/gzip"         // .gz
-"application/x-tar"        // .tar
+"application/zip"; // .zip
+"application/gzip"; // .gz
+"application/x-tar"; // .tar
 ```
 
 ## Best Practices
@@ -602,11 +613,13 @@ assets/
 ### 2. Use Descriptive Names
 
 **Good:**
+
 - `header-logo.png`
 - `main-stylesheet.css`
 - `user-profile-default.jpg`
 
 **Bad:**
+
 - `img1.png`
 - `style.css`
 - `pic.jpg`
@@ -640,18 +653,18 @@ Regularly remove assets that are no longer referenced:
 function cleanupHandler(req) {
   const assets = listAssets();
   const unusedAssets = findUnusedAssets(assets);
-  
-  unusedAssets.forEach(asset => {
+
+  unusedAssets.forEach((asset) => {
     deleteAsset(asset);
     writeLog(`Deleted unused asset: ${asset}`);
   });
-  
+
   return {
     status: 200,
-    body: JSON.stringify({ 
-      deleted: unusedAssets.length 
+    body: JSON.stringify({
+      deleted: unusedAssets.length,
     }),
-    contentType: "application/json"
+    contentType: "application/json",
   };
 }
 ```
@@ -680,7 +693,7 @@ function responsiveImageHandler(req) {
     </body>
     </html>
   `;
-  
+
   return { status: 200, body: html, contentType: "text/html" };
 }
 ```
@@ -690,7 +703,7 @@ function responsiveImageHandler(req) {
 ```javascript
 function themedPageHandler(req) {
   const theme = req.query.theme || "light";
-  
+
   const html = `
     <!DOCTYPE html>
     <html>
@@ -703,7 +716,7 @@ function themedPageHandler(req) {
     </body>
     </html>
   `;
-  
+
   return { status: 200, body: html, contentType: "text/html" };
 }
 ```
@@ -717,18 +730,18 @@ function pwaManifestHandler(req) {
     short_name: "App",
     icons: [
       { src: "/images/icon-192.png", sizes: "192x192", type: "image/png" },
-      { src: "/images/icon-512.png", sizes: "512x512", type: "image/png" }
+      { src: "/images/icon-512.png", sizes: "512x512", type: "image/png" },
     ],
     start_url: "/",
     display: "standalone",
     theme_color: "#ffffff",
-    background_color: "#ffffff"
+    background_color: "#ffffff",
   };
-  
+
   return {
     status: 200,
     body: JSON.stringify(manifest),
-    contentType: "application/json"
+    contentType: "application/json",
   };
 }
 
@@ -740,6 +753,7 @@ register("/manifest.json", "pwaManifestHandler", "GET");
 ### Asset Not Loading
 
 **Check:**
+
 - File exists in `assets/` directory
 - Path is correct (case-sensitive)
 - MIME type is correct
@@ -748,6 +762,7 @@ register("/manifest.json", "pwaManifestHandler", "GET");
 ### Images Not Displaying
 
 **Check:**
+
 - Image format is supported
 - File is not corrupted
 - Path starts with `/`
@@ -756,6 +771,7 @@ register("/manifest.json", "pwaManifestHandler", "GET");
 ### CSS Not Applied
 
 **Check:**
+
 - `<link>` tag in `<head>`
 - Correct `href` path
 - CSS syntax is valid
@@ -764,6 +780,7 @@ register("/manifest.json", "pwaManifestHandler", "GET");
 ### JavaScript Not Running
 
 **Check:**
+
 - `<script>` tag placement (before closing `</body>` or with `defer`)
 - Console for JavaScript errors
 - Correct `src` path

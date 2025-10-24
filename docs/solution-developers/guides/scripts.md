@@ -33,7 +33,7 @@ function helloHandler(req) {
   return {
     status: 200,
     body: "Hello, World!",
-    contentType: "text/plain"
+    contentType: "text/plain",
   };
 }
 
@@ -61,7 +61,7 @@ init();
 ```javascript
 /**
  * script-name.js - Brief description
- * 
+ *
  * Longer description of what this script does.
  * List key features or routes.
  */
@@ -98,7 +98,7 @@ function createResponse(status, data) {
   return {
     status: status,
     body: JSON.stringify(data),
-    contentType: "application/json"
+    contentType: "application/json",
   };
 }
 
@@ -115,17 +115,17 @@ function createItemHandler(req) {
   const item = {
     id: nextId++,
     name: req.form.name,
-    created: new Date().toISOString()
+    created: new Date().toISOString(),
   };
-  
+
   const validation = validateItem(item);
   if (!validation.valid) {
     return createResponse(400, { error: validation.error });
   }
-  
+
   items.push(item);
   writeLog(`Item created: ${item.id}`);
-  
+
   return createResponse(201, { item: item });
 }
 
@@ -137,7 +137,7 @@ function init() {
   // Register routes
   register("/api/items", "listItemsHandler", "GET");
   register("/api/items", "createItemHandler", "POST");
-  
+
   // Log initialization
   writeLog("Items API initialized");
 }
@@ -171,7 +171,7 @@ function handlerName(req) {
   return {
     status: 200,
     body: "response content",
-    contentType: "text/plain"
+    contentType: "text/plain",
   };
 }
 ```
@@ -220,7 +220,7 @@ function textHandler(req) {
   return {
     status: 200,
     body: "Plain text response",
-    contentType: "text/plain"
+    contentType: "text/plain",
   };
 }
 ```
@@ -232,13 +232,13 @@ function jsonHandler(req) {
   const data = {
     message: "Success",
     timestamp: new Date().toISOString(),
-    data: [1, 2, 3]
+    data: [1, 2, 3],
   };
-  
+
   return {
     status: 200,
     body: JSON.stringify(data),
-    contentType: "application/json"
+    contentType: "application/json",
   };
 }
 ```
@@ -260,11 +260,11 @@ function htmlHandler(req) {
     </body>
     </html>
   `;
-  
+
   return {
     status: 200,
     body: html,
-    contentType: "text/html"
+    contentType: "text/html",
   };
 }
 ```
@@ -276,7 +276,7 @@ function errorHandler(req) {
   return {
     status: 404,
     body: JSON.stringify({ error: "Resource not found" }),
-    contentType: "application/json"
+    contentType: "application/json",
   };
 }
 ```
@@ -319,7 +319,7 @@ function init() {
   // Collection endpoints
   register("/api/users", "listUsers", "GET");
   register("/api/users", "createUser", "POST");
-  
+
   // Resource endpoints
   register("/api/users/:id", "getUser", "GET");
   register("/api/users/:id", "updateUser", "PUT");
@@ -334,7 +334,7 @@ Note: Path parameters like `:id` are not currently extracted automatically. Use 
 register("/api/users/get", "getUser", "GET");
 
 function getUser(req) {
-  const id = req.query.id;  // Access via ?id=123
+  const id = req.query.id; // Access via ?id=123
   // ...
 }
 ```
@@ -348,11 +348,11 @@ function init() {
   // User routes
   register("/api/users", "listUsers", "GET");
   register("/api/users", "createUser", "POST");
-  
+
   // Product routes
   register("/api/products", "listProducts", "GET");
   register("/api/products", "createProduct", "POST");
-  
+
   // Page routes
   register("/", "homePage", "GET");
   register("/about", "aboutPage", "GET");
@@ -370,16 +370,16 @@ function searchHandler(req) {
   const query = req.query.q || "";
   const page = parseInt(req.query.page || "1");
   const limit = parseInt(req.query.limit || "10");
-  
+
   writeLog(`Search: q="${query}", page=${page}, limit=${limit}`);
-  
+
   // Perform search...
   const results = performSearch(query, page, limit);
-  
+
   return {
     status: 200,
     body: JSON.stringify(results),
-    contentType: "application/json"
+    contentType: "application/json",
   };
 }
 
@@ -396,24 +396,24 @@ function createUserHandler(req) {
   const name = req.form.name;
   const email = req.form.email;
   const age = parseInt(req.form.age || "0");
-  
+
   // Validate
   if (!name || !email) {
     return {
       status: 400,
       body: JSON.stringify({ error: "Name and email required" }),
-      contentType: "application/json"
+      contentType: "application/json",
     };
   }
-  
+
   // Create user
   const user = { id: generateId(), name, email, age };
   saveUser(user);
-  
+
   return {
     status: 201,
     body: JSON.stringify({ user: user }),
-    contentType: "application/json"
+    contentType: "application/json",
   };
 }
 
@@ -430,19 +430,19 @@ function apiHandler(req) {
     // If client sends JSON with Content-Type: application/json
     // It may be available in req.form as a single key
     const jsonData = req.form.body ? JSON.parse(req.form.body) : req.form;
-    
+
     writeLog(`Received data: ${JSON.stringify(jsonData)}`);
-    
+
     return {
       status: 200,
       body: JSON.stringify({ received: jsonData }),
-      contentType: "application/json"
+      contentType: "application/json",
     };
   } catch (error) {
     return {
       status: 400,
       body: JSON.stringify({ error: "Invalid JSON" }),
-      contentType: "application/json"
+      contentType: "application/json",
     };
   }
 }
@@ -457,17 +457,17 @@ function headerHandler(req) {
   const userAgent = req.headers["user-agent"] || "Unknown";
   const contentType = req.headers["content-type"] || "None";
   const authHeader = req.headers["authorization"] || "";
-  
+
   writeLog(`User-Agent: ${userAgent}`);
-  
+
   return {
     status: 200,
     body: JSON.stringify({
       userAgent: userAgent,
       contentType: contentType,
-      hasAuth: authHeader.length > 0
+      hasAuth: authHeader.length > 0,
     }),
-    contentType: "application/json"
+    contentType: "application/json",
   };
 }
 ```
@@ -479,11 +479,13 @@ function headerHandler(req) {
 Use appropriate status codes:
 
 **Success:**
+
 - `200` - OK (successful GET, PUT, DELETE)
 - `201` - Created (successful POST)
 - `204` - No Content (successful but no body)
 
 **Client Errors:**
+
 - `400` - Bad Request (invalid input)
 - `401` - Unauthorized (authentication required)
 - `403` - Forbidden (insufficient permissions)
@@ -492,6 +494,7 @@ Use appropriate status codes:
 - `422` - Unprocessable Entity (validation failed)
 
 **Server Errors:**
+
 - `500` - Internal Server Error (unexpected error)
 - `502` - Bad Gateway (upstream service error)
 - `503` - Service Unavailable (temporary)
@@ -502,21 +505,21 @@ Common MIME types:
 
 ```javascript
 // Text
-contentType: "text/plain"
-contentType: "text/html"
-contentType: "text/css"
+contentType: "text/plain";
+contentType: "text/html";
+contentType: "text/css";
 
 // Application
-contentType: "application/json"
-contentType: "application/xml"
-contentType: "application/pdf"
-contentType: "application/javascript"
+contentType: "application/json";
+contentType: "application/xml";
+contentType: "application/pdf";
+contentType: "application/javascript";
 
 // Images
-contentType: "image/jpeg"
-contentType: "image/png"
-contentType: "image/gif"
-contentType: "image/svg+xml"
+contentType: "image/jpeg";
+contentType: "image/png";
+contentType: "image/gif";
+contentType: "image/svg+xml";
 ```
 
 ### Response Helper
@@ -528,7 +531,7 @@ function jsonResponse(status, data) {
   return {
     status: status,
     body: JSON.stringify(data),
-    contentType: "application/json"
+    contentType: "application/json",
   };
 }
 
@@ -536,7 +539,7 @@ function textResponse(status, text) {
   return {
     status: status,
     body: text,
-    contentType: "text/plain"
+    contentType: "text/plain",
   };
 }
 
@@ -574,6 +577,7 @@ function resetHandler(req) {
 ```
 
 **Important:** State is lost when:
+
 - Server restarts
 - Script is reloaded
 - Script is updated
@@ -587,20 +591,20 @@ function loginHandler(req) {
   const sessionId = generateSessionId();
   sessions[sessionId] = {
     user: req.form.username,
-    created: Date.now()
+    created: Date.now(),
   };
-  
+
   return jsonResponse(200, { sessionId: sessionId });
 }
 
 function getUserHandler(req) {
   const sessionId = req.headers["x-session-id"];
   const session = sessions[sessionId];
-  
+
   if (!session) {
     return errorResponse(401, "Invalid session");
   }
-  
+
   return jsonResponse(200, { user: session.user });
 }
 ```
@@ -622,22 +626,22 @@ function getCachedData(key) {
 function setCachedData(key, data) {
   cache[key] = {
     data: data,
-    timestamp: Date.now()
+    timestamp: Date.now(),
   };
 }
 
 function apiHandler(req) {
   const cacheKey = `users_${req.query.page || 1}`;
-  
+
   // Check cache
   let data = getCachedData(cacheKey);
-  
+
   if (!data) {
     // Fetch fresh data
     data = fetchUsers(req.query.page);
     setCachedData(cacheKey, data);
   }
-  
+
   return jsonResponse(200, data);
 }
 ```
@@ -654,7 +658,7 @@ function riskyHandler(req) {
     // Operations that might fail
     const data = JSON.parse(req.form.data);
     const result = processData(data);
-    
+
     return jsonResponse(200, { result: result });
   } catch (error) {
     writeLog(`Error in riskyHandler: ${error.message}`);
@@ -673,21 +677,21 @@ function createItemHandler(req) {
   if (!req.form.name) {
     return errorResponse(400, "Name is required");
   }
-  
+
   if (!req.form.email) {
     return errorResponse(400, "Email is required");
   }
-  
+
   // Validate format
   if (!isValidEmail(req.form.email)) {
     return errorResponse(400, "Invalid email format");
   }
-  
+
   // Validate length
   if (req.form.name.length > 100) {
     return errorResponse(400, "Name too long (max 100 characters)");
   }
-  
+
   // Process valid data
   const item = createItem(req.form);
   return jsonResponse(201, { item: item });
@@ -704,14 +708,14 @@ function isValidEmail(email) {
 function handleError(error, context) {
   const errorId = Date.now().toString(36);
   writeLog(`[${errorId}] Error in ${context}: ${error.message}`);
-  
+
   return {
     status: 500,
     body: JSON.stringify({
       error: "Internal server error",
-      errorId: errorId
+      errorId: errorId,
     }),
-    contentType: "application/json"
+    contentType: "application/json",
   };
 }
 
@@ -730,17 +734,19 @@ function myHandler(req) {
 ### 1. Use Descriptive Names
 
 **Good:**
+
 ```javascript
-function createUserHandler(req) { }
-function getUserByIdHandler(req) { }
-function updateUserEmailHandler(req) { }
+function createUserHandler(req) {}
+function getUserByIdHandler(req) {}
+function updateUserEmailHandler(req) {}
 ```
 
 **Bad:**
+
 ```javascript
-function handler1(req) { }
-function func(req) { }
-function process(req) { }
+function handler1(req) {}
+function func(req) {}
+function process(req) {}
 ```
 
 ### 2. Validate All Inputs
@@ -751,18 +757,18 @@ function safeHandler(req) {
   if (!req.query.id) {
     return errorResponse(400, "Missing id parameter");
   }
-  
+
   // Validate types
   const id = parseInt(req.query.id);
   if (isNaN(id)) {
     return errorResponse(400, "Invalid id format");
   }
-  
+
   // Check ranges
   if (id < 1 || id > 1000000) {
     return errorResponse(400, "ID out of range");
   }
-  
+
   // Process validated data
   return processId(id);
 }
@@ -773,7 +779,7 @@ function safeHandler(req) {
 ```javascript
 function handler(req) {
   writeLog(`Request started: ${req.path}`);
-  
+
   try {
     const result = doSomething();
     writeLog(`Request completed successfully`);
@@ -788,6 +794,7 @@ function handler(req) {
 ### 4. Keep Handlers Focused
 
 **Good - Single Responsibility:**
+
 ```javascript
 function listUsers(req) {
   const users = getAllUsers();
@@ -802,6 +809,7 @@ function createUser(req) {
 ```
 
 **Bad - Too Much in One Handler:**
+
 ```javascript
 function usersHandler(req) {
   if (req.method === "GET") {
@@ -836,11 +844,11 @@ function sanitizeInput(str) {
 // Handler uses helpers
 function createHandler(req) {
   const email = sanitizeInput(req.form.email);
-  
+
   if (!validateEmail(email)) {
     return errorResponse(400, "Invalid email");
   }
-  
+
   const id = generateId();
   // ... continue processing
 }
@@ -857,12 +865,12 @@ function requireAuth(req, handler) {
   if (!token) {
     return errorResponse(401, "Authentication required");
   }
-  
+
   // Validate token...
   if (!isValidToken(token)) {
     return errorResponse(401, "Invalid token");
   }
-  
+
   // Call actual handler
   return handler(req);
 }
@@ -889,16 +897,16 @@ function protectedDataHandler(req) {
 ```javascript
 function createCrudHandlers(resourceName, storage) {
   return {
-    list: function(req) {
+    list: function (req) {
       return jsonResponse(200, { [resourceName]: storage });
     },
-    
-    create: function(req) {
+
+    create: function (req) {
       const item = { id: generateId(), ...req.form };
       storage.push(item);
       return jsonResponse(201, { [resourceName]: item });
     },
-    
+
     // ... more handlers
   };
 }
@@ -927,14 +935,14 @@ function createUserHandler(req) {
 function paginatedHandler(req) {
   const page = parseInt(req.query.page || "1");
   const limit = parseInt(req.query.limit || "10");
-  
+
   const offset = (page - 1) * limit;
   const allItems = getAllItems();
   const totalItems = allItems.length;
   const totalPages = Math.ceil(totalItems / limit);
-  
+
   const items = allItems.slice(offset, offset + limit);
-  
+
   return jsonResponse(200, {
     items: items,
     pagination: {
@@ -943,8 +951,8 @@ function paginatedHandler(req) {
       totalItems: totalItems,
       totalPages: totalPages,
       hasNext: page < totalPages,
-      hasPrev: page > 1
-    }
+      hasPrev: page > 1,
+    },
   });
 }
 ```
@@ -962,8 +970,8 @@ function paginatedHandler(req) {
 ### Essential Functions
 
 ```javascript
-register(path, handlerName, method)  // Register route
-writeLog(message)                     // Write to logs
+register(path, handlerName, method); // Register route
+writeLog(message); // Write to logs
 ```
 
 ### Handler Template
@@ -973,31 +981,31 @@ function myHandler(req) {
   try {
     // Extract parameters
     const param = req.query.param || req.form.param;
-    
+
     // Validate
     if (!param) {
       return {
         status: 400,
         body: JSON.stringify({ error: "Missing parameter" }),
-        contentType: "application/json"
+        contentType: "application/json",
       };
     }
-    
+
     // Process
     const result = process(param);
-    
+
     // Return success
     return {
       status: 200,
       body: JSON.stringify({ result: result }),
-      contentType: "application/json"
+      contentType: "application/json",
     };
   } catch (error) {
     writeLog(`Error: ${error.message}`);
     return {
       status: 500,
       body: JSON.stringify({ error: "Internal error" }),
-      contentType: "application/json"
+      contentType: "application/json",
     };
   }
 }

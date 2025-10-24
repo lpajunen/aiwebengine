@@ -429,7 +429,7 @@ Store bootstrap admin configuration securely:
 
 **Problem:** Already signed in before adding bootstrap config
 
-**Solution:** 
+**Solution:**
 
 Delete your user from the database (development only), add bootstrap config, restart server, and sign in again. Or have an existing admin grant you the Administrator role manually.
 

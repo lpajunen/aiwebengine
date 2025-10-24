@@ -65,7 +65,7 @@ function helloHandler(req) {
   return {
     status: 200,
     body: "Hello from editor!",
-    contentType: "text/plain"
+    contentType: "text/plain",
   };
 }
 
@@ -201,7 +201,7 @@ DEPLOYER="./target/release/deployer"
 for script in ./scripts/api/*.js; do
   filename=$(basename "$script")
   path="/api/${filename%.js}"
-  
+
   echo "Deploying $filename to $path..."
   $DEPLOYER --uri "$SERVER$path" --file "$script"
 done
@@ -363,18 +363,18 @@ Create your own deployment tool:
 
 ```javascript
 // deploy.mjs
-import fs from 'fs';
-import fetch from 'node-fetch';
+import fs from "fs";
+import fetch from "node-fetch";
 
 async function deployScript(serverUrl, scriptPath, localFile) {
-  const content = fs.readFileSync(localFile, 'utf8');
-  
+  const content = fs.readFileSync(localFile, "utf8");
+
   const response = await fetch(`${serverUrl}/api/scripts/${scriptPath}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content })
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content }),
   });
-  
+
   if (response.ok) {
     console.log(`✓ Deployed ${scriptPath}`);
   } else {
@@ -384,9 +384,9 @@ async function deployScript(serverUrl, scriptPath, localFile) {
 
 // Usage
 await deployScript(
-  'http://localhost:8080',
-  'api/users.js',
-  './scripts/api/users.js'
+  "http://localhost:8080",
+  "api/users.js",
+  "./scripts/api/users.js",
 );
 ```
 
@@ -496,7 +496,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
-      
+
       - name: Deploy scripts
         run: |
           for script in scripts/**/*.js; do
@@ -516,13 +516,13 @@ jobs:
 
 ## Comparing Workflows
 
-| Workflow | Ease of Use | Version Control | Team Collaboration | CI/CD Ready | Best For |
-|----------|-------------|-----------------|-------------------|-------------|----------|
-| Web Editor | ⭐⭐⭐⭐⭐ | ❌ | ⭐ | ❌ | Learning, prototyping |
-| Deployer Tool | ⭐⭐⭐⭐ | ✅ | ⭐⭐⭐⭐ | ✅ | Professional dev |
-| Direct File | ⭐⭐⭐ | ✅ | ⭐⭐ | ⭐⭐⭐ | Server admins |
-| API-based | ⭐⭐ | ✅ | ⭐⭐⭐ | ✅ | Tool integration |
-| Git-based | ⭐⭐⭐ | ✅ | ⭐⭐⭐⭐⭐ | ✅ | Teams |
+| Workflow      | Ease of Use | Version Control | Team Collaboration | CI/CD Ready | Best For              |
+| ------------- | ----------- | --------------- | ------------------ | ----------- | --------------------- |
+| Web Editor    | ⭐⭐⭐⭐⭐  | ❌              | ⭐                 | ❌          | Learning, prototyping |
+| Deployer Tool | ⭐⭐⭐⭐    | ✅              | ⭐⭐⭐⭐           | ✅          | Professional dev      |
+| Direct File   | ⭐⭐⭐      | ✅              | ⭐⭐               | ⭐⭐⭐      | Server admins         |
+| API-based     | ⭐⭐        | ✅              | ⭐⭐⭐             | ✅          | Tool integration      |
+| Git-based     | ⭐⭐⭐      | ✅              | ⭐⭐⭐⭐⭐         | ✅          | Teams                 |
 
 ## Environment-Specific Deployment
 
@@ -650,7 +650,7 @@ esac
 find scripts -name "*.js" -type f | while read script; do
   path="${script#scripts/}"
   path="/${path%.js}"
-  
+
   echo "Deploying $script to $path..."
   ./deployer --uri "$SERVER$path" --file "$script"
 done

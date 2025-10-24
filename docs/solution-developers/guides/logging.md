@@ -26,15 +26,15 @@ Writes a message to the server's log system.
 ```javascript
 function myHandler(req) {
   writeLog("Request received");
-  
+
   const result = processRequest(req);
-  
+
   writeLog(`Request processed: ${result.status}`);
-  
+
   return {
     status: 200,
     body: JSON.stringify(result),
-    contentType: "application/json"
+    contentType: "application/json",
   };
 }
 ```
@@ -141,11 +141,11 @@ Retrieve logs programmatically in your scripts:
 function logsHandler(req) {
   // Get logs for current script
   const logs = listLogs();
-  
+
   return {
     status: 200,
     body: JSON.stringify({ logs: logs }),
-    contentType: "application/json"
+    contentType: "application/json",
   };
 }
 
@@ -159,21 +159,21 @@ Get logs for a specific script URI:
 ```javascript
 function allLogsHandler(req) {
   const uri = req.query.uri; // e.g., "/api/users"
-  
+
   if (!uri) {
     return {
       status: 400,
       body: JSON.stringify({ error: "URI parameter required" }),
-      contentType: "application/json"
+      contentType: "application/json",
     };
   }
-  
+
   const logs = listLogsForUri(uri);
-  
+
   return {
     status: 200,
     body: JSON.stringify({ uri: uri, logs: logs }),
-    contentType: "application/json"
+    contentType: "application/json",
   };
 }
 
@@ -204,11 +204,13 @@ tail -f /var/log/aiwebengine/server.log
 ```javascript
 function logViewerHandler(req) {
   const logs = listLogs();
-  
-  const logItems = logs.map(log => {
-    return `<li><code>${log}</code></li>`;
-  }).join('');
-  
+
+  const logItems = logs
+    .map((log) => {
+      return `<li><code>${log}</code></li>`;
+    })
+    .join("");
+
   const html = `
     <!DOCTYPE html>
     <html>
@@ -227,11 +229,11 @@ function logViewerHandler(req) {
     </body>
     </html>
   `;
-  
+
   return {
     status: 200,
     body: html,
-    contentType: "text/html"
+    contentType: "text/html",
   };
 }
 
@@ -244,15 +246,15 @@ register("/logs-viewer", "logViewerHandler", "GET");
 function advancedLogViewerHandler(req) {
   const filter = req.query.filter || "";
   const level = req.query.level || "all";
-  
+
   const logs = listLogs();
-  
+
   // Filter logs
-  const filteredLogs = logs.filter(log => {
+  const filteredLogs = logs.filter((log) => {
     if (filter && !log.toLowerCase().includes(filter.toLowerCase())) {
       return false;
     }
-    
+
     if (level !== "all") {
       if (level === "error" && !log.toLowerCase().includes("error")) {
         return false;
@@ -261,10 +263,10 @@ function advancedLogViewerHandler(req) {
         return false;
       }
     }
-    
+
     return true;
   });
-  
+
   const html = `
     <!DOCTYPE html>
     <html>
@@ -293,10 +295,10 @@ function advancedLogViewerHandler(req) {
           <label>
             Level:
             <select name="level">
-              <option value="all" ${level === 'all' ? 'selected' : ''}>All</option>
-              <option value="error" ${level === 'error' ? 'selected' : ''}>Errors</option>
-              <option value="warning" ${level === 'warning' ? 'selected' : ''}>Warnings</option>
-              <option value="info" ${level === 'info' ? 'selected' : ''}>Info</option>
+              <option value="all" ${level === "all" ? "selected" : ""}>All</option>
+              <option value="error" ${level === "error" ? "selected" : ""}>Errors</option>
+              <option value="warning" ${level === "warning" ? "selected" : ""}>Warnings</option>
+              <option value="info" ${level === "info" ? "selected" : ""}>Info</option>
             </select>
           </label>
           
@@ -306,23 +308,26 @@ function advancedLogViewerHandler(req) {
       
       <div>
         <p><strong>${filteredLogs.length}</strong> log entries</p>
-        ${filteredLogs.map(log => {
-          let className = "log-entry";
-          if (log.toLowerCase().includes("error")) className += " error";
-          else if (log.toLowerCase().includes("warning")) className += " warning";
-          else if (log.toLowerCase().includes("info")) className += " info";
-          
-          return `<div class="${className}">${log}</div>`;
-        }).join('')}
+        ${filteredLogs
+          .map((log) => {
+            let className = "log-entry";
+            if (log.toLowerCase().includes("error")) className += " error";
+            else if (log.toLowerCase().includes("warning"))
+              className += " warning";
+            else if (log.toLowerCase().includes("info")) className += " info";
+
+            return `<div class="${className}">${log}</div>`;
+          })
+          .join("")}
       </div>
     </body>
     </html>
   `;
-  
+
   return {
     status: 200,
     body: html,
-    contentType: "text/html"
+    contentType: "text/html",
   };
 }
 
@@ -338,21 +343,21 @@ Add logs at key points:
 ```javascript
 function complexHandler(req) {
   writeLog("complexHandler: Start");
-  
+
   writeLog("complexHandler: Validating input");
   if (!validateInput(req)) {
     writeLog("complexHandler: Validation failed");
     return errorResponse(400, "Invalid input");
   }
-  
+
   writeLog("complexHandler: Processing data");
   const result = processData(req.form);
-  
+
   writeLog(`complexHandler: Processing complete, result: ${result.status}`);
-  
+
   writeLog("complexHandler: Saving to database");
   saveToDatabase(result);
-  
+
   writeLog("complexHandler: End");
   return jsonResponse(200, result);
 }
@@ -366,10 +371,10 @@ Inspect data at runtime:
 function debugHandler(req) {
   writeLog(`Received query: ${JSON.stringify(req.query)}`);
   writeLog(`Received form: ${JSON.stringify(req.form)}`);
-  
+
   const processedData = transformData(req.form);
   writeLog(`Processed data: ${JSON.stringify(processedData)}`);
-  
+
   return jsonResponse(200, processedData);
 }
 ```
@@ -389,9 +394,9 @@ function debugLog(message) {
 
 function myHandler(req) {
   debugLog("Handler called with path: " + req.path);
-  
+
   // Your logic
-  
+
   debugLog("Handler completed");
   return jsonResponse(200, { success: true });
 }
@@ -410,7 +415,7 @@ function createUserHandler(req) {
   } catch (error) {
     writeLog(`ERROR in createUserHandler: ${error.message}`);
     writeLog(`  Input data: ${JSON.stringify(req.form)}`);
-    writeLog(`  Stack: ${error.stack || 'No stack trace'}`);
+    writeLog(`  Stack: ${error.stack || "No stack trace"}`);
     return errorResponse(500, "Failed to create user");
   }
 }
@@ -424,7 +429,7 @@ Measure execution time:
 function timedOperation(name, operation) {
   const start = Date.now();
   writeLog(`${name}: Starting`);
-  
+
   try {
     const result = operation();
     const duration = Date.now() - start;
@@ -453,10 +458,10 @@ function slowHandler(req) {
 ```javascript
 function loggedHandler(req) {
   const requestId = generateRequestId();
-  
+
   writeLog(`[${requestId}] Request: ${req.method} ${req.path}`);
   writeLog(`[${requestId}] Query: ${JSON.stringify(req.query)}`);
-  
+
   try {
     const response = processRequest(req);
     writeLog(`[${requestId}] Response: ${response.status}`);
@@ -476,7 +481,7 @@ function auditLog(action, user, details) {
     timestamp: new Date().toISOString(),
     action: action,
     user: user,
-    details: details
+    details: details,
   };
   writeLog(`[AUDIT] ${JSON.stringify(entry)}`);
 }
@@ -484,11 +489,11 @@ function auditLog(action, user, details) {
 function deleteUserHandler(req) {
   const userId = req.query.id;
   const currentUser = getCurrentUser(req);
-  
+
   auditLog("DELETE_USER", currentUser, { userId: userId });
-  
+
   deleteUser(userId);
-  
+
   return jsonResponse(200, { message: "User deleted" });
 }
 ```
@@ -499,20 +504,20 @@ function deleteUserHandler(req) {
 const metrics = {
   requests: 0,
   errors: 0,
-  totalDuration: 0
+  totalDuration: 0,
 };
 
 function metricsHandler(req) {
   const start = Date.now();
   metrics.requests++;
-  
+
   try {
     const result = processRequest(req);
     const duration = Date.now() - start;
     metrics.totalDuration += duration;
-    
+
     writeLog(`[METRICS] Request completed in ${duration}ms`);
-    
+
     return result;
   } catch (error) {
     metrics.errors++;
@@ -522,19 +527,19 @@ function metricsHandler(req) {
 }
 
 function statsHandler(req) {
-  const avgDuration = metrics.requests > 0 
-    ? metrics.totalDuration / metrics.requests 
-    : 0;
-  
+  const avgDuration =
+    metrics.requests > 0 ? metrics.totalDuration / metrics.requests : 0;
+
   const stats = {
     totalRequests: metrics.requests,
     totalErrors: metrics.errors,
     averageDuration: Math.round(avgDuration),
-    errorRate: metrics.requests > 0 
-      ? ((metrics.errors / metrics.requests) * 100).toFixed(2) + '%'
-      : '0%'
+    errorRate:
+      metrics.requests > 0
+        ? ((metrics.errors / metrics.requests) * 100).toFixed(2) + "%"
+        : "0%",
   };
-  
+
   return jsonResponse(200, stats);
 }
 
@@ -561,7 +566,9 @@ writeLog("Login error: Invalid password");
 
 ```javascript
 // Good - includes context
-writeLog(`createOrder: User ${userId} ordered ${items.length} items, total $${total}`);
+writeLog(
+  `createOrder: User ${userId} ordered ${items.length} items, total $${total}`,
+);
 
 // Bad - lacks context
 writeLog("Order created");
@@ -626,7 +633,7 @@ for (let i = 0; i < 1000; i++) {
 
 ```javascript
 function sanitizeEmail(email) {
-  const [user, domain] = email.split('@');
+  const [user, domain] = email.split("@");
   return `${user.substring(0, 2)}***@${domain}`;
 }
 
@@ -688,6 +695,10 @@ const logs = listLogs();
 const logs = listLogsForUri("/api/users");
 
 // Log helper functions
-function logError(msg) { writeLog(`[ERROR] ${msg}`); }
-function logInfo(msg) { writeLog(`[INFO] ${msg}`); }
+function logError(msg) {
+  writeLog(`[ERROR] ${msg}`);
+}
+function logInfo(msg) {
+  writeLog(`[INFO] ${msg}`);
+}
 ```

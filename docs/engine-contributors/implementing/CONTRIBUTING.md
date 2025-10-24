@@ -65,6 +65,7 @@ Use issue templates when available.
 ### Step 3: Claim the Work
 
 Comment on the issue with:
+
 - "I'd like to work on this"
 - Your estimated timeline
 - Any questions or clarifications needed
@@ -267,6 +268,7 @@ git push origin feature/your-feature-name
 Go to GitHub and create a Pull Request with:
 
 **Title:** Clear, concise description
+
 ```
 Add OAuth2 authentication support with 3 providers
 ```
@@ -495,11 +497,13 @@ Small, focused PRs are easier to review and merge.
 ### What to Expect
 
 **Timeline:**
+
 - Initial review: Within 3-5 business days
 - Follow-up reviews: Within 2 business days
 - Merge: After approval from 2 maintainers
 
 **Reviewer Assignments:**
+
 - Architecture changes: Lead maintainer
 - Security changes: Security reviewer
 - Core features: Two maintainers
@@ -508,21 +512,25 @@ Small, focused PRs are easier to review and merge.
 ### Common Review Feedback
 
 **Code Quality:**
+
 - "Please remove this unwrap() and handle the error properly"
 - "This function is too complex; consider splitting it"
 - "Add doc comments explaining what this does"
 
 **Testing:**
+
 - "Please add tests for the error cases"
 - "Coverage for this module is only 60%; please add more tests"
 - "The integration test is missing"
 
 **Security:**
+
 - "This input needs validation before use"
 - "Please add rate limiting to this endpoint"
 - "Sensitive data should be encrypted"
 
 **Documentation:**
+
 - "Please update the user guide with this new feature"
 - "The example is missing from the documentation"
 - "Add an entry to CHANGELOG.md"

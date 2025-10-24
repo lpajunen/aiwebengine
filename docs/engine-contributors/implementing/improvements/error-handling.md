@@ -272,9 +272,9 @@ fn test_handles_error_case() {
 async fn test_script_execution_timeout() {
     let infinite_loop = "while(true) {}";
     let timeout = Duration::from_millis(100);
-    
+
     let result = execute_script_with_timeout(infinite_loop, timeout).await;
-    
+
     assert!(matches!(result, Err(ScriptError::Timeout { .. })));
 }
 ```
@@ -287,12 +287,12 @@ fn test_mutex_poisoning_recovery() {
     // Poison the mutex
     let mutex = Arc::new(Mutex::new(42));
     let mutex_clone = mutex.clone();
-    
+
     let _ = std::panic::catch_unwind(|| {
         let _guard = mutex_clone.lock().unwrap();
         panic!("Intentional panic to poison mutex");
     });
-    
+
     // Verify recovery
     let result = safe_lock(&mutex);
     assert!(result.is_err());
@@ -354,7 +354,7 @@ pub fn get_script(&self, id: &str) -> Result<Script, RepositoryError> {
         .ok_or(RepositoryError::NotInitialized)?
         .lock()
         .map_err(|_| RepositoryError::LockError)?;
-    
+
     store.get(id)
         .cloned()
         .ok_or_else(|| RepositoryError::NotFound {

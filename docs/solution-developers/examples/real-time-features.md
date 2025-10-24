@@ -11,13 +11,13 @@ SSE allows servers to push updates to clients over HTTP. Perfect for one-way rea
 ```javascript
 function init() {
   // Register a WebSocket stream
-  registerWebStream('/notifications');
-  
+  registerWebStream("/notifications");
+
   // Page to display notifications
-  register('GET', '/notifications-demo', showNotificationsPage);
-  
+  register("GET", "/notifications-demo", showNotificationsPage);
+
   // Endpoint to send a notification
-  register('POST', '/send-notification', sendNotification);
+  register("POST", "/send-notification", sendNotification);
 }
 
 function showNotificationsPage(request) {
@@ -181,39 +181,39 @@ function showNotificationsPage(request) {
     </body>
     </html>
   `;
-  
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'text/html' },
-    body: html
+    headers: { "Content-Type": "text/html" },
+    body: html,
   };
 }
 
 function sendNotification(request) {
-  const data = JSON.parse(request.body || '{}');
-  const type = data.type || 'info';
-  
+  const data = JSON.parse(request.body || "{}");
+  const type = data.type || "info";
+
   const messages = {
-    info: 'This is an informational message',
-    success: 'Operation completed successfully!',
-    warning: 'Please review this warning',
-    error: 'An error occurred that needs attention'
+    info: "This is an informational message",
+    success: "Operation completed successfully!",
+    warning: "Please review this warning",
+    error: "An error occurred that needs attention",
   };
-  
+
   const notification = {
     type: type,
-    message: messages[type] || 'Test notification',
-    timestamp: new Date().toISOString()
+    message: messages[type] || "Test notification",
+    timestamp: new Date().toISOString(),
   };
-  
+
   sendStreamMessage(notification);
-  
-  writeLog('info', 'Notification sent', notification);
-  
+
+  writeLog("info", "Notification sent", notification);
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ success: true })
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ success: true }),
   };
 }
 
@@ -226,10 +226,10 @@ A complete real-time chat system:
 
 ```javascript
 function init() {
-  registerWebStream('/chat');
-  register('GET', '/chat', showChatPage);
-  register('POST', '/chat/send', sendMessage);
-  register('POST', '/chat/typing', sendTypingIndicator);
+  registerWebStream("/chat");
+  register("GET", "/chat", showChatPage);
+  register("POST", "/chat/send", sendMessage);
+  register("POST", "/chat/typing", sendTypingIndicator);
 }
 
 function showChatPage(request) {
@@ -519,53 +519,53 @@ function showChatPage(request) {
     </body>
     </html>
   `;
-  
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'text/html' },
-    body: html
+    headers: { "Content-Type": "text/html" },
+    body: html,
   };
 }
 
 function sendMessage(request) {
-  const data = JSON.parse(request.body || '{}');
-  
+  const data = JSON.parse(request.body || "{}");
+
   const message = {
-    type: 'message',
-    user: data.user || 'Anonymous',
+    type: "message",
+    user: data.user || "Anonymous",
     message: data.message,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   };
-  
+
   sendStreamMessage(message);
-  
-  writeLog('info', 'Chat message sent', {
+
+  writeLog("info", "Chat message sent", {
     user: message.user,
-    messageLength: message.message.length
+    messageLength: message.message.length,
   });
-  
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ success: true })
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ success: true }),
   };
 }
 
 function sendTypingIndicator(request) {
-  const data = JSON.parse(request.body || '{}');
-  
+  const data = JSON.parse(request.body || "{}");
+
   const typing = {
-    type: 'typing',
+    type: "typing",
     user: data.user,
-    isTyping: data.isTyping
+    isTyping: data.isTyping,
   };
-  
+
   sendStreamMessage(typing);
-  
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ success: true })
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ success: true }),
   };
 }
 
@@ -578,9 +578,9 @@ Real-time system monitoring dashboard:
 
 ```javascript
 function init() {
-  registerWebStream('/system-stats');
-  register('GET', '/dashboard', showDashboard);
-  register('POST', '/update-stats', updateSystemStats);
+  registerWebStream("/system-stats");
+  register("GET", "/dashboard", showDashboard);
+  register("POST", "/update-stats", updateSystemStats);
 }
 
 function showDashboard(request) {
@@ -837,11 +837,11 @@ function showDashboard(request) {
     </body>
     </html>
   `;
-  
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'text/html' },
-    body: html
+    headers: { "Content-Type": "text/html" },
+    body: html,
   };
 }
 
@@ -856,15 +856,15 @@ function updateSystemStats(request) {
     totalRequests: Math.floor(Math.random() * 10000),
     errorRate: Math.floor(Math.random() * 5),
     avgResponse: Math.floor(Math.random() * 200) + 50,
-    dbConnected: Math.random() > 0.1
+    dbConnected: Math.random() > 0.1,
   };
-  
+
   sendStreamMessage(stats);
-  
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ success: true })
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ success: true }),
   };
 }
 
@@ -877,9 +877,9 @@ Real-time stock price updates:
 
 ```javascript
 function init() {
-  registerWebStream('/stock-prices');
-  register('GET', '/stocks', showStockTicker);
-  register('POST', '/update-prices', updatePrices);
+  registerWebStream("/stock-prices");
+  register("GET", "/stocks", showStockTicker);
+  register("POST", "/update-prices", updatePrices);
 }
 
 function showStockTicker(request) {
@@ -1067,49 +1067,49 @@ function showStockTicker(request) {
     </body>
     </html>
   `;
-  
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'text/html' },
-    body: html
+    headers: { "Content-Type": "text/html" },
+    body: html,
   };
 }
 
 function updatePrices(request) {
   const stocks = [
-    { symbol: 'AAPL', name: 'Apple Inc.' },
-    { symbol: 'GOOGL', name: 'Alphabet Inc.' },
-    { symbol: 'MSFT', name: 'Microsoft Corp.' },
-    { symbol: 'AMZN', name: 'Amazon.com Inc.' },
-    { symbol: 'TSLA', name: 'Tesla Inc.' }
+    { symbol: "AAPL", name: "Apple Inc." },
+    { symbol: "GOOGL", name: "Alphabet Inc." },
+    { symbol: "MSFT", name: "Microsoft Corp." },
+    { symbol: "AMZN", name: "Amazon.com Inc." },
+    { symbol: "TSLA", name: "Tesla Inc." },
   ];
-  
-  stocks.forEach(stock => {
+
+  stocks.forEach((stock) => {
     // Generate realistic price movements
     const basePrice = {
-      'AAPL': 150,
-      'GOOGL': 2800,
-      'MSFT': 300,
-      'AMZN': 3200,
-      'TSLA': 700
+      AAPL: 150,
+      GOOGL: 2800,
+      MSFT: 300,
+      AMZN: 3200,
+      TSLA: 700,
     }[stock.symbol];
-    
+
     const volatility = 0.02; // 2% volatility
     const change = (Math.random() - 0.5) * 2 * volatility * basePrice;
     const price = basePrice + change;
-    
+
     sendStreamMessage({
       symbol: stock.symbol,
       name: stock.name,
       price: price,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
   });
-  
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ success: true })
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ success: true }),
   };
 }
 
@@ -1122,9 +1122,9 @@ Real-time user activity stream:
 
 ```javascript
 function init() {
-  registerWebStream('/activity');
-  register('GET', '/activity-feed', showActivityFeed);
-  register('POST', '/activity/log', logActivity);
+  registerWebStream("/activity");
+  register("GET", "/activity-feed", showActivityFeed);
+  register("POST", "/activity/log", logActivity);
 }
 
 function showActivityFeed(request) {
@@ -1310,32 +1310,32 @@ function showActivityFeed(request) {
     </body>
     </html>
   `;
-  
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'text/html' },
-    body: html
+    headers: { "Content-Type": "text/html" },
+    body: html,
   };
 }
 
 function logActivity(request) {
-  const data = JSON.parse(request.body || '{}');
-  
+  const data = JSON.parse(request.body || "{}");
+
   const activity = {
     type: data.type,
     user: data.user,
     action: data.action,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   };
-  
+
   sendStreamMessage(activity);
-  
-  writeLog('info', 'Activity logged', activity);
-  
+
+  writeLog("info", "Activity logged", activity);
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ success: true })
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ success: true }),
   };
 }
 
@@ -1349,15 +1349,15 @@ init();
 ```javascript
 // Server sends periodic heartbeats
 setInterval(() => {
-  sendStreamMessage({ type: 'heartbeat', timestamp: Date.now() });
+  sendStreamMessage({ type: "heartbeat", timestamp: Date.now() });
 }, 30000); // Every 30 seconds
 ```
 
 ### 2. Handle Reconnection
 
 ```javascript
-eventSource.onerror = function() {
-  console.log('Connection lost, will auto-reconnect');
+eventSource.onerror = function () {
+  console.log("Connection lost, will auto-reconnect");
   // EventSource automatically reconnects
 };
 ```
@@ -1368,8 +1368,8 @@ eventSource.onerror = function() {
 // Send only necessary data
 sendStreamMessage({
   id: userId,
-  update: 'status',
-  value: newStatus
+  update: "status",
+  value: newStatus,
   // Don't send entire user object
 });
 ```
@@ -1378,7 +1378,7 @@ sendStreamMessage({
 
 ```javascript
 // One-way updates: Use SSE (registerWebStream)
-registerWebStream('/notifications');
+registerWebStream("/notifications");
 
 // For bidirectional: Consider GraphQL subscriptions
 // See graphql-subscriptions guide
@@ -1388,7 +1388,7 @@ registerWebStream('/notifications');
 
 ```javascript
 // Client-side cleanup
-window.addEventListener('beforeunload', () => {
+window.addEventListener("beforeunload", () => {
   eventSource.close();
 });
 ```
@@ -1400,9 +1400,9 @@ window.addEventListener('beforeunload', () => {
 ```javascript
 function broadcastToAll(message) {
   sendStreamMessage({
-    type: 'broadcast',
+    type: "broadcast",
     message: message,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   });
 }
 ```
@@ -1430,8 +1430,8 @@ let updateQueue = [];
 setInterval(() => {
   if (updateQueue.length > 0) {
     sendStreamMessage({
-      type: 'batch',
-      updates: updateQueue
+      type: "batch",
+      updates: updateQueue,
     });
     updateQueue = [];
   }
@@ -1450,15 +1450,15 @@ setInterval(() => {
 
 ```javascript
 // Register stream
-registerWebStream('/my-stream');
+registerWebStream("/my-stream");
 
 // Send message to all connected clients
-sendStreamMessage({ type: 'update', data: value });
+sendStreamMessage({ type: "update", data: value });
 
 // Client-side connection
-const eventSource = new EventSource('/my-stream');
+const eventSource = new EventSource("/my-stream");
 
-eventSource.onmessage = function(event) {
+eventSource.onmessage = function (event) {
   const data = JSON.parse(event.data);
   // Handle update
 };

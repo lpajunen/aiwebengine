@@ -31,11 +31,13 @@ The aiwebengine editor includes an integrated AI assistant that understands your
 Create complete scripts from descriptions:
 
 **Example Prompt:**
+
 ```text
 Create a REST API for managing blog posts with CRUD operations
 ```
 
 **What the AI provides:**
+
 - Complete working script
 - All necessary handlers
 - Route registrations
@@ -49,6 +51,7 @@ Create a REST API for managing blog posts with CRUD operations
 Modify existing scripts with surgical precision:
 
 **Example Prompts:**
+
 ```text
 Add error handling to all functions
 
@@ -62,6 +65,7 @@ Convert this to return JSON instead of HTML
 ```
 
 **Features:**
+
 - Side-by-side diff preview
 - See exact changes before applying
 - Accept or reject modifications
@@ -71,6 +75,7 @@ Convert this to return JSON instead of HTML
 Understand how code works:
 
 **Example Prompts:**
+
 ```text
 Explain what this script does
 
@@ -86,6 +91,7 @@ Explain the error handling in this code
 Get assistance fixing issues:
 
 **Example Prompts:**
+
 ```text
 This script returns 500 errors. Can you fix it?
 
@@ -101,12 +107,14 @@ Help me debug the authentication logic
 #### Be Specific
 
 **Good:**
+
 ```text
-Create a contact form that validates email addresses, stores submissions, 
+Create a contact form that validates email addresses, stores submissions,
 and sends a confirmation email
 ```
 
 **Bad:**
+
 ```text
 Create a form
 ```
@@ -114,12 +122,14 @@ Create a form
 #### Provide Context
 
 **Good:**
+
 ```text
-Add authentication to this API using the built-in auth functions. 
+Add authentication to this API using the built-in auth functions.
 Require login for all endpoints except /api/public
 ```
 
 **Bad:**
+
 ```text
 Add authentication
 ```
@@ -127,6 +137,7 @@ Add authentication
 #### Describe the Outcome
 
 **Good:**
+
 ```text
 Refactor this script to:
 - Use async/await instead of callbacks
@@ -136,6 +147,7 @@ Refactor this script to:
 ```
 
 **Bad:**
+
 ```text
 Make this better
 ```
@@ -143,6 +155,7 @@ Make this better
 #### Include Requirements
 
 **Good:**
+
 ```text
 Create a user registration API that:
 - Validates email format
@@ -153,6 +166,7 @@ Create a user registration API that:
 ```
 
 **Bad:**
+
 ```text
 Create a registration API
 ```
@@ -164,12 +178,14 @@ Create a registration API
 aiwebengine scripts are **server-side JavaScript** that handle HTTP requests:
 
 **Scripts ARE:**
+
 - ✅ Server-side request handlers
 - ✅ Functions that return HTML/JSON/text
 - ✅ API endpoints
 - ✅ Web page generators
 
 **Scripts are NOT:**
+
 - ❌ Client-side browser JavaScript
 - ❌ Static HTML files
 - ❌ Standalone web pages
@@ -219,12 +235,14 @@ Create a dashboard that updates every 5 seconds
 ### 1. Simple Web Page
 
 **Prompt:**
+
 ```text
-Create a script that serves an "About Us" page with company information, 
+Create a script that serves an "About Us" page with company information,
 team members, and contact details
 ```
 
 **Expected Result:**
+
 - Handler function returning HTML
 - Route registered at `/about`
 - Properly formatted HTML with CSS
@@ -232,6 +250,7 @@ team members, and contact details
 ### 2. REST API
 
 **Prompt:**
+
 ```text
 Create a REST API for a product catalog with:
 - GET /api/products - list all products
@@ -243,6 +262,7 @@ Include input validation and error handling
 ```
 
 **Expected Result:**
+
 - Multiple handler functions
 - All CRUD operations
 - Validation logic
@@ -251,6 +271,7 @@ Include input validation and error handling
 ### 3. Form Processing
 
 **Prompt:**
+
 ```text
 Create a newsletter signup form that:
 - Shows form on GET /signup
@@ -261,6 +282,7 @@ Create a newsletter signup form that:
 ```
 
 **Expected Result:**
+
 - GET handler with form HTML
 - POST handler with validation
 - Data storage
@@ -269,6 +291,7 @@ Create a newsletter signup form that:
 ### 4. External API Integration
 
 **Prompt:**
+
 ```text
 Create a weather API that:
 - Accepts city name as query parameter
@@ -278,6 +301,7 @@ Create a weather API that:
 ```
 
 **Expected Result:**
+
 - Handler with `fetch()` call
 - API key handling (using secrets)
 - Error handling
@@ -286,6 +310,7 @@ Create a weather API that:
 ### 5. Authentication
 
 **Prompt:**
+
 ```text
 Create a login system that:
 - Shows login form on GET /login
@@ -296,6 +321,7 @@ Create a login system that:
 ```
 
 **Expected Result:**
+
 - GET and POST handlers
 - Auth API usage
 - Session management
@@ -306,8 +332,9 @@ Create a login system that:
 ### Workflow 1: Rapid Prototyping
 
 1. **Describe feature** to AI
+
    ```text
-   Create a blog homepage that lists recent posts with titles, 
+   Create a blog homepage that lists recent posts with titles,
    excerpts, and publish dates
    ```
 
@@ -320,6 +347,7 @@ Create a login system that:
    - Test the endpoint immediately
 
 4. **Iterate with AI**
+
    ```text
    Add pagination to the blog list
 
@@ -334,6 +362,7 @@ Create a login system that:
    - Have a basic script running
 
 2. **Ask AI for specific improvements**
+
    ```text
    Add error handling to all database operations
 
@@ -353,6 +382,7 @@ Create a login system that:
 ### Workflow 3: Learning and Exploration
 
 1. **Ask AI to explain concepts**
+
    ```text
    How do I implement real-time updates using streams?
 
@@ -362,6 +392,7 @@ Create a login system that:
    ```
 
 2. **Request examples**
+
    ```text
    Create a simple example of Server-Sent Events
 
@@ -369,6 +400,7 @@ Create a login system that:
    ```
 
 3. **Build on examples**
+
    ```text
    Expand this SSE example to broadcast chat messages
 
@@ -383,8 +415,9 @@ Create a login system that:
    - Check logs for error messages
 
 2. **Ask AI for help**
+
    ```text
-   This script is throwing "undefined is not a function" errors. 
+   This script is throwing "undefined is not a function" errors.
    Here's the error from logs: [paste error]
 
    This form handler isn't receiving POST data correctly
@@ -483,18 +516,20 @@ Reference the /style.css asset for styling
 ### 4. Provide Examples When Possible
 
 ```text
-Create a form handler similar to the feedback example, 
+Create a form handler similar to the feedback example,
 but for product reviews with a 1-5 star rating
 ```
 
 ### 5. Break Complex Requests into Steps
 
 Instead of:
+
 ```text
 Create a full e-commerce site with products, cart, checkout, and payment
 ```
 
 Do this:
+
 ```text
 Step 1: Create a product listing API
 Step 2: Add product detail pages
@@ -512,7 +547,7 @@ You can use external AI tools by providing context:
 **Context to provide:**
 
 ```text
-I'm developing scripts for aiwebengine, which is a JavaScript-based 
+I'm developing scripts for aiwebengine, which is a JavaScript-based
 web application engine. Scripts are server-side handlers that:
 
 - Receive a `req` object with method, path, query, form, headers
@@ -548,8 +583,8 @@ If developing locally with VS Code:
 For external API integrations:
 
 ```text
-Create an aiwebengine script that calls the Stripe API to process payments. 
-Use the fetch() function with {{secret:stripe_key}} for the API key. 
+Create an aiwebengine script that calls the Stripe API to process payments.
+Use the fetch() function with {{secret:stripe_key}} for the API key.
 Return JSON responses.
 ```
 
@@ -560,8 +595,9 @@ Return JSON responses.
 **Problem:** AI creates browser JavaScript instead of server handlers
 
 **Solution:** Be explicit:
+
 ```text
-Create a SERVER-SIDE aiwebengine script that RETURNS HTML, 
+Create a SERVER-SIDE aiwebengine script that RETURNS HTML,
 not client-side JavaScript
 ```
 
@@ -570,6 +606,7 @@ not client-side JavaScript
 **Problem:** AI uses Node.js/browser APIs not available in QuickJS
 
 **Solution:** Specify:
+
 ```text
 Use only QuickJS-compatible code. Available functions are:
 register(), writeLog(), fetch(), JSON.parse(), JSON.stringify()
@@ -580,6 +617,7 @@ register(), writeLog(), fetch(), JSON.parse(), JSON.stringify()
 **Problem:** Response is overwhelming or too complex
 
 **Solution:** Ask for simpler version:
+
 ```text
 Create a minimal working example of [feature]
 
@@ -593,8 +631,9 @@ Break this into smaller, focused functions
 **Problem:** AI doesn't know about your existing code
 
 **Solution:** Provide context:
+
 ```text
-I have a script that manages users. Add a new endpoint to 
+I have a script that manages users. Add a new endpoint to
 delete users. Here's my current code: [paste code]
 ```
 

@@ -12,8 +12,8 @@ Create a content generation tool:
 
 ```javascript
 function init() {
-  register('GET', '/ai-writer', showAIWriter);
-  register('POST', '/api/generate', generateContent);
+  register("GET", "/ai-writer", showAIWriter);
+  register("POST", "/api/generate", generateContent);
 }
 
 function showAIWriter(request) {
@@ -318,34 +318,34 @@ function showAIWriter(request) {
     </body>
     </html>
   `;
-  
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'text/html' },
-    body: html
+    headers: { "Content-Type": "text/html" },
+    body: html,
   };
 }
 
 function generateContent(request) {
-  const data = JSON.parse(request.body || '{}');
-  
-  writeLog('info', 'AI content generation requested', {
+  const data = JSON.parse(request.body || "{}");
+
+  writeLog("info", "AI content generation requested", {
     contentType: data.contentType,
-    topic: data.topic
+    topic: data.topic,
   });
-  
+
   // In a real implementation, you would call an AI API here
   // For demonstration, we'll generate a mock response
-  
+
   const mockContent = generateMockContent(data);
-  
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       success: true,
-      content: mockContent
-    })
+      content: mockContent,
+    }),
   };
 }
 
@@ -367,7 +367,7 @@ As we move into the future, understanding and adapting to these changes will be 
 ## Conclusion
 
 ${data.topic} is not just a passing trend—it's a fundamental shift that will shape our future. By staying informed and adapting quickly, we can harness its potential for positive change.`,
-    
+
     product: `Introducing ${data.topic}—the perfect solution for modern needs.
 
 Premium Features:
@@ -381,7 +381,7 @@ This isn't just another product—it's a game-changer. Designed with you in mind
 
 Order Today!
 Don't miss out on this opportunity to upgrade your experience. Limited stock available.`,
-    
+
     email: `Subject: ${data.topic}
 
 Hi Team,
@@ -398,10 +398,13 @@ Next Steps:
 
 Please let me know if you have any questions or concerns.
 
-Best regards`
+Best regards`,
   };
-  
-  return templates[data.contentType] || `Generated content about ${data.topic} with ${data.tone} tone.`;
+
+  return (
+    templates[data.contentType] ||
+    `Generated content about ${data.topic} with ${data.tone} tone.`
+  );
 }
 
 init();
@@ -413,8 +416,8 @@ Create an interactive AI chatbot:
 
 ```javascript
 function init() {
-  register('GET', '/chatbot', showChatbot);
-  register('POST', '/api/chat', handleChat);
+  register("GET", "/chatbot", showChatbot);
+  register("POST", "/api/chat", handleChat);
 }
 
 function showChatbot(request) {
@@ -715,59 +718,62 @@ function showChatbot(request) {
     </body>
     </html>
   `;
-  
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'text/html' },
-    body: html
+    headers: { "Content-Type": "text/html" },
+    body: html,
   };
 }
 
 function handleChat(request) {
-  const data = JSON.parse(request.body || '{}');
+  const data = JSON.parse(request.body || "{}");
   const userMessage = data.message;
-  
-  writeLog('info', 'Chat message received', { message: userMessage });
-  
+
+  writeLog("info", "Chat message received", { message: userMessage });
+
   // Mock AI response logic
   const response = generateChatResponse(userMessage);
-  
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       success: true,
-      response: response
-    })
+      response: response,
+    }),
   };
 }
 
 function generateChatResponse(message) {
   const lowerMessage = message.toLowerCase();
-  
+
   // Simple keyword-based responses
-  if (lowerMessage.includes('hello') || lowerMessage.includes('hi')) {
+  if (lowerMessage.includes("hello") || lowerMessage.includes("hi")) {
     return "Hello! How can I assist you today?";
   }
-  
-  if (lowerMessage.includes('help')) {
+
+  if (lowerMessage.includes("help")) {
     return "I can help you with various tasks like answering questions, providing information, and having conversations. What would you like to know?";
   }
-  
-  if (lowerMessage.includes('ai') || lowerMessage.includes('artificial intelligence')) {
+
+  if (
+    lowerMessage.includes("ai") ||
+    lowerMessage.includes("artificial intelligence")
+  ) {
     return "Artificial Intelligence refers to computer systems that can perform tasks that typically require human intelligence, such as learning, problem-solving, and decision-making.";
   }
-  
-  if (lowerMessage.includes('fun fact')) {
+
+  if (lowerMessage.includes("fun fact")) {
     const facts = [
       "The first computer programmer was Ada Lovelace in the 1840s!",
       "Honey never spoils. Archaeologists have found 3000-year-old honey that's still edible!",
       "Octopuses have three hearts and blue blood!",
-      "The word 'robot' comes from the Czech word 'robota,' meaning forced labor."
+      "The word 'robot' comes from the Czech word 'robota,' meaning forced labor.",
     ];
     return facts[Math.floor(Math.random() * facts.length)];
   }
-  
+
   // Default response
   return "That's interesting! I'm here to help answer your questions and assist with various tasks. Feel free to ask me anything!";
 }
@@ -781,8 +787,8 @@ Generate descriptions for images:
 
 ```javascript
 function init() {
-  register('GET', '/image-analyzer', showImageAnalyzer);
-  register('POST', '/api/analyze-image', analyzeImage);
+  register("GET", "/image-analyzer", showImageAnalyzer);
+  register("POST", "/api/analyze-image", analyzeImage);
 }
 
 function showImageAnalyzer(request) {
@@ -1050,38 +1056,39 @@ function showImageAnalyzer(request) {
     </body>
     </html>
   `;
-  
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'text/html' },
-    body: html
+    headers: { "Content-Type": "text/html" },
+    body: html,
   };
 }
 
 function analyzeImage(request) {
-  const data = JSON.parse(request.body || '{}');
-  
-  writeLog('info', 'Image analysis requested', {
-    filename: data.filename
+  const data = JSON.parse(request.body || "{}");
+
+  writeLog("info", "Image analysis requested", {
+    filename: data.filename,
   });
-  
+
   // Mock AI image analysis
   // In real implementation, you would:
   // 1. Decode base64 image
   // 2. Call AI vision API (OpenAI, Google Vision, etc.)
   // 3. Return actual analysis results
-  
+
   const mockAnalysis = {
-    description: "A vibrant outdoor scene featuring natural elements. The image shows good composition with balanced colors and lighting.",
+    description:
+      "A vibrant outdoor scene featuring natural elements. The image shows good composition with balanced colors and lighting.",
     objects: ["sky", "trees", "landscape", "nature"],
     colors: ["#4A90E2", "#7ED321", "#F5A623", "#8B572A"],
-    tags: ["outdoor", "nature", "scenic", "daylight", "landscape photography"]
+    tags: ["outdoor", "nature", "scenic", "daylight", "landscape photography"],
   };
-  
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(mockAnalysis)
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(mockAnalysis),
   };
 }
 
@@ -1094,8 +1101,8 @@ Intelligent search with AI:
 
 ```javascript
 function init() {
-  register('GET', '/smart-search', showSmartSearch);
-  register('POST', '/api/search', performSearch);
+  register("GET", "/smart-search", showSmartSearch);
+  register("POST", "/api/search", performSearch);
 }
 
 function showSmartSearch(request) {
@@ -1318,51 +1325,63 @@ function showSmartSearch(request) {
     </body>
     </html>
   `;
-  
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'text/html' },
-    body: html
+    headers: { "Content-Type": "text/html" },
+    body: html,
   };
 }
 
 function performSearch(request) {
-  const data = JSON.parse(request.body || '{}');
+  const data = JSON.parse(request.body || "{}");
   const query = data.query;
-  
-  writeLog('info', 'AI search performed', { query });
-  
+
+  writeLog("info", "AI search performed", { query });
+
   // Mock AI-powered search results
   const mockResults = {
     summary: `Based on your query "${query}", here's what I found: This topic involves multiple aspects including technical implementation, best practices, and recent developments in the field. The information below provides comprehensive coverage of the subject.`,
     results: [
       {
         title: "Comprehensive Guide to " + query,
-        snippet: "This detailed guide covers everything you need to know about " + query + ". Learn from basics to advanced concepts with practical examples.",
-        relevance: 95
+        snippet:
+          "This detailed guide covers everything you need to know about " +
+          query +
+          ". Learn from basics to advanced concepts with practical examples.",
+        relevance: 95,
       },
       {
         title: query + ": Best Practices and Tips",
-        snippet: "Discover industry-standard best practices and expert tips for working with " + query + ". Updated with latest trends and methodologies.",
-        relevance: 88
+        snippet:
+          "Discover industry-standard best practices and expert tips for working with " +
+          query +
+          ". Updated with latest trends and methodologies.",
+        relevance: 88,
       },
       {
         title: "Common Challenges with " + query,
-        snippet: "Understanding and overcoming common challenges when dealing with " + query + ". Real-world solutions and troubleshooting advice.",
-        relevance: 82
+        snippet:
+          "Understanding and overcoming common challenges when dealing with " +
+          query +
+          ". Real-world solutions and troubleshooting advice.",
+        relevance: 82,
       },
       {
         title: "Future of " + query,
-        snippet: "Explore emerging trends and future developments in " + query + ". Expert predictions and industry insights for the coming years.",
-        relevance: 75
-      }
-    ]
+        snippet:
+          "Explore emerging trends and future developments in " +
+          query +
+          ". Expert predictions and industry insights for the coming years.",
+        relevance: 75,
+      },
+    ],
   };
-  
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(mockResults)
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(mockResults),
   };
 }
 
@@ -1378,22 +1397,22 @@ Example of integrating with external AI services:
 function callOpenAI(prompt) {
   // Note: You would need to handle API keys securely
   // This is a conceptual example
-  
-  const apiKey = 'your-api-key'; // Should be stored securely
-  const endpoint = 'https://api.openai.com/v1/chat/completions';
-  
+
+  const apiKey = "your-api-key"; // Should be stored securely
+  const endpoint = "https://api.openai.com/v1/chat/completions";
+
   const response = fetch(endpoint, {
-    method: 'POST',
+    method: "POST",
     headers: {
-      'Content-Type': 'application/json',
-      'Authorization': 'Bearer ' + apiKey
+      "Content-Type": "application/json",
+      Authorization: "Bearer " + apiKey,
     },
     body: JSON.stringify({
-      model: 'gpt-3.5-turbo',
-      messages: [{ role: 'user', content: prompt }]
-    })
+      model: "gpt-3.5-turbo",
+      messages: [{ role: "user", content: prompt }],
+    }),
   });
-  
+
   // Handle response
   // Note: fetch() API usage depends on aiwebengine's implementation
 }
@@ -1401,18 +1420,18 @@ function callOpenAI(prompt) {
 // Example: Anthropic Claude Integration
 function callClaude(prompt) {
   // Similar pattern for Claude API
-  const response = fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
+  const response = fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
     headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': 'your-api-key',
-      'anthropic-version': '2023-06-01'
+      "Content-Type": "application/json",
+      "x-api-key": "your-api-key",
+      "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({
-      model: 'claude-3-sonnet-20240229',
+      model: "claude-3-sonnet-20240229",
       max_tokens: 1024,
-      messages: [{ role: 'user', content: prompt }]
-    })
+      messages: [{ role: "user", content: prompt }],
+    }),
   });
 }
 ```
@@ -1425,18 +1444,18 @@ function callClaude(prompt) {
 async function callAI(prompt) {
   try {
     const response = await fetch(aiEndpoint, {
-      method: 'POST',
-      body: JSON.stringify({ prompt })
+      method: "POST",
+      body: JSON.stringify({ prompt }),
     });
-    
+
     if (!response.ok) {
-      throw new Error('AI API error');
+      throw new Error("AI API error");
     }
-    
+
     return await response.json();
   } catch (error) {
-    writeLog('error', 'AI API failed', { error: error.message });
-    return { error: 'AI service temporarily unavailable' };
+    writeLog("error", "AI API failed", { error: error.message });
+    return { error: "AI service temporarily unavailable" };
   }
 }
 ```
@@ -1450,9 +1469,9 @@ const MIN_INTERVAL = 1000; // 1 second between requests
 function rateLimitedAICall(prompt) {
   const now = Date.now();
   if (now - lastRequest < MIN_INTERVAL) {
-    return { error: 'Please wait before making another request' };
+    return { error: "Please wait before making another request" };
   }
-  
+
   lastRequest = now;
   return callAI(prompt);
 }
@@ -1467,7 +1486,7 @@ function getCachedAIResponse(prompt) {
   if (aiCache[prompt]) {
     return aiCache[prompt];
   }
-  
+
   const response = callAI(prompt);
   aiCache[prompt] = response;
   return response;
@@ -1480,8 +1499,8 @@ function getCachedAIResponse(prompt) {
 function sanitizePrompt(userInput) {
   // Remove potentially harmful content
   return userInput
-    .replace(/<script>/gi, '')
-    .replace(/javascript:/gi, '')
+    .replace(/<script>/gi, "")
+    .replace(/javascript:/gi, "")
     .trim()
     .slice(0, 1000); // Limit length
 }
@@ -1491,11 +1510,11 @@ function sanitizePrompt(userInput) {
 
 ```javascript
 function logAIInteraction(prompt, response, duration) {
-  writeLog('info', 'AI interaction', {
+  writeLog("info", "AI interaction", {
     promptLength: prompt.length,
     responseLength: response.length,
     duration: duration,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   });
 }
 ```
@@ -1518,16 +1537,16 @@ function generateAIResponse(prompt) {
 
 // Call external AI API
 const response = fetch(aiEndpoint, {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ prompt: userInput })
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ prompt: userInput }),
 });
 
 // Handle AI errors
 try {
   const result = await callAI(prompt);
 } catch (error) {
-  writeLog('error', 'AI failed', { error });
+  writeLog("error", "AI failed", { error });
 }
 ```
 

@@ -41,48 +41,48 @@ register("/hello", "helloHandler", "GET");
 
 #### Getting Started
 
-| Document                                                          | Description                                           |
-| ----------------------------------------------------------------- | ----------------------------------------------------- |
-| [Solution Developer Guide](solution-developers/README.md)         | Main navigation hub and quick start guide             |
-| [Your First Script](solution-developers/getting-started/01-first-script.md) | Create your first "Hello World" script      |
-| [Working with Editor](solution-developers/getting-started/02-working-with-editor.md) | Use the web-based editor              |
-| [Deployment Workflow](solution-developers/getting-started/03-deployment-workflow.md) | Deploy scripts to aiwebengine          |
+| Document                                                                             | Description                               |
+| ------------------------------------------------------------------------------------ | ----------------------------------------- |
+| [Solution Developer Guide](solution-developers/README.md)                            | Main navigation hub and quick start guide |
+| [Your First Script](solution-developers/getting-started/01-first-script.md)          | Create your first "Hello World" script    |
+| [Working with Editor](solution-developers/getting-started/02-working-with-editor.md) | Use the web-based editor                  |
+| [Deployment Workflow](solution-developers/getting-started/03-deployment-workflow.md) | Deploy scripts to aiwebengine             |
 
 #### Development Guides
 
-| Document                                                              | Description                                                 |
-| --------------------------------------------------------------------- | ----------------------------------------------------------- |
-| [Script Development](solution-developers/guides/scripts.md)           | Complete guide to writing scripts                           |
-| [Asset Management](solution-developers/guides/assets.md)              | Manage CSS, JS, images, and other assets                    |
-| [Logging & Debugging](solution-developers/guides/logging.md)          | Write logs and debug your scripts                           |
-| [AI-Assisted Development](solution-developers/guides/ai-development.md) | Use AI to generate and improve scripts                    |
-| [Streaming](solution-developers/guides/streaming.md)                  | Server-sent events and streaming responses                  |
-| [GraphQL Subscriptions](solution-developers/guides/graphql-subscriptions.md) | Real-time GraphQL subscription support           |
+| Document                                                                     | Description                                |
+| ---------------------------------------------------------------------------- | ------------------------------------------ |
+| [Script Development](solution-developers/guides/scripts.md)                  | Complete guide to writing scripts          |
+| [Asset Management](solution-developers/guides/assets.md)                     | Manage CSS, JS, images, and other assets   |
+| [Logging & Debugging](solution-developers/guides/logging.md)                 | Write logs and debug your scripts          |
+| [AI-Assisted Development](solution-developers/guides/ai-development.md)      | Use AI to generate and improve scripts     |
+| [Streaming](solution-developers/guides/streaming.md)                         | Server-sent events and streaming responses |
+| [GraphQL Subscriptions](solution-developers/guides/graphql-subscriptions.md) | Real-time GraphQL subscription support     |
 
 #### Tools
 
-| Document                                                              | Description                                                 |
-| --------------------------------------------------------------------- | ----------------------------------------------------------- |
-| [Web Editor](solution-developers/tools/editor.md)                     | Comprehensive web editor guide                              |
-| [Deployer CLI](solution-developers/tools/deployer.md)                 | Command-line deployment tool                                |
-| [External Tools](solution-developers/tools/external-tools.md)         | VS Code, Git, CI/CD integration                             |
+| Document                                                      | Description                     |
+| ------------------------------------------------------------- | ------------------------------- |
+| [Web Editor](solution-developers/tools/editor.md)             | Comprehensive web editor guide  |
+| [Deployer CLI](solution-developers/tools/deployer.md)         | Command-line deployment tool    |
+| [External Tools](solution-developers/tools/external-tools.md) | VS Code, Git, CI/CD integration |
 
 #### API Reference
 
-| Document                                                              | Description                                                 |
-| --------------------------------------------------------------------- | ----------------------------------------------------------- |
-| [JavaScript APIs](solution-developers/reference/javascript-apis.md)   | Complete API reference for scripts                          |
-| [Authentication API](solution-developers/reference/auth-api.md)        | User authentication and authorization APIs                  |
+| Document                                                            | Description                                |
+| ------------------------------------------------------------------- | ------------------------------------------ |
+| [JavaScript APIs](solution-developers/reference/javascript-apis.md) | Complete API reference for scripts         |
+| [Authentication API](solution-developers/reference/auth-api.md)     | User authentication and authorization APIs |
 
 #### Examples
 
-| Document                                                              | Description                                                 |
-| --------------------------------------------------------------------- | ----------------------------------------------------------- |
-| [Basic API Examples](solution-developers/examples/basic-api.md)       | RESTful API patterns and CRUD operations                    |
-| [Forms & Data Handling](solution-developers/examples/forms-and-data.md) | Form submissions, validation, file uploads               |
-| [Real-Time Features](solution-developers/examples/real-time-features.md) | Chat, notifications, live updates                        |
-| [AI Integration](solution-developers/examples/ai-integration.md)      | AI-powered content generation and chatbots                  |
-| [Example Scripts Index](solution-developers/examples/index.md)        | Guide to all example scripts                                |
+| Document                                                                 | Description                                |
+| ------------------------------------------------------------------------ | ------------------------------------------ |
+| [Basic API Examples](solution-developers/examples/basic-api.md)          | RESTful API patterns and CRUD operations   |
+| [Forms & Data Handling](solution-developers/examples/forms-and-data.md)  | Form submissions, validation, file uploads |
+| [Real-Time Features](solution-developers/examples/real-time-features.md) | Chat, notifications, live updates          |
+| [AI Integration](solution-developers/examples/ai-integration.md)         | AI-powered content generation and chatbots |
+| [Example Scripts Index](solution-developers/examples/index.md)           | Guide to all example scripts               |
 
 **📁 Location**: `docs/solution-developers/`
 
@@ -94,21 +94,21 @@ register("/hello", "helloHandler", "GET");
 
 #### Step-by-Step Guides
 
-| Document                                                            | Description                                     |
-| ------------------------------------------------------------------- | ----------------------------------------------- |
-| [01 - Getting Started](engine-administrators/01-GETTING-STARTED.md) | Prerequisites and first deployment              |
-| [02 - Configuration](engine-administrators/02-CONFIGURATION.md)     | Configuration options and environment variables |
-| [03 - Running Environments](engine-administrators/03-RUNNING-ENVIRONMENTS.md) | Local, staging, and production deployment |
-| [04 - Secrets and Security](engine-administrators/04-SECRETS-AND-SECURITY.md) | OAuth setup, secrets management, bootstrap admins |
-| [05 - Monitoring and Maintenance](engine-administrators/05-MONITORING-AND-MAINTENANCE.md) | Health checks, logs, backups, user management |
-| [06 - Troubleshooting](engine-administrators/06-TROUBLESHOOTING.md) | Common problems and solutions                   |
+| Document                                                                                  | Description                                       |
+| ----------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| [01 - Getting Started](engine-administrators/01-GETTING-STARTED.md)                       | Prerequisites and first deployment                |
+| [02 - Configuration](engine-administrators/02-CONFIGURATION.md)                           | Configuration options and environment variables   |
+| [03 - Running Environments](engine-administrators/03-RUNNING-ENVIRONMENTS.md)             | Local, staging, and production deployment         |
+| [04 - Secrets and Security](engine-administrators/04-SECRETS-AND-SECURITY.md)             | OAuth setup, secrets management, bootstrap admins |
+| [05 - Monitoring and Maintenance](engine-administrators/05-MONITORING-AND-MAINTENANCE.md) | Health checks, logs, backups, user management     |
+| [06 - Troubleshooting](engine-administrators/06-TROUBLESHOOTING.md)                       | Common problems and solutions                     |
 
 #### Quick References
 
-| Document                                                        | Description                           |
-| --------------------------------------------------------------- | ------------------------------------- |
-| [Quick Reference](engine-administrators/QUICK-REFERENCE.md)     | Fast lookup for commands and variables |
-| [Administrator README](engine-administrators/README.md)         | Overview of administrator documentation |
+| Document                                                    | Description                             |
+| ----------------------------------------------------------- | --------------------------------------- |
+| [Quick Reference](engine-administrators/QUICK-REFERENCE.md) | Fast lookup for commands and variables  |
+| [Administrator README](engine-administrators/README.md)     | Overview of administrator documentation |
 
 **📁 Location**: `docs/engine-administrators/`
 
@@ -120,20 +120,20 @@ register("/hello", "helloHandler", "GET");
 
 #### Planning & Architecture
 
-| Document                                                     | Description                              |
-| ------------------------------------------------------------ | ---------------------------------------- |
-| [Requirements](engine-contributors/planning/REQUIREMENTS.md) | Core requirements and feature specifications |
-| [Use Cases](engine-contributors/planning/USE_CASES.md)       | User scenarios and use case documentation |
-| [Customer Survey](engine-contributors/planning/CUSTOMER_SURVEY.md) | Customer research and feedback    |
+| Document                                                           | Description                                  |
+| ------------------------------------------------------------------ | -------------------------------------------- |
+| [Requirements](engine-contributors/planning/REQUIREMENTS.md)       | Core requirements and feature specifications |
+| [Use Cases](engine-contributors/planning/USE_CASES.md)             | User scenarios and use case documentation    |
+| [Customer Survey](engine-contributors/planning/CUSTOMER_SURVEY.md) | Customer research and feedback               |
 
 **📁 Location**: `docs/engine-contributors/planning/`
 
 #### Implementation & Development
 
-| Document                                                                  | Description                                |
-| ------------------------------------------------------------------------- | ------------------------------------------ |
-| [Implementation Overview](engine-contributors/implementing/README.md)     | Navigation hub for implementation work     |
-| [Development Roadmap](engine-contributors/implementing/ROADMAP.md)        | Prioritized development roadmap            |
+| Document                                                                  | Description                                 |
+| ------------------------------------------------------------------------- | ------------------------------------------- |
+| [Implementation Overview](engine-contributors/implementing/README.md)     | Navigation hub for implementation work      |
+| [Development Roadmap](engine-contributors/implementing/ROADMAP.md)        | Prioritized development roadmap             |
 | [Contributing Guide](engine-contributors/implementing/CONTRIBUTING.md)    | How to contribute features and improvements |
 | [Development Guidelines](engine-contributors/implementing/DEVELOPMENT.md) | Core development guidelines and standards   |
 
@@ -263,7 +263,7 @@ Historical implementation notes, completed phases, and deprecated analysis docum
 
 These documents provide historical context but are no longer actively maintained:
 
-- Phase completion documents (PHASE_*.md)
+- Phase completion documents (PHASE\_\*.md)
 - Implementation plans for completed features
 - Test fixes and analysis (historical)
 - Requirements gap analysis (completed)

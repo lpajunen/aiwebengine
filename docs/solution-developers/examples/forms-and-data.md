@@ -8,8 +8,8 @@ A basic form with GET (display) and POST (submit) handlers:
 
 ```javascript
 function init() {
-  register('GET', '/contact', showContactForm);
-  register('POST', '/contact', handleContactForm);
+  register("GET", "/contact", showContactForm);
+  register("POST", "/contact", handleContactForm);
 }
 
 function showContactForm(request) {
@@ -76,24 +76,24 @@ function showContactForm(request) {
     </body>
     </html>
   `;
-  
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'text/html' },
-    body: html
+    headers: { "Content-Type": "text/html" },
+    body: html,
   };
 }
 
 function handleContactForm(request) {
   // Parse form data
   const formData = parseFormData(request.body);
-  
-  writeLog('info', 'Contact form submitted', {
+
+  writeLog("info", "Contact form submitted", {
     name: formData.name,
     email: formData.email,
-    subject: formData.subject
+    subject: formData.subject,
   });
-  
+
   const html = `
     <!DOCTYPE html>
     <html>
@@ -131,23 +131,25 @@ function handleContactForm(request) {
     </body>
     </html>
   `;
-  
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'text/html' },
-    body: html
+    headers: { "Content-Type": "text/html" },
+    body: html,
   };
 }
 
 function parseFormData(body) {
   const data = {};
-  const pairs = body.split('&');
-  
+  const pairs = body.split("&");
+
   for (const pair of pairs) {
-    const [key, value] = pair.split('=');
-    data[decodeURIComponent(key)] = decodeURIComponent(value.replace(/\+/g, ' '));
+    const [key, value] = pair.split("=");
+    data[decodeURIComponent(key)] = decodeURIComponent(
+      value.replace(/\+/g, " "),
+    );
   }
-  
+
   return data;
 }
 
@@ -160,24 +162,31 @@ Add server-side validation:
 
 ```javascript
 function init() {
-  register('GET', '/signup', showSignupForm);
-  register('POST', '/signup', handleSignup);
+  register("GET", "/signup", showSignupForm);
+  register("POST", "/signup", handleSignup);
 }
 
 function showSignupForm(request) {
   const params = parseQueryParams(request.url);
-  const errors = params.errors ? JSON.parse(decodeURIComponent(params.errors)) : [];
-  const values = params.values ? JSON.parse(decodeURIComponent(params.values)) : {};
-  
-  const errorHtml = errors.length > 0 ? `
+  const errors = params.errors
+    ? JSON.parse(decodeURIComponent(params.errors))
+    : [];
+  const values = params.values
+    ? JSON.parse(decodeURIComponent(params.values))
+    : {};
+
+  const errorHtml =
+    errors.length > 0
+      ? `
     <div class="errors">
       <strong>Please fix the following errors:</strong>
       <ul>
-        ${errors.map(e => `<li>${e}</li>`).join('')}
+        ${errors.map((e) => `<li>${e}</li>`).join("")}
       </ul>
     </div>
-  ` : '';
-  
+  `
+      : "";
+
   const html = `
     <!DOCTYPE html>
     <html>
@@ -239,11 +248,11 @@ function showSignupForm(request) {
       ${errorHtml}
       <form method="POST" action="/signup">
         <label>Username *</label>
-        <input type="text" name="username" value="${values.username || ''}" required>
+        <input type="text" name="username" value="${values.username || ""}" required>
         <div class="help-text">3-20 characters, letters and numbers only</div>
         
         <label>Email *</label>
-        <input type="email" name="email" value="${values.email || ''}" required>
+        <input type="email" name="email" value="${values.email || ""}" required>
         
         <label>Password *</label>
         <input type="password" name="password" required>
@@ -253,15 +262,15 @@ function showSignupForm(request) {
         <input type="password" name="confirmPassword" required>
         
         <label>Age *</label>
-        <input type="number" name="age" value="${values.age || ''}" min="13" max="120" required>
+        <input type="number" name="age" value="${values.age || ""}" min="13" max="120" required>
         
         <label>Country *</label>
         <select name="country" required>
           <option value="">Select...</option>
-          <option value="US" ${values.country === 'US' ? 'selected' : ''}>United States</option>
-          <option value="UK" ${values.country === 'UK' ? 'selected' : ''}>United Kingdom</option>
-          <option value="CA" ${values.country === 'CA' ? 'selected' : ''}>Canada</option>
-          <option value="AU" ${values.country === 'AU' ? 'selected' : ''}>Australia</option>
+          <option value="US" ${values.country === "US" ? "selected" : ""}>United States</option>
+          <option value="UK" ${values.country === "UK" ? "selected" : ""}>United Kingdom</option>
+          <option value="CA" ${values.country === "CA" ? "selected" : ""}>Canada</option>
+          <option value="AU" ${values.country === "AU" ? "selected" : ""}>Australia</option>
         </select>
         
         <button type="submit">Create Account</button>
@@ -269,46 +278,48 @@ function showSignupForm(request) {
     </body>
     </html>
   `;
-  
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'text/html' },
-    body: html
+    headers: { "Content-Type": "text/html" },
+    body: html,
   };
 }
 
 function handleSignup(request) {
   const formData = parseFormData(request.body);
-  
+
   // Validate
   const errors = validateSignupForm(formData);
-  
+
   if (errors.length > 0) {
     // Redirect back with errors
     const errorParam = encodeURIComponent(JSON.stringify(errors));
-    const valuesParam = encodeURIComponent(JSON.stringify({
-      username: formData.username,
-      email: formData.email,
-      age: formData.age,
-      country: formData.country
-    }));
-    
+    const valuesParam = encodeURIComponent(
+      JSON.stringify({
+        username: formData.username,
+        email: formData.email,
+        age: formData.age,
+        country: formData.country,
+      }),
+    );
+
     return {
       status: 302,
       headers: {
-        'Location': `/signup?errors=${errorParam}&values=${valuesParam}`
+        Location: `/signup?errors=${errorParam}&values=${valuesParam}`,
       },
-      body: ''
+      body: "",
     };
   }
-  
+
   // Success - create account (mock)
-  writeLog('info', 'New user signup', {
+  writeLog("info", "New user signup", {
     username: formData.username,
     email: formData.email,
-    country: formData.country
+    country: formData.country,
   });
-  
+
   const html = `
     <!DOCTYPE html>
     <html>
@@ -340,77 +351,79 @@ function handleSignup(request) {
     </body>
     </html>
   `;
-  
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'text/html' },
-    body: html
+    headers: { "Content-Type": "text/html" },
+    body: html,
   };
 }
 
 function validateSignupForm(data) {
   const errors = [];
-  
+
   // Username validation
   if (!data.username || data.username.length < 3) {
-    errors.push('Username must be at least 3 characters');
+    errors.push("Username must be at least 3 characters");
   } else if (data.username.length > 20) {
-    errors.push('Username must be no more than 20 characters');
+    errors.push("Username must be no more than 20 characters");
   } else if (!/^[a-zA-Z0-9]+$/.test(data.username)) {
-    errors.push('Username can only contain letters and numbers');
+    errors.push("Username can only contain letters and numbers");
   }
-  
+
   // Email validation
-  if (!data.email || !data.email.includes('@')) {
-    errors.push('Valid email is required');
+  if (!data.email || !data.email.includes("@")) {
+    errors.push("Valid email is required");
   }
-  
+
   // Password validation
   if (!data.password || data.password.length < 8) {
-    errors.push('Password must be at least 8 characters');
+    errors.push("Password must be at least 8 characters");
   }
-  
+
   if (data.password !== data.confirmPassword) {
-    errors.push('Passwords do not match');
+    errors.push("Passwords do not match");
   }
-  
+
   // Age validation
   const age = parseInt(data.age);
   if (isNaN(age) || age < 13) {
-    errors.push('You must be at least 13 years old');
+    errors.push("You must be at least 13 years old");
   } else if (age > 120) {
-    errors.push('Please enter a valid age');
+    errors.push("Please enter a valid age");
   }
-  
+
   // Country validation
   if (!data.country) {
-    errors.push('Please select a country');
+    errors.push("Please select a country");
   }
-  
+
   return errors;
 }
 
 function parseFormData(body) {
   const data = {};
-  const pairs = body.split('&');
-  
+  const pairs = body.split("&");
+
   for (const pair of pairs) {
-    const [key, value] = pair.split('=');
-    data[decodeURIComponent(key)] = decodeURIComponent(value.replace(/\+/g, ' '));
+    const [key, value] = pair.split("=");
+    data[decodeURIComponent(key)] = decodeURIComponent(
+      value.replace(/\+/g, " "),
+    );
   }
-  
+
   return data;
 }
 
 function parseQueryParams(url) {
   const params = {};
-  const queryString = url.split('?')[1];
+  const queryString = url.split("?")[1];
   if (!queryString) return params;
-  
-  const pairs = queryString.split('&');
+
+  const pairs = queryString.split("&");
   for (const pair of pairs) {
-    const [key, value] = pair.split('=');
-    params[decodeURIComponent(key)] = decodeURIComponent(value || '');
+    const [key, value] = pair.split("=");
+    params[decodeURIComponent(key)] = decodeURIComponent(value || "");
   }
   return params;
 }
@@ -424,8 +437,8 @@ Modern async form handling:
 
 ```javascript
 function init() {
-  register('GET', '/feedback', showFeedbackForm);
-  register('POST', '/api/feedback', handleFeedbackAPI);
+  register("GET", "/feedback", showFeedbackForm);
+  register("POST", "/api/feedback", handleFeedbackAPI);
 }
 
 function showFeedbackForm(request) {
@@ -645,11 +658,11 @@ function showFeedbackForm(request) {
     </body>
     </html>
   `;
-  
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'text/html' },
-    body: html
+    headers: { "Content-Type": "text/html" },
+    body: html,
   };
 }
 
@@ -660,55 +673,55 @@ function handleFeedbackAPI(request) {
   } catch (e) {
     return {
       status: 400,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ error: 'Invalid JSON' })
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ error: "Invalid JSON" }),
     };
   }
-  
+
   // Validate
   const errors = [];
-  if (!data.name || data.name.trim() === '') {
-    errors.push('Name is required');
+  if (!data.name || data.name.trim() === "") {
+    errors.push("Name is required");
   }
-  if (!data.email || !data.email.includes('@')) {
-    errors.push('Valid email is required');
+  if (!data.email || !data.email.includes("@")) {
+    errors.push("Valid email is required");
   }
   if (!data.rating || data.rating < 1 || data.rating > 5) {
-    errors.push('Rating must be between 1 and 5');
+    errors.push("Rating must be between 1 and 5");
   }
   if (!data.category) {
-    errors.push('Category is required');
+    errors.push("Category is required");
   }
-  if (!data.comments || data.comments.trim() === '') {
-    errors.push('Comments are required');
+  if (!data.comments || data.comments.trim() === "") {
+    errors.push("Comments are required");
   }
-  
+
   if (errors.length > 0) {
     return {
       status: 400,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        error: 'Validation failed',
-        errors: errors
-      })
+        error: "Validation failed",
+        errors: errors,
+      }),
     };
   }
-  
+
   // Log feedback
-  writeLog('info', 'Feedback received', {
+  writeLog("info", "Feedback received", {
     name: data.name,
     email: data.email,
     rating: data.rating,
-    category: data.category
+    category: data.category,
   });
-  
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       success: true,
-      message: 'Thank you for your feedback!'
-    })
+      message: "Thank you for your feedback!",
+    }),
   };
 }
 
@@ -721,8 +734,8 @@ Handle file uploads (for when assets API is used):
 
 ```javascript
 function init() {
-  register('GET', '/upload', showUploadForm);
-  register('POST', '/upload', handleUpload);
+  register("GET", "/upload", showUploadForm);
+  register("POST", "/upload", handleUpload);
 }
 
 function showUploadForm(request) {
@@ -914,32 +927,32 @@ function showUploadForm(request) {
     </body>
     </html>
   `;
-  
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'text/html' },
-    body: html
+    headers: { "Content-Type": "text/html" },
+    body: html,
   };
 }
 
 function handleUpload(request) {
-  writeLog('info', 'File upload received', {
-    contentType: request.headers['content-type'],
-    bodyLength: request.body ? request.body.length : 0
+  writeLog("info", "File upload received", {
+    contentType: request.headers["content-type"],
+    bodyLength: request.body ? request.body.length : 0,
   });
-  
+
   // In real implementation, you would:
   // 1. Parse multipart form data
   // 2. Extract file content
   // 3. Use upsertAsset() to save the file
-  
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       success: true,
-      message: 'File uploaded successfully'
-    })
+      message: "File uploaded successfully",
+    }),
   };
 }
 
@@ -952,8 +965,8 @@ Create a multi-step registration process:
 
 ```javascript
 function init() {
-  register('GET', '/wizard', showWizard);
-  register('POST', '/api/wizard/step', handleWizardStep);
+  register("GET", "/wizard", showWizard);
+  register("POST", "/api/wizard/step", handleWizardStep);
 }
 
 function showWizard(request) {
@@ -1312,29 +1325,29 @@ function showWizard(request) {
     </body>
     </html>
   `;
-  
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'text/html' },
-    body: html
+    headers: { "Content-Type": "text/html" },
+    body: html,
   };
 }
 
 function handleWizardStep(request) {
   const data = JSON.parse(request.body);
-  
-  writeLog('info', 'Wizard registration completed', {
+
+  writeLog("info", "Wizard registration completed", {
     username: data.account.username,
-    email: data.account.email
+    email: data.account.email,
   });
-  
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       success: true,
-      message: 'Registration completed successfully'
-    })
+      message: "Registration completed successfully",
+    }),
   };
 }
 
@@ -1352,12 +1365,12 @@ Never trust client-side validation alone:
 // Server-side validation is security
 function validateInput(data) {
   const errors = [];
-  
+
   // Always validate
-  if (!data.email || !data.email.includes('@')) {
-    errors.push('Invalid email');
+  if (!data.email || !data.email.includes("@")) {
+    errors.push("Invalid email");
   }
-  
+
   return errors;
 }
 ```
@@ -1366,10 +1379,10 @@ function validateInput(data) {
 
 ```javascript
 // Good: Specific error messages
-"Email must contain an @ symbol"
+"Email must contain an @ symbol";
 
 // Bad: Generic errors
-"Invalid input"
+"Invalid input";
 ```
 
 ### 3. Preserve User Input
@@ -1378,16 +1391,16 @@ When validation fails, preserve what the user entered:
 
 ```javascript
 // Return form with values filled in
-value="${values.username || ''}"
+value = "${values.username || ''}";
 ```
 
 ### 4. Use Appropriate Input Types
 
 ```html
-<input type="email" name="email">
-<input type="tel" name="phone">
-<input type="date" name="dob">
-<input type="number" name="age">
+<input type="email" name="email" />
+<input type="tel" name="phone" />
+<input type="date" name="dob" />
+<input type="number" name="age" />
 ```
 
 ### 5. Handle Errors Gracefully
@@ -1396,7 +1409,7 @@ value="${values.username || ''}"
 try {
   const data = JSON.parse(request.body);
 } catch (e) {
-  return errorResponse('Invalid JSON');
+  return errorResponse("Invalid JSON");
 }
 ```
 

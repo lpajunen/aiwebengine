@@ -44,6 +44,7 @@ These individual AI guides were consolidated into a single comprehensive guide:
 - **CLAUDE_MODEL_GUIDE.md**
 
 → All replaced by:
+
 - `solution-developers/guides/ai-development.md` (comprehensive AI guide)
 - `solution-developers/examples/ai-integration.md` (practical examples)
 

@@ -18,14 +18,14 @@ Welcome to the aiwebengine implementation documentation! This section helps cont
 
 New functional capabilities that need to be added:
 
-| Feature | Priority | Status | Guide |
-|---------|----------|--------|-------|
-| Authentication System | 🔴 Critical | Planned | [features/authentication.md](./features/authentication.md) |
-| Database Integration | 🟠 High | Needs Planning | [features/database-integration.md](./features/database-integration.md) |
-| Template Engine | 🟡 Medium | Future | [features/template-engine.md](./features/template-engine.md) |
-| Email Support | 🟢 Low | Future | [features/email-support.md](./features/email-support.md) |
-| Background Jobs | 🟢 Low | Future | [features/background-jobs.md](./features/background-jobs.md) |
-| MCP Integration | 🟢 Low | Future | [features/mcp-integration.md](./features/mcp-integration.md) |
+| Feature               | Priority    | Status         | Guide                                                                  |
+| --------------------- | ----------- | -------------- | ---------------------------------------------------------------------- |
+| Authentication System | 🔴 Critical | Planned        | [features/authentication.md](./features/authentication.md)             |
+| Database Integration  | 🟠 High     | Needs Planning | [features/database-integration.md](./features/database-integration.md) |
+| Template Engine       | 🟡 Medium   | Future         | [features/template-engine.md](./features/template-engine.md)           |
+| Email Support         | 🟢 Low      | Future         | [features/email-support.md](./features/email-support.md)               |
+| Background Jobs       | 🟢 Low      | Future         | [features/background-jobs.md](./features/background-jobs.md)           |
+| MCP Integration       | 🟢 Low      | Future         | [features/mcp-integration.md](./features/mcp-integration.md)           |
 
 **See [features/README.md](./features/README.md) for complete list**
 
@@ -33,14 +33,14 @@ New functional capabilities that need to be added:
 
 Non-functional improvements to existing code:
 
-| Improvement | Priority | Status | Guide |
-|-------------|----------|--------|-------|
-| Error Handling | 🔴 Critical | In Progress | [improvements/error-handling.md](./improvements/error-handling.md) |
-| Security Integration | 🔴 Critical | In Progress | [improvements/security-hardening.md](./improvements/security-hardening.md) |
-| Testing Coverage | 🔴 Critical | Needed | [improvements/testing-strategy.md](./improvements/testing-strategy.md) |
-| Performance Optimization | 🟠 High | Planned | [improvements/performance.md](./improvements/performance.md) |
-| Monitoring & Observability | 🟡 Medium | Planned | [improvements/monitoring.md](./improvements/monitoring.md) |
-| Code Quality | 🟡 Medium | Ongoing | [improvements/code-quality.md](./improvements/code-quality.md) |
+| Improvement                | Priority    | Status      | Guide                                                                      |
+| -------------------------- | ----------- | ----------- | -------------------------------------------------------------------------- |
+| Error Handling             | 🔴 Critical | In Progress | [improvements/error-handling.md](./improvements/error-handling.md)         |
+| Security Integration       | 🔴 Critical | In Progress | [improvements/security-hardening.md](./improvements/security-hardening.md) |
+| Testing Coverage           | 🔴 Critical | Needed      | [improvements/testing-strategy.md](./improvements/testing-strategy.md)     |
+| Performance Optimization   | 🟠 High     | Planned     | [improvements/performance.md](./improvements/performance.md)               |
+| Monitoring & Observability | 🟡 Medium   | Planned     | [improvements/monitoring.md](./improvements/monitoring.md)                 |
+| Code Quality               | 🟡 Medium   | Ongoing     | [improvements/code-quality.md](./improvements/code-quality.md)             |
 
 **See [improvements/README.md](./improvements/README.md) for complete list**
 
@@ -64,7 +64,7 @@ Best practices and processes for implementing features:
 Based on the roadmap, we're currently focused on:
 
 1. **Stability & Error Handling** - Eliminating panics, improving error propagation
-2. **Security Integration** - Connecting security framework to execution paths  
+2. **Security Integration** - Connecting security framework to execution paths
 3. **Testing Infrastructure** - Achieving comprehensive test coverage
 
 ### Before Starting Authentication Work
@@ -89,20 +89,21 @@ This section is organized by the **type of work** needed:
 These are new capabilities that don't exist yet (or need significant expansion):
 
 - Authentication & authorization
-- Database integration  
+- Database integration
 - Template engines
 - Email sending
 - Background job processing
 - Model Context Protocol support
 
 Each feature document includes:
+
 - Current status and gaps
 - Implementation approach
 - Technical design
 - Dependencies and prerequisites
 - Testing strategy
 
-### `/improvements/` - Non-Functional Improvements  
+### `/improvements/` - Non-Functional Improvements
 
 These enhance existing code quality, performance, or maintainability:
 
@@ -114,6 +115,7 @@ These enhance existing code quality, performance, or maintainability:
 - Code quality improvements
 
 Each improvement document includes:
+
 - Current state assessment
 - Problems to solve
 - Proposed solutions
@@ -152,22 +154,26 @@ We use a color-coded priority system:
 ### If you want to...
 
 **Add a new feature:**
+
 1. Check [ROADMAP.md](./ROADMAP.md) to see if it's planned
 2. Read [guides/adding-new-features.md](./guides/adding-new-features.md)
 3. Review the specific feature guide in `/features/`
 4. Follow [CONTRIBUTING.md](./CONTRIBUTING.md) for the contribution process
 
 **Fix/improve existing code:**
+
 1. Check [ROADMAP.md](./ROADMAP.md) for priority
 2. Review the relevant guide in `/improvements/`
 3. Follow [DEVELOPMENT.md](./DEVELOPMENT.md) coding standards
 4. Add comprehensive tests per [guides/testing-guidelines.md](./guides/testing-guidelines.md)
 
 **Understand what needs work:**
+
 1. Start with [ROADMAP.md](./ROADMAP.md) for the big picture
 2. Dive into specific areas via [features/README.md](./features/README.md) or [improvements/README.md](./improvements/README.md)
 
 **Review someone's contribution:**
+
 1. Use [guides/code-review-process.md](./guides/code-review-process.md)
 2. Check against [guides/security-checklist.md](./guides/security-checklist.md)
 3. Verify test coverage per [guides/testing-guidelines.md](./guides/testing-guidelines.md)
@@ -180,7 +186,7 @@ Each document uses status indicators to show implementation progress:
 
 - **✅ Implemented** - Feature/improvement is complete and merged
 - **🚧 In Progress** - Currently being worked on
-- **📋 Planned** - Designed and ready to implement  
+- **📋 Planned** - Designed and ready to implement
 - **💭 Needs Planning** - Idea stage, requires design work
 - **🔮 Future** - Long-term consideration, not scheduled
 

@@ -96,8 +96,8 @@ All completed implementation notes and old TODO files moved to `/archive/impleme
 - DOCUMENTATION_UPDATES_COMPLETE.md
 - USER_REPOSITORY_IMPLEMENTATION.md
 - USER_REPOSITORY_INTEGRATION.md
-- *_FIX.md files (various bug fixes)
-- *_IMPLEMENTATION.md files (completed work)
+- \*\_FIX.md files (various bug fixes)
+- \*\_IMPLEMENTATION.md files (completed work)
 
 ### Consolidated TODOs
 
@@ -171,13 +171,13 @@ All completed implementation notes and old TODO files moved to `/archive/impleme
 
 ### If you had bookmarked old files:
 
-| Old File | New Location |
-|----------|-------------|
-| TODO.md | ROADMAP.md |
+| Old File         | New Location                                    |
+| ---------------- | ----------------------------------------------- |
+| TODO.md          | ROADMAP.md                                      |
 | SECURITY_TODO.md | ROADMAP.md + improvements/security-hardening.md |
-| AUTH_TODO.md | ROADMAP.md + features/authentication.md |
-| URGENT_TODO.md | ROADMAP.md (Critical Prerequisites section) |
-| Completed docs | /archive/implementing/ |
+| AUTH_TODO.md     | ROADMAP.md + features/authentication.md         |
+| URGENT_TODO.md   | ROADMAP.md (Critical Prerequisites section)     |
+| Completed docs   | /archive/implementing/                          |
 
 ### If you're looking for:
 

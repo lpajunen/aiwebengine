@@ -10,27 +10,27 @@ This directory contains guides for **non-functional improvements** to existing a
 
 ### 🔴 Critical Priority (Blocking v1.0)
 
-| Improvement | Status | Effort | Guide |
-|-------------|--------|--------|-------|
-| Error Handling & Stability | 🚧 In Progress | 2-3 days | [error-handling.md](./error-handling.md) |
-| Security Framework Integration | 🚧 In Progress | 3-4 days | [security-hardening.md](./security-hardening.md) |
-| Testing Coverage | 📋 Planned | 2-3 days | [testing-strategy.md](./testing-strategy.md) |
-| Configuration Management | 📋 Planned | 1-2 days | [configuration-management.md](./configuration-management.md) |
+| Improvement                    | Status         | Effort   | Guide                                                        |
+| ------------------------------ | -------------- | -------- | ------------------------------------------------------------ |
+| Error Handling & Stability     | 🚧 In Progress | 2-3 days | [error-handling.md](./error-handling.md)                     |
+| Security Framework Integration | 🚧 In Progress | 3-4 days | [security-hardening.md](./security-hardening.md)             |
+| Testing Coverage               | 📋 Planned     | 2-3 days | [testing-strategy.md](./testing-strategy.md)                 |
+| Configuration Management       | 📋 Planned     | 1-2 days | [configuration-management.md](./configuration-management.md) |
 
 ### 🟠 High Priority (Required for v1.0)
 
-| Improvement | Status | Effort | Guide |
-|-------------|--------|--------|-------|
-| Performance Optimization | 📋 Planned | 2-3 weeks | [performance.md](./performance.md) |
-| Code Quality Cleanup | 🚧 Ongoing | Continuous | [code-quality.md](./code-quality.md) |
+| Improvement              | Status     | Effort     | Guide                                |
+| ------------------------ | ---------- | ---------- | ------------------------------------ |
+| Performance Optimization | 📋 Planned | 2-3 weeks  | [performance.md](./performance.md)   |
+| Code Quality Cleanup     | 🚧 Ongoing | Continuous | [code-quality.md](./code-quality.md) |
 
 ### 🟡 Medium Priority (v1.1)
 
-| Improvement | Status | Effort | Guide |
-|-------------|--------|--------|-------|
-| Monitoring & Observability | 📋 Planned | 2 weeks | [monitoring.md](./monitoring.md) |
-| Development Tools | 📋 Planned | 1-2 weeks | [development-tools.md](./development-tools.md) |
-| API Consistency | 💭 Needs Planning | 1 week | [api-consistency.md](./api-consistency.md) |
+| Improvement                | Status            | Effort    | Guide                                          |
+| -------------------------- | ----------------- | --------- | ---------------------------------------------- |
+| Monitoring & Observability | 📋 Planned        | 2 weeks   | [monitoring.md](./monitoring.md)               |
+| Development Tools          | 📋 Planned        | 1-2 weeks | [development-tools.md](./development-tools.md) |
+| API Consistency            | 💭 Needs Planning | 1 week    | [api-consistency.md](./api-consistency.md)     |
 
 ---
 

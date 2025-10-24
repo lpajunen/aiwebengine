@@ -25,9 +25,10 @@ This document provides a prioritized view of all development work needed for aiw
 **Theme:** Production-Ready Foundation with Authentication
 
 **Key Goals:**
+
 - Zero panics in production code
 - Authentication & user management working
-- >80% test coverage
+- > 80% test coverage
 - Security framework fully operational
 - Production deployment validated
 
@@ -44,12 +45,14 @@ These **MUST** be completed before authentication or any other major feature wor
 **Target:** Week 1-2
 
 **Problems:**
+
 - 20+ `unwrap()` calls in production paths create panic risks
 - Incomplete mutex poisoning recovery
 - No JavaScript execution timeouts
 - 1 failing test: `test_register_web_stream_invalid_path`
 
 **Tasks:**
+
 - [ ] Remove all `unwrap()`/`expect()` from `src/lib.rs` (~15 instances)
 - [ ] Remove all `unwrap()`/`expect()` from `src/js_engine.rs` (~6 instances)
 - [ ] Fix failing test: `test_register_web_stream_invalid_path`
@@ -58,6 +61,7 @@ These **MUST** be completed before authentication or any other major feature wor
 - [ ] Add graceful degradation for component failures
 
 **Success Metrics:**
+
 - Zero `unwrap()` calls in production code (grep returns nothing)
 - 100% test pass rate (126/126 passing)
 - All error paths return proper `Result<T, E>` types
@@ -73,12 +77,14 @@ These **MUST** be completed before authentication or any other major feature wor
 **Target:** Week 2-3
 
 **Problems:**
+
 - Security modules exist but aren't enforced in execution paths
 - `setup_global_functions()` legacy code still present (unused)
 - 18 TODO comments in security modules indicating incomplete work
 - SecureOperations not connected to actual repository/storage
 
 **Tasks:**
+
 - [ ] Remove legacy `setup_global_functions()` from `src/js_engine.rs:92`
 - [ ] Connect `SecureOperations` to repository layer (5 TODOs in operations.rs)
 - [ ] Implement async handlers in `secure_globals.rs` (8 TODOs)
@@ -87,6 +93,7 @@ These **MUST** be completed before authentication or any other major feature wor
 - [ ] Add integration tests proving security enforcement works
 
 **Success Metrics:**
+
 - All 18 security TODOs resolved or explicitly deferred with documentation
 - Security operations enforced on every script execution
 - UserContext validated on every request
@@ -103,6 +110,7 @@ These **MUST** be completed before authentication or any other major feature wor
 **Target:** Week 3
 
 **Problems:**
+
 - Current: 125/126 tests passing (99.2%) - need 100%
 - No security integration tests
 - Missing tests for `graphql.rs` module
@@ -110,6 +118,7 @@ These **MUST** be completed before authentication or any other major feature wor
 - Code coverage unknown (no reports generated)
 
 **Tasks:**
+
 - [ ] Fix failing test: `test_register_web_stream_invalid_path`
 - [ ] Create `tests/security_integration.rs` with 10+ comprehensive tests
 - [ ] Add missing unit tests for `graphql.rs` module
@@ -119,9 +128,10 @@ These **MUST** be completed before authentication or any other major feature wor
 - [ ] Add property-based tests for input validation
 
 **Success Metrics:**
+
 - 100% test pass rate
-- >80% line coverage overall
-- >90% coverage for security-critical modules
+- > 80% line coverage overall
+- > 90% coverage for security-critical modules
 - All security enforcement validated by tests
 
 **Guide:** [improvements/testing-strategy.md](./improvements/testing-strategy.md)
@@ -135,12 +145,14 @@ These **MUST** be completed before authentication or any other major feature wor
 **Target:** Week 4
 
 **Problems:**
+
 - No configuration structure for authentication
 - No secrets management (needed for JWT keys, OAuth secrets)
 - Environment-specific security settings not defined
 - No key rotation mechanism
 
 **Tasks:**
+
 - [ ] Add `AuthConfig` struct to `src/config.rs`
 - [ ] Create `.env.example` with all required variables
 - [ ] Implement secrets validation (minimum length, presence)
@@ -149,6 +161,7 @@ These **MUST** be completed before authentication or any other major feature wor
 - [ ] Add configuration tests
 
 **Success Metrics:**
+
 - Secrets loaded from environment variables only
 - Validation prevents weak/missing secrets
 - Configuration tested in all environments
@@ -171,6 +184,7 @@ These are production-critical features required for v1.0 release but can only st
 **Target:** Weeks 5-12
 
 **What's Needed:**
+
 - OAuth2/OIDC integration (Google, Microsoft, Apple)
 - Session management with encrypted storage
 - JWT token generation and validation
@@ -179,6 +193,7 @@ These are production-critical features required for v1.0 release but can only st
 - JavaScript API for user context
 
 **Current State:**
+
 - ✅ User repository implemented (`src/user_repository.rs`)
 - ✅ Authentication plan documented (AUTH_TODO.md)
 - ✅ Security prerequisites designed
@@ -187,6 +202,7 @@ These are production-critical features required for v1.0 release but can only st
 - ❌ Middleware not implemented
 
 **Tasks:**
+
 - [ ] Implement secure session storage with encryption (Phase 0.5)
 - [ ] Implement CSRF protection framework (Phase 0.5)
 - [ ] Add data encryption layer (Phase 0.5)
@@ -197,6 +213,7 @@ These are production-critical features required for v1.0 release but can only st
 - [ ] Comprehensive testing and security validation (Phase 7)
 
 **Success Metrics:**
+
 - Users can authenticate with Google, Microsoft, Apple
 - Sessions persist correctly and securely
 - JavaScript handlers can access user context
@@ -214,6 +231,7 @@ These are production-critical features required for v1.0 release but can only st
 **Target:** Week 13-14
 
 **What's Needed:**
+
 - Environment-specific configuration profiles
 - Configuration validation with detailed errors
 - Hot-reloading for non-critical settings
@@ -231,6 +249,7 @@ These are production-critical features required for v1.0 release but can only st
 **Target:** Week 15-17
 
 **What's Needed:**
+
 - Script compilation and caching
 - Connection pooling (when database added)
 - Request/response caching
@@ -253,6 +272,7 @@ These enhance the platform but aren't blocking for initial production release.
 **Target:** v1.1
 
 **What's Needed:**
+
 - PostgreSQL connection and query support
 - Query builder with type safety
 - Connection pooling
@@ -260,6 +280,7 @@ These enhance the platform but aren't blocking for initial production release.
 - Database configuration management
 
 **Current State:**
+
 - ❌ No database layer implemented
 - Session storage currently in-memory only
 - Would enable: persistent sessions, user data, application data
@@ -278,16 +299,19 @@ These enhance the platform but aren't blocking for initial production release.
 **Features Needed:**
 
 #### CORS Support
+
 - Configurable cross-origin resource sharing
 - Preflight request handling
 - Per-route CORS configuration
 
 #### File Upload Handling
+
 - Multipart form data parsing
 - File storage with configurable backends
 - File validation (size, type, content)
 
 #### Response Compression
+
 - Gzip compression middleware
 - Brotli compression support
 - Content-type based rules
@@ -304,6 +328,7 @@ These enhance the platform but aren't blocking for initial production release.
 **Target:** v1.1
 
 **What's Needed:**
+
 - Structured logging with correlation IDs
 - Prometheus metrics collection
 - Distributed tracing (OpenTelemetry)
@@ -323,6 +348,7 @@ These enhance the platform but aren't blocking for initial production release.
 **Target:** v1.1
 
 **What's Needed:**
+
 - Hot reloading development server
 - Enhanced error pages with stack traces
 - Development middleware pipeline
@@ -343,6 +369,7 @@ These are valuable but not critical for initial production use.
 **Target:** v2.0+
 
 **What's Needed:**
+
 - Server-side template rendering (Handlebars/Tera)
 - Template caching
 - Template inheritance and partials
@@ -359,6 +386,7 @@ These are valuable but not critical for initial production use.
 **Target:** v2.0+
 
 **What's Needed:**
+
 - SMTP client integration
 - Email template system
 - Async email queue
@@ -375,6 +403,7 @@ These are valuable but not critical for initial production use.
 **Target:** v2.0+
 
 **What's Needed:**
+
 - Job queue with persistent storage
 - Worker process management
 - Job scheduling and retry logic
@@ -391,6 +420,7 @@ These are valuable but not critical for initial production use.
 **Target:** v2.0+
 
 **What's Needed:**
+
 - MCP specification implementation
 - Tool and prompt registration APIs
 - MCP message handling and routing
@@ -407,6 +437,7 @@ These are valuable but not critical for initial production use.
 **Target:** v2.0+
 
 **What's Needed:**
+
 - Translation key management
 - Locale file support (JSON/YAML)
 - Translation function in JavaScript
@@ -424,6 +455,7 @@ These are valuable but not critical for initial production use.
 **Target:** v2.0+
 
 **Features:**
+
 - Multi-factor authentication (TOTP, WebAuthn)
 - Social login extensions (GitHub, Discord, Twitter)
 - SAML support for enterprise SSO
@@ -439,21 +471,25 @@ These are valuable but not critical for initial production use.
 ### Phase 0: Critical Prerequisites (Weeks 1-4)
 
 **Week 1-2: Stability & Error Handling**
+
 - Days 1-2: Remove all `unwrap()` calls
 - Days 3-4: Fix failing tests
 - Day 5: Add timeout mechanisms
 
 **Week 2-3: Security Integration**
+
 - Days 1-2: Remove legacy code, connect SecureOperations
 - Days 3-4: Complete async handlers and audit integration
 - Day 5: Integration testing
 
 **Week 3: Testing Infrastructure**
+
 - Days 1-2: Create security integration tests
 - Days 3-4: Add missing tests, achieve coverage targets
 - Day 5: Set up coverage reporting
 
 **Week 4: Configuration & Secrets**
+
 - Days 1-2: Add AuthConfig, create .env.example
 - Days 3-4: Implement validation, environment configs
 - Day 5: Testing and documentation
@@ -461,21 +497,25 @@ These are valuable but not critical for initial production use.
 ### Phase 1: Authentication (Weeks 5-12)
 
 **Weeks 5-6: Session & OAuth Foundation**
+
 - Secure session management with encryption
 - CSRF protection framework
 - OAuth provider implementations
 
 **Weeks 7-8: Middleware & Routes**
+
 - Authentication middleware with rate limiting
 - Login/callback/logout routes
 - Security header integration
 
 **Weeks 9-10: JavaScript Integration**
+
 - User context in request objects
 - JavaScript authentication APIs
 - Protected resource examples
 
 **Weeks 11-12: Testing & Validation**
+
 - Comprehensive testing (unit, integration, e2e)
 - Security penetration testing
 - Performance validation
@@ -484,11 +524,13 @@ These are valuable but not critical for initial production use.
 ### Phase 2: Production Readiness (Weeks 13-17)
 
 **Weeks 13-14: Configuration Management**
+
 - Environment profiles
 - Configuration validation
 - Hot-reloading
 
 **Weeks 15-17: Performance & Scalability**
+
 - Script caching
 - Performance optimization
 - Load testing
@@ -497,9 +539,10 @@ These are valuable but not critical for initial production use.
 ### v1.0 Release (Week 18)
 
 **Success Criteria:**
+
 - All critical prerequisites complete
 - Authentication working with 3+ providers
-- >80% test coverage, all tests passing
+- > 80% test coverage, all tests passing
 - Security framework fully operational
 - Production deployment validated
 - Complete documentation
@@ -513,7 +556,7 @@ These are valuable but not critical for initial production use.
 - [ ] Zero `unwrap()` calls in production code
 - [ ] 100% test pass rate (126/126 tests)
 - [ ] All 18 security TODOs resolved
-- [ ] >80% test coverage
+- [ ] > 80% test coverage
 - [ ] Security integration tests passing
 - [ ] Configuration supports authentication
 
@@ -542,6 +585,7 @@ These are valuable but not critical for initial production use.
 ### For Contributors
 
 **Starting new work:**
+
 1. Check this roadmap for priority and status
 2. Ensure prerequisites are complete
 3. Read the relevant guide in `/features/` or `/improvements/`
@@ -549,6 +593,7 @@ These are valuable but not critical for initial production use.
 5. Submit PR following [CONTRIBUTING.md](./CONTRIBUTING.md)
 
 **Updating status:**
+
 1. Change status indicators (🚧, ✅, etc.)
 2. Update task checkboxes as work progresses
 3. Add owner name when claiming work
@@ -557,12 +602,14 @@ These are valuable but not critical for initial production use.
 ### For Maintainers
 
 **Reviewing priorities:**
+
 - Critical (🔴) items are non-negotiable for v1.0
 - High (🟠) items are required for production use
 - Medium (🟡) items improve quality of life
 - Low (🟢) items are future enhancements
 
 **Accepting contributions:**
+
 - Ensure work aligns with roadmap priorities
 - Verify prerequisites are met
 - Check that success metrics are defined
@@ -573,6 +620,7 @@ These are valuable but not critical for initial production use.
 ## 🔄 Roadmap Updates
 
 This roadmap is a living document updated as:
+
 - Work is completed (status changes)
 - Priorities shift based on user needs
 - New requirements emerge

@@ -7,7 +7,7 @@ The deployer is a command-line tool for rapid development and deployment of aiwe
 **Key Features:**
 
 - ✅ **One-time deployment** - Upload a script and exit
-- ✅ **File watching** - Auto-redeploy when file changes  
+- ✅ **File watching** - Auto-redeploy when file changes
 - ✅ **Fast feedback** - Instant deployment on save
 - ✅ **Flexible configuration** - Custom URLs and paths
 - ✅ **Multiple scripts** - Deploy many scripts simultaneously
@@ -419,18 +419,18 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    
+
     steps:
       - uses: actions/checkout@v3
-      
+
       - name: Install Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
-      
+
       - name: Build deployer
         run: cargo build --release --bin deployer
-      
+
       - name: Deploy to staging
         if: github.event_name == 'pull_request'
         run: |
@@ -439,7 +439,7 @@ jobs:
             --uri "${{ secrets.STAGING_SERVER }}/api/test" \
             --file "scripts/api/test.js" \
             --watch false
-      
+
       - name: Deploy to production
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
@@ -472,22 +472,22 @@ deploy_staging:
   only:
     - develop
   script:
-    - ./target/release/deployer 
-        --server "$STAGING_SERVER" 
-        --uri "$STAGING_SERVER/api/test" 
-        --file "scripts/api/test.js" 
-        --watch false
+    - ./target/release/deployer
+      --server "$STAGING_SERVER"
+      --uri "$STAGING_SERVER/api/test"
+      --file "scripts/api/test.js"
+      --watch false
 
 deploy_production:
   stage: deploy
   only:
     - main
   script:
-    - ./target/release/deployer 
-        --server "$PROD_SERVER" 
-        --uri "$PROD_SERVER/api/test" 
-        --file "scripts/api/test.js" 
-        --watch false
+    - ./target/release/deployer
+      --server "$PROD_SERVER"
+      --uri "$PROD_SERVER/api/test"
+      --file "scripts/api/test.js"
+      --watch false
   when: manual
 ```
 

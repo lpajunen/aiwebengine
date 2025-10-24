@@ -8,20 +8,20 @@ The most basic API returns JSON data:
 
 ```javascript
 function init() {
-  register('GET', '/api/hello', helloHandler);
+  register("GET", "/api/hello", helloHandler);
 }
 
 function helloHandler(request) {
   const data = {
-    message: 'Hello from aiwebengine!',
+    message: "Hello from aiwebengine!",
     timestamp: new Date().toISOString(),
-    version: '1.0.0'
+    version: "1.0.0",
   };
 
   return {
     status: 200,
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data)
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
   };
 }
 
@@ -50,57 +50,57 @@ Handle query parameters for filtering and searching:
 
 ```javascript
 function init() {
-  register('GET', '/api/users', getUsersHandler);
+  register("GET", "/api/users", getUsersHandler);
 }
 
 function getUsersHandler(request) {
   // Parse query parameters
   const params = parseQueryParams(request.url);
-  const role = params.role || 'all';
-  const limit = parseInt(params.limit || '10');
-  
-  writeLog('info', 'Fetching users', { role, limit });
-  
+  const role = params.role || "all";
+  const limit = parseInt(params.limit || "10");
+
+  writeLog("info", "Fetching users", { role, limit });
+
   // Mock data
   const allUsers = [
-    { id: 1, name: 'Alice', role: 'admin' },
-    { id: 2, name: 'Bob', role: 'user' },
-    { id: 3, name: 'Charlie', role: 'user' },
-    { id: 4, name: 'Diana', role: 'admin' }
+    { id: 1, name: "Alice", role: "admin" },
+    { id: 2, name: "Bob", role: "user" },
+    { id: 3, name: "Charlie", role: "user" },
+    { id: 4, name: "Diana", role: "admin" },
   ];
-  
+
   // Filter by role
   let users = allUsers;
-  if (role !== 'all') {
-    users = users.filter(u => u.role === role);
+  if (role !== "all") {
+    users = users.filter((u) => u.role === role);
   }
-  
+
   // Apply limit
   users = users.slice(0, limit);
-  
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       data: users,
       count: users.length,
-      filters: { role, limit }
-    })
+      filters: { role, limit },
+    }),
   };
 }
 
 function parseQueryParams(url) {
   const params = {};
-  const queryString = url.split('?')[1];
-  
+  const queryString = url.split("?")[1];
+
   if (!queryString) return params;
-  
-  const pairs = queryString.split('&');
+
+  const pairs = queryString.split("&");
   for (const pair of pairs) {
-    const [key, value] = pair.split('=');
-    params[decodeURIComponent(key)] = decodeURIComponent(value || '');
+    const [key, value] = pair.split("=");
+    params[decodeURIComponent(key)] = decodeURIComponent(value || "");
   }
-  
+
   return params;
 }
 
@@ -129,40 +129,40 @@ Extract parameters from the URL path:
 
 ```javascript
 function init() {
-  register('GET', '/api/users/:id', getUserByIdHandler);
+  register("GET", "/api/users/:id", getUserByIdHandler);
 }
 
 function getUserByIdHandler(request) {
   // Extract ID from URL
-  const urlParts = request.url.split('/');
-  const id = urlParts[urlParts.length - 1].split('?')[0];
-  
-  writeLog('info', 'Fetching user by ID', { id });
-  
+  const urlParts = request.url.split("/");
+  const id = urlParts[urlParts.length - 1].split("?")[0];
+
+  writeLog("info", "Fetching user by ID", { id });
+
   // Mock database lookup
   const users = {
-    '1': { id: 1, name: 'Alice', email: 'alice@example.com', role: 'admin' },
-    '2': { id: 2, name: 'Bob', email: 'bob@example.com', role: 'user' },
-    '3': { id: 3, name: 'Charlie', email: 'charlie@example.com', role: 'user' }
+    1: { id: 1, name: "Alice", email: "alice@example.com", role: "admin" },
+    2: { id: 2, name: "Bob", email: "bob@example.com", role: "user" },
+    3: { id: 3, name: "Charlie", email: "charlie@example.com", role: "user" },
   };
-  
+
   const user = users[id];
-  
+
   if (!user) {
     return {
       status: 404,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        error: 'User not found',
-        id: id
-      })
+        error: "User not found",
+        id: id,
+      }),
     };
   }
-  
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ data: user })
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ data: user }),
   };
 }
 
@@ -188,62 +188,62 @@ Handle POST requests with JSON body:
 
 ```javascript
 function init() {
-  register('POST', '/api/users', createUserHandler);
+  register("POST", "/api/users", createUserHandler);
 }
 
 function createUserHandler(request) {
   // Parse JSON body
   let userData;
   try {
-    userData = JSON.parse(request.body || '{}');
+    userData = JSON.parse(request.body || "{}");
   } catch (e) {
     return {
       status: 400,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        error: 'Invalid JSON',
-        message: e.message
-      })
+        error: "Invalid JSON",
+        message: e.message,
+      }),
     };
   }
-  
+
   // Validate required fields
   const errors = [];
-  if (!userData.name) errors.push('name is required');
-  if (!userData.email) errors.push('email is required');
-  
+  if (!userData.name) errors.push("name is required");
+  if (!userData.email) errors.push("email is required");
+
   if (errors.length > 0) {
     return {
       status: 400,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        error: 'Validation failed',
-        errors: errors
-      })
+        error: "Validation failed",
+        errors: errors,
+      }),
     };
   }
-  
+
   // Create user (mock)
   const newUser = {
     id: Date.now(),
     name: userData.name,
     email: userData.email,
-    role: userData.role || 'user',
-    createdAt: new Date().toISOString()
+    role: userData.role || "user",
+    createdAt: new Date().toISOString(),
   };
-  
-  writeLog('info', 'User created', newUser);
-  
+
+  writeLog("info", "User created", newUser);
+
   return {
     status: 201,
-    headers: { 
-      'Content-Type': 'application/json',
-      'Location': `/api/users/${newUser.id}`
+    headers: {
+      "Content-Type": "application/json",
+      Location: `/api/users/${newUser.id}`,
     },
     body: JSON.stringify({
-      message: 'User created successfully',
-      data: newUser
-    })
+      message: "User created successfully",
+      data: newUser,
+    }),
   };
 }
 
@@ -270,57 +270,57 @@ Full update of a resource:
 
 ```javascript
 function init() {
-  register('PUT', '/api/users/:id', updateUserHandler);
+  register("PUT", "/api/users/:id", updateUserHandler);
 }
 
 function updateUserHandler(request) {
   // Extract ID
-  const urlParts = request.url.split('/');
-  const id = urlParts[urlParts.length - 1].split('?')[0];
-  
+  const urlParts = request.url.split("/");
+  const id = urlParts[urlParts.length - 1].split("?")[0];
+
   // Parse body
   let userData;
   try {
-    userData = JSON.parse(request.body || '{}');
+    userData = JSON.parse(request.body || "{}");
   } catch (e) {
     return {
       status: 400,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ error: 'Invalid JSON' })
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ error: "Invalid JSON" }),
     };
   }
-  
+
   // Validate
   const errors = [];
-  if (!userData.name) errors.push('name is required');
-  if (!userData.email) errors.push('email is required');
-  
+  if (!userData.name) errors.push("name is required");
+  if (!userData.email) errors.push("email is required");
+
   if (errors.length > 0) {
     return {
       status: 400,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ error: 'Validation failed', errors })
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ error: "Validation failed", errors }),
     };
   }
-  
+
   // Update user (mock)
   const updatedUser = {
     id: parseInt(id),
     name: userData.name,
     email: userData.email,
-    role: userData.role || 'user',
-    updatedAt: new Date().toISOString()
+    role: userData.role || "user",
+    updatedAt: new Date().toISOString(),
   };
-  
-  writeLog('info', 'User updated', updatedUser);
-  
+
+  writeLog("info", "User updated", updatedUser);
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      message: 'User updated successfully',
-      data: updatedUser
-    })
+      message: "User updated successfully",
+      data: updatedUser,
+    }),
   };
 }
 
@@ -341,35 +341,35 @@ Delete a resource:
 
 ```javascript
 function init() {
-  register('DELETE', '/api/users/:id', deleteUserHandler);
+  register("DELETE", "/api/users/:id", deleteUserHandler);
 }
 
 function deleteUserHandler(request) {
   // Extract ID
-  const urlParts = request.url.split('/');
-  const id = urlParts[urlParts.length - 1].split('?')[0];
-  
-  writeLog('info', 'Deleting user', { id });
-  
+  const urlParts = request.url.split("/");
+  const id = urlParts[urlParts.length - 1].split("?")[0];
+
+  writeLog("info", "Deleting user", { id });
+
   // Mock deletion - check if user exists
-  if (id === '999') {
+  if (id === "999") {
     return {
       status: 404,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        error: 'User not found',
-        id: id
-      })
+        error: "User not found",
+        id: id,
+      }),
     };
   }
-  
+
   return {
     status: 200,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      message: 'User deleted successfully',
-      id: parseInt(id)
-    })
+      message: "User deleted successfully",
+      id: parseInt(id),
+    }),
   };
 }
 
@@ -393,45 +393,45 @@ Here's a complete CRUD API in one script:
 ```javascript
 // Simple in-memory storage
 let users = [
-  { id: 1, name: 'Alice', email: 'alice@example.com', role: 'admin' },
-  { id: 2, name: 'Bob', email: 'bob@example.com', role: 'user' },
-  { id: 3, name: 'Charlie', email: 'charlie@example.com', role: 'user' }
+  { id: 1, name: "Alice", email: "alice@example.com", role: "admin" },
+  { id: 2, name: "Bob", email: "bob@example.com", role: "user" },
+  { id: 3, name: "Charlie", email: "charlie@example.com", role: "user" },
 ];
 let nextId = 4;
 
 function init() {
-  register('GET', '/api/users', listUsers);
-  register('GET', '/api/users/:id', getUser);
-  register('POST', '/api/users', createUser);
-  register('PUT', '/api/users/:id', updateUser);
-  register('DELETE', '/api/users/:id', deleteUser);
+  register("GET", "/api/users", listUsers);
+  register("GET", "/api/users/:id", getUser);
+  register("POST", "/api/users", createUser);
+  register("PUT", "/api/users/:id", updateUser);
+  register("DELETE", "/api/users/:id", deleteUser);
 }
 
 // LIST - Get all users
 function listUsers(request) {
   const params = parseQueryParams(request.url);
   const role = params.role;
-  
+
   let filtered = users;
   if (role) {
-    filtered = users.filter(u => u.role === role);
+    filtered = users.filter((u) => u.role === role);
   }
-  
+
   return jsonResponse(200, {
     data: filtered,
-    count: filtered.length
+    count: filtered.length,
   });
 }
 
 // GET - Get single user
 function getUser(request) {
   const id = parseInt(extractId(request.url));
-  const user = users.find(u => u.id === id);
-  
+  const user = users.find((u) => u.id === id);
+
   if (!user) {
-    return jsonResponse(404, { error: 'User not found' });
+    return jsonResponse(404, { error: "User not found" });
   }
-  
+
   return jsonResponse(200, { data: user });
 }
 
@@ -441,118 +441,118 @@ function createUser(request) {
   if (userData.error) {
     return jsonResponse(400, userData);
   }
-  
+
   const errors = validateUser(userData);
   if (errors.length > 0) {
-    return jsonResponse(400, { error: 'Validation failed', errors });
+    return jsonResponse(400, { error: "Validation failed", errors });
   }
-  
+
   const newUser = {
     id: nextId++,
     name: userData.name,
     email: userData.email,
-    role: userData.role || 'user',
-    createdAt: new Date().toISOString()
+    role: userData.role || "user",
+    createdAt: new Date().toISOString(),
   };
-  
+
   users.push(newUser);
-  writeLog('info', 'User created', newUser);
-  
+  writeLog("info", "User created", newUser);
+
   return jsonResponse(201, {
-    message: 'User created',
-    data: newUser
+    message: "User created",
+    data: newUser,
   });
 }
 
 // UPDATE - Update user
 function updateUser(request) {
   const id = parseInt(extractId(request.url));
-  const index = users.findIndex(u => u.id === id);
-  
+  const index = users.findIndex((u) => u.id === id);
+
   if (index === -1) {
-    return jsonResponse(404, { error: 'User not found' });
+    return jsonResponse(404, { error: "User not found" });
   }
-  
+
   const userData = parseBody(request.body);
   if (userData.error) {
     return jsonResponse(400, userData);
   }
-  
+
   const errors = validateUser(userData);
   if (errors.length > 0) {
-    return jsonResponse(400, { error: 'Validation failed', errors });
+    return jsonResponse(400, { error: "Validation failed", errors });
   }
-  
+
   users[index] = {
     ...users[index],
     name: userData.name,
     email: userData.email,
     role: userData.role || users[index].role,
-    updatedAt: new Date().toISOString()
+    updatedAt: new Date().toISOString(),
   };
-  
-  writeLog('info', 'User updated', users[index]);
-  
+
+  writeLog("info", "User updated", users[index]);
+
   return jsonResponse(200, {
-    message: 'User updated',
-    data: users[index]
+    message: "User updated",
+    data: users[index],
   });
 }
 
 // DELETE - Delete user
 function deleteUser(request) {
   const id = parseInt(extractId(request.url));
-  const index = users.findIndex(u => u.id === id);
-  
+  const index = users.findIndex((u) => u.id === id);
+
   if (index === -1) {
-    return jsonResponse(404, { error: 'User not found' });
+    return jsonResponse(404, { error: "User not found" });
   }
-  
+
   const deleted = users.splice(index, 1)[0];
-  writeLog('info', 'User deleted', deleted);
-  
+  writeLog("info", "User deleted", deleted);
+
   return jsonResponse(200, {
-    message: 'User deleted',
-    data: deleted
+    message: "User deleted",
+    data: deleted,
   });
 }
 
 // Helper functions
 function parseBody(body) {
   try {
-    return JSON.parse(body || '{}');
+    return JSON.parse(body || "{}");
   } catch (e) {
-    return { error: 'Invalid JSON' };
+    return { error: "Invalid JSON" };
   }
 }
 
 function validateUser(user) {
   const errors = [];
-  if (!user.name || user.name.trim() === '') {
-    errors.push('name is required');
+  if (!user.name || user.name.trim() === "") {
+    errors.push("name is required");
   }
-  if (!user.email || user.email.trim() === '') {
-    errors.push('email is required');
-  } else if (!user.email.includes('@')) {
-    errors.push('email must be valid');
+  if (!user.email || user.email.trim() === "") {
+    errors.push("email is required");
+  } else if (!user.email.includes("@")) {
+    errors.push("email must be valid");
   }
   return errors;
 }
 
 function extractId(url) {
-  const parts = url.split('/');
-  return parts[parts.length - 1].split('?')[0];
+  const parts = url.split("/");
+  return parts[parts.length - 1].split("?")[0];
 }
 
 function parseQueryParams(url) {
   const params = {};
-  const queryString = url.split('?')[1];
+  const queryString = url.split("?")[1];
   if (!queryString) return params;
-  
-  const pairs = queryString.split('&');
+
+  const pairs = queryString.split("&");
   for (const pair of pairs) {
-    const [key, value] = pair.split('=');
-    params[decodeURIComponent(key)] = decodeURIComponent(value || '');
+    const [key, value] = pair.split("=");
+    params[decodeURIComponent(key)] = decodeURIComponent(value || "");
   }
   return params;
 }
@@ -560,8 +560,8 @@ function parseQueryParams(url) {
 function jsonResponse(status, data) {
   return {
     status: status,
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data)
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
   };
 }
 
@@ -603,17 +603,17 @@ function safeHandler(request) {
   try {
     // Your logic here
     const data = processRequest(request);
-    
+
     return jsonResponse(200, { data });
   } catch (error) {
-    writeLog('error', 'Request failed', {
+    writeLog("error", "Request failed", {
       error: error.message,
-      url: request.url
+      url: request.url,
     });
-    
+
     return jsonResponse(500, {
-      error: 'Internal server error',
-      message: error.message
+      error: "Internal server error",
+      message: error.message,
     });
   }
 }
@@ -621,9 +621,9 @@ function safeHandler(request) {
 function processRequest(request) {
   // Simulate processing that might fail
   if (Math.random() > 0.9) {
-    throw new Error('Random failure for testing');
+    throw new Error("Random failure for testing");
   }
-  
+
   return { success: true };
 }
 ```
@@ -640,33 +640,33 @@ return jsonResponse(200, { data: users });
 return jsonResponse(201, { data: newUser });
 
 // 400 - Bad Request
-return jsonResponse(400, { error: 'Invalid input' });
+return jsonResponse(400, { error: "Invalid input" });
 
 // 404 - Not Found
-return jsonResponse(404, { error: 'User not found' });
+return jsonResponse(404, { error: "User not found" });
 
 // 500 - Server Error
-return jsonResponse(500, { error: 'Internal error' });
+return jsonResponse(500, { error: "Internal error" });
 ```
 
 ### 2. Validate Input
 
 ```javascript
 function validateEmail(email) {
-  return email && email.includes('@') && email.includes('.');
+  return email && email.includes("@") && email.includes(".");
 }
 
 function validateUser(user) {
   const errors = [];
-  
+
   if (!user.name || user.name.length < 2) {
-    errors.push('Name must be at least 2 characters');
+    errors.push("Name must be at least 2 characters");
   }
-  
+
   if (!validateEmail(user.email)) {
-    errors.push('Invalid email address');
+    errors.push("Invalid email address");
   }
-  
+
   return errors;
 }
 ```
@@ -675,13 +675,13 @@ function validateUser(user) {
 
 ```javascript
 // Log successful operations
-writeLog('info', 'User created', { id: newUser.id, name: newUser.name });
+writeLog("info", "User created", { id: newUser.id, name: newUser.name });
 
 // Log errors
-writeLog('error', 'Failed to create user', { error: error.message });
+writeLog("error", "Failed to create user", { error: error.message });
 
 // Log warnings
-writeLog('warn', 'Invalid email format', { email: userData.email });
+writeLog("warn", "Invalid email format", { email: userData.email });
 ```
 
 ### 4. Return Consistent Responses
@@ -708,16 +708,16 @@ writeLog('warn', 'Invalid email format', { email: userData.email });
 function jsonResponse(status, data) {
   return {
     status: status,
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data)
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
   };
 }
 
 function parseJsonBody(body) {
   try {
-    return { success: true, data: JSON.parse(body || '{}') };
+    return { success: true, data: JSON.parse(body || "{}") };
   } catch (e) {
-    return { success: false, error: 'Invalid JSON' };
+    return { success: false, error: "Invalid JSON" };
   }
 }
 ```
@@ -734,22 +734,22 @@ function parseJsonBody(body) {
 
 ```javascript
 // GET endpoint
-register('GET', '/api/resource', handler);
+register("GET", "/api/resource", handler);
 
 // POST endpoint
-register('POST', '/api/resource', handler);
+register("POST", "/api/resource", handler);
 
 // PUT endpoint
-register('PUT', '/api/resource/:id', handler);
+register("PUT", "/api/resource/:id", handler);
 
 // DELETE endpoint
-register('DELETE', '/api/resource/:id', handler);
+register("DELETE", "/api/resource/:id", handler);
 
 // JSON response
 return {
   status: 200,
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify(data)
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(data),
 };
 ```
 

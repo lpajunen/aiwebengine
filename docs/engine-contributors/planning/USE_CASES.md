@@ -1690,7 +1690,7 @@ ${tickets.map((t) => `- ${t.subject} (${t.priority})`).join("\n") || "None"}
 // JavaScript handler doesn't need security logic
 function displayUserComment(req) {
   const { username, comment } = req.query;
-  
+
   // Engine automatically escapes output - no XSS possible
   return Response.html(`
     <div class="comment">
@@ -1800,19 +1800,19 @@ This means JavaScript calls secure Rust functions, Rust validates everything bef
 // ❌ WRONG: Security validation in JavaScript
 function upsert_script_handler(req) {
   const { uri, content } = req.form;
-  
+
   // ❌ JavaScript validation can be bypassed!
   if (uri.length > 200) {
     return Response.json({ error: "URI too long" }, { status: 400 });
   }
-  
+
   if (content.includes("eval(")) {
     return Response.json({ error: "Dangerous code" }, { status: 400 });
   }
-  
+
   // ❌ Direct call without Rust validation
   upsertScript(uri, content);
-  
+
   return Response.json({ success: true });
 }
 ```
@@ -1830,29 +1830,26 @@ function upsert_script_handler(req) {
 // ✅ CORRECT: Only business logic in JavaScript
 function upsert_script_handler(req) {
   const { uri, content } = req.form;
-  
+
   // ✅ Simple business validation (user experience)
   if (!uri || !content) {
     return Response.json(
-      { error: "URI and content required" }, 
-      { status: 400 }
+      { error: "URI and content required" },
+      { status: 400 },
     );
   }
-  
+
   try {
     // ✅ Security validation happens in Rust
     upsertScript(uri, content);
-    
-    return Response.json({ 
+
+    return Response.json({
       success: true,
-      message: "Script updated successfully" 
+      message: "Script updated successfully",
     });
   } catch (error) {
     // Rust returned security error
-    return Response.json(
-      { error: error.message },
-      { status: 400 }
-    );
+    return Response.json({ error: error.message }, { status: 400 });
   }
 }
 
@@ -1860,8 +1857,8 @@ function upsert_script_handler(req) {
 function maliciousScript() {
   // This will STILL be validated by Rust
   upsertScript(
-    "../../../../etc/passwd",  // ❌ Rust rejects: Invalid URI
-    "eval('rm -rf /')"        // ❌ Rust rejects: Dangerous pattern
+    "../../../../etc/passwd", // ❌ Rust rejects: Invalid URI
+    "eval('rm -rf /')", // ❌ Rust rejects: Dangerous pattern
   );
   // Security error thrown, attack blocked
 }
@@ -1877,7 +1874,7 @@ let secure_upsert_script = {
         ctx.clone(),
         move |_c: Ctx<'_>, uri: String, content: String| -> Result<(), Error> {
             // ✅ ALL SECURITY LOGIC IN RUST
-            
+
             // 1. Check user capabilities
             if !runtime_ref.has_capability(Capability::WriteScripts) {
                 security_audit_log(SecurityEvent::UnauthorizedAccess {
@@ -1886,7 +1883,7 @@ let secure_upsert_script = {
                 });
                 return Err(Error::Unauthorized("Missing WriteScripts capability"));
             }
-            
+
             // 2. Validate URI in Rust
             let clean_uri = match InputValidator::validate_uri(&uri) {
                 Ok(uri) => uri,
@@ -1898,7 +1895,7 @@ let secure_upsert_script = {
                     return Err(Error::ValidationFailed(format!("Invalid URI: {}", e)));
                 }
             };
-            
+
             // 3. Validate content in Rust
             if let Err(e) = InputValidator::validate_script_content(&content) {
                 security_audit_log(SecurityEvent::DangerousPattern {
@@ -1907,7 +1904,7 @@ let secure_upsert_script = {
                 });
                 return Err(Error::SecurityViolation(format!("Dangerous code: {}", e)));
             }
-            
+
             // 4. Execute only after ALL validation passes
             match repository::upsert_script(&clean_uri, &content) {
                 Ok(()) => {
@@ -1961,48 +1958,48 @@ The engine's security architecture ensures that even if a developer writes insec
 
 ## Use Case Traceability Matrix
 
-| Use Case                | Priority | Related Requirements                              | Status      |
-| ----------------------- | -------- | ------------------------------------------------- | ----------- |
-| **Primary Use Cases**   |          |                                                   |             |
-| UC-001                  | CRITICAL | REQ-JS-001, REQ-JS-005, REQ-SEC-001, REQ-HTTP-003 | In Progress |
-| UC-002                  | CRITICAL | REQ-RT-001, REQ-RT-002, REQ-GQL-003, REQ-SEC-005  | In Progress |
-| UC-003                  | CRITICAL | REQ-DEPLOY-001-005, REQ-CONFIG-001, REQ-LOG-001   | Partial     |
-| UC-004                  | CRITICAL | REQ-AUTH-001-011, REQ-SEC-001-006                 | Partial     |
-| **MCP Use Cases**       |          |                                                   |             |
-| UC-005                  | CRITICAL | REQ-MCP-001, REQ-MCP-002, REQ-MCP-003             | Planned     |
-| UC-006                  | HIGH     | REQ-MCP-001, REQ-MCP-002, REQ-MCP-005             | Planned     |
-| UC-007                  | MEDIUM   | REQ-MCP-001, REQ-MCP-002, REQ-MCP-004             | Planned     |
-| **Web Developer**       |          |                                                   |             |
-| UC-101                  | HIGH     | REQ-HTTP-002, REQ-HTTP-008, REQ-JS-API-002        | Implemented |
-| UC-102                  | HIGH     | REQ-ASSET-001-006                                 | Implemented |
-| UC-103                  | HIGH     | REQ-HTTP-008, REQ-HTTP-010, REQ-DATA-004          | Partial     |
-| UC-104                  | MEDIUM   | REQ-JS-005, REQ-SEC-004, REQ-DATA-001             | Implemented |
-| **API Developer**       |          |                                                   |             |
-| UC-201                  | CRITICAL | REQ-HTTP-001-003, REQ-DATA-001-005                | Implemented |
-| UC-202                  | HIGH     | REQ-GQL-001, REQ-GQL-002, REQ-DATA-001            | Partial     |
-| UC-203                  | CRITICAL | REQ-AUTH-001-011, REQ-SEC-005-006                 | Partial     |
-| UC-204                  | MEDIUM   | REQ-SEC-003, REQ-PERF-001                         | Planned     |
-| **Real-Time Developer** |          |                                                   |             |
-| UC-301                  | CRITICAL | REQ-RT-001-002, REQ-STREAM-001-005                | Implemented |
-| UC-302                  | CRITICAL | REQ-GQL-003, REQ-RT-001-002                       | Implemented |
-| UC-303                  | HIGH     | REQ-RT-001, REQ-DATA-002, REQ-DATA-005            | Partial     |
-| UC-304                  | MEDIUM   | REQ-RT-002, REQ-STREAM-003                        | Partial     |
-| **Feature-Specific**    |          |                                                   |             |
-| UC-401                  | HIGH     | REQ-ERROR-001-005, REQ-HTTP-003                   | Implemented |
-| UC-402                  | MEDIUM   | REQ-CONFIG-001-005                                | Implemented |
-| UC-403                  | HIGH     | REQ-LOG-001-006, REQ-MONITOR-001-004              | Partial     |
-| UC-404                  | HIGH     | REQ-DEPLOY-001-005                                | Partial     |
-| **Integration**         |          |                                                   |             |
-| UC-501                  | HIGH     | Most requirements                                 | Planned     |
-| UC-502                  | HIGH     | REQ-AUTH, REQ-GQL-003, REQ-RT, REQ-DATA           | Planned     |
-| UC-503                  | HIGH     | REQ-AUTH, REQ-SEC, REQ-DATA, REQ-GQL              | Planned     |
-| UC-504                  | CRITICAL | REQ-SEC-005, REQ-JSAPI-007, REQ-HTTP-010          | Planned     |
-| UC-505                  | HIGH     | REQ-MCP-001-005, REQ-GQL, REQ-AUTH, REQ-RT        | Planned     |
-| **Edge Cases**          |          |                                                   |             |
-| UC-601                  | CRITICAL | REQ-SEC-001-015                                   | In Progress |
-| UC-602                  | CRITICAL | REQ-JS-002-004, REQ-PERF                          | Implemented |
-| UC-603                  | HIGH     | REQ-ERROR, REQ-RT-002                             | Partial     |
-| UC-604                  | CRITICAL | REQ-SEC-008, REQ-SEC-009, REQ-SEC-012, REQ-AUTH-005 | Required  |
+| Use Case                | Priority | Related Requirements                                | Status      |
+| ----------------------- | -------- | --------------------------------------------------- | ----------- |
+| **Primary Use Cases**   |          |                                                     |             |
+| UC-001                  | CRITICAL | REQ-JS-001, REQ-JS-005, REQ-SEC-001, REQ-HTTP-003   | In Progress |
+| UC-002                  | CRITICAL | REQ-RT-001, REQ-RT-002, REQ-GQL-003, REQ-SEC-005    | In Progress |
+| UC-003                  | CRITICAL | REQ-DEPLOY-001-005, REQ-CONFIG-001, REQ-LOG-001     | Partial     |
+| UC-004                  | CRITICAL | REQ-AUTH-001-011, REQ-SEC-001-006                   | Partial     |
+| **MCP Use Cases**       |          |                                                     |             |
+| UC-005                  | CRITICAL | REQ-MCP-001, REQ-MCP-002, REQ-MCP-003               | Planned     |
+| UC-006                  | HIGH     | REQ-MCP-001, REQ-MCP-002, REQ-MCP-005               | Planned     |
+| UC-007                  | MEDIUM   | REQ-MCP-001, REQ-MCP-002, REQ-MCP-004               | Planned     |
+| **Web Developer**       |          |                                                     |             |
+| UC-101                  | HIGH     | REQ-HTTP-002, REQ-HTTP-008, REQ-JS-API-002          | Implemented |
+| UC-102                  | HIGH     | REQ-ASSET-001-006                                   | Implemented |
+| UC-103                  | HIGH     | REQ-HTTP-008, REQ-HTTP-010, REQ-DATA-004            | Partial     |
+| UC-104                  | MEDIUM   | REQ-JS-005, REQ-SEC-004, REQ-DATA-001               | Implemented |
+| **API Developer**       |          |                                                     |             |
+| UC-201                  | CRITICAL | REQ-HTTP-001-003, REQ-DATA-001-005                  | Implemented |
+| UC-202                  | HIGH     | REQ-GQL-001, REQ-GQL-002, REQ-DATA-001              | Partial     |
+| UC-203                  | CRITICAL | REQ-AUTH-001-011, REQ-SEC-005-006                   | Partial     |
+| UC-204                  | MEDIUM   | REQ-SEC-003, REQ-PERF-001                           | Planned     |
+| **Real-Time Developer** |          |                                                     |             |
+| UC-301                  | CRITICAL | REQ-RT-001-002, REQ-STREAM-001-005                  | Implemented |
+| UC-302                  | CRITICAL | REQ-GQL-003, REQ-RT-001-002                         | Implemented |
+| UC-303                  | HIGH     | REQ-RT-001, REQ-DATA-002, REQ-DATA-005              | Partial     |
+| UC-304                  | MEDIUM   | REQ-RT-002, REQ-STREAM-003                          | Partial     |
+| **Feature-Specific**    |          |                                                     |             |
+| UC-401                  | HIGH     | REQ-ERROR-001-005, REQ-HTTP-003                     | Implemented |
+| UC-402                  | MEDIUM   | REQ-CONFIG-001-005                                  | Implemented |
+| UC-403                  | HIGH     | REQ-LOG-001-006, REQ-MONITOR-001-004                | Partial     |
+| UC-404                  | HIGH     | REQ-DEPLOY-001-005                                  | Partial     |
+| **Integration**         |          |                                                     |             |
+| UC-501                  | HIGH     | Most requirements                                   | Planned     |
+| UC-502                  | HIGH     | REQ-AUTH, REQ-GQL-003, REQ-RT, REQ-DATA             | Planned     |
+| UC-503                  | HIGH     | REQ-AUTH, REQ-SEC, REQ-DATA, REQ-GQL                | Planned     |
+| UC-504                  | CRITICAL | REQ-SEC-005, REQ-JSAPI-007, REQ-HTTP-010            | Planned     |
+| UC-505                  | HIGH     | REQ-MCP-001-005, REQ-GQL, REQ-AUTH, REQ-RT          | Planned     |
+| **Edge Cases**          |          |                                                     |             |
+| UC-601                  | CRITICAL | REQ-SEC-001-015                                     | In Progress |
+| UC-602                  | CRITICAL | REQ-JS-002-004, REQ-PERF                            | Implemented |
+| UC-603                  | HIGH     | REQ-ERROR, REQ-RT-002                               | Partial     |
+| UC-604                  | CRITICAL | REQ-SEC-008, REQ-SEC-009, REQ-SEC-012, REQ-AUTH-005 | Required    |
 
 ---
 

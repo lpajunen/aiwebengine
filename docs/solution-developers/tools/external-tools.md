@@ -44,38 +44,46 @@ Install these VS Code extensions for better aiwebengine development:
 #### JavaScript Development
 
 **ESLint** (`dbaeumer.vscode-eslint`)
+
 - Lints your JavaScript code
 - Catches errors before deployment
 
 **Prettier** (`esbenp.prettier-vscode`)
+
 - Auto-formats code consistently
 - Configurable style rules
 
 **JavaScript (ES6) Code Snippets** (`xabikos.JavaScriptSnippets`)
+
 - Quick code generation
 - Common patterns ready to use
 
 #### API Development
 
 **REST Client** (`humao.rest-client`)
+
 - Test HTTP endpoints directly in VS Code
 - No need for Postman/Insomnia
 
 **Thunder Client** (`rangav.vscode-thunder-client`)
+
 - Alternative REST client with GUI
 - Collections for organizing requests
 
 #### Productivity
 
 **Path Intellisense** (`christian-kohler.path-intellisense`)
+
 - Auto-complete file paths
 - Reduces typos in asset references
 
 **GitLens** (`eamonn.gitlens`)
+
 - Enhanced Git integration
 - See file history and blame
 
 **Todo Tree** (`Gruntfuggly.todo-tree`)
+
 - Track TODO comments
 - Navigate pending tasks
 
@@ -223,9 +231,7 @@ Create `.vscode/aiwebengine.code-snippets`:
   },
   "aiwebengine Log": {
     "prefix": "awe-log",
-    "body": [
-      "writeLog('${1:info}', '${2:message}', { ${3:data: value} });"
-    ],
+    "body": ["writeLog('${1:info}', '${2:message}', { ${3:data: value} });"],
     "description": "Write a log message"
   }
 }
@@ -470,21 +476,21 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
-    
+
     steps:
       - uses: actions/checkout@v3
-      
+
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: '18'
-      
+          node-version: "18"
+
       - name: Install dependencies
         run: npm ci
-      
+
       - name: Run linter
         run: npm run lint
-      
+
       - name: Run tests
         run: npm test
 
@@ -492,18 +498,18 @@ jobs:
     needs: test
     if: github.ref == 'refs/heads/develop'
     runs-on: ubuntu-latest
-    
+
     steps:
       - uses: actions/checkout@v3
-      
+
       - name: Install Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
-      
+
       - name: Build deployer
         run: cargo build --release --bin deployer
-      
+
       - name: Deploy to staging
         run: |
           for file in scripts/**/*.js; do
@@ -521,18 +527,18 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
-    
+
     steps:
       - uses: actions/checkout@v3
-      
+
       - name: Install Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
-      
+
       - name: Build deployer
         run: cargo build --release --bin deployer
-      
+
       - name: Deploy to production
         run: ./deploy-production.sh
         env:
@@ -598,7 +604,7 @@ Create `Jenkinsfile`:
 ```groovy
 pipeline {
     agent any
-    
+
     stages {
         stage('Test') {
             steps {
@@ -607,13 +613,13 @@ pipeline {
                 sh 'npm test'
             }
         }
-        
+
         stage('Build') {
             steps {
                 sh 'cargo build --release --bin deployer'
             }
         }
-        
+
         stage('Deploy to Staging') {
             when {
                 branch 'develop'
@@ -622,7 +628,7 @@ pipeline {
                 sh './deploy-staging.sh'
             }
         }
-        
+
         stage('Deploy to Production') {
             when {
                 branch 'main'
@@ -633,7 +639,7 @@ pipeline {
             }
         }
     }
-    
+
     post {
         success {
             echo 'Deployment successful!'
@@ -663,41 +669,41 @@ global.writeLog = jest.fn();
 global.register = jest.fn();
 
 // Import your script
-const userScript = require('../../scripts/api/users.js');
+const userScript = require("../../scripts/api/users.js");
 
-describe('User API', () => {
-  test('returns users list', () => {
+describe("User API", () => {
+  test("returns users list", () => {
     const request = {
-      method: 'GET',
-      url: '/api/users'
+      method: "GET",
+      url: "/api/users",
     };
-    
+
     const response = userScript.getUsers(request);
-    
+
     expect(response.status).toBe(200);
-    expect(response.headers['Content-Type']).toBe('application/json');
-    
+    expect(response.headers["Content-Type"]).toBe("application/json");
+
     const body = JSON.parse(response.body);
     expect(Array.isArray(body)).toBe(true);
   });
-  
-  test('creates new user', () => {
+
+  test("creates new user", () => {
     const request = {
-      method: 'POST',
-      url: '/api/users',
+      method: "POST",
+      url: "/api/users",
       body: JSON.stringify({
-        name: 'John Doe',
-        email: 'john@example.com'
-      })
+        name: "John Doe",
+        email: "john@example.com",
+      }),
     };
-    
+
     const response = userScript.createUser(request);
-    
+
     expect(response.status).toBe(201);
-    
+
     const body = JSON.parse(response.body);
     expect(body.id).toBeDefined();
-    expect(body.name).toBe('John Doe');
+    expect(body.name).toBe("John Doe");
   });
 });
 ```
@@ -725,33 +731,33 @@ npm test
 Create `tests/integration/api.test.js`:
 
 ```javascript
-const fetch = require('node-fetch');
+const fetch = require("node-fetch");
 
-const BASE_URL = 'http://localhost:8080';
+const BASE_URL = "http://localhost:8080";
 
-describe('API Integration Tests', () => {
-  test('GET /api/users returns users', async () => {
+describe("API Integration Tests", () => {
+  test("GET /api/users returns users", async () => {
     const response = await fetch(`${BASE_URL}/api/users`);
     const data = await response.json();
-    
+
     expect(response.status).toBe(200);
     expect(Array.isArray(data)).toBe(true);
   });
-  
-  test('POST /api/users creates user', async () => {
+
+  test("POST /api/users creates user", async () => {
     const userData = {
-      name: 'Jane Doe',
-      email: 'jane@example.com'
+      name: "Jane Doe",
+      email: "jane@example.com",
     };
-    
+
     const response = await fetch(`${BASE_URL}/api/users`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(userData)
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(userData),
     });
-    
+
     const data = await response.json();
-    
+
     expect(response.status).toBe(201);
     expect(data.name).toBe(userData.name);
   });
@@ -797,12 +803,26 @@ Create build system (`Tools` → `Build System` → `New Build System`):
 
 ```json
 {
-  "cmd": ["deployer", "--uri", "http://localhost:8080/$file_base_name", "--file", "$file", "--watch", "false"],
+  "cmd": [
+    "deployer",
+    "--uri",
+    "http://localhost:8080/$file_base_name",
+    "--file",
+    "$file",
+    "--watch",
+    "false"
+  ],
   "selector": "source.js",
   "variants": [
     {
       "name": "Deploy and Watch",
-      "cmd": ["deployer", "--uri", "http://localhost:8080/$file_base_name", "--file", "$file"]
+      "cmd": [
+        "deployer",
+        "--uri",
+        "http://localhost:8080/$file_base_name",
+        "--file",
+        "$file"
+      ]
     }
   ]
 }
@@ -876,17 +896,20 @@ Create `DEVELOPMENT.md`:
 # Development Workflow
 
 ## Setup
+
 1. Clone repo
 2. Run `npm install`
 3. Start server: `cargo run`
 
 ## Development
+
 1. Create feature branch
 2. Edit scripts
 3. Test locally
 4. Create PR
 
 ## Deployment
+
 - Staging: Automatic on merge to develop
 - Production: Manual approval required
 ```

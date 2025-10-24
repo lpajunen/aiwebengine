@@ -147,15 +147,15 @@ The AI will:
 
 ### Keyboard Shortcuts
 
-| Action | Windows/Linux | macOS |
-|--------|--------------|-------|
-| Save | Ctrl+S | Cmd+S |
-| Find | Ctrl+F | Cmd+F |
-| Replace | Ctrl+H | Cmd+H |
-| Comment line | Ctrl+/ | Cmd+/ |
-| Undo | Ctrl+Z | Cmd+Z |
-| Redo | Ctrl+Y | Cmd+Shift+Z |
-| Format code | Shift+Alt+F | Shift+Option+F |
+| Action       | Windows/Linux | macOS          |
+| ------------ | ------------- | -------------- |
+| Save         | Ctrl+S        | Cmd+S          |
+| Find         | Ctrl+F        | Cmd+F          |
+| Replace      | Ctrl+H        | Cmd+H          |
+| Comment line | Ctrl+/        | Cmd+/          |
+| Undo         | Ctrl+Z        | Cmd+Z          |
+| Redo         | Ctrl+Y        | Cmd+Shift+Z    |
+| Format code  | Shift+Alt+F   | Shift+Option+F |
 
 ## Managing Assets
 
@@ -201,11 +201,11 @@ function homeHandler(req) {
     </body>
     </html>
   `;
-  
+
   return {
     status: 200,
     body: html,
-    contentType: "text/html"
+    contentType: "text/html",
   };
 }
 ```
@@ -261,19 +261,19 @@ aiwebengine logs capture:
 ```javascript
 function createUser(req) {
   const email = req.form.email;
-  
+
   // Log important actions
   writeLog(`Creating user: ${email}`);
-  
+
   try {
     // ... create user logic
     writeLog(`User created successfully: ${email}`);
-    
+
     return { status: 201, body: "User created" };
   } catch (error) {
     // Log errors with context
     writeLog(`Error creating user ${email}: ${error.message}`);
-    
+
     return { status: 500, body: "Failed to create user" };
   }
 }
@@ -463,14 +463,14 @@ Explain how the streaming works in this script
      return {
        status: 200,
        body: JSON.stringify({ message: "Hello API" }),
-       contentType: "application/json"
+       contentType: "application/json",
      };
    }
-   
+
    function init() {
      register("/api/myapi", "apiHandler", "GET");
    }
-   
+
    init();
    ```
 
@@ -497,14 +497,14 @@ Explain how the streaming works in this script
          </body>
          </html>
        `,
-       contentType: "text/html"
+       contentType: "text/html",
      };
    }
-   
+
    function init() {
      register("/", "homeHandler", "GET");
    }
-   
+
    init();
    ```
 
@@ -566,15 +566,15 @@ Now that you understand the editor:
 
 ### Editor Actions
 
-| Action | How To |
-|--------|--------|
-| New script | Click "New Script" button |
-| Save script | Cmd+S / Ctrl+S or "Save" button |
-| Delete script | "Delete" button |
-| Upload asset | "Upload Assets" in Assets section |
-| View logs | "Logs" tab or script context |
-| Test API | "Test API" button |
-| AI help | Type in AI Assistant panel |
+| Action        | How To                            |
+| ------------- | --------------------------------- |
+| New script    | Click "New Script" button         |
+| Save script   | Cmd+S / Ctrl+S or "Save" button   |
+| Delete script | "Delete" button                   |
+| Upload asset  | "Upload Assets" in Assets section |
+| View logs     | "Logs" tab or script context      |
+| Test API      | "Test API" button                 |
+| AI help       | Type in AI Assistant panel        |
 
 ### AI Prompt Templates
 
