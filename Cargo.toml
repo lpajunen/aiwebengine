@@ -8,7 +8,7 @@ default-run = "server"
 axum = "0.8.4"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
-rquickjs = "0.9"
+rquickjs = "0.10.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 anyhow = "1.0"
