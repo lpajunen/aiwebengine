@@ -55,7 +55,9 @@ In the context of aiwebengine, a **solution** refers to any website, GraphQL API
 The project roadmap includes planned enhancements such as:
 
 - Database integration
-- Testing framework integration
+- Testing framework integration for user generated scripts
+- Public cloud deployment guides like Terraform scripts
+- System monitoring and alerting
 
 ## Getting Started
 
