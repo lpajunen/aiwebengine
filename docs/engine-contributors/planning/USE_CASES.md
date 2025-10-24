@@ -1617,17 +1617,109 @@ ${tickets.map((t) => `- ${t.subject} (${t.priority})`).join("\n") || "None"}
 **Actors**: Attacker, Engine  
 **Goal**: Prevent security vulnerabilities from malicious input
 
-**Scenarios**:
+**Preconditions**:
 
-- SQL injection attempts → Blocked by parameterized queries
-- XSS attempts → Blocked by output escaping
-- Extremely large payloads → Rejected by size limits
-- Script execution attempts → Sandboxed JavaScript only
-- Path traversal → Blocked by path validation
+- Engine enforces security at Rust layer (REQ-SEC-008)
+- All inputs validated before reaching JavaScript
+- Sandbox hardening prevents escape attempts
 
-**Expected Results**: All attacks mitigated by engine, not script code
+**Attack Scenarios and Mitigations**:
 
-**Related Requirements**: REQ-SEC-001 through REQ-SEC-010
+1. **SQL Injection Attempts**
+   - Attack: `' OR '1'='1'; DROP TABLE users; --`
+   - Mitigation: Blocked by parameterized queries in data layer
+   - Engine validates all query parameters before execution
+
+2. **XSS (Cross-Site Scripting) Attempts**
+   - Attack: `<script>alert('XSS')</script>` in form input
+   - Mitigation: Output encoding enforced by engine
+   - Content-Security-Policy headers automatically set
+   - HTML entity escaping applied to user content
+
+3. **Code Injection Attempts**
+   - Attack: JavaScript containing `eval()`, `Function()`, `constructor.constructor`
+   - Mitigation: AST-based validation in Rust rejects dangerous patterns
+   - Sandbox prevents dynamic code execution
+   - Prototype pollution blocked
+
+4. **Path Traversal Attempts**
+   - Attack: `../../etc/passwd` in file paths
+   - Mitigation: URI validation in Rust sanitizes all paths
+   - File system access restrictions enforced
+
+5. **Extremely Large Payloads**
+   - Attack: 1GB request body to exhaust memory
+   - Mitigation: Size limits enforced before parsing (REQ-HTTP-005)
+   - Returns 413 Payload Too Large
+
+6. **CSRF (Cross-Site Request Forgery)**
+   - Attack: Malicious site submits form to engine
+   - Mitigation: CSRF token validation (REQ-SEC-011)
+   - SameSite cookie configuration
+   - State-changing operations require valid tokens
+
+7. **Sandbox Escape Attempts**
+   - Attack: `__proto__.toString = () => malicious()`
+   - Mitigation: Prototype pollution prevention (REQ-SEC-009)
+   - Constructor manipulation blocked
+   - Import/require attempts rejected
+
+**Main Flow**:
+
+1. Attacker sends malicious request to endpoint
+2. Engine receives request at Rust layer
+3. Rust validates all inputs BEFORE JavaScript execution
+4. Invalid/malicious input rejected with appropriate error
+5. Security event logged for monitoring
+6. Attack blocked transparently without script involvement
+
+**Expected Results**:
+
+- ✅ All attacks mitigated by engine, not script code
+- ✅ JavaScript handlers never see malicious input
+- ✅ Security validation happens in Rust layer
+- ✅ Clear error messages without exposing internals
+- ✅ Security events logged for analysis
+- ✅ No security decisions required in JavaScript
+
+**Related Requirements**: REQ-SEC-001 through REQ-SEC-015
+
+**Example: XSS Prevention**
+
+```javascript
+// JavaScript handler doesn't need security logic
+function displayUserComment(req) {
+  const { username, comment } = req.query;
+  
+  // Engine automatically escapes output - no XSS possible
+  return Response.html(`
+    <div class="comment">
+      <strong>${username}</strong>: ${comment}
+    </div>
+  `);
+}
+
+// Even if attacker sends:
+// ?username=<script>alert('XSS')</script>&comment=Hello
+// Engine renders it safely as:
+// &lt;script&gt;alert('XSS')&lt;/script&gt;: Hello
+```
+
+**Example: Code Injection Prevention**
+
+```javascript
+// This script would be rejected during deployment
+function dangerousHandler(req) {
+  const code = req.form.code;
+  eval(code); // ❌ AST validation rejects this at deployment
+  return Response.json({ result: "executed" });
+}
+
+// Engine error on deployment:
+// "Script validation failed: Dangerous pattern detected (eval)
+//  Location: line 3, column 3
+//  Security policy prohibits dynamic code execution"
+```
 
 ---
 
@@ -1665,6 +1757,205 @@ ${tickets.map((t) => `- ${t.subject} (${t.priority})`).join("\n") || "None"}
 **Expected Results**: System recovers gracefully
 
 **Related Requirements**: REQ-ERROR, REQ-RT-002
+
+---
+
+### UC-604: Security Validation Architecture
+
+**Priority**: CRITICAL  
+**Actors**: Developer + AI, Attacker, Engine  
+**Goal**: Demonstrate that security is enforced in Rust layer, not JavaScript layer
+
+**Preconditions**:
+
+- Engine implements REQ-SEC-008 (Security Enforcement Architecture)
+- All global functions validate in Rust before execution
+- Capability-based security model in place
+
+**Architecture Principle**:
+
+> **"Security is enforced at the Rust boundary, not the JavaScript boundary"**
+
+This means JavaScript calls secure Rust functions, Rust validates everything before execution, and JavaScript cannot bypass security controls.
+
+**Main Flow - Correct Pattern**:
+
+1. **Developer + AI creates script** with business logic only
+2. **Script calls global function** (e.g., `upsertScript(uri, content)`)
+3. **Rust function receives call** from JavaScript
+4. **Rust validates ALL inputs** before execution:
+   - Check user capabilities (does user have WriteScripts permission?)
+   - Validate URI format and safety
+   - Scan content for dangerous patterns
+   - Enforce size limits
+   - Check rate limits
+5. **If validation passes**: Rust executes operation
+6. **If validation fails**: Rust rejects with security error
+7. **Security event logged** in Rust layer
+8. **Result returned** to JavaScript
+
+**Anti-Pattern - What NOT to Do**:
+
+```javascript
+// ❌ WRONG: Security validation in JavaScript
+function upsert_script_handler(req) {
+  const { uri, content } = req.form;
+  
+  // ❌ JavaScript validation can be bypassed!
+  if (uri.length > 200) {
+    return Response.json({ error: "URI too long" }, { status: 400 });
+  }
+  
+  if (content.includes("eval(")) {
+    return Response.json({ error: "Dangerous code" }, { status: 400 });
+  }
+  
+  // ❌ Direct call without Rust validation
+  upsertScript(uri, content);
+  
+  return Response.json({ success: true });
+}
+```
+
+**Why This is Wrong**:
+
+- Attacker can call `upsertScript()` directly from another script
+- Validation logic scattered across JavaScript files
+- Malicious scripts can disable their own validation
+- No centralized security enforcement
+
+**Correct Pattern - Security in Rust**:
+
+```javascript
+// ✅ CORRECT: Only business logic in JavaScript
+function upsert_script_handler(req) {
+  const { uri, content } = req.form;
+  
+  // ✅ Simple business validation (user experience)
+  if (!uri || !content) {
+    return Response.json(
+      { error: "URI and content required" }, 
+      { status: 400 }
+    );
+  }
+  
+  try {
+    // ✅ Security validation happens in Rust
+    upsertScript(uri, content);
+    
+    return Response.json({ 
+      success: true,
+      message: "Script updated successfully" 
+    });
+  } catch (error) {
+    // Rust returned security error
+    return Response.json(
+      { error: error.message },
+      { status: 400 }
+    );
+  }
+}
+
+// ✅ Even if attacker tries to bypass handler:
+function maliciousScript() {
+  // This will STILL be validated by Rust
+  upsertScript(
+    "../../../../etc/passwd",  // ❌ Rust rejects: Invalid URI
+    "eval('rm -rf /')"        // ❌ Rust rejects: Dangerous pattern
+  );
+  // Security error thrown, attack blocked
+}
+```
+
+**Rust Implementation (Conceptual)**:
+
+```rust
+// src/js_engine.rs - Secure global function
+let secure_upsert_script = {
+    let runtime_ref = runtime.clone();
+    Function::new(
+        ctx.clone(),
+        move |_c: Ctx<'_>, uri: String, content: String| -> Result<(), Error> {
+            // ✅ ALL SECURITY LOGIC IN RUST
+            
+            // 1. Check user capabilities
+            if !runtime_ref.has_capability(Capability::WriteScripts) {
+                security_audit_log(SecurityEvent::UnauthorizedAccess {
+                    operation: "upsert_script",
+                    user: runtime_ref.user_id(),
+                });
+                return Err(Error::Unauthorized("Missing WriteScripts capability"));
+            }
+            
+            // 2. Validate URI in Rust
+            let clean_uri = match InputValidator::validate_uri(&uri) {
+                Ok(uri) => uri,
+                Err(e) => {
+                    security_audit_log(SecurityEvent::InvalidInput {
+                        operation: "upsert_script",
+                        reason: format!("Invalid URI: {}", e),
+                    });
+                    return Err(Error::ValidationFailed(format!("Invalid URI: {}", e)));
+                }
+            };
+            
+            // 3. Validate content in Rust
+            if let Err(e) = InputValidator::validate_script_content(&content) {
+                security_audit_log(SecurityEvent::DangerousPattern {
+                    operation: "upsert_script",
+                    pattern: e.to_string(),
+                });
+                return Err(Error::SecurityViolation(format!("Dangerous code: {}", e)));
+            }
+            
+            // 4. Execute only after ALL validation passes
+            match repository::upsert_script(&clean_uri, &content) {
+                Ok(()) => {
+                    security_audit_log(SecurityEvent::ScriptUpdated {
+                        uri: clean_uri,
+                        user: runtime_ref.user_id(),
+                    });
+                    Ok(())
+                }
+                Err(e) => Err(Error::RepositoryError(e)),
+            }
+        },
+    )?
+};
+
+// ✅ Only expose if user has capability
+if runtime.has_capability(Capability::WriteScripts) {
+    global.set("upsertScript", secure_upsert_script)?;
+}
+```
+
+**Expected Results**:
+
+- ✅ JavaScript files contain ZERO security validation logic
+- ✅ All security boundaries enforced in Rust at global function level
+- ✅ No way for JavaScript to bypass Rust security validation
+- ✅ Capability-based access control for all operations
+- ✅ Automatic security logging for all operations
+- ✅ Clear separation: Rust = Security, JavaScript = Business Logic
+
+**Security Validation Checklist**:
+
+When implementing global functions, Rust layer MUST:
+
+- [ ] Check user capabilities/permissions
+- [ ] Validate all string inputs (URI, content, identifiers)
+- [ ] Enforce size limits
+- [ ] Scan for dangerous patterns
+- [ ] Check rate limits (if applicable)
+- [ ] Log security events
+- [ ] Return clear error messages
+- [ ] Never trust JavaScript layer for security decisions
+
+**Related Requirements**: REQ-SEC-008, REQ-SEC-009, REQ-SEC-012, REQ-AUTH-005
+
+**Key Insight**:
+
+The engine's security architecture ensures that even if a developer writes insecure JavaScript code, or even if a malicious script is deployed, the Rust layer prevents actual security violations. Security is a property of the engine architecture, not the deployed scripts.
 
 ---
 
@@ -1708,9 +1999,10 @@ ${tickets.map((t) => `- ${t.subject} (${t.priority})`).join("\n") || "None"}
 | UC-504                  | CRITICAL | REQ-SEC-005, REQ-JSAPI-007, REQ-HTTP-010          | Planned     |
 | UC-505                  | HIGH     | REQ-MCP-001-005, REQ-GQL, REQ-AUTH, REQ-RT        | Planned     |
 | **Edge Cases**          |          |                                                   |             |
-| UC-601                  | CRITICAL | REQ-SEC-001-010                                   | In Progress |
+| UC-601                  | CRITICAL | REQ-SEC-001-015                                   | In Progress |
 | UC-602                  | CRITICAL | REQ-JS-002-004, REQ-PERF                          | Implemented |
 | UC-603                  | HIGH     | REQ-ERROR, REQ-RT-002                             | Partial     |
+| UC-604                  | CRITICAL | REQ-SEC-008, REQ-SEC-009, REQ-SEC-012, REQ-AUTH-005 | Required  |
 
 ---
 
