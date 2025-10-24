@@ -56,8 +56,8 @@ COPY --from=builder /app/target/release/server /usr/local/bin/aiwebengine
 RUN mkdir -p /app/logs /app/scripts /app/assets /app/data && \
     chown -R aiwebengine:aiwebengine /app
 
-# Copy default configuration
-COPY config.toml /app/config.toml
+# Copy default configuration (use production config as base)
+COPY config.production.toml /app/config.toml
 
 # Copy assets if they exist
 COPY assets /app/assets/

@@ -81,7 +81,9 @@ temp/
 # Config files (we copy specific ones)
 config.*.toml
 config.*.yaml
-!config.example.yaml
+!config.production.toml
+!config.staging.toml
+!config.local.toml
 
 # Scripts (mounted as volume in production)
 # scripts/
