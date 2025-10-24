@@ -72,8 +72,10 @@ Comprehensive documentation is available for all user roles:
 
 - **📚 [Documentation Index](docs/INDEX.md)** - Complete guide to all documentation
 - **👥 Solution Developers** - [Getting Started Guide](docs/solution-developers/APP_DEVELOPMENT.md)
-- **🔧 Engine Administrators** - [Docker Deployment](docs/engine-administrators/DOCKER.md) | [Configuration](docs/engine-administrators/CONFIGURATION.md) | [HTTPS Setup](docs/engine-administrators/HTTPS_SETUP.md)
+- **🔧 Engine Administrators** - [Getting Started](docs/engine-administrators/01-GETTING-STARTED.md) | [Configuration](docs/engine-administrators/02-CONFIGURATION.md) | [Running Environments](docs/engine-administrators/03-RUNNING-ENVIRONMENTS.md) | [Quick Reference](docs/engine-administrators/QUICK-REFERENCE.md)
 - **🛠️ Engine Contributors** - [Requirements](docs/engine-contributors/planning/REQUIREMENTS.md) | [Development Roadmap](docs/engine-contributors/implementing/TODO.md)
+
+**Engine Administrators**: New task-based documentation guides you from setup to production deployment. Start with [Getting Started](docs/engine-administrators/01-GETTING-STARTED.md) or jump to the [Quick Reference](docs/engine-administrators/QUICK-REFERENCE.md) for command lookups.
 
 For quick reference, see the role-based organization in the [Documentation Index](docs/INDEX.md).
 
@@ -111,7 +113,7 @@ cp .env.example .env
 docker-compose up -d
 ```
 
-For detailed Docker deployment instructions, see [docs/engine-administrators/DOCKER.md](docs/engine-administrators/DOCKER.md).
+For detailed Docker deployment instructions, see [docs/engine-administrators/03-RUNNING-ENVIRONMENTS.md](docs/engine-administrators/03-RUNNING-ENVIRONMENTS.md).
 
 ### Development
 
@@ -133,7 +135,7 @@ source .env && cargo run
 make docker-dev
 ```
 
-See [docs/engine-administrators/CONFIGURATION.md](docs/engine-administrators/CONFIGURATION.md) for detailed configuration options.
+See [docs/engine-administrators/02-CONFIGURATION.md](docs/engine-administrators/02-CONFIGURATION.md) for detailed configuration options.
 
 ## Architecture
 
