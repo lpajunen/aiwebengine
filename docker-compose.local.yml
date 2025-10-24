@@ -1,9 +1,16 @@
 version: '3.8'
 
 services:
-  # Caddy reverse proxy for local development (HTTP only)
+  # Caddy reverse proxy with DigitalOcean DNS plugin for Let's Encrypt
   caddy-dev:
-    image: caddy:2-alpine
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM caddy:2-builder AS builder
+        RUN xcaddy build --with github.com/caddy-dns/digitalocean
+        
+        FROM caddy:2-alpine
+        COPY --from=builder /usr/bin/caddy /usr/bin/caddy
     container_name: aiwebengine-caddy-dev
     restart: unless-stopped
     ports:
@@ -11,6 +18,10 @@ services:
       - "443:443"
     volumes:
       - ./Caddyfile.local:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      - DIGITALOCEAN_TOKEN=${DIGITALOCEAN_TOKEN}
     networks:
       - aiwebengine-dev-network
     depends_on:
@@ -113,3 +124,5 @@ volumes:
   cargo-git:
   target-cache:
   postgres-dev-data:
+  caddy-data:
+  caddy-config:

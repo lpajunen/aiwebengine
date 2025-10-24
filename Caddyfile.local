@@ -1,14 +1,43 @@
-# Caddyfile for local development
-# Uses self-signed certificates for HTTPS on localhost and local.softagen.com
+# Caddyfile for local development with Let's Encrypt DNS-01 challenge
+# Uses DigitalOcean DNS for domain validation
 
+# Global options
+{
+    # Email for Let's Encrypt notifications
+    email lpajunen@gmail.com
+    
+    # Use production Let's Encrypt (comment out to use staging for testing)
+    # acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+# HTTP to HTTPS redirect
 :80 {
-    # Redirect HTTP to HTTPS
     redir https://{host}{uri} permanent
 }
 
-localhost, local.softagen.com, :443 {
-    # Use self-signed TLS for local development
+# localhost - use self-signed certificate (Let's Encrypt doesn't support localhost)
+localhost {
     tls internal
+    
+    # Reverse proxy to aiwebengine container
+    reverse_proxy aiwebengine-dev:3000
+    
+    # Enable gzip compression
+    encode gzip
+    
+    # Access logging
+    log {
+        output stdout
+        format console
+    }
+}
+
+# Public domain - use Let's Encrypt with DNS-01 challenge
+local.softagen.com {
+    # Let's Encrypt with DNS-01 challenge using DigitalOcean
+    tls {
+        dns digitalocean {env.DIGITALOCEAN_TOKEN}
+    }
     
     # Reverse proxy to aiwebengine container
     reverse_proxy aiwebengine-dev:3000
