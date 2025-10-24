@@ -22,6 +22,7 @@ Modified `handle_callback()` in `src/auth/manager.rs` to integrate with the user
 ### Changes Made
 
 **Before:**
+
 ```rust
 // Create session
 let session_token = self
@@ -39,6 +40,7 @@ let session_token = self
 ```
 
 **After:**
+
 ```rust
 // Upsert user in repository (this handles bootstrap admin assignment)
 let user_id = crate::user_repository::upsert_user(
@@ -138,11 +140,13 @@ kill <PID>
 ### Check Server Logs
 
 On startup, you should see:
+
 ```
 Configuring 1 bootstrap admin(s): ["lpajunen@gmail.com"]
 ```
 
 After login, you should see:
+
 ```
 Session successfully invalidated during logout
 Session created for user <UUID> with admin status: true
@@ -151,6 +155,7 @@ Session created for user <UUID> with admin status: true
 ### Check Session Token
 
 In browser developer tools:
+
 ```
 Application > Cookies > session
 ```
@@ -202,6 +207,7 @@ redirect_uri = "http://localhost:3000/auth/callback/google"
 ## Summary
 
 The OAuth callback now properly integrates with the user repository, ensuring that:
+
 - Users are persisted with consistent UUIDs
 - Bootstrap admins automatically get Administrator role
 - Sessions are created with correct role information

@@ -124,8 +124,7 @@ POSTGRES_PASSWORD=secure-password
 | ------------ | ---------------------------- | --------------------- |
 | Application  | http://localhost:3000        | Main API              |
 | Health Check | http://localhost:3000/health | Status endpoint       |
-| PostgreSQL   | localhost:5432               | Database (optional)   |
-| Redis        | localhost:6379               | Cache (optional)      |
+| PostgreSQL   | localhost:5432               | Database              |
 | Prometheus   | http://localhost:9090        | Metrics (optional)    |
 | Grafana      | http://localhost:3001        | Dashboards (optional) |
 

@@ -1164,7 +1164,7 @@ This integration ensures defense-in-depth and consistent security across the pla
 2. **Social Login Extensions**: GitHub, Discord, Twitter/X
 3. **SAML Support**: Enterprise SSO integration
 4. **User Management**: Registration, profile management, password reset
-5. **Advanced Session Management**: Redis backend, session clustering
+5. **Advanced Session Management**: Session clustering and distributed storage
 6. **API Key Authentication**: Service-to-service authentication
 7. **Rate Limiting**: Advanced rate limiting with authentication context
 8. **Audit Logging**: Comprehensive security event logging

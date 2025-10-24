@@ -166,8 +166,6 @@ export SECRET_SESSION_SECRET="your-session-secret"
 
 ```bash
 export SECRET_DATABASE_PASSWORD="secure-password"
-export SECRET_REDIS_PASSWORD="redis-password"
-export SECRET_MONGODB_PASSWORD="mongo-password"
 ```
 
 ## Best Practices

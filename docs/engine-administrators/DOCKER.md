@@ -157,7 +157,6 @@ docker-compose -f docker-compose.dev.yml up
 
 - **aiwebengine**: http://localhost:3000
 - **PostgreSQL**: localhost:5432 (username: aiwebengine, password: devpassword)
-- **Redis**: localhost:6379
 
 ## Configuration
 
@@ -224,19 +223,27 @@ docker-compose restart aiwebengine
 docker-compose exec aiwebengine /bin/bash
 ```
 
-### Optional Services
+### Database Services
 
 #### PostgreSQL
 
-For production database instead of SQLite:
+PostgreSQL is the primary database for all environments:
 
-```yaml
-# Uncomment in docker-compose.yml
-postgres:
-  # ... configuration
+```bash
+# View PostgreSQL logs
+docker-compose logs -f postgres
+
+# Access PostgreSQL CLI
+docker-compose exec postgres psql -U aiwebengine -d aiwebengine
+
+# Backup database
+docker-compose exec postgres pg_dump -U aiwebengine aiwebengine > backup.sql
+
+# Restore database
+docker-compose exec -T postgres psql -U aiwebengine -d aiwebengine < backup.sql
 ```
 
-Update your config to use PostgreSQL:
+Configuration in config files:
 
 ```toml
 [repository]
@@ -244,17 +251,7 @@ database_type = "postgresql"
 database_url = "postgresql://aiwebengine:password@postgres:5432/aiwebengine"
 ```
 
-#### Redis
-
-For caching and session storage (future enhancement):
-
-```bash
-# Start Redis
-docker-compose up -d redis
-
-# Access Redis CLI
-docker-compose exec redis redis-cli
-```
+#### Monitoring Services
 
 #### Prometheus & Grafana
 

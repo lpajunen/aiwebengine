@@ -40,13 +40,14 @@ cargo run --release
 
 AIWebEngine provides three environment-specific configuration files:
 
-| File | Purpose | Database | Security | Use Case |
-|------|---------|----------|----------|----------|
-| `config.local.toml` | Local development | SQLite | Relaxed | Development, debugging |
-| `config.staging.toml` | Testing environment | PostgreSQL | Moderate | Integration testing, QA |
-| `config.production.toml` | Production deployment | PostgreSQL | Strict | Production servers |
+| File                     | Purpose               | Database   | Security | Use Case                |
+| ------------------------ | --------------------- | ---------- | -------- | ----------------------- |
+| `config.local.toml`      | Local development     | PostgreSQL | Relaxed  | Development, debugging  |
+| `config.staging.toml`    | Testing environment   | PostgreSQL | Moderate | Integration testing, QA |
+| `config.production.toml` | Production deployment | PostgreSQL | Strict   | Production servers      |
 
 **Usage**: Copy the appropriate file to `config.toml`:
+
 ```bash
 cp config.local.toml config.toml        # Local development
 cp config.staging.toml config.toml      # Staging
@@ -92,10 +93,12 @@ export APP_AUTH__BOOTSTRAP_ADMINS='["admin@example.com","your-email@example.com"
 ```
 
 **Important:** The double underscore (`__`) is required to match nested TOML structure:
+
 - `APP_AUTH__JWT_SECRET` → `[auth]` → `jwt_secret`
 - `APP_AUTH__PROVIDERS__GOOGLE__CLIENT_ID` → `[auth.providers.google]` → `client_id`
 
 **Important Note on Array Environment Variables**: When setting array/list values via environment variables, you must use JSON array format:
+
 ```bash
 # Correct - JSON array format
 export APP_AUTH_BOOTSTRAP_ADMINS='["email1@example.com","email2@example.com"]'
@@ -105,6 +108,7 @@ export APP_AUTH_BOOTSTRAP_ADMINS=email1@example.com,email2@example.com
 ```
 
 Alternatively, set array values directly in your `config.toml` file:
+
 ```toml
 [auth]
 bootstrap_admins = ["admin@example.com", "your-email@example.com"]
@@ -185,8 +189,8 @@ allowed_apis = [                # Available APIs for scripts
 
 ```toml
 [repository]
-database_type = "sqlite"         # Database type: sqlite, postgresql
-database_url = "./app.db"       # Database connection string
+database_type = "postgresql"     # Database type: postgresql or memory
+database_url = "postgresql://user:pass@localhost:5432/aiwebengine"  # Database connection string
 max_connections = 5              # Connection pool size
 connection_timeout_ms = 2000     # Connection timeout
 auto_migrate = true              # Auto-run database migrations
@@ -325,7 +329,7 @@ The configuration system includes comprehensive validation:
 - **Memory limits**: 1-1024 MB
 - **Timeout ranges**: 100ms-300000ms (5 minutes)
 - **Log levels**: trace, debug, info, warn, error
-- **Database types**: sqlite, postgresql
+- **Database types**: postgresql, memory
 - **Required fields**: All configuration sections have sensible defaults
 
 ## Error Handling
@@ -340,7 +344,8 @@ Configuration validation failed: Server port 99999 is out of valid range (1-6553
 
 ### Local Development (`config.local.toml`)
 
-- ✅ Use SQLite for simple setup (`database_type = "sqlite"`)
+- ✅ Use PostgreSQL in Docker for consistency with production
+- ✅ Or use in-memory storage for quick testing (`database_type = "memory"`)
 - ✅ Enable verbose logging (`level = "debug"`)
 - ✅ Enable console and filesystem APIs for debugging
 - ✅ Use `.env` file for OAuth credentials (not committed to git)
@@ -413,10 +418,11 @@ cargo run --release
    - ❌ Never hardcode secrets in config files
 
 2. **Use strong, randomly generated secrets**
+
    ```bash
    # JWT secret (base64, 48 bytes)
    openssl rand -base64 48
-   
+
    # API key (hex, 32 bytes)
    openssl rand -hex 32
    ```

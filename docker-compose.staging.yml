@@ -91,25 +91,6 @@ services:
     ports:
       - "5432:5432"
 
-  # Redis for caching and session storage
-  redis:
-    image: redis:7-alpine
-    container_name: aiwebengine-redis-staging
-    restart: unless-stopped
-    command: redis-server --appendonly yes
-    volumes:
-      - redis-data:/data
-    networks:
-      - aiwebengine-staging-network
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    # Expose Redis port for debugging
-    ports:
-      - "6379:6379"
-
   # Prometheus for metrics
   prometheus:
     image: prom/prometheus:latest
@@ -156,6 +137,5 @@ volumes:
   caddy-config:    # Caddy configuration
   caddy-logs:      # Caddy access logs
   postgres-data:
-  redis-data:
   prometheus-data:
   grafana-data:

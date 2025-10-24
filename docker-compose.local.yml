@@ -100,21 +100,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # Development Redis
-  redis-dev:
-    image: redis:7-alpine
-    container_name: aiwebengine-redis-dev
-    restart: unless-stopped
-    networks:
-      - aiwebengine-dev-network
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
 networks:
   aiwebengine-dev-network:
     driver: bridge

@@ -61,6 +61,7 @@ Administrators can:
 ### 3. Visual Design
 
 The UI features:
+
 - Modern gradient background (purple theme)
 - Card-based layout
 - Responsive design (mobile-friendly)
@@ -80,6 +81,7 @@ The UI features:
 **Authentication**: Required (Admin only)
 
 **Response**:
+
 ```json
 {
   "users": [
@@ -103,14 +105,16 @@ The UI features:
 **Authentication**: Required (Admin only)
 
 **Request Body**:
+
 ```json
 {
-  "role": "Editor",  // or "Administrator"
-  "action": "add"    // or "remove"
+  "role": "Editor", // or "Administrator"
+  "action": "add" // or "remove"
 }
 ```
 
 **Response**:
+
 ```json
 {
   "success": true,
@@ -158,6 +162,7 @@ The manager script exposes these functions to the JavaScript runtime (admin-only
 Returns a JSON string containing all users.
 
 **Usage**:
+
 ```javascript
 const usersJson = listUsers();
 const users = JSON.parse(usersJson);
@@ -168,10 +173,12 @@ const users = JSON.parse(usersJson);
 Adds a role to a user.
 
 **Parameters**:
+
 - `userId` (string): The user's internal ID
 - `role` (string): "Editor", "Administrator", or "Authenticated"
 
 **Usage**:
+
 ```javascript
 addUserRole("user-id-123", "Editor");
 ```
@@ -181,10 +188,12 @@ addUserRole("user-id-123", "Editor");
 Removes a role from a user.
 
 **Parameters**:
+
 - `userId` (string): The user's internal ID
 - `role` (string): "Editor" or "Administrator" (cannot remove "Authenticated")
 
 **Usage**:
+
 ```javascript
 removeUserRole("user-id-123", "Editor");
 ```
@@ -224,6 +233,7 @@ cargo test --test manager
 ```
 
 Tests verify:
+
 - ✅ Manager script loads correctly
 - ✅ Manager script executes successfully
 - ✅ Init function registers all routes
@@ -232,6 +242,7 @@ Tests verify:
 ## Navigation
 
 The manager UI includes quick navigation links to:
+
 - **Home** (`/`) - Main application
 - **Editor** (`/editor`) - Script editor
 - **GraphQL** (`/graphql`) - GraphQL playground
@@ -239,17 +250,20 @@ The manager UI includes quick navigation links to:
 ## Error Handling
 
 The UI displays errors in red alert boxes for:
+
 - Failed API requests
 - Network errors
 - Permission denied errors
 
 Success messages are shown in green for:
+
 - Successful role additions
 - Successful role removals
 
 ## Browser Compatibility
 
 The UI uses modern web standards and is compatible with:
+
 - Chrome/Edge (latest)
 - Firefox (latest)
 - Safari (latest)
@@ -294,7 +308,8 @@ Potential improvements:
 
 **Problem**: Blank page or JavaScript errors
 
-**Solution**: 
+**Solution**:
+
 1. Check browser console for errors
 2. Verify manager.js is loaded (`fetch_scripts()` includes it)
 3. Ensure server is running with script initialization enabled
@@ -312,6 +327,7 @@ Potential improvements:
 The manager UI uses the default server configuration. No additional configuration is required.
 
 To disable the manager UI, you would need to:
+
 1. Remove manager.js from the repository
 2. Or implement a configuration flag to skip loading it
 
@@ -324,6 +340,7 @@ To disable the manager UI, you would need to:
 ## Support
 
 For issues or questions about the Manager UI:
+
 1. Check server logs for errors
 2. Review user repository tests
 3. Verify authentication is working

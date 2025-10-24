@@ -20,22 +20,23 @@ The manager script (`scripts/feature_scripts/manager.js`) checks `request.auth.i
 
 ```javascript
 function handleManagerUI(request) {
-    if (!request.auth || !request.auth.authenticated) {
-        return {
-            status: 302,
-            headers: { 'Location': '/auth/login?redirect=/manager' },
-            body: ''
-        };
-    }
-    
-    if (!request.auth.isAdmin) {  // ← This check was failing!
-        return {
-            status: 403,
-            body: JSON.stringify({ error: 'Access denied.' }),
-            contentType: 'application/json'
-        };
-    }
-    // ... rest of handler
+  if (!request.auth || !request.auth.authenticated) {
+    return {
+      status: 302,
+      headers: { Location: "/auth/login?redirect=/manager" },
+      body: "",
+    };
+  }
+
+  if (!request.auth.isAdmin) {
+    // ← This check was failing!
+    return {
+      status: 403,
+      body: JSON.stringify({ error: "Access denied." }),
+      contentType: "application/json",
+    };
+  }
+  // ... rest of handler
 }
 ```
 
@@ -87,12 +88,14 @@ This method returns the full `AuthSession` with `is_admin`, `email`, `name`, etc
 **File**: `src/auth/middleware.rs`
 
 Changed from:
+
 ```rust
 let user_id = auth_manager.validate_session(&session_token, &ip_addr, &user_agent).await?;
 let auth_user = AuthUser::new(user_id, "unknown".to_string(), session_token);
 ```
 
 To:
+
 ```rust
 let session = auth_manager.get_session(&session_token, &ip_addr, &user_agent).await?;
 let auth_user = AuthUser::new(
@@ -201,11 +204,13 @@ cargo test --lib user_repository -- --test-threads=1
 ## How to Apply
 
 1. **Rebuild** the application:
+
    ```bash
    cargo build --release
    ```
 
 2. **Restart** the server:
+
    ```bash
    ./target/release/aiwebengine
    ```
@@ -244,7 +249,7 @@ You should also see the Manager UI instead of being redirected to login.
 ✅ **Full session data available** - Email and name are now accessible in JavaScript  
 ✅ **Consistent auth flow** - Session → Middleware → JavaScript all have same information  
 ✅ **Security maintained** - Admin status comes from validated session, not user input  
-✅ **Bootstrap admins functional** - Users in `bootstrap_admins` config get admin access  
+✅ **Bootstrap admins functional** - Users in `bootstrap_admins` config get admin access
 
 ## Summary
 

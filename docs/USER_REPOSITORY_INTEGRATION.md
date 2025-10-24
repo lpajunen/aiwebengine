@@ -9,18 +9,22 @@ The `user_repository` module provides persistent user management for the authent
 ## Features
 
 ### 1. User Management
+
 - **Automatic ID Generation**: UUIDs are automatically generated for new users
 - **Upsert Logic**: Returns existing user ID on subsequent sign-ins with the same provider credentials
 - **Multi-Provider Support**: Users can authenticate with multiple OAuth providers
 - **Provider Tracking**: Stores first and last authentication times per provider
 
 ### 2. Role Management
+
 Three built-in roles with hierarchical privileges:
+
 - **Authenticated**: Basic authenticated user (always present)
 - **Editor**: User with editor privileges
 - **Administrator**: User with full administrator privileges
 
 ### 3. Thread-Safe Operations
+
 All operations use mutex-protected global state with poisoned state recovery.
 
 ## API Reference
@@ -28,6 +32,7 @@ All operations use mutex-protected global state with poisoned state recovery.
 ### Core Functions
 
 #### `upsert_user`
+
 ```rust
 pub fn upsert_user(
     email: String,
@@ -42,6 +47,7 @@ pub fn upsert_user(
 **Returns**: User ID (either existing or newly created)
 
 **Example**:
+
 ```rust
 use aiwebengine::user_repository;
 
@@ -54,6 +60,7 @@ let user_id = user_repository::upsert_user(
 ```
 
 #### `get_user`
+
 ```rust
 pub fn get_user(user_id: &str) -> Result<User, UserRepositoryError>
 ```
@@ -61,6 +68,7 @@ pub fn get_user(user_id: &str) -> Result<User, UserRepositoryError>
 **Purpose**: Retrieve a user by their internal ID.
 
 **Example**:
+
 ```rust
 let user = user_repository::get_user(&user_id)?;
 println!("Email: {}", user.email);
@@ -68,6 +76,7 @@ println!("Has Admin: {}", user.has_role(&UserRole::Administrator));
 ```
 
 #### `find_user_by_provider`
+
 ```rust
 pub fn find_user_by_provider(
     provider_name: &str,
@@ -78,6 +87,7 @@ pub fn find_user_by_provider(
 **Purpose**: Find a user by their provider credentials.
 
 **Example**:
+
 ```rust
 if let Some(user) = user_repository::find_user_by_provider("google", "google_123456")? {
     println!("Found existing user: {}", user.id);
@@ -87,6 +97,7 @@ if let Some(user) = user_repository::find_user_by_provider("google", "google_123
 ### Role Management Functions
 
 #### `add_user_role`
+
 ```rust
 pub fn add_user_role(user_id: &str, role: UserRole) -> Result<(), UserRepositoryError>
 ```
@@ -94,11 +105,13 @@ pub fn add_user_role(user_id: &str, role: UserRole) -> Result<(), UserRepository
 **Purpose**: Add a role to a user (idempotent).
 
 **Example**:
+
 ```rust
 user_repository::add_user_role(&user_id, UserRole::Editor)?;
 ```
 
 #### `remove_user_role`
+
 ```rust
 pub fn remove_user_role(user_id: &str, role: &UserRole) -> Result<(), UserRepositoryError>
 ```
@@ -106,11 +119,13 @@ pub fn remove_user_role(user_id: &str, role: &UserRole) -> Result<(), UserReposi
 **Purpose**: Remove a role from a user. Cannot remove `Authenticated` role.
 
 **Example**:
+
 ```rust
 user_repository::remove_user_role(&user_id, &UserRole::Editor)?;
 ```
 
 #### `update_user_roles`
+
 ```rust
 pub fn update_user_roles(
     user_id: &str,
@@ -121,6 +136,7 @@ pub fn update_user_roles(
 **Purpose**: Replace all user roles. Automatically ensures `Authenticated` role is present.
 
 **Example**:
+
 ```rust
 user_repository::update_user_roles(
     &user_id,
@@ -131,6 +147,7 @@ user_repository::update_user_roles(
 ### Utility Functions
 
 #### `list_users`
+
 ```rust
 pub fn list_users() -> Result<Vec<User>, UserRepositoryError>
 ```
@@ -138,6 +155,7 @@ pub fn list_users() -> Result<Vec<User>, UserRepositoryError>
 **Purpose**: Get all users (for admin purposes).
 
 #### `get_user_count`
+
 ```rust
 pub fn get_user_count() -> Result<usize, UserRepositoryError>
 ```
@@ -145,6 +163,7 @@ pub fn get_user_count() -> Result<usize, UserRepositoryError>
 **Purpose**: Get the total number of users.
 
 #### `delete_user`
+
 ```rust
 pub fn delete_user(user_id: &str) -> Result<bool, UserRepositoryError>
 ```
@@ -166,10 +185,10 @@ async fn handle_callback(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> Result<impl IntoResponse, AuthError> {
     // ... existing code to validate state and exchange tokens ...
-    
+
     // Get user info from provider
     let user_info = provider.get_user_info(&token_response.access_token).await?;
-    
+
     // Upsert user to get consistent user ID
     let user_id = user_repository::upsert_user(
         user_info.email.clone().unwrap_or_default(),
@@ -177,7 +196,7 @@ async fn handle_callback(
         provider_name.to_string(),
         user_info.id.clone(),
     ).map_err(|e| AuthError::Internal(format!("Failed to upsert user: {}", e)))?;
-    
+
     // Create session with the user ID from repository
     let session_token = auth_manager
         .create_session(
@@ -194,7 +213,7 @@ async fn handle_callback(
                 .to_string(),
         )
         .await?;
-    
+
     // ... rest of the code ...
 }
 ```
@@ -245,7 +264,7 @@ impl AuthUser {
     pub fn has_role(&self, role: &UserRole) -> bool {
         self.roles.iter().any(|r| r == role)
     }
-    
+
     pub fn has_privilege(&self, required: &UserRole) -> bool {
         self.roles.iter().any(|r| r.has_privilege(required))
     }
@@ -258,22 +277,22 @@ impl AuthUser {
 pub struct User {
     /// Unique internal user ID (UUID)
     pub id: String,
-    
+
     /// User's email address
     pub email: String,
-    
+
     /// User's display name
     pub name: Option<String>,
-    
+
     /// User's roles in the system
     pub roles: Vec<UserRole>,
-    
+
     /// When the user was first created
     pub created_at: SystemTime,
-    
+
     /// When the user data was last updated
     pub updated_at: SystemTime,
-    
+
     /// Provider information for all providers this user has authenticated with
     pub providers: Vec<ProviderInfo>,
 }
@@ -288,6 +307,7 @@ Administrator > Editor > Authenticated
 ```
 
 Example privilege checks:
+
 ```rust
 // Administrator has all privileges
 assert!(UserRole::Administrator.has_privilege(&UserRole::Editor));
@@ -310,27 +330,27 @@ Create an admin endpoint to manage user roles:
 ```javascript
 // In a JavaScript handler
 function adminUpdateUserRole(request) {
-    // This would call a Rust function exposed to JavaScript
-    // that interacts with user_repository
-    
-    const { userId, role } = JSON.parse(request.body);
-    
-    // Check if requester is admin
-    if (!request.auth.hasRole('Administrator')) {
-        return {
-            status: 403,
-            body: JSON.stringify({ error: 'Forbidden' })
-        };
-    }
-    
-    // Add role to user
-    // (Assuming we expose a function to JavaScript)
-    addUserRole(userId, role);
-    
+  // This would call a Rust function exposed to JavaScript
+  // that interacts with user_repository
+
+  const { userId, role } = JSON.parse(request.body);
+
+  // Check if requester is admin
+  if (!request.auth.hasRole("Administrator")) {
     return {
-        status: 200,
-        body: JSON.stringify({ success: true })
+      status: 403,
+      body: JSON.stringify({ error: "Forbidden" }),
     };
+  }
+
+  // Add role to user
+  // (Assuming we expose a function to JavaScript)
+  addUserRole(userId, role);
+
+  return {
+    status: 200,
+    body: JSON.stringify({ success: true }),
+  };
 }
 ```
 
@@ -430,7 +450,8 @@ See [Bootstrap Admin Guide](./BOOTSTRAP_ADMIN.md) for detailed instructions.
 
 **Problem**: "Redirected to login when accessing /manager"
 
-**Solution**: 
+**Solution**:
+
 1. Ensure your email is in `bootstrap_admins` in `config.toml`
 2. Rebuild the server: `cargo build --release`
 3. Restart the server

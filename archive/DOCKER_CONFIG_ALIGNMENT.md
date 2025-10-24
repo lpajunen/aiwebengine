@@ -5,17 +5,18 @@ This document describes the aligned naming convention for Docker and configurati
 ## Overview
 
 All Docker files and configuration files now use consistent naming based on deployment environment:
+
 - **Local/Development**: `config.local.toml`
 - **Staging**: `config.staging.toml`
 - **Production**: `config.production.toml`
 
 ## File Mapping
 
-| Environment | Config File | Dockerfile | Docker Compose |
-|-------------|-------------|------------|----------------|
-| Local/Dev | `config.local.toml` | `Dockerfile.local` | `docker-compose.local.yml` |
-| Staging | `config.staging.toml` | `Dockerfile.staging` | `docker-compose.staging.yml` |
-| Production | `config.production.toml` | `Dockerfile` | `docker-compose.yml` |
+| Environment | Config File              | Dockerfile           | Docker Compose               |
+| ----------- | ------------------------ | -------------------- | ---------------------------- |
+| Local/Dev   | `config.local.toml`      | `Dockerfile.local`   | `docker-compose.local.yml`   |
+| Staging     | `config.staging.toml`    | `Dockerfile.staging` | `docker-compose.staging.yml` |
+| Production  | `config.production.toml` | `Dockerfile`         | `docker-compose.yml`         |
 
 ## Usage
 
@@ -42,7 +43,7 @@ docker-compose up
 
 ## Key Changes
 
-1. **Renamed references**: 
+1. **Renamed references**:
    - `config.dev.toml` → `config.local.toml`
    - `config.prod.toml` → `config.production.toml`
 

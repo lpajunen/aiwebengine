@@ -260,7 +260,6 @@ export SECRET_SENDGRID_API_KEY="SG..."               # SendGrid
 
 # Database credentials
 export SECRET_DATABASE_PASSWORD="dev-password"
-export SECRET_REDIS_PASSWORD="dev-redis"
 ```
 
 ### Security Notes for Development

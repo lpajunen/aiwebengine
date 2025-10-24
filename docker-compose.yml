@@ -69,7 +69,7 @@ services:
       retries: 3
       start_period: 10s
 
-  # Optional: PostgreSQL database (if using postgres instead of sqlite)
+  # PostgreSQL database
   postgres:
     image: postgres:16-alpine
     container_name: aiwebengine-postgres
@@ -90,25 +90,6 @@ services:
     # Uncomment to expose PostgreSQL port
     # ports:
     #   - "5432:5432"
-
-  # Optional: Redis for caching and session storage (future enhancement)
-  redis:
-    image: redis:7-alpine
-    container_name: aiwebengine-redis
-    restart: unless-stopped
-    command: redis-server --appendonly yes
-    volumes:
-      - redis-data:/data
-    networks:
-      - aiwebengine-network
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    # Uncomment to expose Redis port
-    # ports:
-    #   - "6379:6379"
 
   # Optional: Prometheus for metrics (future enhancement)
   prometheus:
@@ -156,6 +137,5 @@ volumes:
   caddy-config:    # Caddy configuration
   caddy-logs:      # Caddy access logs
   postgres-data:
-  redis-data:
   prometheus-data:
   grafana-data:

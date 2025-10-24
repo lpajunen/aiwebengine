@@ -112,8 +112,6 @@ This document outlines development ideas, enhancements, and features for aiweben
 **Tasks**:
 
 - [ ] Add PostgreSQL connection and query support
-- [ ] Add MySQL connection and query support
-- [ ] Add SQLite embedded database support
 - [ ] Implement query builder with type safety
 - [ ] Add connection pooling
 - [ ] Create migration system for schema changes
@@ -233,7 +231,6 @@ This document outlines development ideas, enhancements, and features for aiweben
 **Tasks**:
 
 - [ ] Implement in-memory cache with LRU eviction
-- [ ] Add Redis backend support
 - [ ] Create cache invalidation strategies
 - [ ] Add cache warming capabilities
 - [ ] Implement cache statistics and monitoring
@@ -249,7 +246,6 @@ This document outlines development ideas, enhancements, and features for aiweben
 
 - [ ] Implement session store interface
 - [ ] Add in-memory session storage
-- [ ] Add Redis session storage backend
 - [ ] Create session middleware for automatic handling
 - [ ] Add session configuration options
 

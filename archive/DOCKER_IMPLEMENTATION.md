@@ -22,7 +22,6 @@ This document summarizes the Docker deployment implementation for aiwebengine, f
 3. **docker-compose.yml** - Production deployment stack
    - Main application service
    - Optional PostgreSQL database
-   - Optional Redis for caching
    - Optional Prometheus + Grafana for monitoring
    - Complete networking and volume management
 
@@ -141,9 +140,7 @@ Benefits:
    - Pre-configured dashboards (future)
 
 3. **Database Options**
-   - SQLite (default, embedded)
-   - PostgreSQL (optional, scalable)
-   - Redis (optional, caching)
+   - PostgreSQL (always-on, scalable)
 
 4. **Networking**
    - Isolated Docker networks

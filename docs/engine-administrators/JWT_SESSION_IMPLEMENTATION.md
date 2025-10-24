@@ -51,7 +51,7 @@ This document outlines the approach for implementing JWT (JSON Web Token) based 
 ### JWT Benefits
 
 ✅ **Load Balancer Compatible**: Token is self-contained, any server can verify it  
-✅ **No Shared State**: No Redis or database needed for sessions  
+✅ **No Shared State**: No external session storage needed  
 ✅ **Scalable**: Add/remove servers without session migration  
 ✅ **Standard**: Well-established industry practice  
 ✅ **Libraries Available**: `jsonwebtoken` crate already in dependencies
@@ -228,7 +228,7 @@ Since JWT cannot be invalidated server-side, we have options:
 
 **Option B: Token Blacklist**
 
-- Maintain a blacklist of revoked tokens in Redis
+- Maintain a blacklist of revoked tokens in a database
 - Check blacklist on every request
 - Defeats the purpose of stateless JWT but provides immediate logout
 

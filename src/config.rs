@@ -157,7 +157,7 @@ fn default_enable_init_functions() -> bool {
 /// Repository configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepositoryConfig {
-    /// Repository type (memory, sqlite, postgresql)
+    /// Repository type (memory, postgresql)
     pub storage_type: String,
 
     /// Database connection string (for non-memory storage)
@@ -437,9 +437,9 @@ impl AppConfig {
 
         // Validate repository configuration
         match self.repository.storage_type.as_str() {
-            "memory" | "sqlite" | "postgresql" => {}
+            "memory" | "postgresql" => {}
             _ => anyhow::bail!(
-                "Invalid storage type: {}. Must be one of: memory, sqlite, postgresql",
+                "Invalid storage type: {}. Must be one of: memory, postgresql",
                 self.repository.storage_type
             ),
         }
@@ -693,19 +693,14 @@ mod tests {
         config.repository.storage_type = "memory".to_string();
         assert!(config.validate().is_ok());
 
-        // Test sqlite - requires connection string
-        config.repository.storage_type = "sqlite".to_string();
-        config.repository.connection_string = Some("./test.db".to_string());
-        assert!(config.validate().is_ok());
-
         // Test postgresql - requires connection string
         config.repository.storage_type = "postgresql".to_string();
         config.repository.connection_string =
             Some("postgresql://user:pass@localhost/db".to_string());
         assert!(config.validate().is_ok());
 
-        // Test sqlite without connection string - should fail
-        config.repository.storage_type = "sqlite".to_string();
+        // Test postgresql without connection string - should fail
+        config.repository.storage_type = "postgresql".to_string();
         config.repository.connection_string = None;
         assert!(config.validate().is_err());
 

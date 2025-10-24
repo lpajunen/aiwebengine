@@ -11,6 +11,7 @@ Created a comprehensive user repository system (`src/user_repository.rs`) that p
 A complete user management system with the following components:
 
 #### Data Structures
+
 - **`User`**: Core user data structure containing:
   - Unique UUID-based ID
   - Email and name
@@ -25,6 +26,7 @@ A complete user management system with the following components:
 #### Key Functions
 
 **User Management:**
+
 - `upsert_user()`: Insert new user or return existing user ID on sign-in
 - `get_user()`: Retrieve user by internal ID
 - `find_user_by_provider()`: Find user by OAuth provider credentials
@@ -32,16 +34,19 @@ A complete user management system with the following components:
 - `delete_user()`: Remove user and clean up indices
 
 **Role Management:**
+
 - `add_user_role()`: Add a role to a user
 - `remove_user_role()`: Remove a role from a user (can't remove Authenticated)
 - `update_user_roles()`: Replace all roles (auto-includes Authenticated)
 
 **Utility:**
+
 - `get_user_count()`: Get total user count
 
 ### 2. Documentation: `docs/USER_REPOSITORY_INTEGRATION.md`
 
 Comprehensive guide covering:
+
 - API reference with examples
 - Integration steps with authentication system
 - Role hierarchy and privilege checking
@@ -55,25 +60,30 @@ Updated `src/lib.rs` to include the new `user_repository` module.
 ## Key Features
 
 ### 1. Consistent User IDs
+
 - **Problem Solved**: Users get the same ID when signing in multiple times
 - **Implementation**: `upsert_user()` checks provider credentials and returns existing user ID if found
 
 ### 2. Role-Based Access Control
+
 - Three built-in roles with hierarchical privileges
 - Easy role checking: `user.has_role()` and `user.has_privilege()`
 - Always maintains at least `Authenticated` role
 
 ### 3. Multi-Provider Support
+
 - Users can authenticate with multiple OAuth providers (Google, Microsoft, Apple)
 - Tracks first and last authentication time per provider
 - All provider data stored in user record
 
 ### 4. Thread-Safe
+
 - Uses mutex-protected global state
 - Automatic recovery from poisoned mutex state
 - Includes test serialization to prevent deadlocks
 
 ### 5. Well-Tested
+
 - 10 comprehensive unit tests covering:
   - User creation and retrieval
   - Upsert logic (new and existing users)
@@ -111,6 +121,7 @@ cargo test user_repository::tests --lib -- --test-threads=1
 Results: **10 passed; 0 failed**
 
 Tests verify:
+
 - ✅ User creation with correct defaults
 - ✅ Upsert returns existing user ID on duplicate sign-in
 - ✅ Role addition and removal
@@ -179,7 +190,7 @@ To fully integrate this with the authentication system:
 
 The current implementation uses in-memory storage. Consider:
 
-1. **Database Backend**: Add PostgreSQL/SQLite support for persistence
+1. **Database Backend**: Add PostgreSQL support for persistence
 2. **User Preferences**: Store additional user settings and preferences
 3. **Role History**: Track when roles were added/removed
 4. **Custom Roles**: Allow defining roles beyond the three built-in ones

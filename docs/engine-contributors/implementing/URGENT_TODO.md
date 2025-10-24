@@ -288,11 +288,8 @@ pub struct AuthConfig {
     /// Enable session persistence
     pub enable_session_persistence: bool,
 
-    /// Session storage backend (memory, redis)
+    /// Session storage backend (memory, postgres)
     pub session_storage: String,
-
-    /// Redis connection string (if using redis storage)
-    pub redis_url: Option<String>,
 
     /// OAuth provider configurations
     pub oauth_providers: Vec<OAuthProviderConfig>,
@@ -321,7 +318,6 @@ impl Default for AuthConfig {
             jwt_audience: "aiwebengine-users".to_string(),
             enable_session_persistence: false,
             session_storage: "memory".to_string(),
-            redis_url: None,
             oauth_providers: vec![],
         }
     }
@@ -343,9 +339,6 @@ GOOGLE_CLIENT_SECRET=your-google-client-secret
 
 # Database (when implemented)
 DATABASE_URL=postgresql://user:pass@localhost/aiwebengine
-
-# Redis (for session storage)
-REDIS_URL=redis://localhost:6379
 
 # Environment
 ENVIRONMENT=development
@@ -617,18 +610,6 @@ services:
       - ENVIRONMENT=development
     volumes:
       - ./config.local.toml:/app/config.toml:ro
-    depends_on:
-      - redis
-
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-
-volumes:
-  redis_data:
 ```
 
 #### Update Documentation
@@ -684,7 +665,6 @@ cargo watch -x test
 - [ ] Install `cargo-watch`, `cargo-nextest`, `cargo-llvm-cov`
 - [ ] Create `Makefile` with common development commands
 - [ ] Create `Dockerfile` for containerized deployment
-- [ ] Create `docker-compose.yml` for local development with Redis
 - [ ] Update `docs/local-development.md` with new workflow
 - [ ] Add `.dockerignore` file
 - [ ] Test Docker build and deployment
@@ -827,63 +807,6 @@ pub enum SessionError {
 - ❌ Cannot scale horizontally (single server only)
 - ❌ Not suitable for production long-term
 
-#### Option B: Redis-Based (Future Migration Path)
-
-```rust
-// src/session.rs - FUTURE IMPLEMENTATION
-
-use redis::{AsyncCommands, Client};
-
-pub struct RedisSessionStore {
-    client: Client,
-}
-
-impl RedisSessionStore {
-    pub async fn new(redis_url: &str) -> Result<Self, SessionError> {
-        let client = Client::open(redis_url)
-            .map_err(|e| SessionError::ConnectionError(e.to_string()))?;
-        Ok(Self { client })
-    }
-
-    pub async fn create_session(&self, user_id: String, username: String, capabilities: HashSet<Capability>) -> Result<SessionData, SessionError> {
-        let session_id = Uuid::new_v4().to_string();
-        let session = SessionData {
-            session_id: session_id.clone(),
-            user_id,
-            username,
-            // ... other fields
-        };
-
-        let mut conn = self.client.get_async_connection().await
-            .map_err(|e| SessionError::ConnectionError(e.to_string()))?;
-
-        let session_json = serde_json::to_string(&session)
-            .map_err(|e| SessionError::SerializationError(e.to_string()))?;
-
-        // Set with expiration
-        conn.set_ex(&session_id, session_json, 86400).await
-            .map_err(|e| SessionError::StorageError(e.to_string()))?;
-
-        Ok(session)
-    }
-
-    // ... other methods
-}
-```
-
-**Pros:**
-
-- ✅ Persists across restarts
-- ✅ Can scale horizontally
-- ✅ Built-in expiration support
-- ✅ Production-ready
-
-**Cons:**
-
-- ❌ Requires Redis infrastructure
-- ❌ More complex setup
-- ❌ Network latency for each session check
-
 ### Recommended Approach
 
 **Phase 1 (Now):** Implement Option A (In-Memory)
@@ -891,25 +814,6 @@ impl RedisSessionStore {
 - Fast to implement
 - Sufficient for development and testing
 - Easy to understand and debug
-
-**Phase 2 (Later):** Add trait abstraction and Redis backend
-
-```rust
-#[async_trait]
-pub trait SessionStore: Send + Sync {
-    async fn create_session(&self, user_id: String, username: String, capabilities: HashSet<Capability>) -> Result<SessionData, SessionError>;
-    async fn get_session(&self, session_id: &str) -> Result<Option<SessionData>, SessionError>;
-    async fn delete_session(&self, session_id: &str) -> Result<(), SessionError>;
-    async fn cleanup_expired(&self) -> Result<usize, SessionError>;
-}
-
-// Can swap implementations without changing authentication code
-let store: Box<dyn SessionStore> = if config.auth.session_storage == "redis" {
-    Box::new(RedisSessionStore::new(&config.auth.redis_url).await?)
-} else {
-    Box::new(InMemorySessionStore::new())
-};
-```
 
 ### Required Actions
 
@@ -1018,7 +922,6 @@ mod tests {
 - [ ] Add comprehensive tests for session operations
 - [ ] Document session storage architecture decision
 - [ ] Add session storage to `AppConfig`
-- [ ] Plan future migration path to Redis/persistent storage
 
 **Estimated Effort:** 1-2 days
 
@@ -1168,7 +1071,6 @@ Before starting authentication implementation, verify ALL of these:
 - [ ] **Session expiration** implemented and tested
 - [ ] **Automatic cleanup** background task running
 - [ ] **Session tests** comprehensive and passing
-- [ ] **Migration path** to Redis documented
 
 ### Documentation
 

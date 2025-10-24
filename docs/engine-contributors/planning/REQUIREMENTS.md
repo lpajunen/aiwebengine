@@ -1226,8 +1226,8 @@ The engine MUST provide:
 
 The engine SHOULD support:
 
-- SQLite database (embedded)
-- PostgreSQL database (external)
+- PostgreSQL database (primary)
+- In-memory storage (testing)
 - Connection pooling
 - Automatic migrations
 - Transaction support
@@ -2387,7 +2387,6 @@ The engine MUST support:
 - **Email Support**: SMTP integration for notifications
 - **File Storage**: S3-compatible object storage
 - **Search Integration**: Elasticsearch/OpenSearch
-- **Message Queue**: Redis/RabbitMQ integration
 - **GraphQL Playground**: Interactive GraphQL IDE (development mode only)
 - **API Version Migration Tools**: Automated migration for breaking changes
 - **Additional Scripting Languages**: Lua, Python, Rhai runtime support (see REQ-JS-008)
