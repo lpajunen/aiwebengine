@@ -52,6 +52,9 @@ openidconnect = "4.0.1"
 async-trait = "0.1"
 urlencoding = "2.1.3"
 
+# Database (SQLx)
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "migrate", "uuid", "chrono"] }
+
 # Optimize test builds for faster compilation and execution
 [profile.test]
 opt-level = 1          # Basic optimizations for tests

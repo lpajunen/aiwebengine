@@ -10,6 +10,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use tracing::{debug, error, info, warn};
 
 pub mod config;
+pub mod database;
 pub mod error;
 pub mod graphql;
 pub mod http_client;
