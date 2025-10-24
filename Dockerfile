@@ -57,7 +57,7 @@ RUN mkdir -p /app/logs /app/scripts /app/assets /app/data && \
     chown -R aiwebengine:aiwebengine /app
 
 # Copy default configuration
-COPY config.example.yaml /app/config.yaml
+COPY config.toml /app/config.toml
 
 # Copy assets if they exist
 COPY assets /app/assets/
@@ -74,7 +74,7 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 
 # Set environment variables
 ENV RUST_LOG=info
-ENV CONFIG_FILE=/app/config.yaml
+ENV CONFIG_FILE=/app/config.toml
 
 # Run the server
 CMD ["aiwebengine"]
