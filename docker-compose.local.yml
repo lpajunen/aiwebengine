@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # Caddy reverse proxy with DigitalOcean DNS plugin for Let's Encrypt
   caddy-dev:
