@@ -30,6 +30,8 @@ help:
 	@echo "  make docker-clean        - Stop and remove all Docker containers and volumes"
 	@echo "  make docker-shell        - Open shell in running container"
 	@echo "  make docker-test         - Run tests in Docker container"
+	@echo "  make postgres-local      - Start only PostgreSQL in local environment"
+	@echo "  make postgres-local-stop - Stop PostgreSQL in local environment"
 
 # Install development dependencies
 deps:
@@ -241,3 +243,28 @@ docker-env:
 docker-setup: docker-env docker-build
 	@echo "✓ Docker setup completed!"
 	@echo "You can now run: make docker-prod"
+
+# Start only PostgreSQL in local environment
+postgres-local:
+	@echo "Starting PostgreSQL server in local environment..."
+	docker-compose -f docker-compose.local.yml up -d postgres-dev
+	@echo "✓ PostgreSQL server started!"
+	@echo "Connection details:"
+	@echo "  Host: localhost"
+	@echo "  Port: 5432"
+	@echo "  Database: aiwebengine"
+	@echo "  User: aiwebengine"
+	@echo "  Password: devpassword"
+	@echo ""
+	@echo "Connection string: postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine"
+
+# Stop PostgreSQL in local environment
+postgres-local-stop:
+	@echo "Stopping PostgreSQL server..."
+	docker-compose -f docker-compose.local.yml stop postgres-dev
+	@echo "✓ PostgreSQL server stopped!"
+
+# View PostgreSQL logs in local environment
+postgres-local-logs:
+	docker-compose -f docker-compose.local.yml logs -f postgres-dev
+
