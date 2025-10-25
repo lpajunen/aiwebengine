@@ -1,9 +1,31 @@
 use anyhow::{Context, Result};
 use sqlx::postgres::{PgPool, PgPoolOptions};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tracing::{info, warn};
 
 use crate::config::RepositoryConfig;
+
+/// Global database instance
+/// 
+/// This is initialized once during server startup and provides
+/// access to the database pool for health checks and queries.
+/// Access via `get_global_database()` function.
+static GLOBAL_DATABASE: OnceLock<Arc<Database>> = OnceLock::new();
+
+/// Get the global database instance
+/// 
+/// Returns None if the database has not been initialized yet.
+pub fn get_global_database() -> Option<Arc<Database>> {
+    GLOBAL_DATABASE.get().cloned()
+}
+
+/// Initialize the global database instance
+/// 
+/// Returns true if successfully initialized, false if already set.
+pub fn initialize_global_database(database: Arc<Database>) -> bool {
+    GLOBAL_DATABASE.set(database).is_ok()
+}
 
 /// Database connection pool manager
 pub struct Database {
@@ -57,6 +79,43 @@ impl Database {
             .await
             .context("Database health check failed")?;
         Ok(())
+    }
+
+    /// Synchronous health check wrapper for use from JavaScript
+    /// Returns a JSON string with the health status
+    pub fn check_health_sync() -> String {
+        if let Some(db) = get_global_database() {
+            // Create a new Tokio runtime for this synchronous call
+            let rt = match tokio::runtime::Runtime::new() {
+                Ok(rt) => rt,
+                Err(e) => {
+                    return serde_json::json!({
+                        "healthy": false,
+                        "error": format!("Failed to create runtime: {}", e)
+                    }).to_string();
+                }
+            };
+            
+            match rt.block_on(db.health_check()) {
+                Ok(()) => {
+                    serde_json::json!({
+                        "healthy": true,
+                        "database": "ok"
+                    }).to_string()
+                }
+                Err(e) => {
+                    serde_json::json!({
+                        "healthy": false,
+                        "error": format!("Database health check failed: {}", e)
+                    }).to_string()
+                }
+            }
+        } else {
+            serde_json::json!({
+                "healthy": false,
+                "error": "Database not initialized"
+            }).to_string()
+        }
     }
 
     /// Gracefully close the database connection pool

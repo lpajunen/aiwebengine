@@ -415,6 +415,23 @@ pub async fn start_server_with_config(
         warn!("Global secrets manager was already initialized");
     }
 
+    // Initialize database connection
+    info!("Initializing database connection...");
+    match database::init_database(&config.repository, config.repository.storage_type == "postgresql").await {
+        Ok(db) => {
+            let db_arc = std::sync::Arc::new(db);
+            if database::initialize_global_database(db_arc) {
+                info!("Global database initialized successfully");
+            } else {
+                warn!("Global database was already initialized");
+            }
+        }
+        Err(e) => {
+            warn!("Database initialization failed: {}. Continuing without database.", e);
+            warn!("Health checks will report database as unavailable");
+        }
+    }
+
     // Clone the timeout value to avoid borrow checker issues in async closures
     let script_timeout_ms = config.script_timeout_ms();
 

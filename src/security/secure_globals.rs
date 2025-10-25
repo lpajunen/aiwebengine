@@ -114,6 +114,9 @@ impl SecureGlobalContext {
         // Setup fetch() function for HTTP requests
         self.setup_fetch_function(ctx, script_uri)?;
 
+        // Setup database functions
+        self.setup_database_functions(ctx, script_uri)?;
+
         // Always setup GraphQL functions, but they will be no-ops if disabled
         self.setup_graphql_functions(ctx, script_uri)?;
 
@@ -1587,6 +1590,26 @@ impl SecureGlobalContext {
 
         global.set("fetch", fetch_fn)?;
         debug!("fetch() function initialized with secret injection support");
+
+        Ok(())
+    }
+
+    /// Setup database functions
+    fn setup_database_functions(&self, ctx: &rquickjs::Ctx<'_>, _script_uri: &str) -> JsResult<()> {
+        let global = ctx.globals();
+
+        // Create the checkDatabaseHealth function
+        let check_db_health = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
+                // Call the database health check
+                let result = crate::database::Database::check_health_sync();
+                Ok(result)
+            },
+        )?;
+
+        global.set("checkDatabaseHealth", check_db_health)?;
+        debug!("checkDatabaseHealth() function initialized");
 
         Ok(())
     }

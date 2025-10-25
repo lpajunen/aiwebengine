@@ -12,15 +12,35 @@ function core_root(req) {
 
 // Health check endpoint
 function health_check(req) {
+  // Call Rust function to check database health
+  var databaseHealth;
+  try {
+    var dbHealthJson = checkDatabaseHealth();
+    databaseHealth = JSON.parse(dbHealthJson);
+  } catch (error) {
+    databaseHealth = {
+      healthy: false,
+      error: "Failed to check database health: " + error.message,
+    };
+  }
+
+  // Determine overall health status
+  var isHealthy = databaseHealth.healthy;
+  var status = isHealthy ? "healthy" : "unhealthy";
+
   return {
     status: 200,
     body: JSON.stringify({
-      status: "healthy",
+      status: status,
       timestamp: new Date().toISOString(),
       checks: {
         javascript: "ok",
         logging: "ok",
         json: "ok",
+        database: databaseHealth.healthy ? "ok" : "error",
+      },
+      details: {
+        database: databaseHealth,
       },
     }),
     contentType: "application/json",
