@@ -46,6 +46,8 @@ services:
       - ./tests:/app/tests:ro
       - ./Cargo.toml:/app/Cargo.toml:ro
       - ./Cargo.lock:/app/Cargo.lock:ro
+      # Mount migrations (required for sqlx::migrate! macro)
+      - ./migrations:/app/migrations:ro
       # Mount configuration
       - ./config.local.toml:/app/config.local.toml:ro
       # Mount scripts for testing

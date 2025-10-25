@@ -26,6 +26,7 @@ RUN mkdir -p src/bin && \
 
 # Copy source code and compile-time assets
 COPY src ./src
+COPY migrations ./migrations
 COPY scripts ./scripts
 COPY assets ./assets
 COPY tests ./tests
