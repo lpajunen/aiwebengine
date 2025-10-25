@@ -2,7 +2,22 @@
 
 AIWebEngine uses **SQLx** for PostgreSQL database integration with type-safe queries and automated migrations.
 
-## Quick Setup
+## Fastest Setup (One Command)
+
+```bash
+# Run the setup script
+./scripts/setup-database.sh
+```
+
+This will:
+1. Install SQLx CLI (if needed)
+2. Start PostgreSQL in Docker
+3. Run all migrations
+4. Verify the setup
+
+---
+
+## Manual Setup
 
 ### 1. Install SQLx CLI
 
@@ -10,62 +25,100 @@ AIWebEngine uses **SQLx** for PostgreSQL database integration with type-safe que
 cargo install sqlx-cli --no-default-features --features postgres
 ```
 
-### 2. Create Database
+### 2. Start PostgreSQL Container
 
 ```bash
-# Local PostgreSQL
-createdb aiwebengine
+# Start PostgreSQL in Docker (local development)
+docker-compose -f docker-compose.local.yml up -d postgres-dev
 
-# Or with custom user
-createuser -P aiwebengine  # Enter password when prompted
-createdb -O aiwebengine aiwebengine
+# Or for production
+docker-compose up -d postgres
 ```
 
-### 3. Configure Environment
+### 3. Database Helper Script
+
+The project includes a helper script for database operations:
+
+```bash
+# Make script executable (first time only)
+chmod +x scripts/db.sh
+
+# Create database (using Docker container)
+./scripts/db.sh createdb
+
+# Run psql interactive terminal
+./scripts/db.sh psql
+
+# Show all available commands
+./scripts/db.sh --help
+```
+
+**Note:** The database is created automatically when using Docker Compose. The helper script is mainly for running migrations and queries.
+
+### 4. Configure Environment
 
 ```bash
 # Copy environment template
 cp .env.example .env
 
-# Edit .env and set:
-export APP_REPOSITORY__DATABASE_URL="postgresql://aiwebengine:your-password@localhost:5432/aiwebengine"
+# For local development with Docker:
+export APP_REPOSITORY__DATABASE_URL="postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine"
 export APP_REPOSITORY__AUTO_MIGRATE=true
+
+# For production (set proper password):
+# export APP_REPOSITORY__DATABASE_URL="postgresql://aiwebengine:your-secure-password@localhost:5432/aiwebengine"
 
 # Load environment
 source .env
 ```
 
-### 4. Run Migrations
+### 5. Run Migrations
 
-**Option A: Automatic (Development)**
+**Option A: Using Helper Script (Recommended)**
 
-Migrations run automatically on server startup when `auto_migrate = true`:
+```bash
+# Run migrations (uses Docker container)
+./scripts/db.sh migrate-run
+
+# Check migration status
+./scripts/db.sh migrate-info
+
+# Revert last migration if needed
+./scripts/db.sh migrate-revert
+```
+
+**Option B: Automatic (Development)**
+
+Migrations run automatically on server startup when `auto_migrate = true` in config:
 
 ```bash
 cargo run
 # Server starts and runs migrations automatically
 ```
 
-**Option B: Manual**
+**Option C: Manual with SQLx CLI**
 
 ```bash
-# Run migrations manually
+# Set DATABASE_URL (for local Docker)
+export DATABASE_URL="postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine"
+
+# Run migrations
 sqlx migrate run
 
 # Then start server
 cargo run
 ```
 
-### 5. Verify Setup
+### 6. Verify Setup
 
 ```bash
-# Check migrations applied
-sqlx migrate info
+# Using helper script
+./scripts/db.sh psql -c "\dt"
 
-# Check tables created
-psql aiwebengine -c "\dt"
+# Or check migration status
+./scripts/db.sh migrate-info
 
-# Should show: scripts, assets, logs, route_registrations
+# Should show tables: scripts, assets, logs, users, sessions
 ```
 
 ---
@@ -105,9 +158,48 @@ let script = sqlx::query!("SELECT * FROM scripts WHERE uri = $1", uri)
 
 ## Common Commands
 
+### Using Helper Script (Recommended for Docker)
+
+```bash
+# Interactive psql
+./scripts/db.sh psql
+
+# Run SQL query
+./scripts/db.sh psql -c "SELECT * FROM users"
+
+# List tables
+./scripts/db.sh psql -c "\dt"
+
+# Run migrations
+./scripts/db.sh migrate-run
+
+# Check migration status
+./scripts/db.sh migrate-info
+
+# Revert last migration
+./scripts/db.sh migrate-revert
+
+# Backup database
+./scripts/db.sh backup backup.sql
+
+# Restore from backup
+./scripts/db.sh restore backup.sql
+
+# View logs
+./scripts/db.sh logs
+
+# Production mode (use --prod flag)
+./scripts/db.sh --prod migrate-run
+```
+
+### Using SQLx CLI Directly
+
 ```bash
 # Create new migration
-sqlx migrate add create_my_table
+sqlx migrate add <description>
+
+# Set DATABASE_URL first
+export DATABASE_URL="postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine"
 
 # Run pending migrations
 sqlx migrate run
@@ -158,62 +250,123 @@ cargo run --release
 
 ## Docker Setup
 
-Update `docker-compose.yml` to include PostgreSQL:
+PostgreSQL is already configured in the Docker Compose files:
 
-```yaml
-services:
-  postgres:
-    image: postgres:15-alpine
-    environment:
-      POSTGRES_DB: aiwebengine
-      POSTGRES_USER: aiwebengine
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+**Local Development** (`docker-compose.local.yml`):
+- Container: `aiwebengine-postgres-dev`
+- Database: `aiwebengine`
+- User: `aiwebengine`
+- Password: `devpassword`
+- Port: `5432` (exposed to host)
 
-  aiwebengine:
-    depends_on:
-      - postgres
-    environment:
-      APP_REPOSITORY__DATABASE_URL: postgresql://aiwebengine:${POSTGRES_PASSWORD}@postgres:5432/aiwebengine
+**Production** (`docker-compose.yml`):
+- Container: `aiwebengine-postgres`
+- Database: `aiwebengine`
+- User: `aiwebengine`
+- Password: Set via `POSTGRES_PASSWORD` env var
+- Port: Not exposed (internal network only)
 
-volumes:
-  postgres_data:
+### Starting Services
+
+```bash
+# Local development
+docker-compose -f docker-compose.local.yml up -d
+
+# Production
+docker-compose up -d
+
+# Start only PostgreSQL
+docker-compose -f docker-compose.local.yml up -d postgres-dev
+```
+
+### Accessing PostgreSQL
+
+```bash
+# Using helper script (recommended)
+./scripts/db.sh psql
+
+# Or directly
+docker exec -it aiwebengine-postgres-dev psql -U aiwebengine -d aiwebengine
 ```
 
 ---
 
 ## Troubleshooting
 
+### Container Issues
+
+**PostgreSQL container not running:**
+```bash
+# Check container status
+docker ps -a | grep postgres
+
+# Start the container
+docker-compose -f docker-compose.local.yml up -d postgres-dev
+
+# View logs
+./scripts/db.sh logs
+# Or: docker-compose -f docker-compose.local.yml logs postgres-dev
+```
+
 **Connection refused:**
 ```bash
-# Check PostgreSQL is running
-pg_isready
-brew services list | grep postgresql  # macOS
+# Check if container is healthy
+docker inspect aiwebengine-postgres-dev | grep Health
 
-# Start if needed
-brew services start postgresql@15  # macOS
+# Restart container
+docker-compose -f docker-compose.local.yml restart postgres-dev
+
+# Check port is exposed
+docker ps | grep postgres
 ```
 
-**Role does not exist:**
-```bash
-createuser -P aiwebengine
-```
+### Database Issues
 
 **Database does not exist:**
 ```bash
-createdb aiwebengine
+# The database is created automatically by Docker
+# If needed, recreate it:
+./scripts/db.sh psql -c "DROP DATABASE IF EXISTS aiwebengine;"
+./scripts/db.sh createdb
 ```
 
 **Migration errors:**
 ```bash
 # Check status
-sqlx migrate info
+./scripts/db.sh migrate-info
 
 # View applied migrations
-psql aiwebengine -c "SELECT * FROM _sqlx_migrations;"
+./scripts/db.sh psql -c "SELECT * FROM _sqlx_migrations;"
+
+# Revert if needed
+./scripts/db.sh migrate-revert
+```
+
+**Permission denied:**
+```bash
+# Make sure script is executable
+chmod +x scripts/db.sh
+
+# Check Docker is running
+docker ps
+```
+
+### Running Engine Locally with Containerized PostgreSQL
+
+When running the engine locally (not in Docker) but using containerized PostgreSQL:
+
+```bash
+# 1. Start only PostgreSQL
+docker-compose -f docker-compose.local.yml up -d postgres-dev
+
+# 2. Set connection string (localhost instead of container name)
+export APP_REPOSITORY__DATABASE_URL="postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine"
+
+# 3. Run migrations
+./scripts/db.sh migrate-run
+
+# 4. Start engine locally
+cargo run
 ```
 
 ---

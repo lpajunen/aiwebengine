@@ -74,6 +74,16 @@ cargo install sqlx-cli --no-default-features --features postgres
 sqlx --version
 ```
 
+### Start PostgreSQL Container
+
+```bash
+# For local development
+docker-compose -f docker-compose.local.yml up -d postgres-dev
+
+# For production
+docker-compose up -d postgres
+```
+
 ---
 
 ## Configuration
@@ -81,16 +91,53 @@ sqlx --version
 Set your database URL:
 
 ```bash
-# For local development
+# For local development with Docker
+export DATABASE_URL="postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine"
+
+# For production (set proper password)
 export DATABASE_URL="postgresql://aiwebengine:your-password@localhost:5432/aiwebengine"
 
 # Or in .env file
-echo 'DATABASE_URL="postgresql://aiwebengine:your-password@localhost:5432/aiwebengine"' >> .env
+echo 'DATABASE_URL="postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine"' >> .env
+```
+
+### Using the Database Helper Script
+
+The project includes `scripts/db.sh` for easy database operations:
+
+```bash
+# Make executable (first time)
+chmod +x scripts/db.sh
+
+# Show all commands
+./scripts/db.sh --help
+
+# Common operations
+./scripts/db.sh psql              # Interactive PostgreSQL
+./scripts/db.sh migrate-run       # Run migrations
+./scripts/db.sh migrate-info      # Check migration status
+./scripts/db.sh backup backup.sql # Backup database
 ```
 
 ---
 
 ## Running Migrations
+
+### Using Helper Script (Recommended for Docker)
+
+```bash
+# Run all pending migrations
+./scripts/db.sh migrate-run
+
+# Check migration status
+./scripts/db.sh migrate-info
+
+# Revert the last migration
+./scripts/db.sh migrate-revert
+
+# For production containers
+./scripts/db.sh --prod migrate-run
+```
 
 ### Automatic (Development)
 
@@ -105,11 +152,12 @@ auto_migrate = true  # Runs migrations on startup
 
 The server will automatically run pending migrations on startup.
 
-### Manual (Production)
-
-**Recommended for production** to have explicit control:
+### Manual with SQLx CLI (Alternative)
 
 ```bash
+# Set DATABASE_URL first
+export DATABASE_URL="postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine"
+
 # Check migration status
 sqlx migrate info
 
@@ -120,12 +168,7 @@ sqlx migrate run
 sqlx migrate revert
 ```
 
-Set `auto_migrate = false` in production config:
-
-```toml
-[repository]
-auto_migrate = false  # Disable automatic migrations
-```
+**Production:** Set `auto_migrate = false` in production config for manual control.
 
 ---
 
@@ -173,21 +216,22 @@ CREATE INDEX idx_users_email ON users(email);
 
 ## Testing Migrations
 
-### Test in Development
+### Test in Development with Docker
 
 ```bash
-# Create a test database
-createdb aiwebengine_test
+# Using helper script
+./scripts/db.sh psql -c "CREATE DATABASE aiwebengine_test;"
 
-# Run migrations
-DATABASE_URL="postgresql://localhost/aiwebengine_test" sqlx migrate run
+# Run migrations against test database
+export DATABASE_URL="postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine_test"
+sqlx migrate run
 
 # Verify schema
-psql aiwebengine_test -c "\dt"  # List tables
-psql aiwebengine_test -c "\d scripts"  # Describe table
+./scripts/db.sh psql -d aiwebengine_test -c "\dt"  # List tables
+./scripts/db.sh psql -d aiwebengine_test -c "\d scripts"  # Describe table
 
 # Cleanup
-dropdb aiwebengine_test
+./scripts/db.sh psql -c "DROP DATABASE aiwebengine_test;"
 ```
 
 ### Revert and Retry

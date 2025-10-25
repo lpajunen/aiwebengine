@@ -19,5 +19,6 @@ CREATE INDEX idx_sessions_user_id ON sessions(user_id);
 CREATE INDEX idx_sessions_expires_at ON sessions(expires_at);
 
 -- Create composite index for active session queries
-CREATE INDEX idx_sessions_user_active ON sessions(user_id, expires_at) 
-WHERE expires_at > NOW();
+-- Note: Cannot use NOW() in WHERE clause as it's not IMMUTABLE
+-- Filter at query time instead
+CREATE INDEX idx_sessions_user_active ON sessions(user_id, expires_at);
