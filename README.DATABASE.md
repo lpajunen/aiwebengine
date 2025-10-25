@@ -75,7 +75,8 @@ psql aiwebengine -c "\dt"
 - **scripts** - JavaScript code storage
 - **assets** - Static assets (CSS, JS, images)
 - **logs** - Script execution logs
-- **route_registrations** - HTTP route handlers
+- **users** - User accounts and authentication
+- **sessions** - User session data
 
 See `migrations/` directory for detailed schema.
 

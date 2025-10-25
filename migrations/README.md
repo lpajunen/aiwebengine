@@ -9,7 +9,8 @@ Migrations are applied in sequential order by filename:
 - `20241024000001_create_scripts.sql` - Scripts table
 - `20241024000002_create_assets.sql` - Assets table
 - `20241024000003_create_logs.sql` - Logs table
-- `20241024000004_create_route_registrations.sql` - Route registrations table
+- `20241024000004_create_users.sql` - Users table
+- `20241024000005_create_sessions.sql` - Sessions table
 
 ## Running Migrations
 

@@ -17,7 +17,7 @@ SQLx has been successfully integrated into AIWebEngine for PostgreSQL database s
 - Full async/await support
 
 ### 3. Database Schema (`migrations/`)
-Four initial migrations created:
+Five initial migrations created:
 
 **20241024000001_create_scripts.sql**
 - Stores JavaScript scripts
@@ -34,10 +34,16 @@ Four initial migrations created:
 - Time-series log data
 - Indexed for efficient filtering by script and time
 
-**20241024000004_create_route_registrations.sql**
-- Stores HTTP route handlers from scripts
-- Maps (path, method) → (script, handler)
-- Unique constraint prevents duplicate registrations
+**20241024000004_create_users.sql**
+- Stores user accounts and authentication data
+- OAuth provider integration
+- Role-based access control (admin, editor)
+- Indexed on email, user_id, and roles
+
+**20241024000005_create_sessions.sql**
+- Stores user sessions with JSONB data
+- Session expiration tracking
+- Indexed for fast session lookups and cleanup
 
 ### 4. Configuration Updates
 

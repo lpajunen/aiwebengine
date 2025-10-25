@@ -15,7 +15,8 @@ migrations/
 ├── 20241024000001_create_scripts.sql
 ├── 20241024000002_create_assets.sql
 ├── 20241024000003_create_logs.sql
-└── 20241024000004_create_route_registrations.sql
+├── 20241024000004_create_users.sql
+└── 20241024000005_create_sessions.sql
 ```
 
 ### Current Schema
@@ -42,14 +43,22 @@ migrations/
 - `message` (TEXT) - Log entry
 - `created_at` (TIMESTAMPTZ)
 
-**route_registrations** - Stores script route handlers
+**users** - Stores user accounts
 - `id` (UUID, primary key)
-- `script_uri` (TEXT) - Script that owns the route
-- `route_path` (TEXT) - URL path pattern
-- `http_method` (TEXT) - HTTP method (GET, POST, etc.)
-- `handler_name` (TEXT) - JavaScript function name
-- `created_at` (TIMESTAMPTZ)
-- Unique constraint: `(script_uri, route_path, http_method)`
+- `user_id` (TEXT, unique) - User identifier
+- `email` (TEXT, unique) - User email address
+- `name` (TEXT, nullable) - Display name
+- `provider` (TEXT) - OAuth provider (google, microsoft, apple)
+- `is_admin` (BOOLEAN) - Admin role flag
+- `is_editor` (BOOLEAN) - Editor role flag
+- `created_at`, `updated_at`, `last_login_at` (TIMESTAMPTZ)
+
+**sessions** - Stores user sessions
+- `id` (UUID, primary key)
+- `session_id` (TEXT, unique) - Session identifier
+- `user_id` (TEXT) - Related user
+- `data` (JSONB) - Session data
+- `created_at`, `expires_at`, `last_accessed_at` (TIMESTAMPTZ)
 
 ---
 
