@@ -505,10 +505,8 @@ pub fn execute_script_for_request_secure(
             let mut headers = std::collections::HashMap::new();
             if let Ok(headers_obj) = response_obj.get::<_, rquickjs::Object>("headers") {
                 // Iterate over headers object properties
-                for item in headers_obj.props::<String, String>() {
-                    if let Ok((key, value)) = item {
-                        headers.insert(key, value);
-                    }
+                for (key, value) in headers_obj.props::<String, String>().flatten() {
+                    headers.insert(key, value);
                 }
             }
 

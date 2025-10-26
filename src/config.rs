@@ -375,33 +375,31 @@ impl AppConfig {
             .merge(Toml::file("config.toml"));
 
         // Debug: print what we have so far
-        if config_toml_exists {
-            if let Ok(partial_config) = figment.clone().extract::<Self>() {
-                eprintln!(
-                    "After loading config.toml - storage_type: {}",
-                    partial_config.repository.storage_type
-                );
-                eprintln!(
-                    "After loading config.toml - connection_string: {:?}",
-                    partial_config
-                        .repository
-                        .connection_string
-                        .as_ref()
-                        .map(|s| {
-                            if let Some(at_pos) = s.find('@') {
-                                let before_at = &s[..at_pos];
-                                let after_at = &s[at_pos..];
-                                if let Some(colon_pos) = before_at.rfind(':') {
-                                    format!("{}:****{}", &before_at[..colon_pos], after_at)
-                                } else {
-                                    s.clone()
-                                }
+        if config_toml_exists && let Ok(partial_config) = figment.clone().extract::<Self>() {
+            eprintln!(
+                "After loading config.toml - storage_type: {}",
+                partial_config.repository.storage_type
+            );
+            eprintln!(
+                "After loading config.toml - connection_string: {:?}",
+                partial_config
+                    .repository
+                    .connection_string
+                    .as_ref()
+                    .map(|s| {
+                        if let Some(at_pos) = s.find('@') {
+                            let before_at = &s[..at_pos];
+                            let after_at = &s[at_pos..];
+                            if let Some(colon_pos) = before_at.rfind(':') {
+                                format!("{}:****{}", &before_at[..colon_pos], after_at)
                             } else {
                                 s.clone()
                             }
-                        })
-                );
-            }
+                        } else {
+                            s.clone()
+                        }
+                    })
+            );
         }
 
         let config: Self = figment
@@ -416,7 +414,7 @@ impl AppConfig {
         );
         eprintln!(
             "Final config - connection_string: {:?}",
-            config.repository.connection_string.as_ref().map(|s| "****")
+            config.repository.connection_string.as_ref().map(|_| "****")
         );
 
         // Validate the configuration

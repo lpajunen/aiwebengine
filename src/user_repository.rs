@@ -48,12 +48,12 @@ pub enum UserRole {
 impl UserRole {
     /// Check if this role has at least the privileges of another role
     pub fn has_privilege(&self, required: &UserRole) -> bool {
-        match (self, required) {
-            (UserRole::Administrator, _) => true,
-            (UserRole::Editor, UserRole::Editor | UserRole::Authenticated) => true,
-            (UserRole::Authenticated, UserRole::Authenticated) => true,
-            _ => false,
-        }
+        matches!(
+            (self, required),
+            (UserRole::Administrator, _)
+                | (UserRole::Editor, UserRole::Editor | UserRole::Authenticated)
+                | (UserRole::Authenticated, UserRole::Authenticated)
+        )
     }
 }
 

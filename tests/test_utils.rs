@@ -17,8 +17,7 @@ impl TestServer {
 
         // Leak the shutdown sender to prevent server shutdown
         let (tx, _rx) = tokio::sync::oneshot::channel::<()>();
-        let shutdown_tx = Some(Box::new(tx));
-        Box::leak(shutdown_tx.unwrap());
+        let _leaked = Box::leak(Box::new(tx));
 
         Ok(Self {
             port,

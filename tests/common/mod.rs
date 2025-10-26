@@ -101,10 +101,9 @@ pub async fn wait_for_server(port: u16, max_attempts: u32) -> anyhow::Result<()>
             .get(format!("http://127.0.0.1:{}/health", port))
             .send()
             .await
+            && (response.status().is_success() || response.status().is_client_error())
         {
-            if response.status().is_success() || response.status().is_client_error() {
-                return Ok(());
-            }
+            return Ok(());
         }
 
         if attempt < max_attempts {

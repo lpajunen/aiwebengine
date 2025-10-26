@@ -10,10 +10,10 @@
 mod common;
 
 use aiwebengine::js_engine::call_init_if_exists;
+use aiwebengine::repository;
 use aiwebengine::repository::{get_script_metadata, upsert_script};
 use aiwebengine::script_init::{InitContext, ScriptInitializer};
-use aiwebengine::{js_engine, repository};
-use common::{TestContext, wait_for_server};
+use common::TestContext;
 use std::time::Duration;
 use tokio::time::timeout;
 

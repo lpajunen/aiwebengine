@@ -62,11 +62,20 @@ impl AuthSessionManager {
         user_agent: String,
     ) -> Result<SessionToken, AuthError> {
         // Create session using secure session manager
+        let params = crate::security::session::CreateSessionParams {
+            user_id,
+            provider,
+            email,
+            name,
+            is_admin,
+            is_editor,
+            ip_addr,
+            user_agent,
+        };
+
         let token = self
             .session_manager
-            .create_session(
-                user_id, provider, email, name, is_admin, is_editor, ip_addr, user_agent,
-            )
+            .create_session(params)
             .await
             .map_err(AuthError::Session)?;
 

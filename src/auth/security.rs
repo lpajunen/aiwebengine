@@ -98,10 +98,9 @@ impl AuthSecurityContext {
             // Decode from base64
             if let Ok(decoded_bytes) =
                 base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(redirect_encoded)
+                && let Ok(redirect_url) = String::from_utf8(decoded_bytes)
             {
-                if let Ok(redirect_url) = String::from_utf8(decoded_bytes) {
-                    return Some(redirect_url);
-                }
+                return Some(redirect_url);
             }
         }
 

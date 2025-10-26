@@ -567,8 +567,10 @@ mod tests {
         let mut limiter = RateLimiter::new();
 
         // Disable IP rate limiting
-        let mut config = RateLimitConfig::default();
-        config.enabled = false;
+        let config = RateLimitConfig {
+            enabled: false,
+            ..RateLimitConfig::default()
+        };
         limiter.update_config("ip", config);
 
         let key = RateLimitKey::IpAddress("192.168.1.1".to_string());

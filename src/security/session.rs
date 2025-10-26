@@ -59,6 +59,19 @@ pub struct SessionData {
     pub fingerprint: SessionFingerprint,
 }
 
+/// Parameters for creating a new session
+#[derive(Debug, Clone)]
+pub struct CreateSessionParams {
+    pub user_id: String,
+    pub provider: String,
+    pub email: Option<String>,
+    pub name: Option<String>,
+    pub is_admin: bool,
+    pub is_editor: bool,
+    pub ip_addr: String,
+    pub user_agent: String,
+}
+
 /// Session fingerprint for detecting hijacking attempts
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionFingerprint {
@@ -170,15 +183,9 @@ impl SecureSessionManager {
     /// Create a new session for an authenticated user
     pub async fn create_session(
         &self,
-        user_id: String,
-        provider: String,
-        email: Option<String>,
-        name: Option<String>,
-        is_admin: bool,
-        is_editor: bool,
-        ip_addr: String,
-        user_agent: String,
+        params: CreateSessionParams,
     ) -> Result<SessionToken, SessionError> {
+        let user_id = params.user_id.clone();
         // Check concurrent session limits and get token to remove if needed
         let token_to_remove = {
             let mut user_sessions = self.user_sessions.write().await;
@@ -215,18 +222,18 @@ impl SecureSessionManager {
         // Create session data
         let session_data = SessionData {
             session_id: token.clone(),
-            user_id: user_id.clone(),
-            provider: provider.clone(),
-            email: email.clone(),
-            name: name.clone(),
-            is_admin,
-            is_editor,
+            user_id: params.user_id.clone(),
+            provider: params.provider.clone(),
+            email: params.email.clone(),
+            name: params.name.clone(),
+            is_admin: params.is_admin,
+            is_editor: params.is_editor,
             created_at: now,
             last_access: now,
             expires_at,
             fingerprint: SessionFingerprint::new(
-                ip_addr.clone(),
-                &user_agent,
+                params.ip_addr.clone(),
+                &params.user_agent,
                 self.strict_ip_validation,
             ),
         };
@@ -253,16 +260,16 @@ impl SecureSessionManager {
                 SecurityEvent::new(
                     SecurityEventType::AuthenticationSuccess,
                     SecuritySeverity::Low,
-                    Some(user_id.clone()),
+                    Some(params.user_id.clone()),
                 )
-                .with_detail("provider", &provider)
-                .with_detail("ip_address", &ip_addr),
+                .with_detail("provider", &params.provider)
+                .with_detail("ip_address", &params.ip_addr),
             )
             .await;
 
         info!(
             "Created session for user {} (provider: {})",
-            user_id, provider
+            params.user_id, params.provider
         );
 
         Ok(SessionToken { token, expires_at })
@@ -488,19 +495,18 @@ mod tests {
     async fn test_create_and_validate_session() {
         let manager = create_test_manager();
 
-        let token = manager
-            .create_session(
-                "user123".to_string(),
-                "google".to_string(),
-                Some("user@example.com".to_string()),
-                Some("Test User".to_string()),
-                false,
-                false,
-                "192.168.1.1".to_string(),
-                "Mozilla/5.0".to_string(),
-            )
-            .await
-            .unwrap();
+        let params = CreateSessionParams {
+            user_id: "user123".to_string(),
+            provider: "google".to_string(),
+            email: Some("user@example.com".to_string()),
+            name: Some("Test User".to_string()),
+            is_admin: false,
+            is_editor: false,
+            ip_addr: "192.168.1.1".to_string(),
+            user_agent: "Mozilla/5.0".to_string(),
+        };
+
+        let token = manager.create_session(params).await.unwrap();
 
         let session = manager
             .validate_session(&token.token, "192.168.1.1", "Mozilla/5.0")
@@ -517,19 +523,18 @@ mod tests {
     async fn test_session_fingerprint_validation() {
         let manager = create_test_manager();
 
-        let token = manager
-            .create_session(
-                "user123".to_string(),
-                "google".to_string(),
-                None,
-                None,
-                false,
-                false,
-                "192.168.1.1".to_string(),
-                "Mozilla/5.0".to_string(),
-            )
-            .await
-            .unwrap();
+        let params = CreateSessionParams {
+            user_id: "user123".to_string(),
+            provider: "google".to_string(),
+            email: None,
+            name: None,
+            is_admin: false,
+            is_editor: false,
+            ip_addr: "192.168.1.1".to_string(),
+            user_agent: "Mozilla/5.0".to_string(),
+        };
+
+        let token = manager.create_session(params).await.unwrap();
 
         // Different user agent should fail
         let result = manager
@@ -546,19 +551,17 @@ mod tests {
 
             // Create 4 sessions (limit is 3)
             for _i in 0..4 {
-                manager
-                    .create_session(
-                        "user123".to_string(),
-                        "google".to_string(),
-                        None,
-                        None,
-                        false,
-                        false,
-                        "192.168.1.1".to_string(),
-                        "Mozilla/5.0".to_string(),
-                    )
-                    .await
-                    .unwrap();
+                let params = CreateSessionParams {
+                    user_id: "user123".to_string(),
+                    provider: "google".to_string(),
+                    email: None,
+                    name: None,
+                    is_admin: false,
+                    is_editor: false,
+                    ip_addr: "192.168.1.1".to_string(),
+                    user_agent: "Mozilla/5.0".to_string(),
+                };
+                manager.create_session(params).await.unwrap();
             }
 
             let count = manager.get_user_session_count("user123").await;
@@ -576,21 +579,20 @@ mod tests {
     async fn test_session_invalidation() {
         let manager = create_test_manager();
 
-        let token = manager
-            .create_session(
-                "user123".to_string(),
-                "google".to_string(),
-                None,
-                None,
-                false,
-                false,
-                "192.168.1.1".to_string(),
-                "Mozilla/5.0".to_string(),
-            )
-            .await
-            .unwrap();
+        let params = CreateSessionParams {
+            user_id: "user123".to_string(),
+            provider: "google".to_string(),
+            email: None,
+            name: None,
+            is_admin: false,
+            is_editor: false,
+            ip_addr: "192.168.1.1".to_string(),
+            user_agent: "Mozilla/5.0".to_string(),
+        };
 
-        manager.invalidate_session(&token.token).await.unwrap();
+        let token = manager.create_session(params).await.unwrap();
+
+        // Validate session exists
 
         let result = manager
             .validate_session(&token.token, "192.168.1.1", "Mozilla/5.0")

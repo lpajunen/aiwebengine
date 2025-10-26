@@ -766,7 +766,7 @@ impl SecureGlobalContext {
         let secrets_manager = self
             .secrets_manager
             .clone()
-            .or_else(|| crate::secrets::get_global_secrets_manager());
+            .or_else(crate::secrets::get_global_secrets_manager);
 
         // Create the Secrets namespace object
         let secrets_obj = rquickjs::Object::new(ctx.clone())?;

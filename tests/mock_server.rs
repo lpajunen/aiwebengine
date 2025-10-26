@@ -195,10 +195,10 @@ async fn handle_response_headers(
 
     // Add any query parameters as response headers
     for (key, value) in params {
-        if let Ok(header_value) = header::HeaderValue::from_str(&value) {
-            if let Ok(header_name) = header::HeaderName::from_bytes(key.as_bytes()) {
-                response_headers.insert(header_name, header_value);
-            }
+        if let Ok(header_value) = header::HeaderValue::from_str(&value)
+            && let Ok(header_name) = header::HeaderName::from_bytes(key.as_bytes())
+        {
+            response_headers.insert(header_name, header_value);
         }
     }
 
@@ -246,7 +246,7 @@ mod tests {
 
         // Test that we can make a request
         let client = reqwest::Client::new();
-        let response = client.get(&server.url("/get")).send().await.unwrap();
+        let response = client.get(server.url("/get")).send().await.unwrap();
 
         assert_eq!(response.status(), 200);
         server.shutdown().await;
@@ -258,7 +258,7 @@ mod tests {
 
         let client = reqwest::Client::new();
         let response = client
-            .post(&server.url("/post"))
+            .post(server.url("/post"))
             .json(&json!({"test": "data"}))
             .send()
             .await
@@ -276,7 +276,7 @@ mod tests {
         let server = MockServer::start().await.unwrap();
 
         let client = reqwest::Client::new();
-        let response = client.get(&server.url("/status/404")).send().await.unwrap();
+        let response = client.get(server.url("/status/404")).send().await.unwrap();
 
         assert_eq!(response.status(), 404);
         server.shutdown().await;

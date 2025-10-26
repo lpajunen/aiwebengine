@@ -1004,10 +1004,10 @@ pub async fn start_server_with_config(
 
                 // Add custom headers from JavaScript response
                 for (name, value) in js_response.headers {
-                    if let Ok(header_name) = axum::http::HeaderName::from_bytes(name.as_bytes()) {
-                        if let Ok(header_value) = axum::http::HeaderValue::from_str(&value) {
-                            response.headers_mut().insert(header_name, header_value);
-                        }
+                    if let Ok(header_name) = axum::http::HeaderName::from_bytes(name.as_bytes())
+                        && let Ok(header_value) = axum::http::HeaderValue::from_str(&value)
+                    {
+                        response.headers_mut().insert(header_name, header_value);
                     }
                 }
 

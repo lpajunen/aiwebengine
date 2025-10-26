@@ -96,7 +96,7 @@ impl HttpClient {
         // Build request
         let timeout = options
             .timeout_ms
-            .map(|ms| Duration::from_millis(ms))
+            .map(Duration::from_millis)
             .unwrap_or(self.default_timeout);
 
         let mut request = self
@@ -145,13 +145,13 @@ impl HttpClient {
         }
 
         // Check for IP addresses
-        if let Ok(ip) = IpAddr::from_str(host) {
-            if Self::is_private_ip(&ip) {
-                return Err(HttpError::BlockedUrl(format!(
-                    "Private IP address not allowed: {}",
-                    ip
-                )));
-            }
+        if let Ok(ip) = IpAddr::from_str(host)
+            && Self::is_private_ip(&ip)
+        {
+            return Err(HttpError::BlockedUrl(format!(
+                "Private IP address not allowed: {}",
+                ip
+            )));
         }
 
         // Check for internal domains (optional, can be extended)
@@ -224,8 +224,8 @@ impl HttpClient {
                         .trim();
 
                     // Get secrets manager
-                    let secrets_manager = get_global_secrets_manager()
-                        .ok_or_else(|| HttpError::SecretsNotInitialized)?;
+                    let secrets_manager =
+                        get_global_secrets_manager().ok_or(HttpError::SecretsNotInitialized)?;
 
                     // Look up secret
                     let secret_value = secrets_manager
@@ -276,10 +276,10 @@ impl HttpClient {
         }
 
         // Check content length
-        if let Some(content_length) = response.content_length() {
-            if content_length > self.max_response_size as u64 {
-                return Err(HttpError::ResponseTooLarge(content_length));
-            }
+        if let Some(content_length) = response.content_length()
+            && content_length > self.max_response_size as u64
+        {
+            return Err(HttpError::ResponseTooLarge(content_length));
         }
 
         // Get response body

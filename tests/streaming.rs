@@ -12,7 +12,6 @@ mod common;
 
 use aiwebengine::{
     js_engine, repository, script_init,
-    stream_manager::StreamConnectionManager,
     stream_registry::{BroadcastResult, GLOBAL_STREAM_REGISTRY, StreamConnection, StreamRegistry},
 };
 use common::{TestContext, wait_for_server};
