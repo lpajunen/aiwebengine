@@ -53,23 +53,23 @@ pub fn register_script(path: &str, content: &str) -> Result<(), SecurityError> {
     if path.contains("..") {
         return Err(SecurityError::PathTraversal);
     }
-    
+
     if !path.starts_with('/') {
         return Err(SecurityError::InvalidPath);
     }
-    
+
     if path.len() > MAX_PATH_LENGTH {
         return Err(SecurityError::PathTooLong);
     }
-    
+
     // Validate content
     if content.len() > MAX_SCRIPT_SIZE {
         return Err(SecurityError::ScriptTooLarge);
     }
-    
+
     // Check for dangerous patterns
     validate_script_content(content)?;
-    
+
     Ok(())
 }
 ```
@@ -94,7 +94,7 @@ pub fn register_script(path: &str, content: &str) -> Result<(), Error> {
 - [ ] **String Input Validation**
   - [ ] Length limits checked
   - [ ] Character set restrictions
-  - [ ] No dangerous patterns (eval, __proto__)
+  - [ ] No dangerous patterns (eval, **proto**)
   - [ ] Proper encoding/escaping
 
 - [ ] **Numeric Input Validation**
@@ -123,7 +123,7 @@ pub async fn protected_handler(
 ) -> Result<Response, Error> {
     // User context automatically injected by middleware
     // Only authenticated users reach this handler
-    
+
     process_authenticated_request(user, request).await
 }
 ```
@@ -147,13 +147,13 @@ pub fn delete_script(user: &UserContext, script_id: &str) -> Result<(), Error> {
     if !user.has_capability(Capability::WriteScripts) {
         return Err(Error::PermissionDenied);
     }
-    
+
     // Additional check: user owns the script
     let script = repository.get_script(script_id)?;
     if script.owner_id != user.id && !user.is_admin() {
         return Err(Error::PermissionDenied);
     }
-    
+
     repository.delete_script(script_id)
 }
 ```
@@ -199,11 +199,11 @@ pub fn delete_script(script_id: &str) -> Result<(), Error> {
 pub fn load_config() -> Result<AppConfig, ConfigError> {
     let jwt_secret = std::env::var("JWT_SECRET")
         .map_err(|_| ConfigError::MissingSecret("JWT_SECRET"))?;
-    
+
     if jwt_secret.len() < 32 {
         return Err(ConfigError::WeakSecret("JWT_SECRET must be at least 32 characters"));
     }
-    
+
     Ok(AppConfig {
         jwt_secret,
         // ...
@@ -376,9 +376,9 @@ pub async fn delete_script_handler(
         .get("X-CSRF-Token")
         .and_then(|v| v.to_str().ok())
         .ok_or(Error::MissingCsrfToken)?;
-    
+
     csrf_protection.validate_token(&csrf_token, &user.session_id)?;
-    
+
     // Proceed with deletion
     delete_script(&user, &script_id)
 }
@@ -413,7 +413,7 @@ pub async fn login_handler(
     if !rate_limiter.check_rate_limit(&addr.ip().to_string()).await {
         return Err(Error::RateLimitExceeded);
     }
-    
+
     // Process login
     authenticate(body.username, body.password).await
 }
@@ -448,11 +448,11 @@ pub async fn login_handler(
 pub fn authenticate(username: &str, password: &str) -> Result<User, AuthError> {
     let user = repository.find_user_by_username(username)
         .map_err(|_| AuthError::InvalidCredentials)?; // Generic error
-    
+
     if !verify_password(password, &user.password_hash) {
         return Err(AuthError::InvalidCredentials); // Same error
     }
-    
+
     Ok(user)
 }
 
@@ -472,11 +472,11 @@ impl Display for AuthError {
 pub fn authenticate(username: &str, password: &str) -> Result<User, AuthError> {
     let user = repository.find_user_by_username(username)
         .ok_or(AuthError::UserNotFound)?; // Leaks existence!
-    
+
     if !verify_password(password, &user.password_hash) {
         return Err(AuthError::WrongPassword); // Different error!
     }
-    
+
     Ok(user)
 }
 ```
@@ -513,12 +513,12 @@ use rand::RngCore;
 pub fn hash_password(password: &str) -> Result<String, CryptoError> {
     let mut salt = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut salt);
-    
+
     let argon2 = Argon2::default();
     let hash = argon2
         .hash_password(password.as_bytes(), &salt)
         .map_err(|e| CryptoError::HashingFailed(e.to_string()))?;
-    
+
     Ok(hash.to_string())
 }
 ```
@@ -596,7 +596,7 @@ fn test_path_traversal_prevention() {
         "../../config",
         "./../../secrets",
     ];
-    
+
     for path in malicious_paths {
         let result = validate_path(path);
         assert!(result.is_err());
@@ -611,7 +611,7 @@ fn test_xss_prevention() {
         "<img src=x onerror=alert('xss')>",
         "javascript:alert('xss')",
     ];
-    
+
     for payload in xss_payloads {
         let output = generate_html_output(payload);
         assert!(!output.contains("<script"));
@@ -623,11 +623,11 @@ fn test_xss_prevention() {
 #[tokio::test]
 async fn test_authentication_required() {
     let app = create_test_app().await;
-    
+
     // Without auth
     let response = app.get("/protected").send().await;
     assert_eq!(response.status(), 401);
-    
+
     // With auth
     let token = create_valid_token();
     let response = app

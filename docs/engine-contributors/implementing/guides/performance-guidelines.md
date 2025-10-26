@@ -23,13 +23,13 @@ This guide covers performance best practices for aiwebengine development. While 
 
 ### Response Time Goals
 
-| Endpoint Type | Target | Maximum |
-|--------------|--------|---------|
-| Health checks | <10ms | 50ms |
-| Static files | <50ms | 200ms |
-| Script registration | <100ms | 500ms |
-| Script execution | <200ms | 2s |
-| GraphQL queries | <100ms | 1s |
+| Endpoint Type       | Target | Maximum |
+| ------------------- | ------ | ------- |
+| Health checks       | <10ms  | 50ms    |
+| Static files        | <50ms  | 200ms   |
+| Script registration | <100ms | 500ms   |
+| Script execution    | <200ms | 2s      |
+| GraphQL queries     | <100ms | 1s      |
 
 ### Resource Limits
 
@@ -89,10 +89,10 @@ pub async fn calculate_hash(data: Vec<u8>) -> Result<String, TaskError> {
 pub async fn process_request() -> Response {
     // NEVER do this - blocks async runtime!
     std::thread::sleep(Duration::from_secs(1));
-    
+
     // Also bad - synchronous I/O
     let data = std::fs::read_to_string("file.txt").unwrap();
-    
+
     Response::ok()
 }
 ```
@@ -103,10 +103,10 @@ pub async fn process_request() -> Response {
 pub async fn process_request() -> Response {
     // Use async sleep
     tokio::time::sleep(Duration::from_secs(1)).await;
-    
+
     // Use async I/O
     let data = tokio::fs::read_to_string("file.txt").await.unwrap();
-    
+
     Response::ok()
 }
 ```
@@ -122,13 +122,13 @@ pub async fn load_all_configs() -> Result<Vec<Config>, Error> {
         "config2.toml",
         "config3.toml",
     ];
-    
+
     // Load concurrently
     let futures: Vec<_> = config_paths
         .iter()
         .map(|path| load_config(path))
         .collect();
-    
+
     // Wait for all
     let results = futures::future::try_join_all(futures).await?;
     Ok(results)
@@ -140,12 +140,12 @@ pub async fn load_all_configs() -> Result<Vec<Config>, Error> {
 ```rust
 pub async fn load_all_configs() -> Result<Vec<Config>, Error> {
     let mut configs = Vec::new();
-    
+
     // Loads one at a time - slow!
     configs.push(load_config("config1.toml").await?);
     configs.push(load_config("config2.toml").await?);
     configs.push(load_config("config3.toml").await?);
-    
+
     Ok(configs)
 }
 ```
@@ -189,7 +189,7 @@ pub fn process_items(items: Vec<Item>) -> Vec<Item> {
     let valid: Vec<Item> = items.into_iter()
         .filter(|item| item.is_valid())
         .collect();
-    
+
     // Creates another new vector
     let mut sorted = valid.clone();
     sorted.sort_by_key(|item| item.priority);
@@ -223,12 +223,12 @@ pub fn normalize_path(path: &str) -> Cow<str> {
 pub fn build_large_string(items: &[Item]) -> String {
     let capacity = items.len() * 50; // Estimate
     let mut result = String::with_capacity(capacity);
-    
+
     for item in items {
         result.push_str(&item.name);
         result.push(',');
     }
-    
+
     result
 }
 ```
@@ -238,12 +238,12 @@ pub fn build_large_string(items: &[Item]) -> String {
 ```rust
 pub fn build_large_string(items: &[Item]) -> String {
     let mut result = String::new(); // Starts empty, reallocates repeatedly
-    
+
     for item in items {
         result.push_str(&item.name);
         result.push(',');
     }
-    
+
     result
 }
 ```
@@ -300,11 +300,11 @@ if seen.contains(&key) { /* O(n) - slow! */ }
 ```rust
 pub fn process_batch(count: usize) -> Vec<Result> {
     let mut results = Vec::with_capacity(count);
-    
+
     for i in 0..count {
         results.push(process_item(i));
     }
-    
+
     results
 }
 ```
@@ -335,16 +335,16 @@ impl ScriptCache {
                 return Ok(script.clone());
             }
         }
-        
+
         // Compile (expensive)
         let script = compile_script(path).await?;
-        
+
         // Write lock to store
         {
             let mut cache = self.compiled.write().await;
             cache.insert(path.to_string(), script.clone());
         }
-        
+
         Ok(script)
     }
 }
@@ -368,7 +368,7 @@ impl ScriptCache {
     pub async fn get_or_compile(&self, path: &Path) -> Result<CompiledScript, Error> {
         let metadata = tokio::fs::metadata(path).await?;
         let modified = metadata.modified()?;
-        
+
         // Check cache with freshness validation
         {
             let cache = self.compiled.read().await;
@@ -378,10 +378,10 @@ impl ScriptCache {
                 }
             }
         }
-        
+
         // Compile and cache
         let script = compile_script(path).await?;
-        
+
         {
             let mut cache = self.compiled.write().await;
             cache.insert(
@@ -392,7 +392,7 @@ impl ScriptCache {
                 },
             );
         }
-        
+
         Ok(script)
     }
 }
@@ -519,17 +519,17 @@ pub fn sum_values(items: &[Item]) -> i32 {
 pub fn sum_values(items: &[Item]) -> i32 {
     let mut sum = 0;
     let mut active = Vec::new();
-    
+
     for item in items {
         if item.is_active {
             active.push(item);
         }
     }
-    
+
     for item in active {
         sum += item.value;
     }
-    
+
     sum
 }
 ```
@@ -561,7 +561,7 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 fn benchmark_script_compilation(c: &mut Criterion) {
     let script = load_test_script();
-    
+
     c.bench_function("compile script", |b| {
         b.iter(|| compile_script(black_box(&script)))
     });

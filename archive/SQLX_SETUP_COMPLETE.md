@@ -5,10 +5,12 @@ SQLx has been successfully integrated into AIWebEngine for PostgreSQL database s
 ## What Was Added
 
 ### 1. Dependencies (`Cargo.toml`)
+
 - **sqlx** v0.8 with PostgreSQL, migrations, UUID, and chrono support
 - Features: `runtime-tokio`, `postgres`, `migrate`, `uuid`, `chrono`
 
 ### 2. Database Module (`src/database.rs`)
+
 - `Database` struct for connection pool management
 - `init_database()` - Initialize connection with optional auto-migration
 - `migrate()` - Run database migrations
@@ -17,30 +19,36 @@ SQLx has been successfully integrated into AIWebEngine for PostgreSQL database s
 - Full async/await support
 
 ### 3. Database Schema (`migrations/`)
+
 Five initial migrations created:
 
 **20241024000001_create_scripts.sql**
+
 - Stores JavaScript scripts
 - Tracks initialization status and errors
 - Indexed on URI and creation date
 
 **20241024000002_create_assets.sql**
+
 - Stores static assets (CSS, JS, images)
 - Binary content storage
 - Indexed on public path and mimetype
 
 **20241024000003_create_logs.sql**
+
 - Stores script execution logs
 - Time-series log data
 - Indexed for efficient filtering by script and time
 
 **20241024000004_create_users.sql**
+
 - Stores user accounts and authentication data
 - OAuth provider integration
 - Role-based access control (admin, editor)
 - Indexed on email, user_id, and roles
 
 **20241024000005_create_sessions.sql**
+
 - Stores user sessions with JSONB data
 - Session expiration tracking
 - Indexed for fast session lookups and cleanup
@@ -48,6 +56,7 @@ Five initial migrations created:
 ### 4. Configuration Updates
 
 **`.env.example`** - Added database variables:
+
 ```bash
 APP_REPOSITORY__DATABASE_URL=postgresql://user:pass@host:port/db
 APP_REPOSITORY__MAX_CONNECTIONS=5
@@ -87,16 +96,19 @@ source .env
 ### 3. Run Migrations
 
 **Option A: Automatic (Development)**
+
 ```toml
 # config.toml
 [repository]
 auto_migrate = true
 ```
+
 ```bash
 cargo run  # Migrations run automatically
 ```
 
 **Option B: Manual (Production)**
+
 ```bash
 sqlx migrate run
 cargo run
@@ -204,6 +216,7 @@ export APP_REPOSITORY__AUTO_MIGRATE=false
 ## Integration Status
 
 ✅ **Completed:**
+
 - SQLx dependency added
 - Database module created
 - Initial schema migrations designed
@@ -212,6 +225,7 @@ export APP_REPOSITORY__AUTO_MIGRATE=false
 - Compilation verified
 
 🔄 **Next Steps:**
+
 - Connect database to repository layer
 - Implement database-backed repository
 - Add database queries for CRUD operations
@@ -258,24 +272,28 @@ pg_restore -d aiwebengine backup.dump
 ## Troubleshooting
 
 **Connection refused:**
+
 ```bash
 pg_isready
 brew services start postgresql@15  # macOS
 ```
 
 **Role/database does not exist:**
+
 ```bash
 createuser -P aiwebengine
 createdb aiwebengine
 ```
 
 **Migration errors:**
+
 ```bash
 sqlx migrate info
 psql aiwebengine -c "SELECT * FROM _sqlx_migrations;"
 ```
 
 **Compile errors:**
+
 ```bash
 cargo sqlx prepare  # Generate offline query data
 ```
@@ -295,6 +313,7 @@ cargo sqlx prepare  # Generate offline query data
 ## Summary
 
 SQLx is now fully integrated and ready to use! The foundation is in place:
+
 - ✅ Dependencies installed
 - ✅ Database module created
 - ✅ Schema migrations ready

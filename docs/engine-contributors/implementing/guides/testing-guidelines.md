@@ -68,7 +68,7 @@ We follow the testing pyramid approach:
 fn test_request_id_generation_creates_unique_ids() {
     let id1 = generate_request_id();
     let id2 = generate_request_id();
-    
+
     assert_ne!(id1, id2);
     assert!(id1.starts_with("req_"));
 }
@@ -90,26 +90,26 @@ fn test_request_id_generation_creates_unique_ids() {
 #[tokio::test]
 async fn test_authentication_flow_with_valid_credentials() {
     let app = create_test_app().await;
-    
+
     // Login
     let login_response = app
         .post("/auth/login")
         .json(&json!({"username": "test", "password": "pass"}))
         .send()
         .await;
-    
+
     assert_eq!(login_response.status(), 200);
-    
+
     // Extract session token
     let token = login_response.cookie("session_token").unwrap();
-    
+
     // Access protected resource
     let protected_response = app
         .get("/protected")
         .cookie(token)
         .send()
         .await;
-    
+
     assert_eq!(protected_response.status(), 200);
 }
 ```
@@ -142,14 +142,14 @@ async fn test_complete_user_journey_from_registration_to_api_call() {
 
 **For new code:**
 
-- >90% line coverage
-- >95% function coverage
+- > 90% line coverage
+- > 95% function coverage
 - 100% critical path coverage
 
 **For overall codebase:**
 
-- >80% line coverage
-- >85% function coverage
+- > 80% line coverage
+- > 85% function coverage
 
 ### How to Measure
 
@@ -216,10 +216,10 @@ fn test_session_manager_creates_valid_session() {
         secret: "test_secret".to_string(),
     };
     let manager = SessionManager::new(config);
-    
+
     // Act - Execute the behavior being tested
     let result = manager.create_session("user123");
-    
+
     // Assert - Verify the outcome
     assert!(result.is_ok());
     let session = result.unwrap();
@@ -238,10 +238,10 @@ fn test_session_manager_creates_valid_session() {
 pub enum ValidationError {
     #[error("Empty input")]
     EmptyInput,
-    
+
     #[error("Too long: {length}")]
     TooLong { length: usize },
-    
+
     #[error("Invalid format")]
     InvalidFormat,
 }
@@ -257,7 +257,7 @@ fn test_validate_with_empty_input_returns_empty_input_error() {
 fn test_validate_with_long_input_returns_too_long_error() {
     let long_input = "x".repeat(1001);
     let result = validate(&long_input);
-    
+
     match result {
         Err(ValidationError::TooLong { length }) => {
             assert_eq!(length, 1001);
@@ -288,7 +288,7 @@ async fn test_async_timeout() {
         Duration::from_millis(100),
         slow_async_function()
     ).await;
-    
+
     assert!(result.is_err()); // Should timeout
 }
 ```
@@ -308,7 +308,7 @@ fn test_email_validation_with_various_formats() {
         ("", false),
         ("user+tag@example.com", true),
     ];
-    
+
     for (email, should_be_valid) in test_cases {
         let result = validate_email(email);
         assert_eq!(
@@ -385,24 +385,24 @@ If using a database:
 async fn test_user_repository_crud() {
     let db = create_test_database().await;
     let repo = UserRepository::new(db);
-    
+
     // Create
     let user = repo.create_user("test@example.com").await.unwrap();
-    
+
     // Read
     let found = repo.find_user(&user.id).await.unwrap();
     assert_eq!(found.email, "test@example.com");
-    
+
     // Update
     repo.update_user(&user.id, "new@example.com").await.unwrap();
     let updated = repo.find_user(&user.id).await.unwrap();
     assert_eq!(updated.email, "new@example.com");
-    
+
     // Delete
     repo.delete_user(&user.id).await.unwrap();
     let deleted = repo.find_user(&user.id).await;
     assert!(deleted.is_none());
-    
+
     cleanup_test_database(db).await;
 }
 ```
@@ -423,7 +423,7 @@ pub trait HttpClient: Send + Sync {
 #[tokio::test]
 async fn test_service_with_mocked_http_client() {
     let mut mock_client = MockHttpClient::new();
-    
+
     mock_client
         .expect_get()
         .with(eq("https://api.example.com/data"))
@@ -432,10 +432,10 @@ async fn test_service_with_mocked_http_client() {
             status: 200,
             body: "test data".to_string(),
         }));
-    
+
     let service = MyService::new(Box::new(mock_client));
     let result = service.fetch_data().await;
-    
+
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), "test data");
 }
@@ -457,7 +457,7 @@ fn test_script_registration_rejects_path_traversal() {
         "../../secret",
         "./../../config",
     ];
-    
+
     for path in malicious_paths {
         let result = register_script(path, "content");
         assert!(result.is_err());
@@ -472,7 +472,7 @@ fn test_script_content_rejects_dangerous_patterns() {
         "__proto__.pollute = true",
         "require('fs')",
     ];
-    
+
     for pattern in dangerous_patterns {
         let result = validate_script_content(pattern);
         assert!(result.is_err());
@@ -486,11 +486,11 @@ fn test_script_content_rejects_dangerous_patterns() {
 #[tokio::test]
 async fn test_protected_endpoint_requires_authentication() {
     let app = create_test_app().await;
-    
+
     // Without auth
     let response = app.get("/protected").send().await;
     assert_eq!(response.status(), 401);
-    
+
     // With invalid token
     let response = app
         .get("/protected")
@@ -498,7 +498,7 @@ async fn test_protected_endpoint_requires_authentication() {
         .send()
         .await;
     assert_eq!(response.status(), 401);
-    
+
     // With valid token
     let token = create_valid_token();
     let response = app
@@ -521,21 +521,21 @@ async fn test_protected_endpoint_requires_authentication() {
 mod benchmarks {
     use super::*;
     use std::time::Instant;
-    
+
     #[test]
     fn benchmark_script_execution() {
         let script = "function test() { return 42; }";
         let iterations = 1000;
-        
+
         let start = Instant::now();
         for _ in 0..iterations {
             let _ = execute_script(script);
         }
         let duration = start.elapsed();
-        
+
         let avg_ms = duration.as_millis() / iterations;
         println!("Average execution time: {}ms", avg_ms);
-        
+
         // Assert performance requirement
         assert!(avg_ms < 10, "Script execution too slow: {}ms", avg_ms);
     }
@@ -549,7 +549,7 @@ mod benchmarks {
 async fn test_concurrent_requests() {
     let app = create_test_app().await;
     let concurrent_requests = 100;
-    
+
     let mut handles = vec![];
     for i in 0..concurrent_requests {
         let app_clone = app.clone();
@@ -561,10 +561,10 @@ async fn test_concurrent_requests() {
         });
         handles.push(handle);
     }
-    
+
     // Wait for all requests
     let results = futures::future::join_all(handles).await;
-    
+
     // All should succeed
     for result in results {
         let response = result.unwrap();
@@ -604,7 +604,7 @@ impl TestData {
             sessions: vec![],
         }
     }
-    
+
     pub fn user_by_email(&self, email: &str) -> Option<&User> {
         self.users.iter().find(|u| u.email == email)
     }
@@ -630,17 +630,17 @@ impl UserBuilder {
             roles: vec!["user".to_string()],
         }
     }
-    
+
     pub fn with_email(mut self, email: &str) -> Self {
         self.email = email.to_string();
         self
     }
-    
+
     pub fn with_role(mut self, role: &str) -> Self {
         self.roles.push(role.to_string());
         self
     }
-    
+
     pub fn build(self) -> User {
         User {
             id: self.id,
@@ -658,7 +658,7 @@ fn test_with_admin_user() {
         .with_email("admin@example.com")
         .with_role("admin")
         .build();
-    
+
     assert!(admin.roles.contains(&"admin".to_string()));
 }
 ```
@@ -674,7 +674,7 @@ fn test_with_admin_user() {
 fn test_concurrent_access_to_shared_state() {
     let state = Arc::new(Mutex::new(0));
     let mut handles = vec![];
-    
+
     for _ in 0..10 {
         let state_clone = state.clone();
         let handle = std::thread::spawn(move || {
@@ -683,11 +683,11 @@ fn test_concurrent_access_to_shared_state() {
         });
         handles.push(handle);
     }
-    
+
     for handle in handles {
         handle.join().unwrap();
     }
-    
+
     assert_eq!(*state.lock().unwrap(), 10);
 }
 ```
@@ -700,7 +700,7 @@ fn test_error_propagation_through_layers() {
     // Service layer error should propagate to handler
     let error = DatabaseError::NotFound;
     let service_result = service_function(error);
-    
+
     assert!(matches!(
         service_result,
         Err(ServiceError::Database(DatabaseError::NotFound))
@@ -715,11 +715,11 @@ fn test_error_propagation_through_layers() {
 fn test_resource_cleanup_on_drop() {
     let temp_file = create_temp_file();
     let path = temp_file.path().to_path_buf();
-    
+
     assert!(path.exists());
-    
+
     drop(temp_file);
-    
+
     assert!(!path.exists(), "File should be deleted on drop");
 }
 ```
@@ -798,10 +798,10 @@ jobs:
 #[test]
 fn test_with_debug_output() {
     let result = complex_function();
-    
+
     // Debug output only shows with --nocapture
     println!("Result: {:?}", result);
-    
+
     assert!(result.is_ok());
 }
 ```
@@ -838,7 +838,7 @@ Before submitting code:
 - [ ] All public functions tested
 - [ ] All error paths tested
 - [ ] Edge cases covered
-- [ ] >90% coverage achieved
+- [ ] > 90% coverage achieved
 
 ### Integration Tests
 

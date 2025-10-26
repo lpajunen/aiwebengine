@@ -161,6 +161,8 @@ pub struct RepositoryConfig {
     pub storage_type: String,
 
     /// Database connection string (for non-memory storage)
+    /// Specified as 'database_url' in config files and APP_REPOSITORY__DATABASE_URL in env
+    #[serde(rename = "database_url")]
     pub connection_string: Option<String>,
 
     /// Maximum script size in bytes
@@ -336,13 +338,86 @@ impl AppConfig {
     /// 3. Config file (TOML, YAML, JSON5, etc.)
     /// 4. Default values
     pub fn load() -> Result<Self, anyhow::Error> {
-        let config: Self = Figment::new()
+        use tracing::debug;
+
+        // Check if config.toml exists
+        let config_toml_exists = std::path::Path::new("config.toml").exists();
+        eprintln!("config.toml exists: {}", config_toml_exists);
+
+        // Log environment variables for debugging
+        debug!("Loading configuration...");
+        for (key, value) in std::env::vars() {
+            if key.starts_with("APP_") {
+                // Sanitize database URLs in logs
+                let safe_value = if key.contains("DATABASE") || key.contains("CONNECTION") {
+                    if let Some(at_pos) = value.find('@') {
+                        let before_at = &value[..at_pos];
+                        let after_at = &value[at_pos..];
+                        if let Some(colon_pos) = before_at.rfind(':') {
+                            format!("{}:****{}", &before_at[..colon_pos], after_at)
+                        } else {
+                            value.clone()
+                        }
+                    } else {
+                        value.clone()
+                    }
+                } else if key.contains("SECRET") {
+                    "****".to_string()
+                } else {
+                    value.clone()
+                };
+                eprintln!("Found env var: {} = {}", key, safe_value);
+            }
+        }
+
+        let figment = Figment::new()
             .merge(Serialized::defaults(Self::default()))
-            .merge(Toml::file("config.toml"))
+            .merge(Toml::file("config.toml"));
+
+        // Debug: print what we have so far
+        if config_toml_exists {
+            if let Ok(partial_config) = figment.clone().extract::<Self>() {
+                eprintln!(
+                    "After loading config.toml - storage_type: {}",
+                    partial_config.repository.storage_type
+                );
+                eprintln!(
+                    "After loading config.toml - connection_string: {:?}",
+                    partial_config
+                        .repository
+                        .connection_string
+                        .as_ref()
+                        .map(|s| {
+                            if let Some(at_pos) = s.find('@') {
+                                let before_at = &s[..at_pos];
+                                let after_at = &s[at_pos..];
+                                if let Some(colon_pos) = before_at.rfind(':') {
+                                    format!("{}:****{}", &before_at[..colon_pos], after_at)
+                                } else {
+                                    s.clone()
+                                }
+                            } else {
+                                s.clone()
+                            }
+                        })
+                );
+            }
+        }
+
+        let config: Self = figment
             .merge(Yaml::file("config.yaml"))
             .merge(Yaml::file("config.yml"))
             .merge(Env::prefixed("APP_").split("__"))
             .extract()?;
+
+        eprintln!(
+            "Final config - storage_type: {}",
+            config.repository.storage_type
+        );
+        eprintln!(
+            "Final config - connection_string: {:?}",
+            config.repository.connection_string.as_ref().map(|s| "****")
+        );
 
         // Validate the configuration
         config.validate()?;

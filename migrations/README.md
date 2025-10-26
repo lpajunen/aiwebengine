@@ -17,6 +17,7 @@ Migrations are applied in sequential order by filename:
 ### Automatic (Development)
 
 Set in `config.toml`:
+
 ```toml
 [repository]
 auto_migrate = true

@@ -20,6 +20,7 @@ This directory contains helper scripts for managing the PostgreSQL database in D
 **Purpose:** First-time database setup automation
 
 **What it does:**
+
 1. Checks if Docker is running
 2. Installs SQLx CLI if needed
 3. Starts PostgreSQL container
@@ -27,11 +28,13 @@ This directory contains helper scripts for managing the PostgreSQL database in D
 5. Verifies the setup
 
 **Usage:**
+
 ```bash
 ./scripts/setup-database.sh
 ```
 
 **When to use:**
+
 - First time setting up the project
 - After cleaning Docker volumes
 - Setting up a new development environment
@@ -106,6 +109,7 @@ The script automatically determines which Docker Compose file to use:
 ```
 
 **Output:**
+
 ```
 Usage: ./scripts/db.sh [--prod|-p] <command> [args...]
 
@@ -227,7 +231,9 @@ docker-compose -f docker-compose.local.yml restart postgres-dev
 ## Container Configuration
 
 ### Local Development
+
 Defined in `docker-compose.local.yml`:
+
 ```yaml
 postgres-dev:
   image: postgres:16-alpine
@@ -241,7 +247,9 @@ postgres-dev:
 ```
 
 ### Production
+
 Defined in `docker-compose.yml`:
+
 ```yaml
 postgres:
   image: postgres:16-alpine
@@ -257,12 +265,14 @@ postgres:
 ## Tips
 
 1. **Always backup before migrations** in production:
+
    ```bash
    ./scripts/db.sh --prod backup before_migration.sql
    ./scripts/db.sh --prod migrate-run
    ```
 
 2. **Use psql for quick checks:**
+
    ```bash
    ./scripts/db.sh psql -c "\dt"           # List tables
    ./scripts/db.sh psql -c "\du"           # List users
@@ -271,6 +281,7 @@ postgres:
    ```
 
 3. **Monitor logs during development:**
+
    ```bash
    ./scripts/db.sh logs
    # Or follow logs:
@@ -289,22 +300,26 @@ postgres:
 ## Troubleshooting
 
 **Script reports container not running:**
+
 ```bash
 docker-compose -f docker-compose.local.yml up -d postgres-dev
 ```
 
 **Permission denied:**
+
 ```bash
 chmod +x scripts/db.sh
 chmod +x scripts/setup-database.sh
 ```
 
 **SQLx CLI not found:**
+
 ```bash
 cargo install sqlx-cli --no-default-features --features postgres
 ```
 
 **Can't connect to database:**
+
 ```bash
 # Check container health
 docker inspect aiwebengine-postgres-dev | grep Health

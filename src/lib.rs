@@ -417,7 +417,34 @@ pub async fn start_server_with_config(
 
     // Initialize database connection
     info!("Initializing database connection...");
-    match database::init_database(&config.repository, config.repository.storage_type == "postgresql").await {
+    info!(
+        "Repository config - storage_type: {}",
+        config.repository.storage_type
+    );
+    if let Some(ref conn_str) = config.repository.connection_string {
+        // Log sanitized connection string (hide password)
+        let safe_conn_str = if let Some(at_pos) = conn_str.find('@') {
+            let before_at = &conn_str[..at_pos];
+            let after_at = &conn_str[at_pos..];
+            if let Some(colon_pos) = before_at.rfind(':') {
+                format!("{}:****{}", &before_at[..colon_pos], after_at)
+            } else {
+                conn_str.clone()
+            }
+        } else {
+            conn_str.clone()
+        };
+        info!("Repository config - connection_string: {}", safe_conn_str);
+    } else {
+        warn!("Repository config - connection_string: None (not set!)");
+    }
+
+    match database::init_database(
+        &config.repository,
+        config.repository.storage_type == "postgresql",
+    )
+    .await
+    {
         Ok(db) => {
             let db_arc = std::sync::Arc::new(db);
             if database::initialize_global_database(db_arc) {
@@ -427,7 +454,10 @@ pub async fn start_server_with_config(
             }
         }
         Err(e) => {
-            warn!("Database initialization failed: {}. Continuing without database.", e);
+            warn!(
+                "Database initialization failed: {}. Continuing without database.",
+                e
+            );
             warn!("Health checks will report database as unavailable");
         }
     }

@@ -39,7 +39,9 @@ allowed_apis = ["fetch", "database", "logging", "filesystem"]
 [repository]
 # Use PostgreSQL for development (same as production/staging)
 database_type = "postgresql"
-database_url = "${APP_REPOSITORY_DATABASE_URL}"
+# Database URL is set via environment variable: APP_REPOSITORY__DATABASE_URL
+# The double underscore __ maps to the nested config: repository.database_url
+# Set in .env file or export directly: export APP_REPOSITORY__DATABASE_URL="postgresql://..."
 # Small connection limits for development
 max_connections = 5
 # Short timeout for development

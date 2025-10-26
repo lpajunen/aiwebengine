@@ -7,21 +7,21 @@ use tracing::{info, warn};
 use crate::config::RepositoryConfig;
 
 /// Global database instance
-/// 
+///
 /// This is initialized once during server startup and provides
 /// access to the database pool for health checks and queries.
 /// Access via `get_global_database()` function.
 static GLOBAL_DATABASE: OnceLock<Arc<Database>> = OnceLock::new();
 
 /// Get the global database instance
-/// 
+///
 /// Returns None if the database has not been initialized yet.
 pub fn get_global_database() -> Option<Arc<Database>> {
     GLOBAL_DATABASE.get().cloned()
 }
 
 /// Initialize the global database instance
-/// 
+///
 /// Returns true if successfully initialized, false if already set.
 pub fn initialize_global_database(database: Arc<Database>) -> bool {
     GLOBAL_DATABASE.set(database).is_ok()
@@ -40,7 +40,20 @@ impl Database {
             .as_ref()
             .context("Database connection string is required")?;
 
-        info!("Connecting to database...");
+        // Log connection attempt (hide password)
+        let safe_conn_string = if let Some(at_pos) = connection_string.find('@') {
+            let before_at = &connection_string[..at_pos];
+            let after_at = &connection_string[at_pos..];
+            if let Some(colon_pos) = before_at.rfind(':') {
+                format!("{}:****{}", &before_at[..colon_pos], after_at)
+            } else {
+                connection_string.clone()
+            }
+        } else {
+            connection_string.clone()
+        };
+
+        info!("Attempting to connect to database: {}", safe_conn_string);
 
         let pool = PgPoolOptions::new()
             .max_connections(5) // Default pool size
@@ -49,7 +62,8 @@ impl Database {
             .await
             .context("Failed to connect to database")?;
 
-        info!("Database connection established");
+        info!("✓ Database connection established successfully");
+        info!("✓ Connection pool created with max 5 connections");
 
         Ok(Self { pool })
     }
@@ -57,7 +71,7 @@ impl Database {
     /// Run database migrations
     pub async fn migrate(&self) -> Result<()> {
         info!("Running database migrations...");
-        
+
         sqlx::migrate!("./migrations")
             .run(&self.pool)
             .await
@@ -92,29 +106,29 @@ impl Database {
                     return serde_json::json!({
                         "healthy": false,
                         "error": format!("Failed to create runtime: {}", e)
-                    }).to_string();
+                    })
+                    .to_string();
                 }
             };
-            
+
             match rt.block_on(db.health_check()) {
-                Ok(()) => {
-                    serde_json::json!({
-                        "healthy": true,
-                        "database": "ok"
-                    }).to_string()
-                }
-                Err(e) => {
-                    serde_json::json!({
-                        "healthy": false,
-                        "error": format!("Database health check failed: {}", e)
-                    }).to_string()
-                }
+                Ok(()) => serde_json::json!({
+                    "healthy": true,
+                    "database": "ok"
+                })
+                .to_string(),
+                Err(e) => serde_json::json!({
+                    "healthy": false,
+                    "error": format!("Database health check failed: {}", e)
+                })
+                .to_string(),
             }
         } else {
             serde_json::json!({
                 "healthy": false,
                 "error": "Database not initialized"
-            }).to_string()
+            })
+            .to_string()
         }
     }
 
@@ -168,8 +182,6 @@ mod tests {
         };
 
         let db = Database::new(&config).await.expect("Failed to connect");
-        db.health_check()
-            .await
-            .expect("Health check failed");
+        db.health_check().await.expect("Health check failed");
     }
 }

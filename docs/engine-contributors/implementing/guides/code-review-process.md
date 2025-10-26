@@ -165,7 +165,7 @@ pub fn calculate_timeout(base: u64, multiplier: u64) -> Duration {
 pub fn read_config(path: &Path) -> Result<Config, ConfigError> {
     let contents = fs::read_to_string(path)
         .map_err(|e| ConfigError::ReadFailed(path.to_path_buf(), e))?;
-    
+
     toml::from_str(&contents)
         .map_err(|e| ConfigError::ParseFailed(path.to_path_buf(), e))
 }
@@ -227,22 +227,22 @@ pub fn validate_email(email: &str) -> Result<(), ValidationError> {
     if email.is_empty() {
         return Err(ValidationError::Empty);
     }
-    
+
     if !email.contains('@') {
         return Err(ValidationError::MissingAtSign);
     }
-    
+
     let parts: Vec<&str> = email.split('@').collect();
     if parts.len() != 2 {
         return Err(ValidationError::InvalidFormat);
     }
-    
+
     Ok(())
 }
 
 // ❌ BAD: Unclear logic
 pub fn validate_email(email: &str) -> Result<(), ValidationError> {
-    if email.is_empty() || !email.contains('@') 
+    if email.is_empty() || !email.contains('@')
         || email.split('@').collect::<Vec<_>>().len() != 2 {
         return Err(ValidationError::Invalid);
     }
@@ -343,13 +343,13 @@ pub fn register_script(
 pub enum ScriptError {
     #[error("Script not found: {0}")]
     NotFound(String),
-    
+
     #[error("Invalid script path: {path}")]
     InvalidPath { path: String },
-    
+
     #[error("Compilation failed: {0}")]
     CompilationFailed(String),
-    
+
     #[error("Repository error: {0}")]
     Repository(#[from] RepositoryError),
 }
@@ -377,24 +377,24 @@ pub enum ScriptError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_valid_email() {
         assert!(validate_email("user@example.com").is_ok());
     }
-    
+
     #[test]
     fn test_empty_email() {
         let result = validate_email("");
         assert!(matches!(result, Err(ValidationError::Empty)));
     }
-    
+
     #[test]
     fn test_missing_at_sign() {
         let result = validate_email("userexample.com");
         assert!(matches!(result, Err(ValidationError::MissingAtSign)));
     }
-    
+
     #[test]
     fn test_multiple_at_signs() {
         let result = validate_email("user@@example.com");
@@ -423,9 +423,9 @@ async fn test_script_registration_requires_authentication() {
         .path("/test.js")
         .content("console.log('test')")
         .build();
-    
+
     let result = service.register(script, None).await;
-    
+
     assert!(matches!(result, Err(ServiceError::Unauthenticated)));
 }
 
@@ -467,7 +467,7 @@ fn test_script_stuff() {
 
 **Are public APIs documented?**
 
-```rust
+````rust
 /// Registers a new script in the system.
 ///
 /// # Arguments
@@ -492,7 +492,7 @@ fn test_script_stuff() {
 ///     .path("/example.js")
 ///     .content("console.log('Hello')")
 ///     .build()?;
-///     
+///
 /// let registered = service.register(script, Some(user)).await?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// # }
@@ -504,7 +504,7 @@ pub async fn register(
 ) -> Result<Script, ServiceError> {
     // ...
 }
-```
+````
 
 **Reviewer Checks:**
 

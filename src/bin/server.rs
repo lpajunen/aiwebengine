@@ -34,6 +34,7 @@ async fn main() -> anyhow::Result<()> {
                 "Warning: Failed to load configuration: {}. Using defaults.",
                 e
             );
+            eprintln!("Error details: {:?}", e);
             AppConfig::default()
         })
     };

@@ -22,6 +22,7 @@ migrations/
 ### Current Schema
 
 **scripts** - Stores JavaScript scripts
+
 - `id` (UUID, primary key)
 - `uri` (TEXT, unique) - Script identifier
 - `code` (TEXT) - JavaScript code
@@ -31,6 +32,7 @@ migrations/
 - `last_init_time` (TIMESTAMPTZ, nullable)
 
 **assets** - Stores static assets
+
 - `id` (UUID, primary key)
 - `public_path` (TEXT, unique) - URL path
 - `mimetype` (TEXT) - Content type
@@ -38,12 +40,14 @@ migrations/
 - `created_at`, `updated_at` (TIMESTAMPTZ)
 
 **logs** - Stores script execution logs
+
 - `id` (UUID, primary key)
 - `script_uri` (TEXT) - Related script
 - `message` (TEXT) - Log entry
 - `created_at` (TIMESTAMPTZ)
 
 **users** - Stores user accounts
+
 - `id` (UUID, primary key)
 - `user_id` (TEXT, unique) - User identifier
 - `email` (TEXT, unique) - User email address
@@ -54,6 +58,7 @@ migrations/
 - `created_at`, `updated_at`, `last_login_at` (TIMESTAMPTZ)
 
 **sessions** - Stores user sessions
+
 - `id` (UUID, primary key)
 - `session_id` (TEXT, unique) - Session identifier
 - `user_id` (TEXT) - Related user
@@ -207,6 +212,7 @@ CREATE INDEX idx_users_email ON users(email);
 ```
 
 **Important:**
+
 - Use `IF NOT EXISTS` for idempotency
 - Include both schema changes and indexes
 - Use `TIMESTAMPTZ` for timestamps
@@ -396,6 +402,7 @@ git add .sqlx
 ## Production Workflow
 
 1. **Develop migration locally**
+
    ```bash
    sqlx migrate add my_feature
    # Edit migrations/YYYYMMDDHHMMSS_my_feature.sql
@@ -403,24 +410,27 @@ git add .sqlx
    ```
 
 2. **Test thoroughly**
+
    ```bash
    # Test forward
    sqlx migrate run
-   
+
    # Test rollback
    sqlx migrate revert
-   
+
    # Re-apply
    sqlx migrate run
    ```
 
 3. **Commit to repository**
+
    ```bash
    git add migrations/
    git commit -m "Add my_feature migration"
    ```
 
 4. **Deploy to staging**
+
    ```bash
    # Staging environment
    export DATABASE_URL="postgresql://user:pass@staging-db/aiwebengine"
@@ -428,10 +438,11 @@ git add .sqlx
    ```
 
 5. **Deploy to production**
+
    ```bash
    # Production environment (with backup!)
    pg_dump -Fc aiwebengine > backup_$(date +%Y%m%d_%H%M%S).dump
-   
+
    export DATABASE_URL="postgresql://user:pass@prod-db/aiwebengine"
    sqlx migrate run
    ```

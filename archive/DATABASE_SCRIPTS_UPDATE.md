@@ -5,9 +5,11 @@ Updated all database documentation and created helper scripts for containerized 
 ## New Files Created
 
 ### 1. `scripts/db.sh` - Database Helper Script
+
 **Purpose:** Simplifies all database operations when using Docker containers
 
 **Features:**
+
 - Interactive psql access
 - Migration management (run, revert, info)
 - Database backup/restore
@@ -15,6 +17,7 @@ Updated all database documentation and created helper scripts for containerized 
 - Container logs and shell access
 
 **Usage:**
+
 ```bash
 ./scripts/db.sh psql              # Interactive SQL
 ./scripts/db.sh migrate-run       # Run migrations
@@ -23,9 +26,11 @@ Updated all database documentation and created helper scripts for containerized 
 ```
 
 ### 2. `scripts/setup-database.sh` - First-Time Setup
+
 **Purpose:** One-command database setup for new developers
 
 **What it does:**
+
 - Checks Docker is running
 - Installs SQLx CLI if needed
 - Starts PostgreSQL container
@@ -33,11 +38,13 @@ Updated all database documentation and created helper scripts for containerized 
 - Verifies setup
 
 **Usage:**
+
 ```bash
 ./scripts/setup-database.sh
 ```
 
 ### 3. `scripts/README.md` - Script Documentation
+
 Complete reference for both helper scripts with examples and troubleshooting.
 
 ---
@@ -45,6 +52,7 @@ Complete reference for both helper scripts with examples and troubleshooting.
 ## Updated Documentation
 
 ### README.DATABASE.md
+
 - Added "Fastest Setup" section with one-command setup
 - Updated all commands to use helper script
 - Added Docker-specific instructions
@@ -52,6 +60,7 @@ Complete reference for both helper scripts with examples and troubleshooting.
 - Added section on running engine locally with containerized PostgreSQL
 
 ### docs/engine-administrators/DATABASE-MIGRATIONS.md
+
 - Added helper script usage instructions
 - Updated all examples to support Docker workflow
 - Added container-specific configuration examples
@@ -62,14 +71,17 @@ Complete reference for both helper scripts with examples and troubleshooting.
 ## Key Features
 
 ### Environment Detection
+
 The `db.sh` script automatically detects your environment:
 
 **Local/Development (default):**
+
 - Uses `docker-compose.local.yml`
 - Container: `aiwebengine-postgres-dev`
 - Connection: `postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine`
 
 **Production (`--prod` flag):**
+
 - Uses `docker-compose.yml`
 - Container: `aiwebengine-postgres`
 - Connection: Uses `POSTGRES_PASSWORD` env var
@@ -77,11 +89,13 @@ The `db.sh` script automatically detects your environment:
 ### Common Workflows
 
 **First-time setup:**
+
 ```bash
 ./scripts/setup-database.sh
 ```
 
 **Daily development:**
+
 ```bash
 # Start PostgreSQL
 docker-compose -f docker-compose.local.yml up -d postgres-dev
@@ -94,6 +108,7 @@ docker-compose -f docker-compose.local.yml up -d postgres-dev
 ```
 
 **Running engine locally with containerized DB:**
+
 ```bash
 # 1. Start PostgreSQL container
 docker-compose -f docker-compose.local.yml up -d postgres-dev
@@ -125,6 +140,7 @@ cargo run
 If you had local PostgreSQL installed, you can now use containers instead:
 
 **Old way:**
+
 ```bash
 createdb aiwebengine
 psql aiwebengine -c "\dt"
@@ -132,6 +148,7 @@ sqlx migrate run
 ```
 
 **New way:**
+
 ```bash
 ./scripts/db.sh createdb
 ./scripts/db.sh psql -c "\dt"
@@ -155,6 +172,7 @@ Both approaches work! The containerized approach is recommended for consistency.
 ## Next Steps
 
 Developers should:
+
 1. Run `./scripts/setup-database.sh` for first-time setup
 2. Use `./scripts/db.sh` for all database operations
 3. Reference `scripts/README.md` for detailed examples

@@ -10,6 +10,7 @@ AIWebEngine uses **SQLx** for PostgreSQL database integration with type-safe que
 ```
 
 This will:
+
 1. Install SQLx CLI (if needed)
 2. Start PostgreSQL in Docker
 3. Run all migrations
@@ -253,6 +254,7 @@ cargo run --release
 PostgreSQL is already configured in the Docker Compose files:
 
 **Local Development** (`docker-compose.local.yml`):
+
 - Container: `aiwebengine-postgres-dev`
 - Database: `aiwebengine`
 - User: `aiwebengine`
@@ -260,6 +262,7 @@ PostgreSQL is already configured in the Docker Compose files:
 - Port: `5432` (exposed to host)
 
 **Production** (`docker-compose.yml`):
+
 - Container: `aiwebengine-postgres`
 - Database: `aiwebengine`
 - User: `aiwebengine`
@@ -296,6 +299,7 @@ docker exec -it aiwebengine-postgres-dev psql -U aiwebengine -d aiwebengine
 ### Container Issues
 
 **PostgreSQL container not running:**
+
 ```bash
 # Check container status
 docker ps -a | grep postgres
@@ -309,6 +313,7 @@ docker-compose -f docker-compose.local.yml up -d postgres-dev
 ```
 
 **Connection refused:**
+
 ```bash
 # Check if container is healthy
 docker inspect aiwebengine-postgres-dev | grep Health
@@ -323,6 +328,7 @@ docker ps | grep postgres
 ### Database Issues
 
 **Database does not exist:**
+
 ```bash
 # The database is created automatically by Docker
 # If needed, recreate it:
@@ -331,6 +337,7 @@ docker ps | grep postgres
 ```
 
 **Migration errors:**
+
 ```bash
 # Check status
 ./scripts/db.sh migrate-info
@@ -343,6 +350,7 @@ docker ps | grep postgres
 ```
 
 **Permission denied:**
+
 ```bash
 # Make sure script is executable
 chmod +x scripts/db.sh

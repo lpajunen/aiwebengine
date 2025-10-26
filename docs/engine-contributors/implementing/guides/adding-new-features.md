@@ -107,18 +107,21 @@ Before writing code, plan how you'll test:
 ## Testing Strategy for Authentication
 
 ### Unit Tests
+
 - OAuth provider token exchange
 - Session token generation/validation
 - User context creation
 - Error handling for each provider
 
 ### Integration Tests
+
 - Complete OAuth flow (redirect → callback → session)
 - Session persistence across requests
 - JavaScript API access to user context
 - Middleware authentication enforcement
 
 ### Manual Testing
+
 - Test with each OAuth provider
 - Session expiration behavior
 - Error scenarios (invalid tokens, etc.)
@@ -233,7 +236,7 @@ impl AuthMiddleware {
 
 **Example of good code:**
 
-```rust
+````rust
 /// Validates an OAuth2 authorization code and exchanges it for an access token.
 ///
 /// # Arguments
@@ -280,7 +283,7 @@ pub async fn exchange_code(
 
     Ok(token)
 }
-```
+````
 
 #### 2.4 Integrate with Existing Systems
 
@@ -355,7 +358,7 @@ pub fn setup_feature_globals(
 
 **Coverage requirements:**
 
-- >90% for new code
+- > 90% for new code
 - All public functions tested
 - All error paths tested
 - Edge cases covered
@@ -465,7 +468,7 @@ Create a checklist for manual testing:
 
 **Required:**
 
-```rust
+````rust
 // 1. Module-level documentation
 //! # Authentication Module
 //!
@@ -500,7 +503,7 @@ Create a checklist for manual testing:
 pub fn create_session(&self, user_id: &str) -> Result<Session, SessionError> {
     // Implementation
 }
-```
+````
 
 #### 4.2 User Documentation
 
@@ -513,24 +516,25 @@ pub fn create_session(&self, user_id: &str) -> Result<Session, SessionError> {
 
 ```markdown
 <!-- docs/solution-developers/guides/authentication.md -->
+
 # Using Authentication in Your Scripts
 
 You can access the authenticated user's information in your JavaScript handlers:
 
 \`\`\`javascript
 function protectedHandler(req) {
-  // Access user information
-  if (!req.user) {
-    return {
-      status: 401,
-      body: "Authentication required"
-    };
-  }
+// Access user information
+if (!req.user) {
+return {
+status: 401,
+body: "Authentication required"
+};
+}
 
-  return {
-    status: 200,
-    body: `Hello, ${req.user.name}!`
-  };
+return {
+status: 200,
+body: `Hello, ${req.user.name}!`
+};
 }
 
 register("/protected", "protectedHandler", "GET");
@@ -552,17 +556,17 @@ function checkAuthHandler(req) {
       body: JSON.stringify({
         message: "You are authenticated",
         user_id: req.user.id,
-        email: req.user.email
+        email: req.user.email,
       }),
-      contentType: "application/json"
+      contentType: "application/json",
     };
   } else {
     return {
       status: 401,
       body: JSON.stringify({
-        error: "Authentication required"
+        error: "Authentication required",
       }),
-      contentType: "application/json"
+      contentType: "application/json",
     };
   }
 }
