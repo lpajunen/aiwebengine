@@ -24,7 +24,7 @@ pub use providers::{
 };
 pub use routes::create_auth_router;
 pub use security::AuthSecurityContext;
-pub use session::{AuthSession, AuthSessionManager};
+pub use session::{AuthSession, AuthSessionManager, CreateAuthSessionParams};
 
 // Re-export security types commonly used in auth
 pub use crate::security::{

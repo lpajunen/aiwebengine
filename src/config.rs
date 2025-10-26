@@ -707,10 +707,8 @@ mod tests {
         let result = AppConfig::load();
         // May fail due to missing config files or figment features, but should not panic
         // The important thing is it doesn't panic
-        match result {
-            Ok(_) => {}  // Config loaded successfully
-            Err(_) => {} // Config loading failed, which is acceptable in test environment
-        }
+        // Config loaded successfully or loading failed, which is acceptable in test environment
+        let _ = result.is_ok();
     }
 
     #[test]

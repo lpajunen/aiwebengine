@@ -22,7 +22,8 @@ pub use operations::{OperationResult, SecureOperations, UpsertScriptRequest};
 pub use rate_limiting::{RateLimitConfig, RateLimitKey, RateLimitResult, RateLimiter, TokenBucket};
 pub use secure_globals::{GlobalSecurityConfig, SecureGlobalContext};
 pub use session::{
-    SecureSessionManager, SessionData, SessionError, SessionFingerprint, SessionToken,
+    CreateSessionParams, SecureSessionManager, SessionData, SessionError, SessionFingerprint,
+    SessionToken,
 };
 pub use threat_detection::{ThreatAssessment, ThreatDetectionConfig, ThreatDetector, ThreatLevel};
 pub use validation::{Capability, InputValidator, SecurityError};

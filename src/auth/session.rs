@@ -9,6 +9,19 @@ use crate::security::{SecureSessionManager, SessionData, SessionToken};
 
 use super::error::AuthError;
 
+/// Parameters for creating an authenticated session
+#[derive(Debug, Clone)]
+pub struct CreateAuthSessionParams {
+    pub user_id: String,
+    pub provider: String,
+    pub email: Option<String>,
+    pub name: Option<String>,
+    pub is_admin: bool,
+    pub is_editor: bool,
+    pub ip_addr: String,
+    pub user_agent: String,
+}
+
 /// Authentication session (user-facing)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthSession {
@@ -52,30 +65,23 @@ impl AuthSessionManager {
     /// Create a new authenticated session
     pub async fn create_session(
         &self,
-        user_id: String,
-        provider: String,
-        email: Option<String>,
-        name: Option<String>,
-        is_admin: bool,
-        is_editor: bool,
-        ip_addr: String,
-        user_agent: String,
+        params: CreateAuthSessionParams,
     ) -> Result<SessionToken, AuthError> {
         // Create session using secure session manager
-        let params = crate::security::session::CreateSessionParams {
-            user_id,
-            provider,
-            email,
-            name,
-            is_admin,
-            is_editor,
-            ip_addr,
-            user_agent,
+        let session_params = crate::security::session::CreateSessionParams {
+            user_id: params.user_id,
+            provider: params.provider,
+            email: params.email,
+            name: params.name,
+            is_admin: params.is_admin,
+            is_editor: params.is_editor,
+            ip_addr: params.ip_addr,
+            user_agent: params.user_agent,
         };
 
         let token = self
             .session_manager
-            .create_session(params)
+            .create_session(session_params)
             .await
             .map_err(AuthError::Session)?;
 
@@ -139,16 +145,16 @@ mod tests {
         let manager = create_test_manager().await;
 
         let token = manager
-            .create_session(
-                "user123".to_string(),
-                "google".to_string(),
-                Some("user@example.com".to_string()),
-                Some("Test User".to_string()),
-                false,
-                false,
-                "192.168.1.1".to_string(),
-                "Mozilla/5.0".to_string(),
-            )
+            .create_session(CreateAuthSessionParams {
+                user_id: "user123".to_string(),
+                provider: "google".to_string(),
+                email: Some("user@example.com".to_string()),
+                name: Some("Test User".to_string()),
+                is_admin: false,
+                is_editor: false,
+                ip_addr: "192.168.1.1".to_string(),
+                user_agent: "Mozilla/5.0".to_string(),
+            })
             .await
             .unwrap();
 
@@ -169,16 +175,16 @@ mod tests {
         let manager = create_test_manager().await;
 
         let token = manager
-            .create_session(
-                "user123".to_string(),
-                "google".to_string(),
-                None,
-                None,
-                false,
-                false,
-                "192.168.1.1".to_string(),
-                "Mozilla/5.0".to_string(),
-            )
+            .create_session(CreateAuthSessionParams {
+                user_id: "user123".to_string(),
+                provider: "google".to_string(),
+                email: None,
+                name: None,
+                is_admin: false,
+                is_editor: false,
+                ip_addr: "192.168.1.1".to_string(),
+                user_agent: "Mozilla/5.0".to_string(),
+            })
             .await
             .unwrap();
 
@@ -202,16 +208,16 @@ mod tests {
         // Create 2 sessions
         for i in 0..2 {
             manager
-                .create_session(
-                    user_id.to_string(),
-                    "google".to_string(),
-                    None,
-                    None,
-                    false,
-                    false,
-                    format!("192.168.1.{}", i),
-                    "Mozilla/5.0".to_string(),
-                )
+                .create_session(CreateAuthSessionParams {
+                    user_id: user_id.to_string(),
+                    provider: "google".to_string(),
+                    email: None,
+                    name: None,
+                    is_admin: false,
+                    is_editor: false,
+                    ip_addr: format!("192.168.1.{}", i),
+                    user_agent: "Mozilla/5.0".to_string(),
+                })
                 .await
                 .unwrap();
         }
@@ -228,16 +234,16 @@ mod tests {
         let manager = create_test_manager().await;
 
         let token = manager
-            .create_session(
-                "admin123".to_string(),
-                "google".to_string(),
-                Some("admin@example.com".to_string()),
-                Some("Admin User".to_string()),
-                true,  // is_admin
-                false, // is_editor
-                "192.168.1.1".to_string(),
-                "Mozilla/5.0".to_string(),
-            )
+            .create_session(CreateAuthSessionParams {
+                user_id: "admin123".to_string(),
+                provider: "google".to_string(),
+                email: Some("admin@example.com".to_string()),
+                name: Some("Admin User".to_string()),
+                is_admin: true,
+                is_editor: false,
+                ip_addr: "192.168.1.1".to_string(),
+                user_agent: "Mozilla/5.0".to_string(),
+            })
             .await
             .unwrap();
 

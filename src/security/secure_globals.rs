@@ -9,6 +9,9 @@ use crate::security::{
     SecureOperations, SecurityAuditor, SecurityEventType, SecuritySeverity, UserContext,
 };
 
+// Type alias for route registration callback function
+type RouteRegisterFn = Box<dyn Fn(&str, &str, Option<&str>) -> Result<(), rquickjs::Error>>;
+
 /// Secure wrapper for JavaScript global functions that enforces Rust-level validation
 pub struct SecureGlobalContext {
     user_context: UserContext,
@@ -90,7 +93,7 @@ impl SecureGlobalContext {
         &self,
         ctx: &rquickjs::Ctx<'_>,
         script_uri: &str,
-        register_fn: Option<Box<dyn Fn(&str, &str, Option<&str>) -> Result<(), rquickjs::Error>>>,
+        register_fn: Option<RouteRegisterFn>,
     ) -> JsResult<()> {
         // Setup route registration function first
         self.setup_route_registration(ctx, register_fn)?;
@@ -133,7 +136,7 @@ impl SecureGlobalContext {
     fn setup_route_registration(
         &self,
         ctx: &rquickjs::Ctx<'_>,
-        register_fn: Option<Box<dyn Fn(&str, &str, Option<&str>) -> Result<(), rquickjs::Error>>>,
+        register_fn: Option<RouteRegisterFn>,
     ) -> JsResult<()> {
         let global = ctx.globals();
 

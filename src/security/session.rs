@@ -593,7 +593,15 @@ mod tests {
         let token = manager.create_session(params).await.unwrap();
 
         // Validate session exists
+        manager
+            .validate_session(&token.token, "192.168.1.1", "Mozilla/5.0")
+            .await
+            .unwrap();
 
+        // Invalidate session
+        manager.invalidate_session(&token.token).await.unwrap();
+
+        // Should fail after invalidation
         let result = manager
             .validate_session(&token.token, "192.168.1.1", "Mozilla/5.0")
             .await;

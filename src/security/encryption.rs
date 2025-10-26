@@ -119,12 +119,16 @@ impl DataEncryption {
             return Err(EncryptionError::InvalidFormat);
         }
 
-        let nonce = Nonce::from_slice(&nonce_bytes);
+        // Convert to fixed-size array for Nonce
+        let nonce_array: [u8; 12] = nonce_bytes
+            .try_into()
+            .map_err(|_| EncryptionError::InvalidFormat)?;
+        let nonce = Nonce::from(nonce_array);
 
         // Decrypt
         let plaintext = self
             .cipher
-            .decrypt(nonce, ciphertext.as_ref())
+            .decrypt(&nonce, ciphertext.as_ref())
             .map_err(|e| EncryptionError::DecryptionFailed(e.to_string()))?;
 
         // Convert to string
@@ -173,10 +177,14 @@ impl DataEncryption {
             return Err(EncryptionError::InvalidFormat);
         }
 
-        let nonce = Nonce::from_slice(&nonce_bytes);
+        // Convert to fixed-size array for Nonce
+        let nonce_array: [u8; 12] = nonce_bytes
+            .try_into()
+            .map_err(|_| EncryptionError::InvalidFormat)?;
+        let nonce = Nonce::from(nonce_array);
 
         self.cipher
-            .decrypt(nonce, ciphertext.as_ref())
+            .decrypt(&nonce, ciphertext.as_ref())
             .map_err(|e| EncryptionError::DecryptionFailed(e.to_string()))
     }
 }

@@ -15,8 +15,8 @@
 // Tests session management, CSRF protection, and data encryption
 
 use aiwebengine::security::{
-    CsrfProtection, DataEncryption, FieldEncryptor, OAuthStateManager, SecureSessionManager,
-    SecurityAuditor, SessionError,
+    CreateSessionParams, CsrfProtection, DataEncryption, FieldEncryptor, OAuthStateManager,
+    SecureSessionManager, SecurityAuditor, SessionError,
 };
 use std::sync::Arc;
 
@@ -31,19 +31,17 @@ async fn test_session_lifecycle() {
     let manager = SecureSessionManager::new(&key, 3600, 3, auditor).unwrap();
 
     // Create session
-    let token = manager
-        .create_session(
-            "user123".to_string(),
-            "google".to_string(),
-            Some("user@example.com".to_string()),
-            Some("Test User".to_string()),
-            false,
-            false,
-            "192.168.1.1".to_string(),
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64)".to_string(),
-        )
-        .await
-        .unwrap();
+    let params = CreateSessionParams {
+        user_id: "user123".to_string(),
+        provider: "google".to_string(),
+        email: Some("user@example.com".to_string()),
+        name: Some("Test User".to_string()),
+        is_admin: false,
+        is_editor: false,
+        ip_addr: "192.168.1.1".to_string(),
+        user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)".to_string(),
+    };
+    let token = manager.create_session(params).await.unwrap();
 
     // Validate session
     let session = manager
@@ -80,19 +78,17 @@ async fn test_session_fingerprint_user_agent_mismatch() {
     let auditor = Arc::new(SecurityAuditor::new());
     let manager = SecureSessionManager::new(&key, 3600, 3, auditor).unwrap();
 
-    let token = manager
-        .create_session(
-            "user123".to_string(),
-            "google".to_string(),
-            None,
-            None,
-            false,
-            false,
-            "192.168.1.1".to_string(),
-            "Mozilla/5.0".to_string(),
-        )
-        .await
-        .unwrap();
+    let params = CreateSessionParams {
+        user_id: "user123".to_string(),
+        provider: "google".to_string(),
+        email: None,
+        name: None,
+        is_admin: false,
+        is_editor: false,
+        ip_addr: "192.168.1.1".to_string(),
+        user_agent: "Mozilla/5.0".to_string(),
+    };
+    let token = manager.create_session(params).await.unwrap();
 
     // Different user agent should fail
     let result = manager
@@ -108,19 +104,17 @@ async fn test_session_ip_change_tolerance() {
     let auditor = Arc::new(SecurityAuditor::new());
     let manager = SecureSessionManager::new(&key, 3600, 3, auditor).unwrap();
 
-    let token = manager
-        .create_session(
-            "user123".to_string(),
-            "google".to_string(),
-            None,
-            None,
-            false,
-            false,
-            "192.168.1.1".to_string(),
-            "Mozilla/5.0".to_string(),
-        )
-        .await
-        .unwrap();
+    let params = CreateSessionParams {
+        user_id: "user123".to_string(),
+        provider: "google".to_string(),
+        email: None,
+        name: None,
+        is_admin: false,
+        is_editor: false,
+        ip_addr: "192.168.1.1".to_string(),
+        user_agent: "Mozilla/5.0".to_string(),
+    };
+    let token = manager.create_session(params).await.unwrap();
 
     // IP change with same user agent should succeed (mobile-friendly)
     let result = manager
@@ -140,19 +134,17 @@ async fn test_concurrent_session_limit() {
 
         // Create 5 sessions (limit is 3)
         for i in 0..5 {
-            manager
-                .create_session(
-                    "user123".to_string(),
-                    "google".to_string(),
-                    None,
-                    None,
-                    false,
-                    false,
-                    format!("192.168.1.{}", i),
-                    "Mozilla/5.0".to_string(),
-                )
-                .await
-                .unwrap();
+            let params = CreateSessionParams {
+                user_id: "user123".to_string(),
+                provider: "google".to_string(),
+                email: None,
+                name: None,
+                is_admin: false,
+                is_editor: false,
+                ip_addr: format!("192.168.1.{}", i),
+                user_agent: "Mozilla/5.0".to_string(),
+            };
+            manager.create_session(params).await.unwrap();
         }
 
         // Should only have 3 sessions
@@ -174,19 +166,17 @@ async fn test_session_encryption_integrity() {
     let manager = SecureSessionManager::new(&key, 3600, 3, auditor).unwrap();
 
     // Create session with sensitive data
-    let token = manager
-        .create_session(
-            "user123".to_string(),
-            "google".to_string(),
-            Some("admin@example.com".to_string()),
-            Some("Admin User".to_string()),
-            true,  // is_admin
-            false, // is_editor
-            "192.168.1.1".to_string(),
-            "Mozilla/5.0".to_string(),
-        )
-        .await
-        .unwrap();
+    let params = CreateSessionParams {
+        user_id: "user123".to_string(),
+        provider: "google".to_string(),
+        email: Some("admin@example.com".to_string()),
+        name: Some("Admin User".to_string()),
+        is_admin: true,
+        is_editor: false,
+        ip_addr: "192.168.1.1".to_string(),
+        user_agent: "Mozilla/5.0".to_string(),
+    };
+    let token = manager.create_session(params).await.unwrap();
 
     // Validate and check data integrity
     let session = manager
@@ -422,19 +412,17 @@ async fn test_full_auth_flow_simulation() {
     println!("Access token encrypted and stored");
 
     // 4. Create session
-    let session_token = session_manager
-        .create_session(
-            "google_12345".to_string(),
-            "google".to_string(),
-            Some("user@gmail.com".to_string()),
-            Some("Test User".to_string()),
-            false,
-            false,
-            "203.0.113.1".to_string(),
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)".to_string(),
-        )
-        .await
-        .unwrap();
+    let params = CreateSessionParams {
+        user_id: "google_12345".to_string(),
+        provider: "google".to_string(),
+        email: Some("user@gmail.com".to_string()),
+        name: Some("Test User".to_string()),
+        is_admin: false,
+        is_editor: false,
+        ip_addr: "203.0.113.1".to_string(),
+        user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)".to_string(),
+    };
+    let session_token = session_manager.create_session(params).await.unwrap();
     println!("Session created: {}", session_token.token);
 
     // 5. Subsequent request - validate session
@@ -483,19 +471,17 @@ async fn test_concurrent_users_isolation() {
     let mut tokens = vec![];
 
     for user in &users {
-        let token = session_manager
-            .create_session(
-                user.to_string(),
-                "google".to_string(),
-                None,
-                None,
-                false,
-                false,
-                format!("192.168.1.{}", user.len()),
-                "Mozilla/5.0".to_string(),
-            )
-            .await
-            .unwrap();
+        let params = CreateSessionParams {
+            user_id: user.to_string(),
+            provider: "google".to_string(),
+            email: None,
+            name: None,
+            is_admin: false,
+            is_editor: false,
+            ip_addr: format!("192.168.1.{}", user.len()),
+            user_agent: "Mozilla/5.0".to_string(),
+        };
+        let token = session_manager.create_session(params).await.unwrap();
         tokens.push((user, token));
     }
 

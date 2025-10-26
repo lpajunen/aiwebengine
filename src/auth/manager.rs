@@ -310,16 +310,16 @@ impl AuthManager {
         // Create session with correct admin and editor status
         let session_token = self
             .session_manager
-            .create_session(
-                user_id.clone(),
-                provider_name.to_string(),
-                Some(user_info.email.clone()),
-                user_info.name.clone(),
+            .create_session(crate::auth::session::CreateAuthSessionParams {
+                user_id: user_id.clone(),
+                provider: provider_name.to_string(),
+                email: Some(user_info.email.clone()),
+                name: user_info.name.clone(),
                 is_admin,
                 is_editor,
-                ip_addr.to_string(),
-                user_agent.to_string(),
-            )
+                ip_addr: ip_addr.to_string(),
+                user_agent: user_agent.to_string(),
+            })
             .await?;
 
         // Log successful authentication

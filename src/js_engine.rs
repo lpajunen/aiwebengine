@@ -11,6 +11,9 @@ use crate::security::UserContext;
 // Use the enhanced secure globals implementation
 use crate::security::secure_globals::{GlobalSecurityConfig, SecureGlobalContext};
 
+// Type alias for route registrations map
+type RouteRegistrations = HashMap<(String, String), String>;
+
 /// Resource limits for JavaScript execution
 #[derive(Debug, Clone)]
 pub struct ExecutionLimits {
@@ -821,7 +824,7 @@ pub fn call_init_if_exists(
     script_uri: &str,
     script_content: &str,
     context: crate::script_init::InitContext,
-) -> Result<Option<HashMap<(String, String), String>>, String> {
+) -> Result<Option<RouteRegistrations>, String> {
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -1118,10 +1121,8 @@ mod tests {
         "#;
 
         // Store the script in repository first
-        match repository::upsert_script("test-resolver", script_content) {
-            Ok(_) => {}
-            Err(_) => {} // Ignore errors for test
-        }
+        // Ignore errors for test
+        let _ = repository::upsert_script("test-resolver", script_content).is_ok();
 
         let result = execute_graphql_resolver("test-resolver", "testResolver", None);
 
