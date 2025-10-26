@@ -46,8 +46,8 @@ services:
       - ./Cargo.lock:/app/Cargo.lock:ro
       # Mount migrations (required for sqlx::migrate! macro)
       - ./migrations:/app/migrations:ro
-      # Mount configuration
-      - ./config.local.toml:/app/config.local.toml:ro
+      # Mount configuration (using config.local.toml as config.toml)
+      - ./config.local.toml:/app/config.toml:ro
       # Mount scripts for testing
       - ./scripts:/app/scripts:ro
       # Mount assets
@@ -63,14 +63,25 @@ services:
     environment:
       - RUST_LOG=debug
       - RUST_BACKTRACE=1
-      - CONFIG_FILE=/app/config.local.toml
+      # Server configuration  
+      - APP_SERVER__HOST=0.0.0.0
+      - APP_SERVER__PORT=3000
       # Development OAuth credentials (optional)
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
       - JWT_SECRET=${JWT_SECRET:-dev-secret-key}
       - SESSION_SECRET=${SESSION_SECRET:-dev-session-secret}
-      # PostgreSQL connection
-      - APP_REPOSITORY_DATABASE_URL=postgresql://aiwebengine:devpassword@postgres-dev:5432/aiwebengine
+      # PostgreSQL connection (note: double underscores for nested config)
+      - APP_REPOSITORY__STORAGE_TYPE=postgresql
+      - APP_REPOSITORY__DATABASE_URL=postgresql://aiwebengine:devpassword@postgres-dev:5432/aiwebengine
+      # Auth configuration
+      - APP_AUTH__JWT_SECRET=${APP_AUTH__JWT_SECRET:-dev-jwt-secret-minimum-32-characters-required-for-security}
+      - APP_AUTH__BOOTSTRAP_ADMINS=${APP_AUTH__BOOTSTRAP_ADMINS:-["admin@example.com"]}
+      - APP_AUTH__PROVIDERS__GOOGLE__CLIENT_ID=${APP_AUTH__PROVIDERS__GOOGLE__CLIENT_ID:-}
+      - APP_AUTH__PROVIDERS__GOOGLE__CLIENT_SECRET=${APP_AUTH__PROVIDERS__GOOGLE__CLIENT_SECRET:-}
+      - APP_AUTH__PROVIDERS__GOOGLE__REDIRECT_URI=${APP_AUTH__PROVIDERS__GOOGLE__REDIRECT_URI:-http://localhost:3000/auth/callback/google}
+      # Security
+      - APP_SECURITY__API_KEY=${APP_SECURITY__API_KEY:-dev-api-key-12345}
     networks:
       - aiwebengine-dev-network
     depends_on:

@@ -451,7 +451,7 @@ impl AppConfig {
         };
 
         let config: AppConfig = figment
-            .merge(Env::prefixed("AIWEBENGINE_").split("__"))
+            .merge(Env::prefixed("APP_").split("__"))
             .extract()
             .context("Failed to load configuration from file")?;
 
