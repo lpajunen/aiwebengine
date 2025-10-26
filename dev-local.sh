@@ -8,6 +8,8 @@ export APP_AUTH__PROVIDERS__GOOGLE__REDIRECT_URI=http://localhost:3000/auth/call
 echo "Starting aiwebengine with local configuration..."
 echo "Access at: http://localhost:3000"
 echo "Google OAuth redirect URI: $APP_AUTH__PROVIDERS__GOOGLE__REDIRECT_URI"
+echo "Microsoft OAuth redirect URI: $APP_AUTH__PROVIDERS__MICROSOFT__REDIRECT_URI"
+echo "Microsoft OAuth configured: ${APP_AUTH__PROVIDERS__MICROSOFT__CLIENT_ID:+Yes}"
 echo ""
 
 cargo run

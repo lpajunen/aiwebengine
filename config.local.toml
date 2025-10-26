@@ -126,14 +126,13 @@ client_secret = "${APP_AUTH_PROVIDERS_GOOGLE_CLIENT_SECRET}"
 redirect_uri = "http://localhost:3000/auth/callback/google"
 scopes = ["openid", "email", "profile"]
 
-# Optional: Microsoft Azure AD
-# Uncomment and set via environment variables to enable
-# [auth.providers.microsoft]
-# client_id = "${APP_AUTH_PROVIDERS_MICROSOFT_CLIENT_ID}"
-# client_secret = "${APP_AUTH_PROVIDERS_MICROSOFT_CLIENT_SECRET}"
-# redirect_uri = "http://localhost:3000/auth/callback/microsoft"
-# tenant_id = "common"  # or your tenant ID
-# scopes = ["openid", "email", "profile"]
+# Microsoft Azure AD (values overridden by environment variables)
+[auth.providers.microsoft]
+client_id = "placeholder"
+client_secret = "placeholder"
+redirect_uri = "http://localhost:3000/auth/callback/microsoft"
+tenant_id = "common"
+scopes = ["openid", "email", "profile"]
 
 # Optional: Apple Sign In
 # Uncomment and set via environment variables to enable
