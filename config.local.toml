@@ -132,7 +132,7 @@ client_id = "placeholder"
 client_secret = "placeholder"
 redirect_uri = "http://localhost:3000/auth/callback/microsoft"
 tenant_id = "common"
-scopes = ["openid", "email", "profile"]
+scopes = ["openid", "email", "profile", "User.Read"]
 
 # Optional: Apple Sign In
 # Uncomment and set via environment variables to enable

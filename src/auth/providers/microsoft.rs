@@ -136,6 +136,11 @@ impl MicrosoftProvider {
             config.scopes.push("openid".to_string());
         }
 
+        // Ensure User.Read scope is included for Graph API access
+        if !config.scopes.contains(&"User.Read".to_string()) {
+            config.scopes.push("User.Read".to_string());
+        }
+
         // Extract tenant ID from extra params (default to "common")
         let tenant_id = config
             .extra_params

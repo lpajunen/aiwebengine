@@ -121,7 +121,7 @@ scopes = ["openid", "email", "profile"]
 # client_secret = "${APP_AUTH_PROVIDERS_MICROSOFT_CLIENT_SECRET}"
 # redirect_uri = "${APP_AUTH_PROVIDERS_MICROSOFT_REDIRECT_URI}"
 # tenant_id = "${APP_AUTH_PROVIDERS_MICROSOFT_TENANT_ID}"
-# scopes = ["openid", "email", "profile"]
+# scopes = ["openid", "email", "profile", "User.Read"]
 
 # Optional: Apple Sign In
 # Uncomment and set via environment variables to enable
