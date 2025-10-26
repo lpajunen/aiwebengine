@@ -117,7 +117,9 @@ For detailed Docker deployment instructions, see [docs/engine-administrators/03-
 
 ### Development
 
-For local development:
+For local development, you have two options:
+
+#### Option 1: Cargo Run (`http://localhost:3000`)
 
 ```bash
 # Set up local configuration
@@ -128,12 +130,27 @@ cp .env.example .env
 # Install development tools
 make deps
 
-# Run development server
-source .env && cargo run
-
-# Or use Docker for development
-make docker-dev
+# Run development server with localhost OAuth
+make dev-local
+# Or manually: source .env && APP_AUTH__PROVIDERS__GOOGLE__REDIRECT_URI=http://localhost:3000/auth/callback/google cargo run
 ```
+
+#### Option 2: Docker Local (`https://local.softagen.com`)
+
+```bash
+# Set up environment
+cp .env.example .env
+# Edit .env with your credentials
+
+# Run with Docker Compose
+make docker-local
+# Access at: https://local.softagen.com
+```
+
+**Important for Google OAuth**: Add both redirect URIs to your Google Cloud Console:
+
+- `http://localhost:3000/auth/callback/google` (for cargo run)
+- `https://local.softagen.com/auth/callback/google` (for Docker)
 
 See [docs/engine-administrators/02-CONFIGURATION.md](docs/engine-administrators/02-CONFIGURATION.md) for detailed configuration options.
 

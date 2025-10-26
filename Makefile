@@ -9,6 +9,7 @@ help:
 	@echo "Development:"
 	@echo "  make deps      - Install development tools (cargo-watch, cargo-nextest, cargo-llvm-cov)"
 	@echo "  make dev       - Run development server with auto-reload"
+	@echo "  make dev-local - Run development server with localhost OAuth (http://localhost:3000)"
 	@echo "  make test      - Run all tests with cargo-nextest"
 	@echo "  make test-simple - Run all tests with cargo test"
 	@echo "  make lint      - Run clippy linter"
@@ -50,6 +51,12 @@ deps:
 # Run development server with auto-reload
 dev:
 	cargo watch -x 'run --bin server'
+
+# Run development server locally (with localhost OAuth redirect)
+dev-local:
+	@echo "Starting development server with localhost OAuth redirect..."
+	@echo "Access at: http://localhost:3000"
+	@bash -c 'source .env && export APP_AUTH__PROVIDERS__GOOGLE__REDIRECT_URI=http://localhost:3000/auth/callback/google && cargo run'
 
 # Run tests with cargo-nextest (better output)
 test:
