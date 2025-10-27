@@ -2,6 +2,7 @@
 node_modules/
 config.toml
 .env
+.env-prod
 aiwebengine_latest.tar
 
 # Caddy data (certificates and configuration)
