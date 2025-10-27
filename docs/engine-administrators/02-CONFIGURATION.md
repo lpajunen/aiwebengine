@@ -266,7 +266,7 @@ Controls database and script storage.
 
 ```toml
 [repository]
-database_type = "postgresql"     # postgresql | memory
+storage_type = "postgresql"     # postgresql | memory
 database_url = "postgresql://user:pass@localhost:5432/aiwebengine"
 max_connections = 5              # Connection pool size (1-100)
 connection_timeout_ms = 2000     # Connection timeout (100-30000)
@@ -567,7 +567,7 @@ Quick lookup for all available settings:
 | `[javascript]`  | `max_memory_mb`         | integer | 1-1024                      | `16`          |
 | `[javascript]`  | `execution_timeout_ms`  | integer | 100-60000                   | `1000`        |
 | `[javascript]`  | `enable_console`        | boolean | true/false                  | `true`        |
-| `[repository]`  | `database_type`         | string  | postgresql/memory           | `postgresql`  |
+| `[repository]`  | `storage_type`          | string  | postgresql/memory           | `postgresql`  |
 | `[repository]`  | `max_connections`       | integer | 1-100                       | `5`           |
 | `[repository]`  | `auto_migrate`          | boolean | true/false                  | `true`        |
 | `[security]`    | `enable_cors`           | boolean | true/false                  | `true`        |
@@ -595,7 +595,7 @@ port = 3000
 level = "debug"
 
 [repository]
-database_type = "postgresql"
+storage_type = "postgresql"
 database_url = "${APP_REPOSITORY__DATABASE_URL}"
 
 [auth]
@@ -632,7 +632,7 @@ enable_console = false
 allowed_apis = ["fetch", "database", "logging"]
 
 [repository]
-database_type = "postgresql"
+storage_type = "postgresql"
 database_url = "${APP_REPOSITORY__DATABASE_URL}"
 max_connections = 50
 auto_migrate = false

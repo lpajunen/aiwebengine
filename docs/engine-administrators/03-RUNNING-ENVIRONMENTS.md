@@ -117,7 +117,7 @@ enable_console = true
 allowed_apis = ["fetch", "database", "logging", "filesystem"]
 
 [repository]
-database_type = "postgresql"
+storage_type = "postgresql"
 database_url = "${APP_REPOSITORY__DATABASE_URL}"
 auto_migrate = true
 

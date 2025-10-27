@@ -28,7 +28,7 @@ enable_console = true
 allowed_apis = ["fetch", "database", "logging", "filesystem"]
 
 [repository]
-database_type = "postgresql"
+storage_type = "postgresql"
 # Set via APP_REPOSITORY_DATABASE_URL environment variable
 database_url = "${APP_REPOSITORY_DATABASE_URL}"
 max_connections = 20

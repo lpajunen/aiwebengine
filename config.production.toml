@@ -39,7 +39,7 @@ allowed_apis = ["fetch", "database", "logging"]
 
 [repository]
 # Use PostgreSQL for production scalability
-database_type = "postgresql"
+storage_type = "postgresql"
 # MUST be set via APP_REPOSITORY_DATABASE_URL environment variable
 database_url = "${APP_REPOSITORY_DATABASE_URL}"
 # Large connection pool for production

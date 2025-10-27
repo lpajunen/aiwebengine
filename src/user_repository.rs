@@ -1,5 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use sqlx::{PgPool, Row};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::SystemTime;
@@ -220,6 +221,240 @@ fn safe_lock_provider_index()
     }
 }
 
+/// Get database pool if available
+fn get_db_pool() -> Option<std::sync::Arc<crate::database::Database>> {
+    crate::database::get_global_database()
+}
+
+/// Convert chrono::DateTime to SystemTime
+fn datetime_to_system_time(dt: chrono::DateTime<chrono::Utc>) -> SystemTime {
+    std::time::UNIX_EPOCH + std::time::Duration::from_secs(dt.timestamp() as u64)
+}
+
+/// Database-backed upsert user
+async fn db_upsert_user(
+    pool: &PgPool,
+    email: &str,
+    name: Option<&str>,
+    provider_name: &str,
+    provider_user_id: &str,
+    is_admin: bool,
+    is_editor: bool,
+) -> Result<String, UserRepositoryError> {
+    let now = chrono::Utc::now();
+
+    // Try to update existing user first
+    let update_result = sqlx::query(
+        r#"
+        UPDATE users
+        SET email = $1, name = $2, is_admin = $3, is_editor = $4, updated_at = $5, last_login_at = $5
+        WHERE provider = $6 AND provider_user_id = $7
+        RETURNING user_id
+        "#,
+    )
+    .bind(email)
+    .bind(name)
+    .bind(is_admin)
+    .bind(is_editor)
+    .bind(now)
+    .bind(provider_name)
+    .bind(provider_user_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error updating user: {}", e);
+        UserRepositoryError::InvalidData(format!("Database error: {}", e))
+    })?;
+
+    if let Some(row) = update_result {
+        let user_id: String = row.try_get("user_id").map_err(|e| {
+            error!("Database error getting user_id: {}", e);
+            UserRepositoryError::InvalidData(format!("Database error: {}", e))
+        })?;
+        debug!("Updated existing user in database: {}", user_id);
+        return Ok(user_id);
+    }
+
+    // User doesn't exist, create new one
+    let user_id = uuid::Uuid::new_v4().to_string();
+
+    sqlx::query(
+        r#"
+        INSERT INTO users (user_id, email, name, provider, provider_user_id, is_admin, is_editor, created_at, updated_at, last_login_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $8)
+        "#,
+    )
+    .bind(&user_id)
+    .bind(email)
+    .bind(name)
+    .bind(provider_name)
+    .bind(provider_user_id)
+    .bind(is_admin)
+    .bind(is_editor)
+    .bind(now)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error creating user: {}", e);
+        UserRepositoryError::InvalidData(format!("Database error: {}", e))
+    })?;
+
+    debug!("Created new user in database: {}", user_id);
+    Ok(user_id)
+}
+
+/// Database-backed get user
+async fn db_get_user(pool: &PgPool, user_id: &str) -> Result<User, UserRepositoryError> {
+    let row = sqlx::query(
+        r#"
+        SELECT user_id, email, name, provider, provider_user_id, is_admin, is_editor, created_at, updated_at
+        FROM users
+        WHERE user_id = $1
+        "#,
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error getting user: {}", e);
+        UserRepositoryError::InvalidData(format!("Database error: {}", e))
+    })?
+    .ok_or_else(|| UserRepositoryError::UserNotFound(user_id.to_string()))?;
+
+    let db_user_id: String = row
+        .try_get("user_id")
+        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+    let email: String = row
+        .try_get("email")
+        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+    let name: Option<String> = row
+        .try_get("name")
+        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+    let provider: String = row
+        .try_get("provider")
+        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+    let provider_user_id: String = row
+        .try_get("provider_user_id")
+        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+    let is_admin: bool = row
+        .try_get("is_admin")
+        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+    let is_editor: bool = row
+        .try_get("is_editor")
+        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+    let created_at: chrono::DateTime<chrono::Utc> = row
+        .try_get("created_at")
+        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+    let updated_at: chrono::DateTime<chrono::Utc> = row
+        .try_get("updated_at")
+        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+
+    let mut roles = vec![UserRole::Authenticated];
+    if is_editor {
+        roles.push(UserRole::Editor);
+    }
+    if is_admin {
+        roles.push(UserRole::Administrator);
+    }
+
+    let providers = vec![ProviderInfo {
+        provider_name: provider,
+        provider_user_id,
+        first_auth_at: datetime_to_system_time(created_at),
+        last_auth_at: datetime_to_system_time(updated_at),
+    }];
+
+    Ok(User {
+        id: db_user_id,
+        email,
+        name,
+        roles,
+        created_at: datetime_to_system_time(created_at),
+        updated_at: datetime_to_system_time(updated_at),
+        providers,
+    })
+}
+
+/// Database-backed find user by provider
+async fn db_find_user_by_provider(
+    pool: &PgPool,
+    provider_name: &str,
+    provider_user_id: &str,
+) -> Result<Option<User>, UserRepositoryError> {
+    let row = sqlx::query(
+        r#"
+        SELECT user_id, email, name, provider, provider_user_id, is_admin, is_editor, created_at, updated_at
+        FROM users
+        WHERE provider = $1 AND provider_user_id = $2
+        "#,
+    )
+    .bind(provider_name)
+    .bind(provider_user_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error finding user by provider: {}", e);
+        UserRepositoryError::InvalidData(format!("Database error: {}", e))
+    })?;
+
+    if let Some(row) = row {
+        let db_user_id: String = row
+            .try_get("user_id")
+            .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+        let email: String = row
+            .try_get("email")
+            .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+        let name: Option<String> = row
+            .try_get("name")
+            .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+        let provider: String = row
+            .try_get("provider")
+            .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+        let provider_user_id: String = row
+            .try_get("provider_user_id")
+            .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+        let is_admin: bool = row
+            .try_get("is_admin")
+            .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+        let is_editor: bool = row
+            .try_get("is_editor")
+            .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+        let created_at: chrono::DateTime<chrono::Utc> = row
+            .try_get("created_at")
+            .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+        let updated_at: chrono::DateTime<chrono::Utc> = row
+            .try_get("updated_at")
+            .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+
+        let mut roles = vec![UserRole::Authenticated];
+        if is_editor {
+            roles.push(UserRole::Editor);
+        }
+        if is_admin {
+            roles.push(UserRole::Administrator);
+        }
+
+        let providers = vec![ProviderInfo {
+            provider_name: provider,
+            provider_user_id,
+            first_auth_at: datetime_to_system_time(created_at),
+            last_auth_at: datetime_to_system_time(updated_at),
+        }];
+
+        Ok(Some(User {
+            id: db_user_id,
+            email,
+            name,
+            roles,
+            created_at: datetime_to_system_time(created_at),
+            updated_at: datetime_to_system_time(updated_at),
+            providers,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
 /// Upsert a user based on provider authentication
 ///
 /// If a user with the given provider credentials already exists, returns the existing user.
@@ -290,6 +525,77 @@ pub fn upsert_user_with_bootstrap(
         ));
     }
 
+    // Check if this email is in the bootstrap admins list
+    let email_lower = email.to_lowercase();
+    let is_bootstrap_admin = bootstrap_admins
+        .iter()
+        .any(|admin_email| admin_email.to_lowercase() == email_lower);
+
+    let is_admin = is_bootstrap_admin;
+    let is_editor = false; // For now, only admins get editor role automatically
+
+    if is_bootstrap_admin {
+        debug!(
+            "User {} will be granted Administrator role (bootstrap admin)",
+            email
+        );
+    }
+
+    // Try database first
+    if let Some(db) = get_db_pool() {
+        // Use tokio::task::block_in_place to run async code in sync context
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                db_upsert_user(
+                    db.pool(),
+                    &email,
+                    name.as_deref(),
+                    &provider_name,
+                    &provider_user_id,
+                    is_admin,
+                    is_editor,
+                )
+                .await
+            })
+        });
+
+        match result {
+            Ok(user_id) => {
+                // Also update in-memory cache for consistency
+                let _ = upsert_user_in_memory(
+                    email.clone(),
+                    name.clone(),
+                    provider_name.clone(),
+                    provider_user_id.clone(),
+                    bootstrap_admins,
+                );
+                return Ok(user_id);
+            }
+            Err(e) => {
+                warn!("Database upsert failed, falling back to in-memory: {}", e);
+                // Fall through to in-memory implementation
+            }
+        }
+    }
+
+    // Fall back to in-memory implementation
+    upsert_user_in_memory(
+        email,
+        name,
+        provider_name,
+        provider_user_id,
+        bootstrap_admins,
+    )
+}
+
+/// In-memory implementation of upsert user (existing logic)
+fn upsert_user_in_memory(
+    email: String,
+    name: Option<String>,
+    provider_name: String,
+    provider_user_id: String,
+    bootstrap_admins: &[String],
+) -> Result<String, UserRepositoryError> {
     let provider_key = ProviderKey {
         provider_name: provider_name.clone(),
         provider_user_id: provider_user_id.clone(),
@@ -342,8 +648,26 @@ pub fn upsert_user_with_bootstrap(
 
 /// Get a user by their internal ID
 pub fn get_user(user_id: &str) -> Result<User, UserRepositoryError> {
-    let users = safe_lock_users()?;
+    // Try database first
+    if let Some(db) = get_db_pool() {
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(async { db_get_user(db.pool(), user_id).await })
+        });
 
+        match result {
+            Ok(user) => return Ok(user),
+            Err(UserRepositoryError::UserNotFound(_)) => {
+                // User not found in database, fall back to in-memory
+            }
+            Err(e) => {
+                warn!("Database get_user failed, falling back to in-memory: {}", e);
+            }
+        }
+    }
+
+    // Fall back to in-memory
+    let users = safe_lock_users()?;
     users
         .get(user_id)
         .cloned()
@@ -355,6 +679,26 @@ pub fn find_user_by_provider(
     provider_name: &str,
     provider_user_id: &str,
 ) -> Result<Option<User>, UserRepositoryError> {
+    // Try database first
+    if let Some(db) = get_db_pool() {
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                db_find_user_by_provider(db.pool(), provider_name, provider_user_id).await
+            })
+        });
+
+        match result {
+            Ok(user) => return Ok(user),
+            Err(e) => {
+                warn!(
+                    "Database find_user_by_provider failed, falling back to in-memory: {}",
+                    e
+                );
+            }
+        }
+    }
+
+    // Fall back to in-memory
     let provider_key = ProviderKey {
         provider_name: provider_name.to_string(),
         provider_user_id: provider_user_id.to_string(),

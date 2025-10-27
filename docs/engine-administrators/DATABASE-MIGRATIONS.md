@@ -150,7 +150,7 @@ Set `auto_migrate = true` in your `config.toml`:
 
 ```toml
 [repository]
-database_type = "postgresql"
+storage_type = "postgresql"
 database_url = "${APP_REPOSITORY__DATABASE_URL}"
 auto_migrate = true  # Runs migrations on startup
 ```

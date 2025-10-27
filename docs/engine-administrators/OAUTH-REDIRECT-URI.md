@@ -92,9 +92,9 @@ APP_AUTH__PROVIDERS__GOOGLE__REDIRECT_URI=http://localhost:3000/auth/callback/go
 
 ## Quick Reference
 
-| Run Method           | Command             | Access URL                       | Redirect URI                                          |
-| -------------------- | ------------------- | -------------------------------- | ----------------------------------------------------- |
-| Cargo (localhost)    | `make dev-local`    | `http://localhost:3000`          | `http://localhost:3000/auth/callback/google`          |
+| Run Method              | Command             | Access URL                   | Redirect URI                                      |
+| ----------------------- | ------------------- | ---------------------------- | ------------------------------------------------- |
+| Cargo (localhost)       | `make dev-local`    | `http://localhost:3000`      | `http://localhost:3000/auth/callback/google`      |
 | Docker (local.softagen) | `make docker-local` | `https://local.softagen.com` | `https://local.softagen.com/auth/callback/google` |
 
 ## Troubleshooting
