@@ -1,7 +1,12 @@
 services:
   # Caddy reverse proxy with automatic HTTPS
   caddy:
-    image: caddy:2-alpine
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM caddy:2-alpine
+        COPY Caddyfile.production /etc/caddy/Caddyfile
+    # image: caddy:2-alpine
     container_name: aiwebengine-caddy
     restart: unless-stopped
     ports:
@@ -9,7 +14,7 @@ services:
       - "443:443"
       - "443:443/udp"  # HTTP/3 support
     volumes:
-      - ./Caddyfile.production:/etc/caddy/Caddyfile:ro
+      # - ./Caddyfile.production:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
       - caddy-logs:/var/log/caddy

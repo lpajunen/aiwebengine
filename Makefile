@@ -276,9 +276,10 @@ postgres-local-logs:
 	docker-compose -f docker-compose.local.yml logs -f postgres-dev
 
 build-locally-deploy-prod:
-	@echo "Building production Docker image locally for deployment..."
-	@DOCKER_HOST='' docker build -t aiwebengine:latest .
+	@echo "Building production Docker image for amd64 platform using Buildx..."
+	@DOCKER_HOST='' docker buildx create --name aiwebengine-builder --use || true
+	@DOCKER_HOST='' docker buildx build --platform linux/amd64 -t aiwebengine:latest --load .
 	@DOCKER_HOST='' docker save aiwebengine:latest -o aiwebengine_latest.tar
 	scp aiwebengine_latest.tar softagen:/tmp/
-	@ssh softagen 'docker load -i /tmp/aiwebengine_latest.tar && rm /tmp/aiwebengine_latest.tar'
-	@echo "✓ Docker image built and copied to remote server!"
+	ssh softagen 'docker load -i /tmp/aiwebengine_latest.tar && rm /tmp/aiwebengine_latest.tar'
+	@echo "✓ Docker amd64 image built and copied to remote server!"
