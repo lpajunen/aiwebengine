@@ -88,6 +88,8 @@ services:
       - APP_AUTH__PROVIDERS__MICROSOFT__TENANT_ID=${APP_AUTH__PROVIDERS__MICROSOFT__TENANT_ID:-common}
       # Security
       - APP_SECURITY__API_KEY=${APP_SECURITY__API_KEY:-dev-api-key-12345}
+      # AI
+      - SECRET_ANTHROPIC_API_KEY=${SECRET_ANTHROPIC_API_KEY:-}
     networks:
       - aiwebengine-dev-network
     depends_on:

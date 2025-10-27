@@ -71,6 +71,8 @@ services:
       # Repository
       - APP_REPOSITORY__STORAGE_TYPE=postgresql
       - APP_REPOSITORY__DATABASE_URL=postgresql://aiwebengine:${POSTGRES_PASSWORD:-staging-password}@postgres:5432/aiwebengine_staging
+      # AI
+      - SECRET_ANTHROPIC_API_KEY=${SECRET_ANTHROPIC_API_KEY:-}
     networks:
       - aiwebengine-staging-network
     healthcheck:
