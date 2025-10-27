@@ -26,9 +26,10 @@ services:
 
   # Production deployment
   aiwebengine:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
+    image: aiwebengine:latest
     container_name: aiwebengine
     restart: unless-stopped
     # Expose port only to internal network (not to host)

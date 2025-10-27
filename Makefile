@@ -275,3 +275,10 @@ postgres-local-stop:
 postgres-local-logs:
 	docker-compose -f docker-compose.local.yml logs -f postgres-dev
 
+build-locally-deploy-prod:
+	@echo "Building production Docker image locally for deployment..."
+	@DOCKER_HOST='' docker build -t aiwebengine:latest .
+	@DOCKER_HOST='' docker save aiwebengine:latest -o aiwebengine_latest.tar
+	scp aiwebengine_latest.tar softagen:/tmp/
+	@ssh softagen 'docker load -i /tmp/aiwebengine_latest.tar && rm /tmp/aiwebengine_latest.tar'
+	@echo "✓ Docker image built and copied to remote server!"
