@@ -6,7 +6,7 @@
 [server]
 # Bind to all interfaces in production
 host = "0.0.0.0"
-port = 8080
+port = 3000
 # Longer timeout for production reliability
 request_timeout_ms = 30000
 # Larger body limit for production workloads
@@ -14,7 +14,7 @@ max_body_size_mb = 10
 
 [logging]
 # Error level only for production performance
-level = "error"
+level = "info"
 # Structured logging for production log aggregation
 structured = true
 # Log to file only in production
@@ -116,12 +116,12 @@ scopes = ["openid", "email", "profile"]
 
 # Optional: Microsoft Azure AD
 # Uncomment and set via environment variables to enable
-# [auth.providers.microsoft]
-# client_id = "${APP_AUTH_PROVIDERS_MICROSOFT_CLIENT_ID}"
-# client_secret = "${APP_AUTH_PROVIDERS_MICROSOFT_CLIENT_SECRET}"
-# redirect_uri = "${APP_AUTH_PROVIDERS_MICROSOFT_REDIRECT_URI}"
-# tenant_id = "${APP_AUTH_PROVIDERS_MICROSOFT_TENANT_ID}"
-# scopes = ["openid", "email", "profile", "User.Read"]
+[auth.providers.microsoft]
+client_id = "${APP_AUTH_PROVIDERS_MICROSOFT_CLIENT_ID}"
+client_secret = "${APP_AUTH_PROVIDERS_MICROSOFT_CLIENT_SECRET}"
+redirect_uri = "${APP_AUTH_PROVIDERS_MICROSOFT_REDIRECT_URI}"
+tenant_id = "${APP_AUTH_PROVIDERS_MICROSOFT_TENANT_ID}"
+scopes = ["openid", "email", "profile", "User.Read"]
 
 # Optional: Apple Sign In
 # Uncomment and set via environment variables to enable
