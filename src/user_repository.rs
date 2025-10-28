@@ -243,19 +243,17 @@ async fn db_upsert_user(
 ) -> Result<String, UserRepositoryError> {
     let now = chrono::Utc::now();
 
-    // Try to update existing user first
+    // Try to update existing user first (preserve existing roles)
     let update_result = sqlx::query(
         r#"
         UPDATE users
-        SET email = $1, name = $2, is_admin = $3, is_editor = $4, updated_at = $5, last_login_at = $5
-        WHERE provider = $6 AND provider_user_id = $7
+        SET email = $1, name = $2, updated_at = $3, last_login_at = $3
+        WHERE provider = $4 AND provider_user_id = $5
         RETURNING user_id
         "#,
     )
     .bind(email)
     .bind(name)
-    .bind(is_admin)
-    .bind(is_editor)
     .bind(now)
     .bind(provider_name)
     .bind(provider_user_id)
