@@ -465,6 +465,15 @@ pub async fn start_server_with_config(
     // Clone the timeout value to avoid borrow checker issues in async closures
     let script_timeout_ms = config.script_timeout_ms();
 
+    // Bootstrap hardcoded scripts into database if configured
+    info!("Bootstrapping hardcoded scripts into database...");
+    if let Err(e) = repository::bootstrap_scripts() {
+        warn!(
+            "Failed to bootstrap scripts: {}. Continuing with static scripts.",
+            e
+        );
+    }
+
     // Execute all scripts at startup to populate GraphQL registry
     info!("Executing all scripts at startup to populate GraphQL registry...");
     let scripts = repository::fetch_scripts();

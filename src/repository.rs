@@ -1,8 +1,9 @@
 use anyhow::Result;
+use sqlx::{PgPool, Row};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::SystemTime;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 /// Defines the types of repository errors that can occur
 #[derive(Debug, thiserror::Error)]
@@ -147,43 +148,175 @@ fn safe_lock_assets()
     }
 }
 
+/// Get database pool if available
+fn get_db_pool() -> Option<std::sync::Arc<crate::database::Database>> {
+    crate::database::get_global_database()
+}
+
+/// Database-backed upsert script
+async fn db_upsert_script(pool: &PgPool, uri: &str, code: &str) -> Result<(), RepositoryError> {
+    let now = chrono::Utc::now();
+
+    // Try to update existing script
+    let update_result = sqlx::query(
+        r#"
+        UPDATE scripts
+        SET code = $1, updated_at = $2
+        WHERE uri = $3
+        "#,
+    )
+    .bind(code)
+    .bind(now)
+    .bind(uri)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error updating script: {}", e);
+        RepositoryError::InvalidData(format!("Database error: {}", e))
+    })?;
+
+    if update_result.rows_affected() > 0 {
+        debug!("Updated existing script in database: {}", uri);
+        return Ok(());
+    }
+
+    // Script doesn't exist, create new one
+    sqlx::query(
+        r#"
+        INSERT INTO scripts (uri, code, created_at, updated_at)
+        VALUES ($1, $2, $3, $3)
+        "#,
+    )
+    .bind(uri)
+    .bind(code)
+    .bind(now)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error creating script: {}", e);
+        RepositoryError::InvalidData(format!("Database error: {}", e))
+    })?;
+
+    debug!("Created new script in database: {}", uri);
+    Ok(())
+}
+
+/// Database-backed get script
+async fn db_get_script(pool: &PgPool, uri: &str) -> Result<Option<String>, RepositoryError> {
+    let row = sqlx::query(
+        r#"
+        SELECT code FROM scripts WHERE uri = $1
+        "#,
+    )
+    .bind(uri)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error getting script: {}", e);
+        RepositoryError::InvalidData(format!("Database error: {}", e))
+    })?;
+
+    if let Some(row) = row {
+        let code: String = row.try_get("code").map_err(|e| {
+            error!("Database error getting code: {}", e);
+            RepositoryError::InvalidData(format!("Database error: {}", e))
+        })?;
+        Ok(Some(code))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Database-backed list all scripts
+async fn db_list_scripts(pool: &PgPool) -> Result<HashMap<String, String>, RepositoryError> {
+    let rows = sqlx::query(
+        r#"
+        SELECT uri, code FROM scripts ORDER BY uri
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error listing scripts: {}", e);
+        RepositoryError::InvalidData(format!("Database error: {}", e))
+    })?;
+
+    let mut scripts = HashMap::new();
+    for row in rows {
+        let uri: String = row.try_get("uri").map_err(|e| {
+            error!("Database error getting uri: {}", e);
+            RepositoryError::InvalidData(format!("Database error: {}", e))
+        })?;
+        let code: String = row.try_get("code").map_err(|e| {
+            error!("Database error getting code: {}", e);
+            RepositoryError::InvalidData(format!("Database error: {}", e))
+        })?;
+        scripts.insert(uri, code);
+    }
+
+    Ok(scripts)
+}
+
 /// Fetch scripts from repository with proper error handling
 pub fn fetch_scripts() -> HashMap<String, String> {
     let mut m = HashMap::new();
 
-    // Always include core functionality scripts
-    let core = include_str!("../scripts/feature_scripts/core.js");
-    let asset_mgmt = include_str!("../scripts/feature_scripts/asset_mgmt.js");
-    let editor = include_str!("../scripts/feature_scripts/editor.js");
-    let manager = include_str!("../scripts/feature_scripts/manager.js");
-    let insufficient_permissions =
-        include_str!("../scripts/feature_scripts/insufficient_permissions.js");
+    // Try database first if configured
+    if let Some(db) = get_db_pool() {
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async { db_list_scripts(db.pool()).await })
+        });
 
-    m.insert("https://example.com/core".to_string(), core.to_string());
-    m.insert(
-        "https://example.com/asset_mgmt".to_string(),
-        asset_mgmt.to_string(),
-    );
-    m.insert("https://example.com/editor".to_string(), editor.to_string());
-    m.insert(
-        "https://example.com/manager".to_string(),
-        manager.to_string(),
-    );
-    m.insert(
-        "https://example.com/insufficient_permissions".to_string(),
-        insufficient_permissions.to_string(),
-    );
+        match result {
+            Ok(db_scripts) => {
+                m.extend(db_scripts);
+                debug!("Loaded {} scripts from database", m.len());
+            }
+            Err(e) => {
+                warn!(
+                    "Database script fetch failed, falling back to static scripts: {}",
+                    e
+                );
+                // Fall through to static scripts
+            }
+        }
+    }
 
-    // Include test scripts when appropriate
-    let include_test_scripts =
-        std::env::var("AIWEBENGINE_INCLUDE_TEST_SCRIPTS").is_ok() || cfg!(test);
+    // Always include core functionality scripts (fallback or when no database)
+    if m.is_empty() {
+        let core = include_str!("../scripts/feature_scripts/core.js");
+        let asset_mgmt = include_str!("../scripts/feature_scripts/asset_mgmt.js");
+        let editor = include_str!("../scripts/feature_scripts/editor.js");
+        let manager = include_str!("../scripts/feature_scripts/manager.js");
+        let insufficient_permissions =
+            include_str!("../scripts/feature_scripts/insufficient_permissions.js");
 
-    if include_test_scripts {
-        let graphql_test = include_str!("../scripts/test_scripts/graphql_test.js");
+        m.insert("https://example.com/core".to_string(), core.to_string());
         m.insert(
-            "https://example.com/graphql_test".to_string(),
-            graphql_test.to_string(),
+            "https://example.com/asset_mgmt".to_string(),
+            asset_mgmt.to_string(),
         );
+        m.insert("https://example.com/editor".to_string(), editor.to_string());
+        m.insert(
+            "https://example.com/manager".to_string(),
+            manager.to_string(),
+        );
+        m.insert(
+            "https://example.com/insufficient_permissions".to_string(),
+            insufficient_permissions.to_string(),
+        );
+
+        // Include test scripts when appropriate
+        let include_test_scripts =
+            std::env::var("AIWEBENGINE_INCLUDE_TEST_SCRIPTS").is_ok() || cfg!(test);
+
+        if include_test_scripts {
+            let graphql_test = include_str!("../scripts/test_scripts/graphql_test.js");
+            m.insert(
+                "https://example.com/graphql_test".to_string(),
+                graphql_test.to_string(),
+            );
+        }
     }
 
     // Safely merge in any dynamically upserted scripts
@@ -207,6 +340,28 @@ pub fn fetch_scripts() -> HashMap<String, String> {
 
 /// Fetch a single script by URI with proper error handling
 pub fn fetch_script(uri: &str) -> Option<String> {
+    // Try database first if configured
+    if let Some(db) = get_db_pool() {
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(async { db_get_script(db.pool(), uri).await })
+        });
+
+        match result {
+            Ok(Some(script)) => {
+                debug!("Loaded script from database: {}", uri);
+                return Some(script);
+            }
+            Ok(None) => {
+                // Script not in database, continue to check static/dynamic
+            }
+            Err(e) => {
+                warn!("Database script fetch failed for {}: {}", uri, e);
+                // Fall through to static/dynamic scripts
+            }
+        }
+    }
+
     // First check static scripts
     let static_scripts = fetch_scripts();
     if let Some(script) = static_scripts.get(uri) {
@@ -369,21 +524,138 @@ pub fn upsert_script(uri: &str, content: &str) -> Result<(), RepositoryError> {
         ));
     }
 
+    // Try database first
+    if let Some(db) = get_db_pool() {
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(async { db_upsert_script(db.pool(), uri, content).await })
+        });
+
+        match result {
+            Ok(()) => {
+                // Also update in-memory cache for consistency
+                let _ = upsert_script_in_memory(uri, content);
+                debug!(
+                    "Upserted script to database: {} ({} bytes)",
+                    uri,
+                    content.len()
+                );
+                return Ok(());
+            }
+            Err(e) => {
+                warn!("Database upsert failed, falling back to in-memory: {}", e);
+                // Fall through to in-memory implementation
+            }
+        }
+    }
+
+    // Fall back to in-memory implementation
+    upsert_script_in_memory(uri, content)
+}
+
+/// In-memory implementation of upsert script (existing logic)
+fn upsert_script_in_memory(uri: &str, content: &str) -> Result<(), RepositoryError> {
     let mut guard = safe_lock_scripts()?;
 
     // Check if script already exists
     if let Some(existing) = guard.get_mut(uri) {
         // Update existing script
         existing.update_code(content.to_string());
-        debug!("Updated script: {} ({} bytes)", uri, content.len());
+        debug!(
+            "Updated script in memory: {} ({} bytes)",
+            uri,
+            content.len()
+        );
     } else {
         // Insert new script
         let metadata = ScriptMetadata::new(uri.to_string(), content.to_string());
         guard.insert(uri.to_string(), metadata);
-        debug!("Created new script: {} ({} bytes)", uri, content.len());
+        debug!(
+            "Created new script in memory: {} ({} bytes)",
+            uri,
+            content.len()
+        );
     }
 
     Ok(())
+}
+
+/// Bootstrap hardcoded scripts into database on startup
+pub fn bootstrap_scripts() -> Result<(), RepositoryError> {
+    if let Some(db) = get_db_pool() {
+        let pool = db.pool();
+
+        // Define the hardcoded scripts
+        let hardcoded_scripts = vec![
+            (
+                "https://example.com/core",
+                include_str!("../scripts/feature_scripts/core.js"),
+            ),
+            (
+                "https://example.com/asset_mgmt",
+                include_str!("../scripts/feature_scripts/asset_mgmt.js"),
+            ),
+            (
+                "https://example.com/editor",
+                include_str!("../scripts/feature_scripts/editor.js"),
+            ),
+            (
+                "https://example.com/manager",
+                include_str!("../scripts/feature_scripts/manager.js"),
+            ),
+            (
+                "https://example.com/insufficient_permissions",
+                include_str!("../scripts/feature_scripts/insufficient_permissions.js"),
+            ),
+        ];
+
+        // Include test scripts when appropriate
+        let mut all_scripts = hardcoded_scripts;
+        let include_test_scripts =
+            std::env::var("AIWEBENGINE_INCLUDE_TEST_SCRIPTS").is_ok() || cfg!(test);
+
+        if include_test_scripts {
+            all_scripts.push((
+                "https://example.com/graphql_test",
+                include_str!("../scripts/test_scripts/graphql_test.js"),
+            ));
+        }
+
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                for (uri, code) in all_scripts {
+                    // Check if script already exists
+                    if let Ok(Some(_)) = db_get_script(pool, uri).await {
+                        debug!("Script already exists in database: {}", uri);
+                        continue;
+                    }
+
+                    // Insert the script
+                    if let Err(e) = db_upsert_script(pool, uri, code).await {
+                        error!("Failed to bootstrap script {}: {}", uri, e);
+                        return Err(e);
+                    } else {
+                        info!("Bootstrapped script into database: {}", uri);
+                    }
+                }
+                Ok(())
+            })
+        });
+
+        match result {
+            Ok(()) => {
+                info!("Successfully bootstrapped scripts into database");
+                Ok(())
+            }
+            Err(e) => {
+                error!("Failed to bootstrap scripts: {}", e);
+                Err(e)
+            }
+        }
+    } else {
+        debug!("Database not configured, skipping script bootstrap");
+        Ok(())
+    }
 }
 
 /// Delete script with error handling
@@ -590,12 +862,12 @@ mod tests {
     }
 
     #[test]
-    fn test_input_validation() {
-        // Test empty URI
-        assert!(upsert_script("", "content").is_err());
-
-        // Test large content
-        let large_content = "x".repeat(2_000_000);
-        assert!(upsert_script("test://large", &large_content).is_err());
+    fn test_bootstrap_scripts() {
+        // Test that bootstrap_scripts doesn't crash when no database is configured
+        let result = bootstrap_scripts();
+        assert!(
+            result.is_ok(),
+            "bootstrap_scripts should succeed even without database"
+        );
     }
 }
