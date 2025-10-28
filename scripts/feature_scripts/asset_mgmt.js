@@ -88,7 +88,29 @@ function asset_handler(req) {
   }
 }
 
-register("/assets", "asset_handler", "GET");
-register("/assets", "asset_handler", "POST");
-register("/assets/*", "asset_handler", "GET");
-register("/assets/*", "asset_handler", "DELETE");
+// Initialization function - called when script is loaded or updated
+function init(context) {
+  try {
+    writeLog(
+      `Initializing asset_mgmt.js script at ${new Date().toISOString()}`,
+    );
+    writeLog(`Init context: ${JSON.stringify(context)}`);
+
+    // Register the routes
+    register("/assets", "asset_handler", "GET");
+    register("/assets", "asset_handler", "POST");
+    register("/assets/*", "asset_handler", "GET");
+    register("/assets/*", "asset_handler", "DELETE");
+
+    writeLog("Asset management script initialized successfully");
+
+    return {
+      success: true,
+      message: "Asset management script initialized successfully",
+      registeredEndpoints: 4,
+    };
+  } catch (error) {
+    writeLog(`Asset management script initialization failed: ${error.message}`);
+    throw error;
+  }
+}

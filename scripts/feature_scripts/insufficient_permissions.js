@@ -272,5 +272,32 @@ function serveInsufficientPermissions(req) {
   };
 }
 
-// Register the route
-register("/insufficient-permissions", "serveInsufficientPermissions", "GET");
+// Initialization function - called when script is loaded or updated
+function init(context) {
+  try {
+    writeLog(
+      `Initializing insufficient_permissions.js script at ${new Date().toISOString()}`,
+    );
+    writeLog(`Init context: ${JSON.stringify(context)}`);
+
+    // Register the route
+    register(
+      "/insufficient-permissions",
+      "serveInsufficientPermissions",
+      "GET",
+    );
+
+    writeLog("Insufficient permissions script initialized successfully");
+
+    return {
+      success: true,
+      message: "Insufficient permissions script initialized successfully",
+      registeredEndpoints: 1,
+    };
+  } catch (error) {
+    writeLog(
+      `Insufficient permissions script initialization failed: ${error.message}`,
+    );
+    throw error;
+  }
+}
