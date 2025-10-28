@@ -714,11 +714,92 @@ pub fn find_user_by_provider(
     }
 }
 
+/// Database-backed update user roles
+async fn db_update_user_roles(
+    pool: &PgPool,
+    user_id: &str,
+    is_admin: bool,
+    is_editor: bool,
+) -> Result<(), UserRepositoryError> {
+    let now = chrono::Utc::now();
+
+    sqlx::query(
+        r#"
+        UPDATE users
+        SET is_admin = $1, is_editor = $2, updated_at = $3
+        WHERE user_id = $4
+        "#,
+    )
+    .bind(is_admin)
+    .bind(is_editor)
+    .bind(now)
+    .bind(user_id)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error updating user roles: {}", e);
+        UserRepositoryError::InvalidData(format!("Database error: {}", e))
+    })?;
+
+    debug!(
+        "Updated user roles in database: {} (admin: {}, editor: {})",
+        user_id, is_admin, is_editor
+    );
+    Ok(())
+}
+
 /// Update user roles
 ///
 /// Completely replaces the user's role set with the provided roles.
 /// Always ensures at least Authenticated role is present.
 pub fn update_user_roles(user_id: &str, roles: Vec<UserRole>) -> Result<(), UserRepositoryError> {
+    // Calculate boolean flags from roles
+    let is_admin = roles.iter().any(|r| matches!(r, UserRole::Administrator));
+    let is_editor = roles.iter().any(|r| matches!(r, UserRole::Editor));
+
+    // Update database first
+    if let Some(db) = get_db_pool() {
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                db_update_user_roles(db.pool(), user_id, is_admin, is_editor).await
+            })
+        });
+
+        match result {
+            Ok(()) => {
+                // Also update in-memory cache for consistency
+                let mut users = safe_lock_users()?;
+                if let Some(user) = users.get_mut(user_id) {
+                    // Ensure Authenticated role is always present
+                    let mut new_roles = roles;
+                    if !new_roles
+                        .iter()
+                        .any(|r| matches!(r, UserRole::Authenticated))
+                    {
+                        new_roles.push(UserRole::Authenticated);
+                    }
+
+                    user.roles = new_roles;
+                    user.updated_at = SystemTime::now();
+                    debug!("Updated roles for user: {}", user_id);
+                    return Ok(());
+                } else {
+                    warn!(
+                        "User {} not found in memory cache after database update",
+                        user_id
+                    );
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "Database update_user_roles failed, falling back to in-memory: {}",
+                    e
+                );
+            }
+        }
+    }
+
+    // Fall back to in-memory only
     let mut users = safe_lock_users()?;
 
     let user = users
@@ -737,31 +818,27 @@ pub fn update_user_roles(user_id: &str, roles: Vec<UserRole>) -> Result<(), User
     user.roles = new_roles;
     user.updated_at = SystemTime::now();
 
-    debug!("Updated roles for user: {}", user_id);
+    debug!("Updated roles for user (in-memory only): {}", user_id);
     Ok(())
 }
 
 /// Add a role to a user
 pub fn add_user_role(user_id: &str, role: UserRole) -> Result<(), UserRepositoryError> {
-    let mut users = safe_lock_users()?;
+    // Get current user to determine new role flags
+    let current_user = get_user(user_id)?;
+    let mut new_roles = current_user.roles.clone();
+    new_roles.push(role);
 
-    let user = users
-        .get_mut(user_id)
-        .ok_or_else(|| UserRepositoryError::UserNotFound(user_id.to_string()))?;
+    // Remove duplicates
+    new_roles.sort_by(|a, b| format!("{:?}", a).cmp(&format!("{:?}", b)));
+    new_roles.dedup();
 
-    user.add_role(role);
-    debug!("Added role to user: {}", user_id);
-    Ok(())
+    // Update with new roles
+    update_user_roles(user_id, new_roles)
 }
 
 /// Remove a role from a user
 pub fn remove_user_role(user_id: &str, role: &UserRole) -> Result<(), UserRepositoryError> {
-    let mut users = safe_lock_users()?;
-
-    let user = users
-        .get_mut(user_id)
-        .ok_or_else(|| UserRepositoryError::UserNotFound(user_id.to_string()))?;
-
     // Don't allow removing Authenticated role
     if matches!(role, UserRole::Authenticated) {
         return Err(UserRepositoryError::InvalidData(
@@ -769,13 +846,122 @@ pub fn remove_user_role(user_id: &str, role: &UserRole) -> Result<(), UserReposi
         ));
     }
 
-    user.remove_role(role);
-    debug!("Removed role from user: {}", user_id);
-    Ok(())
+    // Get current user to determine new role flags
+    let current_user = get_user(user_id)?;
+    let mut new_roles = current_user.roles.clone();
+    new_roles.retain(|r| r != role);
+
+    // Update with new roles
+    update_user_roles(user_id, new_roles)
 }
 
 /// List all users (for admin purposes)
 pub fn list_users() -> Result<Vec<User>, UserRepositoryError> {
+    // Try database first
+    if let Some(db) = get_db_pool() {
+        let result: Result<Vec<User>, UserRepositoryError> = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                let pool = db.pool();
+                let rows = sqlx::query(
+                    r#"
+                    SELECT user_id, email, name, provider, provider_user_id, is_admin, is_editor, created_at, updated_at
+                    FROM users
+                    ORDER BY created_at DESC
+                    "#,
+                )
+                .fetch_all(pool)
+                .await
+                .map_err(|e| {
+                    error!("Database error listing users: {}", e);
+                    UserRepositoryError::InvalidData(format!("Database error: {}", e))
+                })?;
+
+                let mut users = Vec::new();
+                for row in rows {
+                    let db_user_id: String = row
+                        .try_get("user_id")
+                        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+                    let email: String = row
+                        .try_get("email")
+                        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+                    let name: Option<String> = row
+                        .try_get("name")
+                        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+                    let provider: String = row
+                        .try_get("provider")
+                        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+                    let provider_user_id: String = row
+                        .try_get("provider_user_id")
+                        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+                    let is_admin: bool = row
+                        .try_get("is_admin")
+                        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+                    let is_editor: bool = row
+                        .try_get("is_editor")
+                        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+                    let created_at: chrono::DateTime<chrono::Utc> = row
+                        .try_get("created_at")
+                        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+                    let updated_at: chrono::DateTime<chrono::Utc> = row
+                        .try_get("updated_at")
+                        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+
+                    let mut roles = vec![UserRole::Authenticated];
+                    if is_editor {
+                        roles.push(UserRole::Editor);
+                    }
+                    if is_admin {
+                        roles.push(UserRole::Administrator);
+                    }
+
+                    let providers = vec![ProviderInfo {
+                        provider_name: provider,
+                        provider_user_id,
+                        first_auth_at: datetime_to_system_time(created_at),
+                        last_auth_at: datetime_to_system_time(updated_at),
+                    }];
+
+                    let user = User {
+                        id: db_user_id.clone(),
+                        email,
+                        name,
+                        roles,
+                        created_at: datetime_to_system_time(created_at),
+                        updated_at: datetime_to_system_time(updated_at),
+                        providers,
+                    };
+
+                    // Also update in-memory cache for consistency
+                    let mut users_cache = safe_lock_users()?;
+                    let mut provider_index = safe_lock_provider_index()?;
+                    users_cache.insert(db_user_id, user.clone());
+                    provider_index.insert(
+                        ProviderKey {
+                            provider_name: user.providers[0].provider_name.clone(),
+                            provider_user_id: user.providers[0].provider_user_id.clone(),
+                        },
+                        user.id.clone(),
+                    );
+
+                    users.push(user);
+                }
+
+                Ok(users)
+            })
+        });
+
+        match result {
+            Ok(users) => return Ok(users),
+            Err(e) => {
+                warn!(
+                    "Database list_users failed, falling back to in-memory: {}",
+                    e
+                );
+            }
+        }
+    }
+
+    // Fall back to in-memory
     let users = safe_lock_users()?;
     Ok(users.values().cloned().collect())
 }

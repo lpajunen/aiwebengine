@@ -50,6 +50,8 @@ pub struct AuthResponse {
     pub success: bool,
     pub session_token: Option<String>,
     pub user_id: Option<String>,
+    pub is_admin: Option<bool>,
+    pub is_editor: Option<bool>,
     pub redirect: Option<String>,
 }
 
@@ -352,14 +354,14 @@ async fn auth_status(
         });
 
     if let Some(token) = session_token
-        && let Ok(user_id) = auth_manager
-            .validate_session(token, &ip_addr, &user_agent)
-            .await
+        && let Ok(session) = auth_manager.get_session(token, &ip_addr, &user_agent).await
     {
         return Json(AuthResponse {
             success: true,
             session_token: Some(token.to_string()),
-            user_id: Some(user_id),
+            user_id: Some(session.user_id),
+            is_admin: Some(session.is_admin),
+            is_editor: Some(session.is_editor),
             redirect: None,
         });
     }
@@ -368,6 +370,8 @@ async fn auth_status(
         success: false,
         session_token: None,
         user_id: None,
+        is_admin: None,
+        is_editor: None,
         redirect: Some("/auth/login".to_string()),
     })
 }
