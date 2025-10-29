@@ -393,6 +393,91 @@ function apiSaveScript(req) {
   }
 }
 
+// API: Delete script
+function apiDeleteScript(req) {
+  try {
+    // Extract the script name from the path
+    let scriptName = req.path.replace("/api/scripts/", "");
+
+    // URL decode the script name in case it contains encoded characters
+    scriptName = decodeURIComponent(scriptName);
+
+    // If it's already a full URI, use it as-is
+    // If it's just a short name, convert it to full URI
+    let fullUri;
+    if (scriptName.startsWith("https://")) {
+      fullUri = scriptName;
+    } else {
+      fullUri = "https://example.com/" + scriptName;
+    }
+
+    if (typeof deleteScript === "function") {
+      const deleted = deleteScript(fullUri);
+
+      if (deleted) {
+        // Broadcast the script removal notification
+        if (typeof sendStreamMessageToPath === "function") {
+          try {
+            const message = {
+              type: "script_update",
+              uri: fullUri,
+              action: "removed",
+              timestamp: new Date().toISOString(),
+              via: "editor",
+            };
+            sendStreamMessageToPath("/script_updates", JSON.stringify(message));
+            writeLog("Broadcasted script deletion from editor: " + fullUri);
+          } catch (broadcastError) {
+            writeLog(
+              "Failed to broadcast script deletion from editor: " +
+                broadcastError.message,
+            );
+          }
+        }
+
+        writeLog("Script deleted via editor API: " + fullUri);
+        return {
+          status: 200,
+          body: JSON.stringify({
+            message: "Script deleted successfully",
+            uri: fullUri,
+          }),
+          contentType: "application/json",
+        };
+      } else {
+        writeLog("Script not found for deletion via editor API: " + fullUri);
+        return {
+          status: 404,
+          body: JSON.stringify({
+            error: "Script not found",
+            message: "No script with the specified name was found",
+            uri: fullUri,
+          }),
+          contentType: "application/json",
+        };
+      }
+    } else {
+      return {
+        status: 500,
+        body: JSON.stringify({
+          error: "deleteScript function not available",
+        }),
+        contentType: "application/json",
+      };
+    }
+  } catch (error) {
+    writeLog("Script deletion failed via editor API: " + error.message);
+    return {
+      status: 500,
+      body: JSON.stringify({
+        error: "Failed to delete script",
+        details: error.message,
+      }),
+      contentType: "application/json",
+    };
+  }
+}
+
 // API: Get logs
 function apiGetLogs(req) {
   try {
@@ -782,6 +867,7 @@ function init(context) {
   register("/api/scripts", "apiListScripts", "GET");
   register("/api/scripts/*", "apiGetScript", "GET");
   register("/api/scripts/*", "apiSaveScript", "POST");
+  register("/api/scripts/*", "apiDeleteScript", "DELETE");
   register("/api/logs", "apiGetLogs", "GET");
   register("/api/assets", "apiGetAssets", "GET");
   register("/api/ai-assistant", "apiAIAssistant", "POST");
