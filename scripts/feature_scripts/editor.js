@@ -633,16 +633,20 @@ AVAILABLE JAVASCRIPT APIs:
 5. sendStreamMessage(data) - Broadcast to all stream clients
    - data: object (will be JSON serialized)
 
-6. getSecret(key) - Retrieve secret value
-   - key: string
-   - Returns: string or null
+6. registerGraphQLQuery(name, schema, resolverName) - Register GraphQL query
+   - name: string (query name)
+   - schema: string (GraphQL schema definition)
+   - resolverName: string (name of resolver function)
 
-7. listScripts() - Get list of all script URIs
-   - Returns: array of strings
+7. registerGraphQLMutation(name, schema, resolverName) - Register GraphQL mutation
+   - name: string (mutation name)
+   - schema: string (GraphQL schema definition)
+   - resolverName: string (name of resolver function)
 
-8. getScript(uri) - Get script content
-   - uri: string
-   - Returns: string (script content)
+8. registerGraphQLSubscription(name, schema, resolverName) - Register GraphQL subscription
+   - name: string (subscription name)
+   - schema: string (GraphQL schema definition)
+   - resolverName: string (name of resolver function)
 
 RESPONSE FORMAT - YOU MUST RESPOND WITH ONLY THIS JSON STRUCTURE:
 {
