@@ -257,6 +257,31 @@ async fn db_list_scripts(pool: &PgPool) -> Result<HashMap<String, String>, Repos
     Ok(scripts)
 }
 
+/// Database-backed delete script
+async fn db_delete_script(pool: &PgPool, uri: &str) -> Result<bool, RepositoryError> {
+    let result = sqlx::query(
+        r#"
+        DELETE FROM scripts WHERE uri = $1
+        "#,
+    )
+    .bind(uri)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error deleting script: {}", e);
+        RepositoryError::InvalidData(format!("Database error: {}", e))
+    })?;
+
+    let existed = result.rows_affected() > 0;
+    if existed {
+        debug!("Deleted script from database: {}", uri);
+    } else {
+        debug!("Script not found in database for deletion: {}", uri);
+    }
+
+    Ok(existed)
+}
+
 /// Fetch scripts from repository with proper error handling
 pub fn fetch_scripts() -> HashMap<String, String> {
     let mut m = HashMap::new();
@@ -660,13 +685,45 @@ pub fn bootstrap_scripts() -> Result<(), RepositoryError> {
 
 /// Delete script with error handling
 pub fn delete_script(uri: &str) -> bool {
+    // Try database first if configured
+    if let Some(db) = get_db_pool() {
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(async { db_delete_script(db.pool(), uri).await })
+        });
+
+        match result {
+            Ok(existed) => {
+                // Also remove from in-memory cache for consistency
+                let _ = safe_lock_scripts()
+                    .map(|mut guard| guard.remove(uri))
+                    .map_err(|e| warn!("Failed to remove script from memory cache: {}", e));
+
+                if existed {
+                    debug!("Deleted script from database: {}", uri);
+                } else {
+                    debug!("Script not found in database for deletion: {}", uri);
+                }
+                return existed;
+            }
+            Err(e) => {
+                warn!("Database delete failed, falling back to in-memory: {}", e);
+                // Fall through to in-memory implementation
+            }
+        }
+    }
+
+    // Fall back to in-memory implementation
     match safe_lock_scripts() {
         Ok(mut guard) => {
             let existed = guard.remove(uri).is_some();
             if existed {
-                debug!("Deleted script: {}", uri);
+                debug!("Deleted script from memory: {}", uri);
             } else {
-                debug!("Attempted to delete non-existent script: {}", uri);
+                debug!(
+                    "Attempted to delete non-existent script from memory: {}",
+                    uri
+                );
             }
             existed
         }
