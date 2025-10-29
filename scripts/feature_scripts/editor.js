@@ -527,6 +527,27 @@ function apiGetAssets(req) {
   }
 }
 
+// API: List all registered routes
+function apiListRoutes(req) {
+  try {
+    const routes = typeof listRoutes === "function" ? listRoutes() : "[]";
+    // Parse and re-stringify to ensure valid JSON
+    const routesData = JSON.parse(routes);
+
+    return {
+      status: 200,
+      body: JSON.stringify(routesData),
+      contentType: "application/json",
+    };
+  } catch (error) {
+    return {
+      status: 500,
+      body: JSON.stringify({ error: error.message }),
+      contentType: "application/json",
+    };
+  }
+}
+
 // API: AI Assistant prompt handler
 function apiAIAssistant(req) {
   // Debug: Log the raw request body
@@ -870,6 +891,7 @@ function init(context) {
   register("/api/scripts/*", "apiDeleteScript", "DELETE");
   register("/api/logs", "apiGetLogs", "GET");
   register("/api/assets", "apiGetAssets", "GET");
+  register("/api/routes", "apiListRoutes", "GET");
   register("/api/ai-assistant", "apiAIAssistant", "POST");
   writeLog("Editor endpoints registered");
   return { success: true };

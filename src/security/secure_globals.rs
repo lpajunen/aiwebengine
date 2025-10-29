@@ -416,7 +416,60 @@ impl SecureGlobalContext {
         )?;
         global.set("getScriptInitStatus", get_script_init_status)?;
 
-        // Secure upsertScript function
+        // Secure listRoutes function - returns all route registrations from all scripts
+        let user_ctx_routes = user_context.clone();
+        let list_routes = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
+                // Check capability - same as getScript
+                if let Err(_e) =
+                    user_ctx_routes.require_capability(&crate::security::Capability::ReadScripts)
+                {
+                    return Ok("[]".to_string()); // Return empty array if no permission
+                }
+
+                debug!(
+                    user_id = ?user_ctx_routes.user_id,
+                    "Secure listRoutes called"
+                );
+
+                // Get all script metadata
+                match repository::get_all_script_metadata() {
+                    Ok(metadata_list) => {
+                        // Collect all route registrations
+                        let mut routes = Vec::new();
+
+                        for metadata in metadata_list {
+                            if metadata.initialized {
+                                for ((path, method), handler) in &metadata.registrations {
+                                    routes.push(serde_json::json!({
+                                        "path": path,
+                                        "method": method,
+                                        "handler": handler,
+                                        "script": metadata.uri
+                                    }));
+                                }
+                            }
+                        }
+
+                        // Sort routes by path for consistent ordering
+                        routes.sort_by(|a, b| {
+                            let path_a = a.get("path").and_then(|p| p.as_str()).unwrap_or("");
+                            let path_b = b.get("path").and_then(|p| p.as_str()).unwrap_or("");
+                            path_a.cmp(path_b)
+                        });
+
+                        // Serialize to JSON string
+                        Ok(serde_json::to_string(&routes).unwrap_or_else(|_| "[]".to_string()))
+                    }
+                    Err(e) => {
+                        warn!("Failed to get script metadata for routes: {}", e);
+                        Ok("[]".to_string())
+                    }
+                }
+            },
+        )?;
+        global.set("listRoutes", list_routes)?;
         let user_ctx_upsert = user_context.clone();
         let _config_upsert = self.config.clone();
         let upsert_script = Function::new(

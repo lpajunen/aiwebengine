@@ -495,11 +495,34 @@ function init(context) {
   // Routes Management
   async loadRoutes() {
     try {
-      // This would need a backend endpoint to list routes
-      // For now, show a placeholder
+      const response = await fetch("/api/routes");
+      const routes = await response.json();
+
       const routesList = document.getElementById("routes-list");
-      routesList.innerHTML =
-        '<div class="loading">Routes listing not yet implemented</div>';
+      routesList.innerHTML = "";
+
+      if (routes.length === 0) {
+        routesList.innerHTML =
+          '<div class="no-routes">No routes registered yet</div>';
+        return;
+      }
+
+      routes.forEach((route) => {
+        const routeElement = document.createElement("div");
+        routeElement.innerHTML = this.templates["route-item"]({
+          method: route.method,
+          path: route.path,
+          handler: route.handler,
+        });
+
+        // Add event listener for test button
+        const testBtn = routeElement.querySelector(".test-btn");
+        testBtn.addEventListener("click", () => {
+          this.testRoute(route.path, route.method);
+        });
+
+        routesList.appendChild(routeElement.firstElementChild);
+      });
     } catch (error) {
       this.showStatus("Error loading routes: " + error.message, "error");
     }
@@ -517,6 +540,22 @@ function init(context) {
       })
       .catch((error) => {
         alert(`Error: ${error.message}`);
+      });
+  }
+
+  testRoute(path, method) {
+    const testUrl = prompt(`Test ${method} ${path}:`, path);
+    if (!testUrl) return;
+
+    // For simplicity, we'll do a GET request regardless of the method
+    // In a real implementation, you'd want to handle different HTTP methods
+    fetch(testUrl)
+      .then((response) => response.text())
+      .then((data) => {
+        alert(`Response from ${method} ${path}:\n${data}`);
+      })
+      .catch((error) => {
+        alert(`Error testing ${method} ${path}: ${error.message}`);
       });
   }
 
