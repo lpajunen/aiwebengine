@@ -32,6 +32,59 @@ impl GraphQLRegistry {
         Self::default()
     }
 
+    /// Clear all registrations from a specific script URI
+    pub fn clear_script_registrations(&mut self, script_uri: &str) {
+        debug!("Clearing GraphQL registrations for script: {}", script_uri);
+
+        // Remove queries from this script
+        let queries_to_remove: Vec<String> = self
+            .queries
+            .iter()
+            .filter(|(_, op)| op.script_uri == script_uri)
+            .map(|(name, _)| name.clone())
+            .collect();
+
+        for query_name in queries_to_remove {
+            self.queries.remove(&query_name);
+            debug!(
+                "Removed query '{}' from script '{}'",
+                query_name, script_uri
+            );
+        }
+
+        // Remove mutations from this script
+        let mutations_to_remove: Vec<String> = self
+            .mutations
+            .iter()
+            .filter(|(_, op)| op.script_uri == script_uri)
+            .map(|(name, _)| name.clone())
+            .collect();
+
+        for mutation_name in mutations_to_remove {
+            self.mutations.remove(&mutation_name);
+            debug!(
+                "Removed mutation '{}' from script '{}'",
+                mutation_name, script_uri
+            );
+        }
+
+        // Remove subscriptions from this script
+        let subscriptions_to_remove: Vec<String> = self
+            .subscriptions
+            .iter()
+            .filter(|(_, op)| op.script_uri == script_uri)
+            .map(|(name, _)| name.clone())
+            .collect();
+
+        for subscription_name in subscriptions_to_remove {
+            self.subscriptions.remove(&subscription_name);
+            debug!(
+                "Removed subscription '{}' from script '{}'",
+                subscription_name, script_uri
+            );
+        }
+    }
+
     /// Register a GraphQL query
     pub fn register_query(&mut self, name: String, operation: GraphQLOperation) {
         debug!("Registering GraphQL query: {}", name);
@@ -102,6 +155,20 @@ pub fn rebuild_schema() -> Result<Schema, async_graphql::Error> {
     }
 
     Ok(schema)
+}
+
+/// Clear all GraphQL registrations from a specific script URI
+pub fn clear_script_graphql_registrations(script_uri: &str) {
+    debug!("Clearing GraphQL registrations for script: {}", script_uri);
+    if let Ok(mut registry) = get_registry().write() {
+        registry.clear_script_registrations(script_uri);
+        debug!(
+            "Successfully cleared GraphQL registrations for script: {}",
+            script_uri
+        );
+    } else {
+        error!("Failed to acquire write lock on GraphQL registry for clearing");
+    }
 }
 
 /// Register a GraphQL query from JavaScript

@@ -830,3 +830,73 @@ async fn test_graphql_script_mutations() {
     // Cleanup
     context.cleanup().await.expect("Failed to cleanup");
 }
+
+#[tokio::test]
+async fn test_graphql_registration_clearing() {
+    use aiwebengine::graphql::{
+        GRAPHQL_REGISTRY, GraphQLOperation, clear_script_graphql_registrations,
+    };
+
+    // Test that clearing GraphQL registrations works
+    let script_uri = "http://test/clear_test";
+
+    // First, simulate adding some registrations to the registry
+    {
+        let mut registry = GRAPHQL_REGISTRY.write().unwrap();
+        registry.queries.insert(
+            script_uri.to_string(),
+            GraphQLOperation {
+                sdl: "type Query { testQuery: String }".to_string(),
+                resolver_function: "testResolver".to_string(),
+                script_uri: script_uri.to_string(),
+            },
+        );
+        registry.mutations.insert(
+            script_uri.to_string(),
+            GraphQLOperation {
+                sdl: "type Mutation { testMutation: String }".to_string(),
+                resolver_function: "testMutationResolver".to_string(),
+                script_uri: script_uri.to_string(),
+            },
+        );
+        registry.subscriptions.insert(
+            script_uri.to_string(),
+            GraphQLOperation {
+                sdl: "type Subscription { testSubscription: String }".to_string(),
+                resolver_function: "testSubscriptionResolver".to_string(),
+                script_uri: script_uri.to_string(),
+            },
+        );
+    }
+
+    // Verify they were added
+    {
+        let registry = GRAPHQL_REGISTRY.read().unwrap();
+        assert!(registry.queries.contains_key(script_uri));
+        assert!(registry.mutations.contains_key(script_uri));
+        assert!(registry.subscriptions.contains_key(script_uri));
+        assert_eq!(
+            registry.queries[script_uri].resolver_function,
+            "testResolver"
+        );
+        assert_eq!(
+            registry.mutations[script_uri].resolver_function,
+            "testMutationResolver"
+        );
+        assert_eq!(
+            registry.subscriptions[script_uri].resolver_function,
+            "testSubscriptionResolver"
+        );
+    }
+
+    // Clear the registrations
+    clear_script_graphql_registrations(script_uri);
+
+    // Verify they were cleared
+    {
+        let registry = GRAPHQL_REGISTRY.read().unwrap();
+        assert!(!registry.queries.contains_key(script_uri));
+        assert!(!registry.mutations.contains_key(script_uri));
+        assert!(!registry.subscriptions.contains_key(script_uri));
+    }
+}

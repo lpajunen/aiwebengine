@@ -505,6 +505,9 @@ impl SecureGlobalContext {
                 // This calls the init() function if it exists
                 let script_name_for_init = script_name.clone();
                 tokio::task::spawn(async move {
+                    // Clear any existing GraphQL registrations from this script before re-initializing
+                    crate::graphql::clear_script_graphql_registrations(&script_name_for_init);
+
                     let initializer = crate::script_init::ScriptInitializer::new(5000); // 5s timeout
                     match initializer
                         .initialize_script(&script_name_for_init, false)
