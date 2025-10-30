@@ -28,6 +28,9 @@ pub mod user_repository;
 // Authentication module (Phase 1 - Core Infrastructure)
 pub mod auth;
 
+// Documentation module
+pub mod docs;
+
 use security::UserContext;
 
 /// Parses a query string into a HashMap of key-value pairs
@@ -1081,6 +1084,11 @@ pub async fn start_server_with_config(
             .route("/graphql", axum::routing::post(graphql_post))
             .route("/graphql/sse", axum::routing::post(graphql_sse));
     }
+
+    // Add documentation routes
+    app = app.route("/docs", axum::routing::get(|axum::extract::Path(()): axum::extract::Path<()>| async { docs::handle_docs_request(String::new()).await }));
+    app = app.route("/docs/", axum::routing::get(|axum::extract::Path(()): axum::extract::Path<()>| async { docs::handle_docs_request(String::new()).await }));
+    app = app.route("/docs/{*path}", axum::routing::get(docs::handle_docs_request));
 
     // Add catch-all dynamic routes
     let auth_enabled_for_home = auth_enabled;
