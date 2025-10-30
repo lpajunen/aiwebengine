@@ -1206,6 +1206,120 @@ impl SecureGlobalContext {
         )?;
         global.set("registerGraphQLSubscription", register_graphql_subscription)?;
 
+        // Secure executeGraphQL function
+        let user_ctx_execute = user_context.clone();
+        let auditor_execute = auditor.clone();
+        let script_uri_execute = script_uri_owned.clone();
+        let config_execute = self.config.clone();
+        let execute_graphql = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  query: String,
+                  variables_json: Option<String>|
+                  -> JsResult<String> {
+                // If GraphQL execution is disabled, return error
+                debug!(
+                    "executeGraphQL called: query_length={}, enable_graphql_execution={}",
+                    query.len(),
+                    config_execute.enable_graphql_registration // Reuse existing config for now
+                );
+                if !config_execute.enable_graphql_registration {
+                    debug!("GraphQL execution disabled, rejecting executeGraphQL call");
+                    return Ok(
+                        "{\"errors\": [{\"message\": \"GraphQL execution is disabled\"}]}"
+                            .to_string(),
+                    );
+                }
+
+                // Check capability
+                if let Err(e) =
+                    user_ctx_execute.require_capability(&crate::security::Capability::ManageGraphQL)
+                {
+                    // Use spawn for fire-and-forget audit logging to avoid runtime conflicts
+                    let auditor_clone = auditor_execute.clone();
+                    let user_id = user_ctx_execute.user_id.clone();
+                    tokio::task::spawn(async move {
+                        let _ = auditor_clone
+                            .log_authz_failure(
+                                user_id,
+                                "graphql".to_string(),
+                                "execute".to_string(),
+                                "ManageGraphQL".to_string(),
+                            )
+                            .await;
+                    });
+                    return Ok(format!("{{\"errors\": [{{\"message\": \"{}\"}}]}}", e));
+                }
+
+                // Validate query
+                if query.is_empty() || query.len() > 100_000 {
+                    return Ok("{\"errors\": [{\"message\": \"Invalid query: must be between 1 and 100,000 characters\"}]}".to_string());
+                }
+
+                // Parse variables if provided
+                let variables = if let Some(vars_json) = variables_json {
+                    if vars_json.len() > 50_000 {
+                        return Ok("{\"errors\": [{\"message\": \"Variables too large: max 50,000 characters\"}]}".to_string());
+                    }
+                    match serde_json::from_str::<serde_json::Value>(&vars_json) {
+                        Ok(v) => Some(v),
+                        Err(e) => {
+                            return Ok(format!(
+                                "{{\"errors\": [{{\"message\": \"Invalid variables JSON: {}\"}}]}}",
+                                e
+                            ));
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                // Log the operation attempt using spawn to avoid runtime conflicts
+                let auditor_clone = auditor_execute.clone();
+                let user_id = user_ctx_execute.user_id.clone();
+                let query_clone = query.clone();
+                let script_uri_clone = script_uri_execute.clone();
+                tokio::task::spawn(async move {
+                    let _ = auditor_clone
+                        .log_event(
+                            crate::security::SecurityEvent::new(
+                                SecurityEventType::SystemSecurityEvent,
+                                SecuritySeverity::Medium,
+                                user_id,
+                            )
+                            .with_resource("graphql".to_string())
+                            .with_action("execute".to_string())
+                            .with_detail("script_uri", &script_uri_clone)
+                            .with_detail("query_length", query_clone.len().to_string()),
+                        )
+                        .await;
+                });
+
+                debug!(
+                    user_id = ?user_ctx_execute.user_id,
+                    query_len = query.len(),
+                    has_variables = variables.is_some(),
+                    "Secure executeGraphQL called"
+                );
+
+                // Execute the GraphQL query
+                match crate::graphql::execute_graphql_query_sync(&query, variables) {
+                    Ok(result_json) => {
+                        debug!("GraphQL execution successful");
+                        Ok(result_json)
+                    }
+                    Err(e) => {
+                        tracing::error!("GraphQL execution failed: {}", e);
+                        Ok(format!(
+                            "{{\"errors\": [{{\"message\": \"GraphQL execution failed: {}\"}}]}}",
+                            e
+                        ))
+                    }
+                }
+            },
+        )?;
+        global.set("executeGraphQL", execute_graphql)?;
+
         Ok(())
     }
 

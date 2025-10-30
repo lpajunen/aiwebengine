@@ -648,6 +648,11 @@ AVAILABLE JAVASCRIPT APIs:
    - schema: string (GraphQL schema definition)
    - resolverName: string (name of resolver function)
 
+9. executeGraphQL(query, variables) - Execute GraphQL query
+   - query: string (GraphQL query string)
+   - variables: string (optional JSON string of variables)
+   - Returns: JSON string with GraphQL response
+
 RESPONSE FORMAT - YOU MUST RESPOND WITH ONLY THIS JSON STRUCTURE:
 {
   "type": "explanation" | "create_script" | "edit_script" | "delete_script",

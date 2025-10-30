@@ -323,6 +323,456 @@ eventSource.onerror = function (event) {
 - **Limit message frequency**: Avoid overwhelming clients with too many messages
 - **Use meaningful paths**: Organize streams logically (e.g., `/chat/room1`, `/notifications/user123`)
 
+## GraphQL APIs
+
+aiwebengine provides comprehensive GraphQL support, allowing you to register GraphQL operations and execute queries directly from your JavaScript scripts.
+
+### registerGraphQLQuery(name, schema, resolverName)
+
+Registers a GraphQL query that can be executed through the GraphQL endpoint.
+
+**Parameters:**
+
+- `name` (string): Name of the query (e.g., `"users"`, `"getPosts"`)
+- `schema` (string): GraphQL schema definition in SDL format
+- `resolverName` (string): Name of your JavaScript resolver function
+
+**Example:**
+
+```javascript
+// Define a simple query
+function getUsers() {
+  return JSON.stringify([
+    { id: 1, name: "Alice", email: "alice@example.com" },
+    { id: 2, name: "Bob", email: "bob@example.com" },
+  ]);
+}
+
+// Register the query
+registerGraphQLQuery(
+  "users",
+  `type User {
+    id: Int!
+    name: String!
+    email: String!
+  }
+  type Query {
+    users: [User!]!
+  }`,
+  "getUsers",
+);
+```
+
+**Example with Arguments:**
+
+```javascript
+function getUserById(args) {
+  const userId = args.id;
+  // Simulate database lookup
+  const users = [
+    { id: 1, name: "Alice", email: "alice@example.com" },
+    { id: 2, name: "Bob", email: "bob@example.com" },
+  ];
+
+  const user = users.find((u) => u.id === userId);
+  return user ? JSON.stringify(user) : JSON.stringify(null);
+}
+
+registerGraphQLQuery(
+  "user",
+  `type User {
+    id: Int!
+    name: String!
+    email: String!
+  }
+  type Query {
+    user(id: Int!): User
+  }`,
+  "getUserById",
+);
+```
+
+### registerGraphQLMutation(name, schema, resolverName)
+
+Registers a GraphQL mutation for modifying data.
+
+**Parameters:**
+
+- `name` (string): Name of the mutation
+- `schema` (string): GraphQL schema definition in SDL format
+- `resolverName` (string): Name of your JavaScript resolver function
+
+**Example:**
+
+```javascript
+function createUser(args) {
+  const { name, email } = args;
+
+  // Simulate creating a user
+  const newUser = {
+    id: Date.now(), // Simple ID generation
+    name: name,
+    email: email,
+    createdAt: new Date().toISOString(),
+  };
+
+  writeLog(`Created user: ${name} (${email})`);
+
+  return JSON.stringify(newUser);
+}
+
+registerGraphQLMutation(
+  "createUser",
+  `type User {
+    id: Int!
+    name: String!
+    email: String!
+    createdAt: String!
+  }
+  type Mutation {
+    createUser(name: String!, email: String!): User!
+  }`,
+  "createUser",
+);
+```
+
+### registerGraphQLSubscription(name, schema, resolverName)
+
+Registers a GraphQL subscription for real-time data streaming.
+
+**Parameters:**
+
+- `name` (string): Name of the subscription
+- `schema` (string): GraphQL schema definition in SDL format
+- `resolverName` (string): Name of your JavaScript resolver function
+
+**Example:**
+
+```javascript
+function onUserActivity() {
+  // Initial subscription message
+  return {
+    type: "subscription_started",
+    message: "User activity monitoring started",
+    timestamp: new Date().toISOString(),
+  };
+}
+
+registerGraphQLSubscription(
+  "userActivity",
+  `type ActivityEvent {
+    type: String!
+    message: String!
+    timestamp: String!
+    userId: String
+  }
+  type Subscription {
+    userActivity: ActivityEvent!
+  }`,
+  "onUserActivity",
+);
+```
+
+### sendSubscriptionMessage(subscriptionName, data)
+
+Sends a message to all clients subscribed to a specific GraphQL subscription.
+
+**Parameters:**
+
+- `subscriptionName` (string): Name of the subscription to send to
+- `data` (string): JSON string containing the message data
+
+**Example:**
+
+```javascript
+function logUserAction(req) {
+  const { userId, action } = req.form;
+
+  // Send real-time update to subscribers
+  const message = JSON.stringify({
+    type: "user_action",
+    userId: userId,
+    action: action,
+    timestamp: new Date().toISOString(),
+  });
+
+  sendSubscriptionMessage("userActivity", message);
+
+  return {
+    status: 200,
+    body: "Action logged",
+    contentType: "text/plain",
+  };
+}
+
+register("/log-action", "logUserAction", "POST");
+```
+
+### executeGraphQL(query, variables)
+
+Executes a GraphQL query or mutation directly against the registered schema without making an HTTP request.
+
+**Parameters:**
+
+- `query` (string): GraphQL query/mutation string
+- `variables` (string, optional): JSON string containing variables for the query
+
+**Returns:** JSON string containing the GraphQL response with `data` and/or `errors` fields
+
+**Example - Simple Query:**
+
+```javascript
+function listScriptsHandler(req) {
+  const query = `
+    query {
+      scripts {
+        uri
+        chars
+      }
+    }
+  `;
+
+  try {
+    const resultJson = executeGraphQL(query);
+    const result = JSON.parse(resultJson);
+
+    if (result.errors) {
+      writeLog("GraphQL errors: " + JSON.stringify(result.errors));
+      return {
+        status: 500,
+        body: "GraphQL query failed",
+        contentType: "text/plain",
+      };
+    }
+
+    return {
+      status: 200,
+      body: JSON.stringify(result.data),
+      contentType: "application/json",
+    };
+  } catch (error) {
+    writeLog("executeGraphQL error: " + error);
+    return {
+      status: 500,
+      body: "Internal error",
+      contentType: "text/plain",
+    };
+  }
+}
+```
+
+**Example - Query with Variables:**
+
+```javascript
+function getScriptHandler(req) {
+  const scriptUri = req.query.uri;
+
+  if (!scriptUri) {
+    return {
+      status: 400,
+      body: "Missing uri parameter",
+      contentType: "text/plain",
+    };
+  }
+
+  const query = `
+    query GetScript($uri: String!) {
+      script(uri: $uri) {
+        uri
+        content
+        contentLength
+        logs
+      }
+    }
+  `;
+
+  const variables = JSON.stringify({
+    uri: scriptUri,
+  });
+
+  const resultJson = executeGraphQL(query, variables);
+  const result = JSON.parse(resultJson);
+
+  return {
+    status: 200,
+    body: JSON.stringify(result.data),
+    contentType: "application/json",
+  };
+}
+```
+
+**Example - Mutation:**
+
+```javascript
+function createScriptHandler(req) {
+  const { uri, content } = req.form;
+
+  if (!uri || !content) {
+    return {
+      status: 400,
+      body: "Missing uri or content",
+      contentType: "text/plain",
+    };
+  }
+
+  const mutation = `
+    mutation CreateScript($uri: String!, $content: String!) {
+      upsertScript(uri: $uri, content: $content) {
+        message
+        uri
+        chars
+        success
+      }
+    }
+  `;
+
+  const variables = JSON.stringify({
+    uri: uri,
+    content: content,
+  });
+
+  const resultJson = executeGraphQL(mutation, variables);
+  const result = JSON.parse(resultJson);
+
+  if (result.data?.upsertScript?.success) {
+    return {
+      status: 201,
+      body: JSON.stringify(result.data.upsertScript),
+      contentType: "application/json",
+    };
+  } else {
+    return {
+      status: 500,
+      body: "Failed to create script",
+      contentType: "text/plain",
+    };
+  }
+}
+```
+
+### GraphQL Schema Definition
+
+GraphQL schemas are defined using the GraphQL Schema Definition Language (SDL). Here are the key concepts:
+
+**Types:**
+
+- `String!` - Non-nullable string
+- `String` - Nullable string
+- `Int!` - Non-nullable integer
+- `Int` - Nullable integer
+- `Boolean!` - Non-nullable boolean
+- `Boolean` - Nullable boolean
+- `[Type!]!` - Non-nullable array of non-nullable types
+- `[Type!]` - Nullable array of non-nullable types
+
+**Example Schema:**
+
+```graphql
+type User {
+  id: Int!
+  name: String!
+  email: String!
+  posts: [Post!]!
+}
+
+type Post {
+  id: Int!
+  title: String!
+  content: String!
+  author: User!
+}
+
+type Query {
+  users: [User!]!
+  user(id: Int!): User
+  posts(limit: Int): [Post!]!
+}
+
+type Mutation {
+  createUser(name: String!, email: String!): User!
+  createPost(title: String!, content: String!, authorId: Int!): Post!
+}
+
+type Subscription {
+  userCreated: User!
+  postCreated: Post!
+}
+```
+
+### Resolver Functions
+
+Resolver functions receive arguments and return JSON strings:
+
+```javascript
+function getUserById(args) {
+  const { id } = args;
+
+  // Your logic here
+  const user = findUserById(id);
+
+  if (user) {
+    return JSON.stringify({
+      id: user.id,
+      name: user.name,
+      email: user.email,
+    });
+  } else {
+    return JSON.stringify(null);
+  }
+}
+
+function createUser(args) {
+  const { name, email } = args;
+
+  // Create user logic
+  const newUser = {
+    id: generateId(),
+    name: name,
+    email: email,
+  };
+
+  return JSON.stringify(newUser);
+}
+```
+
+### GraphQL Client Usage
+
+Once you've registered GraphQL operations, clients can query them via HTTP POST to `/graphql`:
+
+```javascript
+// From a web browser or external client
+fetch("/graphql", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    query: `
+      query GetUsers {
+        users {
+          id
+          name
+          email
+        }
+      }
+    `,
+  }),
+})
+  .then((response) => response.json())
+  .then((data) => console.log(data));
+```
+
+### Best Practices for GraphQL
+
+1. **Define clear schemas**: Use descriptive type and field names
+2. **Handle nulls properly**: Use nullable types (`String`) when data might be missing
+3. **Validate input**: Always validate arguments in your resolvers
+4. **Use meaningful errors**: Return descriptive error messages
+5. **Log important operations**: Use `writeLog()` for debugging mutations
+6. **Keep resolvers simple**: Complex logic should be in separate functions
+7. **Use executeGraphQL for internal calls**: Prefer `executeGraphQL()` over HTTP fetch for internal GraphQL operations
+8. **Handle subscription connections**: Use `sendSubscriptionMessage()` to broadcast real-time updates
+
 ## Request Object
 
 The `req` parameter passed to handler functions contains information about the HTTP request.

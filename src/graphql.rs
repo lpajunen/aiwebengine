@@ -902,3 +902,38 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
         .finish()
         .map_err(|e| async_graphql::Error::new(format!("Schema build error: {}", e)))
 }
+
+/// Execute a GraphQL query synchronously and return the result as a JSON string.
+/// This is used by the JavaScript executeGraphQL function.
+pub fn execute_graphql_query_sync(
+    query: &str,
+    variables: Option<serde_json::Value>,
+) -> Result<String, String> {
+    debug!("Executing GraphQL query synchronously: {}", query);
+
+    // Get the current schema
+    let schema = get_schema().map_err(|e| format!("Failed to get GraphQL schema: {:?}", e))?;
+
+    // Create the GraphQL request
+    let mut request = async_graphql::Request::new(query);
+
+    // Add variables if provided
+    if let Some(vars) = variables {
+        request = request.variables(async_graphql::Variables::from_json(vars));
+    }
+
+    // Execute the query synchronously
+    // Since we're in a synchronous context but async_graphql requires async,
+    // we need to create a minimal runtime to execute this
+    let rt =
+        tokio::runtime::Runtime::new().map_err(|e| format!("Failed to create runtime: {}", e))?;
+
+    let response = rt.block_on(async { schema.execute(request).await });
+
+    // Convert the response to JSON
+    let json_result = serde_json::to_string(&response)
+        .map_err(|e| format!("Failed to serialize GraphQL response: {}", e))?;
+
+    debug!("GraphQL execution completed successfully");
+    Ok(json_result)
+}
