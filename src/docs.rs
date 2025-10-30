@@ -1,5 +1,5 @@
 use axum::response::Html;
-use pulldown_cmark::{html, Options, Parser};
+use pulldown_cmark::{Options, Parser, html};
 use std::fs;
 use std::path::Path;
 
@@ -131,27 +131,28 @@ pub fn markdown_to_html(markdown: &str, title: &str) -> String {
 }
 
 /// Handle docs requests by converting Markdown files to HTML
-pub async fn handle_docs_request(path: String) -> Result<Html<String>, (axum::http::StatusCode, String)> {
-    // The path parameter contains the part after /docs/
-    let relative_path = if path.is_empty() {
-        ""
-    } else {
-        &path
-    };
+pub async fn handle_docs_request(
+    path: Option<axum::extract::Path<String>>,
+) -> Result<Html<String>, (axum::http::StatusCode, String)> {
+    // Extract the path string, defaulting to empty string if no path parameter
+    let path_str = path.map(|p| p.0).unwrap_or_default();
 
     // If it's the root docs path, serve the main README
-    let file_path = if relative_path.is_empty() || relative_path == "index" || relative_path == "index.md" {
+    let file_path = if path_str.is_empty() || path_str == "index" || path_str == "index.md" {
         "docs/solution-developers/README.md".to_string()
     } else {
         // Map the URL path to the file system path
-        let md_path = if relative_path.ends_with(".md") {
-            format!("docs/solution-developers/{}", relative_path)
-        } else if relative_path.ends_with("/") {
-            format!("docs/solution-developers/{}/README.md", relative_path.trim_end_matches('/'))
+        let md_path = if path_str.ends_with(".md") {
+            format!("docs/solution-developers/{}", path_str)
+        } else if path_str.ends_with("/") {
+            format!(
+                "docs/solution-developers/{}/README.md",
+                path_str.trim_end_matches('/')
+            )
         } else {
             // Try both with and without .md extension
-            let with_md = format!("docs/solution-developers/{}.md", relative_path);
-            let as_dir = format!("docs/solution-developers/{}/README.md", relative_path);
+            let with_md = format!("docs/solution-developers/{}.md", path_str);
+            let as_dir = format!("docs/solution-developers/{}/README.md", path_str);
 
             if Path::new(&with_md).exists() {
                 with_md
@@ -160,7 +161,7 @@ pub async fn handle_docs_request(path: String) -> Result<Html<String>, (axum::ht
             } else {
                 return Err((
                     axum::http::StatusCode::NOT_FOUND,
-                    format!("Documentation file not found: {}", relative_path),
+                    format!("Documentation file not found: {}", path_str),
                 ));
             }
         };

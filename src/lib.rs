@@ -1086,9 +1086,12 @@ pub async fn start_server_with_config(
     }
 
     // Add documentation routes
-    app = app.route("/docs", axum::routing::get(|axum::extract::Path(()): axum::extract::Path<()>| async { docs::handle_docs_request(String::new()).await }));
-    app = app.route("/docs/", axum::routing::get(|axum::extract::Path(()): axum::extract::Path<()>| async { docs::handle_docs_request(String::new()).await }));
-    app = app.route("/docs/{*path}", axum::routing::get(docs::handle_docs_request));
+    app = app.route("/docs", axum::routing::get(docs::handle_docs_request));
+    app = app.route("/docs/", axum::routing::get(docs::handle_docs_request));
+    app = app.route(
+        "/docs/{*path}",
+        axum::routing::get(docs::handle_docs_request),
+    );
 
     // Add catch-all dynamic routes
     let auth_enabled_for_home = auth_enabled;
