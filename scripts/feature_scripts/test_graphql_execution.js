@@ -31,7 +31,7 @@ function testGraphQLHandler(req) {
     `;
 
     const variables = JSON.stringify({
-      uri: "https://example.com/core"
+      uri: "https://example.com/core",
     });
 
     writeLog("Executing GraphQL query with variables");
@@ -41,24 +41,23 @@ function testGraphQLHandler(req) {
     // Return results
     const response = {
       query1: JSON.parse(result1),
-      query2: JSON.parse(result2)
+      query2: JSON.parse(result2),
     };
 
     return {
       status: 200,
       body: JSON.stringify(response, null, 2),
-      contentType: "application/json"
+      contentType: "application/json",
     };
-
   } catch (error) {
     writeLog("Error in testGraphQLHandler: " + error.message);
     return {
       status: 500,
       body: JSON.stringify({
         error: error.message,
-        stack: error.stack
+        stack: error.stack,
       }),
-      contentType: "application/json"
+      contentType: "application/json",
     };
   }
 }

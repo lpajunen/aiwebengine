@@ -32,7 +32,7 @@ function serveEditor(req) {
         Location: loginUrl,
       },
       body: "",
-      contentType: "text/plain",
+      contentType: "text/plain; charset=UTF-8",
     };
   }
 
@@ -53,7 +53,7 @@ function serveEditor(req) {
         Location: insufficientPermissionsUrl,
       },
       body: "",
-      contentType: "text/plain",
+      contentType: "text/plain; charset=UTF-8",
     };
   }
 
@@ -248,7 +248,7 @@ function serveEditor(req) {
   return {
     status: 200,
     body: html,
-    contentType: "text/html",
+    contentType: "text/html; charset=UTF-8",
   };
 }
 
@@ -303,7 +303,7 @@ function apiGetScript(req) {
       return {
         status: 500,
         body: "getScript function not available",
-        contentType: "text/plain",
+        contentType: "text/plain; charset=UTF-8",
       };
     }
 
@@ -311,20 +311,20 @@ function apiGetScript(req) {
       return {
         status: 404,
         body: "Script not found",
-        contentType: "text/plain",
+        contentType: "text/plain; charset=UTF-8",
       };
     }
 
     return {
       status: 200,
       body: content,
-      contentType: "text/plain",
+      contentType: "text/plain; charset=UTF-8",
     };
   } catch (error) {
     return {
       status: 500,
       body: "Error: " + error.message,
-      contentType: "text/plain",
+      contentType: "text/plain; charset=UTF-8",
     };
   }
 }
@@ -689,7 +689,7 @@ function handlerName(req) {
     return {
       status: 200,
       body: 'your response content here',
-      contentType: 'text/html' // or 'application/json', 'text/plain'
+      contentType: 'text/html; charset=UTF-8' // or 'application/json', 'text/plain; charset=UTF-8'
     };
   } catch (error) {
     writeLog('Error: ' + error);
@@ -705,8 +705,8 @@ function init(context) {
 
 IMPORTANT CONCEPTS:
 1. Scripts are SERVER-SIDE JavaScript that handle HTTP requests
-2. To create a web page, return HTML in the body with contentType: 'text/html'
-3. To create an API, return JSON in the body with contentType: 'application/json'
+2. To create a web page, return HTML in the body with contentType: 'text/html; charset=UTF-8'
+3. To create an API, return JSON in the body with contentType: 'application/json; charset=UTF-8'
 4. Scripts don't have access to browser APIs or Node.js APIs
 5. Use fetch() to call external APIs
 6. Use register() in init() to map URLs to handler functions
@@ -726,10 +726,10 @@ RULES:
 EXAMPLES OF CORRECT RESPONSES:
 
 Example 1 - Create web page:
-{"type":"create_script","message":"Creating a script that serves an HTML page","script_name":"hello-page.js","code":"// Hello page\\n\\nfunction servePage(req) {\\n  const html = '<!DOCTYPE html><html><head><title>Hello</title></head><body><h1>Hello World!</h1></body></html>';\\n  return { status: 200, body: html, contentType: 'text/html' };\\n}\\n\\nfunction init(context) {\\n  register('/hello', 'servePage', 'GET');\\n  return { success: true };\\n}"}
+{"type":"create_script","message":"Creating a script that serves an HTML page","script_name":"hello-page.js","code":"// Hello page\\n\\nfunction servePage(req) {\\n  const html = '<!DOCTYPE html><html><head><title>Hello</title></head><body><h1>Hello World!</h1></body></html>';\\n  return { status: 200, body: html, contentType: 'text/html; charset=UTF-8' };\\n}\\n\\nfunction init(context) {\\n  register('/hello', 'servePage', 'GET');\\n  return { success: true };\\n}"}
 
 Example 2 - Create JSON API:
-{"type":"create_script","message":"Creating a REST API endpoint","script_name":"users-api.js","code":"// Users API\\n\\nfunction getUsers(req) {\\n  const users = [{id: 1, name: 'Alice'}, {id: 2, name: 'Bob'}];\\n  return { status: 200, body: JSON.stringify(users), contentType: 'application/json' };\\n}\\n\\nfunction init(context) {\\n  register('/api/users', 'getUsers', 'GET');\\n  return { success: true };\\n}"}
+{"type":"create_script","message":"Creating a REST API endpoint","script_name":"users-api.js","code":"// Users API\\n\\nfunction getUsers(req) {\\n  const users = [{id: 1, name: 'Alice'}, {id: 2, name: 'Bob'}];\\n  return { status: 200, body: JSON.stringify(users), contentType: 'application/json; charset=UTF-8' };\\n}\\n\\nfunction init(context) {\\n  register('/api/users', 'getUsers', 'GET');\\n  return { success: true };\\n}"}
 
 Example 3 - Explanation:
 {"type":"explanation","message":"This script registers a GET endpoint that returns JSON user data with proper error handling and content type."}

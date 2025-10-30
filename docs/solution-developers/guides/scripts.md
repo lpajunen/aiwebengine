@@ -33,7 +33,7 @@ function helloHandler(req) {
   return {
     status: 200,
     body: "Hello, World!",
-    contentType: "text/plain",
+    contentType: "text/plain; charset=UTF-8",
   };
 }
 
@@ -220,7 +220,7 @@ function textHandler(req) {
   return {
     status: 200,
     body: "Plain text response",
-    contentType: "text/plain",
+    contentType: "text/plain; charset=UTF-8",
   };
 }
 ```
@@ -264,7 +264,7 @@ function htmlHandler(req) {
   return {
     status: 200,
     body: html,
-    contentType: "text/html",
+    contentType: "text/html; charset=UTF-8",
   };
 }
 ```
@@ -505,8 +505,8 @@ Common MIME types:
 
 ```javascript
 // Text
-contentType: "text/plain";
-contentType: "text/html";
+contentType: "text/plain; charset=UTF-8";
+contentType: "text/html; charset=UTF-8";
 contentType: "text/css";
 
 // Application
@@ -539,7 +539,7 @@ function textResponse(status, text) {
   return {
     status: status,
     body: text,
-    contentType: "text/plain",
+    contentType: "text/plain; charset=UTF-8",
   };
 }
 

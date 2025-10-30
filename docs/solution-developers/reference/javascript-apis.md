@@ -18,7 +18,11 @@ Registers a route that maps a URL path to a handler function.
 
 ```javascript
 function getUsers(req) {
-  return { status: 200, body: "User list", contentType: "text/plain" };
+  return {
+    status: 200,
+    body: "User list",
+    contentType: "text/plain; charset=UTF-8",
+  };
 }
 
 register("/api/users", "getUsers", "GET");
@@ -37,7 +41,11 @@ Writes a message to the server log for debugging and monitoring.
 ```javascript
 function myHandler(req) {
   writeLog("Handler called with path: " + req.path);
-  return { status: 200, body: "Logged", contentType: "text/plain" };
+  return {
+    status: 200,
+    body: "Logged",
+    contentType: "text/plain; charset=UTF-8",
+  };
 }
 ```
 
@@ -163,7 +171,7 @@ function fetchExample(req) {
       return {
         status: response.status,
         body: "External API error",
-        contentType: "text/plain",
+        contentType: "text/plain; charset=UTF-8",
       };
     }
   } catch (error) {
@@ -501,7 +509,7 @@ function logUserAction(req) {
   return {
     status: 200,
     body: "Action logged",
-    contentType: "text/plain",
+    contentType: "text/plain; charset=UTF-8",
   };
 }
 
@@ -541,7 +549,7 @@ function listScriptsHandler(req) {
       return {
         status: 500,
         body: "GraphQL query failed",
-        contentType: "text/plain",
+        contentType: "text/plain; charset=UTF-8",
       };
     }
 
@@ -555,7 +563,7 @@ function listScriptsHandler(req) {
     return {
       status: 500,
       body: "Internal error",
-      contentType: "text/plain",
+      contentType: "text/plain; charset=UTF-8",
     };
   }
 }
@@ -571,7 +579,7 @@ function getScriptHandler(req) {
     return {
       status: 400,
       body: "Missing uri parameter",
-      contentType: "text/plain",
+      contentType: "text/plain; charset=UTF-8",
     };
   }
 
@@ -611,7 +619,7 @@ function createScriptHandler(req) {
     return {
       status: 400,
       body: "Missing uri or content",
-      contentType: "text/plain",
+      contentType: "text/plain; charset=UTF-8",
     };
   }
 
@@ -644,7 +652,7 @@ function createScriptHandler(req) {
     return {
       status: 500,
       body: "Failed to create script",
-      contentType: "text/plain",
+      contentType: "text/plain; charset=UTF-8",
     };
   }
 }
@@ -821,7 +829,7 @@ Handler functions must return a response object that defines how the server resp
 
 ### Optional Properties
 
-- `contentType` (string): MIME type (defaults to `"text/plain"`)
+- `contentType` (string): MIME type (defaults to `"text/plain; charset=UTF-8"`)
 
 ### Response Examples
 
@@ -830,7 +838,7 @@ Handler functions must return a response object that defines how the server resp
 return {
   status: 200,
   body: "Hello World",
-  contentType: "text/plain",
+  contentType: "text/plain; charset=UTF-8",
 };
 
 // JSON response
@@ -844,14 +852,14 @@ return {
 return {
   status: 200,
   body: "<h1>Welcome</h1><p>This is HTML content.</p>",
-  contentType: "text/html",
+  contentType: "text/html; charset=UTF-8",
 };
 
 // Error response
 return {
   status: 404,
   body: "Not Found",
-  contentType: "text/plain",
+  contentType: "text/plain; charset=UTF-8",
 };
 ```
 
@@ -916,8 +924,8 @@ Common HTTP status codes you might use:
 
 Common MIME types for `contentType`:
 
-- `"text/plain"` - Plain text
-- `"text/html"` - HTML content
+- `"text/plain; charset=UTF-8"` - Plain text
+- `"text/html; charset=UTF-8"` - HTML content
 - `"application/json"` - JSON data
 - `"application/xml"` - XML data
 - `"image/jpeg"`, `"image/png"` - Images

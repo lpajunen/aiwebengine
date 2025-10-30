@@ -621,7 +621,7 @@ function myHandler(req) {
   return {
     status: 200,
     body: "",
-    contentType: "text/plain",
+    contentType: "text/plain; charset=UTF-8",
   };
 }
 

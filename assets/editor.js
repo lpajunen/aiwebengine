@@ -294,7 +294,7 @@ function handler(req) {
     return {
         status: 200,
         body: 'Hello from ${fullName}!',
-        contentType: 'text/plain'
+        contentType: 'text/plain; charset=UTF-8'
     };
 }
 

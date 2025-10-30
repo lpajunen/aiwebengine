@@ -77,7 +77,7 @@ Return an object with:
 
 - `status`: HTTP status code (required)
 - `body`: Response content (required)
-- `contentType`: MIME type (optional, defaults to "text/plain")
+- `contentType`: MIME type (optional, defaults to "text/plain; charset=UTF-8")
 
 ## Built-in Functions
 

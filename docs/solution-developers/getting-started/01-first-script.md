@@ -29,7 +29,7 @@ function myHandler(req) {
   return {
     status: 200,
     body: "Hello!",
-    contentType: "text/plain",
+    contentType: "text/plain; charset=UTF-8",
   };
 }
 
@@ -93,7 +93,7 @@ function helloHandler(req) {
   return {
     status: 200,
     body: greeting,
-    contentType: "text/plain",
+    contentType: "text/plain; charset=UTF-8",
   };
 }
 
@@ -208,7 +208,7 @@ Your handler must return:
 {
   status: 200,              // HTTP status code
   body: "Hello, Alice!",    // Response content
-  contentType: "text/plain" // MIME type (optional)
+  contentType: "text/plain; charset=UTF-8" // MIME type (optional)
 }
 ```
 
@@ -233,7 +233,7 @@ function helloHandler(req) {
     return {
       status: 400,
       body: "Error: 'name' parameter is required",
-      contentType: "text/plain",
+      contentType: "text/plain; charset=UTF-8",
     };
   }
 
@@ -242,7 +242,7 @@ function helloHandler(req) {
     return {
       status: 400,
       body: "Error: Name too long (max 50 characters)",
-      contentType: "text/plain",
+      contentType: "text/plain; charset=UTF-8",
     };
   }
 
@@ -332,7 +332,7 @@ function badHandler(req) {
 return {
   status: 200,
   body: JSON.stringify({ data: "value" }),
-  contentType: "text/plain", // Should be "application/json"!
+  contentType: "text/plain; charset=UTF-8", // Should be "application/json"!
 };
 ```
 
@@ -375,14 +375,14 @@ function myHandler(req) {
     return {
       status: 200,
       body: "Success",
-      contentType: "text/plain",
+      contentType: "text/plain; charset=UTF-8",
     };
   } catch (error) {
     writeLog(`Error: ${error.message}`);
     return {
       status: 500,
       body: "Internal server error",
-      contentType: "text/plain",
+      contentType: "text/plain; charset=UTF-8",
     };
   }
 }

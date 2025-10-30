@@ -65,7 +65,7 @@ function helloHandler(req) {
   return {
     status: 200,
     body: "Hello from editor!",
-    contentType: "text/plain",
+    contentType: "text/plain; charset=UTF-8",
   };
 }
 
