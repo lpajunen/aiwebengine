@@ -52,6 +52,8 @@ services:
       - ./scripts:/app/scripts:ro
       # Mount assets
       - ./assets:/app/assets:ro
+      # Mount docs for development
+      - ./docs:/app/docs:ro
       # Persist logs
       - ./logs:/app/logs
       # Persist database

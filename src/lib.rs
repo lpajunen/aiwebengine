@@ -1086,7 +1086,12 @@ pub async fn start_server_with_config(
     }
 
     // Add documentation routes
-    app = app.route("/docs", axum::routing::get(docs::handle_docs_request));
+    app = app.route(
+        "/docs",
+        axum::routing::get(|axum::extract::Path(()): axum::extract::Path<()>| async {
+            axum::response::Redirect::permanent("/docs/").into_response()
+        }),
+    );
     app = app.route("/docs/", axum::routing::get(docs::handle_docs_request));
     app = app.route(
         "/docs/{*path}",

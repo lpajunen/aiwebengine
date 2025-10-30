@@ -6,26 +6,9 @@
 node_modules/
 
 # Documentation and markdown files
-*.md
-docs/
-TODO.md
-URGENT_TODO.md
-AUTH_TODO.md
-SECURITY_TODO.md
-DEVELOPMENT.md
-REQUIREMENTS.md
-REQUIREMENTS_*.md
-PHASE_*.md
-FIXES_APPLIED.md
-TEST_*.md
-SCRIPT_INIT_IMPLEMENTATION_PLAN.md
-RUST_VS_JS_SECURITY_ANALYSIS.md
-SECURITY_ANALYSIS.md
-EDITOR_API_FIX.md
-QUICK_START_TEST_FIX.md
-CACHED_REGISTRATIONS_IMPLEMENTATION.md
-MISSING_AUTH_COMPONENTS.md
-USE_CASES.md
+# *.md
+# docs/  # Removed - needed for containerized docs serving
+archive/
 
 # Rust build artifacts
 target/

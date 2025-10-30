@@ -29,6 +29,7 @@ COPY src ./src
 COPY migrations ./migrations
 COPY scripts ./scripts
 COPY assets ./assets
+COPY docs ./docs
 COPY tests ./tests
 
 # Build the actual application
@@ -55,14 +56,15 @@ WORKDIR /app
 COPY --from=builder /app/target/release/server /usr/local/bin/aiwebengine
 
 # Create necessary directories
-RUN mkdir -p /app/logs /app/scripts /app/assets /app/data && \
+RUN mkdir -p /app/logs /app/scripts /app/assets /app/docs /app/data && \
     chown -R aiwebengine:aiwebengine /app
 
 # Copy default configuration (use staging config as base)
 COPY config.staging.toml /app/config.toml
 
-# Copy assets if they exist
+# Copy assets and docs if they exist
 COPY assets /app/assets/
+COPY docs /app/docs/
 
 # Switch to non-root user
 USER aiwebengine
