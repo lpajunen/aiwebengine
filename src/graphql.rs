@@ -68,11 +68,40 @@ impl GraphQLRegistry {
 
 lazy_static::lazy_static! {
     pub static ref GRAPHQL_REGISTRY: Arc<RwLock<GraphQLRegistry>> = Arc::new(RwLock::new(GraphQLRegistry::new()));
+    pub static ref GRAPHQL_SCHEMA: Arc<RwLock<Option<Schema>>> = Arc::new(RwLock::new(None));
 }
 
 /// Get a reference to the global GraphQL registry
 pub fn get_registry() -> Arc<RwLock<GraphQLRegistry>> {
     Arc::clone(&GRAPHQL_REGISTRY)
+}
+
+/// Get the current GraphQL schema, rebuilding it if necessary
+pub fn get_schema() -> Result<Schema, async_graphql::Error> {
+    // Try to get existing schema
+    if let Ok(schema_guard) = GRAPHQL_SCHEMA.read()
+        && let Some(ref schema) = *schema_guard
+    {
+        return Ok(schema.clone());
+    }
+
+    // Schema doesn't exist or needs rebuild, build it
+    rebuild_schema()
+}
+
+/// Rebuild the GraphQL schema from the current registry
+pub fn rebuild_schema() -> Result<Schema, async_graphql::Error> {
+    let schema = build_schema()?;
+
+    // Store the new schema
+    if let Ok(mut schema_guard) = GRAPHQL_SCHEMA.write() {
+        *schema_guard = Some(schema.clone());
+        debug!("GraphQL schema rebuilt successfully");
+    } else {
+        error!("Failed to store rebuilt GraphQL schema");
+    }
+
+    Ok(schema)
 }
 
 /// Register a GraphQL query from JavaScript

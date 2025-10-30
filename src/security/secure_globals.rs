@@ -516,6 +516,18 @@ impl SecureGlobalContext {
                                     "Script '{}' initialized after upsert",
                                     script_name_for_init
                                 );
+                                // Rebuild GraphQL schema after script initialization
+                                if let Err(e) = crate::graphql::rebuild_schema() {
+                                    warn!(
+                                        "Failed to rebuild GraphQL schema after script '{}' initialization: {:?}",
+                                        script_name_for_init, e
+                                    );
+                                } else {
+                                    debug!(
+                                        "GraphQL schema rebuilt successfully after script '{}' initialization",
+                                        script_name_for_init
+                                    );
+                                }
                             } else if let Some(err) = result.error {
                                 warn!(
                                     "Script '{}' init failed after upsert: {}",

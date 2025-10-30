@@ -548,32 +548,11 @@ pub async fn start_server_with_config(
         info!("Script init() functions are disabled in configuration");
     }
 
-    // Create GraphQL schema after scripts have been executed
-    let schema = match graphql::build_schema() {
-        Ok(schema) => schema,
-        Err(e) => {
-            error!("Failed to build GraphQL schema: {:?}", e);
-            // Return a minimal dynamic schema if building fails
-            async_graphql::dynamic::Schema::build("Query", None, None)
-                .register(async_graphql::dynamic::Object::new("Query").field(
-                    async_graphql::dynamic::Field::new(
-                        "error",
-                        async_graphql::dynamic::TypeRef::named(
-                            async_graphql::dynamic::TypeRef::STRING,
-                        ),
-                        |_| {
-                            async_graphql::dynamic::FieldFuture::new(async {
-                                Ok(Some(async_graphql::Value::String(
-                                    "Schema build failed".to_string(),
-                                )))
-                            })
-                        },
-                    ),
-                ))
-                .finish()
-                .unwrap_or_else(|_| panic!("Failed to build fallback schema"))
-        }
-    };
+    // Initialize GraphQL schema (will be rebuilt dynamically as needed)
+    if let Err(e) = graphql::rebuild_schema() {
+        error!("Failed to initialize GraphQL schema: {:?}", e);
+        // Don't fail startup, just log the error
+    }
 
     // Initialize authentication if configured
     let auth_manager: Option<Arc<auth::AuthManager>> = if let Some(auth_config) =
@@ -645,10 +624,7 @@ pub async fn start_server_with_config(
     };
 
     // GraphQL POST handler - executes queries
-    async fn graphql_post(
-        schema: async_graphql::dynamic::Schema,
-        req: axum::http::Request<axum::body::Body>,
-    ) -> impl IntoResponse {
+    async fn graphql_post(req: axum::http::Request<axum::body::Body>) -> impl IntoResponse {
         let (_parts, body) = req.into_parts();
         let body_bytes = match axum::body::to_bytes(body, usize::MAX).await {
             Ok(bytes) => bytes,
@@ -668,15 +644,22 @@ pub async fn start_server_with_config(
             }
         };
 
+        // Get the current schema (rebuilds if necessary)
+        let schema = match graphql::get_schema() {
+            Ok(schema) => schema,
+            Err(e) => {
+                return axum::response::Json(
+                    serde_json::json!({"error": format!("Schema error: {:?}", e)}),
+                );
+            }
+        };
+
         let response = schema.execute(request).await;
         axum::response::Json(serde_json::to_value(response).unwrap_or(serde_json::Value::Null))
     }
 
     // GraphQL SSE handler - handles subscriptions over Server-Sent Events using execute_stream
-    async fn graphql_sse(
-        schema: async_graphql::dynamic::Schema,
-        req: axum::http::Request<axum::body::Body>,
-    ) -> impl IntoResponse {
+    async fn graphql_sse(req: axum::http::Request<axum::body::Body>) -> impl IntoResponse {
         let (_parts, body) = req.into_parts();
         let body_bytes = match axum::body::to_bytes(body, usize::MAX).await {
             Ok(bytes) => bytes,
@@ -704,6 +687,24 @@ pub async fn start_server_with_config(
                     .unwrap_or_else(|err| {
                         error!("Failed to build error response: {}", err);
                         axum::response::Response::new(axum::body::Body::from("Bad Request"))
+                    });
+            }
+        };
+
+        // Get the current schema (rebuilds if necessary)
+        let schema = match graphql::get_schema() {
+            Ok(schema) => schema,
+            Err(e) => {
+                error!("GraphQL SSE: Failed to get schema: {:?}", e);
+                return axum::response::Response::builder()
+                    .status(500)
+                    .header("content-type", "text/plain")
+                    .body(axum::body::Body::from(format!("Schema error: {:?}", e)))
+                    .unwrap_or_else(|err| {
+                        error!("Failed to build error response: {}", err);
+                        axum::response::Response::new(axum::body::Body::from(
+                            "Internal Server Error",
+                        ))
                     });
             }
         };
@@ -772,8 +773,7 @@ pub async fn start_server_with_config(
     }
 
     // Clone schema for handlers
-    let schema_for_post = schema.clone();
-    let schema_for_sse = schema.clone();
+    // (No longer needed - handlers get schema dynamically)
 
     // Shared request handler function for both / and /{*path} routes
     async fn handle_dynamic_request(
@@ -1060,14 +1060,8 @@ pub async fn start_server_with_config(
         let auth_mgr_for_graphql = Arc::clone(auth_mgr);
         let graphql_router = Router::new()
             .route("/graphql", axum::routing::get(graphql_get_handler))
-            .route(
-                "/graphql",
-                axum::routing::post(move |req| graphql_post(schema_for_post, req)),
-            )
-            .route(
-                "/graphql/sse",
-                axum::routing::post(move |req| graphql_sse(schema_for_sse, req)),
-            )
+            .route("/graphql", axum::routing::post(graphql_post))
+            .route("/graphql/sse", axum::routing::post(graphql_sse))
             .layer(axum::middleware::from_fn_with_state(
                 auth_mgr_for_graphql,
                 auth::require_editor_or_admin_middleware,
@@ -1084,14 +1078,8 @@ pub async fn start_server_with_config(
         // GraphQL endpoints without authentication
         app = app
             .route("/graphql", axum::routing::get(graphql_get_handler))
-            .route(
-                "/graphql",
-                axum::routing::post(move |req| graphql_post(schema_for_post, req)),
-            )
-            .route(
-                "/graphql/sse",
-                axum::routing::post(move |req| graphql_sse(schema_for_sse, req)),
-            );
+            .route("/graphql", axum::routing::post(graphql_post))
+            .route("/graphql/sse", axum::routing::post(graphql_sse));
     }
 
     // Add catch-all dynamic routes
