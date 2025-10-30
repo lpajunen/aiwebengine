@@ -621,37 +621,45 @@ AVAILABLE JAVASCRIPT APIs:
 2. writeLog(message) - Write to server logs
    - message: string
 
-3. fetch(url, options) - Make HTTP requests to external APIs
+3. scriptStorage - Persistent key-value storage per script
+   - scriptStorage.getItem(key) - Get stored value (returns string or null)
+   - scriptStorage.setItem(key, value) - Store key-value pair (returns success message)
+   - scriptStorage.removeItem(key) - Delete key-value pair (returns boolean)
+   - scriptStorage.clear() - Remove all data for this script (returns success message)
+   - Each script has its own isolated storage namespace
+   - Data persists across requests and server restarts (when PostgreSQL configured)
+
+4. fetch(url, options) - Make HTTP requests to external APIs
    - url: string
    - options: JSON string with {method, headers, body, timeout_ms}
    - Supports {{secret:identifier}} in headers for secure API keys
    - Returns: JSON string with {status, ok, headers, body}
 
-4. registerWebStream(path) - Register SSE stream endpoint
+5. registerWebStream(path) - Register SSE stream endpoint
    - path: string (must start with /)
 
-5. sendStreamMessage(data) - Broadcast to all stream clients
+6. sendStreamMessage(data) - Broadcast to all stream clients
    - data: object (will be JSON serialized)
 
-6. registerGraphQLQuery(name, schema, resolverName) - Register GraphQL query
+7. registerGraphQLQuery(name, schema, resolverName) - Register GraphQL query
    - name: string (query name)
    - schema: string (GraphQL schema definition)
    - resolverName: string (name of resolver function)
 
-7. registerGraphQLMutation(name, schema, resolverName) - Register GraphQL mutation
+8. registerGraphQLMutation(name, schema, resolverName) - Register GraphQL mutation
    - name: string (mutation name)
    - schema: string (GraphQL schema definition)
    - resolverName: string (name of resolver function)
 
-8. registerGraphQLSubscription(name, schema, resolverName) - Register GraphQL subscription
+9. registerGraphQLSubscription(name, schema, resolverName) - Register GraphQL subscription
    - name: string (subscription name)
    - schema: string (GraphQL schema definition)
    - resolverName: string (name of resolver function)
 
-9. executeGraphQL(query, variables) - Execute GraphQL query
-   - query: string (GraphQL query string)
-   - variables: string (optional JSON string of variables)
-   - Returns: JSON string with GraphQL response
+10. executeGraphQL(query, variables) - Execute GraphQL query
+    - query: string (GraphQL query string)
+    - variables: string (optional JSON string of variables)
+    - Returns: JSON string with GraphQL response
 
 RESPONSE FORMAT - YOU MUST RESPOND WITH ONLY THIS JSON STRUCTURE:
 {

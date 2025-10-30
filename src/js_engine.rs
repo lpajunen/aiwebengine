@@ -1435,7 +1435,7 @@ mod tests {
     }
 
     #[test]
-    fn test_script_size_validation() {
+    fn test_script_storage_validation() {
         // Test with a script that exceeds the default 1MB limit
         let large_script = "// ".repeat(600_000) + "register('/test', 'handler');";
         assert!(large_script.len() > 1_000_000);
@@ -1459,5 +1459,58 @@ mod tests {
 
         // Should pass validation (just warning), but our logs would show the warning
         assert!(validation_result.is_ok());
+    }
+
+    #[test]
+    fn test_script_storage_api_execution() {
+        let script_content = r#"
+// Test script for scriptStorage API
+register("/test-storage", "testStorageHandler", "GET");
+
+function testStorageHandler(request) {
+    // Test setting an item
+    const setResult = scriptStorage.setItem("test_key", "test_value");
+
+    // Test getting the item
+    const getResult = scriptStorage.getItem("test_key");
+
+    // Test removing an item
+    const removeResult = scriptStorage.removeItem("test_key");
+
+    // Verify it's gone
+    const getAfterRemove = scriptStorage.getItem("test_key");
+
+    return {
+        status: 200,
+        body: JSON.stringify({
+            setResult,
+            getResult,
+            removeResult,
+            getAfterRemove
+        })
+    };
+}
+"#;
+
+        let result = execute_script_secure(
+            "test-storage-script",
+            script_content,
+            UserContext::admin("test".to_string()),
+        );
+
+        assert!(
+            result.success,
+            "Script execution should succeed: {:?}",
+            result.error
+        );
+        assert!(result.error.is_none(), "Should not have any errors");
+
+        // Verify the script registered the route
+        assert_eq!(result.registrations.len(), 1);
+        assert!(
+            result
+                .registrations
+                .contains_key(&("/test-storage".to_string(), "GET".to_string()))
+        );
     }
 }

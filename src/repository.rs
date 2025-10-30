@@ -96,6 +96,8 @@ pub struct Asset {
 static DYNAMIC_SCRIPTS: OnceLock<Mutex<HashMap<String, ScriptMetadata>>> = OnceLock::new();
 static DYNAMIC_LOGS: OnceLock<Mutex<HashMap<String, Vec<String>>>> = OnceLock::new();
 static DYNAMIC_ASSETS: OnceLock<Mutex<HashMap<String, Asset>>> = OnceLock::new();
+static DYNAMIC_SCRIPT_STORAGE: OnceLock<Mutex<HashMap<String, HashMap<String, String>>>> =
+    OnceLock::new();
 
 /// Safe mutex access with recovery from poisoned state
 fn safe_lock_scripts()
@@ -142,6 +144,26 @@ fn safe_lock_assets()
             warn!("Assets mutex was poisoned, recovering with new data");
             store.lock().map_err(|e| {
                 error!("Failed to recover from poisoned assets mutex: {}", e);
+                RepositoryError::LockError(format!("Unrecoverable mutex poisoning: {}", e))
+            })
+        }
+    }
+}
+
+fn safe_lock_script_storage()
+-> Result<std::sync::MutexGuard<'static, HashMap<String, HashMap<String, String>>>, RepositoryError>
+{
+    let store = DYNAMIC_SCRIPT_STORAGE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    match store.lock() {
+        Ok(guard) => Ok(guard),
+        Err(PoisonError { .. }) => {
+            warn!("Script storage mutex was poisoned, recovering with new data");
+            store.lock().map_err(|e| {
+                error!(
+                    "Failed to recover from poisoned script storage mutex: {}",
+                    e
+                );
                 RepositoryError::LockError(format!("Unrecoverable mutex poisoning: {}", e))
             })
         }
@@ -280,6 +302,156 @@ async fn db_delete_script(pool: &PgPool, uri: &str) -> Result<bool, RepositoryEr
     }
 
     Ok(existed)
+}
+
+/// Database-backed set script storage item
+async fn db_set_script_storage_item(
+    pool: &PgPool,
+    script_uri: &str,
+    key: &str,
+    value: &str,
+) -> Result<(), RepositoryError> {
+    let now = chrono::Utc::now();
+
+    // Try to update existing item
+    let update_result = sqlx::query(
+        r#"
+        UPDATE script_storage
+        SET value = $1, updated_at = $2
+        WHERE script_uri = $3 AND key = $4
+        "#,
+    )
+    .bind(value)
+    .bind(now)
+    .bind(script_uri)
+    .bind(key)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error updating script storage: {}", e);
+        RepositoryError::InvalidData(format!("Database error: {}", e))
+    })?;
+
+    if update_result.rows_affected() > 0 {
+        debug!(
+            "Updated script storage item in database: {}:{}",
+            script_uri, key
+        );
+        return Ok(());
+    }
+
+    // Item doesn't exist, create new one
+    sqlx::query(
+        r#"
+        INSERT INTO script_storage (script_uri, key, value, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $4)
+        "#,
+    )
+    .bind(script_uri)
+    .bind(key)
+    .bind(value)
+    .bind(now)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error creating script storage item: {}", e);
+        RepositoryError::InvalidData(format!("Database error: {}", e))
+    })?;
+
+    debug!(
+        "Created new script storage item in database: {}:{}",
+        script_uri, key
+    );
+    Ok(())
+}
+
+/// Database-backed get script storage item
+async fn db_get_script_storage_item(
+    pool: &PgPool,
+    script_uri: &str,
+    key: &str,
+) -> Result<Option<String>, RepositoryError> {
+    let row = sqlx::query(
+        r#"
+        SELECT value FROM script_storage WHERE script_uri = $1 AND key = $2
+        "#,
+    )
+    .bind(script_uri)
+    .bind(key)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error getting script storage item: {}", e);
+        RepositoryError::InvalidData(format!("Database error: {}", e))
+    })?;
+
+    if let Some(row) = row {
+        let value: String = row.try_get("value").map_err(|e| {
+            error!("Database error getting value: {}", e);
+            RepositoryError::InvalidData(format!("Database error: {}", e))
+        })?;
+        Ok(Some(value))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Database-backed remove script storage item
+async fn db_remove_script_storage_item(
+    pool: &PgPool,
+    script_uri: &str,
+    key: &str,
+) -> Result<bool, RepositoryError> {
+    let result = sqlx::query(
+        r#"
+        DELETE FROM script_storage WHERE script_uri = $1 AND key = $2
+        "#,
+    )
+    .bind(script_uri)
+    .bind(key)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error removing script storage item: {}", e);
+        RepositoryError::InvalidData(format!("Database error: {}", e))
+    })?;
+
+    let existed = result.rows_affected() > 0;
+    if existed {
+        debug!(
+            "Removed script storage item from database: {}:{}",
+            script_uri, key
+        );
+    } else {
+        debug!(
+            "Script storage item not found in database for removal: {}:{}",
+            script_uri, key
+        );
+    }
+
+    Ok(existed)
+}
+
+/// Database-backed clear all script storage for a script
+async fn db_clear_script_storage(pool: &PgPool, script_uri: &str) -> Result<(), RepositoryError> {
+    sqlx::query(
+        r#"
+        DELETE FROM script_storage WHERE script_uri = $1
+        "#,
+    )
+    .bind(script_uri)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error clearing script storage: {}", e);
+        RepositoryError::InvalidData(format!("Database error: {}", e))
+    })?;
+
+    debug!(
+        "Cleared all script storage items from database for script: {}",
+        script_uri
+    );
+    Ok(())
 }
 
 /// Fetch scripts from repository with proper error handling
@@ -894,7 +1066,259 @@ pub fn get_repository_stats() -> HashMap<String, usize> {
         }
     }
 
+    // Count script storage entries
+    match safe_lock_script_storage() {
+        Ok(guard) => {
+            let total_entries: usize = guard.values().map(|script_map| script_map.len()).sum();
+            stats.insert("script_storage_entries".to_string(), total_entries);
+        }
+        Err(_) => {
+            stats.insert("script_storage_entries".to_string(), 0);
+        }
+    }
+
     stats
+}
+
+/// Set a script storage item (key-value pair for a specific script)
+pub fn set_script_storage_item(
+    script_uri: &str,
+    key: &str,
+    value: &str,
+) -> Result<(), RepositoryError> {
+    if script_uri.trim().is_empty() {
+        return Err(RepositoryError::InvalidData(
+            "Script URI cannot be empty".to_string(),
+        ));
+    }
+
+    if key.trim().is_empty() {
+        return Err(RepositoryError::InvalidData(
+            "Key cannot be empty".to_string(),
+        ));
+    }
+
+    if value.len() > 1_000_000 {
+        // 1MB limit per value
+        return Err(RepositoryError::InvalidData(
+            "Value too large (>1MB)".to_string(),
+        ));
+    }
+
+    // Try database first
+    if let Some(db) = get_db_pool() {
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                db_set_script_storage_item(db.pool(), script_uri, key, value).await
+            })
+        });
+
+        match result {
+            Ok(()) => {
+                // Also update in-memory cache for consistency
+                let _ = set_script_storage_item_in_memory(script_uri, key, value);
+                debug!(
+                    "Set script storage item to database: {}:{} = {} bytes",
+                    script_uri,
+                    key,
+                    value.len()
+                );
+                return Ok(());
+            }
+            Err(e) => {
+                warn!("Database set failed, falling back to in-memory: {}", e);
+                // Fall through to in-memory implementation
+            }
+        }
+    }
+
+    // Fall back to in-memory implementation
+    set_script_storage_item_in_memory(script_uri, key, value)
+}
+
+/// Get a script storage item
+pub fn get_script_storage_item(script_uri: &str, key: &str) -> Option<String> {
+    // Try database first
+    if let Some(db) = get_db_pool() {
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(async { db_get_script_storage_item(db.pool(), script_uri, key).await })
+        });
+
+        match result {
+            Ok(Some(value)) => {
+                debug!(
+                    "Got script storage item from database: {}:{}",
+                    script_uri, key
+                );
+                return Some(value);
+            }
+            Ok(None) => {
+                // Item not in database, continue to check in-memory
+            }
+            Err(e) => {
+                warn!("Database get failed, falling back to in-memory: {}", e);
+                // Fall through to in-memory implementation
+            }
+        }
+    }
+
+    // Check in-memory storage
+    match safe_lock_script_storage() {
+        Ok(guard) => guard
+            .get(script_uri)
+            .and_then(|script_map| script_map.get(key))
+            .cloned(),
+        Err(e) => {
+            error!(
+                "Failed to access script storage for get {}:{}: {}",
+                script_uri, key, e
+            );
+            None
+        }
+    }
+}
+
+/// Remove a script storage item
+pub fn remove_script_storage_item(script_uri: &str, key: &str) -> bool {
+    // Try database first
+    if let Some(db) = get_db_pool() {
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(async { db_remove_script_storage_item(db.pool(), script_uri, key).await })
+        });
+
+        match result {
+            Ok(existed) => {
+                // Also remove from in-memory cache for consistency
+                let _ = safe_lock_script_storage()
+                    .map(|mut guard| {
+                        if let Some(script_map) = guard.get_mut(script_uri) {
+                            script_map.remove(key);
+                        }
+                    })
+                    .map_err(|e| warn!("Failed to remove from memory cache: {}", e));
+
+                if existed {
+                    debug!(
+                        "Removed script storage item from database: {}:{}",
+                        script_uri, key
+                    );
+                } else {
+                    debug!(
+                        "Script storage item not found in database for removal: {}:{}",
+                        script_uri, key
+                    );
+                }
+                return existed;
+            }
+            Err(e) => {
+                warn!("Database remove failed, falling back to in-memory: {}", e);
+                // Fall through to in-memory implementation
+            }
+        }
+    }
+
+    // Fall back to in-memory implementation
+    match safe_lock_script_storage() {
+        Ok(mut guard) => {
+            let existed = if let Some(script_map) = guard.get_mut(script_uri) {
+                script_map.remove(key).is_some()
+            } else {
+                false
+            };
+
+            if existed {
+                debug!(
+                    "Removed script storage item from memory: {}:{}",
+                    script_uri, key
+                );
+            } else {
+                debug!(
+                    "Script storage item not found in memory for removal: {}:{}",
+                    script_uri, key
+                );
+            }
+            existed
+        }
+        Err(e) => {
+            error!(
+                "Failed to remove script storage item {}:{}: {}",
+                script_uri, key, e
+            );
+            false
+        }
+    }
+}
+
+/// Clear all script storage items for a specific script
+pub fn clear_script_storage(script_uri: &str) -> Result<(), RepositoryError> {
+    // Try database first
+    if let Some(db) = get_db_pool() {
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(async { db_clear_script_storage(db.pool(), script_uri).await })
+        });
+
+        match result {
+            Ok(()) => {
+                // Also clear from in-memory cache for consistency
+                let _ = safe_lock_script_storage()
+                    .map(|mut guard| {
+                        guard.remove(script_uri);
+                    })
+                    .map_err(|e| warn!("Failed to clear from memory cache: {}", e));
+
+                debug!(
+                    "Cleared all script storage items from database for script: {}",
+                    script_uri
+                );
+                return Ok(());
+            }
+            Err(e) => {
+                warn!("Database clear failed, falling back to in-memory: {}", e);
+                // Fall through to in-memory implementation
+            }
+        }
+    }
+
+    // Fall back to in-memory implementation
+    match safe_lock_script_storage() {
+        Ok(mut guard) => {
+            guard.remove(script_uri);
+            debug!(
+                "Cleared all script storage items from memory for script: {}",
+                script_uri
+            );
+            Ok(())
+        }
+        Err(e) => {
+            error!("Failed to clear script storage for {}: {}", script_uri, e);
+            Err(e)
+        }
+    }
+}
+
+/// In-memory implementation of set script storage item
+fn set_script_storage_item_in_memory(
+    script_uri: &str,
+    key: &str,
+    value: &str,
+) -> Result<(), RepositoryError> {
+    let mut guard = safe_lock_script_storage()?;
+
+    let script_map = guard
+        .entry(script_uri.to_string())
+        .or_insert_with(HashMap::new);
+    script_map.insert(key.to_string(), value.to_string());
+
+    debug!(
+        "Set script storage item in memory: {}:{} = {} bytes",
+        script_uri,
+        key,
+        value.len()
+    );
+    Ok(())
 }
 
 #[cfg(test)]
@@ -926,5 +1350,49 @@ mod tests {
             result.is_ok(),
             "bootstrap_scripts should succeed even without database"
         );
+    }
+
+    #[test]
+    fn test_script_storage_operations() {
+        let script_uri = "test://storage-script";
+        let key = "test_key";
+        let value = "test_value";
+
+        // Test set item
+        assert!(set_script_storage_item(script_uri, key, value).is_ok());
+
+        // Test get item
+        let retrieved = get_script_storage_item(script_uri, key);
+        assert_eq!(retrieved, Some(value.to_string()));
+
+        // Test remove item
+        assert!(remove_script_storage_item(script_uri, key));
+
+        // Verify item is gone
+        let retrieved_after_remove = get_script_storage_item(script_uri, key);
+        assert_eq!(retrieved_after_remove, None);
+
+        // Test clear storage
+        assert!(set_script_storage_item(script_uri, "key1", "value1").is_ok());
+        assert!(set_script_storage_item(script_uri, "key2", "value2").is_ok());
+
+        assert!(clear_script_storage(script_uri).is_ok());
+
+        // Verify both items are gone
+        assert_eq!(get_script_storage_item(script_uri, "key1"), None);
+        assert_eq!(get_script_storage_item(script_uri, "key2"), None);
+    }
+
+    #[test]
+    fn test_script_storage_validation() {
+        // Test empty script URI
+        assert!(set_script_storage_item("", "key", "value").is_err());
+
+        // Test empty key
+        assert!(set_script_storage_item("test://script", "", "value").is_err());
+
+        // Test oversized value (simulate by creating a large string)
+        let large_value = "x".repeat(1_000_001); // Just over 1MB
+        assert!(set_script_storage_item("test://script", "key", &large_value).is_err());
     }
 }

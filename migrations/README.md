@@ -11,6 +11,9 @@ Migrations are applied in sequential order by filename:
 - `20241024000003_create_logs.sql` - Logs table
 - `20241024000004_create_users.sql` - Users table
 - `20241024000005_create_sessions.sql` - Sessions table
+- `20251027155422_add_provider_user_id_to_users.sql` - Add provider user ID to users
+- `20251028100000_alter_users_drop_email_unique.sql` - Drop email unique constraint
+- `20251030175548_create_script_storage.sql` - Script storage table
 
 ## Running Migrations
 
