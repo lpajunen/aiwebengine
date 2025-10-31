@@ -76,25 +76,63 @@ fn extract_subscription_name(query: &str) -> String {
         // Skip whitespace after "subscription"
         let after_subscription = after_subscription.trim_start();
 
-        // Look for the opening brace or whitespace that indicates the end of the subscription name
-        if let Some(brace_pos) = after_subscription.find('{') {
-            let subscription_name = after_subscription[..brace_pos].trim();
-            if !subscription_name.is_empty() {
-                return subscription_name.to_string();
+        // Check if it starts with '{', meaning no subscription name
+        if after_subscription.starts_with('{') {
+            // Extract the first field name from the subscription
+            if let Some(end_pos) = after_subscription.find('}') {
+                let subscription_body = &after_subscription[1..end_pos]; // Remove opening brace
+                // Find the first field name (skip whitespace and extract until whitespace or end)
+                let field_name = subscription_body.trim_start();
+                if let Some(space_pos) = field_name.find(char::is_whitespace) {
+                    field_name[..space_pos].trim().to_string()
+                } else if let Some(brace_pos) = field_name.find('{') {
+                    field_name[..brace_pos].trim().to_string()
+                } else {
+                    field_name.trim().to_string()
+                }
+            } else {
+                "anonymous_subscription".to_string()
             }
-        }
+        } else {
+            // Look for the opening brace or whitespace that indicates the end of the subscription name
+            if let Some(brace_pos) = after_subscription.find('{') {
+                let subscription_name = after_subscription[..brace_pos].trim();
+                if !subscription_name.is_empty() {
+                    return subscription_name.to_string();
+                }
+            }
 
-        // Fallback: look for whitespace after subscription name
-        if let Some(space_pos) = after_subscription.find(char::is_whitespace) {
-            let subscription_name = after_subscription[..space_pos].trim();
-            if !subscription_name.is_empty() {
-                return subscription_name.to_string();
+            // Fallback: look for whitespace after subscription name
+            if let Some(space_pos) = after_subscription.find(char::is_whitespace) {
+                let subscription_name = after_subscription[..space_pos].trim();
+                if !subscription_name.is_empty() {
+                    return subscription_name.to_string();
+                }
+            }
+
+            // If we can't find a name, use the first field
+            if let Some(brace_pos) = after_subscription.find('{') {
+                let subscription_body = &after_subscription[brace_pos + 1..];
+                if let Some(end_pos) = subscription_body.find('}') {
+                    let field_name = subscription_body[..end_pos].trim_start();
+                    if let Some(space_pos) = field_name.find(char::is_whitespace) {
+                        field_name[..space_pos].trim().to_string()
+                    } else if let Some(brace_pos) = field_name.find('{') {
+                        field_name[..brace_pos].trim().to_string()
+                    } else {
+                        field_name.trim().to_string()
+                    }
+                } else {
+                    "anonymous_subscription".to_string()
+                }
+            } else {
+                "anonymous_subscription".to_string()
             }
         }
+    } else {
+        // Fallback to a generic name if we can't parse it
+        "unknown_subscription".to_string()
     }
-
-    // Fallback to a generic name if we can't parse it
-    "unknown_subscription".to_string()
 }
 
 /// Parses form data from request body based on content type
