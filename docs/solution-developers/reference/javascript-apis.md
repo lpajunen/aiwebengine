@@ -74,20 +74,21 @@ registerWebStream("/chat/room1");
 - Streams persist until the server restarts or the script is reloaded
 - Use meaningful, descriptive paths for better organization
 
-### sendStreamMessage(data)
+### sendStreamMessageToPath(path, data)
 
-Broadcasts a message to all clients connected to registered streams.
+Sends a message to all clients connected to a specific stream path.
 
 **Parameters:**
 
+- `path` (string): Stream path to send to (must start with `/`)
 - `data` (object): Data object to send (will be JSON serialized)
 
 **Example:**
 
 ```javascript
 function notifyHandler(req) {
-  // Send notification to all connected streams
-  sendStreamMessage({
+  // Send notification to specific stream
+  sendStreamMessageToPath("/notifications", {
     type: "notification",
     message: "New update available",
     timestamp: new Date().toISOString(),
@@ -114,8 +115,8 @@ function sendMessage(req) {
     return { status: 400, body: "Missing user or message" };
   }
 
-  // Broadcast to all connected chat clients
-  sendStreamMessage({
+  // Send to the chat stream
+  sendStreamMessageToPath("/chat", {
     type: "chat_message",
     user: user,
     message: message,
@@ -320,7 +321,7 @@ eventSource.onerror = function (event) {
 
 1. **Registration**: Use `registerWebStream()` to create a stream endpoint
 2. **Connection**: Clients connect using EventSource or compatible SSE clients
-3. **Broadcasting**: Use `sendStreamMessage()` to send data to all connected clients
+3. **Broadcasting**: Use `sendStreamMessageToPath()` to send data to connected clients on specific streams
 4. **Cleanup**: Connections are automatically cleaned up when clients disconnect
 
 ### Best Practices for Streaming
@@ -330,6 +331,7 @@ eventSource.onerror = function (event) {
 - **Handle disconnections**: Clients should implement reconnection logic
 - **Limit message frequency**: Avoid overwhelming clients with too many messages
 - **Use meaningful paths**: Organize streams logically (e.g., `/chat/room1`, `/notifications/user123`)
+- **Target specific streams**: Use `sendStreamMessageToPath()` to send messages to the appropriate stream
 
 ## GraphQL APIs
 

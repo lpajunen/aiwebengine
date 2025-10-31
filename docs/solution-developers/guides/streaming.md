@@ -37,7 +37,7 @@ aiwebengine provides built-in support for real-time streaming through Server-Sen
 
 1. **Stream Registry**: Manages registered stream paths and active connections
 2. **Connection Manager**: Handles client connections and cleanup
-3. **JavaScript Engine Integration**: Provides `registerWebStream()` and `sendStreamMessage()` functions
+3. **JavaScript Engine Integration**: Provides `registerWebStream()` and `sendStreamMessageToPath()` functions
 4. **SSE Server**: Handles HTTP connections and message broadcasting
 
 ### Flow Diagram
@@ -50,17 +50,17 @@ JavaScript Script          Stream Registry          Connected Clients
      |                          |                         |
      |                          | <--- Client connects ---|
      |                          |                         |
-     | sendStreamMessage()      |                         |
+     | sendStreamMessageToPath()|                         |
      |------------------------->|                         |
-     |                          |---- Broadcast to all -->|
-     |                          |---- connected clients ->|
+     |                          |---- Send to specific -->|
+     |                          |---- stream clients ---->|
 ```
 
 ### Connection Lifecycle
 
 1. **Registration**: Script calls `registerWebStream('/path')` to create a stream endpoint
 2. **Client Connection**: Browser connects using `new EventSource('/path')`
-3. **Broadcasting**: Script calls `sendStreamMessage(data)` to send data to all clients
+3. **Broadcasting**: Script calls `sendStreamMessageToPath('/path', data)` to send data to clients on that specific stream
 4. **Cleanup**: Connections automatically cleaned up when clients disconnect
 
 ## Quick Start
@@ -73,7 +73,7 @@ registerWebStream("/events");
 
 // Handler to send events
 function triggerEvent(req) {
-  sendStreamMessage({
+  sendStreamMessageToPath("/events", {
     type: "event",
     message: "Something happened!",
     timestamp: new Date().toISOString(),
@@ -150,12 +150,13 @@ registerWebStream("/status/server1");
 - Should be unique per script
 - Case-sensitive
 
-#### sendStreamMessage(data)
+#### sendStreamMessageToPath(path, data)
 
-Broadcasts a message to all clients connected to registered streams.
+Sends a message to all clients connected to a specific stream path.
 
 **Parameters:**
 
+- `path` (string): Stream path to send to (must start with `/`)
 - `data` (object): Data to send (will be JSON serialized)
 
 **Returns:** Nothing
@@ -163,7 +164,7 @@ Broadcasts a message to all clients connected to registered streams.
 **Example:**
 
 ```javascript
-sendStreamMessage({
+sendStreamMessageToPath("/notifications", {
   type: "notification",
   title: "New Message",
   body: "You have a new message",
@@ -185,7 +186,7 @@ Streams are automatically managed by the aiwebengine:
 
 - **Registration**: Streams persist until server restart or script reload
 - **Connections**: Multiple clients can connect to the same stream
-- **Broadcasting**: Messages sent to ALL connected clients on ALL registered streams
+- **Broadcasting**: Messages sent to clients connected to the specified stream path
 - **Cleanup**: Stale connections automatically removed
 
 ## Client Integration
@@ -315,7 +316,7 @@ registerWebStream("/notifications");
 function sendAlert(req) {
   const { type, message, priority } = req.form;
 
-  sendStreamMessage({
+  sendStreamMessageToPath("/notifications", {
     type: "alert",
     alertType: type,
     message: message,
@@ -346,7 +347,7 @@ function updateMetrics(req) {
     timestamp: new Date().toISOString(),
   };
 
-  sendStreamMessage(metrics);
+  sendStreamMessageToPath("/dashboard", metrics);
   return { status: 200, body: "Metrics updated" };
 }
 
@@ -363,7 +364,7 @@ registerWebStream("/chat");
 function sendMessage(req) {
   const { user, room, message } = req.form;
 
-  sendStreamMessage({
+  sendStreamMessageToPath("/chat", {
     type: "chat_message",
     user: user,
     room: room,
@@ -395,7 +396,7 @@ function broadcastData(req) {
     timestamp: new Date().toISOString(),
   };
 
-  sendStreamMessage(data);
+  sendStreamMessageToPath("/data-feed", data);
   return { status: 200, body: "Data broadcasted" };
 }
 
@@ -435,9 +436,9 @@ register("/broadcast-data", "broadcastData", "GET");
 
 3. **Handle Different Message Types**
    ```javascript
-   sendStreamMessage({ type: 'notification', ... });
-   sendStreamMessage({ type: 'update', ... });
-   sendStreamMessage({ type: 'error', ... });
+   sendStreamMessageToPath('/notifications', { type: 'notification', ... });
+   sendStreamMessageToPath('/updates', { type: 'update', ... });
+   sendStreamMessageToPath('/errors', { type: 'error', ... });
    ```
 
 ### Client-Side Best Practices
@@ -504,11 +505,14 @@ register("/broadcast-data", "broadcastData", "GET");
    function safeHandler(req) {
      try {
        // Your logic here
-       sendStreamMessage({ type: "success", data: result });
+       sendStreamMessageToPath("/notifications", {
+         type: "success",
+         data: result,
+       });
        return { status: 200, body: "OK" };
      } catch (error) {
        writeLog("Error in handler: " + error.message);
-       sendStreamMessage({
+       sendStreamMessageToPath("/notifications", {
          type: "error",
          message: "Something went wrong",
          timestamp: new Date().toISOString(),
@@ -555,7 +559,7 @@ register("/broadcast-data", "broadcastData", "GET");
 
    // Verify message sending
    writeLog("Sending message...");
-   sendStreamMessage({ type: "test", message: "Hello" });
+   sendStreamMessageToPath("/my-stream", { type: "test", message: "Hello" });
    writeLog("Message sent");
    ```
 
@@ -632,7 +636,7 @@ registerWebStream("/chat"); // Chat messages
 // Send targeted messages based on context
 function handleUserAction(req) {
   // Notify about user action
-  sendStreamMessage({
+  sendStreamMessageToPath("/notifications", {
     type: "user_action",
     action: req.form.action,
     user: req.form.user,
@@ -640,7 +644,7 @@ function handleUserAction(req) {
 
   // Update system status if needed
   if (req.form.action === "critical_operation") {
-    sendStreamMessage({
+    sendStreamMessageToPath("/system-status", {
       type: "system_status",
       status: "busy",
       operation: req.form.action,
@@ -663,7 +667,7 @@ function webhookHandler(req) {
   const webhookData = JSON.parse(req.body);
 
   // Transform external data for your stream
-  sendStreamMessage({
+  sendStreamMessageToPath("/external-updates", {
     type: "external_update",
     source: "github",
     event: webhookData.action,

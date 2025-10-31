@@ -222,7 +222,7 @@ const response = fetch(url, options);
 
 // Streaming
 registerWebStream(path);
-sendStreamMessage(data);
+sendStreamMessageToPath(path, data);
 ```
 
 ### Handler Template

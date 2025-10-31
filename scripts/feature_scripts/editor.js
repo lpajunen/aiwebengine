@@ -638,7 +638,8 @@ AVAILABLE JAVASCRIPT APIs:
 5. registerWebStream(path) - Register SSE stream endpoint
    - path: string (must start with /)
 
-6. sendStreamMessage(data) - Broadcast to all stream clients
+6. sendStreamMessageToPath(path, data) - Send message to specific stream path
+   - path: string (must start with /)
    - data: object (will be JSON serialized)
 
 7. registerGraphQLQuery(name, schema, resolverName) - Register GraphQL query

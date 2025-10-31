@@ -1338,8 +1338,8 @@ mod tests {
             // Register a stream first
             registerWebStream('/test-message-stream');
 
-            // Send a message to all streams
-            sendStreamMessage('{"type": "test", "data": "Hello World"}');
+            // Send a message to the specific stream
+            sendStreamMessageToPath('/test-message-stream', '{"type": "test", "data": "Hello World"}');
 
             writeLog('Message sent successfully');
         "#;
@@ -1397,7 +1397,7 @@ mod tests {
             };
 
             // JavaScript must stringify the object before sending
-            sendStreamMessage(JSON.stringify(messageObj));
+            sendStreamMessageToPath('/test-json-stream', JSON.stringify(messageObj));
 
             writeLog('Complex JSON message sent');
         "#;

@@ -989,7 +989,7 @@ The engine SHOULD maintain comprehensive audit logs for compliance and security:
 The engine MUST support Server-Sent Events:
 
 - Stream registration via `registerWebStream(path)`
-- Message broadcasting via `sendStreamMessage(data)`
+- Targeted message broadcasting via `sendStreamMessageToPath(path, data)`
 - Multi-client support per stream
 - Automatic connection cleanup
 - Standard SSE format compliance
@@ -1326,7 +1326,6 @@ The engine MUST expose:
 The engine MUST expose:
 
 - `registerWebStream(path)` - SSE stream registration
-- `sendStreamMessage(data)` - broadcast to all streams
 - `sendStreamMessageToPath(path, data)` - targeted broadcast
 
 ### REQ-JSAPI-003: GraphQL APIs

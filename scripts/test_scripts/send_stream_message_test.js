@@ -1,4 +1,4 @@
-// Test script for sendStreamMessage functionality
+// Test script for sendStreamMessageToPath functionality
 // This script demonstrates how to register a stream and send messages to it
 
 // Initialization function - called once when script is loaded
@@ -18,7 +18,7 @@ function init(context) {
 // Send different types of messages
 function sendTestMessages() {
   // Simple text message
-  sendStreamMessage('"Hello World!"');
+  sendStreamMessageToPath("/notifications", '"Hello World!"');
 
   // JSON object message
   var notification = {
@@ -28,7 +28,7 @@ function sendTestMessages() {
     timestamp: new Date().toISOString(),
     priority: "high",
   };
-  sendStreamMessage(JSON.stringify(notification));
+  sendStreamMessageToPath("/notifications", JSON.stringify(notification));
 
   // Chat message
   var chatMessage = {
@@ -38,7 +38,7 @@ function sendTestMessages() {
     channel: "general",
     timestamp: Date.now(),
   };
-  sendStreamMessage(JSON.stringify(chatMessage));
+  sendStreamMessageToPath("/chat", JSON.stringify(chatMessage));
 
   // Status update
   var statusUpdate = {
@@ -52,11 +52,11 @@ function sendTestMessages() {
       requests_per_sec: 120,
     },
   };
-  sendStreamMessage(JSON.stringify(statusUpdate));
+  sendStreamMessageToPath("/notifications", JSON.stringify(statusUpdate));
 }
 
 // Call the function to send test messages
 sendTestMessages();
 
 // Log completion
-writeLog("Sent multiple test messages to all registered streams");
+writeLog("Sent multiple test messages to registered streams");
