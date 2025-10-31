@@ -527,6 +527,118 @@ impl StreamRegistry {
         }
     }
 
+    /// Broadcast a message to connections on a specific stream path that match the given metadata filter
+    pub fn broadcast_to_stream_with_filter(
+        &self,
+        path: &str,
+        message: &str,
+        metadata_filter: &HashMap<String, String>,
+    ) -> Result<BroadcastResult, String> {
+        match self.streams.lock() {
+            Ok(mut streams) => {
+                match streams.get_mut(path) {
+                    Some(registration) => {
+                        let mut successful_sends = 0;
+                        let mut failed_connections = Vec::new();
+                        let mut total_matching_connections = 0;
+
+                        for (connection_id, connection) in &registration.connections {
+                            // Check if connection metadata matches the filter
+                            let matches_filter =
+                                if let Some(ref conn_metadata) = connection.metadata {
+                                    // All filter criteria must be present and match
+                                    metadata_filter.iter().all(|(key, expected_value)| {
+                                        conn_metadata.get(key).map_or(false, |actual_value| {
+                                            actual_value == expected_value
+                                        })
+                                    })
+                                } else {
+                                    // If no filter criteria, match connections with no metadata
+                                    // If filter is empty, match all connections
+                                    metadata_filter.is_empty()
+                                };
+
+                            if matches_filter {
+                                total_matching_connections += 1;
+                                match connection.send_message(message) {
+                                    Ok(_) => {
+                                        successful_sends += 1;
+                                        debug!(
+                                            "Sent filtered message to connection {} on path {}",
+                                            connection_id, path
+                                        );
+                                    }
+                                    Err(broadcast::error::SendError(_)) => {
+                                        warn!(
+                                            "Failed to send filtered message to connection {} on path {} (no receivers)",
+                                            connection_id, path
+                                        );
+                                        failed_connections.push(connection_id.clone());
+                                    }
+                                }
+                            }
+                        }
+
+                        let result = BroadcastResult {
+                            successful_sends,
+                            failed_connections: failed_connections.clone(),
+                            total_connections: total_matching_connections,
+                        };
+
+                        if !result.failed_connections.is_empty() {
+                            warn!(
+                                "Filtered broadcast to path {} with filter {:?}: {} successful, {} failed of {} matching connections",
+                                path,
+                                metadata_filter,
+                                successful_sends,
+                                failed_connections.len(),
+                                total_matching_connections
+                            );
+                        } else if successful_sends > 0 {
+                            debug!(
+                                "Filtered broadcast to path {} with filter {:?}: {} connections matched and received message",
+                                path, metadata_filter, successful_sends
+                            );
+                        }
+
+                        // Auto-cleanup failed connections
+                        if !result.failed_connections.is_empty() {
+                            let mut cleaned_count = 0;
+                            for failed_connection_id in &result.failed_connections {
+                                if registration.remove_connection(failed_connection_id) {
+                                    cleaned_count += 1;
+                                }
+                            }
+                            if cleaned_count > 0 {
+                                debug!(
+                                    "Auto-cleaned {} failed connections from path '{}' after filtered broadcast",
+                                    cleaned_count, path
+                                );
+                            }
+                        }
+
+                        Ok(result)
+                    }
+                    None => {
+                        debug!(
+                            "Attempted to broadcast with filter to unregistered stream path '{}'",
+                            path
+                        );
+                        Ok(BroadcastResult {
+                            successful_sends: 0,
+                            failed_connections: Vec::new(),
+                            total_connections: 0,
+                        })
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to acquire stream registry lock: {}", e);
+                Err("Failed to broadcast with filter: registry lock error".to_string())
+            }
+        }
+    }
+
     /// Get statistics about all registered streams
     pub fn get_stream_stats(&self) -> Result<HashMap<String, serde_json::Value>, String> {
         match self.streams.lock() {

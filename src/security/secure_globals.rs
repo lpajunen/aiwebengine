@@ -1,5 +1,6 @@
 use base64::Engine;
 use rquickjs::{Function, Result as JsResult};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, warn};
 
@@ -1542,33 +1543,47 @@ impl SecureGlobalContext {
         )?;
         global.set("sendStreamMessageToPath", send_stream_message_to_path)?;
 
-        // Secure sendSubscriptionMessage function (for GraphQL subscriptions)
-        let user_ctx_send_subscription = user_context.clone();
-        let auditor_send_subscription = auditor.clone();
-        let send_subscription_message = Function::new(
+        // Secure sendStreamMessageToConnections function (selective broadcasting)
+        let user_ctx_send_filtered = user_context.clone();
+        let auditor_send_filtered = auditor.clone();
+        let send_stream_message_to_connections = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>,
-                  subscription_name: String,
-                  message: String|
+                  path: String,
+                  message: String,
+                  filter_json: Option<String>|
                   -> JsResult<String> {
-                // Allow system-level GraphQL subscription broadcasting without capability checks
-                let is_system_broadcast = true; // GraphQL subscriptions are considered system-level
+                // Parse filter criteria from JSON string
+                let metadata_filter: HashMap<String, String> = if let Some(json_str) = filter_json {
+                    serde_json::from_str(&json_str).map_err(|e| {
+                        rquickjs::Error::new_from_js_message(
+                            "filter",
+                            "MetadataFilter",
+                            &format!("Invalid filter JSON: {}", e),
+                        )
+                    })?
+                } else {
+                    HashMap::new() // Empty filter matches all connections
+                };
+
+                // Allow system-level broadcasting without capability checks for certain paths
+                let is_system_broadcast = path == "/script_updates" || path.starts_with("/system/");
 
                 if !is_system_broadcast {
-                    // Check capability for non-system operations (future use)
-                    if let Err(e) = user_ctx_send_subscription
-                        .require_capability(&crate::security::Capability::ManageGraphQL)
+                    // Check capability for non-system operations
+                    if let Err(e) = user_ctx_send_filtered
+                        .require_capability(&crate::security::Capability::ManageStreams)
                     {
                         // Use spawn for fire-and-forget audit logging to avoid runtime conflicts
-                        let auditor_clone = auditor_send_subscription.clone();
-                        let user_id = user_ctx_send_subscription.user_id.clone();
+                        let auditor_clone = auditor_send_filtered.clone();
+                        let user_id = user_ctx_send_filtered.user_id.clone();
                         tokio::task::spawn(async move {
                             let _ = auditor_clone
                                 .log_authz_failure(
                                     user_id,
-                                    "graphql".to_string(),
-                                    "send_subscription_message".to_string(),
-                                    "ManageGraphQL".to_string(),
+                                    "stream".to_string(),
+                                    "send_message_to_connections".to_string(),
+                                    "ManageStreams".to_string(),
                                 )
                                 .await;
                         });
@@ -1577,8 +1592,101 @@ impl SecureGlobalContext {
                 }
 
                 // Log the operation attempt using spawn to avoid runtime conflicts
-                let auditor_clone = auditor_send_subscription.clone();
-                let user_id = user_ctx_send_subscription.user_id.clone();
+                let auditor_clone = auditor_send_filtered.clone();
+                let user_id = user_ctx_send_filtered.user_id.clone();
+                let path_clone = path.clone();
+                let message_clone = message.clone();
+                let filter_clone = metadata_filter.clone();
+                tokio::task::spawn(async move {
+                    let _ = auditor_clone
+                        .log_event(
+                            crate::security::SecurityEvent::new(
+                                SecurityEventType::SystemSecurityEvent,
+                                SecuritySeverity::Low,
+                                user_id,
+                            )
+                            .with_resource("stream".to_string())
+                            .with_action("send_message_to_connections".to_string())
+                            .with_detail("path", &path_clone)
+                            .with_detail("message_length", message_clone.len().to_string())
+                            .with_detail("filter_criteria", &format!("{:?}", filter_clone)),
+                        )
+                        .await;
+                });
+
+                debug!(
+                    user_id = ?user_ctx_send_filtered.user_id,
+                    path = %path,
+                    message_len = message.len(),
+                    filter = ?metadata_filter,
+                    "Secure sendStreamMessageToConnections called"
+                );
+
+                // Call selective broadcasting (sync operation)
+                match crate::stream_registry::GLOBAL_STREAM_REGISTRY
+                    .broadcast_to_stream_with_filter(&path, &message, &metadata_filter)
+                {
+                    Ok(result) => {
+                        if result.is_fully_successful() {
+                            Ok(format!(
+                                "Stream message sent to path '{}' with filter {:?} ({} connections) successfully",
+                                path, metadata_filter, result.successful_sends
+                            ))
+                        } else {
+                            Ok(format!(
+                                "Stream message to '{}' with filter {:?} partially sent: {} successful, {} failed out of {} matching connections",
+                                path,
+                                metadata_filter,
+                                result.successful_sends,
+                                result.failed_connections.len(),
+                                result.total_connections
+                            ))
+                        }
+                    }
+                    Err(e) => Ok(format!(
+                        "Failed to send stream message to path '{}' with filter: {}",
+                        path, e
+                    )),
+                }
+            },
+        )?;
+        global.set(
+            "sendStreamMessageToConnections",
+            send_stream_message_to_connections,
+        )?;
+
+        // Secure sendSubscriptionMessage function
+        let user_ctx_send_sub = user_context.clone();
+        let auditor_send_sub = auditor.clone();
+        let send_subscription_message = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  subscription_name: String,
+                  message: String|
+                  -> JsResult<String> {
+                // Check capability
+                if let Err(e) = user_ctx_send_sub
+                    .require_capability(&crate::security::Capability::ManageGraphQL)
+                {
+                    // Use spawn for fire-and-forget audit logging to avoid runtime conflicts
+                    let auditor_clone = auditor_send_sub.clone();
+                    let user_id = user_ctx_send_sub.user_id.clone();
+                    tokio::task::spawn(async move {
+                        let _ = auditor_clone
+                            .log_authz_failure(
+                                user_id,
+                                "graphql".to_string(),
+                                "send_subscription_message".to_string(),
+                                "ManageGraphQL".to_string(),
+                            )
+                            .await;
+                    });
+                    return Ok(format!("Error: {}", e));
+                }
+
+                // Log the operation attempt using spawn to avoid runtime conflicts
+                let auditor_clone = auditor_send_sub.clone();
+                let user_id = user_ctx_send_sub.user_id.clone();
                 let subscription_name_clone = subscription_name.clone();
                 let message_clone = message.clone();
                 tokio::task::spawn(async move {
@@ -1598,43 +1706,160 @@ impl SecureGlobalContext {
                 });
 
                 debug!(
-                    user_id = ?user_ctx_send_subscription.user_id,
+                    user_id = ?user_ctx_send_sub.user_id,
                     subscription_name = %subscription_name,
                     message_len = message.len(),
                     "Secure sendSubscriptionMessage called"
                 );
 
-                // Call actual GraphQL subscription message sending (sync operation)
                 // Send to the auto-registered stream path for this subscription
                 let stream_path = format!("/graphql/subscription/{}", subscription_name);
 
-                // Send via stream path
+                // Call actual stream message sending (sync operation)
+                match crate::stream_registry::GLOBAL_STREAM_REGISTRY
+                    .broadcast_to_stream(&stream_path, &message)
+                {
+                    Ok(result) => {
+                        if result.is_fully_successful() {
+                            Ok(format!(
+                                "GraphQL subscription message sent to '{}' ({} connections) successfully",
+                                subscription_name, result.successful_sends
+                            ))
+                        } else {
+                            Ok(format!(
+                                "GraphQL subscription message to '{}' partially sent: {} successful, {} failed out of {} total",
+                                subscription_name,
+                                result.successful_sends,
+                                result.failed_connections.len(),
+                                result.total_connections
+                            ))
+                        }
+                    }
+                    Err(e) => Ok(format!(
+                        "Failed to send GraphQL subscription message to '{}': {}",
+                        subscription_name, e
+                    )),
+                }
+            },
+        )?;
+        global.set("sendSubscriptionMessage", send_subscription_message)?;
+
+        // Secure sendSubscriptionMessageToConnections function (selective broadcasting for GraphQL)
+        let user_ctx_send_sub_filtered = user_context.clone();
+        let auditor_send_sub_filtered = auditor.clone();
+        let send_subscription_message_to_connections = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  subscription_name: String,
+                  message: String,
+                  filter_json: Option<String>|
+                  -> JsResult<String> {
+                // Parse filter criteria from JSON string
+                let metadata_filter: HashMap<String, String> = if let Some(json_str) = filter_json {
+                    serde_json::from_str(&json_str).map_err(|e| {
+                        rquickjs::Error::new_from_js_message(
+                            "filter",
+                            "MetadataFilter",
+                            &format!("Invalid filter JSON: {}", e),
+                        )
+                    })?
+                } else {
+                    HashMap::new() // Empty filter matches all connections
+                };
+
+                // Allow system-level GraphQL subscription broadcasting without capability checks
+                let is_system_broadcast = true; // GraphQL subscriptions are considered system-level
+
+                if !is_system_broadcast {
+                    // Check capability for non-system operations (future use)
+                    if let Err(e) = user_ctx_send_sub_filtered
+                        .require_capability(&crate::security::Capability::ManageGraphQL)
+                    {
+                        // Use spawn for fire-and-forget audit logging to avoid runtime conflicts
+                        let auditor_clone = auditor_send_sub_filtered.clone();
+                        let user_id = user_ctx_send_sub_filtered.user_id.clone();
+                        tokio::task::spawn(async move {
+                            let _ = auditor_clone
+                                .log_authz_failure(
+                                    user_id,
+                                    "graphql".to_string(),
+                                    "send_subscription_message_to_connections".to_string(),
+                                    "ManageGraphQL".to_string(),
+                                )
+                                .await;
+                        });
+                        return Ok(format!("Error: {}", e));
+                    }
+                }
+
+                // Log the operation attempt using spawn to avoid runtime conflicts
+                let auditor_clone = auditor_send_sub_filtered.clone();
+                let user_id = user_ctx_send_sub_filtered.user_id.clone();
+                let subscription_name_clone = subscription_name.clone();
+                let message_clone = message.clone();
+                let filter_clone = metadata_filter.clone();
+                tokio::task::spawn(async move {
+                    let _ = auditor_clone
+                        .log_event(
+                            crate::security::SecurityEvent::new(
+                                SecurityEventType::SystemSecurityEvent,
+                                SecuritySeverity::Low,
+                                user_id,
+                            )
+                            .with_resource("graphql".to_string())
+                            .with_action("send_subscription_message_to_connections".to_string())
+                            .with_detail("subscription_name", &subscription_name_clone)
+                            .with_detail("message_length", message_clone.len().to_string())
+                            .with_detail("filter_criteria", &format!("{:?}", filter_clone)),
+                        )
+                        .await;
+                });
+
+                debug!(
+                    user_id = ?user_ctx_send_sub_filtered.user_id,
+                    subscription_name = %subscription_name,
+                    message_len = message.len(),
+                    filter = ?metadata_filter,
+                    "Secure sendSubscriptionMessageToConnections called"
+                );
+
+                // Send to the auto-registered stream path for this subscription with filtering
+                let stream_path = format!("/graphql/subscription/{}", subscription_name);
+
+                // Call selective broadcasting (sync operation)
                 let result = crate::stream_registry::GLOBAL_STREAM_REGISTRY
-                    .broadcast_to_stream(&stream_path, &message);
+                    .broadcast_to_stream_with_filter(&stream_path, &message, &metadata_filter);
 
                 match result {
                     Ok(broadcast_result) => {
                         if broadcast_result.is_fully_successful() {
                             Ok(format!(
-                                "GraphQL subscription message sent to {} connections",
+                                "GraphQL subscription message sent to '{}' with filter {:?} ({} connections) successfully",
+                                subscription_name,
+                                metadata_filter,
                                 broadcast_result.successful_sends
                             ))
                         } else {
                             Ok(format!(
-                                "GraphQL subscription message partially sent: {} successful, {} failed connections",
+                                "GraphQL subscription message to '{}' with filter {:?} partially sent: {} successful, {} failed connections",
+                                subscription_name,
+                                metadata_filter,
                                 broadcast_result.successful_sends,
                                 broadcast_result.failed_connections.len()
                             ))
                         }
                     }
                     Err(e) => Ok(format!(
-                        "Failed to send GraphQL subscription message: {}",
-                        e
+                        "Failed to send GraphQL subscription message to '{}' with filter: {}",
+                        subscription_name, e
                     )),
                 }
             },
         )?;
-        global.set("sendSubscriptionMessage", send_subscription_message)?;
+        global.set(
+            "sendSubscriptionMessageToConnections",
+            send_subscription_message_to_connections,
+        )?;
 
         Ok(())
     }

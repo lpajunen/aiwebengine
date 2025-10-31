@@ -642,22 +642,36 @@ AVAILABLE JAVASCRIPT APIs:
    - path: string (must start with /)
    - data: object (will be JSON serialized)
 
-7. registerGraphQLQuery(name, schema, resolverName) - Register GraphQL query
+7. sendStreamMessageToConnections(path, data, filterJson) - Send message to specific connections based on metadata filtering
+   - path: string (must start with /)
+   - data: object (will be JSON serialized)
+   - filterJson: string (optional JSON string with metadata filter criteria, empty "{}" matches all)
+   - Returns: string describing broadcast result with success/failure counts
+   - Use for personalized broadcasting to specific users/groups on stable endpoints
+
+8. sendSubscriptionMessageToConnections(subscriptionName, data, filterJson) - Send message to specific GraphQL subscription connections
+   - subscriptionName: string (name of GraphQL subscription)
+   - data: object (will be JSON serialized)
+   - filterJson: string (optional JSON string with metadata filter criteria, empty "{}" matches all)
+   - Returns: string describing broadcast result with success/failure counts
+   - Use for personalized GraphQL subscription broadcasting
+
+9. registerGraphQLQuery(name, schema, resolverName) - Register GraphQL query
    - name: string (query name)
    - schema: string (GraphQL schema definition)
    - resolverName: string (name of resolver function)
 
-8. registerGraphQLMutation(name, schema, resolverName) - Register GraphQL mutation
-   - name: string (mutation name)
-   - schema: string (GraphQL schema definition)
-   - resolverName: string (name of resolver function)
+10. registerGraphQLMutation(name, schema, resolverName) - Register GraphQL mutation
+    - name: string (mutation name)
+    - schema: string (GraphQL schema definition)
+    - resolverName: string (name of resolver function)
 
-9. registerGraphQLSubscription(name, schema, resolverName) - Register GraphQL subscription
-   - name: string (subscription name)
-   - schema: string (GraphQL schema definition)
-   - resolverName: string (name of resolver function)
+11. registerGraphQLSubscription(name, schema, resolverName) - Register GraphQL subscription
+    - name: string (subscription name)
+    - schema: string (GraphQL schema definition)
+    - resolverName: string (name of resolver function)
 
-10. executeGraphQL(query, variables) - Execute GraphQL query
+12. executeGraphQL(query, variables) - Execute GraphQL query
     - query: string (GraphQL query string)
     - variables: string (optional JSON string of variables)
     - Returns: JSON string with GraphQL response
@@ -711,6 +725,9 @@ IMPORTANT CONCEPTS:
 4. Scripts don't have access to browser APIs or Node.js APIs
 5. Use fetch() to call external APIs
 6. Use register() in init() to map URLs to handler functions
+7. For real-time features, use registerWebStream() and sendStreamMessageToPath()
+8. For personalized broadcasting, use sendStreamMessageToConnections() with metadata filters
+9. Selective broadcasting enables chat apps and user-specific notifications without dynamic endpoints
 
 RULES:
 1. ALWAYS respond with ONLY valid JSON - no other text
@@ -734,6 +751,12 @@ Example 2 - Create JSON API:
 
 Example 3 - Explanation:
 {"type":"explanation","message":"This script registers a GET endpoint that returns JSON user data with proper error handling and content type."}
+
+Example 4 - Selective Broadcasting Chat:
+{"type":"create_script","message":"Creating a chat application with selective broadcasting for personalized messages","script_name":"chat-app.js","code":"// Chat Application with Selective Broadcasting\\n\\n// Register one stream for all chat messages\\nfunction init(context) {\\n  registerWebStream('/chat');\\n  register('/chat/send', 'sendMessage', 'POST');\\n  register('/chat/personal', 'sendPersonalMessage', 'POST');\\n  return { success: true };\\n}\\n\\n// Send message to specific room\\nfunction sendMessage(req) {\\n  const { room, message, sender } = req.form;\\n  \\n  const result = sendStreamMessageToConnections('/chat', {\\n    type: 'room_message',\\n    room: room,\\n    message: message,\\n    sender: sender,\\n    timestamp: new Date().toISOString()\\n  }, JSON.stringify({ room: room }));\\n  \\n  return {\\n    status: 200,\\n    body: JSON.stringify({ success: true, result: result }),\\n    contentType: 'application/json; charset=UTF-8'\\n  };\\n}\\n\\n// Send personal message to specific user\\nfunction sendPersonalMessage(req) {\\n  const { targetUser, message, sender } = req.form;\\n  \\n  const result = sendStreamMessageToConnections('/chat', {\\n    type: 'personal_message',\\n    message: message,\\n    sender: sender,\\n    timestamp: new Date().toISOString()\\n  }, JSON.stringify({ user_id: targetUser }));\\n  \\n  return {\\n    status: 200,\\n    body: JSON.stringify({ success: true, result: result }),\\n    contentType: 'application/json; charset=UTF-8'\\n  };\\n}"}
+
+Example 5 - GraphQL Subscription with Selective Broadcasting:
+{"type":"create_script","message":"Creating a GraphQL subscription with selective broadcasting for personalized notifications","script_name":"notification-subscription.js","code":"// GraphQL Subscription with Selective Broadcasting\\n\\nfunction init(context) {\\n  registerGraphQLSubscription(\\n    'userNotifications',\\n    'type Subscription { userNotifications: String }',\\n    'userNotificationsResolver'\\n  );\\n  register('/notify/user', 'sendUserNotification', 'POST');\\n  return { success: true };\\n}\\n\\nfunction userNotificationsResolver() {\\n  return 'User notifications subscription active';\\n}\\n\\nfunction sendUserNotification(req) {\\n  const { userId, message, type } = req.form;\\n  \\n  const result = sendSubscriptionMessageToConnections('userNotifications', {\\n    type: type || 'notification',\\n    message: message,\\n    timestamp: new Date().toISOString()\\n  }, JSON.stringify({ user_id: userId }));\\n  \\n  return {\\n    status: 200,\\n    body: JSON.stringify({ success: true, result: result }),\\n    contentType: 'application/json; charset=UTF-8'\\n  };\\n}"}
 
 IMPORTANT: In these examples, each \\n represents ONE newline character in the JavaScript code. When you output JSON, a newline in the source code becomes \\n in the JSON string.
 

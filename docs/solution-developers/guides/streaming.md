@@ -8,11 +8,14 @@ This guide covers aiwebengine's real-time streaming capabilities using Server-Se
 - [Architecture](#architecture)
 - [Quick Start](#quick-start)
 - [API Reference](#api-reference)
+- [Selective Broadcasting](#selective-broadcasting)
 - [Client Integration](#client-integration)
 - [Use Cases](#use-cases)
-- [GraphQL Subscriptions](#graphql-subscriptions)
 - [Best Practices](#best-practices)
 - [Troubleshooting](#troubleshooting)
+- [Advanced Topics](#advanced-topics)
+- [GraphQL Subscriptions](#graphql-subscriptions)
+- [Next Steps](#next-steps)
 
 ## Overview
 
@@ -180,6 +183,102 @@ sendStreamMessageToPath("/notifications", {
 - Use consistent field names across your application
 - Keep messages reasonably sized (< 1MB recommended)
 
+#### sendStreamMessageToConnections(path, data, filterJson) [Advanced]
+
+Sends a message to specific clients connected to a stream path based on connection metadata filtering.
+
+**Parameters:**
+
+- `path` (string): Stream path to send to (must start with `/`)
+- `data` (object): Data to send (will be JSON serialized)
+- `filterJson` (string, optional): JSON string containing metadata filter criteria. Empty string `{}` matches all connections.
+
+**Returns:** String describing the broadcast result including success/failure counts
+
+**Example:**
+
+```javascript
+// Send to connections where user_id matches "user123" and room is "general"
+sendStreamMessageToConnections(
+  "/chat",
+  {
+    type: "chat_message",
+    message: "Hello everyone in general!",
+    timestamp: new Date().toISOString(),
+  },
+  JSON.stringify({
+    user_id: "user123",
+    room: "general",
+  }),
+);
+
+// Send to all connections (empty filter)
+sendStreamMessageToConnections(
+  "/notifications",
+  {
+    type: "system_alert",
+    message: "System maintenance starting",
+  },
+  "{}",
+);
+```
+
+**Filter Format:**
+
+The `filterJson` parameter should be a JSON string containing key-value pairs that must match the connection's metadata:
+
+```javascript
+// Filter examples
+JSON.stringify({ user_id: "user123" }); // Match specific user
+JSON.stringify({ room: "general", role: "admin" }); // Match room AND role
+JSON.stringify({}); // Match all connections (empty filter)
+```
+
+**Use Cases:**
+
+- **Chat Applications**: Send messages only to users in specific rooms or with certain permissions
+- **User-Specific Notifications**: Deliver personalized content to individual users
+- **Role-Based Broadcasting**: Send different messages based on user roles or groups
+- **Multi-Tenant Systems**: Filter by tenant, organization, or workspace
+
+#### sendSubscriptionMessageToConnections(subscriptionName, data, filterJson) [Advanced]
+
+Sends a message to specific clients subscribed to a GraphQL subscription based on connection metadata filtering.
+
+**Parameters:**
+
+- `subscriptionName` (string): Name of the GraphQL subscription
+- `data` (object): Data to send (will be JSON serialized)
+- `filterJson` (string, optional): JSON string containing metadata filter criteria. Empty string `{}` matches all connections.
+
+**Returns:** String describing the broadcast result including success/failure counts
+
+**Example:**
+
+```javascript
+// Register GraphQL subscription first
+registerGraphQLSubscription(
+  "chatMessages",
+  "type Subscription { chatMessages: String }",
+  "chatMessagesResolver",
+);
+
+// Send to connections where user_id matches "user456"
+sendSubscriptionMessageToConnections(
+  "chatMessages",
+  {
+    type: "chat_message",
+    message: "Private message for you!",
+    timestamp: new Date().toISOString(),
+  },
+  JSON.stringify({
+    user_id: "user456",
+  }),
+);
+```
+
+**Note:** This function works with GraphQL subscriptions and uses the same metadata filtering as `sendStreamMessageToConnections`.
+
 ### Stream Management
 
 Streams are automatically managed by the aiwebengine:
@@ -189,7 +288,261 @@ Streams are automatically managed by the aiwebengine:
 - **Broadcasting**: Messages sent to clients connected to the specified stream path
 - **Cleanup**: Stale connections automatically removed
 
-## Client Integration
+## Selective Broadcasting
+
+Selective broadcasting allows you to send messages to specific clients based on connection metadata, enabling personalized content delivery on stable endpoints without creating dynamic user-specific paths.
+
+### How It Works
+
+1. **Connection Metadata**: Each client connection can have associated metadata (key-value pairs)
+2. **Filtering**: When broadcasting, you provide filter criteria that match against this metadata
+3. **Targeted Delivery**: Only connections whose metadata matches the filter receive the message
+
+### Benefits
+
+- **Stable Endpoints**: Use one endpoint instead of many user-specific paths
+- **Scalability**: Avoid endpoint proliferation and memory leaks
+- **Personalization**: Deliver relevant content to specific users or groups
+- **Security**: Filter based on user permissions, roles, or context
+
+### Quick Example
+
+```javascript
+// Register one stream for all chat messages
+registerWebStream("/chat");
+
+// Send personalized messages using metadata filtering
+function sendPersonalMessage(req) {
+  const { targetUser, message } = req.form;
+
+  // Send only to connections where user_id matches targetUser
+  const result = sendStreamMessageToConnections(
+    "/chat",
+    {
+      type: "personal_message",
+      message: message,
+      from: "system",
+      timestamp: new Date().toISOString(),
+    },
+    JSON.stringify({
+      user_id: targetUser,
+    }),
+  );
+
+  return { status: 200, body: result };
+}
+
+register("/chat/personal", "sendPersonalMessage", "POST");
+```
+
+### Advanced Filtering
+
+```javascript
+// Multiple filter criteria (AND logic)
+sendStreamMessageToConnections(
+  "/notifications",
+  data,
+  JSON.stringify({
+    user_id: "user123",
+    role: "admin",
+    department: "engineering",
+  }),
+);
+
+// Room-based chat filtering
+sendStreamMessageToConnections(
+  "/chat",
+  data,
+  JSON.stringify({
+    room: "general",
+  }),
+);
+
+// Tenant-based filtering for multi-tenant apps
+sendStreamMessageToConnections(
+  "/updates",
+  data,
+  JSON.stringify({
+    tenant_id: "tenant123",
+    environment: "production",
+  }),
+);
+```
+
+### Client-Side Metadata Setup
+
+Connection metadata is typically set when clients connect. The exact mechanism depends on your authentication and connection setup, but here's a conceptual example:
+
+```javascript
+// When establishing connection, include metadata
+const connectionOptions = {
+  headers: {
+    "X-User-ID": "user123",
+    "X-Room": "general",
+    "X-Role": "admin",
+  },
+};
+
+// The server would extract this metadata and associate it with the connection
+// This is handled automatically by aiwebengine's connection management
+```
+
+### Use Cases for Selective Broadcasting
+
+#### 1. Chat Applications
+
+```javascript
+registerWebStream("/chat");
+
+function sendRoomMessage(req) {
+  const { room, message, sender } = req.form;
+
+  return sendStreamMessageToConnections(
+    "/chat",
+    {
+      type: "room_message",
+      room: room,
+      message: message,
+      sender: sender,
+      timestamp: new Date().toISOString(),
+    },
+    JSON.stringify({ room: room }),
+  );
+}
+
+function sendPrivateMessage(req) {
+  const { targetUser, message, sender } = req.form;
+
+  return sendStreamMessageToConnections(
+    "/chat",
+    {
+      type: "private_message",
+      message: message,
+      sender: sender,
+      timestamp: new Date().toISOString(),
+    },
+    JSON.stringify({ user_id: targetUser }),
+  );
+}
+
+register("/chat/room", "sendRoomMessage", "POST");
+register("/chat/private", "sendPrivateMessage", "POST");
+```
+
+#### 2. Role-Based Notifications
+
+```javascript
+registerWebStream("/notifications");
+
+function sendAdminAlert(req) {
+  const { message, priority } = req.form;
+
+  return sendStreamMessageToConnections(
+    "/notifications",
+    {
+      type: "admin_alert",
+      message: message,
+      priority: priority,
+      timestamp: new Date().toISOString(),
+    },
+    JSON.stringify({ role: "admin" }),
+  );
+}
+
+function sendUserNotification(req) {
+  const { userId, message } = req.form;
+
+  return sendStreamMessageToConnections(
+    "/notifications",
+    {
+      type: "user_notification",
+      message: message,
+      timestamp: new Date().toISOString(),
+    },
+    JSON.stringify({ user_id: userId }),
+  );
+}
+
+register("/notify/admin", "sendAdminAlert", "POST");
+register("/notify/user", "sendUserNotification", "POST");
+```
+
+#### 3. Multi-Tenant Applications
+
+```javascript
+registerWebStream("/tenant-updates");
+
+function broadcastTenantUpdate(req) {
+  const { tenantId, message } = req.form;
+
+  return sendStreamMessageToConnections(
+    "/tenant-updates",
+    {
+      type: "tenant_update",
+      message: message,
+      timestamp: new Date().toISOString(),
+    },
+    JSON.stringify({ tenant_id: tenantId }),
+  );
+}
+
+register("/tenant/broadcast", "broadcastTenantUpdate", "POST");
+```
+
+### Best Practices for Selective Broadcasting
+
+1. **Filter Design**
+   - Use consistent metadata keys across your application
+   - Plan your filtering strategy before implementing
+   - Consider performance impact of complex filters
+
+2. **Security**
+   - Validate filter criteria server-side
+   - Don't expose sensitive metadata in client responses
+   - Use appropriate capability checks for filtered broadcasts
+
+3. **Performance**
+   - Prefer simple filters (single key-value pairs)
+   - Avoid overly complex filter combinations
+   - Monitor broadcast performance with many connections
+
+4. **Error Handling**
+
+```javascript
+function safeBroadcast(req) {
+  try {
+    const result = sendStreamMessageToConnections("/chat", data, filter);
+    writeLog("Broadcast result: " + result);
+    return { status: 200, body: result };
+  } catch (error) {
+    writeLog("Broadcast failed: " + error.message);
+    return { status: 500, body: "Broadcast failed" };
+  }
+}
+```
+
+### Troubleshooting Selective Broadcasting
+
+1. **Messages Not Received**
+   - Check that connection metadata matches your filter exactly
+   - Verify filter JSON syntax
+   - Ensure connections have the expected metadata
+
+2. **Performance Issues**
+   - Monitor broadcast result strings for failure counts
+   - Check server logs for filtering performance
+   - Consider simplifying complex filters
+
+3. **Debugging**
+
+````javascript
+// Log broadcast results
+const result = sendStreamMessageToConnections("/test", data, filter);
+writeLog("Broadcast result: " + result);
+
+// Test with empty filter to verify basic functionality
+sendStreamMessageToConnections("/test", { type: "test" }, "{}");
+```## Client Integration
 
 ### EventSource API
 
@@ -217,7 +570,7 @@ eventSource.onerror = function (event) {
 
 // Close connection when done
 // eventSource.close();
-```
+````
 
 ### Advanced Client Handling
 
@@ -435,11 +788,12 @@ register("/broadcast-data", "broadcastData", "GET");
    ```
 
 3. **Handle Different Message Types**
-   ```javascript
-   sendStreamMessageToPath('/notifications', { type: 'notification', ... });
-   sendStreamMessageToPath('/updates', { type: 'update', ... });
-   sendStreamMessageToPath('/errors', { type: 'error', ... });
-   ```
+
+```javascript
+sendStreamMessageToPath('/notifications', { type: 'notification', ... });
+sendStreamMessageToPath('/updates', { type: 'update', ... });
+sendStreamMessageToPath('/errors', { type: 'error', ... });
+```
 
 ### Client-Side Best Practices
 
@@ -471,14 +825,15 @@ register("/broadcast-data", "broadcastData", "GET");
    ```
 
 3. **Clean Up Connections**
-   ```javascript
-   // Close connections when navigating away
-   window.addEventListener("beforeunload", function () {
-     if (eventSource) {
-       eventSource.close();
-     }
-   });
-   ```
+
+```javascript
+// Close connections when navigating away
+window.addEventListener("beforeunload", function () {
+  if (eventSource) {
+    eventSource.close();
+  }
+});
+```
 
 ### Performance Considerations
 
@@ -523,13 +878,14 @@ register("/broadcast-data", "broadcastData", "GET");
    ```
 
 2. **Client-Side**
-   ```javascript
-   eventSource.onerror = function (event) {
-     console.error("Stream error:", event);
-     // Handle the error appropriately
-     showErrorMessage("Connection lost. Attempting to reconnect...");
-   };
-   ```
+
+```javascript
+eventSource.onerror = function (event) {
+  console.error("Stream error:", event);
+  // Handle the error appropriately
+  showErrorMessage("Connection lost. Attempting to reconnect...");
+};
+```
 
 ### Security Considerations
 
@@ -685,7 +1041,7 @@ register("/webhook/github", "webhookHandler", "POST");
 
 aiwebengine supports GraphQL subscriptions using the same SSE streaming infrastructure. When you register a GraphQL subscription, a corresponding stream path is automatically created.
 
-### Quick Example
+### Basic Example
 
 ```javascript
 // Register a GraphQL subscription
