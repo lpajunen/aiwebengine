@@ -14,7 +14,7 @@ This guide covers aiwebengine's real-time streaming capabilities using Server-Se
 - [Best Practices](#best-practices)
 - [Troubleshooting](#troubleshooting)
 - [Advanced Topics](#advanced-topics)
-- [GraphQL Subscriptions](#graphql-subscriptions)
+- [GraphQL Subscriptions with Selective Broadcasting](#graphql-subscriptions-with-selective-broadcasting)
 - [Next Steps](#next-steps)
 
 ## Overview
@@ -371,20 +371,124 @@ sendStreamMessageToConnections(
 
 ### Client-Side Metadata Setup
 
-Connection metadata is typically set when clients connect. The exact mechanism depends on your authentication and connection setup, but here's a conceptual example:
+Connection metadata is specified when clients connect by including query parameters in the stream URL. These parameters become the connection's metadata and can be used for selective broadcasting.
+
+**Basic Example:**
 
 ```javascript
-// When establishing connection, include metadata
-const connectionOptions = {
-  headers: {
-    "X-User-ID": "user123",
-    "X-Room": "general",
-    "X-Role": "admin",
-  },
-};
+// Connect with user-specific metadata
+const eventSource = new EventSource("/chat?user_id=user123&room=general");
 
-// The server would extract this metadata and associate it with the connection
-// This is handled automatically by aiwebengine's connection management
+// Connect with role-based metadata
+const adminSource = new EventSource(
+  "/notifications?role=admin&department=engineering",
+);
+
+// Connect with tenant metadata for multi-tenant apps
+const tenantSource = new EventSource(
+  "/updates?tenant_id=tenant123&environment=production",
+);
+```
+
+**Query Parameter Format:**
+
+- All query parameters in the connection URL become metadata key-value pairs
+- Values are automatically URL-decoded
+- Empty values are preserved as empty strings
+- Duplicate keys use the last value (standard URL behavior)
+
+**Examples:**
+
+```javascript
+// URL: /stream?user_id=john&role=admin&department=engineering
+// Metadata: { user_id: "john", role: "admin", department: "engineering" }
+
+// URL: /chat?room=general&mute=false
+// Metadata: { room: "general", mute: "false" }
+
+// URL: /notifications?priority=high&category=system
+// Metadata: { priority: "high", category: "system" }
+```
+
+**JavaScript Helper Function:**
+
+```javascript
+function connectWithMetadata(streamPath, metadata) {
+  const params = new URLSearchParams(metadata);
+  const url = `${streamPath}?${params.toString()}`;
+  return new EventSource(url);
+}
+
+// Usage
+const stream = connectWithMetadata("/chat", {
+  user_id: "user123",
+  room: "general",
+  role: "member",
+});
+```
+
+**Authentication Integration:**
+
+For authenticated applications, you can include user information in metadata:
+
+```javascript
+// Assuming you have user context from authentication
+function connectAuthenticatedStream(streamPath) {
+  const user = getCurrentUser(); // Your auth function
+  const metadata = {
+    user_id: user.id,
+    role: user.role,
+    tenant_id: user.tenantId,
+    // Add any other relevant metadata
+  };
+
+  return connectWithMetadata(streamPath, metadata);
+}
+
+// Usage
+const notifications = connectAuthenticatedStream("/notifications");
+const chat = connectAuthenticatedStream("/chat");
+```
+
+**Dynamic Metadata Updates:**
+
+If you need to change metadata during a session, you'll need to disconnect and reconnect with new parameters:
+
+```javascript
+function switchRoom(newRoom) {
+  // Close existing connection
+  if (eventSource) {
+    eventSource.close();
+  }
+
+  // Connect with new room metadata
+  eventSource = new EventSource(
+    `/chat?user_id=user123&room=${encodeURIComponent(newRoom)}`,
+  );
+}
+```
+
+**Best Practices for Metadata:**
+
+1. **Keep it Simple**: Use simple key-value pairs, avoid complex nested objects
+2. **Be Consistent**: Use the same metadata keys across your application
+3. **URL Encode**: Always encode special characters in metadata values
+4. **Security**: Don't include sensitive information in metadata (it's visible in URLs)
+5. **Performance**: Prefer short, descriptive keys and values
+
+**Troubleshooting Metadata:**
+
+```javascript
+// Debug metadata by logging connection setup
+console.log("Connecting to:", urlWithMetadata);
+
+// Verify metadata is being sent
+const testConnection = new EventSource(
+  "/test-metadata?debug=true&user_id=test",
+);
+testConnection.onmessage = (event) => {
+  console.log("Connection metadata:", event.data);
+};
 ```
 
 ### Use Cases for Selective Broadcasting
@@ -1037,58 +1141,72 @@ function webhookHandler(req) {
 register("/webhook/github", "webhookHandler", "POST");
 ```
 
-## GraphQL Subscriptions
+### GraphQL Subscriptions with Selective Broadcasting
 
-aiwebengine supports GraphQL subscriptions using the same SSE streaming infrastructure. When you register a GraphQL subscription, a corresponding stream path is automatically created.
+GraphQL subscriptions also support selective broadcasting using the same metadata mechanism. Clients specify metadata via query parameters in the GraphQL SSE endpoint URL.
 
-### Basic Example
+**Client Connection:**
 
 ```javascript
-// Register a GraphQL subscription
-registerGraphQLSubscription(
-  "liveEvents",
-  "type Subscription { liveEvents: String }",
-  "liveEventsResolver",
+// Connect to GraphQL subscription with metadata
+const eventSource = new EventSource(
+  "/graphql/sse?user_id=user123&room=general&role=member",
 );
 
-// Subscription resolver
-function liveEventsResolver() {
-  return "Live events subscription active";
-}
-
-// Send messages to subscribers
-function triggerEvent() {
-  sendSubscriptionMessage(
-    "liveEvents",
-    JSON.stringify({
-      event: "user_joined",
-      timestamp: new Date().toISOString(),
-    }),
-  );
-}
-```
-
-### Client Connection
-
-```javascript
-// Connect via GraphQL subscription
+// Send GraphQL subscription request
 const subscriptionQuery = {
-  query: `subscription { liveEvents }`,
+  query: `subscription { chatMessages { id text sender } }`,
 };
 
-fetch("/graphql/sse", {
+fetch("/graphql/sse?user_id=user123&room=general", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify(subscriptionQuery),
 }).then((response) => {
   // Handle SSE stream...
 });
-
-// Or connect directly to the auto-registered stream path
-const eventSource = new EventSource("/graphql/subscription/liveEvents");
 ```
 
-For complete GraphQL subscription documentation, see [GraphQL Subscriptions Guide](graphql-subscriptions.md).
+**Server-Side Broadcasting:**
+
+```javascript
+// Send to all subscribers of chatMessages
+sendSubscriptionMessage("chatMessages", data);
+
+// Send selectively to subscribers with specific metadata
+sendSubscriptionMessageToConnections(
+  "chatMessages",
+  data,
+  JSON.stringify({ user_id: "user123" }),
+);
+
+// Send to subscribers in a specific room
+sendSubscriptionMessageToConnections(
+  "chatMessages",
+  data,
+  JSON.stringify({ room: "general" }),
+);
+```
+
+**Key Differences from Regular Streams:**
+
+- **URL Structure**: Metadata is specified in the `/graphql/sse` endpoint URL, not in individual stream paths
+- **Subscription Name**: The system automatically determines the stream path based on the GraphQL subscription name
+- **Connection Tracking**: Each GraphQL subscription connection is tracked with metadata for selective broadcasting
+
+**Example Workflow:**
+
+1. Client connects to `/graphql/sse?user_id=user123&room=general`
+2. Client sends GraphQL subscription: `subscription { chatMessages { ... } }`
+3. Server creates connection to `/graphql/subscription/chatMessages` with metadata `{user_id: "user123", room: "general"}`
+4. Server can selectively broadcast using `sendSubscriptionMessageToConnections("chatMessages", data, filter)`
+
+**Use Cases:**
+
+- **User-Specific Notifications**: Send notifications only to specific users
+- **Room-Based Chat**: Filter messages by chat room or channel
+- **Role-Based Broadcasting**: Send different content based on user roles
+- **Tenant Isolation**: Filter by organization or workspace
 
 ## Next Steps
 

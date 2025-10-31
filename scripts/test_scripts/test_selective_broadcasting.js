@@ -10,6 +10,7 @@ function init(context) {
 
   // Register test stream endpoints
   registerWebStream("/test/chat");
+  registerWebStream("/test/metadata-demo");
 
   // Register GraphQL subscription for testing
   registerGraphQLSubscription(
@@ -75,6 +76,43 @@ function testSelectiveSubscriptionBroadcasting() {
 
   writeLog("Subscription broadcast result: " + subscriptionResult);
 }
+
+// Test metadata parsing from query parameters
+function testMetadataDemo(req) {
+  writeLog("Testing metadata demo endpoint...");
+
+  // Send a message that will be filtered by the metadata from query params
+  const result = sendStreamMessageToConnections(
+    "/test/metadata-demo",
+    JSON.stringify({
+      type: "metadata_test",
+      message: "This message is filtered by query parameter metadata!",
+      timestamp: new Date().toISOString(),
+      server_received_params: req.query,
+    }),
+    JSON.stringify({ demo: "true" }), // Only send to connections with demo=true
+  );
+
+  writeLog("Metadata demo broadcast result: " + result);
+
+  return {
+    status: 200,
+    body: JSON.stringify({
+      message: "Metadata demo triggered",
+      broadcast_result: result,
+      your_query_params: req.query,
+    }),
+  };
+}
+
+// Register test endpoints
+register("/test/selective/stream", "testSelectiveStreamBroadcasting", "POST");
+register(
+  "/test/selective/subscription",
+  "testSelectiveSubscriptionBroadcasting",
+  "POST",
+);
+register("/test/metadata-demo", "testMetadataDemo", "POST");
 
 // Run the tests
 testSelectiveStreamBroadcasting();

@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Selective Broadcasting Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        .messages { height: 200px; overflow-y: auto; background: #f5f5f5; padding: 10px; margin: 10px 0; }
+        .message { margin: 5px 0; padding: 5px; background: white; border-radius: 3px; }
+        button { padding: 8px 16px; margin: 5px; cursor: pointer; }
+        input { padding: 8px; margin: 5px; }
+        .status { padding: 5px; margin: 5px 0; font-weight: bold; }
+        .connected { color: green; }
+        .disconnected { color: red; }
+        .error { color: orange; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Selective Broadcasting Test</h1>
+
+        <div class="section">
+            <h2>Connection Setup</h2>
+            <p>Connect to streams with different metadata using query parameters:</p>
+
+            <div>
+                <label>User ID: <input type="text" id="userId" value="user123"></label>
+                <label>Room: <input type="text" id="room" value="general"></label>
+                <label>Demo: <input type="checkbox" id="demo" checked></label>
+                <button onclick="connectStreams()">Connect</button>
+                <button onclick="disconnectStreams()">Disconnect</button>
+            </div>
+
+            <div class="status" id="connectionStatus">Not connected</div>
+        </div>
+
+        <div class="section">
+            <h2>Stream Messages</h2>
+            <div id="messages" class="messages"></div>
+            <button onclick="clearMessages()">Clear Messages</button>
+        </div>
+
+        <div class="section">
+            <h2>Test Broadcasting</h2>
+            <p>Test selective broadcasting by sending messages to different metadata filters:</p>
+
+            <button onclick="testSelectiveBroadcast()">Send to user123 + general room</button>
+            <button onclick="testDemoBroadcast()">Send to demo=true connections</button>
+            <button onclick="testAllBroadcast()">Send to ALL connections</button>
+        </div>
+
+        <div class="section">
+            <h2>How It Works</h2>
+            <p>This demo shows how clients specify message filtering criteria when subscribing to selective broadcasting:</p>
+            <ol>
+                <li><strong>Connection Metadata:</strong> When connecting to a stream, include query parameters that define your metadata</li>
+                <li><strong>Server-Side Filtering:</strong> The server uses this metadata to filter which connections receive messages</li>
+                <li><strong>Selective Broadcasting:</strong> Use <code>sendStreamMessageToConnections()</code> with filter criteria</li>
+            </ol>
+
+            <h3>Example URLs:</h3>
+            <ul>
+                <li><code>/test/chat?user_id=user123&room=general</code> - Connects with user and room metadata</li>
+                <li><code>/test/metadata-demo?demo=true&user_id=user123</code> - Connects with demo flag</li>
+            </ul>
+
+            <h3>Filter Examples:</h3>
+            <ul>
+                <li><code>{user_id: "user123", room: "general"}</code> - Send to specific user in specific room</li>
+                <li><code>{demo: "true"}</code> - Send to demo connections only</li>
+                <li><code>{}</code> - Send to ALL connections (empty filter)</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        let chatSource = null;
+        let demoSource = null;
+
+        function connectStreams() {
+            const userId = document.getElementById('userId').value;
+            const room = document.getElementById('room').value;
+            const demo = document.getElementById('demo').checked;
+
+            // Disconnect existing connections
+            disconnectStreams();
+
+            // Connect to chat stream with user/room metadata
+            const chatUrl = `/test/chat?user_id=${encodeURIComponent(userId)}&room=${encodeURIComponent(room)}`;
+            chatSource = new EventSource(chatUrl);
+
+            // Connect to demo stream with demo metadata
+            const demoUrl = `/test/metadata-demo?demo=${demo}&user_id=${encodeURIComponent(userId)}`;
+            demoSource = new EventSource(demoUrl);
+
+            setupEventSource(chatSource, 'Chat Stream');
+            setupEventSource(demoSource, 'Demo Stream');
+
+            document.getElementById('connectionStatus').textContent = 'Connected';
+            document.getElementById('connectionStatus').className = 'status connected';
+        }
+
+        function disconnectStreams() {
+            if (chatSource) {
+                chatSource.close();
+                chatSource = null;
+            }
+            if (demoSource) {
+                demoSource.close();
+                demoSource = null;
+            }
+
+            document.getElementById('connectionStatus').textContent = 'Disconnected';
+            document.getElementById('connectionStatus').className = 'status disconnected';
+        }
+
+        function setupEventSource(source, name) {
+            source.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                addMessage(`${name}: ${JSON.stringify(data, null, 2)}`);
+            };
+
+            source.onopen = function() {
+                addMessage(`${name}: Connected`);
+            };
+
+            source.onerror = function(event) {
+                addMessage(`${name}: Error - ${event}`);
+                document.getElementById('connectionStatus').textContent = 'Connection Error';
+                document.getElementById('connectionStatus').className = 'status error';
+            };
+        }
+
+        function addMessage(message) {
+            const messagesDiv = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message';
+            messageDiv.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            messagesDiv.appendChild(messageDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        function clearMessages() {
+            document.getElementById('messages').innerHTML = '';
+        }
+
+        async function testSelectiveBroadcast() {
+            try {
+                const response = await fetch('/test/selective/stream', { method: 'POST' });
+                const result = await response.text();
+                addMessage(`Selective broadcast result: ${result}`);
+            } catch (error) {
+                addMessage(`Error: ${error.message}`);
+            }
+        }
+
+        async function testDemoBroadcast() {
+            try {
+                const response = await fetch('/test/metadata-demo', { method: 'POST' });
+                const result = await response.json();
+                addMessage(`Demo broadcast result: ${JSON.stringify(result)}`);
+            } catch (error) {
+                addMessage(`Error: ${error.message}`);
+            }
+        }
+
+        async function testAllBroadcast() {
+            try {
+                // This would trigger a broadcast to all connections
+                const response = await fetch('/test/selective/stream', { method: 'POST' });
+                addMessage(`Broadcast to all triggered`);
+            } catch (error) {
+                addMessage(`Error: ${error.message}`);
+            }
+        }
+
+        // Auto-connect on page load
+        window.addEventListener('load', function() {
+            setTimeout(connectStreams, 1000);
+        });
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', disconnectStreams);
+    </script>
+</body>
+</html>

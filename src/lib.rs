@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio_stream::wrappers::BroadcastStream;
 use tracing::{debug, error, info, warn};
+use urlencoding;
 
 pub mod config;
 pub mod database;
@@ -35,7 +36,65 @@ use security::UserContext;
 
 /// Parses a query string into a HashMap of key-value pairs
 fn parse_query_string(query: &str) -> HashMap<String, String> {
-    serde_urlencoded::from_str(query).unwrap_or_default()
+    let mut params = HashMap::new();
+    if query.is_empty() {
+        return params;
+    }
+
+    for pair in query.split('&') {
+        let mut parts = pair.splitn(2, '=');
+        let key = parts.next().unwrap_or("");
+        let value = parts.next().unwrap_or("");
+
+        // URL decode the key and value
+        let decoded_key =
+            urlencoding::decode(key).unwrap_or_else(|_| std::borrow::Cow::Borrowed(key));
+        let decoded_value =
+            urlencoding::decode(value).unwrap_or_else(|_| std::borrow::Cow::Borrowed(value));
+
+        // Convert + to spaces (though urlencoding should handle this, being explicit)
+        let final_key = decoded_key.replace('+', " ");
+        let final_value = decoded_value.replace('+', " ");
+
+        params.insert(final_key, final_value);
+    }
+
+    params
+}
+
+fn extract_subscription_name(query: &str) -> String {
+    // Simple extraction of subscription name from GraphQL query
+    // This is a basic implementation - in production you might want more sophisticated parsing
+
+    // Remove leading/trailing whitespace and normalize
+    let query = query.trim();
+
+    // Look for "subscription" keyword followed by the subscription name
+    if let Some(subscription_pos) = query.find("subscription") {
+        let after_subscription = &query[subscription_pos + "subscription".len()..];
+
+        // Skip whitespace after "subscription"
+        let after_subscription = after_subscription.trim_start();
+
+        // Look for the opening brace or whitespace that indicates the end of the subscription name
+        if let Some(brace_pos) = after_subscription.find('{') {
+            let subscription_name = after_subscription[..brace_pos].trim();
+            if !subscription_name.is_empty() {
+                return subscription_name.to_string();
+            }
+        }
+
+        // Fallback: look for whitespace after subscription name
+        if let Some(space_pos) = after_subscription.find(char::is_whitespace) {
+            let subscription_name = after_subscription[..space_pos].trim();
+            if !subscription_name.is_empty() {
+                return subscription_name.to_string();
+            }
+        }
+    }
+
+    // Fallback to a generic name if we can't parse it
+    "unknown_subscription".to_string()
 }
 
 /// Parses form data from request body based on content type
@@ -66,12 +125,26 @@ async fn parse_form_data(
 }
 
 /// Handle Server-Sent Events stream requests
-async fn handle_stream_request(path: String) -> Response {
-    info!("Handling stream request for path: {}", path);
+async fn handle_stream_request(req: Request<Body>) -> Response {
+    let path = req.uri().path().to_string();
+    let query_string = req.uri().query().map(|s| s.to_string()).unwrap_or_default();
+    let query_params = parse_query_string(&query_string);
+
+    info!(
+        "Handling stream request for path: {} with query params: {:?}",
+        path, query_params
+    );
+
+    // Use query parameters as client metadata for selective broadcasting
+    let client_metadata = if query_params.is_empty() {
+        None
+    } else {
+        Some(query_params)
+    };
 
     // Create a connection with the stream manager
     let connection = match stream_manager::StreamConnectionManager::new()
-        .create_connection(&path, None)
+        .create_connection(&path, client_metadata)
         .await
     {
         Ok(conn) => conn,
@@ -663,7 +736,12 @@ pub async fn start_server_with_config(
 
     // GraphQL SSE handler - handles subscriptions over Server-Sent Events using execute_stream
     async fn graphql_sse(req: axum::http::Request<axum::body::Body>) -> impl IntoResponse {
-        let (_parts, body) = req.into_parts();
+        let (parts, body) = req.into_parts();
+        let query_string = parts.uri.query().map(|s| s.to_string()).unwrap_or_default();
+        let query_params = parse_query_string(&query_string);
+
+        info!("GraphQL SSE request with query params: {:?}", query_params);
+
         let body_bytes = match axum::body::to_bytes(body, usize::MAX).await {
             Ok(bytes) => bytes,
             Err(e) => {
@@ -716,6 +794,49 @@ pub async fn start_server_with_config(
         let is_subscription = request.query.trim_start().starts_with("subscription");
 
         if is_subscription {
+            // For subscriptions, create a connection with metadata to enable selective broadcasting
+            // Extract subscription name from the query to determine the stream path
+            let subscription_name = extract_subscription_name(&request.query);
+            let stream_path = format!("/graphql/subscription/{}", subscription_name);
+
+            // Use query parameters as client metadata for selective broadcasting
+            let client_metadata = if query_params.is_empty() {
+                None
+            } else {
+                Some(query_params)
+            };
+
+            // Create a connection with the stream manager for this subscription
+            let connection = match stream_manager::StreamConnectionManager::new()
+                .create_connection(&stream_path, client_metadata)
+                .await
+            {
+                Ok(conn) => conn,
+                Err(e) => {
+                    error!(
+                        "Failed to create GraphQL subscription connection for '{}': {}",
+                        stream_path, e
+                    );
+                    return axum::response::Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .header("content-type", "text/plain")
+                        .body(Body::from(format!(
+                            "Failed to create subscription connection: {}",
+                            e
+                        )))
+                        .unwrap_or_else(|err| {
+                            error!("Failed to build error response: {}", err);
+                            Response::new(Body::from("Internal Server Error"))
+                        });
+                }
+            };
+
+            let connection_id = connection.connection_id.clone();
+            info!(
+                "Created GraphQL subscription connection {} for path '{}' with metadata: {:?}",
+                connection_id, stream_path, connection.client_metadata
+            );
+
             // Use execute_stream for subscriptions - this provides native GraphQL subscription lifecycle
             // We need to move the schema into a spawn to handle the lifetime requirements
             let (tx, rx) = tokio::sync::mpsc::channel(100);
@@ -745,6 +866,20 @@ pub async fn start_server_with_config(
                     };
 
                     if tx.send(event).await.is_err() {
+                        // Connection closed, clean up the subscription connection
+                        if let Err(cleanup_err) = stream_registry::GLOBAL_STREAM_REGISTRY
+                            .remove_connection(&stream_path, &connection_id)
+                        {
+                            error!(
+                                "Failed to cleanup GraphQL subscription connection {}: {}",
+                                connection_id, cleanup_err
+                            );
+                        } else {
+                            debug!(
+                                "Cleaned up GraphQL subscription connection {} from stream {}",
+                                connection_id, stream_path
+                            );
+                        }
                         break; // Receiver dropped, stop streaming
                     }
                 }
@@ -812,7 +947,7 @@ pub async fn start_server_with_config(
 
         if is_get && is_stream_registered {
             info!("Routing to stream handler for path: {}", path);
-            return handle_stream_request(path).await;
+            return handle_stream_request(req).await;
         }
 
         // Check if any route exists for this path (including wildcards)
