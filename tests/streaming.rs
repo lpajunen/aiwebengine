@@ -755,7 +755,7 @@ async fn test_stream_messaging() {
                 timestamp: new Date().toISOString()
             };
             
-            sendStreamMessage(JSON.stringify(message));
+            sendStreamMessageToPath('/notification-stream', JSON.stringify(message));
             writeLog('POST - Sent notification: ' + JSON.stringify(message));
             return { 
                 status: 200, 
@@ -772,7 +772,7 @@ async fn test_stream_messaging() {
                 timestamp: new Date().toISOString()
             };
             
-            sendStreamMessage(JSON.stringify(message));
+            sendStreamMessageToPath('/notification-stream', JSON.stringify(message));
             writeLog('GET - Sent notification: ' + JSON.stringify(message));
             return { 
                 status: 200, 
@@ -808,10 +808,10 @@ async fn test_stream_messaging() {
     let minimal_test = r#"
         writeLog('Testing sendStreamMessage in isolation');
         try {
-            sendStreamMessage('{"test": "isolation"}');
-            writeLog('sendStreamMessage isolation test: SUCCESS');
+            sendStreamMessageToPath('/notification-stream', '{"test": "isolation"}');
+            writeLog('sendStreamMessageToPath isolation test: SUCCESS');
         } catch (error) {
-            writeLog('sendStreamMessage isolation test ERROR: ' + error.toString());
+            writeLog('sendStreamMessageToPath isolation test ERROR: ' + error.toString());
         }
     "#;
 
@@ -1127,7 +1127,7 @@ fn test_simple_message_sending() {
 
     let test_script = r#"
         try {
-            sendStreamMessage({ type: 'test', message: 'hello' });
+            sendStreamMessageToPath('/simple_test', { type: 'test', message: 'hello' });
             writeLog('Message sent successfully');
         } catch (error) {
             writeLog('Error sending message: ' + error.message);
@@ -1159,7 +1159,7 @@ fn test_combined_functionality() {
         writeLog('Stream registered');
         
         try {
-            sendStreamMessage({ type: 'combined_test', message: 'hello combined' });
+            sendStreamMessageToPath('/combined_test', { type: 'combined_test', message: 'hello combined' });
             writeLog('Message sent successfully');
         } catch (error) {
             writeLog('Error sending message: ' + error.message);

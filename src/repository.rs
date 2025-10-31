@@ -150,9 +150,9 @@ fn safe_lock_assets()
     }
 }
 
-fn safe_lock_script_storage()
--> Result<std::sync::MutexGuard<'static, HashMap<String, HashMap<String, String>>>, RepositoryError>
-{
+type ScriptStorageGuard<'a> = std::sync::MutexGuard<'a, HashMap<String, HashMap<String, String>>>;
+
+fn safe_lock_script_storage() -> Result<ScriptStorageGuard<'static>, RepositoryError> {
     let store = DYNAMIC_SCRIPT_STORAGE.get_or_init(|| Mutex::new(HashMap::new()));
 
     match store.lock() {

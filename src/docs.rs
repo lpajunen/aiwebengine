@@ -142,7 +142,7 @@ pub async fn handle_docs_request(
         "docs/solution-developers/README.md".to_string()
     } else {
         // Map the URL path to the file system path
-        let md_path = if path_str.ends_with(".md") {
+        if path_str.ends_with(".md") {
             format!("docs/solution-developers/{}", path_str)
         } else if path_str.ends_with("/") {
             format!(
@@ -164,9 +164,7 @@ pub async fn handle_docs_request(
                     format!("Documentation file not found: {}", path_str),
                 ));
             }
-        };
-
-        md_path
+        }
     };
 
     // Read the Markdown file
