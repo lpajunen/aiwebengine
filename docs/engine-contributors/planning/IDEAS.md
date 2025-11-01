@@ -8,23 +8,50 @@ The API should use as little namespace as possible from the actual scripts and h
 
 The goal is to make the API more consistent and easier to use. The following are some proposed changes:
 
+### Engine API Changes
+
 codeStorage object
 
-- getScript -> getItem (use similar api structure as localStorage)
-- getScriptInitStatus -> getItemMetadata
+- getScript -> value | null getItem(key) (use similar api structure as localStorage)
+- upsertScript -> bool setItem(key, value)
+- deleteScript -> bool removeItem(key)
+- listScripts -> [key] listKeys()
+- getScriptInitStatus -> {} | null getMetadata(key)
+
+- if editor role, owned scripts only
+- if admin role, all scripts
 
 routeRegistry object
 
-- register -> addRoute
+- register -> registerRoute(path, method, handler)
+- None -> unregisterRoute(path, method)
+- registerWebStream -> registerStreamRoute(path, connectionHandler | null)
+- None -> unregisterStreamRoute(path)
+- sendStreamMessageToPath -> sendStreamMessage(path, message, filterCriteria | null)
+- sendStreamMessageToConnection -> None
+- listRoutes -> [{path, method}] listRoutes()
+
+- connectionHandler gets req object as parameter and returns filterCriteria for that connection
+
+- all scripts owned by editors and admins can list all routes and register new routes
+- unregisterRoute, unregisterStreamRoute, sendStreamMessage only for scripts where they were registered or owned by admin
 
 console object
 
 - writeLog -> log
 
-logHistory object
+logStorage object
 
-- getLogs
-- getOtherLogs
+- listLogs -> [logDetails] listLogs(key)
+
+- editors can list logs for their own scripts
+- admins can list logs for all scripts
+
+eventRegistry object
+
+- None -> registerEvent(eventType, handler)
+- None -> unregisterEvent(eventType)
+- None -> dispatchEvent(eventType, eventData)
 
 assetStorage / assetRegistry object
 
@@ -44,11 +71,26 @@ userStorage object
 
 graphQLRegistry object
 
-- registerGraphQLQuery -> addGraphQLQuery
+- registerGraphQLQuery -> registerQuery(name, sdl, handler)
+- registerGraphQLMutation -> registerMutation(name, sdl, handler)
+- registerGraphQLSubscription -> registerSubscription(name, sdl, handler, connectionHandler | null)
+- None -> unregisterQuery(name)
+- None -> unregisterMutation(name)
+- None -> unregisterSubscription(name)
+- sendSubscriptionMessageToConnections -> sendSubscriptionMessage(name, message, filterCriteria | null)
+- executeGraphQL -> executeGraphQL(query, variables | null)
 
 identityStorage object
 
 - addUserRole -> assignUserRole
+
+timerEventService object
+
+- None -> registerSingleShotTimer(name, delayMs, handler)
+- None -> registerRecurringTimer(name, intervalMs, handler)
+- None -> unregisterTimer(name)
+
+### Script API Changes
 
 init function
 
@@ -56,22 +98,35 @@ handler function
 
 - req.auth
 
+connectionHandler function
+
+- req.auth
+
 event function
+
+- eventType
+- eventData
 
 ## Needs thinking
 
 Streams
 
 - how to provide different values for different streams and users?
+- now filtercriteria is specified in http url when connecting the stream. it should be fully customizable in script side in connectionHandler function. this allows hiding this logic from the clients.
 
 Change events
+
+- streams and GraphQL subscriptions are for external clients to get real-time updates. however, there could be a need for internal event system for scripts to communicate with each other based on certain events happening in the system.
 
 - for example new script created, script updated, script deleted
 - for example new asset created, asset updated, asset deleted
 - for example new user created, user updated, user deleted
 
+- for example, i create a script for handling chat groups. there could be a separate script for handling user presence. when a user joins or leaves a chat group, the chat group script needs to be notified about this event. how to implement this event system? also when a new message is created, the chat group script needs to be notified about this event. e.g. multiple scripts need to communicate with each other based on events.
+
 - could there be a "event" function that is called with the event details as parameters?
 - should there be a way to subscribe to specific events?
+- multiple external clients can subscribe to the same stream. however, if multiple scripts wants to subscribe to the same stream, how to handle that? is the separate event system needed?
 
 Transactions or transactional storage operations
 
@@ -99,3 +154,8 @@ Security enhancements
 - security for business logic
 - secure storage and logging of sensitive data
 - audit trails for changes made by scripts
+
+Monitoring and analytics
+
+- how to monitor event chains and script performance?
+- if a graphql query triggers another query or mutation, how to track the full chain of events for debugging and optimization purposes?
