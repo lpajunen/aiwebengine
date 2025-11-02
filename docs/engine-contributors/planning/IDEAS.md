@@ -147,6 +147,7 @@ Composition of scripts
 Ticker service / background jobs
 
 - how to implement a ticker service that can trigger events at regular intervals?
+- how to implement long running background jobs that do not have direct user interaction?
 
 Security enhancements
 
@@ -159,3 +160,36 @@ Monitoring and analytics
 
 - how to monitor event chains and script performance?
 - if a graphql query triggers another query or mutation, how to track the full chain of events for debugging and optimization purposes?
+- add support for prometheus metrics collection from scripts and from engine
+- add support for open telemetry tracing from scripts and from engine
+
+AI understanding / context of scripts
+
+- system prompt allow script generation AI to understand envige APIs
+- how AI can know about other scripts and their functionality?
+
+## URL structure ideas
+
+- /auth/... for authentication and authorization related endpoints
+  - login, logout, token refresh
+  - unauthorized
+  - implement OAuth2 / OIDC protocols
+- /engine/... for engine management endpoints
+  - engine status, health checks
+  - metrics
+  - development and admin operations (console)
+    - user management
+    - script management
+    - asset management
+    - secret management
+    - log management
+  - external cli (deployer) tool operations
+- /graphql/... for GraphQL related endpoints
+  - implement GraphQL queries, mutations, subscriptions
+- /mcp/... for Model-Context-Protocol related endpoints
+  - implement MCP interactions
+
+- everything else is available for user scripts
+  - implement HTTP endpoints
+  - complete responses and streams
+- if there is no script registered for /, redirect to /engine/status or show a default welcome page
