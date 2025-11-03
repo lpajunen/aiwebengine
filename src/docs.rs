@@ -23,110 +23,216 @@ pub fn markdown_to_html(markdown: &str, title: &str) -> String {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{}</title>
+    <link rel="stylesheet" href="/engine.css">
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <style>
+        /* Documentation-specific overrides */
         body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            max-width: 800px;
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            padding: 2rem 0;
+        }}
+
+        .docs-container {{
+            max-width: 900px;
             margin: 0 auto;
-            padding: 20px;
-            background-color: #f8f9fa;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: var(--border-radius-lg);
+            box-shadow: var(--shadow-lg);
+            overflow: hidden;
         }}
-        .container {{
-            background: white;
-            padding: 30px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+
+        .docs-header {{
+            background: var(--bg-secondary);
+            padding: 1.5rem 2rem;
+            border-bottom: 1px solid var(--border-color);
         }}
-        h1, h2, h3, h4, h5, h6 {{
-            color: #2c3e50;
-            margin-top: 1.5em;
-            margin-bottom: 0.5em;
+
+        .docs-nav {{
+            background: rgba(255, 255, 255, 0.9);
+            padding: 1rem 2rem;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
         }}
-        h1 {{
-            border-bottom: 2px solid #3498db;
-            padding-bottom: 10px;
+
+        .docs-nav a {{
+            color: var(--primary-color);
+            text-decoration: none;
+            font-weight: 500;
+            padding: 0.5rem 1rem;
+            border-radius: var(--border-radius);
+            transition: var(--transition);
+        }}
+
+        .docs-nav a:hover {{
+            background: var(--bg-secondary);
+            color: var(--primary-color);
+        }}
+
+        .docs-content {{
+            padding: 2rem;
+            line-height: 1.7;
+        }}
+
+        /* Markdown content styling */
+        .docs-content h1,
+        .docs-content h2,
+        .docs-content h3,
+        .docs-content h4,
+        .docs-content h5,
+        .docs-content h6 {{
+            color: var(--text-color);
+            margin-top: 2rem;
+            margin-bottom: 1rem;
+            font-weight: 600;
+        }}
+
+        .docs-content h1 {{
+            border-bottom: 3px solid var(--primary-color);
+            padding-bottom: 0.5rem;
             margin-top: 0;
+            font-size: 2.25rem;
         }}
-        code {{
-            background: #f1f3f4;
-            padding: 2px 6px;
-            border-radius: 3px;
+
+        .docs-content h2 {{
+            border-bottom: 2px solid var(--primary-color);
+            padding-bottom: 0.25rem;
+            font-size: 1.875rem;
+        }}
+
+        .docs-content h3 {{
+            font-size: 1.5rem;
+        }}
+
+        .docs-content code {{
+            background: var(--bg-secondary);
+            padding: 0.125rem 0.375rem;
+            border-radius: var(--border-radius-sm);
             font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-            font-size: 0.9em;
+            font-size: 0.875em;
+            color: var(--text-color);
         }}
-        pre {{
-            background: #f8f9fa;
-            padding: 15px;
-            border-radius: 5px;
+
+        .docs-content pre {{
+            background: var(--bg-secondary);
+            padding: 1rem;
+            border-radius: var(--border-radius);
             overflow-x: auto;
-            border: 1px solid #e9ecef;
+            border: 1px solid var(--border-color);
+            margin: 1rem 0;
         }}
-        pre code {{
+
+        .docs-content pre code {{
             background: none;
             padding: 0;
+            font-size: 0.875em;
         }}
-        blockquote {{
-            border-left: 4px solid #3498db;
-            padding-left: 15px;
-            margin: 15px 0;
-            color: #555;
+
+        .docs-content blockquote {{
+            border-left: 4px solid var(--primary-color);
+            padding-left: 1rem;
+            margin: 1.5rem 0;
+            color: var(--text-muted);
             font-style: italic;
+            background: var(--bg-secondary);
+            padding: 1rem 1rem 1rem 1.5rem;
+            border-radius: 0 var(--border-radius) var(--border-radius) 0;
         }}
-        table {{
+
+        .docs-content table {{
             border-collapse: collapse;
             width: 100%;
-            margin: 15px 0;
+            margin: 1.5rem 0;
+            background: var(--bg-color);
+            border-radius: var(--border-radius);
+            overflow: hidden;
+            box-shadow: var(--shadow);
         }}
-        th, td {{
-            border: 1px solid #ddd;
-            padding: 8px 12px;
+
+        .docs-content th,
+        .docs-content td {{
+            border: 1px solid var(--border-color);
+            padding: 0.75rem;
             text-align: left;
         }}
-        th {{
-            background-color: #f8f9fa;
-            font-weight: bold;
+
+        .docs-content th {{
+            background: var(--bg-secondary);
+            font-weight: 600;
+            color: var(--text-color);
         }}
-        tr:nth-child(even) {{
-            background-color: #f9f9f9;
+
+        .docs-content tr:nth-child(even) {{
+            background: rgba(0, 0, 0, 0.02);
         }}
-        a {{
-            color: #3498db;
+
+        .docs-content a {{
+            color: var(--primary-color);
             text-decoration: none;
+            transition: var(--transition);
         }}
-        a:hover {{
+
+        .docs-content a:hover {{
             text-decoration: underline;
+            color: var(--primary-color);
         }}
-        .nav {{
-            margin-bottom: 20px;
-            padding: 10px;
-            background: #e3f2fd;
-            border-radius: 5px;
+
+        .docs-content ul,
+        .docs-content ol {{
+            padding-left: 1.5rem;
+            margin: 1rem 0;
         }}
-        .nav a {{
-            margin-right: 15px;
-            font-weight: bold;
+
+        .docs-content li {{
+            margin: 0.5rem 0;
         }}
-        ul, ol {{
-            padding-left: 20px;
+
+        .docs-content p {{
+            margin-bottom: 1rem;
         }}
-        li {{
-            margin: 5px 0;
+
+        /* Responsive adjustments */
+        @media (max-width: 768px) {{
+            .docs-container {{
+                margin: 1rem;
+                max-width: none;
+            }}
+
+            .docs-content {{
+                padding: 1rem;
+            }}
+
+            .docs-nav {{
+                padding: 0.75rem 1rem;
+            }}
+
+            .docs-nav a {{
+                padding: 0.375rem 0.75rem;
+                font-size: 0.875rem;
+            }}
         }}
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="nav">
+    <div class="docs-container">
+        <header class="docs-header">
+            <h1>{}</h1>
+        </header>
+        <nav class="docs-nav">
             <a href="/docs/">📚 Documentation Home</a>
             <a href="/">🏠 Home</a>
-        </div>
-        {}
+            <a href="/editor">✏️ Editor</a>
+            <a href="/manager">👥 User Manager</a>
+        </nav>
+        <main class="docs-content">
+            {}
+        </main>
     </div>
 </body>
 </html>"#,
-        title, html_output
+        title, title, html_output
     )
 }
 

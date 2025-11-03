@@ -8,172 +8,190 @@ function feedback_form_handler(req) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>aiwebengine Feedback</title>
+    <link rel="stylesheet" href="/engine.css">
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <style>
+        /* Feedback form specific overrides */
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            margin: 0;
-            padding: 20px;
-            min-height: 100vh;
+            padding: 2rem 0;
         }
-        .form-container {
+
+        .feedback-container {
             max-width: 600px;
             margin: 0 auto;
-            background: white;
-            border-radius: 10px;
-            padding: 40px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: var(--border-radius-lg);
+            box-shadow: var(--shadow-lg);
+            overflow: hidden;
         }
-        h1 {
-            color: #2c3e50;
+
+        .feedback-header {
+            background: var(--bg-secondary);
+            padding: 2rem;
             text-align: center;
-            margin-bottom: 30px;
+            border-bottom: 1px solid var(--border-color);
         }
-        .form-group {
-            margin-bottom: 20px;
+
+        .feedback-content {
+            padding: 2rem;
         }
-        label {
-            display: block;
-            margin-bottom: 5px;
-            color: #2c3e50;
-            font-weight: 500;
-        }
-        input, textarea, select {
-            width: 100%;
-            padding: 12px;
-            border: 2px solid #e1e8ed;
-            border-radius: 5px;
-            font-size: 16px;
-            transition: border-color 0.3s;
-            box-sizing: border-box;
-        }
-        input:focus, textarea:focus, select:focus {
-            outline: none;
-            border-color: #3498db;
-        }
-        textarea {
-            resize: vertical;
-            min-height: 100px;
-        }
+
         .rating-group {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+            gap: 0.75rem;
+            margin-top: 0.5rem;
         }
-        .rating-option {
-            flex: 1;
-            min-width: 80px;
-        }
+
         .rating-option input[type="radio"] {
             display: none;
         }
+
         .rating-option label {
             display: block;
-            padding: 10px;
+            padding: 0.75rem;
             text-align: center;
-            background: #f8f9fa;
-            border: 2px solid #e1e8ed;
-            border-radius: 5px;
+            background: var(--bg-secondary);
+            border: 2px solid var(--border-color);
+            border-radius: var(--border-radius);
             cursor: pointer;
-            transition: all 0.3s;
+            transition: var(--transition);
+            font-weight: 500;
         }
+
         .rating-option input[type="radio"]:checked + label {
-            background: #3498db;
+            background: var(--primary-color);
             color: white;
-            border-color: #3498db;
+            border-color: var(--primary-color);
         }
-        button {
+
+        .rating-option label:hover {
+            border-color: var(--primary-color);
+        }
+
+        .submit-btn {
             width: 100%;
-            padding: 15px;
+            padding: 1rem;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             border: none;
-            border-radius: 5px;
-            font-size: 16px;
+            border-radius: var(--border-radius);
+            font-size: 1rem;
             font-weight: 600;
             cursor: pointer;
-            transition: transform 0.2s;
+            transition: var(--transition);
+            margin-top: 1rem;
         }
-        button:hover {
+
+        .submit-btn:hover {
             transform: translateY(-2px);
+            box-shadow: var(--shadow);
         }
+
         .back-link {
             text-align: center;
-            margin-top: 20px;
+            margin-top: 2rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border-color);
         }
+
         .back-link a {
-            color: #7f8c8d;
+            color: var(--text-muted);
             text-decoration: none;
+            font-weight: 500;
         }
+
         .back-link a:hover {
+            color: var(--primary-color);
             text-decoration: underline;
+        }
+
+        @media (max-width: 768px) {
+            .feedback-content {
+                padding: 1rem;
+            }
+
+            .feedback-header {
+                padding: 1rem;
+            }
+
+            .rating-group {
+                grid-template-columns: 1fr;
+            }
         }
     </style>
 </head>
 <body>
-    <div class="form-container">
-        <h1>💬 Share Your Feedback</h1>
-        <form method="POST" action="/feedback">
-            <div class="form-group">
-                <label for="name">Name *</label>
-                <input type="text" id="name" name="name" required>
-            </div>
+    <div class="feedback-container">
+        <header class="feedback-header">
+            <h1>💬 Share Your Feedback</h1>
+        </header>
 
-            <div class="form-group">
-                <label for="email">Email *</label>
-                <input type="email" id="email" name="email" required>
-            </div>
+        <main class="feedback-content">
+            <form method="POST" action="/feedback">
+                <div class="form-group">
+                    <label for="name" class="form-label">Name *</label>
+                    <input type="text" id="name" name="name" class="form-control" required>
+                </div>
 
-            <div class="form-group">
-                <label>Overall Experience</label>
-                <div class="rating-group">
-                    <div class="rating-option">
-                        <input type="radio" id="rating-1" name="rating" value="1">
-                        <label for="rating-1">😞 Poor</label>
-                    </div>
-                    <div class="rating-option">
-                        <input type="radio" id="rating-2" name="rating" value="2">
-                        <label for="rating-2">😐 Fair</label>
-                    </div>
-                    <div class="rating-option">
-                        <input type="radio" id="rating-3" name="rating" value="3">
-                        <label for="rating-3">🙂 Good</label>
-                    </div>
-                    <div class="rating-option">
-                        <input type="radio" id="rating-4" name="rating" value="4">
-                        <label for="rating-4">😊 Great</label>
-                    </div>
-                    <div class="rating-option">
-                        <input type="radio" id="rating-5" name="rating" value="5" checked>
-                        <label for="rating-5">🤩 Excellent</label>
+                <div class="form-group">
+                    <label for="email" class="form-label">Email *</label>
+                    <input type="email" id="email" name="email" class="form-control" required>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Overall Experience</label>
+                    <div class="rating-group">
+                        <div class="rating-option">
+                            <input type="radio" id="rating-1" name="rating" value="1">
+                            <label for="rating-1">😞 Poor</label>
+                        </div>
+                        <div class="rating-option">
+                            <input type="radio" id="rating-2" name="rating" value="2">
+                            <label for="rating-2">😐 Fair</label>
+                        </div>
+                        <div class="rating-option">
+                            <input type="radio" id="rating-3" name="rating" value="3">
+                            <label for="rating-3">🙂 Good</label>
+                        </div>
+                        <div class="rating-option">
+                            <input type="radio" id="rating-4" name="rating" value="4">
+                            <label for="rating-4">😊 Great</label>
+                        </div>
+                        <div class="rating-option">
+                            <input type="radio" id="rating-5" name="rating" value="5" checked>
+                            <label for="rating-5">🤩 Excellent</label>
+                        </div>
                     </div>
                 </div>
+
+                <div class="form-group">
+                    <label for="category" class="form-label">Category</label>
+                    <select id="category" name="category" class="form-control">
+                        <option value="">Select a category</option>
+                        <option value="bug">🐛 Bug Report</option>
+                        <option value="feature">✨ Feature Request</option>
+                        <option value="documentation">📚 Documentation</option>
+                        <option value="performance">⚡ Performance</option>
+                        <option value="usability">🎯 Usability</option>
+                        <option value="other">❓ Other</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="message" class="form-label">Message *</label>
+                    <textarea id="message" name="message" class="form-control" placeholder="Tell us what you think..." required></textarea>
+                </div>
+
+                <button type="submit" class="submit-btn">Submit Feedback</button>
+            </form>
+
+            <div class="back-link">
+                <a href="/blog">← Back to Blog</a>
             </div>
-
-            <div class="form-group">
-                <label for="category">Category</label>
-                <select id="category" name="category">
-                    <option value="">Select a category</option>
-                    <option value="bug">🐛 Bug Report</option>
-                    <option value="feature">✨ Feature Request</option>
-                    <option value="documentation">📚 Documentation</option>
-                    <option value="performance">⚡ Performance</option>
-                    <option value="usability">🎯 Usability</option>
-                    <option value="other">❓ Other</option>
-                </select>
-            </div>
-
-            <div class="form-group">
-                <label for="message">Message *</label>
-                <textarea id="message" name="message" placeholder="Tell us what you think..." required></textarea>
-            </div>
-
-            <button type="submit">Submit Feedback</button>
-        </form>
-
-        <div class="back-link">
-            <a href="/blog">← Back to Blog</a>
-        </div>
+        </main>
     </div>
 </body>
 </html>`;
@@ -207,67 +225,101 @@ function feedback_submit_handler(req) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Thank You - aiwebengine</title>
+    <link rel="stylesheet" href="/engine.css">
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <style>
+        /* Thank you page specific overrides */
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            margin: 0;
-            padding: 20px;
             min-height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
+            padding: 2rem 0;
         }
-        .thank-you {
-            background: white;
-            border-radius: 10px;
-            padding: 40px;
-            text-align: center;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+
+        .thank-you-container {
             max-width: 500px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: var(--border-radius-lg);
+            box-shadow: var(--shadow-lg);
+            overflow: hidden;
         }
-        h1 {
-            color: #2c3e50;
-            margin-bottom: 20px;
+
+        .thank-you-content {
+            padding: 3rem 2rem;
+            text-align: center;
         }
-        p {
-            color: #7f8c8d;
-            margin-bottom: 30px;
+
+        .thank-you-emoji {
+            font-size: 4rem;
+            margin-bottom: 1rem;
+        }
+
+        .thank-you-content h1 {
+            color: var(--text-color);
+            margin-bottom: 1rem;
+        }
+
+        .thank-you-content p {
+            color: var(--text-muted);
+            margin-bottom: 1.5rem;
             line-height: 1.6;
         }
-        .emoji {
-            font-size: 3em;
-            margin-bottom: 20px;
-        }
-        .actions {
+
+        .thank-you-actions {
             display: flex;
-            gap: 15px;
+            gap: 1rem;
             justify-content: center;
             flex-wrap: wrap;
+            margin-top: 2rem;
         }
-        a {
-            padding: 12px 24px;
+
+        .thank-you-actions a {
+            padding: 0.75rem 1.5rem;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             text-decoration: none;
-            border-radius: 5px;
-            transition: transform 0.2s;
+            border-radius: var(--border-radius);
+            font-weight: 500;
+            transition: var(--transition);
         }
-        a:hover {
+
+        .thank-you-actions a:hover {
             transform: translateY(-2px);
+            box-shadow: var(--shadow);
+        }
+
+        @media (max-width: 768px) {
+            .thank-you-content {
+                padding: 2rem 1rem;
+            }
+
+            .thank-you-actions {
+                flex-direction: column;
+            }
+
+            .thank-you-actions a {
+                width: 100%;
+                text-align: center;
+            }
         }
     </style>
 </head>
 <body>
-    <div class="thank-you">
-        <div class="emoji">🙏</div>
-        <h1>Thank You!</h1>
-        <p>Thank you for your feedback, <strong>${name}</strong>! We appreciate you taking the time to share your thoughts about aiwebengine.</p>
-        <p>Your input helps us improve and build better tools for developers like you.</p>
+    <div class="thank-you-container">
+        <div class="thank-you-content">
+            <div class="thank-you-emoji">🙏</div>
+            <h1>Thank You!</h1>
+            <p>Thank you for your feedback, <strong>${name}</strong>! We appreciate you taking the time to share your thoughts about aiwebengine.</p>
+            <p>Your input helps us improve and build better tools for developers like you.</p>
 
-        <div class="actions">
-            <a href="/blog">Read the Blog</a>
-            <a href="/feedback">Submit More Feedback</a>
+            <div class="thank-you-actions">
+                <a href="/blog">Read the Blog</a>
+                <a href="/feedback">Submit More Feedback</a>
+            </div>
         </div>
     </div>
 </body>

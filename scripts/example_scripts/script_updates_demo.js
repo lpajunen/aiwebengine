@@ -6,73 +6,229 @@ function scriptUpdatesDemoPage(req) {
     status: 200,
     body: `
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<title>Script Updates - GraphQL Subscription Demo</title>
+	<link rel="stylesheet" href="/engine.css">
+	<link rel="icon" type="image/x-icon" href="/favicon.ico">
 	<style>
-		body { font-family: Arial, sans-serif; margin: 40px; }
-		.container { max-width: 1000px; }
-		.updates { border: 1px solid #ddd; height: 300px; overflow-y: auto; padding: 10px; margin: 20px 0; background: #f9f9f9; }
-		.update { margin: 5px 0; padding: 8px; background: #fff; border-left: 4px solid #007cba; border-radius: 3px; }
-		.update.inserted { border-left-color: #28a745; }
-		.update.updated { border-left-color: #ffc107; }
-		.update.removed { border-left-color: #dc3545; }
-		input, textarea, button { padding: 10px; margin: 5px; }
-		input, textarea { width: 300px; }
-		textarea { height: 100px; }
-		.status { padding: 10px; margin: 10px 0; border-radius: 3px; }
-		.status.connected { background: #d4edda; color: #155724; }
-		.status.error { background: #f8d7da; color: #721c24; }
-		.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+		/* Demo-specific overrides */
+		body {
+			background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+			padding: 2rem 0;
+		}
+
+		.demo-container {
+			max-width: 1200px;
+			margin: 0 auto;
+			background: rgba(255, 255, 255, 0.95);
+			backdrop-filter: blur(10px);
+			border-radius: var(--border-radius-lg);
+			box-shadow: var(--shadow-lg);
+			overflow: hidden;
+		}
+
+		.demo-header {
+			background: var(--bg-secondary);
+			padding: 2rem;
+			text-align: center;
+			border-bottom: 1px solid var(--border-color);
+		}
+
+		.demo-content {
+			padding: 2rem;
+		}
+
+		.updates-container {
+			background: var(--bg-secondary);
+			border: 1px solid var(--border-color);
+			border-radius: var(--border-radius);
+			height: 300px;
+			overflow-y: auto;
+			padding: 1rem;
+			margin: 1.5rem 0;
+		}
+
+		.update-item {
+			margin: 0.5rem 0;
+			padding: 0.75rem;
+			background: var(--bg-color);
+			border-left: 4px solid var(--primary-color);
+			border-radius: var(--border-radius);
+			box-shadow: var(--shadow-sm);
+		}
+
+		.update-item.inserted { border-left-color: var(--success-color); }
+		.update-item.updated { border-left-color: var(--warning-color); }
+		.update-item.removed { border-left-color: var(--danger-color); }
+
+		.form-group {
+			margin-bottom: 1rem;
+		}
+
+		.form-group input,
+		.form-group textarea {
+			width: 100%;
+			max-width: 400px;
+		}
+
+		.form-group textarea {
+			min-height: 100px;
+			resize: vertical;
+		}
+
+		.button-group {
+			display: flex;
+			gap: 0.5rem;
+			flex-wrap: wrap;
+			margin-top: 1rem;
+		}
+
+		.status-indicator {
+			padding: 0.75rem 1rem;
+			border-radius: var(--border-radius);
+			margin: 1rem 0;
+			font-weight: 500;
+		}
+
+		.status-connected {
+			background: rgba(40, 167, 69, 0.1);
+			border: 1px solid rgba(40, 167, 69, 0.2);
+			color: #155724;
+		}
+
+		.status-error {
+			background: rgba(220, 53, 69, 0.1);
+			border: 1px solid rgba(220, 53, 69, 0.2);
+			color: #721c24;
+		}
+
+		.demo-grid {
+			display: grid;
+			grid-template-columns: 1fr 1fr;
+			gap: 2rem;
+			margin-top: 2rem;
+		}
+
+		.demo-section {
+			background: var(--bg-secondary);
+			padding: 1.5rem;
+			border-radius: var(--border-radius);
+			border: 1px solid var(--border-color);
+		}
+
+		.demo-section h3 {
+			margin-top: 0;
+			margin-bottom: 1rem;
+			color: var(--text-color);
+		}
+
+		.nav-links {
+			text-align: center;
+			margin-top: 2rem;
+			padding-top: 1rem;
+			border-top: 1px solid var(--border-color);
+		}
+
+		.nav-links a {
+			color: var(--primary-color);
+			text-decoration: none;
+			margin: 0 1rem;
+			font-weight: 500;
+		}
+
+		.nav-links a:hover {
+			text-decoration: underline;
+		}
+
+		@media (max-width: 768px) {
+			.demo-grid {
+				grid-template-columns: 1fr;
+				gap: 1rem;
+			}
+
+			.demo-content {
+				padding: 1rem;
+			}
+
+			.demo-header {
+				padding: 1rem;
+			}
+
+			.button-group {
+				flex-direction: column;
+			}
+
+			.button-group .btn {
+				width: 100%;
+			}
+		}
 	</style>
 </head>
 <body>
-	<div class="container">
-		<h1>Script Updates - GraphQL Subscription Demo</h1>
-		<p>This page demonstrates real-time script updates using GraphQL subscriptions.</p>
-		
-		<div class="status" id="status">Connecting to subscription...</div>
-		
-		<div class="grid">
-			<div>
-				<h3>Script Management via GraphQL</h3>
-				<div>
-					<input type="text" id="scriptUri" placeholder="Script URI (e.g., test-script.js)" />
-				</div>
-				<div>
-					<textarea id="scriptContent" placeholder="Script content...">function testScript() {
+	<div class="demo-container">
+		<header class="demo-header">
+			<h1>Script Updates - GraphQL Subscription Demo</h1>
+			<p class="text-muted">This page demonstrates real-time script updates using GraphQL subscriptions.</p>
+		</header>
+
+		<main class="demo-content">
+			<div class="status-indicator status-connected" id="status">Connecting to subscription...</div>
+
+			<div class="demo-grid">
+				<div class="demo-section">
+					<h3>Script Management via GraphQL</h3>
+					<div class="form-group">
+						<label for="scriptUri" class="form-label">Script URI</label>
+						<input type="text" id="scriptUri" class="form-control" placeholder="Script URI (e.g., test-script.js)" />
+					</div>
+					<div class="form-group">
+						<label for="scriptContent" class="form-label">Script Content</label>
+						<textarea id="scriptContent" class="form-control" placeholder="Script content...">function testScript() {
 	return "Hello from " + new Date().toISOString();
 }</textarea>
+					</div>
+					<div class="button-group">
+						<button class="btn btn-primary" onclick="upsertScriptGraphQL()">Upsert Script (GraphQL)</button>
+						<button class="btn btn-danger" onclick="deleteScriptGraphQL()">Delete Script (GraphQL)</button>
+						<button class="btn btn-secondary" onclick="getScriptGraphQL()">Get Script (GraphQL)</button>
+					</div>
+
+					<h3>Script Management via HTTP</h3>
+					<div class="button-group">
+						<button class="btn btn-success" onclick="upsertScriptHTTP()">Upsert Script (HTTP)</button>
+						<button class="btn btn-warning" onclick="deleteScriptHTTP()">Delete Script (HTTP)</button>
+					</div>
 				</div>
-				<div>
-					<button onclick="upsertScriptGraphQL()">Upsert Script (GraphQL)</button>
-					<button onclick="deleteScriptGraphQL()">Delete Script (GraphQL)</button>
-					<button onclick="getScriptGraphQL()">Get Script (GraphQL)</button>
-				</div>
-				
-				<h3>Script Management via HTTP</h3>
-				<div>
-					<button onclick="upsertScriptHTTP()">Upsert Script (HTTP)</button>
-					<button onclick="deleteScriptHTTP()">Delete Script (HTTP)</button>
+
+				<div class="demo-section">
+					<h3>Live Script Updates</h3>
+					<div class="updates-container" id="updates">
+						<p class="text-muted">Waiting for script updates...</p>
+					</div>
+					<button class="btn btn-secondary" onclick="clearUpdates()">Clear Updates</button>
 				</div>
 			</div>
-			
-			<div>
-				<h3>Live Script Updates</h3>
-				<div class="updates" id="updates">
-					<p>Waiting for script updates...</p>
-				</div>
-				<button onclick="clearUpdates()">Clear Updates</button>
+
+			<div class="demo-section">
+				<h3>Instructions</h3>
+				<ol>
+					<li>The page automatically subscribes to the GraphQL scriptUpdates subscription</li>
+					<li>Try creating, updating, or deleting scripts using either GraphQL mutations or HTTP endpoints</li>
+					<li>Watch the real-time updates appear on the right side</li>
+					<li>Updates include the action (inserted/updated/removed), URI, and timestamp</li>
+				</ol>
 			</div>
-		</div>
-		
-		<h3>Instructions</h3>
-		<ol>
-			<li>The page automatically subscribes to the GraphQL scriptUpdates subscription</li>
-			<li>Try creating, updating, or deleting scripts using either GraphQL mutations or HTTP endpoints</li>
-			<li>Watch the real-time updates appear on the right side</li>
-			<li>Updates include the action (inserted/updated/removed), URI, and timestamp</li>
-		</ol>
+
+			<div class="nav-links">
+				<a href="/">🏠 Home</a>
+				<a href="/editor">✏️ Editor</a>
+				<a href="/manager">👥 User Manager</a>
+				<a href="/docs">📚 Documentation</a>
+			</div>
+		</main>
 	</div>
 	
 	<script>
@@ -99,13 +255,13 @@ function scriptUpdatesDemoPage(req) {
 				const reader = response.body.getReader();
 				const decoder = new TextDecoder();
 				
-				document.getElementById('status').className = 'status connected';
+				document.getElementById('status').className = 'status-indicator status-connected';
 				document.getElementById('status').textContent = 'Connected to scriptUpdates subscription ✓';
 				
 				function readStream() {
 					reader.read().then(({ done, value }) => {
 						if (done) {
-							document.getElementById('status').className = 'status error';
+							document.getElementById('status').className = 'status-indicator status-error';
 							document.getElementById('status').textContent = 'Subscription ended';
 							return;
 						}
@@ -133,7 +289,7 @@ function scriptUpdatesDemoPage(req) {
 				readStream();
 			})
 			.catch(error => {
-				document.getElementById('status').className = 'status error';
+				document.getElementById('status').className = 'status-indicator status-error';
 				document.getElementById('status').textContent = 'Connection failed: ' + error.message;
 				console.error('Subscription error:', error);
 			});
@@ -150,7 +306,7 @@ function scriptUpdatesDemoPage(req) {
 				}
 				
 				const updateEl = document.createElement('div');
-				updateEl.className = 'update ' + update.action;
+				updateEl.className = 'update-item ' + update.action;
 				updateEl.innerHTML = \`
 					<strong>\${update.action.toUpperCase()}</strong>: \${update.uri}<br>
 					<small>Time: \${update.timestamp}</small>

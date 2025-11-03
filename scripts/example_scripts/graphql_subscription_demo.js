@@ -50,53 +50,210 @@ function subscriptionDemoPage(req) {
     status: 200,
     body: `
         <!DOCTYPE html>
-        <html>
+        <html lang="en">
         <head>
-            <title>GraphQL Subscription Demo</title>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>GraphQL Subscription Demo - aiwebengine</title>
+            <link rel="stylesheet" href="/engine.css">
+            <link rel="icon" type="image/x-icon" href="/favicon.ico">
             <style>
-                body { font-family: Arial, sans-serif; margin: 40px; }
-                .container { max-width: 800px; }
-                .messages { border: 1px solid #ddd; height: 300px; overflow-y: auto; padding: 10px; margin: 20px 0; }
-                .message { margin: 5px 0; padding: 5px; background: #f5f5f5; border-radius: 3px; }
-                input, button { padding: 10px; margin: 5px; }
-                input { width: 300px; }
+                /* Subscription demo specific overrides */
+                body {
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    min-height: 100vh;
+                    padding: 2rem 0;
+                }
+
+                .demo-container {
+                    max-width: 1000px;
+                    margin: 0 auto;
+                    background: rgba(255, 255, 255, 0.95);
+                    backdrop-filter: blur(10px);
+                    border-radius: var(--border-radius-lg);
+                    box-shadow: var(--shadow-lg);
+                    overflow: hidden;
+                }
+
+                .demo-content {
+                    padding: 3rem 2rem;
+                }
+
+                .demo-header {
+                    text-align: center;
+                    margin-bottom: 3rem;
+                }
+
+                .demo-header h1 {
+                    color: var(--text-color);
+                    margin-bottom: 0.5rem;
+                }
+
+                .demo-header p {
+                    color: var(--text-muted);
+                    font-size: 1.1rem;
+                }
+
+                .demo-section {
+                    margin-bottom: 2.5rem;
+                    padding: 1.5rem;
+                    background: var(--bg-secondary);
+                    border-radius: var(--border-radius);
+                    border: 1px solid var(--border-color);
+                }
+
+                .demo-section h3 {
+                    color: var(--text-color);
+                    margin-top: 0;
+                    margin-bottom: 1rem;
+                    border-bottom: 2px solid var(--primary-color);
+                    padding-bottom: 0.5rem;
+                }
+
+                .form-row {
+                    display: flex;
+                    gap: 1rem;
+                    align-items: center;
+                    margin-bottom: 1rem;
+                    flex-wrap: wrap;
+                }
+
+                .form-row input {
+                    flex: 1;
+                    min-width: 200px;
+                }
+
+                .messages-container {
+                    border: 1px solid var(--border-color);
+                    border-radius: var(--border-radius);
+                    height: 300px;
+                    overflow-y: auto;
+                    padding: 1rem;
+                    background: var(--bg-primary);
+                    margin: 1rem 0;
+                }
+
+                .message {
+                    margin: 0.5rem 0;
+                    padding: 0.75rem;
+                    background: var(--bg-secondary);
+                    border-radius: var(--border-radius);
+                    border-left: 3px solid var(--primary-color);
+                }
+
+                .message strong {
+                    color: var(--primary-color);
+                }
+
+                .status-indicator {
+                    display: inline-block;
+                    padding: 0.25rem 0.75rem;
+                    border-radius: var(--border-radius);
+                    font-size: 0.9rem;
+                    font-weight: 500;
+                    margin-bottom: 1rem;
+                }
+
+                .status-connected {
+                    background: var(--success-bg);
+                    color: var(--success-color);
+                }
+
+                .status-error {
+                    background: var(--error-bg);
+                    color: var(--error-color);
+                }
+
+                .instructions {
+                    background: var(--info-bg);
+                    border: 1px solid var(--info-border);
+                    border-radius: var(--border-radius);
+                    padding: 1.5rem;
+                    margin-top: 2rem;
+                }
+
+                .instructions h3 {
+                    color: var(--info-color);
+                    margin-top: 0;
+                }
+
+                .instructions ol {
+                    margin: 1rem 0 0 0;
+                    padding-left: 1.5rem;
+                }
+
+                .instructions li {
+                    margin-bottom: 0.5rem;
+                    color: var(--text-muted);
+                }
+
+                @media (max-width: 768px) {
+                    .demo-content {
+                        padding: 2rem 1rem;
+                    }
+
+                    .form-row {
+                        flex-direction: column;
+                        align-items: stretch;
+                    }
+
+                    .form-row input {
+                        width: 100%;
+                    }
+                }
             </style>
         </head>
         <body>
-            <div class="container">
-                <h1>GraphQL Subscription Demo</h1>
-                <p>This demonstrates GraphQL subscriptions using Server-Sent Events.</p>
-                
-                <h3>Send Message via GraphQL Mutation</h3>
-                <input type="text" id="messageInput" placeholder="Enter your message" />
-                <button onclick="sendGraphQLMessage()">Send via GraphQL</button>
-                
-                <h3>Send Message via HTTP</h3>
-                <input type="text" id="httpMessageInput" placeholder="Enter your message" />
-                <button onclick="sendHttpMessage()">Send via HTTP</button>
-                
-                <h3>Live Messages (GraphQL Subscription via SSE)</h3>
-                <div id="status">Connecting to subscription...</div>
-                <div class="messages" id="messages"></div>
-                
-                <h3>Instructions</h3>
-                <ol>
-                    <li>The page automatically subscribes to the GraphQL subscription using SSE</li>
-                    <li>Use either button to send messages</li>
-                    <li>Messages will appear in real-time via the subscription</li>
-                    <li>Open multiple browser tabs to see multi-client broadcasting</li>
-                </ol>
+            <div class="demo-container">
+                <div class="demo-content">
+                    <div class="demo-header">
+                        <h1>📡 GraphQL Subscription Demo</h1>
+                        <p>This demonstrates GraphQL subscriptions using Server-Sent Events</p>
+                    </div>
+
+                    <div class="demo-section">
+                        <h3>Send Message via GraphQL Mutation</h3>
+                        <div class="form-row">
+                            <input type="text" id="messageInput" placeholder="Enter your message" class="form-control" />
+                            <button onclick="sendGraphQLMessage()" class="btn btn-primary">Send via GraphQL</button>
+                        </div>
+                    </div>
+
+                    <div class="demo-section">
+                        <h3>Send Message via HTTP</h3>
+                        <div class="form-row">
+                            <input type="text" id="httpMessageInput" placeholder="Enter your message" class="form-control" />
+                            <button onclick="sendHttpMessage()" class="btn btn-secondary">Send via HTTP</button>
+                        </div>
+                    </div>
+
+                    <div class="demo-section">
+                        <h3>Live Messages (GraphQL Subscription via SSE)</h3>
+                        <div id="status" class="status-indicator status-connected">Connecting to subscription...</div>
+                        <div class="messages-container" id="messages"></div>
+                    </div>
+
+                    <div class="instructions">
+                        <h3>📋 Instructions</h3>
+                        <ol>
+                            <li>The page automatically subscribes to the GraphQL subscription using SSE</li>
+                            <li>Use either button to send messages</li>
+                            <li>Messages will appear in real-time via the subscription</li>
+                            <li>Open multiple browser tabs to see multi-client broadcasting</li>
+                        </ol>
+                    </div>
+                </div>
             </div>
-            
+
             <script>
                 let messageCount = 0;
-                
+
                 // Subscribe to GraphQL subscription via SSE
                 function subscribeToMessages() {
                     const subscriptionQuery = {
                         query: \`subscription { liveMessages }\`
                     };
-                    
+
                     fetch('/graphql/sse', {
                         method: 'POST',
                         headers: {
@@ -108,22 +265,24 @@ function subscriptionDemoPage(req) {
                         if (!response.ok) {
                             throw new Error('Failed to start subscription');
                         }
-                        
+
                         const reader = response.body.getReader();
                         const decoder = new TextDecoder();
-                        
+
                         document.getElementById('status').textContent = 'Connected to subscription ✓';
-                        
+                        document.getElementById('status').className = 'status-indicator status-connected';
+
                         function readStream() {
                             reader.read().then(({ done, value }) => {
                                 if (done) {
                                     document.getElementById('status').textContent = 'Subscription ended';
+                                    document.getElementById('status').className = 'status-indicator status-error';
                                     return;
                                 }
-                                
+
                                 const chunk = decoder.decode(value);
                                 const lines = chunk.split('\\n');
-                                
+
                                 lines.forEach(line => {
                                     if (line.startsWith('data: ')) {
                                         try {
@@ -136,24 +295,25 @@ function subscriptionDemoPage(req) {
                                         }
                                     }
                                 });
-                                
+
                                 readStream();
                             });
                         }
-                        
+
                         readStream();
                     })
                     .catch(error => {
                         document.getElementById('status').textContent = 'Connection failed: ' + error.message;
+                        document.getElementById('status').className = 'status-indicator status-error';
                         console.error('Subscription error:', error);
                     });
                 }
-                
+
                 function displayMessage(message) {
                     const messagesDiv = document.getElementById('messages');
                     const messageEl = document.createElement('div');
                     messageEl.className = 'message';
-                    
+
                     try {
                         const messageData = JSON.parse(message);
                         messageEl.innerHTML = \`
@@ -163,21 +323,21 @@ function subscriptionDemoPage(req) {
                     } catch (e) {
                         messageEl.textContent = \`[\${new Date().toISOString()}] \${message}\`;
                     }
-                    
+
                     messagesDiv.appendChild(messageEl);
                     messagesDiv.scrollTop = messagesDiv.scrollHeight;
                     messageCount++;
                 }
-                
+
                 function sendGraphQLMessage() {
                     const input = document.getElementById('messageInput');
                     const message = input.value.trim();
                     if (!message) return;
-                    
+
                     const mutation = {
                         query: \`mutation { sendMessage(text: "\${message}") }\`
                     };
-                    
+
                     fetch('/graphql', {
                         method: 'POST',
                         headers: {
@@ -195,12 +355,12 @@ function subscriptionDemoPage(req) {
                         alert('Failed to send message: ' + error.message);
                     });
                 }
-                
+
                 function sendHttpMessage() {
                     const input = document.getElementById('httpMessageInput');
                     const message = input.value.trim();
                     if (!message) return;
-                    
+
                     fetch('/trigger-message', {
                         method: 'POST',
                         headers: {
@@ -218,16 +378,16 @@ function subscriptionDemoPage(req) {
                         alert('Failed to send message: ' + error.message);
                     });
                 }
-                
+
                 // Handle Enter key in input fields
                 document.getElementById('messageInput').addEventListener('keypress', function(e) {
                     if (e.key === 'Enter') sendGraphQLMessage();
                 });
-                
+
                 document.getElementById('httpMessageInput').addEventListener('keypress', function(e) {
                     if (e.key === 'Enter') sendHttpMessage();
                 });
-                
+
                 // Start the subscription when page loads
                 subscribeToMessages();
             </script>
