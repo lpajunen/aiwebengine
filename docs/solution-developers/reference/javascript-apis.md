@@ -970,6 +970,6 @@ function safeHandler(req) {
 
 ## Next Steps
 
-- See [examples](examples.md) for practical usage patterns
-- Learn about [local development](../engine-administrators/local-development.md) workflows
-- Try the [remote editor](../engine-administrators/remote-development.md) for testing
+- See [examples](../examples/index.md) for practical usage patterns
+- Use the web editor at `/editor` for testing and development
+- Check the [deployment workflow](../getting-started/03-deployment-workflow.md) for publishing scripts

@@ -86,6 +86,7 @@ function serveEditor(req) {
                 <h1>aiwebengine Editor</h1>
             </div>
             <div class="header-right">
+                <a href="/docs" class="header-link" title="View Documentation">📚 Docs</a>
                 <span id="server-status" class="status-indicator">● Connected</span>
             </div>
         </header>

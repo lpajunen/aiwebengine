@@ -65,6 +65,24 @@ body {
     gap: 5px;
 }
 
+.header-link {
+    color: var(--text-muted);
+    text-decoration: none;
+    font-size: 12px;
+    padding: 4px 8px;
+    border-radius: var(--border-radius);
+    transition: var(--transition);
+    margin-right: 15px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.header-link:hover {
+    color: var(--primary-color);
+    background-color: var(--hover-bg);
+}
+
 /* Navigation */
 .editor-nav {
     display: flex;

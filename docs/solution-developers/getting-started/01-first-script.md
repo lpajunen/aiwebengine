@@ -15,7 +15,7 @@ A simple "Hello World" API endpoint that:
 
 Before you start, make sure you have:
 
-- aiwebengine running (see [Engine Administrator docs](../../engine-administrators/01-GETTING-STARTED.md))
+- aiwebengine running and accessible
 - Access to the `/editor` interface OR the deployer tool
 - Basic JavaScript knowledge
 

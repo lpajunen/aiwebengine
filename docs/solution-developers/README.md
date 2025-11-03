@@ -268,11 +268,11 @@ function init() {
 init();
 ```
 
-## 🔗 Related Documentation
+## 🔗 Related Resources
 
-- **[Engine Administrators](../engine-administrators/)** - For deploying and managing aiwebengine
-- **[Engine Contributors](../engine-contributors/)** - For contributing to aiwebengine core
-- **[Main Index](../INDEX.md)** - Complete documentation overview
+- **Example Scripts** - Browse working examples in `/scripts/example_scripts/`
+- **Built-in Features** - See feature scripts in `/scripts/feature_scripts/`
+- **Test Scripts** - Check test examples in `/scripts/test_scripts/`
 
 ## 🆘 Getting Help
 
