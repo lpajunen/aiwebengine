@@ -87,6 +87,7 @@ function serveEditor(req) {
             </div>
             <div class="header-right">
                 <a href="/docs" class="header-link" title="View Documentation">📚 Docs</a>
+                <a href="/graphql" class="header-link" title="GraphQL Editor">🔗 GraphQL</a>
                 <span id="server-status" class="status-indicator">● Connected</span>
             </div>
         </header>
