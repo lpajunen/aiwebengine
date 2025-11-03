@@ -29,39 +29,39 @@ function serveInsufficientPermissions(req) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Insufficient Permissions</title>
+    <title>Insufficient Permissions - aiwebengine</title>
+    <link rel="stylesheet" href="/engine.css">
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
+        /* Insufficient permissions page specific overrides */
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
-            padding: 20px;
+            padding: 2rem 0;
         }
 
-        .container {
-            background: white;
-            border-radius: 16px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        .permissions-container {
             max-width: 600px;
-            width: 100%;
-            padding: 48px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: var(--border-radius-lg);
+            box-shadow: var(--shadow-lg);
+            overflow: hidden;
+        }
+
+        .permissions-content {
+            padding: 3rem 2rem;
             text-align: center;
         }
 
-        .icon {
+        .permissions-icon {
             width: 80px;
             height: 80px;
-            margin: 0 auto 24px;
+            margin: 0 auto 1.5rem;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             border-radius: 50%;
             display: flex;
@@ -71,33 +71,32 @@ function serveInsufficientPermissions(req) {
             color: white;
         }
 
-        h1 {
-            font-size: 28px;
-            color: #2d3748;
-            margin-bottom: 16px;
-            font-weight: 700;
+        .permissions-content h1 {
+            color: var(--text-color);
+            margin-bottom: 1rem;
+            font-size: 2rem;
         }
 
-        .subtitle {
-            font-size: 18px;
-            color: #718096;
-            margin-bottom: 32px;
+        .permissions-subtitle {
+            color: var(--text-muted);
+            margin-bottom: 2rem;
+            font-size: 1.1rem;
             line-height: 1.6;
         }
 
         .info-box {
-            background: #f7fafc;
-            border-left: 4px solid #667eea;
-            border-radius: 8px;
-            padding: 20px;
-            margin-bottom: 32px;
+            background: var(--bg-secondary);
+            border-left: 4px solid var(--primary-color);
+            border-radius: var(--border-radius);
+            padding: 1.5rem;
+            margin-bottom: 2rem;
             text-align: left;
         }
 
         .info-box p {
-            color: #4a5568;
+            color: var(--text-muted);
             line-height: 1.6;
-            margin-bottom: 12px;
+            margin-bottom: 0.75rem;
         }
 
         .info-box p:last-child {
@@ -105,164 +104,163 @@ function serveInsufficientPermissions(req) {
         }
 
         .info-box strong {
-            color: #2d3748;
+            color: var(--text-color);
         }
 
         .user-info {
-            background: #edf2f7;
-            border-radius: 8px;
-            padding: 16px;
-            margin-bottom: 24px;
-            font-size: 14px;
-            color: #4a5568;
+            background: var(--info-bg);
+            border: 1px solid var(--info-border);
+            border-radius: var(--border-radius);
+            padding: 1rem;
+            margin-bottom: 1.5rem;
+            font-size: 0.9rem;
+            color: var(--info-color);
         }
 
         .user-info strong {
-            color: #2d3748;
+            color: var(--text-color);
         }
 
         .attempted-path {
-            background: #fff5f5;
-            border-left: 4px solid #f56565;
-            border-radius: 8px;
-            padding: 16px;
-            margin-bottom: 24px;
+            background: var(--error-bg);
+            border-left: 4px solid var(--error-color);
+            border-radius: var(--border-radius);
+            padding: 1rem;
+            margin-bottom: 1.5rem;
             text-align: left;
-            font-size: 14px;
-            color: #742a2a;
+            font-size: 0.9rem;
+            color: var(--error-color);
             word-break: break-all;
         }
 
-        .buttons {
+        .permissions-actions {
             display: flex;
-            gap: 12px;
+            gap: 1rem;
             justify-content: center;
             flex-wrap: wrap;
+            margin-bottom: 2rem;
         }
 
-        .button {
-            display: inline-block;
-            padding: 12px 24px;
-            border-radius: 8px;
+        .permissions-actions a {
+            padding: 0.75rem 1.5rem;
+            border-radius: var(--border-radius);
             text-decoration: none;
             font-weight: 600;
-            font-size: 16px;
-            transition: all 0.2s;
-            border: none;
-            cursor: pointer;
+            font-size: 1rem;
+            transition: var(--transition);
+            display: inline-block;
+            text-align: center;
         }
 
-        .button-primary {
+        .permissions-actions a:first-child {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
         }
 
-        .button-primary:hover {
+        .permissions-actions a:first-child:hover {
             transform: translateY(-2px);
-            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+            box-shadow: var(--shadow);
         }
 
-        .button-secondary {
-            background: #edf2f7;
-            color: #4a5568;
+        .permissions-actions a:last-child {
+            background: var(--bg-secondary);
+            color: var(--text-muted);
+            border: 1px solid var(--border-color);
         }
 
-        .button-secondary:hover {
-            background: #e2e8f0;
+        .permissions-actions a:last-child:hover {
+            background: var(--bg-primary);
         }
 
         .contact-info {
-            margin-top: 32px;
-            padding-top: 24px;
-            border-top: 1px solid #e2e8f0;
-            font-size: 14px;
-            color: #718096;
+            margin-top: 2rem;
+            padding-top: 1.5rem;
+            border-top: 1px solid var(--border-color);
+            font-size: 0.9rem;
+            color: var(--text-muted);
         }
 
-        @media (max-width: 600px) {
-            .container {
-                padding: 32px 24px;
+        @media (max-width: 768px) {
+            .permissions-content {
+                padding: 2rem 1rem;
             }
 
-            h1 {
-                font-size: 24px;
+            .permissions-content h1 {
+                font-size: 1.75rem;
             }
 
-            .subtitle {
-                font-size: 16px;
-            }
-
-            .buttons {
+            .permissions-actions {
                 flex-direction: column;
             }
 
-            .button {
+            .permissions-actions a {
                 width: 100%;
             }
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="icon">
-            🔒
-        </div>
-        
-        <h1>Insufficient Permissions</h1>
-        
-        <p class="subtitle">
-            You don't have the required permissions to access this resource.
-        </p>
+    <div class="permissions-container">
+        <div class="permissions-content">
+            <div class="permissions-icon">
+                🔒
+            </div>
 
-        ${
-          isAuthenticated
-            ? `
-        <div class="user-info">
-            <strong>Signed in as:</strong> ${userName}${userEmail ? ` (${userEmail})` : ""}
-        </div>
-        `
-            : ""
-        }
+            <h1>Insufficient Permissions</h1>
 
-        ${
-          attemptedPath !== "the requested page"
-            ? `
-        <div class="attempted-path">
-            <strong>Attempted to access:</strong> ${attemptedPath}
-        </div>
-        `
-            : ""
-        }
+            <p class="permissions-subtitle">
+                You don't have the required permissions to access this resource.
+            </p>
 
-        <div class="info-box">
-            <p><strong>Why am I seeing this?</strong></p>
-            <p>This page or feature requires <strong>Editor</strong> or <strong>Administrator</strong> privileges. Your current account does not have these permissions.</p>
-            <p><strong>What can I do?</strong></p>
-            <p>• Contact your system administrator to request the appropriate role</p>
-            <p>• Verify you're signed in with the correct account</p>
-            <p>• Return to the home page to access features available to you</p>
-        </div>
-
-        <div class="buttons">
-            <a href="/" class="button button-primary">Go to Home</a>
             ${
               isAuthenticated
                 ? `
-            <a href="/auth/logout" class="button button-secondary">Sign Out</a>
+            <div class="user-info">
+                <strong>Signed in as:</strong> ${userName}${userEmail ? ` (${userEmail})` : ""}
+            </div>
             `
-                : `
-            <a href="/auth/login" class="button button-secondary">Sign In</a>
-            `
+                : ""
             }
-        </div>
 
-        <div class="contact-info">
-            If you believe this is an error, please contact your system administrator.
+            ${
+              attemptedPath !== "the requested page"
+                ? `
+            <div class="attempted-path">
+                <strong>Attempted to access:</strong> ${attemptedPath}
+            </div>
+            `
+                : ""
+            }
+
+            <div class="info-box">
+                <p><strong>Why am I seeing this?</strong></p>
+                <p>This page or feature requires <strong>Editor</strong> or <strong>Administrator</strong> privileges. Your current account does not have these permissions.</p>
+                <p><strong>What can I do?</strong></p>
+                <p>• Contact your system administrator to request the appropriate role</p>
+                <p>• Verify you're signed in with the correct account</p>
+                <p>• Return to the home page to access features available to you</p>
+            </div>
+
+            <div class="permissions-actions">
+                <a href="/">Go to Home</a>
+                ${
+                  isAuthenticated
+                    ? `
+                <a href="/auth/logout">Sign Out</a>
+                `
+                    : `
+                <a href="/auth/login">Sign In</a>
+                `
+                }
+            </div>
+
+            <div class="contact-info">
+                If you believe this is an error, please contact your system administrator.
+            </div>
         </div>
     </div>
 </body>
 </html>`;
-
   return {
     status: 403,
     headers: {
