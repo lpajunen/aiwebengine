@@ -932,6 +932,14 @@ fn get_static_assets() -> HashMap<String, Asset> {
     };
     m.insert("/editor.css".to_string(), editor_css);
 
+    let engine_css_content = include_bytes!("../assets/engine.css").to_vec();
+    let engine_css = Asset {
+        public_path: "/engine.css".to_string(),
+        mimetype: "text/css".to_string(),
+        content: engine_css_content,
+    };
+    m.insert("/engine.css".to_string(), engine_css);
+
     let editor_js_content = include_bytes!("../assets/editor.js").to_vec();
     let editor_js = Asset {
         public_path: "/editor.js".to_string(),

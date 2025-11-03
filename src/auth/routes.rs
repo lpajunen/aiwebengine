@@ -116,58 +116,33 @@ async fn login_page(
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login</title>
-    <style>
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            max-width: 600px;
-            margin: 50px auto;
-            padding: 20px;
-            background: #f5f5f5;
-        }}
-        .login-container {{
-            background: white;
-            padding: 40px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }}
-        h1 {{
-            margin-top: 0;
-            color: #333;
-        }}
-        .provider-button {{
-            display: block;
-            width: 100%;
-            padding: 15px;
-            margin: 10px 0;
-            border: none;
-            border-radius: 4px;
-            font-size: 16px;
-            cursor: pointer;
-            text-decoration: none;
-            text-align: center;
-            color: white;
-            transition: opacity 0.2s;
-        }}
-        .provider-button:hover {{
-            opacity: 0.9;
-        }}
-        .google {{ background: #4285f4; }}
-        .microsoft {{ background: #00a4ef; }}
-        .apple {{ background: #000; }}
-    </style>
+    <link rel="stylesheet" href="/engine.css">
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
 </head>
 <body>
-    <div class="login-container">
-        <h1>Sign In</h1>
-        <p>Choose a provider to continue:</p>
-        {}
+    <div class="page-container">
+        <main class="page-main">
+            <div class="container">
+                <div class="row justify-content-center">
+                    <div class="col-12 col-md-6 col-lg-4">
+                        <div class="card">
+                            <div class="card-body text-center">
+                                <h1 class="mb-3">Sign In</h1>
+                                <p class="text-muted mb-4">Choose a provider to continue:</p>
+                                {}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
     </div>
 </body>
 </html>"#,
         providers
             .iter()
             .map(|p| format!(
-                r#"<a href="/auth/login/{}?redirect={}" class="provider-button {}">{}</a>"#,
+                r#"<a href="/auth/login/{}?redirect={}" class="btn btn-block provider-btn provider-{} mb-2">{}</a>"#,
                 p.to_lowercase(),
                 encoded_redirect,
                 p.to_lowercase(),
@@ -179,7 +154,7 @@ async fn login_page(
                 }
             ))
             .collect::<Vec<_>>()
-            .join("\n        ")
+            .join("\n                                ")
     );
 
     Html(html)

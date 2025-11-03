@@ -59,244 +59,161 @@ function handleManagerUI(request) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>User Management - AIWebEngine</title>
+    <link rel="stylesheet" href="/engine.css">
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
+        /* Manager-specific overrides */
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
+            padding: 2rem 0;
         }
-        
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
+
+        .page-header {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border: none;
+            margin-bottom: 2rem;
         }
-        
-        .header {
-            background: white;
-            border-radius: 12px;
-            padding: 24px;
-            margin-bottom: 20px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        }
-        
-        .header h1 {
-            color: #333;
-            font-size: 28px;
-            margin-bottom: 8px;
-        }
-        
-        .header p {
-            color: #666;
-            font-size: 14px;
-        }
-        
-        .stats {
+
+        .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 16px;
-            margin-bottom: 20px;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
         }
-        
+
         .stat-card {
-            background: white;
-            border-radius: 12px;
-            padding: 20px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        }
-        
-        .stat-card h3 {
-            color: #666;
-            font-size: 14px;
-            font-weight: 500;
-            margin-bottom: 8px;
-        }
-        
-        .stat-card .value {
-            color: #333;
-            font-size: 32px;
-            font-weight: bold;
-        }
-        
-        .users-section {
-            background: white;
-            border-radius: 12px;
-            padding: 24px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        }
-        
-        .users-section h2 {
-            color: #333;
-            font-size: 20px;
-            margin-bottom: 20px;
-        }
-        
-        .loading {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border: none;
+            padding: 1.5rem;
             text-align: center;
-            padding: 40px;
-            color: #666;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
         }
-        
-        .error {
-            background: #fee;
-            border: 1px solid #fcc;
-            border-radius: 8px;
-            padding: 16px;
-            color: #c33;
-            margin-bottom: 16px;
-        }
-        
-        .user-table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        
-        .user-table thead {
-            background: #f8f9fa;
-        }
-        
-        .user-table th {
-            text-align: left;
-            padding: 12px;
+
+        .stat-card h3 {
+            color: var(--text-muted);
+            font-size: 0.875rem;
             font-weight: 600;
-            color: #333;
-            border-bottom: 2px solid #e9ecef;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 0.5rem;
         }
-        
-        .user-table td {
-            padding: 12px;
-            border-bottom: 1px solid #e9ecef;
-            color: #555;
+
+        .stat-card .value {
+            color: var(--text-color);
+            font-size: 2.5rem;
+            font-weight: bold;
+            margin: 0;
         }
-        
-        .user-table tr:hover {
-            background: #f8f9fa;
+
+        .users-section {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border: none;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
         }
-        
+
         .role-badge {
             display: inline-block;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 12px;
-            font-weight: 500;
-            margin-right: 4px;
-            margin-bottom: 4px;
+            padding: 0.25rem 0.75rem;
+            border-radius: 1rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-right: 0.25rem;
+            margin-bottom: 0.25rem;
         }
-        
+
         .role-badge.authenticated {
-            background: #e3f2fd;
+            background: rgba(25, 118, 210, 0.1);
             color: #1976d2;
         }
-        
+
         .role-badge.editor {
-            background: #fff3e0;
+            background: rgba(245, 124, 0, 0.1);
             color: #f57c00;
         }
-        
+
         .role-badge.administrator {
-            background: #fce4ec;
+            background: rgba(194, 24, 91, 0.1);
             color: #c2185b;
         }
-        
-        .role-actions {
+
+        .provider-tag {
+            background: rgba(63, 81, 181, 0.1);
+            color: #3f51b5;
+            padding: 0.125rem 0.5rem;
+            border-radius: 0.5rem;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .nav-links {
             display: flex;
-            gap: 8px;
+            gap: 1rem;
+            margin-top: 1rem;
             flex-wrap: wrap;
         }
-        
-        .btn {
-            padding: 6px 12px;
-            border: none;
-            border-radius: 6px;
-            font-size: 13px;
-            cursor: pointer;
+
+        .nav-link {
+            color: var(--primary-color);
+            text-decoration: none;
             font-weight: 500;
-            transition: all 0.2s;
+            transition: var(--transition);
         }
-        
-        .btn:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+
+        .nav-link:hover {
+            color: var(--primary-color);
+            text-decoration: underline;
         }
-        
-        .btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            transform: none;
-        }
-        
+
         .btn-add-editor {
             background: #ff9800;
             color: white;
         }
-        
-        .btn-remove-editor {
-            background: #e0e0e0;
-            color: #666;
+
+        .btn-add-editor:hover:not(:disabled) {
+            background: #e68900;
         }
-        
+
         .btn-add-admin {
             background: #e91e63;
             color: white;
         }
-        
+
+        .btn-add-admin:hover:not(:disabled) {
+            background: #d81b60;
+        }
+
+        .btn-remove-editor,
         .btn-remove-admin {
-            background: #e0e0e0;
-            color: #666;
+            background: var(--bg-secondary);
+            color: var(--text-muted);
+            border: 1px solid var(--border-color);
         }
-        
-        .timestamp {
-            font-size: 12px;
-            color: #999;
+
+        .btn-remove-editor:hover:not(:disabled),
+        .btn-remove-admin:hover:not(:disabled) {
+            background: var(--bg-tertiary);
         }
-        
-        .providers {
-            display: flex;
-            gap: 4px;
-            flex-wrap: wrap;
+
+        .alert-success {
+            background: rgba(40, 167, 69, 0.1);
+            border-color: rgba(40, 167, 69, 0.2);
+            color: #155724;
         }
-        
-        .provider-tag {
-            background: #e8eaf6;
-            color: #3f51b5;
-            padding: 2px 8px;
-            border-radius: 4px;
-            font-size: 11px;
-            font-weight: 500;
-        }
-        
-        .nav-links {
-            display: flex;
-            gap: 12px;
-            margin-top: 16px;
-        }
-        
-        .nav-link {
-            color: #667eea;
-            text-decoration: none;
-            font-size: 14px;
-            font-weight: 500;
-        }
-        
-        .nav-link:hover {
-            text-decoration: underline;
-        }
-        
+
         @media (max-width: 768px) {
-            .user-table {
-                font-size: 14px;
+            .stats-grid {
+                grid-template-columns: 1fr;
             }
-            
+
             .role-actions {
                 flex-direction: column;
             }
-            
+
             .btn {
                 width: 100%;
             }
@@ -305,17 +222,19 @@ function handleManagerUI(request) {
 </head>
 <body>
     <div class="container">
-        <div class="header">
-            <h1>User Management</h1>
-            <p>Manage user roles and permissions</p>
-            <div class="nav-links">
-                <a href="/" class="nav-link">← Back to Home</a>
-                <a href="/editor" class="nav-link">Editor</a>
-                <a href="/graphql" class="nav-link">GraphQL</a>
+        <header class="page-header">
+            <div class="text-center">
+                <h1>User Management</h1>
+                <p class="text-muted">Manage user roles and permissions</p>
+                <div class="nav-links">
+                    <a href="/" class="nav-link">← Back to Home</a>
+                    <a href="/editor" class="nav-link">Editor</a>
+                    <a href="/graphql" class="nav-link">GraphQL</a>
+                </div>
             </div>
-        </div>
-        
-        <div class="stats" id="stats">
+        </header>
+
+        <div class="stats-grid" id="stats">
             <div class="stat-card">
                 <h3>Total Users</h3>
                 <div class="value" id="total-users">-</div>
@@ -329,12 +248,16 @@ function handleManagerUI(request) {
                 <div class="value" id="total-editors">-</div>
             </div>
         </div>
-        
-        <div class="users-section">
-            <h2>Users</h2>
-            <div id="error-container"></div>
-            <div id="loading" class="loading">Loading users...</div>
-            <div id="users-container" style="display: none;"></div>
+
+        <div class="card users-section">
+            <div class="card-header">
+                <h2 class="mb-0">Users</h2>
+            </div>
+            <div class="card-body">
+                <div id="error-container"></div>
+                <div id="loading" class="loading">Loading users...</div>
+                <div id="users-container" style="display: none;"></div>
+            </div>
         </div>
     </div>
     
@@ -379,7 +302,7 @@ function handleManagerUI(request) {
             } catch (error) {
                 loading.style.display = 'none';
                 errorContainer.innerHTML = \`
-                    <div class="error">
+                    <div class="alert alert-danger">
                         <strong>Error:</strong> \${error.message}
                     </div>
                 \`;
@@ -483,7 +406,7 @@ function handleManagerUI(request) {
                 
                 // Show success message briefly
                 errorContainer.innerHTML = \`
-                    <div style="background: #e8f5e9; border: 1px solid #c8e6c9; border-radius: 8px; padding: 16px; color: #2e7d32; margin-bottom: 16px;">
+                    <div class="alert alert-success">
                         <strong>Success:</strong> Role \${action === 'add' ? 'added' : 'removed'} successfully
                     </div>
                 \`;
@@ -494,7 +417,7 @@ function handleManagerUI(request) {
                 
             } catch (error) {
                 errorContainer.innerHTML = \`
-                    <div class="error">
+                    <div class="alert alert-danger">
                         <strong>Error:</strong> \${error.message}
                     </div>
                 \`;
