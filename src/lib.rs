@@ -729,11 +729,46 @@ pub async fn start_server_with_config(
                 .into_response();
         }
 
-        axum::response::Html(
-            async_graphql::http::GraphiQLSource::build()
-                .endpoint("/graphql")
-                .finish(),
-        )
+        let graphiql_html = async_graphql::http::GraphiQLSource::build()
+            .endpoint("/graphql")
+            .subscription_endpoint("/graphql/sse")
+            .title("aiwebengine GraphQL Editor")
+            .finish();
+
+        // Create a custom HTML response with navigation
+        let navigation_script = r#"<script>
+document.addEventListener('DOMContentLoaded', function() {
+    setTimeout(function() {
+        const nav = document.createElement('div');
+        nav.id = 'aiwebengine-nav';
+        nav.style.cssText = 'position: absolute; top: 10px; right: 10px; z-index: 1000; display: flex; gap: 8px;';
+        
+        const editorLink = document.createElement('a');
+        editorLink.href = '/editor';
+        editorLink.textContent = 'Editor';
+        editorLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
+        
+        const docsLink = document.createElement('a');
+        docsLink.href = '/docs';
+        docsLink.textContent = 'Docs';
+        docsLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
+        
+        nav.appendChild(editorLink);
+        nav.appendChild(docsLink);
+        document.body.appendChild(nav);
+        
+        // Add hover effects
+        const style = document.createElement('style');
+        style.textContent = '#aiwebengine-nav a:hover { background: #e5e7eb !important; border-color: #9ca3af !important; }';
+        document.head.appendChild(style);
+    }, 2000);
+});
+</script>"#;
+
+        let mut full_html = graphiql_html;
+        full_html.push_str(navigation_script);
+
+        axum::response::Html(full_html)
         .into_response()
     };
 
