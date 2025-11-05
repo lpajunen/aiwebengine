@@ -454,6 +454,139 @@ async fn db_clear_script_storage(pool: &PgPool, script_uri: &str) -> Result<(), 
     Ok(())
 }
 
+/// Database-backed insert log message
+async fn db_insert_log_message(
+    pool: &PgPool,
+    script_uri: &str,
+    message: &str,
+) -> Result<(), RepositoryError> {
+    sqlx::query(
+        r#"
+        INSERT INTO logs (script_uri, message, created_at)
+        VALUES ($1, $2, NOW())
+        "#,
+    )
+    .bind(script_uri)
+    .bind(message)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error inserting log message: {}", e);
+        RepositoryError::InvalidData(format!("Database error: {}", e))
+    })?;
+
+    debug!("Inserted log message to database for script: {}", script_uri);
+    Ok(())
+}
+
+/// Database-backed fetch log messages for a script
+async fn db_fetch_log_messages(
+    pool: &PgPool,
+    script_uri: &str,
+) -> Result<Vec<String>, RepositoryError> {
+    let rows = sqlx::query(
+        r#"
+        SELECT message FROM logs
+        WHERE script_uri = $1
+        ORDER BY created_at DESC
+        "#,
+    )
+    .bind(script_uri)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error fetching log messages: {}", e);
+        RepositoryError::InvalidData(format!("Database error: {}", e))
+    })?;
+
+    let messages = rows
+        .into_iter()
+        .map(|row| row.try_get("message"))
+        .collect::<Result<Vec<String>, _>>()
+        .map_err(|e| {
+            error!("Database error getting message: {}", e);
+            RepositoryError::InvalidData(format!("Database error: {}", e))
+        })?;
+
+    Ok(messages)
+}
+
+/// Database-backed fetch all log messages
+async fn db_fetch_all_log_messages(pool: &PgPool) -> Result<Vec<String>, RepositoryError> {
+    let rows = sqlx::query(
+        r#"
+        SELECT message FROM logs
+        ORDER BY created_at DESC
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error fetching all log messages: {}", e);
+        RepositoryError::InvalidData(format!("Database error: {}", e))
+    })?;
+
+    let messages = rows
+        .into_iter()
+        .map(|row| row.try_get("message"))
+        .collect::<Result<Vec<String>, _>>()
+        .map_err(|e| {
+            error!("Database error getting message: {}", e);
+            RepositoryError::InvalidData(format!("Database error: {}", e))
+        })?;
+
+    Ok(messages)
+}
+
+/// Database-backed clear log messages for a script
+async fn db_clear_log_messages(
+    pool: &PgPool,
+    script_uri: &str,
+) -> Result<(), RepositoryError> {
+    sqlx::query(
+        r#"
+        DELETE FROM logs WHERE script_uri = $1
+        "#,
+    )
+    .bind(script_uri)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error clearing log messages: {}", e);
+        RepositoryError::InvalidData(format!("Database error: {}", e))
+    })?;
+
+    debug!("Cleared log messages from database for script: {}", script_uri);
+    Ok(())
+}
+
+/// Database-backed prune log messages (keep only latest 20 per script)
+async fn db_prune_log_messages(pool: &PgPool) -> Result<(), RepositoryError> {
+    // For each script_uri, keep only the 20 most recent messages
+    sqlx::query(
+        r#"
+        DELETE FROM logs
+        WHERE id IN (
+            SELECT id FROM (
+                SELECT id,
+                       ROW_NUMBER() OVER (PARTITION BY script_uri ORDER BY created_at DESC) as rn
+                FROM logs
+            ) ranked
+            WHERE rn > 20
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error pruning log messages: {}", e);
+        RepositoryError::InvalidData(format!("Database error: {}", e))
+    })?;
+
+    debug!("Pruned log messages in database, keeping 20 entries per script");
+    Ok(())
+}
+
 /// Fetch scripts from repository with proper error handling
 pub fn fetch_scripts() -> HashMap<String, String> {
     let mut m = HashMap::new();
@@ -577,6 +710,26 @@ pub fn fetch_script(uri: &str) -> Option<String> {
 
 /// Insert log message with error handling
 pub fn insert_log_message(script_uri: &str, message: &str) {
+    // Try database first if configured
+    if let Some(db) = get_db_pool() {
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(async { db_insert_log_message(db.pool(), script_uri, message).await })
+        });
+
+        match result {
+            Ok(()) => {
+                debug!("Inserted log message to database for script: {}", script_uri);
+                return;
+            }
+            Err(e) => {
+                warn!("Database log insert failed, falling back to in-memory: {}", e);
+                // Fall through to in-memory implementation
+            }
+        }
+    }
+
+    // Fall back to in-memory implementation
     match safe_lock_logs() {
         Ok(mut guard) => {
             guard
@@ -598,6 +751,26 @@ pub fn insert_log_message(script_uri: &str, message: &str) {
 
 /// Fetch log messages with error handling
 pub fn fetch_log_messages(script_uri: &str) -> Vec<String> {
+    // Try database first if configured
+    if let Some(db) = get_db_pool() {
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(async { db_fetch_log_messages(db.pool(), script_uri).await })
+        });
+
+        match result {
+            Ok(messages) => {
+                debug!("Fetched {} log messages from database for script: {}", messages.len(), script_uri);
+                return messages;
+            }
+            Err(e) => {
+                warn!("Database log fetch failed, falling back to in-memory: {}", e);
+                // Fall through to in-memory implementation
+            }
+        }
+    }
+
+    // Fall back to in-memory implementation
     match safe_lock_logs() {
         Ok(guard) => guard.get(script_uri).cloned().unwrap_or_default(),
         Err(e) => {
@@ -609,6 +782,26 @@ pub fn fetch_log_messages(script_uri: &str) -> Vec<String> {
 
 /// Fetch ALL log messages from all script URIs
 pub fn fetch_all_log_messages() -> Vec<String> {
+    // Try database first if configured
+    if let Some(db) = get_db_pool() {
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(async { db_fetch_all_log_messages(db.pool()).await })
+        });
+
+        match result {
+            Ok(messages) => {
+                debug!("Fetched {} log messages from database", messages.len());
+                return messages;
+            }
+            Err(e) => {
+                warn!("Database all logs fetch failed, falling back to in-memory: {}", e);
+                // Fall through to in-memory implementation
+            }
+        }
+    }
+
+    // Fall back to in-memory implementation
     match safe_lock_logs() {
         Ok(guard) => {
             let mut all_logs = Vec::new();
@@ -626,8 +819,27 @@ pub fn fetch_all_log_messages() -> Vec<String> {
 
 /// Clear log messages for a script
 pub fn clear_log_messages(script_uri: &str) -> Result<(), RepositoryError> {
-    let mut guard = safe_lock_logs()?;
+    // Try database first if configured
+    if let Some(db) = get_db_pool() {
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(async { db_clear_log_messages(db.pool(), script_uri).await })
+        });
 
+        match result {
+            Ok(()) => {
+                debug!("Cleared log messages from database for script: {}", script_uri);
+                return Ok(());
+            }
+            Err(e) => {
+                warn!("Database log clear failed, falling back to in-memory: {}", e);
+                // Fall through to in-memory implementation
+            }
+        }
+    }
+
+    // Fall back to in-memory implementation
+    let mut guard = safe_lock_logs()?;
     guard.remove(script_uri);
     debug!("Cleared log messages for script: {}", script_uri);
     Ok(())
@@ -635,6 +847,26 @@ pub fn clear_log_messages(script_uri: &str) -> Result<(), RepositoryError> {
 
 /// Keep only the latest `limit` log messages (default 20) for each script URI and remove older ones
 pub fn prune_log_messages() -> Result<(), RepositoryError> {
+    // Try database first if configured
+    if let Some(db) = get_db_pool() {
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(async { db_prune_log_messages(db.pool()).await })
+        });
+
+        match result {
+            Ok(()) => {
+                debug!("Pruned log messages in database");
+                return Ok(());
+            }
+            Err(e) => {
+                warn!("Database log prune failed, falling back to in-memory: {}", e);
+                // Fall through to in-memory implementation
+            }
+        }
+    }
+
+    // Fall back to in-memory implementation
     const LIMIT: usize = 20;
     let mut guard = safe_lock_logs()?;
 
