@@ -483,11 +483,12 @@ function apiDeleteScript(req) {
 // API: Get logs
 function apiGetLogs(req) {
   try {
-    const logs = typeof listLogs === "function" ? listLogs() : [];
+    const logsJson = typeof listLogs === "function" ? listLogs() : "[]";
+    const logs = JSON.parse(logsJson);
     const formattedLogs = logs.map((log) => ({
-      timestamp: new Date().toISOString(),
+      timestamp: new Date(log.timestamp),
       level: "info",
-      message: log,
+      message: log.message,
     }));
 
     return {

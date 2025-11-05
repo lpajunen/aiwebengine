@@ -85,7 +85,11 @@ impl SecureGlobalContext {
     }
 
     /// Setup all secure global functions in the JavaScript context
-    pub fn setup_secure_globals(&self, ctx: &rquickjs::Ctx<'_>, script_uri: &str) -> JsResult<()> {
+    pub fn setup_secure_globals<'js>(
+        &self,
+        ctx: &'js rquickjs::Ctx<'js>,
+        script_uri: &str,
+    ) -> JsResult<()> {
         self.setup_secure_functions(ctx, script_uri, None)
     }
 
@@ -258,13 +262,13 @@ impl SecureGlobalContext {
         let user_ctx_list = user_context.clone();
         let list_logs = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<Vec<String>> {
+            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
                 // Check capability
                 if let Err(_e) =
                     user_ctx_list.require_capability(&crate::security::Capability::ViewLogs)
                 {
-                    // Return empty array if no permission (JavaScript expects an array)
-                    return Ok(Vec::new());
+                    // Return empty array if no permission (JavaScript expects a JSON array)
+                    return Ok("[]".to_string());
                 }
 
                 debug!(
@@ -274,7 +278,33 @@ impl SecureGlobalContext {
 
                 // Fetch all logs from all script URIs
                 let logs = repository::fetch_all_log_messages();
-                Ok(logs)
+
+                // Create JSON array of log objects
+                let log_objects: Vec<serde_json::Value> = logs
+                    .iter()
+                    .map(|log_entry| {
+                        // Convert SystemTime to milliseconds since UNIX_EPOCH
+                        let timestamp_ms = log_entry
+                            .timestamp
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as f64;
+
+                        serde_json::json!({
+                            "message": log_entry.message,
+                            "timestamp": timestamp_ms
+                        })
+                    })
+                    .collect();
+
+                // Serialize to JSON string
+                match serde_json::to_string(&log_objects) {
+                    Ok(json) => Ok(json),
+                    Err(e) => {
+                        warn!("Failed to serialize logs to JSON: {}", e);
+                        Ok("[]".to_string())
+                    }
+                }
             },
         )?;
         global.set("listLogs", list_logs)?;

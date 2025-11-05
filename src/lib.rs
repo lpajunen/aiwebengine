@@ -768,8 +768,7 @@ document.addEventListener('DOMContentLoaded', function() {
         let mut full_html = graphiql_html;
         full_html.push_str(navigation_script);
 
-        axum::response::Html(full_html)
-        .into_response()
+        axum::response::Html(full_html).into_response()
     };
 
     // GraphQL POST handler - executes queries

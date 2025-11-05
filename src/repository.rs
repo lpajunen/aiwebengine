@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock, PoisonError};
@@ -20,6 +21,19 @@ pub enum RepositoryError {
 
 /// Route registration: (path, method) -> handler_name
 pub type RouteRegistrations = HashMap<(String, String), String>;
+
+/// Log entry with timestamp information
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LogEntry {
+    pub message: String,
+    pub timestamp: SystemTime,
+}
+
+impl LogEntry {
+    pub fn new(message: String, timestamp: SystemTime) -> Self {
+        Self { message, timestamp }
+    }
+}
 
 /// Script metadata for tracking initialization status and registrations
 #[derive(Debug, Clone)]
@@ -475,7 +489,10 @@ async fn db_insert_log_message(
         RepositoryError::InvalidData(format!("Database error: {}", e))
     })?;
 
-    debug!("Inserted log message to database for script: {}", script_uri);
+    debug!(
+        "Inserted log message to database for script: {}",
+        script_uri
+    );
     Ok(())
 }
 
@@ -512,10 +529,10 @@ async fn db_fetch_log_messages(
 }
 
 /// Database-backed fetch all log messages
-async fn db_fetch_all_log_messages(pool: &PgPool) -> Result<Vec<String>, RepositoryError> {
+async fn db_fetch_all_log_messages(pool: &PgPool) -> Result<Vec<LogEntry>, RepositoryError> {
     let rows = sqlx::query(
         r#"
-        SELECT message FROM logs
+        SELECT message, created_at FROM logs
         ORDER BY created_at DESC
         "#,
     )
@@ -528,10 +545,16 @@ async fn db_fetch_all_log_messages(pool: &PgPool) -> Result<Vec<String>, Reposit
 
     let messages = rows
         .into_iter()
-        .map(|row| row.try_get("message"))
-        .collect::<Result<Vec<String>, _>>()
+        .map(|row| {
+            let message: String = row.try_get("message")?;
+            let created_at: DateTime<Utc> = row.try_get("created_at")?;
+            // Convert chrono DateTime to SystemTime
+            let system_time = SystemTime::from(created_at);
+            Ok(LogEntry::new(message, system_time))
+        })
+        .collect::<Result<Vec<LogEntry>, sqlx::Error>>()
         .map_err(|e| {
-            error!("Database error getting message: {}", e);
+            error!("Database error getting message/timestamp: {}", e);
             RepositoryError::InvalidData(format!("Database error: {}", e))
         })?;
 
@@ -539,10 +562,7 @@ async fn db_fetch_all_log_messages(pool: &PgPool) -> Result<Vec<String>, Reposit
 }
 
 /// Database-backed clear log messages for a script
-async fn db_clear_log_messages(
-    pool: &PgPool,
-    script_uri: &str,
-) -> Result<(), RepositoryError> {
+async fn db_clear_log_messages(pool: &PgPool, script_uri: &str) -> Result<(), RepositoryError> {
     sqlx::query(
         r#"
         DELETE FROM logs WHERE script_uri = $1
@@ -556,7 +576,10 @@ async fn db_clear_log_messages(
         RepositoryError::InvalidData(format!("Database error: {}", e))
     })?;
 
-    debug!("Cleared log messages from database for script: {}", script_uri);
+    debug!(
+        "Cleared log messages from database for script: {}",
+        script_uri
+    );
     Ok(())
 }
 
@@ -719,11 +742,17 @@ pub fn insert_log_message(script_uri: &str, message: &str) {
 
         match result {
             Ok(()) => {
-                debug!("Inserted log message to database for script: {}", script_uri);
+                debug!(
+                    "Inserted log message to database for script: {}",
+                    script_uri
+                );
                 return;
             }
             Err(e) => {
-                warn!("Database log insert failed, falling back to in-memory: {}", e);
+                warn!(
+                    "Database log insert failed, falling back to in-memory: {}",
+                    e
+                );
                 // Fall through to in-memory implementation
             }
         }
@@ -760,11 +789,18 @@ pub fn fetch_log_messages(script_uri: &str) -> Vec<String> {
 
         match result {
             Ok(messages) => {
-                debug!("Fetched {} log messages from database for script: {}", messages.len(), script_uri);
+                debug!(
+                    "Fetched {} log messages from database for script: {}",
+                    messages.len(),
+                    script_uri
+                );
                 return messages;
             }
             Err(e) => {
-                warn!("Database log fetch failed, falling back to in-memory: {}", e);
+                warn!(
+                    "Database log fetch failed, falling back to in-memory: {}",
+                    e
+                );
                 // Fall through to in-memory implementation
             }
         }
@@ -781,7 +817,7 @@ pub fn fetch_log_messages(script_uri: &str) -> Vec<String> {
 }
 
 /// Fetch ALL log messages from all script URIs
-pub fn fetch_all_log_messages() -> Vec<String> {
+pub fn fetch_all_log_messages() -> Vec<LogEntry> {
     // Try database first if configured
     if let Some(db) = get_db_pool() {
         let result = tokio::task::block_in_place(|| {
@@ -795,7 +831,10 @@ pub fn fetch_all_log_messages() -> Vec<String> {
                 return messages;
             }
             Err(e) => {
-                warn!("Database all logs fetch failed, falling back to in-memory: {}", e);
+                warn!(
+                    "Database all logs fetch failed, falling back to in-memory: {}",
+                    e
+                );
                 // Fall through to in-memory implementation
             }
         }
@@ -805,14 +844,20 @@ pub fn fetch_all_log_messages() -> Vec<String> {
     match safe_lock_logs() {
         Ok(guard) => {
             let mut all_logs = Vec::new();
+            let now = SystemTime::now();
             for logs in guard.values() {
-                all_logs.extend(logs.clone());
+                for message in logs {
+                    all_logs.push(LogEntry::new(message.clone(), now));
+                }
             }
             all_logs
         }
         Err(e) => {
             error!("Failed to fetch all log messages: {}", e);
-            vec![format!("Error: Could not retrieve logs - {}", e)]
+            vec![LogEntry::new(
+                format!("Error: Could not retrieve logs - {}", e),
+                SystemTime::now(),
+            )]
         }
     }
 }
@@ -828,11 +873,17 @@ pub fn clear_log_messages(script_uri: &str) -> Result<(), RepositoryError> {
 
         match result {
             Ok(()) => {
-                debug!("Cleared log messages from database for script: {}", script_uri);
+                debug!(
+                    "Cleared log messages from database for script: {}",
+                    script_uri
+                );
                 return Ok(());
             }
             Err(e) => {
-                warn!("Database log clear failed, falling back to in-memory: {}", e);
+                warn!(
+                    "Database log clear failed, falling back to in-memory: {}",
+                    e
+                );
                 // Fall through to in-memory implementation
             }
         }
@@ -860,7 +911,10 @@ pub fn prune_log_messages() -> Result<(), RepositoryError> {
                 return Ok(());
             }
             Err(e) => {
-                warn!("Database log prune failed, falling back to in-memory: {}", e);
+                warn!(
+                    "Database log prune failed, falling back to in-memory: {}",
+                    e
+                );
                 // Fall through to in-memory implementation
             }
         }
