@@ -548,9 +548,7 @@ impl StreamRegistry {
                                 if let Some(ref conn_metadata) = connection.metadata {
                                     // All filter criteria must be present and match
                                     metadata_filter.iter().all(|(key, expected_value)| {
-                                        conn_metadata.get(key).map_or(false, |actual_value| {
-                                            actual_value == expected_value
-                                        })
+                                        conn_metadata.get(key) == Some(expected_value)
                                     })
                                 } else {
                                     // If no filter criteria, match connections with no metadata

@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio_stream::wrappers::BroadcastStream;
 use tracing::{debug, error, info, warn};
-use urlencoding;
 
 pub mod config;
 pub mod database;
@@ -47,10 +46,8 @@ fn parse_query_string(query: &str) -> HashMap<String, String> {
         let value = parts.next().unwrap_or("");
 
         // URL decode the key and value
-        let decoded_key =
-            urlencoding::decode(key).unwrap_or_else(|_| std::borrow::Cow::Borrowed(key));
-        let decoded_value =
-            urlencoding::decode(value).unwrap_or_else(|_| std::borrow::Cow::Borrowed(value));
+        let decoded_key = urlencoding::decode(key).unwrap_or(std::borrow::Cow::Borrowed(key));
+        let decoded_value = urlencoding::decode(value).unwrap_or(std::borrow::Cow::Borrowed(value));
 
         // Convert + to spaces (though urlencoding should handle this, being explicit)
         let final_key = decoded_key.replace('+', " ");

@@ -1639,7 +1639,7 @@ impl SecureGlobalContext {
                             .with_action("send_message_to_connections".to_string())
                             .with_detail("path", &path_clone)
                             .with_detail("message_length", message_clone.len().to_string())
-                            .with_detail("filter_criteria", &format!("{:?}", filter_clone)),
+                            .with_detail("filter_criteria", format!("{:?}", filter_clone)),
                         )
                         .await;
                 });
@@ -1840,7 +1840,7 @@ impl SecureGlobalContext {
                             .with_action("send_subscription_message_to_connections".to_string())
                             .with_detail("subscription_name", &subscription_name_clone)
                             .with_detail("message_length", message_clone.len().to_string())
-                            .with_detail("filter_criteria", &format!("{:?}", filter_clone)),
+                            .with_detail("filter_criteria", format!("{:?}", filter_clone)),
                         )
                         .await;
                 });
