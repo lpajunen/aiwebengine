@@ -3,7 +3,7 @@
 
 // Initialization function - called once when script is loaded
 function init(context) {
-  writeLog(
+  console.log(
     "Initializing send_stream_message_test.js at " + new Date().toISOString(),
   );
 
@@ -11,7 +11,7 @@ function init(context) {
   registerWebStream("/notifications");
   registerWebStream("/chat");
 
-  writeLog("Stream endpoints registered successfully");
+  console.log("Stream endpoints registered successfully");
   return { success: true };
 }
 
@@ -59,4 +59,4 @@ function sendTestMessages() {
 sendTestMessages();
 
 // Log completion
-writeLog("Sent multiple test messages to registered streams");
+console.log("Sent multiple test messages to registered streams");

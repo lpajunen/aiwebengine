@@ -53,10 +53,10 @@ function js_mgmt_check(req) {
 
 // Initialization function
 function init(context) {
-  writeLog(
+  console.log(
     "Initializing js_script_mgmt_test.js at " + new Date().toISOString(),
   );
   register("/js-mgmt-check", "js_mgmt_check", "GET");
-  writeLog("JS script management test endpoint registered");
+  console.log("JS script management test endpoint registered");
   return { success: true };
 }

@@ -3,7 +3,7 @@
 
 // The subscription resolver - called when a client subscribes
 function liveMessagesResolver() {
-  writeLog("Client subscribed to liveMessages");
+  console.log("Client subscribed to liveMessages");
   return "Subscription initialized - waiting for messages...";
 }
 
@@ -20,7 +20,7 @@ function sendMessageResolver(args) {
     sender: "system",
   };
 
-  writeLog(`Sending message to liveMessages subscribers: ${message}`);
+  console.log(`Sending message to liveMessages subscribers: ${message}`);
 
   // Send the message to the subscription using the convenience function
   // This will broadcast to all clients subscribed to the 'liveMessages' subscription
@@ -400,10 +400,10 @@ function subscriptionDemoPage(req) {
 // Initialization function - called when script is loaded or updated
 function init(context) {
   try {
-    writeLog(
+    console.log(
       `Initializing graphql_subscription_demo.js script at ${new Date().toISOString()}`,
     );
-    writeLog(`Init context: ${JSON.stringify(context)}`);
+    console.log(`Init context: ${JSON.stringify(context)}`);
 
     // Register a GraphQL subscription
     registerGraphQLSubscription(
@@ -425,7 +425,7 @@ function init(context) {
     // Test page to demonstrate subscription usage
     register("/subscription-demo", "subscriptionDemoPage", "GET");
 
-    writeLog("GraphQL subscription example script initialized successfully");
+    console.log("GraphQL subscription example script initialized successfully");
 
     return {
       success: true,
@@ -434,7 +434,7 @@ function init(context) {
       registeredGraphQLOperations: 2,
     };
   } catch (error) {
-    writeLog(
+    console.error(
       `GraphQL subscription example script initialization failed: ${error.message}`,
     );
     throw error;

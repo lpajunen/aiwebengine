@@ -19,8 +19,8 @@ function query_handler(req) {
 
 // Initialization function
 function init(context) {
-  writeLog("Initializing query_test.js at " + new Date().toISOString());
+  console.log("Initializing query_test.js at " + new Date().toISOString());
   register("/api/query", "query_handler", "GET");
-  writeLog("Query test endpoint registered");
+  console.log("Query test endpoint registered");
   return { success: true };
 }

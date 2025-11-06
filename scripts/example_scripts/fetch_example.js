@@ -2,7 +2,7 @@
 // This script shows how to make HTTP requests to external APIs
 
 function init(context) {
-  writeLog("Initializing fetch_example.js");
+  console.log("Initializing fetch_example.js");
   register("/fetch/example", "fetchExample", "GET");
   register("/fetch/with-secret", "fetchWithSecret", "GET");
   register("/fetch/post", "fetchPost", "POST");
@@ -11,14 +11,14 @@ function init(context) {
 
 // Example 1: Simple GET request
 function fetchExample(req) {
-  writeLog("Fetching data from httpbin.org");
+  console.log("Fetching data from httpbin.org");
 
   try {
     const responseJson = fetch("https://httpbin.org/get");
     const response = JSON.parse(responseJson);
 
     if (response.ok) {
-      writeLog("Fetch successful! Status: " + response.status);
+      console.log("Fetch successful! Status: " + response.status);
       return {
         status: 200,
         body: JSON.stringify({
@@ -35,7 +35,7 @@ function fetchExample(req) {
       };
     }
   } catch (error) {
-    writeLog("Fetch error: " + error);
+    console.error("Fetch error: " + error);
     return {
       status: 500,
       body: JSON.stringify({ error: "Internal error: " + error }),
@@ -46,7 +46,7 @@ function fetchExample(req) {
 
 // Example 2: Using secret injection for API keys
 function fetchWithSecret(req) {
-  writeLog("Fetching with secret injection");
+  console.log("Fetching with secret injection");
 
   // Check if the secret exists
   if (!Secrets.exists("example_api_key")) {
@@ -93,7 +93,7 @@ function fetchWithSecret(req) {
       };
     }
   } catch (error) {
-    writeLog("Fetch error: " + error);
+    console.error("Fetch error: " + error);
     return {
       status: 500,
       body: JSON.stringify({ error: "Internal error: " + error }),
@@ -104,7 +104,7 @@ function fetchWithSecret(req) {
 
 // Example 3: POST request with JSON body
 function fetchPost(req) {
-  writeLog("Making POST request");
+  console.log("Making POST request");
 
   try {
     const requestData = {
@@ -144,7 +144,7 @@ function fetchPost(req) {
       };
     }
   } catch (error) {
-    writeLog("POST error: " + error);
+    console.error("POST error: " + error);
     return {
       status: 500,
       body: JSON.stringify({ error: "Internal error: " + error }),

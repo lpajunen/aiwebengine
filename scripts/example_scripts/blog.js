@@ -209,13 +209,13 @@ register('/hello', 'hello_handler', 'GET');
 // Initialization function - called when script is loaded or updated
 function init(context) {
   try {
-    writeLog(`Initializing blog.js script at ${new Date().toISOString()}`);
-    writeLog(`Init context: ${JSON.stringify(context)}`);
+    console.log(`Initializing blog.js script at ${new Date().toISOString()}`);
+    console.log(`Init context: ${JSON.stringify(context)}`);
 
     // Register the blog endpoint
     register("/blog", "blog_handler", "GET");
 
-    writeLog("Blog script initialized successfully");
+    console.log("Blog script initialized successfully");
 
     return {
       success: true,
@@ -223,7 +223,7 @@ function init(context) {
       registeredEndpoints: 1,
     };
   } catch (error) {
-    writeLog(`Blog script initialization failed: ${error.message}`);
+    console.error(`Blog script initialization failed: ${error.message}`);
     throw error;
   }
 }

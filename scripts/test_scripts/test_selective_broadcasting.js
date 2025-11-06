@@ -3,7 +3,7 @@
 
 // Initialization function - called once when script is loaded
 function init(context) {
-  writeLog(
+  console.log(
     "Initializing test_selective_broadcasting.js at " +
       new Date().toISOString(),
   );
@@ -19,7 +19,7 @@ function init(context) {
     "chatMessagesResolver",
   );
 
-  writeLog("Selective broadcasting test endpoints registered successfully");
+  console.log("Selective broadcasting test endpoints registered successfully");
   return { success: true };
 }
 
@@ -30,7 +30,7 @@ function chatMessagesResolver() {
 
 // Test selective broadcasting to stream connections
 function testSelectiveStreamBroadcasting() {
-  writeLog("Testing selective stream broadcasting...");
+  console.log("Testing selective stream broadcasting...");
 
   // This would send to connections where metadata.user_id == "user123" and metadata.room == "general"
   const streamResult = sendStreamMessageToConnections(
@@ -43,7 +43,7 @@ function testSelectiveStreamBroadcasting() {
     JSON.stringify({ user_id: "user123", room: "general" }),
   );
 
-  writeLog("Stream broadcast result: " + streamResult);
+  console.log("Stream broadcast result: " + streamResult);
 
   // Test broadcasting to all connections (empty filter)
   const allResult = sendStreamMessageToConnections(
@@ -56,12 +56,12 @@ function testSelectiveStreamBroadcasting() {
     "{}", // Empty filter matches all
   );
 
-  writeLog("Broadcast to all result: " + allResult);
+  console.log("Broadcast to all result: " + allResult);
 }
 
 // Test selective broadcasting to GraphQL subscription connections
 function testSelectiveSubscriptionBroadcasting() {
-  writeLog("Testing selective subscription broadcasting...");
+  console.log("Testing selective subscription broadcasting...");
 
   // This would send to connections where metadata.user_id == "user456"
   const subscriptionResult = sendSubscriptionMessageToConnections(
@@ -74,12 +74,12 @@ function testSelectiveSubscriptionBroadcasting() {
     JSON.stringify({ user_id: "user456" }),
   );
 
-  writeLog("Subscription broadcast result: " + subscriptionResult);
+  console.log("Subscription broadcast result: " + subscriptionResult);
 }
 
 // Test metadata parsing from query parameters
 function testMetadataDemo(req) {
-  writeLog("Testing metadata demo endpoint...");
+  console.log("Testing metadata demo endpoint...");
 
   // Send a message that will be filtered by the metadata from query params
   const result = sendStreamMessageToConnections(
@@ -93,7 +93,7 @@ function testMetadataDemo(req) {
     JSON.stringify({ demo: "true" }), // Only send to connections with demo=true
   );
 
-  writeLog("Metadata demo broadcast result: " + result);
+  console.log("Metadata demo broadcast result: " + result);
 
   return {
     status: 200,
@@ -118,4 +118,4 @@ register("/test/metadata-demo", "testMetadataDemo", "POST");
 testSelectiveStreamBroadcasting();
 testSelectiveSubscriptionBroadcasting();
 
-writeLog("Selective broadcasting tests completed");
+console.log("Selective broadcasting tests completed");

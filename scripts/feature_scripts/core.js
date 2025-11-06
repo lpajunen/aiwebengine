@@ -1,11 +1,11 @@
 // core script: registers root handler
 function core_root(req) {
-  writeLog("core-root-called");
-  writeLog("req: " + JSON.stringify(req));
+  console.log("core-root-called");
+  console.log("req: " + JSON.stringify(req));
   if (auth.isAuthenticated) {
-    writeLog("User is logged in");
+    console.log("User is logged in");
   } else {
-    writeLog("Anonymous user");
+    console.log("Anonymous user");
   }
   return { status: 200, body: "Core handler: OK" };
 }
@@ -49,7 +49,7 @@ function health_check(req) {
 
 // GraphQL subscription resolver for script updates
 function scriptUpdatesResolver() {
-  writeLog("Client subscribed to scriptUpdates GraphQL subscription");
+  console.log("Client subscribed to scriptUpdates GraphQL subscription");
   return {
     type: "subscription_init",
     uri: "system",
@@ -80,9 +80,9 @@ function broadcastScriptUpdate(uri, action, details = {}) {
     // Send to GraphQL subscription using modern approach
     sendSubscriptionMessage("scriptUpdates", JSON.stringify(message));
 
-    writeLog("Broadcasted script update: " + action + " " + uri);
+    console.log("Broadcasted script update: " + action + " " + uri);
   } catch (error) {
-    writeLog("Failed to broadcast script update: " + error.message);
+    console.error("Failed to broadcast script update: " + error.message);
   }
 }
 
@@ -142,7 +142,7 @@ function upsert_script_handler(req) {
       previousExists: !!existingScript,
     });
 
-    writeLog(`Script upserted: ${uri} (${content.length} characters)`);
+    console.log(`Script upserted: ${uri} (${content.length} characters)`);
 
     return {
       status: 200,
@@ -156,7 +156,7 @@ function upsert_script_handler(req) {
       contentType: "application/json",
     };
   } catch (error) {
-    writeLog(`Script upsert failed: ${error.message}`);
+    console.error(`Script upsert failed: ${error.message}`);
     return {
       status: 500,
       body: JSON.stringify({
@@ -203,7 +203,7 @@ function delete_script_handler(req) {
       // Broadcast the script removal
       broadcastScriptUpdate(uri, "removed");
 
-      writeLog(`Script deleted: ${uri}`);
+      console.log(`Script deleted: ${uri}`);
       return {
         status: 200,
         body: JSON.stringify({
@@ -215,7 +215,7 @@ function delete_script_handler(req) {
         contentType: "application/json",
       };
     } else {
-      writeLog(`Script not found for deletion: ${uri}`);
+      console.log(`Script not found for deletion: ${uri}`);
       return {
         status: 404,
         body: JSON.stringify({
@@ -228,7 +228,7 @@ function delete_script_handler(req) {
       };
     }
   } catch (error) {
-    writeLog(`Script deletion failed: ${error.message}`);
+    console.error(`Script deletion failed: ${error.message}`);
     return {
       status: 500,
       body: JSON.stringify({
@@ -268,14 +268,14 @@ function read_script_handler(req) {
 
     // getScript returns null if script not found or access denied
     if (content !== null && content !== undefined) {
-      writeLog(`Script retrieved: ${uri} (${content.length} characters)`);
+      console.log(`Script retrieved: ${uri} (${content.length} characters)`);
       return {
         status: 200,
         body: content,
         contentType: "application/javascript",
       };
     } else {
-      writeLog(`Script not found: ${uri}`);
+      console.log(`Script not found: ${uri}`);
       return {
         status: 404,
         body: JSON.stringify({
@@ -288,7 +288,7 @@ function read_script_handler(req) {
       };
     }
   } catch (error) {
-    writeLog(`Script read failed: ${error.message}`);
+    console.error(`Script read failed: ${error.message}`);
     return {
       status: 500,
       body: JSON.stringify({
@@ -326,7 +326,7 @@ function script_logs_handler(req) {
     // Call the listLogsForUri function
     const logs = listLogsForUri(uri);
 
-    writeLog(`Retrieved ${logs.length} log entries for script: ${uri}`);
+    console.log(`Retrieved ${logs.length} log entries for script: ${uri}`);
 
     return {
       status: 200,
@@ -339,7 +339,7 @@ function script_logs_handler(req) {
       contentType: "application/json",
     };
   } catch (error) {
-    writeLog(`Script logs retrieval failed: ${error.message}`);
+    console.error(`Script logs retrieval failed: ${error.message}`);
     return {
       status: 500,
       body: JSON.stringify({
@@ -362,7 +362,7 @@ function scriptsQuery() {
     }));
     return JSON.stringify(scriptArray);
   } catch (error) {
-    writeLog(`Scripts query failed: ${error.message}`);
+    console.error(`Scripts query failed: ${error.message}`);
     return JSON.stringify([]);
   }
 }
@@ -390,7 +390,7 @@ function scriptQuery(args) {
       });
     }
   } catch (error) {
-    writeLog(`Script query failed: ${error.message}`);
+    console.error(`Script query failed: ${error.message}`);
     return JSON.stringify({
       uri: args.uri,
       content: null,
@@ -410,7 +410,7 @@ function scriptInitStatusQuery(args) {
       return JSON.stringify(null);
     }
   } catch (error) {
-    writeLog(`Script init status query failed: ${error.message}`);
+    console.error(`Script init status query failed: ${error.message}`);
     return JSON.stringify(null);
   }
 }
@@ -430,7 +430,7 @@ function allScriptsInitStatusQuery() {
 
     return JSON.stringify(statusArray);
   } catch (error) {
-    writeLog(`All scripts init status query failed: ${error.message}`);
+    console.error(`All scripts init status query failed: ${error.message}`);
     return JSON.stringify([]);
   }
 }
@@ -450,7 +450,7 @@ function upsertScriptMutation(args) {
       via: "graphql",
     });
 
-    writeLog(
+    console.log(
       `Script upserted via GraphQL: ${args.uri} (${args.content.length} characters)`,
     );
     return JSON.stringify({
@@ -460,7 +460,7 @@ function upsertScriptMutation(args) {
       success: true,
     });
   } catch (error) {
-    writeLog(`Script upsert mutation failed: ${error.message}`);
+    console.error(`Script upsert mutation failed: ${error.message}`);
     return JSON.stringify({
       message: `Error: Failed to upsert script: ${error.message}`,
       uri: args.uri,
@@ -481,7 +481,7 @@ function deleteScriptMutation(args) {
         via: "graphql",
       });
 
-      writeLog(`Script deleted via GraphQL: ${args.uri}`);
+      console.log(`Script deleted via GraphQL: ${args.uri}`);
       return JSON.stringify({
         message: `Script deleted successfully: ${args.uri}`,
         uri: args.uri,
@@ -495,7 +495,7 @@ function deleteScriptMutation(args) {
       });
     }
   } catch (error) {
-    writeLog(`Script delete mutation failed: ${error.message}`);
+    console.error(`Script delete mutation failed: ${error.message}`);
     return JSON.stringify({
       message: `Error: Failed to delete script: ${error.message}`,
       uri: args.uri,
@@ -509,8 +509,8 @@ function deleteScriptMutation(args) {
 // Initialization function - called when script is loaded or updated
 function init(context) {
   try {
-    writeLog(`Initializing core.js script at ${new Date().toISOString()}`);
-    writeLog(`Init context: ${JSON.stringify(context)}`);
+    console.log(`Initializing core.js script at ${new Date().toISOString()}`);
+    console.log(`Init context: ${JSON.stringify(context)}`);
 
     // Register HTTP endpoints
     register("/", "core_root", "GET");
@@ -565,7 +565,7 @@ function init(context) {
       "deleteScriptMutation",
     );
 
-    writeLog("Core script initialized successfully");
+    console.log("Core script initialized successfully");
 
     return {
       success: true,
@@ -574,15 +574,13 @@ function init(context) {
       registeredGraphQLOperations: 8,
     };
   } catch (error) {
-    writeLog(`Core script initialization failed: ${error.message}`);
+    console.error(`Core script initialization failed: ${error.message}`);
     throw error;
   }
 }
 
 try {
-  if (typeof writeLog === "function") {
-    writeLog(`server started ${new Date().toISOString()}`);
-  }
+  console.log(`server started ${new Date().toISOString()}`);
 } catch (e) {
   // ignore if host function isn't present yet
 }

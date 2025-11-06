@@ -21,8 +21,8 @@ function testEditorAPI(req) {
 
 // Initialization function
 function init(context) {
-  writeLog("Initializing test_editor_api.js at " + new Date().toISOString());
+  console.log("Initializing test_editor_api.js at " + new Date().toISOString());
   register("/test-editor-api", "testEditorAPI", "GET");
-  writeLog("Editor API test endpoint registered");
+  console.log("Editor API test endpoint registered");
   return { success: true };
 }

@@ -21,7 +21,7 @@ function serveInsufficientPermissions(req) {
       }
     }
   } catch (error) {
-    writeLog("Could not get user info: " + error.message);
+    console.error("Could not get user info: " + error.message);
   }
 
   const html = `<!DOCTYPE html>
@@ -273,10 +273,10 @@ function serveInsufficientPermissions(req) {
 // Initialization function - called when script is loaded or updated
 function init(context) {
   try {
-    writeLog(
+    console.log(
       `Initializing insufficient_permissions.js script at ${new Date().toISOString()}`,
     );
-    writeLog(`Init context: ${JSON.stringify(context)}`);
+    console.log(`Init context: ${JSON.stringify(context)}`);
 
     // Register the route
     register(
@@ -285,7 +285,7 @@ function init(context) {
       "GET",
     );
 
-    writeLog("Insufficient permissions script initialized successfully");
+    console.log("Insufficient permissions script initialized successfully");
 
     return {
       success: true,
@@ -293,7 +293,7 @@ function init(context) {
       registeredEndpoints: 1,
     };
   } catch (error) {
-    writeLog(
+    console.error(
       `Insufficient permissions script initialization failed: ${error.message}`,
     );
     throw error;

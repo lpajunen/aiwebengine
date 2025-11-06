@@ -212,12 +212,12 @@ function feedback_submit_handler(req) {
   let message = req.form?.message || "";
 
   // Log the feedback (in a real app, you'd store this in a database)
-  writeLog("Feedback received:");
-  writeLog("Name: " + name);
-  writeLog("Email: " + email);
-  writeLog("Rating: " + rating);
-  writeLog("Category: " + category);
-  writeLog("Message: " + message);
+  console.log("Feedback received:");
+  console.log("Name: " + name);
+  console.log("Email: " + email);
+  console.log("Rating: " + rating);
+  console.log("Category: " + category);
+  console.log("Message: " + message);
 
   const thankYouHtml = `<!DOCTYPE html>
 <html lang="en">
@@ -335,14 +335,16 @@ function feedback_submit_handler(req) {
 // Initialization function - called when script is loaded or updated
 function init(context) {
   try {
-    writeLog(`Initializing feedback.js script at ${new Date().toISOString()}`);
-    writeLog(`Init context: ${JSON.stringify(context)}`);
+    console.log(
+      `Initializing feedback.js script at ${new Date().toISOString()}`,
+    );
+    console.log(`Init context: ${JSON.stringify(context)}`);
 
     // Register both GET (form) and POST (submission) handlers
     register("/feedback", "feedback_form_handler", "GET");
     register("/feedback", "feedback_submit_handler", "POST");
 
-    writeLog("Feedback script initialized successfully");
+    console.log("Feedback script initialized successfully");
 
     return {
       success: true,
@@ -350,7 +352,7 @@ function init(context) {
       registeredEndpoints: 2,
     };
   } catch (error) {
-    writeLog(`Feedback script initialization failed: ${error.message}`);
+    console.error(`Feedback script initialization failed: ${error.message}`);
     throw error;
   }
 }
