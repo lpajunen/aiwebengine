@@ -14,6 +14,18 @@ use crate::security::secure_globals::{GlobalSecurityConfig, SecureGlobalContext}
 // Type alias for route registrations map
 type RouteRegistrations = HashMap<(String, String), String>;
 
+/// Helper to safely drop Context before Runtime to prevent GC assertions
+///  
+/// This prevents the "Assertion `list_empty(&rt->gc_obj_list)' failed" error
+/// by ensuring the Context is dropped first, allowing QuickJS to properly
+/// clean up JavaScript objects before the Runtime is freed.
+fn ensure_clean_shutdown<T>(ctx: Context, result: T) -> T {
+    // Simply drop context - Rust's drop order will handle the rest
+    // The key is that Context MUST drop before Runtime
+    drop(ctx);
+    result
+}
+
 /// Resource limits for JavaScript execution
 #[derive(Debug, Clone)]
 pub struct ExecutionLimits {
@@ -215,7 +227,7 @@ pub fn execute_script_secure(
                     Ok(())
                 });
 
-                match result {
+                let exec_result = match result {
                     Ok(_) => {
                         debug!("Script {} executed successfully", uri);
                         match registrations.try_borrow() {
@@ -236,7 +248,10 @@ pub fn execute_script_secure(
                             start_time.elapsed().as_millis() as u64,
                         )
                     }
-                }
+                };
+
+                // Ensure clean shutdown: drop Context before Runtime
+                ensure_clean_shutdown(ctx, exec_result)
             }
             Err(e) => {
                 error!("Failed to create context for script {}: {}", uri, e);
@@ -318,7 +333,7 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                             Ok(())
                         });
 
-                    match result {
+                    let exec_result = match result {
                         Ok(_) => {
                             tracing::info!("Successfully executed script {}", uri_owned);
                             let final_regs = registrations.borrow().clone();
@@ -338,7 +353,10 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                                 start_time.elapsed().as_millis() as u64,
                             )
                         }
-                    }
+                    };
+
+                    // Ensure clean shutdown: drop Context before Runtime
+                    ensure_clean_shutdown(ctx, exec_result)
                 }
                 Err(e) => {
                     error!(
@@ -438,7 +456,7 @@ pub fn execute_script_for_request_secure(
     ctx.with(|ctx| ctx.eval::<(), _>(owner_script.as_str()))
         .map_err(|e| format!("owner eval: {}", e))?;
 
-    ctx.with(|ctx| -> Result<JsHttpResponse, String> {
+    let response_exec = ctx.with(|ctx| -> Result<JsHttpResponse, String> {
         let global = ctx.globals();
         let func: Function = global
             .get::<_, Function>(&params.handler_name)
@@ -542,7 +560,13 @@ pub fn execute_script_for_request_secure(
             };
             Ok(JsHttpResponse::new(200, body))
         }
-    })
+    });
+
+    let response_result = response_exec.map_err(|e| e.to_string())?;
+
+    // Ensure clean shutdown: drop Context before Runtime
+    drop(ctx);
+    Ok(response_result)
 }
 
 /// Executes a JavaScript script for an HTTP request (LEGACY - has security vulnerabilities)
@@ -667,7 +691,8 @@ pub fn execute_script_for_request(
             Ok((status as u16, body, content_type))
         })?;
 
-    Ok((status, body, content_type))
+    // Ensure clean shutdown: drop Context before Runtime
+    ensure_clean_shutdown(ctx, Ok((status, body, content_type)))
 }
 
 /// Executes a JavaScript GraphQL resolver function and returns the result as a string.
@@ -684,7 +709,7 @@ pub fn execute_graphql_resolver(
     let rt = Runtime::new().map_err(|e| format!("runtime new: {}", e))?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
-    ctx.with(|ctx| -> Result<String, rquickjs::Error> {
+    let result_exec = ctx.with(|ctx| -> Result<String, rquickjs::Error> {
         // Set up all global functions using the secure helper function
         // For GraphQL resolvers, we don't need GraphQL registration (no-ops) or stream registration
         let config = GlobalSecurityConfig {
@@ -808,7 +833,13 @@ pub fn execute_graphql_resolver(
         };
 
         Ok(result_string)
-    }).map_err(|e| format!("JavaScript execution error: {}", e))
+    });
+
+    let result_string = result_exec.map_err(|e| format!("JavaScript execution error: {}", e))?;
+
+    // Ensure clean shutdown: drop Context before Runtime
+    drop(ctx);
+    Ok(result_string)
 }
 
 /// Calls the init() function in a script if it exists
@@ -831,6 +862,11 @@ pub fn call_init_if_exists(
     debug!("Checking for init() function in script: {}", script_uri);
 
     let rt = Runtime::new().map_err(|e| format!("Failed to create runtime: {}", e))?;
+
+    // Set memory limit to help with cleanup
+    rt.set_memory_limit(256 * 1024 * 1024); // 256MB limit
+    rt.set_max_stack_size(512 * 1024); // 512KB stack
+
     let ctx = Context::full(&rt).map_err(|e| format!("Failed to create context: {}", e))?;
 
     // Create registrations map to capture register() calls during init
@@ -928,7 +964,7 @@ pub fn call_init_if_exists(
         .map_err(|e| format!("Init function error: {}", e))?;
 
     // Return registrations if init was called
-    if result {
+    let final_result = if result {
         match registrations.try_borrow() {
             Ok(regs) => {
                 let reg_count = regs.len();
@@ -942,7 +978,10 @@ pub fn call_init_if_exists(
         }
     } else {
         Ok(None)
-    }
+    };
+
+    // Ensure clean shutdown: drop Context before Runtime
+    ensure_clean_shutdown(ctx, final_result)
 }
 
 #[cfg(test)]

@@ -256,27 +256,25 @@ impl SecureGlobalContext {
                 Ok("Log written successfully".to_string())
             },
         )?;
-        // Create console object with log, info, warn, error, and debug methods
-        let console_obj = rquickjs::Object::new(ctx.clone())?;
 
-        // Helper to create level-specific log functions
-        let create_level_logger = |level: &str| {
-            let write_log_clone = write_log.clone();
-            let level_str = level.to_string();
-            Function::new(
-                ctx.clone(),
-                move |_ctx: rquickjs::Ctx<'_>, message: String| -> JsResult<String> {
-                    write_log_clone.call::<_, String>((message, level_str.clone()))
-                },
-            )
-        };
-
-        console_obj.set("log", create_level_logger("LOG"))?;
-        console_obj.set("info", create_level_logger("INFO"))?;
-        console_obj.set("warn", create_level_logger("WARN"))?;
-        console_obj.set("error", create_level_logger("ERROR"))?;
-        console_obj.set("debug", create_level_logger("DEBUG"))?;
-        global.set("console", console_obj)?;
+        // Create console object using JavaScript to avoid multiple ctx.clone() calls
+        // This creates wrapper functions in JavaScript space that call write_log with different levels
+        global.set("__writeLog", write_log)?;
+        ctx.eval::<(), _>(
+            r#"
+            (function() {
+                const writeLog = globalThis.__writeLog;
+                globalThis.console = {
+                    log: function(msg) { return writeLog(msg, "LOG"); },
+                    info: function(msg) { return writeLog(msg, "INFO"); },
+                    warn: function(msg) { return writeLog(msg, "WARN"); },
+                    error: function(msg) { return writeLog(msg, "ERROR"); },
+                    debug: function(msg) { return writeLog(msg, "DEBUG"); }
+                };
+                delete globalThis.__writeLog;  // Clean up temporary
+            })();
+        "#,
+        )?;
 
         // Secure listLogs function
         let user_ctx_list = user_context.clone();

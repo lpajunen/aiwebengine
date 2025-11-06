@@ -55,7 +55,7 @@ impl SecureGlobalContext {
         let user_ctx_write = user_context.clone();
         let write_log = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, message: String| -> JsResult<String> {
+            move |_ctx: rquickjs::Ctx<'_>, message: String, level: String| -> JsResult<String> {
                 // Check capability
                 if let Err(e) =
                     user_ctx_write.require_capability(&crate::security::Capability::ViewLogs)
@@ -66,24 +66,35 @@ impl SecureGlobalContext {
                 debug!(
                     user_id = ?user_ctx_write.user_id,
                     message_len = message.len(),
+                    level = %level,
                     "Secure writeLog called"
                 );
 
-                // Write to repository
-                // Call actual repository function
-                repository::insert_log_message("", &message, "LOG");
+                // Write to repository with the specified level
+                repository::insert_log_message("", &message, &level);
 
                 Ok("Log written successfully".to_string())
             },
         )?;
-        // Create console object with log, info, warn, error, and debug methods
-        let console_obj = rquickjs::Object::new(ctx.clone())?;
-        console_obj.set("log", write_log.clone())?;
-        console_obj.set("info", write_log.clone())?;
-        console_obj.set("warn", write_log.clone())?;
-        console_obj.set("error", write_log.clone())?;
-        console_obj.set("debug", write_log)?;
-        global.set("console", console_obj)?;
+
+        // Create console object using JavaScript to avoid multiple ctx.clone() calls
+        // This creates wrapper functions in JavaScript space that call write_log with different levels
+        global.set("__writeLog", write_log)?;
+        ctx.eval::<(), _>(
+            r#"
+            (function() {
+                const writeLog = globalThis.__writeLog;
+                globalThis.console = {
+                    log: function(msg) { return writeLog(msg, "LOG"); },
+                    info: function(msg) { return writeLog(msg, "INFO"); },
+                    warn: function(msg) { return writeLog(msg, "WARN"); },
+                    error: function(msg) { return writeLog(msg, "ERROR"); },
+                    debug: function(msg) { return writeLog(msg, "DEBUG"); }
+                };
+                delete globalThis.__writeLog;  // Clean up temporary
+            })();
+        "#,
+        )?;
 
         // Secure listLogs function
         let user_ctx_list = user_context.clone();
