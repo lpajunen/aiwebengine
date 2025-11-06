@@ -4,27 +4,27 @@
 // Serve the editor HTML page
 function serveEditor(req) {
   // Debug logging for authentication
-  writeLog("=== Editor Authentication Check ===");
-  writeLog("auth object exists: " + (typeof auth !== "undefined"));
+  console.log("=== Editor Authentication Check ===");
+  console.log("auth object exists: " + (typeof auth !== "undefined"));
   if (typeof auth !== "undefined") {
-    writeLog("auth.isAuthenticated: " + auth.isAuthenticated);
-    writeLog("auth.userId: " + auth.userId);
-    writeLog("auth.provider: " + auth.provider);
-    writeLog("auth.isEditor: " + auth.isEditor);
-    writeLog("auth.isAdmin: " + auth.isAdmin);
+    console.log("auth.isAuthenticated: " + auth.isAuthenticated);
+    console.log("auth.userId: " + auth.userId);
+    console.log("auth.provider: " + auth.provider);
+    console.log("auth.isEditor: " + auth.isEditor);
+    console.log("auth.isAdmin: " + auth.isAdmin);
   }
 
   // Require authentication to access the editor
   let user;
   try {
     user = auth.requireAuth();
-    writeLog("Authentication successful for user: " + user.id);
+    console.log("Authentication successful for user: " + user.id);
   } catch (error) {
-    writeLog("Authentication failed: " + error.message);
+    console.log("Authentication failed: " + error.message);
     // Redirect to login page with return URL
     const currentPath = encodeURIComponent(req.path || "/editor");
     const loginUrl = "/auth/login?redirect=" + currentPath;
-    writeLog("Redirecting to: " + loginUrl);
+    console.log("Redirecting to: " + loginUrl);
 
     return {
       status: 302,
@@ -38,14 +38,16 @@ function serveEditor(req) {
 
   // Check if user has Editor or Administrator role
   if (!auth.isEditor && !auth.isAdmin) {
-    writeLog("User " + user.id + " does not have Editor or Administrator role");
-    writeLog("isEditor: " + auth.isEditor + ", isAdmin: " + auth.isAdmin);
+    console.log(
+      "User " + user.id + " does not have Editor or Administrator role",
+    );
+    console.log("isEditor: " + auth.isEditor + ", isAdmin: " + auth.isAdmin);
 
     // Redirect to insufficient permissions page
     const currentPath = encodeURIComponent(req.path || "/editor");
     const insufficientPermissionsUrl =
       "/insufficient-permissions?attempted=" + currentPath;
-    writeLog("Redirecting to: " + insufficientPermissionsUrl);
+    console.log("Redirecting to: " + insufficientPermissionsUrl);
 
     return {
       status: 302,
@@ -57,7 +59,7 @@ function serveEditor(req) {
     };
   }
 
-  writeLog(
+  console.log(
     "User " +
       user.id +
       " has required permissions (isEditor: " +
@@ -369,11 +371,11 @@ function apiSaveScript(req) {
             via: "editor",
           };
           sendStreamMessageToPath("/script_updates", JSON.stringify(message));
-          writeLog(
+          console.log(
             "Broadcasted script update from editor: " + action + " " + fullUri,
           );
         } catch (broadcastError) {
-          writeLog(
+          console.log(
             "Failed to broadcast script update from editor: " +
               broadcastError.message,
           );
@@ -428,16 +430,16 @@ function apiDeleteScript(req) {
               via: "editor",
             };
             sendStreamMessageToPath("/script_updates", JSON.stringify(message));
-            writeLog("Broadcasted script deletion from editor: " + fullUri);
+            console.log("Broadcasted script deletion from editor: " + fullUri);
           } catch (broadcastError) {
-            writeLog(
+            console.log(
               "Failed to broadcast script deletion from editor: " +
                 broadcastError.message,
             );
           }
         }
 
-        writeLog("Script deleted via editor API: " + fullUri);
+        console.log("Script deleted via editor API: " + fullUri);
         return {
           status: 200,
           body: JSON.stringify({
@@ -447,7 +449,7 @@ function apiDeleteScript(req) {
           contentType: "application/json",
         };
       } else {
-        writeLog("Script not found for deletion via editor API: " + fullUri);
+        console.log("Script not found for deletion via editor API: " + fullUri);
         return {
           status: 404,
           body: JSON.stringify({
@@ -468,7 +470,7 @@ function apiDeleteScript(req) {
       };
     }
   } catch (error) {
-    writeLog("Script deletion failed via editor API: " + error.message);
+    console.log("Script deletion failed via editor API: " + error.message);
     return {
       status: 500,
       body: JSON.stringify({
@@ -554,14 +556,14 @@ function apiListRoutes(req) {
 // API: AI Assistant prompt handler
 function apiAIAssistant(req) {
   // Debug: Log the raw request body
-  writeLog(`AI Assistant: Raw request body: ${req.body}`);
+  console.log(`AI Assistant: Raw request body: ${req.body}`);
 
   const body = JSON.parse(req.body || "{}");
 
   // Debug: Log the parsed body
-  writeLog(`AI Assistant: Parsed body: ${JSON.stringify(body)}`);
-  writeLog(`AI Assistant: Prompt value: "${body.prompt}"`);
-  writeLog(
+  console.log(`AI Assistant: Parsed body: ${JSON.stringify(body)}`);
+  console.log(`AI Assistant: Prompt value: "${body.prompt}"`);
+  console.log(
     `AI Assistant: Prompt length: ${body.prompt ? body.prompt.length : 0}`,
   );
 
@@ -571,7 +573,7 @@ function apiAIAssistant(req) {
 
   // Check if Anthropic API key is configured
   if (!Secrets.exists("anthropic_api_key")) {
-    writeLog(`AI Assistant: ERROR - Anthropic API key not configured`);
+    console.log(`AI Assistant: ERROR - Anthropic API key not configured`);
     return {
       status: 503,
       body: JSON.stringify({
@@ -586,7 +588,7 @@ function apiAIAssistant(req) {
 
   // Validate prompt is not empty
   if (!prompt || prompt.trim().length === 0) {
-    writeLog(`AI Assistant: ERROR - Empty prompt received`);
+    console.log(`AI Assistant: ERROR - Empty prompt received`);
     return {
       status: 400,
       body: JSON.stringify({
@@ -598,7 +600,7 @@ function apiAIAssistant(req) {
     };
   }
 
-  writeLog(
+  console.log(
     `AI Assistant: Processing request with prompt: ${prompt.substring(0, 50)}...`,
   );
 
@@ -621,7 +623,7 @@ AVAILABLE JAVASCRIPT APIs:
    - handlerName: string (name of your handler function)
    - method: "GET" | "POST" | "PUT" | "DELETE"
 
-2. writeLog(message) - Write to server logs
+2. console.log(message) - Write to server logs
    - message: string
 
 3. scriptStorage - Persistent key-value storage per script
@@ -710,13 +712,13 @@ function handlerName(req) {
       contentType: 'text/html; charset=UTF-8' // or 'application/json', 'text/plain; charset=UTF-8'
     };
   } catch (error) {
-    writeLog('Error: ' + error);
+    console.log('Error: ' + error);
     return { status: 500, body: 'Internal error' };
   }
 }
 
 function init(context) {
-  writeLog('Initializing script');
+  console.log('Initializing script');
   register('/your-path', 'handlerName', 'GET');
   return { success: true };
 }
@@ -737,7 +739,7 @@ RULES:
 2. Include complete, working JavaScript code
 3. Use try-catch blocks in all handlers
 4. ALWAYS include init() function that calls register()
-5. Use writeLog() for debugging
+5. Use console.log() for debugging
 6. For edits, include both original_code and code fields
 7. Never use Node.js APIs (fs, path, etc.) - they don't exist here
 8. Never use browser APIs (localStorage, document, window) - they don't exist here
@@ -785,13 +787,13 @@ Remember: You are creating JavaScript scripts that run on the SERVER and handle 
       contextualPrompt += "AVAILABLE SCRIPTS: " + scripts.join(", ") + "\\n\\n";
     }
   } catch (e) {
-    writeLog("Could not list scripts: " + e);
+    console.log("Could not list scripts: " + e);
   }
 
   // Add user's actual prompt
   contextualPrompt += "USER REQUEST: " + prompt;
 
-  writeLog("AI Assistant: Sending request with context...");
+  console.log("AI Assistant: Sending request with context...");
 
   try {
     // Make request to Anthropic API with secret injection and system prompt
@@ -824,18 +826,20 @@ Remember: You are creating JavaScript scripts that run on the SERVER and handle 
     if (response.ok) {
       const data = JSON.parse(response.body);
       let aiResponse = data.content[0].text;
-      writeLog(`AI Assistant: Success - Model: ${data.model}`);
-      writeLog(`AI Assistant: Raw response length: ${aiResponse.length} chars`);
-      writeLog(
+      console.log(`AI Assistant: Success - Model: ${data.model}`);
+      console.log(
+        `AI Assistant: Raw response length: ${aiResponse.length} chars`,
+      );
+      console.log(
         `AI Assistant: Raw response start: ${aiResponse.substring(0, 100)}...`,
       );
 
       // Check if response was truncated (stopped mid-response)
       const stopReason = data.stop_reason || "unknown";
-      writeLog(`AI Assistant: Stop reason: ${stopReason}`);
+      console.log(`AI Assistant: Stop reason: ${stopReason}`);
 
       if (stopReason === "max_tokens") {
-        writeLog(
+        console.log(
           `AI Assistant: WARNING - Response truncated due to max_tokens limit`,
         );
       }
@@ -845,13 +849,13 @@ Remember: You are creating JavaScript scripts that run on the SERVER and handle 
 
       // Remove markdown code blocks (```json ... ``` or ``` ... ```)
       if (cleanedResponse.startsWith("```")) {
-        writeLog(`AI Assistant: Removing markdown code blocks`);
+        console.log(`AI Assistant: Removing markdown code blocks`);
         // Remove opening ```json or ```
         cleanedResponse = cleanedResponse.replace(/^```(?:json)?\s*\n?/, "");
         // Remove closing ```
         cleanedResponse = cleanedResponse.replace(/\n?```\s*$/, "");
         cleanedResponse = cleanedResponse.trim();
-        writeLog(
+        console.log(
           `AI Assistant: Cleaned response start: ${cleanedResponse.substring(0, 100)}...`,
         );
       }
@@ -860,14 +864,14 @@ Remember: You are creating JavaScript scripts that run on the SERVER and handle 
       let parsedResponse = null;
       try {
         parsedResponse = JSON.parse(cleanedResponse);
-        writeLog(
+        console.log(
           `AI Assistant: Successfully parsed structured response of type: ${parsedResponse.type}`,
         );
       } catch (parseError) {
-        writeLog(
+        console.log(
           `AI Assistant: Response is plain text, not JSON - Error: ${parseError}`,
         );
-        writeLog(
+        console.log(
           `AI Assistant: First 200 chars: ${cleanedResponse.substring(0, 200)}`,
         );
       }
@@ -886,18 +890,18 @@ Remember: You are creating JavaScript scripts that run on the SERVER and handle 
       };
     } else {
       // Log the full error response for debugging
-      writeLog(`AI Assistant: API error - Status: ${response.status}`);
-      writeLog(`AI Assistant: Error body: ${response.body}`);
+      console.log(`AI Assistant: API error - Status: ${response.status}`);
+      console.log(`AI Assistant: Error body: ${response.body}`);
 
       let errorMessage = "API request failed";
       try {
         const errorData = JSON.parse(response.body);
         errorMessage =
           errorData.error?.message || errorData.message || errorMessage;
-        writeLog(`AI Assistant: Error details: ${errorMessage}`);
+        console.log(`AI Assistant: Error details: ${errorMessage}`);
       } catch (e) {
         // If we can't parse the error, just log the raw body
-        writeLog(`AI Assistant: Could not parse error response`);
+        console.log(`AI Assistant: Could not parse error response`);
       }
 
       return {
@@ -912,7 +916,7 @@ Remember: You are creating JavaScript scripts that run on the SERVER and handle 
       };
     }
   } catch (error) {
-    writeLog(`AI Assistant: Error - ${error}`);
+    console.log(`AI Assistant: Error - ${error}`);
     return {
       status: 500,
       body: JSON.stringify({
@@ -927,7 +931,7 @@ Remember: You are creating JavaScript scripts that run on the SERVER and handle 
 
 // Initialization function
 function init(context) {
-  writeLog("Initializing editor.js at " + new Date().toISOString());
+  console.log("Initializing editor.js at " + new Date().toISOString());
   register("/editor", "serveEditor", "GET");
   register("/api/scripts", "apiListScripts", "GET");
   register("/api/scripts/*", "apiGetScript", "GET");
@@ -937,6 +941,6 @@ function init(context) {
   register("/api/assets", "apiGetAssets", "GET");
   register("/api/routes", "apiListRoutes", "GET");
   register("/api/ai-assistant", "apiAIAssistant", "POST");
-  writeLog("Editor endpoints registered");
+  console.log("Editor endpoints registered");
   return { success: true };
 }

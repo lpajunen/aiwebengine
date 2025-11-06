@@ -241,7 +241,7 @@ aiwebengine logs capture:
 
 - **Script initialization** - When scripts load
 - **Route registration** - When routes are registered
-- **Custom logs** - Your `writeLog()` calls
+- **Custom logs** - Your `console.log()` calls
 - **Errors** - When handlers throw errors
 
 ### Example Log Output
@@ -263,16 +263,16 @@ function createUser(req) {
   const email = req.form.email;
 
   // Log important actions
-  writeLog(`Creating user: ${email}`);
+  console.log(`Creating user: ${email}`);
 
   try {
     // ... create user logic
-    writeLog(`User created successfully: ${email}`);
+    console.log(`User created successfully: ${email}`);
 
     return { status: 201, body: "User created" };
   } catch (error) {
     // Log errors with context
-    writeLog(`Error creating user ${email}: ${error.message}`);
+    console.log(`Error creating user ${email}: ${error.message}`);
 
     return { status: 500, body: "Failed to create user" };
   }
@@ -533,7 +533,7 @@ Explain how the streaming works in this script
 **Check:**
 
 - Selected correct script in logs viewer
-- Script has `writeLog()` calls
+- Script has `console.log()` calls
 - Script has been executed at least once
 
 ### Assets Not Loading

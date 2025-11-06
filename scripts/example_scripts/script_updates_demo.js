@@ -496,15 +496,15 @@ function scriptUpdatesDemoPage(req) {
 // Initialization function - called when script is loaded or updated
 function init(context) {
   try {
-    writeLog(
+    console.log(
       `Initializing script_updates_demo.js script at ${new Date().toISOString()}`,
     );
-    writeLog(`Init context: ${JSON.stringify(context)}`);
+    console.log(`Init context: ${JSON.stringify(context)}`);
 
     // Register the demo page endpoint
     register("/script-updates-demo", "scriptUpdatesDemoPage", "GET");
 
-    writeLog("Script updates demo script initialized successfully");
+    console.log("Script updates demo script initialized successfully");
 
     return {
       success: true,
@@ -512,7 +512,7 @@ function init(context) {
       registeredEndpoints: 1,
     };
   } catch (error) {
-    writeLog(
+    console.log(
       `Script updates demo script initialization failed: ${error.message}`,
     );
     throw error;

@@ -59,7 +59,7 @@ function getUsersHandler(request) {
   const role = params.role || "all";
   const limit = parseInt(params.limit || "10");
 
-  writeLog("info", "Fetching users", { role, limit });
+  console.log("info", "Fetching users", { role, limit });
 
   // Mock data
   const allUsers = [
@@ -137,7 +137,7 @@ function getUserByIdHandler(request) {
   const urlParts = request.url.split("/");
   const id = urlParts[urlParts.length - 1].split("?")[0];
 
-  writeLog("info", "Fetching user by ID", { id });
+  console.log("info", "Fetching user by ID", { id });
 
   // Mock database lookup
   const users = {
@@ -232,7 +232,7 @@ function createUserHandler(request) {
     createdAt: new Date().toISOString(),
   };
 
-  writeLog("info", "User created", newUser);
+  console.log("info", "User created", newUser);
 
   return {
     status: 201,
@@ -312,7 +312,7 @@ function updateUserHandler(request) {
     updatedAt: new Date().toISOString(),
   };
 
-  writeLog("info", "User updated", updatedUser);
+  writeLog("info", "User updated", users[index]);
 
   return {
     status: 200,
@@ -349,7 +349,7 @@ function deleteUserHandler(request) {
   const urlParts = request.url.split("/");
   const id = urlParts[urlParts.length - 1].split("?")[0];
 
-  writeLog("info", "Deleting user", { id });
+  console.log("info", "Deleting user", { id });
 
   // Mock deletion - check if user exists
   if (id === "999") {
@@ -456,7 +456,7 @@ function createUser(request) {
   };
 
   users.push(newUser);
-  writeLog("info", "User created", newUser);
+  console.log("info", "User created", newUser);
 
   return jsonResponse(201, {
     message: "User created",
@@ -491,7 +491,7 @@ function updateUser(request) {
     updatedAt: new Date().toISOString(),
   };
 
-  writeLog("info", "User updated", users[index]);
+  console.log("info", "User updated", users[index]);
 
   return jsonResponse(200, {
     message: "User updated",
@@ -509,7 +509,7 @@ function deleteUser(request) {
   }
 
   const deleted = users.splice(index, 1)[0];
-  writeLog("info", "User deleted", deleted);
+  console.log("info", "User deleted", deleted);
 
   return jsonResponse(200, {
     message: "User deleted",
@@ -606,7 +606,7 @@ function safeHandler(request) {
 
     return jsonResponse(200, { data });
   } catch (error) {
-    writeLog("error", "Request failed", {
+    console.log("error", "Request failed", {
       error: error.message,
       url: request.url,
     });
@@ -675,13 +675,13 @@ function validateUser(user) {
 
 ```javascript
 // Log successful operations
-writeLog("info", "User created", { id: newUser.id, name: newUser.name });
+console.log("info", "User created", { id: newUser.id, name: newUser.name });
 
 // Log errors
-writeLog("error", "Failed to create user", { error: error.message });
+console.log("error", "Failed to create user", { error: error.message });
 
 // Log warnings
-writeLog("warn", "Invalid email format", { email: userData.email });
+console.log("warn", "Invalid email format", { email: userData.email });
 ```
 
 ### 4. Return Consistent Responses

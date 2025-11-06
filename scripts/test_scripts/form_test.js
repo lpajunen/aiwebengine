@@ -19,8 +19,8 @@ function form_handler(req) {
 
 // Initialization function
 function init(context) {
-  writeLog("Initializing form_test.js at " + new Date().toISOString());
+  console.log("Initializing form_test.js at " + new Date().toISOString());
   register("/api/form", "form_handler", "POST");
-  writeLog("Form test endpoint registered");
+  console.log("Form test endpoint registered");
   return { success: true };
 }

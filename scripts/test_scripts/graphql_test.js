@@ -21,7 +21,7 @@ function createUserResolver(args) {
 }
 
 function userUpdatesResolver() {
-  writeLog("User subscribed to userUpdates");
+  console.log("User subscribed to userUpdates");
   return "User updates subscription initialized";
 }
 
@@ -39,7 +39,7 @@ function triggerUserUpdateResolver(args) {
     timestamp: new Date().toISOString(),
   };
 
-  writeLog(`Triggering user update for: ${args.userId}`);
+  console.log(`Triggering user update for: ${args.userId}`);
   sendSubscriptionMessage("userUpdates", JSON.stringify(updateData));
 
   return `User update triggered for ${args.userId}`;

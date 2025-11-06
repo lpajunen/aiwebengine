@@ -28,7 +28,7 @@ function getUsers(req) {
 register("/api/users", "getUsers", "GET");
 ```
 
-### writeLog(message)
+### console.log(message)
 
 Writes a message to the server log for debugging and monitoring.
 
@@ -40,7 +40,7 @@ Writes a message to the server log for debugging and monitoring.
 
 ```javascript
 function myHandler(req) {
-  writeLog("Handler called with path: " + req.path);
+  console.log("Handler called with path: " + req.path);
   return {
     status: 200,
     body: "Logged",
@@ -162,7 +162,7 @@ function fetchExample(req) {
     const response = JSON.parse(responseJson);
 
     if (response.ok) {
-      writeLog("Fetch successful: " + response.status);
+      console.log("Fetch successful: " + response.status);
       return {
         status: 200,
         body: response.body,
@@ -176,7 +176,7 @@ function fetchExample(req) {
       };
     }
   } catch (error) {
-    writeLog("Fetch error: " + error);
+    console.log("Fetch error: " + error);
     return { status: 500, body: "Request failed" };
   }
 }
@@ -265,7 +265,7 @@ function robustFetch(req) {
     }
   } catch (error) {
     // Fetch errors (network, timeout, blocked URL, etc.)
-    writeLog("Fetch failed: " + error);
+    console.log("Fetch failed: " + error);
     return { status: 500, body: "Request failed" };
   }
 }
@@ -289,7 +289,7 @@ These URLs will be rejected for security reasons:
 3. **Use secrets for API keys**: Never hardcode API keys in scripts
 4. **Set appropriate timeouts**: Adjust `timeout_ms` based on expected response time
 5. **Handle rate limits**: Implement retry logic for 429 responses
-6. **Log errors**: Use `writeLog()` to track fetch failures
+6. **Log errors**: Use `console.log()` to track fetch failures
 7. **Validate response data**: Parse and validate JSON responses before using them
 
 ## Streaming Connections
@@ -426,7 +426,7 @@ function createUser(args) {
     createdAt: new Date().toISOString(),
   };
 
-  writeLog(`Created user: ${name} (${email})`);
+  console.log(`Created user: ${name} (${email})`);
 
   return JSON.stringify(newUser);
 }
@@ -547,7 +547,7 @@ function listScriptsHandler(req) {
     const result = JSON.parse(resultJson);
 
     if (result.errors) {
-      writeLog("GraphQL errors: " + JSON.stringify(result.errors));
+      console.log("GraphQL errors: " + JSON.stringify(result.errors));
       return {
         status: 500,
         body: "GraphQL query failed",
@@ -561,7 +561,7 @@ function listScriptsHandler(req) {
       contentType: "application/json",
     };
   } catch (error) {
-    writeLog("executeGraphQL error: " + error);
+    console.log("executeGraphQL error: " + error);
     return {
       status: 500,
       body: "Internal error",
@@ -778,7 +778,7 @@ fetch("/graphql", {
 2. **Handle nulls properly**: Use nullable types (`String`) when data might be missing
 3. **Validate input**: Always validate arguments in your resolvers
 4. **Use meaningful errors**: Return descriptive error messages
-5. **Log important operations**: Use `writeLog()` for debugging mutations
+5. **Log important operations**: Use `console.log()` for debugging mutations
 6. **Keep resolvers simple**: Complex logic should be in separate functions
 7. **Use executeGraphQL for internal calls**: Prefer `executeGraphQL()` over HTTP fetch for internal GraphQL operations
 8. **Handle subscription connections**: Use `sendSubscriptionMessage()` to broadcast real-time updates
@@ -953,7 +953,7 @@ function safeHandler(req) {
 
     return { status: 200, body: "Success" };
   } catch (error) {
-    writeLog("Error in handler: " + error.message);
+    console.log("Error in handler: " + error.message);
     return { status: 500, body: "Internal server error" };
   }
 }
@@ -964,7 +964,7 @@ function safeHandler(req) {
 1. **Validate input**: Always check required parameters
 2. **Use appropriate status codes**: Return meaningful HTTP status codes
 3. **Set content types**: Specify correct MIME types for responses
-4. **Log important events**: Use `writeLog()` for debugging
+4. **Log important events**: Use `console.log()` for debugging
 5. **Handle errors gracefully**: Use try-catch for robust scripts
 6. **Keep responses small**: Avoid very large response bodies
 

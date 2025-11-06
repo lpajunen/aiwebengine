@@ -79,7 +79,7 @@ function asset_handler(req) {
       contentType: "application/json",
     };
   } catch (e) {
-    writeLog("Asset handler error: " + String(e));
+    console.log("Asset handler error: " + String(e));
     return {
       status: 500,
       body: JSON.stringify({ error: String(e) }),
@@ -91,10 +91,10 @@ function asset_handler(req) {
 // Initialization function - called when script is loaded or updated
 function init(context) {
   try {
-    writeLog(
+    console.log(
       `Initializing asset_mgmt.js script at ${new Date().toISOString()}`,
     );
-    writeLog(`Init context: ${JSON.stringify(context)}`);
+    console.log(`Init context: ${JSON.stringify(context)}`);
 
     // Register the routes
     register("/assets", "asset_handler", "GET");
@@ -102,7 +102,7 @@ function init(context) {
     register("/assets/*", "asset_handler", "GET");
     register("/assets/*", "asset_handler", "DELETE");
 
-    writeLog("Asset management script initialized successfully");
+    console.log("Asset management script initialized successfully");
 
     return {
       success: true,
@@ -110,7 +110,9 @@ function init(context) {
       registeredEndpoints: 4,
     };
   } catch (error) {
-    writeLog(`Asset management script initialization failed: ${error.message}`);
+    console.log(
+      `Asset management script initialization failed: ${error.message}`,
+    );
     throw error;
   }
 }

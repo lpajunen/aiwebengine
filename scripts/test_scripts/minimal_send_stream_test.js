@@ -1,12 +1,12 @@
 // Minimal test to isolate sendStreamMessageToPath issue
-writeLog("Starting minimal sendStreamMessageToPath test");
+console.log("Starting minimal sendStreamMessageToPath test");
 
 try {
-  writeLog("Calling sendStreamMessageToPath...");
+  console.log("Calling sendStreamMessageToPath...");
   sendStreamMessageToPath("/test-stream", '{"test": "message"}');
-  writeLog("sendStreamMessageToPath call completed successfully");
+  console.log("sendStreamMessageToPath call completed successfully");
 } catch (error) {
-  writeLog("Error caught: " + error.toString());
+  console.log("Error caught: " + error.toString());
 }
 
-writeLog("Test completed");
+console.log("Test completed");

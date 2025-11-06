@@ -3,7 +3,7 @@
 
 function testGraphQLHandler(req) {
   try {
-    writeLog("Testing executeGraphQL function");
+    console.log("Testing executeGraphQL function");
 
     // Example 1: Simple query without variables
     const query1 = `
@@ -15,9 +15,9 @@ function testGraphQLHandler(req) {
       }
     `;
 
-    writeLog("Executing GraphQL query: " + query1.trim());
+    console.log("Executing GraphQL query: " + query1.trim());
     const result1 = executeGraphQL(query1);
-    writeLog("Query result: " + result1);
+    console.log("Query result: " + result1);
 
     // Example 2: Query with variables (if supported)
     const query2 = `
@@ -34,9 +34,9 @@ function testGraphQLHandler(req) {
       uri: "https://example.com/core",
     });
 
-    writeLog("Executing GraphQL query with variables");
+    console.log("Executing GraphQL query with variables");
     const result2 = executeGraphQL(query2, variables);
-    writeLog("Query with variables result: " + result2);
+    console.log("Query with variables result: " + result2);
 
     // Return results
     const response = {
@@ -50,7 +50,7 @@ function testGraphQLHandler(req) {
       contentType: "application/json",
     };
   } catch (error) {
-    writeLog("Error in testGraphQLHandler: " + error.message);
+    console.log("Error in testGraphQLHandler: " + error.message);
     return {
       status: 500,
       body: JSON.stringify({
@@ -63,8 +63,8 @@ function testGraphQLHandler(req) {
 }
 
 function init(context) {
-  writeLog("Initializing GraphQL test script");
+  console.log("Initializing GraphQL test script");
   register("/test-graphql", "testGraphQLHandler", "GET");
-  writeLog("GraphQL test endpoint registered at /test-graphql");
+  console.log("GraphQL test endpoint registered at /test-graphql");
   return { success: true };
 }

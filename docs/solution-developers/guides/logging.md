@@ -13,10 +13,10 @@ Logging is essential for:
 
 ## Writing Logs
 
-### The `writeLog()` Function
+### The `console.log()` Function
 
 ```javascript
-writeLog(message);
+console.log(message);
 ```
 
 Writes a message to the server's log system.
@@ -25,11 +25,11 @@ Writes a message to the server's log system.
 
 ```javascript
 function myHandler(req) {
-  writeLog("Request received");
+  console.log("Request received");
 
   const result = processRequest(req);
 
-  writeLog(`Request processed: ${result.status}`);
+  console.log(`Request processed: ${result.status}`);
 
   return {
     status: 200,
@@ -44,10 +44,10 @@ function myHandler(req) {
 **Log important events:**
 
 ```javascript
-writeLog("User login attempt: " + email);
-writeLog("Payment processed: $" + amount);
-writeLog("File uploaded: " + filename);
-writeLog("Email sent to: " + recipient);
+console.log("User login attempt: " + email);
+console.log("Payment processed: $" + amount);
+console.log("File uploaded: " + filename);
+console.log("Email sent to: " + recipient);
 ```
 
 **Log errors:**
@@ -56,15 +56,15 @@ writeLog("Email sent to: " + recipient);
 try {
   processData(data);
 } catch (error) {
-  writeLog(`Error processing data: ${error.message}`);
+  console.log(`Error processing data: ${error.message}`);
 }
 ```
 
 **Log state changes:**
 
 ```javascript
-writeLog(`User ${userId} status changed from ${oldStatus} to ${newStatus}`);
-writeLog(`Cart updated: ${items.length} items, total $${total}`);
+console.log(`User ${userId} status changed from ${oldStatus} to ${newStatus}`);
+console.log(`Cart updated: ${items.length} items, total $${total}`);
 ```
 
 **Log performance metrics:**
@@ -73,7 +73,7 @@ writeLog(`Cart updated: ${items.length} items, total $${total}`);
 const start = Date.now();
 const result = expensiveOperation();
 const duration = Date.now() - start;
-writeLog(`Operation completed in ${duration}ms`);
+console.log(`Operation completed in ${duration}ms`);
 ```
 
 ### What NOT to Log
@@ -89,13 +89,13 @@ writeLog(`Operation completed in ${duration}ms`);
 
 ```javascript
 // DON'T log passwords
-writeLog(`User logged in with password: ${password}`); // ❌
+console.log(`User logged in with password: ${password}`); // ❌
 
 // DON'T log tokens
-writeLog(`API token: ${apiToken}`); // ❌
+console.log(`API token: ${apiToken}`); // ❌
 
 // DON'T log full request objects
-writeLog(JSON.stringify(req)); // ❌ Too much data
+console.log(JSON.stringify(req)); // ❌ Too much data
 ```
 
 ### Structured Logging
@@ -106,7 +106,7 @@ Use consistent formats for easier parsing:
 function logEvent(event, data) {
   const timestamp = new Date().toISOString();
   const message = `[${event}] ${JSON.stringify(data)}`;
-  writeLog(message);
+  console.log(message);
 }
 
 // Usage
@@ -342,23 +342,23 @@ Add logs at key points:
 
 ```javascript
 function complexHandler(req) {
-  writeLog("complexHandler: Start");
+  console.log("complexHandler: Start");
 
-  writeLog("complexHandler: Validating input");
+  console.log("complexHandler: Validating input");
   if (!validateInput(req)) {
-    writeLog("complexHandler: Validation failed");
+    console.log("complexHandler: Validation failed");
     return errorResponse(400, "Invalid input");
   }
 
-  writeLog("complexHandler: Processing data");
+  console.log("complexHandler: Processing data");
   const result = processData(req.form);
 
-  writeLog(`complexHandler: Processing complete, result: ${result.status}`);
+  console.log(`complexHandler: Processing complete, result: ${result.status}`);
 
-  writeLog("complexHandler: Saving to database");
+  console.log("complexHandler: Saving to database");
   saveToDatabase(result);
 
-  writeLog("complexHandler: End");
+  console.log("complexHandler: End");
   return jsonResponse(200, result);
 }
 ```
@@ -369,11 +369,11 @@ Inspect data at runtime:
 
 ```javascript
 function debugHandler(req) {
-  writeLog(`Received query: ${JSON.stringify(req.query)}`);
-  writeLog(`Received form: ${JSON.stringify(req.form)}`);
+  console.log(`Received query: ${JSON.stringify(req.query)}`);
+  console.log(`Received form: ${JSON.stringify(req.form)}`);
 
   const processedData = transformData(req.form);
-  writeLog(`Processed data: ${JSON.stringify(processedData)}`);
+  console.log(`Processed data: ${JSON.stringify(processedData)}`);
 
   return jsonResponse(200, processedData);
 }
@@ -388,7 +388,7 @@ const DEBUG = true;
 
 function debugLog(message) {
   if (DEBUG) {
-    writeLog(`[DEBUG] ${message}`);
+    console.log(`[DEBUG] ${message}`);
   }
 }
 
@@ -410,12 +410,12 @@ Provide context when logging errors:
 function createUserHandler(req) {
   try {
     const user = createUser(req.form);
-    writeLog(`User created successfully: ${user.email}`);
+    console.log(`User created successfully: ${user.email}`);
     return jsonResponse(201, { user: user });
   } catch (error) {
-    writeLog(`ERROR in createUserHandler: ${error.message}`);
-    writeLog(`  Input data: ${JSON.stringify(req.form)}`);
-    writeLog(`  Stack: ${error.stack || "No stack trace"}`);
+    console.log(`ERROR in createUserHandler: ${error.message}`);
+    console.log(`  Input data: ${JSON.stringify(req.form)}`);
+    console.log(`  Stack: ${error.stack || "No stack trace"}`);
     return errorResponse(500, "Failed to create user");
   }
 }
@@ -428,16 +428,16 @@ Measure execution time:
 ```javascript
 function timedOperation(name, operation) {
   const start = Date.now();
-  writeLog(`${name}: Starting`);
+  console.log(`${name}: Starting`);
 
   try {
     const result = operation();
     const duration = Date.now() - start;
-    writeLog(`${name}: Completed in ${duration}ms`);
+    console.log(`${name}: Completed in ${duration}ms`);
     return result;
   } catch (error) {
     const duration = Date.now() - start;
-    writeLog(`${name}: Failed after ${duration}ms - ${error.message}`);
+    console.log(`${name}: Failed after ${duration}ms - ${error.message}`);
     throw error;
   }
 }
@@ -459,15 +459,15 @@ function slowHandler(req) {
 function loggedHandler(req) {
   const requestId = generateRequestId();
 
-  writeLog(`[${requestId}] Request: ${req.method} ${req.path}`);
-  writeLog(`[${requestId}] Query: ${JSON.stringify(req.query)}`);
+  console.log(`[${requestId}] Request: ${req.method} ${req.path}`);
+  console.log(`[${requestId}] Query: ${JSON.stringify(req.query)}`);
 
   try {
     const response = processRequest(req);
-    writeLog(`[${requestId}] Response: ${response.status}`);
+    console.log(`[${requestId}] Response: ${response.status}`);
     return response;
   } catch (error) {
-    writeLog(`[${requestId}] Error: ${error.message}`);
+    console.log(`[${requestId}] Error: ${error.message}`);
     throw error;
   }
 }
@@ -483,7 +483,7 @@ function auditLog(action, user, details) {
     user: user,
     details: details,
   };
-  writeLog(`[AUDIT] ${JSON.stringify(entry)}`);
+  console.log(`[AUDIT] ${JSON.stringify(entry)}`);
 }
 
 function deleteUserHandler(req) {
@@ -516,12 +516,12 @@ function metricsHandler(req) {
     const duration = Date.now() - start;
     metrics.totalDuration += duration;
 
-    writeLog(`[METRICS] Request completed in ${duration}ms`);
+    console.log(`[METRICS] Request completed in ${duration}ms`);
 
     return result;
   } catch (error) {
     metrics.errors++;
-    writeLog(`[METRICS] Request failed: ${error.message}`);
+    console.log(`[METRICS] Request failed: ${error.message}`);
     throw error;
   }
 }
@@ -552,26 +552,26 @@ register("/stats", "statsHandler", "GET");
 
 ```javascript
 // Good - consistent format
-writeLog("USER_LOGIN: user@example.com - SUCCESS");
-writeLog("USER_LOGOUT: user@example.com - SUCCESS");
-writeLog("USER_LOGIN: user@example.com - FAILED: Invalid password");
+console.log("USER_LOGIN: user@example.com - SUCCESS");
+console.log("USER_LOGOUT: user@example.com - SUCCESS");
+console.log("USER_LOGIN: user@example.com - FAILED: Invalid password");
 
 // Bad - inconsistent
-writeLog("User logged in: user@example.com");
-writeLog("Logout successful for user@example.com");
-writeLog("Login error: Invalid password");
+console.log("User logged in: user@example.com");
+console.log("Logout successful for user@example.com");
+console.log("Login error: Invalid password");
 ```
 
 ### 2. Include Context
 
 ```javascript
 // Good - includes context
-writeLog(
+console.log(
   `createOrder: User ${userId} ordered ${items.length} items, total $${total}`,
 );
 
 // Bad - lacks context
-writeLog("Order created");
+console.log("Order created");
 ```
 
 ### 3. Log Levels (Manual)
@@ -580,20 +580,20 @@ Implement log levels yourself:
 
 ```javascript
 function logError(message) {
-  writeLog(`[ERROR] ${message}`);
+  console.log(`[ERROR] ${message}`);
 }
 
 function logWarning(message) {
-  writeLog(`[WARNING] ${message}`);
+  console.log(`[WARNING] ${message}`);
 }
 
 function logInfo(message) {
-  writeLog(`[INFO] ${message}`);
+  console.log(`[INFO] ${message}`);
 }
 
 function logDebug(message) {
   if (DEBUG_MODE) {
-    writeLog(`[DEBUG] ${message}`);
+    console.log(`[DEBUG] ${message}`);
   }
 }
 
@@ -609,21 +609,21 @@ logDebug("Variable value: " + someVar);
 ```javascript
 // Bad - too many logs
 for (let i = 0; i < 1000; i++) {
-  writeLog(`Processing item ${i}`); // ❌ 1000 log entries!
+  console.log(`Processing item ${i}`); // ❌ 1000 log entries!
   processItem(items[i]);
 }
 
 // Good - log summary
-writeLog(`Processing ${items.length} items`);
+console.log(`Processing ${items.length} items`);
 for (let i = 0; i < items.length; i++) {
   processItem(items[i]);
 }
-writeLog(`Processed all items successfully`);
+console.log(`Processed all items successfully`);
 
 // Also good - log milestones
 for (let i = 0; i < 1000; i++) {
   if (i % 100 === 0) {
-    writeLog(`Processed ${i}/1000 items`);
+    console.log(`Processed ${i}/1000 items`);
   }
   processItem(items[i]);
 }
@@ -642,8 +642,8 @@ function sanitizeCardNumber(card) {
 }
 
 // Usage
-writeLog(`Payment processed for ${sanitizeEmail(email)}`);
-writeLog(`Card ending in ${sanitizeCardNumber(cardNumber)}`);
+console.log(`Payment processed for ${sanitizeEmail(email)}`);
+console.log(`Card ending in ${sanitizeCardNumber(cardNumber)}`);
 ```
 
 ## Troubleshooting
@@ -686,7 +686,7 @@ writeLog(`Card ending in ${sanitizeCardNumber(cardNumber)}`);
 
 ```javascript
 // Write a log message
-writeLog("Message");
+console.log("Message");
 
 // Get logs for current script
 const logs = listLogs();
@@ -696,9 +696,9 @@ const logs = listLogsForUri("/api/users");
 
 // Log helper functions
 function logError(msg) {
-  writeLog(`[ERROR] ${msg}`);
+  console.log(`[ERROR] ${msg}`);
 }
 function logInfo(msg) {
-  writeLog(`[INFO] ${msg}`);
+  console.log(`[INFO] ${msg}`);
 }
 ```

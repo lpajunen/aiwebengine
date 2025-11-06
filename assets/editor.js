@@ -299,9 +299,9 @@ function handler(req) {
 }
 
 function init(context) {
-    writeLog('Initializing ${fullName} at ' + new Date().toISOString());
+    console.log('Initializing ${fullName} at ' + new Date().toISOString());
     register('/', 'handler', 'GET');
-    writeLog('${fullName} endpoints registered');
+    console.log('${fullName} endpoints registered');
     return { success: true };
 }`,
     })

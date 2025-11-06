@@ -75,7 +75,10 @@ impl SecureGlobalContext {
                 Ok("Log written successfully".to_string())
             },
         )?;
-        global.set("writeLog", write_log)?;
+        // Create console object with log method
+        let console_obj = rquickjs::Object::new(ctx.clone())?;
+        console_obj.set("log", write_log)?;
+        global.set("console", console_obj)?;
 
         // Secure listLogs function
         let user_ctx_list = user_context.clone();
