@@ -70,7 +70,8 @@ impl SecureGlobalContext {
                 );
 
                 // Write to repository
-                repository::insert_log_message("", &message);
+                // Call actual repository function
+                repository::insert_log_message("", &message, "LOG");
 
                 Ok("Log written successfully".to_string())
             },

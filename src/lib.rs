@@ -1367,7 +1367,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     info!("Auto-assigned port: {}", actual_port);
 
                     // record startup in logs so tests can observe server start
-                    repository::insert_log_message("server", "server started");
+                    repository::insert_log_message("server", "server started", "INFO");
                     debug!(
                         "Server configuration - host: {}, requested port: {}, actual port: {}",
                         config.host(),
@@ -1422,7 +1422,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
 
                 // record startup in logs so tests can observe server start
-                repository::insert_log_message("server", "server started");
+                repository::insert_log_message("server", "server started", "INFO");
                 debug!(
                     "Server configuration - host: {}, requested port: {}, actual port: {}",
                     config.host(),

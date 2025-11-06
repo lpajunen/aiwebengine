@@ -75,8 +75,8 @@ fn test_insert_and_list_log_messages() {
     // Record starting length so test is robust to previous state
     let start = repository::fetch_log_messages("test").len();
 
-    repository::insert_log_message("test", "log-one");
-    repository::insert_log_message("test", "log-two");
+    repository::insert_log_message("test", "log-one", "INFO");
+    repository::insert_log_message("test", "log-two", "INFO");
 
     let msgs = repository::fetch_log_messages("test");
     assert!(
@@ -93,7 +93,7 @@ fn test_insert_and_list_log_messages() {
 fn test_prune_keeps_latest_20_logs() {
     // Insert 25 distinct messages
     for i in 0..25 {
-        repository::insert_log_message("test", &format!("prune-test-{}", i));
+        repository::insert_log_message("test", &format!("prune-test-{}", i), "INFO");
     }
 
     let _ = repository::prune_log_messages();

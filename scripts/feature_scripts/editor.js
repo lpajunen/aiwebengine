@@ -489,7 +489,7 @@ function apiGetLogs(req) {
     const logs = JSON.parse(logsJson);
     const formattedLogs = logs.map((log) => ({
       timestamp: new Date(log.timestamp),
-      level: "info",
+      level: log.level || "INFO",
       message: log.message,
     }));
 

@@ -260,9 +260,17 @@ async fn js_write_log_and_listlogs() {
 #[tokio::test]
 async fn js_list_logs_for_uri() {
     // Insert some test log messages for different URIs
-    repository::insert_log_message("https://example.com/js-log-test-uri", "test-message-1");
-    repository::insert_log_message("https://example.com/js-log-test-uri", "test-message-2");
-    repository::insert_log_message("https://example.com/other-script", "other-message");
+    repository::insert_log_message(
+        "https://example.com/js-log-test-uri",
+        "test-message-1",
+        "INFO",
+    );
+    repository::insert_log_message(
+        "https://example.com/js-log-test-uri",
+        "test-message-2",
+        "INFO",
+    );
+    repository::insert_log_message("https://example.com/other-script", "other-message", "INFO");
 
     // upsert the js_log_test_uri script so it registers its routes
     let _ = repository::upsert_script(

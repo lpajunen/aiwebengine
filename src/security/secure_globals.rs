@@ -192,7 +192,7 @@ impl SecureGlobalContext {
         let config_write = config.clone();
         let write_log = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, message: String| -> JsResult<String> {
+            move |_ctx: rquickjs::Ctx<'_>, message: String, level: String| -> JsResult<String> {
                 // Check capability
                 if let Err(e) =
                     user_ctx_write.require_capability(&crate::security::Capability::ViewLogs)
@@ -252,17 +252,30 @@ impl SecureGlobalContext {
                 );
 
                 // Call actual repository function
-                repository::insert_log_message(&script_uri_write, &message);
+                repository::insert_log_message(&script_uri_write, &message, &level);
                 Ok("Log written successfully".to_string())
             },
         )?;
         // Create console object with log, info, warn, error, and debug methods
         let console_obj = rquickjs::Object::new(ctx.clone())?;
-        console_obj.set("log", write_log.clone())?;
-        console_obj.set("info", write_log.clone())?;
-        console_obj.set("warn", write_log.clone())?;
-        console_obj.set("error", write_log.clone())?;
-        console_obj.set("debug", write_log)?;
+
+        // Helper to create level-specific log functions
+        let create_level_logger = |level: &str| {
+            let write_log_clone = write_log.clone();
+            let level_str = level.to_string();
+            Function::new(
+                ctx.clone(),
+                move |_ctx: rquickjs::Ctx<'_>, message: String| -> JsResult<String> {
+                    write_log_clone.call::<_, String>((message, level_str.clone()))
+                },
+            )
+        };
+
+        console_obj.set("log", create_level_logger("LOG"))?;
+        console_obj.set("info", create_level_logger("INFO"))?;
+        console_obj.set("warn", create_level_logger("WARN"))?;
+        console_obj.set("error", create_level_logger("ERROR"))?;
+        console_obj.set("debug", create_level_logger("DEBUG"))?;
         global.set("console", console_obj)?;
 
         // Secure listLogs function
@@ -299,6 +312,7 @@ impl SecureGlobalContext {
 
                         serde_json::json!({
                             "message": log_entry.message,
+                            "level": log_entry.level,
                             "timestamp": timestamp_ms
                         })
                     })

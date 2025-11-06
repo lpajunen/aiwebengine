@@ -26,12 +26,17 @@ pub type RouteRegistrations = HashMap<(String, String), String>;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LogEntry {
     pub message: String,
+    pub level: String,
     pub timestamp: SystemTime,
 }
 
 impl LogEntry {
-    pub fn new(message: String, timestamp: SystemTime) -> Self {
-        Self { message, timestamp }
+    pub fn new(message: String, level: String, timestamp: SystemTime) -> Self {
+        Self {
+            message,
+            level,
+            timestamp,
+        }
     }
 }
 
@@ -473,15 +478,17 @@ async fn db_insert_log_message(
     pool: &PgPool,
     script_uri: &str,
     message: &str,
+    log_level: &str,
 ) -> Result<(), RepositoryError> {
     sqlx::query(
         r#"
-        INSERT INTO logs (script_uri, message, created_at)
-        VALUES ($1, $2, NOW())
+        INSERT INTO logs (script_uri, message, log_level, created_at)
+        VALUES ($1, $2, $3, NOW())
         "#,
     )
     .bind(script_uri)
     .bind(message)
+    .bind(log_level)
     .execute(pool)
     .await
     .map_err(|e| {
@@ -532,7 +539,7 @@ async fn db_fetch_log_messages(
 async fn db_fetch_all_log_messages(pool: &PgPool) -> Result<Vec<LogEntry>, RepositoryError> {
     let rows = sqlx::query(
         r#"
-        SELECT message, created_at FROM logs
+        SELECT message, log_level, created_at FROM logs
         ORDER BY created_at DESC
         "#,
     )
@@ -547,14 +554,15 @@ async fn db_fetch_all_log_messages(pool: &PgPool) -> Result<Vec<LogEntry>, Repos
         .into_iter()
         .map(|row| {
             let message: String = row.try_get("message")?;
+            let log_level: String = row.try_get("log_level")?;
             let created_at: DateTime<Utc> = row.try_get("created_at")?;
             // Convert chrono DateTime to SystemTime
             let system_time = SystemTime::from(created_at);
-            Ok(LogEntry::new(message, system_time))
+            Ok(LogEntry::new(message, log_level, system_time))
         })
         .collect::<Result<Vec<LogEntry>, sqlx::Error>>()
         .map_err(|e| {
-            error!("Database error getting message/timestamp: {}", e);
+            error!("Database error getting message/level/timestamp: {}", e);
             RepositoryError::InvalidData(format!("Database error: {}", e))
         })?;
 
@@ -732,12 +740,13 @@ pub fn fetch_script(uri: &str) -> Option<String> {
 }
 
 /// Insert log message with error handling
-pub fn insert_log_message(script_uri: &str, message: &str) {
+pub fn insert_log_message(script_uri: &str, message: &str, log_level: &str) {
     // Try database first if configured
     if let Some(db) = get_db_pool() {
         let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async { db_insert_log_message(db.pool(), script_uri, message).await })
+            tokio::runtime::Handle::current().block_on(async {
+                db_insert_log_message(db.pool(), script_uri, message, log_level).await
+            })
         });
 
         match result {
@@ -847,7 +856,7 @@ pub fn fetch_all_log_messages() -> Vec<LogEntry> {
             let now = SystemTime::now();
             for logs in guard.values() {
                 for message in logs {
-                    all_logs.push(LogEntry::new(message.clone(), now));
+                    all_logs.push(LogEntry::new(message.clone(), "INFO".to_string(), now));
                 }
             }
             all_logs
@@ -856,6 +865,7 @@ pub fn fetch_all_log_messages() -> Vec<LogEntry> {
             error!("Failed to fetch all log messages: {}", e);
             vec![LogEntry::new(
                 format!("Error: Could not retrieve logs - {}", e),
+                "ERROR".to_string(),
                 SystemTime::now(),
             )]
         }
