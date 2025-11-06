@@ -84,7 +84,7 @@ function helloHandler(req) {
   const name = req.query.name || "World";
 
   // Log the request
-  writeLog(`Greeting requested for: ${name}`);
+  console.log(`Greeting requested for: ${name}`);
 
   // Create the greeting message
   const greeting = `Hello, ${name}! Welcome to aiwebengine.`;
@@ -100,7 +100,7 @@ function helloHandler(req) {
 function init() {
   // Register the route
   register("/hello", "helloHandler", "GET");
-  writeLog("Hello script initialized successfully");
+  console.log("Hello script initialized successfully");
 }
 
 // Initialize the script
@@ -247,7 +247,7 @@ function helloHandler(req) {
   }
 
   // Log the request
-  writeLog(`Greeting requested for: ${name}`);
+  console.log(`Greeting requested for: ${name}`);
 
   // Create a more detailed response
   const response = {
@@ -266,7 +266,7 @@ function helloHandler(req) {
 
 function init() {
   register("/hello", "helloHandler", "GET");
-  writeLog("Enhanced hello script initialized");
+  console.log("Enhanced hello script initialized");
 }
 
 init();
@@ -319,7 +319,7 @@ function init() {
 
 ```javascript
 function badHandler(req) {
-  writeLog("Processing request");
+  console.log("Processing request");
   // Forgot to return!
 }
 ```
@@ -356,7 +356,7 @@ Now that you've created your first script, you can:
 register(path, handlerName, method);
 
 // Write to logs
-writeLog(message);
+console.log(message);
 
 // List all scripts
 const scripts = listScripts();
@@ -378,7 +378,7 @@ function myHandler(req) {
       contentType: "text/plain; charset=UTF-8",
     };
   } catch (error) {
-    writeLog(`Error: ${error.message}`);
+    console.error(`Error: ${error.message}`);
     return {
       status: 500,
       body: "Internal server error",

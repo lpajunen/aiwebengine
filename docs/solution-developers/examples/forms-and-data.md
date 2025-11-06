@@ -88,7 +88,7 @@ function handleContactForm(request) {
   // Parse form data
   const formData = parseFormData(request.body);
 
-  writeLog("info", "Contact form submitted", {
+  console.log("Contact form submitted", {
     name: formData.name,
     email: formData.email,
     subject: formData.subject,
@@ -314,7 +314,7 @@ function handleSignup(request) {
   }
 
   // Success - create account (mock)
-  writeLog("info", "New user signup", {
+  console.log("New user signup", {
     username: formData.username,
     email: formData.email,
     country: formData.country,
@@ -708,7 +708,7 @@ function handleFeedbackAPI(request) {
   }
 
   // Log feedback
-  writeLog("info", "Feedback received", {
+  console.log("Feedback received", {
     name: data.name,
     email: data.email,
     rating: data.rating,
@@ -936,7 +936,7 @@ function showUploadForm(request) {
 }
 
 function handleUpload(request) {
-  writeLog("info", "File upload received", {
+  console.log("File upload received", {
     contentType: request.headers["content-type"],
     bodyLength: request.body ? request.body.length : 0,
   });
@@ -1336,7 +1336,7 @@ function showWizard(request) {
 function handleWizardStep(request) {
   const data = JSON.parse(request.body);
 
-  writeLog("info", "Wizard registration completed", {
+  console.log("Wizard registration completed", {
     username: data.account.username,
     email: data.account.email,
   });

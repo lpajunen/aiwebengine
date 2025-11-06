@@ -572,7 +572,7 @@ When watching (`--watch true`):
 - Check script syntax in editor
 - View server logs for JavaScript errors
 - Test script in `/editor` for error messages
-- Add `writeLog()` for debugging
+- Add `console.log()` for debugging
 
 ### Watch Not Working
 

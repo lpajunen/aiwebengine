@@ -30,7 +30,7 @@ The subscription resolver is called when a client subscribes. It should return a
 
 ```javascript
 function mySubscriptionResolver() {
-  writeLog("Client subscribed to mySubscription");
+  console.log("Client subscribed to mySubscription");
   return "Subscription initialized";
 }
 ```
@@ -132,7 +132,7 @@ registerGraphQLMutation(
 
 // Subscription resolver - called when clients subscribe
 function liveNotificationsResolver() {
-  writeLog("Client subscribed to live notifications");
+  console.log("Client subscribed to live notifications");
   return "Notification subscription active";
 }
 

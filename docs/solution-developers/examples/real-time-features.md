@@ -208,7 +208,7 @@ function sendNotification(request) {
 
   sendStreamMessage(notification);
 
-  writeLog("info", "Notification sent", notification);
+  console.log("Notification sent", notification);
 
   return {
     status: 200,
@@ -539,7 +539,7 @@ function sendMessage(request) {
 
   sendStreamMessage(message);
 
-  writeLog("info", "Chat message sent", {
+  console.log("Chat message sent", {
     user: message.user,
     messageLength: message.message.length,
   });
@@ -1330,7 +1330,7 @@ function logActivity(request) {
 
   sendStreamMessage(activity);
 
-  writeLog("info", "Activity logged", activity);
+  console.log("Activity logged", activity);
 
   return {
     status: 200,

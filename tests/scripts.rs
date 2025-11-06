@@ -1006,8 +1006,8 @@ async fn test_init_function_called_successfully() {
         
         function init(context) {
             initWasCalled = true;
-            writeLog("Init called for: " + context.scriptName);
-            writeLog("Is startup: " + context.isStartup);
+            console.log("Init called for: " + context.scriptName);
+            console.log("Is startup: " + context.isStartup);
         }
         
         function getInitStatus() {
@@ -1038,7 +1038,7 @@ async fn test_script_initializer_updates_metadata() {
     let script_uri = "test://init-metadata";
     let script_content = r#"
         function init(context) {
-            writeLog("Updating metadata test");
+            console.log("Updating metadata test");
         }
     "#;
 
@@ -1132,7 +1132,7 @@ async fn test_script_initializer_single_script() {
     let script_uri = "test://initializer-test";
     let script_content = r#"
         function init(context) {
-            writeLog("Initialized: " + context.scriptName);
+            console.log("Initialized: " + context.scriptName);
         }
     "#;
 
@@ -1155,11 +1155,11 @@ async fn test_script_initializer_all_scripts() {
     let scripts = vec![
         (
             "test://multi-init-1",
-            r#"function init(ctx) { writeLog("Init 1"); }"#,
+            r#"function init(ctx) { console.log("Init 1"); }"#,
         ),
         (
             "test://multi-init-2",
-            r#"function init(ctx) { writeLog("Init 2"); }"#,
+            r#"function init(ctx) { console.log("Init 2"); }"#,
         ),
         ("test://multi-no-init", r#"function handler() { }"#),
     ];
@@ -1190,9 +1190,9 @@ async fn test_init_context_properties() {
         
         function init(context) {
             capturedContext = context;
-            writeLog("ScriptName: " + context.scriptName);
-            writeLog("IsStartup: " + context.isStartup);
-            writeLog("Timestamp: " + context.timestamp);
+            console.log("ScriptName: " + context.scriptName);
+            console.log("IsStartup: " + context.isStartup);
+            console.log("Timestamp: " + context.timestamp);
         }
     "#;
 

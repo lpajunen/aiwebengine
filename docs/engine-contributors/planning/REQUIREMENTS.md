@@ -904,8 +904,8 @@ The engine SHOULD:
 
 The engine MUST expose logging to JavaScript:
 
-- `writeLog(message)` - write to server log
-- `console.log()` - if enabled in configuration
+- `console.log()`, `console.error()`, `console.warn()`, `console.info()`, `console.debug()` - standard console logging
+- `writeLog(message)` - legacy logging (deprecated, use console methods)
 - Separate user script logs from system logs
 
 #### REQ-LOG-004: Access Logs
@@ -1315,7 +1315,8 @@ The engine SHOULD support multi-tenant applications:
 The engine MUST expose:
 
 - `register(path, handlerName, method)` - route registration
-- `writeLog(message)` - logging
+- `console.log()`, `console.error()`, `console.warn()`, `console.info()`, `console.debug()` - standard console logging
+- `writeLog(message)` - legacy logging (deprecated, use console methods)
 - Handler request/response objects
 
 ### REQ-JSAPI-002: Streaming APIs

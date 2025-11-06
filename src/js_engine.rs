@@ -1268,7 +1268,7 @@ mod tests {
 
         let script_content = r#"
             registerWebStream('/test-stream-func');
-            writeLog('Stream registered successfully');
+            console.log('Stream registered successfully');
         "#;
 
         let _ = repository::upsert_script("stream-test-func", script_content);
@@ -1306,9 +1306,9 @@ mod tests {
         let script_content = r#"
             try {
                 registerWebStream('invalid-path-test');
-                writeLog('ERROR: Should have failed');
+                console.error('ERROR: Should have failed');
             } catch (e) {
-                writeLog('Expected error: ' + String(e));
+                console.log('Expected error: ' + String(e));
             }
         "#;
 
@@ -1341,7 +1341,7 @@ mod tests {
             // Send a message to the specific stream
             sendStreamMessageToPath('/test-message-stream', '{"type": "test", "data": "Hello World"}');
 
-            writeLog('Message sent successfully');
+            console.log('Message sent successfully');
         "#;
 
         let _ = repository::upsert_script("stream-message-test", script_content);
@@ -1399,7 +1399,7 @@ mod tests {
             // JavaScript must stringify the object before sending
             sendStreamMessageToPath('/test-json-stream', JSON.stringify(messageObj));
 
-            writeLog('Complex JSON message sent');
+            console.log('Complex JSON message sent');
         "#;
 
         let _ = repository::upsert_script("stream-json-test", script_content);

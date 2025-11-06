@@ -508,7 +508,7 @@ Use the aiwebengine fetch() function to call the API
 
 Use Server-Sent Events (registerWebStream) for real-time updates
 
-Use the built-in writeLog() for logging
+Use the built-in console.log() for logging
 
 Reference the /style.css asset for styling
 ```
@@ -553,12 +553,12 @@ web application engine. Scripts are server-side handlers that:
 - Receive a `req` object with method, path, query, form, headers
 - Must return an object with status, body, contentType
 - Use register(path, handlerName, method) to map routes
-- Can use writeLog(message) for logging
+- Can use console.log(message) for logging
 - Can use fetch(url, options) for external API calls
 - Can use registerWebStream(path) and sendStreamMessage(data) for SSE
 
 Available functions:
-- register(), writeLog(), listLogs(), listLogsForUri()
+- register(), console.log(), listLogs(), listLogsForUri()
 - fetch(), registerWebStream(), sendStreamMessage()
 - listAssets(), fetchAsset(), upsertAsset(), deleteAsset()
 
@@ -609,7 +609,7 @@ not client-side JavaScript
 
 ```text
 Use only QuickJS-compatible code. Available functions are:
-register(), writeLog(), fetch(), JSON.parse(), JSON.stringify()
+register(), console.log(), fetch(), JSON.parse(), JSON.stringify()
 ```
 
 ### AI Generates Too Much Code

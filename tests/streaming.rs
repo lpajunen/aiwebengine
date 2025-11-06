@@ -444,13 +444,13 @@ async fn test_script_update_streaming_integration() {
                 };
                 
                 sendStreamMessageToPath('/script_updates', JSON.stringify(message));
-                writeLog(`Broadcasted script update: ${action} ${uri}`);
+                console.log(`Broadcasted script update: ${action} ${uri}`);
             } catch (error) {
-                writeLog(`Failed to broadcast script update: ${error.message}`);
+                console.error(`Failed to broadcast script update: ${error.message}`);
             }
         }
 
-        writeLog('Script update streaming script loaded');
+        console.log('Script update streaming script loaded');
     "#;
 
     let _ = aiwebengine::repository::upsert_script(
@@ -533,7 +533,7 @@ async fn test_script_update_message_format() {
             };
             
             sendStreamMessageToPath('/script_updates_format_test', JSON.stringify(message));
-            writeLog(`Broadcast ${action} for ${uri}`);
+            console.log(`Broadcast ${action} for ${uri}`);
         }
 
         function test_message_format(req) {
@@ -561,10 +561,10 @@ async fn test_script_update_message_format() {
         }
 
         function init(context) {
-            writeLog('Initializing message format test script at ' + new Date().toISOString());
+            console.log('Initializing message format test script at ' + new Date().toISOString());
             registerWebStream('/script_updates_format_test');
             register('/test_message_format', 'test_message_format', 'GET');
-            writeLog('Message format test script initialized');
+            console.log('Message format test script initialized');
             return { success: true };
         }
     "#;
@@ -647,12 +647,12 @@ async fn test_stream_endpoints() {
         }
         
         function init(context) {
-            writeLog('Initializing stream integration test');
+            console.log('Initializing stream integration test');
             // Register a stream endpoint
             registerWebStream('/test-stream');
             // Register a regular handler to test stream vs regular route handling
             register('/regular-endpoint', 'handleRegular', 'GET');
-            writeLog('Stream and regular endpoints registered');
+            console.log('Stream and regular endpoints registered');
             return { success: true };
         }
     "#;
@@ -756,7 +756,7 @@ async fn test_stream_messaging() {
             };
             
             sendStreamMessageToPath('/notification-stream', JSON.stringify(message));
-            writeLog('POST - Sent notification: ' + JSON.stringify(message));
+            console.log('POST - Sent notification: ' + JSON.stringify(message));
             return { 
                 status: 200, 
                 body: 'POST Message sent',
@@ -773,7 +773,7 @@ async fn test_stream_messaging() {
             };
             
             sendStreamMessageToPath('/notification-stream', JSON.stringify(message));
-            writeLog('GET - Sent notification: ' + JSON.stringify(message));
+            console.log('GET - Sent notification: ' + JSON.stringify(message));
             return { 
                 status: 200, 
                 body: 'GET Message sent',
@@ -782,14 +782,14 @@ async fn test_stream_messaging() {
         }
         
         function init(context) {
-            writeLog('Initializing notification system');
+            console.log('Initializing notification system');
             // Register a stream endpoint
             registerWebStream('/notification-stream');
             // Register an endpoint to send messages for both GET and POST
             register('/send-notification', 'sendNotification', 'POST');
             register('/send-notification', 'sendNotificationGet', 'GET');
-            writeLog('Registered POST and GET /send-notification');
-            writeLog('Notification system initialized');
+            console.log('Registered POST and GET /send-notification');
+            console.log('Notification system initialized');
             return { success: true };
         }
     "#;
@@ -806,12 +806,12 @@ async fn test_stream_messaging() {
 
     // Test sendStreamMessage in isolation first
     let minimal_test = r#"
-        writeLog('Testing sendStreamMessage in isolation');
+        console.log('Testing sendStreamMessage in isolation');
         try {
             sendStreamMessageToPath('/notification-stream', '{"test": "isolation"}');
-            writeLog('sendStreamMessageToPath isolation test: SUCCESS');
+            console.log('sendStreamMessageToPath isolation test: SUCCESS');
         } catch (error) {
-            writeLog('sendStreamMessageToPath isolation test ERROR: ' + error.toString());
+            console.error('sendStreamMessageToPath isolation test ERROR: ' + error.toString());
         }
     "#;
 
@@ -1094,7 +1094,7 @@ fn test_simple_stream_registration() {
 
     let test_script = r#"
         registerWebStream('/simple_test');
-        writeLog('Stream registered successfully');
+        console.log('Stream registered successfully');
     "#;
 
     println!("Testing simple stream registration");
@@ -1128,9 +1128,9 @@ fn test_simple_message_sending() {
     let test_script = r#"
         try {
             sendStreamMessageToPath('/simple_test', { type: 'test', message: 'hello' });
-            writeLog('Message sent successfully');
+            console.log('Message sent successfully');
         } catch (error) {
-            writeLog('Error sending message: ' + error.message);
+            console.error('Error sending message: ' + error.message);
         }
     "#;
 
@@ -1156,13 +1156,13 @@ fn test_combined_functionality() {
 
     let test_script = r#"
         registerWebStream('/combined_test');
-        writeLog('Stream registered');
+        console.log('Stream registered');
         
         try {
             sendStreamMessageToPath('/combined_test', { type: 'combined_test', message: 'hello combined' });
-            writeLog('Message sent successfully');
+            console.log('Message sent successfully');
         } catch (error) {
-            writeLog('Error sending message: ' + error.message);
+            console.error('Error sending message: ' + error.message);
         }
     "#;
 

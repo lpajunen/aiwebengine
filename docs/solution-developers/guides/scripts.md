@@ -107,7 +107,7 @@ function createResponse(status, data) {
 // ============================================
 
 function listItemsHandler(req) {
-  writeLog(`Listing items: ${items.length} total`);
+  console.log(`Listing items: ${items.length} total`);
   return createResponse(200, { items: items });
 }
 
@@ -124,7 +124,7 @@ function createItemHandler(req) {
   }
 
   items.push(item);
-  writeLog(`Item created: ${item.id}`);
+  console.log(`Item created: ${item.id}`);
 
   return createResponse(201, { item: item });
 }
@@ -139,7 +139,7 @@ function init() {
   register("/api/items", "createItemHandler", "POST");
 
   // Log initialization
-  writeLog("Items API initialized");
+  console.log("Items API initialized");
 }
 
 // ============================================
@@ -371,7 +371,7 @@ function searchHandler(req) {
   const page = parseInt(req.query.page || "1");
   const limit = parseInt(req.query.limit || "10");
 
-  writeLog(`Search: q="${query}", page=${page}, limit=${limit}`);
+  console.log(`Search: q="${query}", page=${page}, limit=${limit}`);
 
   // Perform search...
   const results = performSearch(query, page, limit);
@@ -431,7 +431,7 @@ function apiHandler(req) {
     // It may be available in req.form as a single key
     const jsonData = req.form.body ? JSON.parse(req.form.body) : req.form;
 
-    writeLog(`Received data: ${JSON.stringify(jsonData)}`);
+    console.log(`Received data: ${JSON.stringify(jsonData)}`);
 
     return {
       status: 200,
@@ -458,7 +458,7 @@ function headerHandler(req) {
   const contentType = req.headers["content-type"] || "None";
   const authHeader = req.headers["authorization"] || "";
 
-  writeLog(`User-Agent: ${userAgent}`);
+  console.log(`User-Agent: ${userAgent}`);
 
   return {
     status: 200,
@@ -661,7 +661,7 @@ function riskyHandler(req) {
 
     return jsonResponse(200, { result: result });
   } catch (error) {
-    writeLog(`Error in riskyHandler: ${error.message}`);
+    console.error(`Error in riskyHandler: ${error.message}`);
     return errorResponse(500, "Internal server error");
   }
 }
@@ -707,7 +707,7 @@ function isValidEmail(email) {
 ```javascript
 function handleError(error, context) {
   const errorId = Date.now().toString(36);
-  writeLog(`[${errorId}] Error in ${context}: ${error.message}`);
+  console.error(`[${errorId}] Error in ${context}: ${error.message}`);
 
   return {
     status: 500,
@@ -778,14 +778,14 @@ function safeHandler(req) {
 
 ```javascript
 function handler(req) {
-  writeLog(`Request started: ${req.path}`);
+  console.log(`Request started: ${req.path}`);
 
   try {
     const result = doSomething();
-    writeLog(`Request completed successfully`);
+    console.log(`Request completed successfully`);
     return jsonResponse(200, result);
   } catch (error) {
-    writeLog(`Request failed: ${error.message}`);
+    console.error(`Request failed: ${error.message}`);
     return errorResponse(500, "Internal error");
   }
 }
@@ -876,9 +876,9 @@ function requireAuth(req, handler) {
 }
 
 function logRequest(req, handler) {
-  writeLog(`${req.method} ${req.path}`);
+  console.log(`${req.method} ${req.path}`);
   const response = handler(req);
-  writeLog(`Response: ${response.status}`);
+  console.log(`Response: ${response.status}`);
   return response;
 }
 
@@ -971,7 +971,7 @@ function paginatedHandler(req) {
 
 ```javascript
 register(path, handlerName, method); // Register route
-writeLog(message); // Write to logs
+console.log(message); // Write to logs
 ```
 
 ### Handler Template
@@ -1001,7 +1001,7 @@ function myHandler(req) {
       contentType: "application/json",
     };
   } catch (error) {
-    writeLog(`Error: ${error.message}`);
+    console.error(`Error: ${error.message}`);
     return {
       status: 500,
       body: JSON.stringify({ error: "Internal error" }),

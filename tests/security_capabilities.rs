@@ -522,7 +522,7 @@ async fn test_secure_script_execution_authenticated() {
     // Test with authenticated user
     let user_context = UserContext::authenticated("test_user".to_string());
     let script_content = r#"
-        writeLog("Hello from secure context!");
+        console.log("Hello from secure context!");
         
         // Try to upsert a script (should work with WriteScripts capability)
         upsertScript("test_script", "console.log('test');");
@@ -580,7 +580,7 @@ async fn test_secure_request_execution() {
     let user_context = UserContext::authenticated("test_user".to_string());
     let script_content = r#"
         function handleSecureTest(request) {
-            writeLog("Handling secure request: " + request.path);
+            console.log("Handling secure request: " + request.path);
             
             return {
                 status: 200,
@@ -632,7 +632,7 @@ async fn test_secure_script_validation() {
         // This should be detected and logged as suspicious but still execute
         var dynamicCode = "console.log('dynamic execution')";
         
-        writeLog("This part should still work");
+        console.log("This part should still work");
     "#;
 
     let result = execute_script_secure("/test_dangerous", dangerous_script, user_context);

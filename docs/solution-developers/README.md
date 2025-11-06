@@ -210,7 +210,7 @@ Real-world code examples:
 register(path, handlerName, method);
 
 // Logging
-writeLog(message);
+console.log(message);
 const logs = listLogs();
 
 // Assets
@@ -252,7 +252,7 @@ function myHandler(req) {
       contentType: "application/json",
     };
   } catch (error) {
-    writeLog(`Error: ${error.message}`);
+    console.error(`Error: ${error.message}`);
     return {
       status: 500,
       body: JSON.stringify({ error: "Internal error" }),

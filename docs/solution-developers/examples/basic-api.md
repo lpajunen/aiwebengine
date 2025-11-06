@@ -312,7 +312,7 @@ function updateUserHandler(request) {
     updatedAt: new Date().toISOString(),
   };
 
-  writeLog("info", "User updated", users[index]);
+  console.log("User updated", users[index]);
 
   return {
     status: 200,

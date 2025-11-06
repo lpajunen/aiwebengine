@@ -160,7 +160,7 @@ function uploadHandler(req) {
 
   try {
     upsertAsset(publicPath, mimetype, contentB64);
-    writeLog(`Asset uploaded: ${publicPath}`);
+    console.log(`Asset uploaded: ${publicPath}`);
 
     return {
       status: 201,
@@ -171,7 +171,7 @@ function uploadHandler(req) {
       contentType: "application/json",
     };
   } catch (error) {
-    writeLog(`Upload failed: ${error.message}`);
+    console.error(`Upload failed: ${error.message}`);
     return {
       status: 500,
       body: JSON.stringify({ error: "Upload failed" }),
@@ -542,9 +542,9 @@ Deletes an asset. Returns `true` if deleted, `false` if not found.
 ```javascript
 const deleted = deleteAsset("/old-image.png");
 if (deleted) {
-  writeLog("Asset deleted");
+  console.log("Asset deleted");
 } else {
-  writeLog("Asset not found");
+  console.log("Asset not found");
 }
 ```
 
@@ -656,7 +656,7 @@ function cleanupHandler(req) {
 
   unusedAssets.forEach((asset) => {
     deleteAsset(asset);
-    writeLog(`Deleted unused asset: ${asset}`);
+    console.log(`Deleted unused asset: ${asset}`);
   });
 
   return {

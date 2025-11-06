@@ -705,7 +705,7 @@ utils/ - Helper scripts
 
 ### 7. Use Logs for Debugging
 
-- Add `writeLog()` liberally
+- Add `console.log()` liberally
 - Check logs after requests
 - Filter by script when debugging
 - Remove excessive logging later
@@ -793,14 +793,14 @@ utils/ - Helper scripts
 
 **Check:**
 
-- Script has `writeLog()` calls
+- Script has `console.log()` calls
 - Script has been executed
 - Correct script selected in filter
 - Logs tab selected
 
 **Solutions:**
 
-- Add `writeLog()` to script
+- Add `console.log()` to script
 - Execute script (make a request)
 - Select correct script
 - Click manual refresh
@@ -901,9 +901,9 @@ Click asset in sidebar to preview:
 Add tags to logs:
 
 ```javascript
-writeLog("[INFO] User logged in");
-writeLog("[ERROR] Database connection failed");
-writeLog("[DEBUG] Processing 100 items");
+console.log("[INFO] User logged in");
+console.log("[ERROR] Database connection failed");
+console.log("[DEBUG] Processing 100 items");
 ```
 
 Then search for `[ERROR]` to find errors.

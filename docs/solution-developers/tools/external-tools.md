@@ -231,7 +231,7 @@ Create `.vscode/aiwebengine.code-snippets`:
   },
   "aiwebengine Log": {
     "prefix": "awe-log",
-    "body": ["writeLog('${1:info}', '${2:message}', { ${3:data: value} });"],
+    "body": ["console.log('${1:message}', { ${2:data: value} });"],
     "description": "Write a log message"
   }
 }
@@ -665,7 +665,13 @@ Create `tests/api/users.test.js`:
 
 ```javascript
 // Mock aiwebengine functions
-global.writeLog = jest.fn();
+global.console = {
+  log: jest.fn(),
+  error: jest.fn(),
+  warn: jest.fn(),
+  info: jest.fn(),
+  debug: jest.fn(),
+};
 global.register = jest.fn();
 
 // Import your script

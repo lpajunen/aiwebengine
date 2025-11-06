@@ -329,7 +329,7 @@ function showAIWriter(request) {
 function generateContent(request) {
   const data = JSON.parse(request.body || "{}");
 
-  writeLog("info", "AI content generation requested", {
+  console.log("AI content generation requested", {
     contentType: data.contentType,
     topic: data.topic,
   });
@@ -730,7 +730,7 @@ function handleChat(request) {
   const data = JSON.parse(request.body || "{}");
   const userMessage = data.message;
 
-  writeLog("info", "Chat message received", { message: userMessage });
+  console.log("Chat message received", { message: userMessage });
 
   // Mock AI response logic
   const response = generateChatResponse(userMessage);
@@ -1067,7 +1067,7 @@ function showImageAnalyzer(request) {
 function analyzeImage(request) {
   const data = JSON.parse(request.body || "{}");
 
-  writeLog("info", "Image analysis requested", {
+  console.log("Image analysis requested", {
     filename: data.filename,
   });
 
@@ -1337,7 +1337,7 @@ function performSearch(request) {
   const data = JSON.parse(request.body || "{}");
   const query = data.query;
 
-  writeLog("info", "AI search performed", { query });
+  console.log("AI search performed", { query });
 
   // Mock AI-powered search results
   const mockResults = {
@@ -1454,7 +1454,7 @@ async function callAI(prompt) {
 
     return await response.json();
   } catch (error) {
-    writeLog("error", "AI API failed", { error: error.message });
+    console.error("AI API failed", { error: error.message });
     return { error: "AI service temporarily unavailable" };
   }
 }
@@ -1510,7 +1510,7 @@ function sanitizePrompt(userInput) {
 
 ```javascript
 function logAIInteraction(prompt, response, duration) {
-  writeLog("info", "AI interaction", {
+  console.log("AI interaction", {
     promptLength: prompt.length,
     responseLength: response.length,
     duration: duration,
@@ -1546,7 +1546,7 @@ const response = fetch(aiEndpoint, {
 try {
   const result = await callAI(prompt);
 } catch (error) {
-  writeLog("error", "AI failed", { error });
+  console.error("AI failed", { error });
 }
 ```
 

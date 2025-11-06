@@ -82,7 +82,7 @@ Return an object with:
 ## Built-in Functions
 
 - `register(path, handlerFunction, method)`: Register a route
-- `writeLog(message)`: Write to the server log
+- `console.log(message)`: Write to the server log
 - `JSON.stringify(obj)`: Convert objects to JSON strings
 
 ## Testing the Examples

@@ -616,10 +616,10 @@ register("/tenant/broadcast", "broadcastTenantUpdate", "POST");
 function safeBroadcast(req) {
   try {
     const result = sendStreamMessageToConnections("/chat", data, filter);
-    writeLog("Broadcast result: " + result);
+    console.log("Broadcast result: " + result);
     return { status: 200, body: result };
   } catch (error) {
-    writeLog("Broadcast failed: " + error.message);
+    console.error("Broadcast failed: " + error.message);
     return { status: 500, body: "Broadcast failed" };
   }
 }
@@ -642,7 +642,7 @@ function safeBroadcast(req) {
 ````javascript
 // Log broadcast results
 const result = sendStreamMessageToConnections("/test", data, filter);
-writeLog("Broadcast result: " + result);
+console.log("Broadcast result: " + result);
 
 // Test with empty filter to verify basic functionality
 sendStreamMessageToConnections("/test", { type: "test" }, "{}");
@@ -970,7 +970,7 @@ window.addEventListener("beforeunload", function () {
        });
        return { status: 200, body: "OK" };
      } catch (error) {
-       writeLog("Error in handler: " + error.message);
+       console.error("Error in handler: " + error.message);
        sendStreamMessageToPath("/notifications", {
          type: "error",
          message: "Something went wrong",
@@ -1013,14 +1013,14 @@ eventSource.onerror = function (event) {
 
    ```javascript
    // Check if stream is registered
-   writeLog("Registering stream...");
+   console.log("Registering stream...");
    registerWebStream("/my-stream");
-   writeLog("Stream registered");
+   console.log("Stream registered");
 
    // Verify message sending
-   writeLog("Sending message...");
+   console.log("Sending message...");
    sendStreamMessageToPath("/my-stream", { type: "test", message: "Hello" });
-   writeLog("Message sent");
+   console.log("Message sent");
    ```
 
 2. **Client Connection Issues**
@@ -1044,8 +1044,8 @@ eventSource.onerror = function (event) {
 1. **Server Logs**
 
    ```javascript
-   writeLog("Stream registered: /my-stream");
-   writeLog("Broadcasting message: " + JSON.stringify(data));
+   console.log("Stream registered: /my-stream");
+   console.log("Broadcasting message: " + JSON.stringify(data));
    ```
 
 2. **Client Console**

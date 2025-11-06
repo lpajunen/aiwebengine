@@ -652,7 +652,7 @@ console.log(`Card ending in ${sanitizeCardNumber(cardNumber)}`);
 
 **Check:**
 
-- `writeLog()` is actually being called
+- `console.log()` is actually being called
 - Script executed successfully (no errors before log call)
 - Correct script selected in log viewer
 - Logs viewer refreshed
