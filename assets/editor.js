@@ -480,7 +480,7 @@ function init(context) {
         logElement.innerHTML = this.templates["log-entry"]({
           time: new Date(log.timestamp).toLocaleTimeString(),
           level: log.level || "info",
-          message: log.message,
+          message: this.escapeHtml(log.message),
         });
         logsContent.appendChild(logElement.firstElementChild);
       });
