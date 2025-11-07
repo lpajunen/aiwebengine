@@ -260,6 +260,10 @@ function serveEditor(req) {
 function apiListScripts(req) {
   try {
     const scripts = typeof listScripts === "function" ? listScripts() : [];
+
+    // Sort scripts alphabetically (case-insensitive)
+    scripts.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+
     const scriptDetails = scripts.map((name) => ({
       name: name,
       size: 0,

@@ -598,6 +598,13 @@ pub async fn start_server_with_config(
         );
         if !result.success {
             error!("Failed to execute script {}: {:?}", uri, result.error);
+            // Log FATAL error to database
+            let error_msg = result
+                .error
+                .as_ref()
+                .map(|e| format!("Script execution failed: {}", e))
+                .unwrap_or_else(|| "Script execution failed".to_string());
+            repository::insert_log_message(uri, &error_msg, "FATAL");
         } else {
             info!("Successfully executed script: {}", uri);
         }
@@ -1234,6 +1241,13 @@ document.addEventListener('DOMContentLoaded', function() {
                     "[{}] ❌ Script execution error for {} {}: {} (handler: {}, script: {})",
                     request_id, method_log, path_log, e, handler_name, owner_uri
                 );
+                // Log FATAL error to database
+                let error_msg = format!(
+                    "Script execution failed for handler '{}': {}",
+                    handler_name, e
+                );
+                repository::insert_log_message(&owner_uri, &error_msg, "FATAL");
+
                 let error_response = error::errors::script_execution_failed(&path, &e, &request_id);
                 let status = StatusCode::from_u16(error_response.status)
                     .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);

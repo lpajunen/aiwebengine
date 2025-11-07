@@ -468,9 +468,14 @@ function init(context) {
       const logs = await response.json();
 
       const logsContent = document.getElementById("logs-content");
+
+      // Remember if user was at the bottom before refresh
+      const wasAtBottom = this.isScrolledToBottom(logsContent);
+
       logsContent.innerHTML = "";
 
-      logs.forEach((log) => {
+      // Reverse logs so newest appear at bottom
+      logs.reverse().forEach((log) => {
         const logElement = document.createElement("div");
         logElement.innerHTML = this.templates["log-entry"]({
           time: new Date(log.timestamp).toLocaleTimeString(),
@@ -480,11 +485,24 @@ function init(context) {
         logsContent.appendChild(logElement.firstElementChild);
       });
 
-      // Auto-scroll to bottom
-      logsContent.scrollTop = logsContent.scrollHeight;
+      // Only auto-scroll if user was already at the bottom
+      if (wasAtBottom) {
+        logsContent.scrollTop = logsContent.scrollHeight;
+      }
     } catch (error) {
       this.showStatus("Error loading logs: " + error.message, "error");
     }
+  }
+
+  // Helper method to check if element is scrolled to bottom
+  isScrolledToBottom(element) {
+    // Consider "at bottom" if within 50px of the bottom
+    // This accounts for rounding errors and makes it easier to stay "at bottom"
+    const threshold = 50;
+    return (
+      element.scrollHeight - element.scrollTop - element.clientHeight <
+      threshold
+    );
   }
 
   async clearLogs() {

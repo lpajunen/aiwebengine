@@ -14,6 +14,64 @@ use crate::security::secure_globals::{GlobalSecurityConfig, SecureGlobalContext}
 // Type alias for route registrations map
 type RouteRegistrations = HashMap<(String, String), String>;
 
+/// Extract detailed error information from a rquickjs::Error
+///
+/// QuickJS errors often include line numbers and column information in their
+/// Display output. This function ensures we capture the full error message
+/// which may contain file names, line numbers, and stack traces.
+fn extract_error_details(ctx: &rquickjs::Ctx<'_>, error: &rquickjs::Error) -> String {
+    // Try to get the pending exception value which may have more details
+    let exception_val = ctx.catch();
+
+    // Try to convert to string to get detailed error message
+    if let Some(err_str) = exception_val.as_string() {
+        if let Ok(rust_str) = err_str.to_string() {
+            if !rust_str.is_empty() {
+                return rust_str;
+            }
+        }
+    }
+
+    // Try to get as an object and extract properties
+    if let Some(err_obj) = exception_val.as_object() {
+        let mut parts = Vec::new();
+
+        // Get message
+        if let Ok(msg) = err_obj.get::<_, String>("message") {
+            parts.push(msg);
+        }
+
+        // Get fileName if available
+        if let Ok(file) = err_obj.get::<_, String>("fileName") {
+            parts.push(format!("at {}", file));
+        }
+
+        // Get lineNumber if available
+        if let Ok(line) = err_obj.get::<_, i32>("lineNumber") {
+            parts.push(format!("line {}", line));
+        }
+
+        // Get columnNumber if available
+        if let Ok(col) = err_obj.get::<_, i32>("columnNumber") {
+            parts.push(format!("column {}", col));
+        }
+
+        // Get stack trace if available
+        if let Ok(stack) = err_obj.get::<_, String>("stack") {
+            if !stack.is_empty() {
+                parts.push(format!("\nStack: {}", stack));
+            }
+        }
+
+        if !parts.is_empty() {
+            return parts.join(", ");
+        }
+    }
+
+    // Fall back to the error Display implementation
+    format!("{}", error)
+}
+
 /// Helper to safely drop Context before Runtime to prevent GC assertions
 ///  
 /// This prevents the "Assertion `list_empty(&rt->gc_obj_list)' failed" error
@@ -179,6 +237,10 @@ pub fn execute_script_secure(
     match Runtime::new() {
         Ok(rt) => match Context::full(&rt) {
             Ok(ctx) => {
+                // Create a shared location for detailed error message
+                let error_details: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+                let error_details_clone = Rc::clone(&error_details);
+
                 let result = ctx.with(|ctx| -> Result<(), rquickjs::Error> {
                     // Set up all secure global functions with audit logging disabled for startup
                     let security_config = GlobalSecurityConfig {
@@ -223,8 +285,17 @@ pub fn execute_script_secure(
                     )?;
 
                     // Execute the script
-                    ctx.eval::<(), _>(content)?;
-                    Ok(())
+                    let eval_result = ctx.eval::<(), _>(content);
+
+                    // If there was an error, capture detailed information
+                    if let Err(ref e) = eval_result {
+                        let details = extract_error_details(&ctx, e);
+                        if let Ok(mut error_ref) = error_details_clone.try_borrow_mut() {
+                            *error_ref = Some(details);
+                        }
+                    }
+
+                    eval_result
                 });
 
                 let exec_result = match result {
@@ -242,9 +313,20 @@ pub fn execute_script_secure(
                         }
                     }
                     Err(e) => {
-                        error!("Script {} execution failed: {}", uri, e);
+                        // Use detailed error information if available
+                        let error_msg = if let Ok(details_ref) = error_details.try_borrow() {
+                            if let Some(ref details) = *details_ref {
+                                details.clone()
+                            } else {
+                                format!("Script execution failed: {}", e)
+                            }
+                        } else {
+                            format!("Script execution failed: {}", e)
+                        };
+
+                        error!("Script {} execution failed: {}", uri, error_msg);
                         ScriptExecutionResult::failed(
-                            format!("Script execution failed: {}", e),
+                            error_msg,
                             start_time.elapsed().as_millis() as u64,
                         )
                     }
@@ -453,8 +535,15 @@ pub fn execute_script_for_request_secure(
     let owner_script = repository::fetch_script(&params.script_uri)
         .ok_or_else(|| format!("no script for uri {}", params.script_uri))?;
 
-    ctx.with(|ctx| ctx.eval::<(), _>(owner_script.as_str()))
-        .map_err(|e| format!("owner eval: {}", e))?;
+    // Evaluate the script and capture detailed error information if it fails
+    ctx.with(|ctx| -> Result<(), String> {
+        let result = ctx.eval::<(), _>(owner_script.as_str());
+        if let Err(ref e) = result {
+            let details = extract_error_details(&ctx, e);
+            return Err(format!("owner eval: {}", details));
+        }
+        Ok(())
+    })?;
 
     let response_exec = ctx.with(|ctx| -> Result<JsHttpResponse, String> {
         let global = ctx.globals();
@@ -508,9 +597,10 @@ pub fn execute_script_for_request_secure(
         }
 
         // Call the handler function
-        let result: Value = func
-            .call::<_, Value>((request_obj,))
-            .map_err(|e| format!("call handler: {}", e))?;
+        let result: Value = func.call::<_, Value>((request_obj,)).map_err(|e| {
+            let details = extract_error_details(&ctx, &e);
+            format!("call handler: {}", details)
+        })?;
 
         // Parse the response
         if let Some(response_obj) = result.as_object() {
@@ -873,6 +963,10 @@ pub fn call_init_if_exists(
     let registrations = Rc::new(RefCell::new(HashMap::new()));
     let uri_owned = script_uri.to_string();
 
+    // Shared location for detailed error message
+    let error_details: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    let error_details_clone = Rc::clone(&error_details);
+
     let result = ctx
         .with(|ctx| -> Result<bool, rquickjs::Error> {
             // Set up secure global functions with minimal config for init
@@ -904,7 +998,7 @@ pub fn call_init_if_exists(
             );
 
             // Init runs with admin context to allow script registration operations
-            setup_secure_global_functions(
+            let setup_result = setup_secure_global_functions(
                 &ctx,
                 script_uri,
                 UserContext::admin("script-init".to_string()),
@@ -912,10 +1006,25 @@ pub fn call_init_if_exists(
                 Some(register_impl),
                 None,
                 None, // No secrets manager yet
-            )?;
+            );
+
+            if let Err(ref e) = setup_result {
+                let details = extract_error_details(&ctx, e);
+                if let Ok(mut error_ref) = error_details_clone.try_borrow_mut() {
+                    *error_ref = Some(details);
+                }
+            }
+            setup_result?;
 
             // Execute the script to define functions
-            ctx.eval::<(), _>(script_content)?;
+            let eval_result = ctx.eval::<(), _>(script_content);
+            if let Err(ref e) = eval_result {
+                let details = extract_error_details(&ctx, e);
+                if let Ok(mut error_ref) = error_details_clone.try_borrow_mut() {
+                    *error_ref = Some(details);
+                }
+            }
+            eval_result?;
 
             // Check if init function exists
             let globals = ctx.globals();
@@ -956,12 +1065,28 @@ pub fn call_init_if_exists(
 
             // Call init function with context
             debug!("Calling init() function for script: {}", script_uri);
-            init_func.call::<_, ()>((context_obj,))?;
+            let call_result = init_func.call::<_, ()>((context_obj,));
+
+            if let Err(ref e) = call_result {
+                let details = extract_error_details(&ctx, e);
+                if let Ok(mut error_ref) = error_details_clone.try_borrow_mut() {
+                    *error_ref = Some(details);
+                }
+            }
+            call_result?;
 
             info!("Successfully called init() for script: {}", script_uri);
             Ok(true)
         })
-        .map_err(|e| format!("Init function error: {}", e))?;
+        .map_err(|e| {
+            // Use detailed error if available, otherwise format the basic error
+            if let Ok(details_ref) = error_details.try_borrow() {
+                if let Some(ref details) = *details_ref {
+                    return format!("Init function error: {}", details);
+                }
+            }
+            format!("Init function error: {}", e)
+        })?;
 
     // Return registrations if init was called
     let final_result = if result {

@@ -146,17 +146,14 @@ impl ScriptInitializer {
                     Ok(InitResult::skipped(script_uri.to_string()))
                 }
                 Err(e) => {
-                    // Init function threw an error
-                    let error_msg = format!("Init function error: {}", e);
-                    if let Err(e) = mark_script_init_failed(script_uri, error_msg.clone()) {
-                        warn!("Failed to mark script init as failed: {}", e);
+                    // Init function threw an error (already formatted by call_init_if_exists)
+                    if let Err(err) = mark_script_init_failed(script_uri, e.clone()) {
+                        warn!("Failed to mark script init as failed: {}", err);
                     }
-                    warn!("✗ Script '{}' init failed: {}", script_uri, error_msg);
-                    Ok(InitResult::failed(
-                        script_uri.to_string(),
-                        error_msg,
-                        duration_ms,
-                    ))
+                    // Log FATAL error to database
+                    repository::insert_log_message(script_uri, &e, "FATAL");
+                    warn!("✗ Script '{}' init failed: {}", script_uri, e);
+                    Ok(InitResult::failed(script_uri.to_string(), e, duration_ms))
                 }
             },
             Ok(Err(join_error)) => {
@@ -165,6 +162,8 @@ impl ScriptInitializer {
                 if let Err(e) = mark_script_init_failed(script_uri, error_msg.clone()) {
                     warn!("Failed to mark script init as failed: {}", e);
                 }
+                // Log FATAL error to database
+                repository::insert_log_message(script_uri, &error_msg, "FATAL");
                 error!("✗ Script '{}' init task failed: {}", script_uri, join_error);
                 Ok(InitResult::failed(
                     script_uri.to_string(),
@@ -178,6 +177,8 @@ impl ScriptInitializer {
                 if let Err(e) = mark_script_init_failed(script_uri, error_msg.clone()) {
                     warn!("Failed to mark script init as failed: {}", e);
                 }
+                // Log FATAL error to database
+                repository::insert_log_message(script_uri, &error_msg, "FATAL");
                 error!(
                     "✗ Script '{}' init timeout after {}ms",
                     script_uri, self.timeout_ms

@@ -139,22 +139,26 @@ async fn login_page(
     </div>
 </body>
 </html>"#,
-        providers
-            .iter()
-            .map(|p| format!(
-                r#"<a href="/auth/login/{}?redirect={}" class="btn btn-block provider-btn provider-{} mb-2">{}</a>"#,
-                p.to_lowercase(),
-                encoded_redirect,
-                p.to_lowercase(),
-                match p.as_str() {
-                    "google" => "Sign in with Google",
-                    "microsoft" => "Sign in with Microsoft",
-                    "apple" => "Sign in with Apple",
-                    _ => "Sign in",
-                }
-            ))
-            .collect::<Vec<_>>()
-            .join("\n                                ")
+        {
+            let mut sorted_providers = providers.clone();
+            sorted_providers.sort();
+            sorted_providers
+                .iter()
+                .map(|p| format!(
+                    r#"<a href="/auth/login/{}?redirect={}" class="btn btn-block provider-btn provider-{} mb-2">{}</a>"#,
+                    p.to_lowercase(),
+                    encoded_redirect,
+                    p.to_lowercase(),
+                    match p.as_str() {
+                        "google" => "Sign in with Google",
+                        "microsoft" => "Sign in with Microsoft",
+                        "apple" => "Sign in with Apple",
+                        _ => "Sign in",
+                    }
+                ))
+                .collect::<Vec<_>>()
+                .join("\n                                ")
+        }
     );
 
     Html(html)
