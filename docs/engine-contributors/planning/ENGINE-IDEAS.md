@@ -163,6 +163,8 @@ Monitoring and analytics
 - add support for prometheus metrics collection from scripts and from engine
 - add support for open telemetry tracing from scripts and from engine
 
+- how to visualize and monitor business logic performance and errors?
+
 AI understanding / context of scripts
 
 - system prompt allow script generation AI to understand envige APIs

@@ -495,6 +495,391 @@ AI: I'll refactor your script:
 [Preview Changes] [Apply]
 ```
 
+### Multi-File Operations with Single Prompt
+
+**Description:** Allow AI to create, modify, or delete multiple scripts in response to a single prompt. This is a key feature in modern AI coding assistants like Cursor, GitHub Copilot, and Aider.
+
+**Why This Matters:**
+
+- **Real-world workflows**: Most features span multiple files (API + client + tests)
+- **Architectural changes**: Refactoring often requires coordinated changes across files
+- **Consistency**: AI can ensure consistent patterns across all related files
+- **Efficiency**: User describes intent once, AI handles all implementations
+
+**Use Cases:**
+
+1. **Feature Implementation:**
+   - "Create a blog system with posts API, comments API, and frontend"
+   - AI creates: `posts-api.js`, `comments-api.js`, `blog-frontend.js`
+
+2. **Refactoring:**
+   - "Extract authentication logic from core.js into a separate auth.js"
+   - AI modifies: `core.js` (removes auth code), creates: `auth.js` (with extracted code)
+
+3. **API + Client Pattern:**
+   - "Create a task management API and a client script that uses it"
+   - AI creates: `tasks-api.js` (GraphQL schema), `tasks-client.js` (queries/mutations)
+
+4. **Migration:**
+   - "Convert all REST APIs to GraphQL"
+   - AI modifies: `users-api.js`, `posts-api.js`, `comments-api.js`, etc.
+
+5. **Testing:**
+   - "Add integration tests for all my API endpoints"
+   - AI creates: `users-api.test.js`, `posts-api.test.js`, etc.
+
+#### Implementation Approaches
+
+**Approach 1: Sequential Operations (Simplest)**
+
+**How it works:**
+
+1. AI response includes array of file operations
+2. Editor executes them sequentially
+3. Shows progress indicator
+4. Allows cancellation mid-process
+
+**Response Format:**
+
+```json
+{
+  "type": "multi_file_operation",
+  "message": "Creating blog system with 3 scripts",
+  "operations": [
+    {
+      "type": "create_script",
+      "script_name": "posts-api.js",
+      "code": "// posts API code..."
+    },
+    {
+      "type": "create_script",
+      "script_name": "comments-api.js",
+      "code": "// comments API code..."
+    },
+    {
+      "type": "edit_script",
+      "script_name": "core.js",
+      "original_code": "// old code...",
+      "code": "// new code..."
+    }
+  ]
+}
+```
+
+**UI Flow:**
+
+```
+AI Assistant Response:
+┌────────────────────────────────────┐
+│ Creating blog system with 3 files  │
+│                                    │
+│ ✓ posts-api.js (created)           │
+│ ⟳ comments-api.js (creating...)    │
+│ ○ blog-frontend.js (pending)       │
+│                                    │
+│ [Cancel] [Preview All] [Apply All] │
+└────────────────────────────────────┘
+```
+
+**Advantages:**
+
+- Simple to implement
+- Clear progress tracking
+- Easy rollback (haven't saved yet)
+
+**Disadvantages:**
+
+- No preview of all changes at once
+- Sequential execution (slower)
+
+**Approach 2: Batch Preview with Multi-Diff (Recommended)**
+
+**How it works:**
+
+1. AI returns all planned operations
+2. Editor shows unified preview of ALL changes
+3. User can review, accept/reject individual files
+4. Batch apply or selective apply
+
+**UI Design:**
+
+```
+┌─ Multi-File Changes ─────────────────────────────────────┐
+│ AI Suggestion: Create blog system with API and frontend  │
+│                                                           │
+│ Files to be affected:                                    │
+│ ☑ posts-api.js (new)                                     │
+│ ☑ comments-api.js (new)                                  │
+│ ☑ blog-frontend.js (new)                                 │
+│ ☑ core.js (modified - 23 lines added, 5 removed)        │
+│                                                           │
+│ [posts-api.js]──────────────────────────────────────────│
+│ + function handleGetPosts(req) {                         │
+│ +   const posts = scriptStorage.getItem('posts');       │
+│ +   return { status: 200, body: posts || '[]' };        │
+│ + }                                                       │
+│ [Show Full Diff]                                         │
+│                                                           │
+│ [comments-api.js]───────────────────────────────────────│
+│ + function handleGetComments(req) {                      │
+│ +   // ... comments handler                              │
+│ [Show Full Diff]                                         │
+│                                                           │
+│ [Reject All] [Apply Selected] [Apply All]                │
+└───────────────────────────────────────────────────────────┘
+```
+
+**Features:**
+
+- Checkbox per file (selective apply)
+- Expandable diff per file
+- Overview of all changes
+- Token usage summary
+- Rollback capability
+
+**Advantages:**
+
+- Complete visibility before committing
+- Selective application of changes
+- Better UX for complex operations
+- Matches VSCode/IDE patterns
+
+**Disadvantages:**
+
+- More complex UI
+- Requires multi-file diff viewer
+
+**Approach 3: Transaction-Based with Rollback**
+
+**How it works:**
+
+1. Apply all changes in a "transaction"
+2. Keep backup of original state
+3. Allow one-click rollback
+4. Auto-commit after user confirmation
+
+**Features:**
+
+- Atomic operations (all succeed or all fail)
+- Easy undo/redo
+- Transaction history
+- "Try it out" mode before committing
+
+**Implementation:**
+
+```javascript
+class FileTransaction {
+  constructor() {
+    this.operations = [];
+    this.backups = new Map();
+  }
+
+  addOperation(type, scriptName, content) {
+    // Backup original if editing
+    if (type === "edit" || type === "delete") {
+      this.backups.set(scriptName, getScript(scriptName));
+    }
+    this.operations.push({ type, scriptName, content });
+  }
+
+  async apply() {
+    for (const op of this.operations) {
+      await executeOperation(op);
+    }
+  }
+
+  async rollback() {
+    // Restore all backed up files
+    for (const [scriptName, content] of this.backups) {
+      upsertScript(scriptName, content);
+    }
+    // Delete any newly created files
+    for (const op of this.operations) {
+      if (op.type === "create") {
+        deleteScript(op.scriptName);
+      }
+    }
+  }
+}
+```
+
+**Advantages:**
+
+- Safe experimentation
+- Easy to undo mistakes
+- Professional developer experience
+
+**Disadvantages:**
+
+- Most complex implementation
+- Need state management
+
+#### AI Response Protocol
+
+**Extended JSON Schema:**
+
+```json
+{
+  "type": "multi_file_operation",
+  "message": "Human-readable description of overall change",
+  "summary": {
+    "files_created": 2,
+    "files_modified": 1,
+    "files_deleted": 0,
+    "total_lines_added": 145,
+    "total_lines_removed": 23
+  },
+  "operations": [
+    {
+      "type": "create_script",
+      "script_name": "posts-api.js",
+      "explanation": "GraphQL API for managing blog posts",
+      "code": "// full script content...",
+      "dependencies": ["core.js"]
+    },
+    {
+      "type": "edit_script",
+      "script_name": "core.js",
+      "explanation": "Register posts API routes",
+      "original_code": "// old init function...",
+      "code": "// new init function...",
+      "diff_summary": "+3 lines, -1 line"
+    },
+    {
+      "type": "delete_script",
+      "script_name": "old-posts.js",
+      "explanation": "Replaced by new posts-api.js"
+    }
+  ],
+  "testing_instructions": "Test with: GET /api/posts",
+  "breaking_changes": []
+}
+```
+
+#### System Prompt Updates
+
+**Add to AI system prompt:**
+
+```
+MULTI-FILE OPERATIONS:
+When a user's request requires multiple files, you can respond with multiple operations:
+
+Response format:
+{
+  "type": "multi_file_operation",
+  "message": "Description of what you're doing",
+  "operations": [
+    { "type": "create_script", "script_name": "...", "code": "..." },
+    { "type": "edit_script", "script_name": "...", "code": "...", "original_code": "..." },
+    { "type": "delete_script", "script_name": "..." }
+  ]
+}
+
+WHEN TO USE MULTI-FILE:
+- User asks to "create a system/feature" (implies multiple components)
+- Refactoring that spans files
+- Creating API + client pairs
+- Adding tests for existing code
+- Architectural changes
+
+BEST PRACTICES:
+1. Keep files focused (single responsibility)
+2. Extract common logic to shared utilities
+3. Create tests alongside features
+4. Update existing files when needed (don't duplicate)
+5. Explain what each file does
+6. Note any breaking changes
+```
+
+#### User Experience Considerations
+
+**Clear Communication:**
+
+- Show file count before executing
+- Progress indicators for each file
+- Success/failure status per file
+- Rollback button always visible
+
+**Safety Measures:**
+
+- Confirm before modifying/deleting existing files
+- Show diff for edits (never blind overwrite)
+- Warn about breaking changes
+- Backup automatically
+
+**Error Handling:**
+
+- If one file fails, what happens to others?
+  - Option A: Stop entire operation
+  - Option B: Continue, mark failed files
+  - Option C: User chooses strategy
+
+**Examples of Multi-File Prompts:**
+
+1. "Create a complete task management system"
+2. "Refactor my API scripts to use shared authentication"
+3. "Add GraphQL subscriptions to all my APIs"
+4. "Create integration tests for my existing scripts"
+5. "Split core.js into separate feature modules"
+6. "Migrate from REST to GraphQL across all endpoints"
+
+#### Technical Challenges
+
+**Challenge 1: Order Dependencies**
+
+- Some files must be created before others
+- Solution: AI specifies dependency order, or editor analyzes imports
+
+**Challenge 2: Conflict Resolution**
+
+- User edits a file while AI operation is pending
+- Solution: Detect conflicts, show three-way merge UI
+
+**Challenge 3: Partial Failures**
+
+- One file saves successfully, another fails
+- Solution: Transaction-based approach with rollback
+
+**Challenge 4: Token Limits**
+
+- Multiple large files exceed context window
+- Solution: Summarize files, show only relevant sections, or split into multiple AI calls
+
+**Challenge 5: Testing Multi-File Changes**
+
+- Need to test all files together
+- Solution: Integrated test runner, automatic endpoint testing
+
+#### Recommended Implementation Path
+
+**Phase 1: Basic Multi-File (MVP)**
+
+1. Support `multi_file_operation` response type
+2. Sequential execution with progress
+3. Simple success/fail indicators
+4. Manual rollback (user deletes/reverts files)
+
+**Phase 2: Preview & Selective Apply**
+
+1. Multi-file diff viewer
+2. Checkbox per file
+3. Preview before apply
+4. Selective application
+
+**Phase 3: Transactions & Safety**
+
+1. Automatic backups
+2. One-click rollback
+3. Transaction history
+4. Conflict detection
+
+**Phase 4: Advanced Features**
+
+1. Dependency ordering
+2. Integrated testing
+3. Breaking change detection
+4. Automated migration tools
+
 ## Editor UI Improvements
 
 ### Context Awareness Indicators
