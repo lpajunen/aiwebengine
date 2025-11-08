@@ -1456,7 +1456,7 @@ fn get_static_assets() -> HashMap<String, Asset> {
 
 /// Fetch assets with error handling (static + dynamic)
 pub fn fetch_assets() -> HashMap<String, Asset> {
-    let mut m = get_static_assets();
+    let mut m = HashMap::new();
 
     // Try database first if configured
     if let Some(db) = get_db_pool() {
@@ -1468,27 +1468,31 @@ pub fn fetch_assets() -> HashMap<String, Asset> {
             Ok(db_assets) => {
                 m.extend(db_assets);
                 debug!("Loaded {} assets from database", m.len());
-                return m;
             }
             Err(e) => {
                 warn!(
-                    "Database asset fetch failed, falling back to static/dynamic assets: {}",
+                    "Database asset fetch failed, falling back to static assets: {}",
                     e
                 );
-                // Fall through to dynamic assets
+                // Fall through to static assets
             }
         }
     }
 
-    // Merge in any dynamically upserted assets
-    match safe_lock_assets() {
-        Ok(guard) => {
-            for (k, v) in guard.iter() {
-                m.insert(k.clone(), v.clone());
+    // Always include static assets (fallback or when no database)
+    if m.is_empty() {
+        m = get_static_assets();
+
+        // Merge in any dynamically upserted assets when using in-memory mode
+        match safe_lock_assets() {
+            Ok(guard) => {
+                for (k, v) in guard.iter() {
+                    m.insert(k.clone(), v.clone());
+                }
             }
-        }
-        Err(e) => {
-            error!("Failed to fetch dynamic assets: {}", e);
+            Err(e) => {
+                error!("Failed to fetch dynamic assets: {}", e);
+            }
         }
     }
 

@@ -555,18 +555,20 @@ function apiGetAsset(req) {
 
       if (assetData && !assetData.startsWith("Asset '")) {
         // fetchAsset returns base64 encoded content
-        // For HTTP serving, we need to decode it
+        // Decode it properly for HTTP serving
         try {
           const bytes = decodeBase64(assetData);
 
-          // Convert Uint8Array to binary string for HTTP response
-          let binaryString = "";
-          for (let i = 0; i < bytes.length; i++) {
-            binaryString += String.fromCharCode(bytes[i]);
+          // Use a more reliable method to convert bytes to binary string
+          // that preserves all byte values correctly
+          const chunks = [];
+          const chunkSize = 8192; // Process in chunks to avoid stack overflow
+          for (let i = 0; i < bytes.length; i += chunkSize) {
+            const chunk = bytes.slice(i, i + chunkSize);
+            chunks.push(String.fromCharCode.apply(null, chunk));
           }
+          const binaryString = chunks.join("");
 
-          // For now, assume it's an image or binary file
-          // In a real implementation, you'd store and retrieve the mimetype
           const mimetype = getMimeTypeFromPath(assetPath);
 
           return {
@@ -722,10 +724,15 @@ function apiDeleteAsset(req) {
     // URL decode the asset path in case it contains encoded characters
     assetPath = decodeURIComponent(assetPath);
 
+    console.log("apiDeleteAsset: attempting to delete asset: " + assetPath);
+
     if (typeof deleteAsset === "function") {
       const deleted = deleteAsset(assetPath);
 
+      console.log("apiDeleteAsset: deleteAsset returned: " + deleted);
+
       if (deleted) {
+        console.log("apiDeleteAsset: successfully deleted asset: " + assetPath);
         return {
           status: 200,
           body: JSON.stringify({
@@ -735,6 +742,7 @@ function apiDeleteAsset(req) {
           contentType: "application/json",
         };
       } else {
+        console.log("apiDeleteAsset: asset not found: " + assetPath);
         return {
           status: 404,
           body: JSON.stringify({
@@ -746,6 +754,7 @@ function apiDeleteAsset(req) {
         };
       }
     } else {
+      console.log("apiDeleteAsset: deleteAsset function not available");
       return {
         status: 500,
         body: JSON.stringify({
@@ -755,6 +764,7 @@ function apiDeleteAsset(req) {
       };
     }
   } catch (error) {
+    console.log("apiDeleteAsset: error - " + error.message);
     return {
       status: 500,
       body: JSON.stringify({

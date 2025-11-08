@@ -447,12 +447,28 @@ function init(context) {
     if (!confirm(`Are you sure you want to delete ${path}?`)) return;
 
     try {
-      await fetch(`/api/assets${path}`, {
+      console.log(`Attempting to delete asset: ${path}`);
+      const response = await fetch(`/api/assets${path}`, {
         method: "DELETE",
       });
+
+      console.log(`Delete response status: ${response.status}`);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`Delete failed: ${errorText}`);
+        throw new Error(
+          `Delete failed with status ${response.status}: ${errorText}`,
+        );
+      }
+
+      const result = await response.json();
+      console.log(`Delete successful:`, result);
+
       this.loadAssets();
       this.showStatus("Asset deleted successfully", "success");
     } catch (error) {
+      console.error("Error deleting asset:", error);
       this.showStatus("Error deleting asset: " + error.message, "error");
     }
   }
@@ -461,11 +477,20 @@ function init(context) {
     const filename = path.split("/").pop();
     const isIco = filename.toLowerCase().endsWith(".ico");
 
+    console.log(`Downloading asset: ${path} (isIco: ${isIco})`);
+
     if (isIco) {
       // For ICO files, use fetch + blob to ensure proper binary handling
       fetch(`/api/assets${path}`)
-        .then((response) => response.blob())
+        .then((response) => {
+          console.log(`Download response status: ${response.status}`);
+          if (!response.ok) {
+            throw new Error(`Download failed with status ${response.status}`);
+          }
+          return response.blob();
+        })
         .then((blob) => {
+          console.log(`Blob size: ${blob.size}, type: ${blob.type}`);
           const url = URL.createObjectURL(blob);
           const a = document.createElement("a");
           a.href = url;
@@ -474,9 +499,11 @@ function init(context) {
           a.click();
           document.body.removeChild(a);
           URL.revokeObjectURL(url);
+          this.showStatus(`Downloaded ${filename}`, "success");
         })
         .catch((error) => {
           console.error("ICO download failed:", error);
+          this.showStatus(`Download failed: ${error.message}`, "error");
           // Fallback to window.open
           window.open(`/api/assets${path}`, "_blank");
         });
