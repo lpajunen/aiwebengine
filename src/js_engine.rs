@@ -24,12 +24,11 @@ fn extract_error_details(ctx: &rquickjs::Ctx<'_>, error: &rquickjs::Error) -> St
     let exception_val = ctx.catch();
 
     // Try to convert to string to get detailed error message
-    if let Some(err_str) = exception_val.as_string() {
-        if let Ok(rust_str) = err_str.to_string() {
-            if !rust_str.is_empty() {
-                return rust_str;
-            }
-        }
+    if let Some(err_str) = exception_val.as_string()
+        && let Ok(rust_str) = err_str.to_string()
+        && !rust_str.is_empty()
+    {
+        return rust_str;
     }
 
     // Try to get as an object and extract properties
@@ -57,10 +56,10 @@ fn extract_error_details(ctx: &rquickjs::Ctx<'_>, error: &rquickjs::Error) -> St
         }
 
         // Get stack trace if available
-        if let Ok(stack) = err_obj.get::<_, String>("stack") {
-            if !stack.is_empty() {
-                parts.push(format!("\nStack: {}", stack));
-            }
+        if let Ok(stack) = err_obj.get::<_, String>("stack")
+            && !stack.is_empty()
+        {
+            parts.push(format!("\nStack: {}", stack));
         }
 
         if !parts.is_empty() {
@@ -1080,10 +1079,10 @@ pub fn call_init_if_exists(
         })
         .map_err(|e| {
             // Use detailed error if available, otherwise format the basic error
-            if let Ok(details_ref) = error_details.try_borrow() {
-                if let Some(ref details) = *details_ref {
-                    return format!("Init function error: {}", details);
-                }
+            if let Ok(details_ref) = error_details.try_borrow()
+                && let Some(ref details) = *details_ref
+            {
+                return format!("Init function error: {}", details);
             }
             format!("Init function error: {}", e)
         })?;
