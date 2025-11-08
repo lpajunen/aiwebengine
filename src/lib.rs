@@ -585,6 +585,15 @@ pub async fn start_server_with_config(
         );
     }
 
+    // Bootstrap hardcoded assets into database if configured
+    info!("Bootstrapping hardcoded assets into database...");
+    if let Err(e) = repository::bootstrap_assets() {
+        warn!(
+            "Failed to bootstrap assets: {}. Continuing with static assets.",
+            e
+        );
+    }
+
     // Execute all scripts at startup to populate GraphQL registry
     info!("Executing all scripts at startup to populate GraphQL registry...");
     let scripts = repository::fetch_scripts();

@@ -618,6 +618,160 @@ async fn db_prune_log_messages(pool: &PgPool) -> Result<(), RepositoryError> {
     Ok(())
 }
 
+/// Database-backed upsert asset
+async fn db_upsert_asset(pool: &PgPool, asset: &Asset) -> Result<(), RepositoryError> {
+    let now = chrono::Utc::now();
+
+    // Try to update existing asset
+    let update_result = sqlx::query(
+        r#"
+        UPDATE assets
+        SET mimetype = $1, content = $2, updated_at = $3
+        WHERE public_path = $4
+        "#,
+    )
+    .bind(&asset.mimetype)
+    .bind(&asset.content)
+    .bind(now)
+    .bind(&asset.public_path)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error updating asset: {}", e);
+        RepositoryError::InvalidData(format!("Database error: {}", e))
+    })?;
+
+    if update_result.rows_affected() > 0 {
+        debug!("Updated existing asset in database: {}", asset.public_path);
+        return Ok(());
+    }
+
+    // Asset doesn't exist, create new one
+    sqlx::query(
+        r#"
+        INSERT INTO assets (public_path, mimetype, content, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $4)
+        "#,
+    )
+    .bind(&asset.public_path)
+    .bind(&asset.mimetype)
+    .bind(&asset.content)
+    .bind(now)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error creating asset: {}", e);
+        RepositoryError::InvalidData(format!("Database error: {}", e))
+    })?;
+
+    debug!("Created new asset in database: {}", asset.public_path);
+    Ok(())
+}
+
+/// Database-backed get asset
+async fn db_get_asset(pool: &PgPool, public_path: &str) -> Result<Option<Asset>, RepositoryError> {
+    let row = sqlx::query(
+        r#"
+        SELECT public_path, mimetype, content FROM assets WHERE public_path = $1
+        "#,
+    )
+    .bind(public_path)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error getting asset: {}", e);
+        RepositoryError::InvalidData(format!("Database error: {}", e))
+    })?;
+
+    if let Some(row) = row {
+        let public_path: String = row.try_get("public_path").map_err(|e| {
+            error!("Database error getting public_path: {}", e);
+            RepositoryError::InvalidData(format!("Database error: {}", e))
+        })?;
+        let mimetype: String = row.try_get("mimetype").map_err(|e| {
+            error!("Database error getting mimetype: {}", e);
+            RepositoryError::InvalidData(format!("Database error: {}", e))
+        })?;
+        let content: Vec<u8> = row.try_get("content").map_err(|e| {
+            error!("Database error getting content: {}", e);
+            RepositoryError::InvalidData(format!("Database error: {}", e))
+        })?;
+        Ok(Some(Asset {
+            public_path,
+            mimetype,
+            content,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Database-backed list all assets
+async fn db_list_assets(pool: &PgPool) -> Result<HashMap<String, Asset>, RepositoryError> {
+    let rows = sqlx::query(
+        r#"
+        SELECT public_path, mimetype, content FROM assets ORDER BY public_path
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error listing assets: {}", e);
+        RepositoryError::InvalidData(format!("Database error: {}", e))
+    })?;
+
+    let mut assets = HashMap::new();
+    for row in rows {
+        let public_path: String = row.try_get("public_path").map_err(|e| {
+            error!("Database error getting public_path: {}", e);
+            RepositoryError::InvalidData(format!("Database error: {}", e))
+        })?;
+        let mimetype: String = row.try_get("mimetype").map_err(|e| {
+            error!("Database error getting mimetype: {}", e);
+            RepositoryError::InvalidData(format!("Database error: {}", e))
+        })?;
+        let content: Vec<u8> = row.try_get("content").map_err(|e| {
+            error!("Database error getting content: {}", e);
+            RepositoryError::InvalidData(format!("Database error: {}", e))
+        })?;
+        assets.insert(
+            public_path.clone(),
+            Asset {
+                public_path,
+                mimetype,
+                content,
+            },
+        );
+    }
+
+    Ok(assets)
+}
+
+/// Database-backed delete asset
+async fn db_delete_asset(pool: &PgPool, public_path: &str) -> Result<bool, RepositoryError> {
+    let result = sqlx::query(
+        r#"
+        DELETE FROM assets WHERE public_path = $1
+        "#,
+    )
+    .bind(public_path)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error deleting asset: {}", e);
+        RepositoryError::InvalidData(format!("Database error: {}", e))
+    })?;
+
+    let existed = result.rows_affected() > 0;
+    if existed {
+        debug!("Deleted asset from database: {}", public_path);
+    } else {
+        debug!("Asset not found in database for deletion: {}", public_path);
+    }
+
+    Ok(existed)
+}
+
 /// Fetch scripts from repository with proper error handling
 pub fn fetch_scripts() -> HashMap<String, String> {
     let mut m = HashMap::new();
@@ -1151,6 +1305,51 @@ pub fn bootstrap_scripts() -> Result<(), RepositoryError> {
     }
 }
 
+/// Bootstrap hardcoded assets into database on startup
+pub fn bootstrap_assets() -> Result<(), RepositoryError> {
+    if let Some(db) = get_db_pool() {
+        let pool = db.pool();
+
+        // Get all static assets
+        let static_assets = get_static_assets();
+
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                for (public_path, asset) in static_assets {
+                    // Check if asset already exists
+                    if let Ok(Some(_)) = db_get_asset(pool, &public_path).await {
+                        debug!("Asset already exists in database: {}", public_path);
+                        continue;
+                    }
+
+                    // Insert the asset
+                    if let Err(e) = db_upsert_asset(pool, &asset).await {
+                        error!("Failed to bootstrap asset {}: {}", public_path, e);
+                        return Err(e);
+                    } else {
+                        info!("Bootstrapped asset into database: {}", public_path);
+                    }
+                }
+                Ok(())
+            })
+        });
+
+        match result {
+            Ok(()) => {
+                info!("Successfully bootstrapped assets into database");
+                Ok(())
+            }
+            Err(e) => {
+                error!("Failed to bootstrap assets: {}", e);
+                Err(e)
+            }
+        }
+    } else {
+        debug!("Database not configured, skipping asset bootstrap");
+        Ok(())
+    }
+}
+
 /// Delete script with error handling
 pub fn delete_script(uri: &str) -> bool {
     // Try database first if configured
@@ -1259,6 +1458,28 @@ fn get_static_assets() -> HashMap<String, Asset> {
 pub fn fetch_assets() -> HashMap<String, Asset> {
     let mut m = get_static_assets();
 
+    // Try database first if configured
+    if let Some(db) = get_db_pool() {
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async { db_list_assets(db.pool()).await })
+        });
+
+        match result {
+            Ok(db_assets) => {
+                m.extend(db_assets);
+                debug!("Loaded {} assets from database", m.len());
+                return m;
+            }
+            Err(e) => {
+                warn!(
+                    "Database asset fetch failed, falling back to static/dynamic assets: {}",
+                    e
+                );
+                // Fall through to dynamic assets
+            }
+        }
+    }
+
     // Merge in any dynamically upserted assets
     match safe_lock_assets() {
         Ok(guard) => {
@@ -1276,15 +1497,41 @@ pub fn fetch_assets() -> HashMap<String, Asset> {
 
 /// Fetch single asset with error handling (dynamic first, then static)
 pub fn fetch_asset(public_path: &str) -> Option<Asset> {
-    // Check dynamic assets first
+    // Try database first if configured
+    if let Some(db) = get_db_pool() {
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(async { db_get_asset(db.pool(), public_path).await })
+        });
+
+        match result {
+            Ok(Some(asset)) => {
+                debug!("Loaded asset from database: {}", public_path);
+                return Some(asset);
+            }
+            Ok(None) => {
+                // Asset not in database, continue to check static/dynamic
+            }
+            Err(e) => {
+                warn!("Database asset fetch failed for {}: {}", public_path, e);
+                // Fall through to static/dynamic assets
+            }
+        }
+    }
+
+    // Check static assets first
+    if let Some(asset) = get_static_assets().get(public_path) {
+        return Some(asset.clone());
+    }
+
+    // Then check dynamic assets
     if let Ok(guard) = safe_lock_assets()
         && let Some(asset) = guard.get(public_path)
     {
         return Some(asset.clone());
     }
 
-    // Check static assets
-    get_static_assets().get(public_path).cloned()
+    None
 }
 
 /// Upsert asset with validation and error handling
@@ -1308,23 +1555,86 @@ pub fn upsert_asset(asset: Asset) -> Result<(), RepositoryError> {
         ));
     }
 
+    // Try database first
+    if let Some(db) = get_db_pool() {
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(async { db_upsert_asset(db.pool(), &asset).await })
+        });
+
+        match result {
+            Ok(()) => {
+                // Also update in-memory cache for consistency
+                let _ = upsert_asset_in_memory(&asset);
+                debug!(
+                    "Upserted asset to database: {} ({} bytes)",
+                    asset.public_path,
+                    asset.content.len()
+                );
+                return Ok(());
+            }
+            Err(e) => {
+                warn!("Database upsert failed, falling back to in-memory: {}", e);
+                // Fall through to in-memory implementation
+            }
+        }
+    }
+
+    // Fall back to in-memory implementation
+    upsert_asset_in_memory(&asset)
+}
+
+/// In-memory implementation of upsert asset (existing logic)
+fn upsert_asset_in_memory(asset: &Asset) -> Result<(), RepositoryError> {
     let mut guard = safe_lock_assets()?;
 
     let public_path = asset.public_path.clone();
-    guard.insert(public_path.clone(), asset);
-    debug!("Upserted asset: {}", public_path);
+    guard.insert(public_path.clone(), asset.clone());
+    debug!("Upserted asset in memory: {}", public_path);
     Ok(())
 }
 
 /// Delete asset with error handling  
 pub fn delete_asset(public_path: &str) -> bool {
+    // Try database first if configured
+    if let Some(db) = get_db_pool() {
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(async { db_delete_asset(db.pool(), public_path).await })
+        });
+
+        match result {
+            Ok(existed) => {
+                // Also remove from in-memory cache for consistency
+                let _ = safe_lock_assets()
+                    .map(|mut guard| guard.remove(public_path))
+                    .map_err(|e| warn!("Failed to remove asset from memory cache: {}", e));
+
+                if existed {
+                    debug!("Deleted asset from database: {}", public_path);
+                } else {
+                    debug!("Asset not found in database for deletion: {}", public_path);
+                }
+                return existed;
+            }
+            Err(e) => {
+                warn!("Database delete failed, falling back to in-memory: {}", e);
+                // Fall through to in-memory implementation
+            }
+        }
+    }
+
+    // Fall back to in-memory implementation
     match safe_lock_assets() {
         Ok(mut guard) => {
             let existed = guard.remove(public_path).is_some();
             if existed {
-                debug!("Deleted asset: {}", public_path);
+                debug!("Deleted asset from memory: {}", public_path);
             } else {
-                debug!("Attempted to delete non-existent asset: {}", public_path);
+                debug!(
+                    "Attempted to delete non-existent asset from memory: {}",
+                    public_path
+                );
             }
             existed
         }
@@ -1653,6 +1963,16 @@ mod tests {
         assert!(
             result.is_ok(),
             "bootstrap_scripts should succeed even without database"
+        );
+    }
+
+    #[test]
+    fn test_bootstrap_assets() {
+        // Test that bootstrap_assets doesn't crash when no database is configured
+        let result = bootstrap_assets();
+        assert!(
+            result.is_ok(),
+            "bootstrap_assets should succeed even without database"
         );
     }
 
