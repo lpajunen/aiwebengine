@@ -382,12 +382,15 @@ function init(context) {
 
       data.assets.forEach((asset) => {
         const assetElement = document.createElement("div");
+        // Exclude .ico files from being displayed as images since they don't render well
+        const isDisplayableImage =
+          asset.type.startsWith("image/") && asset.type !== "image/x-icon";
         assetElement.innerHTML = this.templates["asset-item"]({
           path: asset.path,
           name: asset.name,
           size: this.formatBytes(asset.size),
           type: asset.type,
-          isImage: asset.type.startsWith("image/"),
+          isImage: isDisplayableImage,
           icon: this.getFileIcon(asset.type),
         });
 
@@ -663,6 +666,7 @@ function init(context) {
   }
 
   getFileIcon(type) {
+    if (type === "image/x-icon") return "⭐"; // Special icon for favicons
     if (type.startsWith("image/")) return "🖼️";
     if (type.startsWith("text/")) return "📄";
     if (type.includes("javascript")) return "📜";
