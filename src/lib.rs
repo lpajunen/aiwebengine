@@ -565,11 +565,19 @@ pub async fn start_server_with_config(
             }
         }
         Err(e) => {
-            warn!(
-                "Database initialization failed: {}. Continuing without database.",
-                e
-            );
-            warn!("Health checks will report database as unavailable");
+            // Only fail if we're trying to use PostgreSQL storage
+            if config.repository.storage_type == "postgresql" {
+                return Err(anyhow::anyhow!(
+                    "Database initialization failed: {}. Cannot continue with PostgreSQL storage.",
+                    e
+                ));
+            } else {
+                warn!(
+                    "Database initialization failed: {}. Continuing without database (using {} storage).",
+                    e, config.repository.storage_type
+                );
+                warn!("Health checks will report database as unavailable");
+            }
         }
     }
 
@@ -681,9 +689,10 @@ pub async fn start_server_with_config(
         // Don't fail startup, just log the error
     }
 
-    // Initialize authentication if configured
+    // Initialize authentication if configured and enabled
     let auth_manager: Option<Arc<auth::AuthManager>> = if let Some(auth_config) =
         config.auth.clone()
+        && auth_config.enabled
     {
         info!("Authentication is enabled, initializing AuthManager...");
         debug!(
@@ -717,7 +726,9 @@ pub async fn start_server_with_config(
         }
     } else {
         info!(
-            "No authentication configuration found (config.auth is None), running without authentication"
+            "Authentication disabled: config.auth.is_some()={}, config.auth.enabled={}",
+            config.auth.is_some(),
+            config.auth.as_ref().map(|c| c.enabled).unwrap_or(false)
         );
         None
     };

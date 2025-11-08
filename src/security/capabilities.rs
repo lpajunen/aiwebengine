@@ -49,6 +49,7 @@ impl UserContext {
                 Capability::ReadAssets,
                 Capability::WriteAssets,
                 Capability::DeleteScripts, // Allow script deletion in dev mode
+                Capability::DeleteAssets,  // Allow asset deletion in dev mode
             ]
             .into_iter()
             .collect()
@@ -132,6 +133,7 @@ mod tests {
         assert!(dev_user.has_capability(&Capability::ReadAssets));
         assert!(dev_user.has_capability(&Capability::WriteAssets));
         assert!(dev_user.has_capability(&Capability::DeleteScripts)); // Allowed in dev mode
+        assert!(dev_user.has_capability(&Capability::DeleteAssets)); // Allowed in dev mode
 
         // Test production mode
         unsafe {

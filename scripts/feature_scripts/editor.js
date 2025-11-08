@@ -518,9 +518,14 @@ function apiGetAssets(req) {
     const assetDetails = assets.map((path) => ({
       path: path,
       name: path.split("/").pop(),
-      size: 0,
-      type: "application/octet-stream",
+      size: 0, // TODO: Get actual size
+      type: getMimeTypeFromPath(path),
     }));
+
+    // Sort assets alphabetically by name (case-insensitive)
+    assetDetails.sort((a, b) =>
+      a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
+    );
 
     return {
       status: 200,
@@ -531,6 +536,231 @@ function apiGetAssets(req) {
     return {
       status: 500,
       body: JSON.stringify({ error: error.message }),
+      contentType: "application/json",
+    };
+  }
+}
+
+// API: Get individual asset
+function apiGetAsset(req) {
+  try {
+    // Extract the asset path from the URL
+    let assetPath = req.path.replace("/api/assets", "");
+
+    // URL decode the asset path in case it contains encoded characters
+    assetPath = decodeURIComponent(assetPath);
+
+    if (typeof fetchAsset === "function") {
+      const assetData = fetchAsset(assetPath);
+
+      if (assetData && !assetData.startsWith("Asset '")) {
+        // fetchAsset returns base64 encoded content
+        // For HTTP serving, we need to decode it
+        try {
+          const bytes = decodeBase64(assetData);
+
+          // Convert Uint8Array to binary string for HTTP response
+          let binaryString = "";
+          for (let i = 0; i < bytes.length; i++) {
+            binaryString += String.fromCharCode(bytes[i]);
+          }
+
+          // For now, assume it's an image or binary file
+          // In a real implementation, you'd store and retrieve the mimetype
+          const mimetype = getMimeTypeFromPath(assetPath);
+
+          return {
+            status: 200,
+            body: binaryString,
+            contentType: mimetype,
+          };
+        } catch (decodeError) {
+          console.log(
+            "Error decoding asset content for " +
+              assetPath +
+              ": " +
+              decodeError.message,
+          );
+          return {
+            status: 500,
+            body: "Error decoding asset content",
+            contentType: "text/plain; charset=UTF-8",
+          };
+        }
+      } else {
+        return {
+          status: 404,
+          body: "Asset not found",
+          contentType: "text/plain; charset=UTF-8",
+        };
+      }
+    } else {
+      return {
+        status: 500,
+        body: "fetchAsset function not available",
+        contentType: "text/plain; charset=UTF-8",
+      };
+    }
+  } catch (error) {
+    return {
+      status: 500,
+      body: "Error: " + error.message,
+      contentType: "text/plain; charset=UTF-8",
+    };
+  }
+}
+
+// Manual base64 decoder
+function decodeBase64(base64) {
+  const chars =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let buffer = [];
+  let bits = 0;
+  let value = 0;
+
+  for (let i = 0; i < base64.length; i++) {
+    const char = base64[i];
+    if (char === "=" || char === "\n" || char === "\r" || char === " ")
+      continue;
+
+    const charIndex = chars.indexOf(char);
+    if (charIndex === -1) {
+      throw new Error("Invalid base64 character: " + char);
+    }
+
+    value = (value << 6) | charIndex;
+    bits += 6;
+
+    if (bits >= 8) {
+      bits -= 8;
+      buffer.push((value >> bits) & 0xff);
+      value &= (1 << bits) - 1;
+    }
+  }
+
+  return new Uint8Array(buffer);
+}
+
+// Helper function to determine MIME type from file path
+function getMimeTypeFromPath(path) {
+  const ext = path.split(".").pop().toLowerCase();
+  const mimeTypes = {
+    png: "image/png",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    gif: "image/gif",
+    svg: "image/svg+xml",
+    webp: "image/webp",
+    ico: "image/x-icon",
+    txt: "text/plain",
+    html: "text/html",
+    css: "text/css",
+    js: "application/javascript",
+    json: "application/json",
+    pdf: "application/pdf",
+    zip: "application/zip",
+  };
+  return mimeTypes[ext] || "application/octet-stream";
+}
+
+// API: Save/upload asset
+function apiSaveAsset(req) {
+  try {
+    const body = JSON.parse(req.body || "{}");
+    const { publicPath, mimetype, content } = body;
+
+    if (!publicPath || !content) {
+      return {
+        status: 400,
+        body: JSON.stringify({ error: "Missing publicPath or content" }),
+        contentType: "application/json",
+      };
+    }
+
+    // Normalize publicPath to ensure it starts with "/"
+    let normalizedPath = publicPath;
+    if (!normalizedPath.startsWith("/")) {
+      normalizedPath = "/" + normalizedPath;
+    }
+    console.log(
+      "apiSaveAsset: original path '" +
+        publicPath +
+        "' -> normalized '" +
+        normalizedPath +
+        "'",
+    );
+
+    if (typeof upsertAsset === "function") {
+      upsertAsset(normalizedPath, content, mimetype);
+      return {
+        status: 200,
+        body: JSON.stringify({ message: "Asset saved successfully" }),
+        contentType: "application/json",
+      };
+    } else {
+      return {
+        status: 500,
+        body: JSON.stringify({ error: "upsertAsset function not available" }),
+        contentType: "application/json",
+      };
+    }
+  } catch (error) {
+    return {
+      status: 500,
+      body: JSON.stringify({ error: error.message }),
+      contentType: "application/json",
+    };
+  }
+}
+
+// API: Delete asset
+function apiDeleteAsset(req) {
+  try {
+    // Extract the asset path from the URL
+    let assetPath = req.path.replace("/api/assets", "");
+
+    // URL decode the asset path in case it contains encoded characters
+    assetPath = decodeURIComponent(assetPath);
+
+    if (typeof deleteAsset === "function") {
+      const deleted = deleteAsset(assetPath);
+
+      if (deleted) {
+        return {
+          status: 200,
+          body: JSON.stringify({
+            message: "Asset deleted successfully",
+            path: assetPath,
+          }),
+          contentType: "application/json",
+        };
+      } else {
+        return {
+          status: 404,
+          body: JSON.stringify({
+            error: "Asset not found",
+            message: "No asset with the specified path was found",
+            path: assetPath,
+          }),
+          contentType: "application/json",
+        };
+      }
+    } else {
+      return {
+        status: 500,
+        body: JSON.stringify({
+          error: "deleteAsset function not available",
+        }),
+        contentType: "application/json",
+      };
+    }
+  } catch (error) {
+    return {
+      status: 500,
+      body: JSON.stringify({
+        error: "Failed to delete asset",
+        details: error.message,
+      }),
       contentType: "application/json",
     };
   }
@@ -943,6 +1173,9 @@ function init(context) {
   register("/api/scripts/*", "apiDeleteScript", "DELETE");
   register("/api/logs", "apiGetLogs", "GET");
   register("/api/assets", "apiGetAssets", "GET");
+  register("/api/assets", "apiSaveAsset", "POST");
+  register("/api/assets/*", "apiGetAsset", "GET");
+  register("/api/assets/*", "apiDeleteAsset", "DELETE");
   register("/api/routes", "apiListRoutes", "GET");
   register("/api/ai-assistant", "apiAIAssistant", "POST");
   console.log("Editor endpoints registered");

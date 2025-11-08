@@ -458,7 +458,32 @@ function init(context) {
   }
 
   downloadAsset(path) {
-    window.open(`/api/assets${path}`, "_blank");
+    const filename = path.split("/").pop();
+    const isIco = filename.toLowerCase().endsWith(".ico");
+
+    if (isIco) {
+      // For ICO files, use fetch + blob to ensure proper binary handling
+      fetch(`/api/assets${path}`)
+        .then((response) => response.blob())
+        .then((blob) => {
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        })
+        .catch((error) => {
+          console.error("ICO download failed:", error);
+          // Fallback to window.open
+          window.open(`/api/assets${path}`, "_blank");
+        });
+    } else {
+      // For other files, use the simple window.open approach
+      window.open(`/api/assets${path}`, "_blank");
+    }
   }
 
   // Logs Management
