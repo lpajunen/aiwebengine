@@ -867,7 +867,12 @@ AVAILABLE JAVASCRIPT APIs:
    - handlerName: string (name of your handler function)
    - method: "GET" | "POST" | "PUT" | "DELETE"
 
-2. console.log(message) - Write to server logs
+2. Console logging - Write messages to server logs
+   - console.log(message) - General logging
+   - console.debug(message) - Debug-level logging
+   - console.info(message) - Informational logging
+   - console.warn(message) - Warning-level logging
+   - console.error(message) - Error-level logging
    - message: string
 
 3. scriptStorage - Persistent key-value storage per script
@@ -956,7 +961,7 @@ function handlerName(req) {
       contentType: 'text/html; charset=UTF-8' // or 'application/json', 'text/plain; charset=UTF-8'
     };
   } catch (error) {
-    console.log('Error: ' + error);
+    console.error('Error: ' + error);
     return { status: 500, body: 'Internal error' };
   }
 }
@@ -982,7 +987,10 @@ RULES:
 1. ALWAYS respond with ONLY valid JSON - no other text
 2. Include complete, working JavaScript code
 3. Use try-catch blocks in all handlers
-4. ALWAYS include init() function that calls register()
+4. ALWAYS include init() function that calls at least one registration function:
+   - For HTTP services: register() or registerWebStream()
+   - For GraphQL services: registerGraphQLQuery(), registerGraphQLMutation(), or registerGraphQLSubscription()
+   - A script may use multiple registration types
 5. Use console.log() for debugging
 6. For edits, include both original_code and code fields
 7. Never use Node.js APIs (fs, path, etc.) - they don't exist here
