@@ -880,6 +880,1990 @@ BEST PRACTICES:
 3. Breaking change detection
 4. Automated migration tools
 
+## Asset Editing (CSS, SVG, Images)
+
+### Problem Statement
+
+The current editor focuses on JavaScript scripts but doesn't provide adequate support for editing assets like CSS files and SVG images. These assets are critical for building complete web applications but currently require:
+
+- Download → External editor → Re-upload workflow
+- No syntax highlighting or validation
+- No live preview
+- No AI assistance for styling/graphics
+
+### Option 1: In-Editor Asset Editing (Recommended)
+
+**Description:** Extend Monaco Editor to support CSS and SVG editing with proper syntax highlighting and preview.
+
+**Features:**
+
+- Detect asset type by extension (.css, .svg, .json)
+- Auto-switch Monaco language mode
+- Unified editing experience with scripts
+- Save through existing asset API
+
+**Implementation:**
+
+```javascript
+// In loadAsset() method
+const language =
+  {
+    ".css": "css",
+    ".svg": "xml",
+    ".json": "json",
+    ".html": "html",
+    ".md": "markdown",
+  }[fileExtension] || "plaintext";
+
+this.monacoEditor.setValue(content);
+monaco.editor.setModelLanguage(this.monacoEditor.getModel(), language);
+```
+
+**Advantages:**
+
+- Simple implementation (Monaco already supports these languages)
+- Consistent UX with script editing
+- No new dependencies
+- Immediate value
+
+**Disadvantages:**
+
+- No visual editing for SVG
+- No live preview (initially)
+
+### Option 2: Split-Pane Preview System
+
+**Description:** Dual-pane editor with code on left and live preview on right.
+
+**CSS Preview:**
+
+```
+┌─────────────────┬─────────────────┐
+│ /* editor.css */│ [Preview Pane]  │
+│                 │                 │
+│ .button {       │  ┌───────────┐  │
+│   background:   │  │  Button   │  │
+│   #007acc;      │  └───────────┘  │
+│   padding: 10px;│                 │
+│ }               │  Sample HTML    │
+│                 │  with CSS       │
+│                 │  applied        │
+└─────────────────┴─────────────────┘
+```
+
+**SVG Preview:**
+
+```
+┌─────────────────┬─────────────────┐
+│ <svg>...</svg>  │  [SVG Render]   │
+│                 │                 │
+│ <circle         │      ⚫         │
+│   cx="50"       │                 │
+│   cy="50"       │  + Zoom controls│
+│   r="40"/>      │  + Pan          │
+│                 │  + Download     │
+└─────────────────┴─────────────────┘
+```
+
+**Implementation:**
+
+- Add `.split-view` CSS class to editor container
+- Create preview iframe for CSS (inject styles)
+- Create SVG renderer with zoom/pan controls
+- Hot reload on content change (debounced)
+
+**Advantages:**
+
+- Immediate visual feedback
+- Better for designers/non-coders
+- Catch rendering issues quickly
+
+**Disadvantages:**
+
+- More complex UI
+- Performance concerns with live updates
+- Need sample HTML for CSS preview
+
+### Option 3: Visual SVG Editor Integration
+
+**Description:** Embed visual SVG editor like SVG-edit or Boxy SVG.
+
+**Tools to Consider:**
+
+- **SVG-edit** (Open source, embeddable)
+- **Method Draw** (Simplified SVG-edit fork)
+- **Custom canvas-based editor**
+
+**Features:**
+
+- Drag and drop shapes
+- Visual manipulation (resize, rotate, color)
+- Toggle between visual and code view
+- Export optimized SVG
+
+**UI Flow:**
+
+```
+[Code View] [Visual View] [Split View]
+     ↑           ↑             ↑
+     └───────────┴─────────────┘
+              Toggles
+```
+
+**Advantages:**
+
+- Non-developers can create/edit SVG
+- Professional graphics workflow
+- No need to know SVG syntax
+
+**Disadvantages:**
+
+- Large dependency (~500KB+)
+- More complex integration
+- Learning curve for visual tool
+
+### Option 4: AI-Assisted Asset Editing (Strategic)
+
+**Description:** Extend existing AI assistant to help with CSS and SVG modifications.
+
+**Use Cases:**
+
+**CSS:**
+
+- "Make the buttons larger and blue"
+- "Add a dark mode variant"
+- "Center this layout vertically"
+- "Extract colors to CSS variables"
+- "Add hover animations"
+
+**SVG:**
+
+- "Add a drop shadow to this icon"
+- "Change all blue elements to red"
+- "Simplify this path"
+- "Generate a loading spinner"
+- "Add gradient background"
+
+**System Prompt Extension:**
+
+```
+ASSET EDITING:
+When editing CSS or SVG files:
+- Understand visual intent from natural language
+- Preserve existing structure where possible
+- Use modern CSS features (flexbox, grid, variables)
+- Optimize SVG paths and remove unnecessary attributes
+- Suggest accessibility improvements
+```
+
+**Response Format:**
+
+```json
+{
+  "type": "edit_asset",
+  "asset_path": "/styles/main.css",
+  "explanation": "Added dark mode with CSS variables",
+  "original_code": "/* old CSS */",
+  "code": "/* new CSS with dark mode */",
+  "preview_url": "/api/assets/styles/main.css?preview=true"
+}
+```
+
+**Advantages:**
+
+- Leverages existing AI infrastructure
+- Natural language interface for styling
+- Lowers barrier for non-CSS experts
+- Unique differentiator vs other editors
+
+**Disadvantages:**
+
+- AI must understand CSS/SVG semantics
+- Token usage increases
+- May need examples/training
+
+### Option 5: Asset Type Registry System
+
+**Description:** Plugin-like architecture for different asset types.
+
+**Registry Definition:**
+
+```javascript
+const ASSET_EDITORS = {
+  ".css": {
+    editor: "monaco",
+    language: "css",
+    preview: {
+      type: "iframe",
+      template: "css-preview.html",
+    },
+    aiContext: "CSS styling for web components",
+    toolbar: ["format", "minify", "extract-vars"],
+  },
+
+  ".svg": {
+    editor: "monaco",
+    language: "xml",
+    preview: {
+      type: "render",
+      component: "SVGPreview",
+    },
+    visualEditor: "svg-edit",
+    aiContext: "SVG graphics and icons",
+    toolbar: ["optimize", "visual-edit", "export-png"],
+  },
+
+  ".json": {
+    editor: "monaco",
+    language: "json",
+    preview: {
+      type: "tree",
+      component: "JSONTree",
+    },
+    aiContext: "JSON configuration and data",
+    toolbar: ["format", "validate", "schema"],
+  },
+};
+```
+
+**Benefits:**
+
+- Extensible for new asset types
+- Standardized interface
+- Easy to add new editors
+- Configurable per asset type
+
+**Implementation:**
+
+```javascript
+loadAsset(assetPath) {
+  const ext = this.getFileExtension(assetPath);
+  const config = ASSET_EDITORS[ext] || ASSET_EDITORS['.txt'];
+
+  this.setupEditor(config.editor, config.language);
+  this.setupPreview(config.preview);
+  this.setupToolbar(config.toolbar);
+  this.setupAIContext(config.aiContext);
+}
+```
+
+### Option 6: External Tool Integration
+
+**Description:** Integrate with external specialized tools for complex work.
+
+**Integration Points:**
+
+**CSS:**
+
+- "Open in CodePen" for complex experiments
+- Link to Tailwind Play for utility classes
+- CSS Grid/Flexbox visual builders
+
+**SVG:**
+
+- Export to Figma/Sketch
+- Import from design tools
+- Link to SVG optimization tools (SVGO)
+
+**Workflow:**
+
+1. Export asset from aiwebengine
+2. Edit in specialized tool
+3. Import back (with git-style diff)
+4. AI reviews changes
+
+**Advantages:**
+
+- Leverage best-in-class tools
+- Don't reinvent the wheel
+- Professional workflows
+
+**Disadvantages:**
+
+- Context switching
+- Import/export friction
+- Requires external accounts
+
+### Recommended Implementation Path
+
+**Phase 1: Foundation (Quick Win)**
+
+1. Add Monaco language detection for assets (.css, .svg, .json)
+2. Proper syntax highlighting
+3. Save assets through existing API
+4. Update sidebar to show both scripts and editable assets
+
+**Estimated Effort:** 2-4 hours
+
+**Phase 2: Live Preview**
+
+1. Add split-pane layout toggle
+2. CSS preview with sample component library
+3. SVG preview with zoom/pan controls
+4. Hot reload on content change
+
+**Estimated Effort:** 1-2 days
+
+**Phase 3: AI Integration (Strategic)**
+
+1. Extend AI assistant context to include current asset
+2. Add asset-type specific prompts
+3. Support diff preview for asset changes
+4. Natural language styling commands
+
+**Estimated Effort:** 2-3 days
+
+**Phase 4: Advanced Features**
+
+1. Visual SVG editor toggle
+2. CSS variable extraction tool
+3. Asset optimization (minify, compress)
+4. Accessibility checking
+
+**Estimated Effort:** 1 week
+
+### Technical Considerations
+
+**Monaco Language Support:**
+
+Monaco includes built-in support for:
+
+- CSS (with IntelliSense)
+- SCSS/LESS
+- HTML
+- XML (for SVG)
+- JSON
+
+**Preview Rendering:**
+
+```javascript
+// CSS Preview
+function renderCSSPreview(cssContent) {
+  const iframe = document.getElementById("preview-iframe");
+  const doc = iframe.contentDocument;
+
+  doc.body.innerHTML = `
+    <style>${cssContent}</style>
+    <div class="preview-components">
+      <button class="btn btn-primary">Button</button>
+      <input class="form-input" placeholder="Input">
+      <!-- More components -->
+    </div>
+  `;
+}
+
+// SVG Preview
+function renderSVGPreview(svgContent) {
+  const container = document.getElementById("svg-preview");
+  container.innerHTML = svgContent;
+
+  // Add pan/zoom with panzoom.js
+  panzoom(container.querySelector("svg"));
+}
+```
+
+**Asset API Extensions:**
+
+May need to add:
+
+- `GET /api/assets/:path/metadata` - Get asset info
+- `POST /api/assets/:path/optimize` - Optimize CSS/SVG
+- `POST /api/assets/:path/preview` - Generate preview
+
+### AI Prompt Examples
+
+**CSS Examples:**
+
+```
+User: "Make this button bigger and add hover effect"
+AI Response:
+{
+  "type": "edit_asset",
+  "asset_path": "/styles/buttons.css",
+  "explanation": "Increased button size and added smooth hover transition",
+  "code": ".btn { padding: 12px 24px; transition: all 0.3s; }\n.btn:hover { transform: scale(1.05); }"
+}
+
+User: "Convert this to use CSS variables for theming"
+AI: Extracts colors/sizes to :root variables
+
+User: "Add dark mode support"
+AI: Creates @media (prefers-color-scheme: dark) rules
+```
+
+**SVG Examples:**
+
+```
+User: "Change the icon color to red"
+AI: Modifies fill/stroke attributes
+
+User: "Add a drop shadow"
+AI: Adds <filter> with feDropShadow
+
+User: "Optimize this SVG"
+AI: Removes unnecessary attributes, simplifies paths
+
+User: "Make this icon responsive"
+AI: Adds viewBox, removes fixed width/height
+```
+
+### UI Mockups
+
+**Asset Editor with Preview:**
+
+```
+┌─────────────────────────────────────────────────┐
+│ Editor: editor.css                    [⚙ Tools]│
+├──────────────────┬──────────────────────────────┤
+│                  │                              │
+│ /* Main Styles */│    [Live Preview]            │
+│                  │                              │
+│ :root {          │    ┌──────────┐             │
+│   --primary:     │    │  Button  │ ← Hover me  │
+│   #007acc;       │    └──────────┘             │
+│ }                │                              │
+│                  │    Lorem ipsum dolor sit     │
+│ .btn {           │    consectetur adipiscing    │
+│   background:    │                              │
+│   var(--primary);│    [Components: v]           │
+│   padding: 10px; │    [x] Buttons               │
+│ }                │    [x] Forms                 │
+│                  │    [ ] Cards                 │
+│                  │                              │
+├──────────────────┴──────────────────────────────┤
+│ 🤖 AI Assistant                                 │
+│ > Make buttons larger and add animations        │
+└─────────────────────────────────────────────────┘
+```
+
+**SVG Visual Editor:**
+
+```
+┌─────────────────────────────────────────────────┐
+│ [Code] [Visual] [Split]        icon.svg    [⚙] │
+├──────────────────┬──────────────────────────────┤
+│                  │                              │
+│ <svg viewBox="0  │    ┌────────────────┐       │
+│   0 100 100">    │    │                │       │
+│   <circle        │    │      ⚫        │       │
+│     cx="50"      │    │    Selected    │       │
+│     cy="50"      │    │                │       │
+│     r="40"       │    └────────────────┘       │
+│     fill="#00f"  │                              │
+│   />             │    [Tools]                   │
+│ </svg>           │    ◯ Circle  □ Rect         │
+│                  │    ✏ Path    T Text         │
+│                  │    🎨 Fill: #0000ff          │
+│                  │    ✂ Stroke: none            │
+│                  │    📏 Size: 40px             │
+│                  │                              │
+├──────────────────┴──────────────────────────────┤
+│ 🤖 AI: "Add a drop shadow to this circle"      │
+└─────────────────────────────────────────────────┘
+```
+
+### Related Features
+
+**Asset Organization:**
+
+- Folder structure in sidebar (css/, images/, icons/)
+- Search/filter assets by type
+- Batch operations (optimize all SVGs)
+- Asset dependencies (which scripts use this CSS?)
+
+**Asset Optimization:**
+
+- CSS minification
+- SVG path optimization (SVGO)
+- Image compression
+- Unused CSS detection
+
+**Collaboration:**
+
+- Asset version history
+- Comments on specific lines
+- Share asset previews with team
+- AI suggests improvements
+
+### Success Metrics
+
+**Phase 1 Success:**
+
+- Can edit CSS/SVG in Monaco with syntax highlighting
+- Can save assets back to server
+- No need to download/re-upload
+
+**Phase 2 Success:**
+
+- Live preview updates within 500ms
+- Visual feedback for all changes
+- 80% of edits done without leaving editor
+
+**Phase 3 Success:**
+
+- 50% of CSS edits use AI assistance
+- Natural language commands work for common tasks
+- Diff preview shows clear before/after
+
+**Phase 4 Success:**
+
+- Visual SVG editor used for icon creation
+- CSS optimizations reduce file size 20%+
+- Complete asset workflow in one tool
+
+## Markdown Document Editing
+
+### Problem Statement
+
+While aiwebengine focuses on JavaScript scripts, many use cases require rich text content:
+
+- Documentation pages
+- Blog posts and articles
+- README files
+- Help/support content
+- User-facing content pages
+- API documentation
+
+Currently, there's no good way to create and edit markdown documents within the editor. Users must either:
+
+- Hardcode HTML in JavaScript strings
+- Store content externally and fetch it
+- Build separate content management systems
+
+### Use Cases
+
+**Documentation Site:**
+
+```javascript
+// Current approach (awkward)
+function serveDocs(req) {
+  return {
+    status: 200,
+    body: `
+      <h1>Documentation</h1>
+      <p>This is hard to maintain...</p>
+    `,
+    contentType: "text/html",
+  };
+}
+
+// Desired approach
+function serveDocs(req) {
+  const content = loadDocument("/docs/getting-started.md");
+  return renderMarkdown(content);
+}
+```
+
+**Blog System:**
+
+- Write posts in markdown
+- Store in aiwebengine storage
+- Render with consistent styling
+- Support front matter (metadata)
+
+**Content Pages:**
+
+- About page
+- Terms of service
+- Privacy policy
+- Landing pages
+
+### Option 1: Markdown Editor with Live Preview (Recommended)
+
+**Description:** Split-pane editor with markdown on left and rendered HTML on right.
+
+**UI Layout:**
+
+````
+┌─────────────────────────────────────────────────┐
+│ Document: getting-started.md          [⚙ Tools]│
+├──────────────────┬──────────────────────────────┤
+│                  │                              │
+│ # Getting Started│  Getting Started             │
+│                  │                              │
+│ Welcome to       │  Welcome to **aiwebengine**! │
+│ **aiwebengine**! │                              │
+│                  │  ## Installation             │
+│ ## Installation  │                              │
+│                  │  Run the following:          │
+│ Run the following│                              │
+│                  │  npm install aiwebengine     │
+│ ```bash          │                              │
+│ npm install      │  Quick Start                 │
+│ ```              │                              │
+│                  │  • Create a script           │
+│ ## Quick Start   │  • Define handler            │
+│                  │  • Deploy                    │
+│ - Create script  │                              │
+│ - Define handler │                              │
+│                  │                              │
+├──────────────────┴──────────────────────────────┤
+│ 🤖 AI: "Expand the installation section"       │
+└─────────────────────────────────────────────────┘
+````
+
+**Features:**
+
+- Monaco editor with markdown language mode
+- Live HTML preview with synchronized scrolling
+- Syntax highlighting for code blocks
+- Table of contents generation
+- Export to HTML/PDF
+
+**Implementation:**
+
+```javascript
+// Markdown rendering with marked.js
+import { marked } from "marked";
+import DOMPurify from "dompurify";
+
+function renderMarkdownPreview(content) {
+  const html = marked.parse(content);
+  const clean = DOMPurify.sanitize(html);
+
+  const preview = document.getElementById("markdown-preview");
+  preview.innerHTML = clean;
+
+  // Syntax highlighting for code blocks
+  preview.querySelectorAll("pre code").forEach((block) => {
+    hljs.highlightBlock(block);
+  });
+}
+
+// Auto-update on content change
+monacoEditor.onDidChangeModelContent(() => {
+  debounce(() => {
+    const content = monacoEditor.getValue();
+    renderMarkdownPreview(content);
+  }, 300);
+});
+```
+
+**Advantages:**
+
+- Familiar markdown syntax
+- Live preview prevents syntax errors
+- Easy to learn for non-developers
+- Portable content (markdown is standard)
+
+**Disadvantages:**
+
+- Need markdown parser library (~50KB)
+- Preview styling must match production
+
+### Option 2: WYSIWYG Markdown Editor
+
+**Description:** Rich text editor that outputs clean markdown.
+
+**Tools to Consider:**
+
+- **Toast UI Editor** (Markdown WYSIWYG)
+- **Editor.js** (Block-based editor)
+- **Milkdown** (WYSIWYG markdown)
+- **Tiptap** (Headless editor)
+
+**UI Modes:**
+
+```
+[Markdown] [WYSIWYG] [Split]
+     ↑         ↑         ↑
+     └─────────┴─────────┘
+        Toggle modes
+```
+
+**WYSIWYG Mode:**
+
+```
+┌─────────────────────────────────────────┐
+│ [B] [I] [H1] [H2] [Link] [Image] [Code]│
+├─────────────────────────────────────────┤
+│                                         │
+│  Getting Started                        │
+│  ═══════════════                        │
+│                                         │
+│  Welcome to aiwebengine!                │
+│                                         │
+│  Installation                           │
+│  ────────────                           │
+│                                         │
+│  Run the following command:             │
+│                                         │
+│  ┌───────────────────────────┐         │
+│  │ npm install aiwebengine   │         │
+│  └───────────────────────────┘         │
+│                                         │
+└─────────────────────────────────────────┘
+```
+
+**Advantages:**
+
+- Lower barrier for non-technical users
+- Familiar word-processor-like interface
+- Prevents markdown syntax errors
+- Direct formatting
+
+**Disadvantages:**
+
+- Larger dependency (200-500KB)
+- More complex integration
+- Can generate non-standard markdown
+
+### Option 3: AI-Assisted Content Creation
+
+**Description:** Use AI to generate, improve, and structure markdown content.
+
+**AI Capabilities:**
+
+**Content Generation:**
+
+```
+User: "Create a getting started guide for aiwebengine"
+AI: Generates complete markdown document with:
+- Introduction
+- Installation steps
+- Quick start tutorial
+- Common use cases
+- Next steps
+
+User: "Write a blog post about serverless JavaScript"
+AI: Creates structured article with sections
+```
+
+**Content Improvement:**
+
+```
+User: "Make this more concise"
+AI: Reduces word count while preserving meaning
+
+User: "Add code examples"
+AI: Inserts relevant code snippets
+
+User: "Improve SEO"
+AI: Adds meta descriptions, better headings
+
+User: "Check grammar and spelling"
+AI: Corrects errors, improves clarity
+```
+
+**Content Restructuring:**
+
+```
+User: "Add a table of contents"
+AI: Generates TOC from headings
+
+User: "Split this into multiple documents"
+AI: Creates logical document hierarchy
+
+User: "Convert this list to a table"
+AI: Reformats content as markdown table
+```
+
+**System Prompt Extension:**
+
+```
+MARKDOWN DOCUMENT EDITING:
+When working with markdown documents:
+- Use proper markdown syntax (headings, lists, links)
+- Structure content logically with clear hierarchy
+- Add code blocks with language specifications
+- Use tables for structured data
+- Include internal links for navigation
+- Consider SEO with descriptive headings
+- Maintain consistent formatting style
+- Suggest images/diagrams where helpful
+```
+
+**Advantages:**
+
+- Dramatically speeds up content creation
+- Improves content quality
+- Helps non-writers create professional docs
+- Unique competitive advantage
+
+**Disadvantages:**
+
+- Token usage for longer documents
+- AI may need guidance on tone/style
+- Review needed for accuracy
+
+### Option 4: Front Matter Support
+
+**Description:** Support YAML front matter for document metadata.
+
+**Front Matter Example:**
+
+```markdown
+---
+title: Getting Started with aiwebengine
+author: Lasse Pajunen
+date: 2025-11-09
+tags: [tutorial, getting-started, javascript]
+description: Learn how to build your first aiwebengine application
+published: true
+---
+
+# Getting Started
+
+Content goes here...
+```
+
+**Parsing Front Matter:**
+
+```javascript
+import matter from "gray-matter";
+
+function parseMarkdownDocument(content) {
+  const { data, content: markdown } = matter(content);
+
+  return {
+    metadata: data, // { title, author, date, tags, ... }
+    content: markdown,
+    html: marked.parse(markdown),
+  };
+}
+```
+
+**Use Cases:**
+
+- Blog post metadata (title, date, author)
+- SEO tags (description, keywords)
+- Publishing status (draft, published)
+- Custom fields (category, featured image)
+- Template selection (layout, theme)
+
+**Metadata Editor UI:**
+
+```
+┌─────────────────────────────────────────┐
+│ Metadata                                │
+├─────────────────────────────────────────┤
+│ Title: [Getting Started              ] │
+│ Author: [Lasse Pajunen              ] │
+│ Date: [2025-11-09                   ] │
+│ Tags: [tutorial] [getting-started   ] │
+│ Published: [✓]                          │
+│                                         │
+│ [Edit YAML] [Add Field +]               │
+└─────────────────────────────────────────┘
+```
+
+**Advantages:**
+
+- Standard metadata format
+- Flexible field definitions
+- Easy to parse and query
+- Used by static site generators
+
+**Disadvantages:**
+
+- Need YAML parser
+- UI complexity for metadata editing
+
+### Option 5: Document Templates
+
+**Description:** Pre-built markdown templates for common document types.
+
+**Template Library:**
+
+```javascript
+const DOCUMENT_TEMPLATES = {
+  "blog-post": {
+    name: "Blog Post",
+    icon: "📝",
+    content: `---
+title: Untitled Post
+date: ${new Date().toISOString().split("T")[0]}
+author: 
+tags: []
+---
+
+# Title
+
+## Introduction
+
+Write your introduction here...
+
+## Main Content
+
+Your main points...
+
+## Conclusion
+
+Wrap up your thoughts...
+`,
+  },
+
+  "api-docs": {
+    name: "API Documentation",
+    icon: "📚",
+    content: `# API Documentation
+
+## Overview
+
+Brief description of the API.
+
+## Authentication
+
+Explain authentication requirements.
+
+## Endpoints
+
+### GET /api/resource
+
+**Description:** What this endpoint does.
+
+**Parameters:**
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| id   | string | Yes | Resource ID |
+
+**Example Request:**
+\`\`\`bash
+curl https://api.example.com/resource/123
+\`\`\`
+
+**Example Response:**
+\`\`\`json
+{
+  "id": "123",
+  "data": "..."
+}
+\`\`\`
+`,
+  },
+
+  readme: {
+    name: "README",
+    icon: "📄",
+    content: `# Project Name
+
+Brief description of your project.
+
+## Features
+
+- Feature 1
+- Feature 2
+- Feature 3
+
+## Installation
+
+\`\`\`bash
+npm install
+\`\`\`
+
+## Usage
+
+\`\`\`javascript
+// Example code
+\`\`\`
+
+## Contributing
+
+Contribution guidelines.
+
+## License
+
+MIT License
+`,
+  },
+
+  tutorial: {
+    name: "Tutorial",
+    icon: "🎓",
+    content: `# Tutorial: [Topic]
+
+## What You'll Learn
+
+- Learning objective 1
+- Learning objective 2
+- Learning objective 3
+
+## Prerequisites
+
+- Prerequisite 1
+- Prerequisite 2
+
+## Step 1: [First Step]
+
+Detailed instructions...
+
+## Step 2: [Second Step]
+
+More instructions...
+
+## Next Steps
+
+What to do after completing this tutorial.
+`,
+  },
+};
+```
+
+**Template Selection UI:**
+
+```
+┌─────────────────────────────────────────┐
+│ New Document                            │
+├─────────────────────────────────────────┤
+│                                         │
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐ │
+│  │   📝    │  │   📚    │  │   📄    │ │
+│  │  Blog   │  │   API   │  │ README  │ │
+│  │  Post   │  │  Docs   │  │         │ │
+│  └─────────┘  └─────────┘  └─────────┘ │
+│                                         │
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐ │
+│  │   🎓    │  │   📋    │  │   ✏️    │ │
+│  │Tutorial │  │  Guide  │  │  Blank  │ │
+│  │         │  │         │  │         │ │
+│  └─────────┘  └─────────┘  └─────────┘ │
+│                                         │
+│ [Cancel] [AI Generate Custom Template] │
+└─────────────────────────────────────────┘
+```
+
+**AI Template Generation:**
+
+```
+User: "Create a template for product documentation"
+AI: Generates custom template with sections:
+- Product Overview
+- Key Features
+- Installation
+- Configuration
+- Usage Examples
+- Troubleshooting
+- FAQ
+```
+
+**Advantages:**
+
+- Quick start for common document types
+- Consistent structure
+- Reduces decision fatigue
+- Easy to customize
+
+**Disadvantages:**
+
+- Need to maintain template library
+- May not fit all use cases
+
+### Option 6: Document Storage and Organization
+
+**Description:** Structured storage for markdown documents separate from scripts.
+
+**Storage API:**
+
+```javascript
+// New document storage endpoints
+POST   /api/documents          // Create document
+GET    /api/documents          // List all documents
+GET    /api/documents/:path    // Get document content
+PUT    /api/documents/:path    // Update document
+DELETE /api/documents/:path    // Delete document
+
+// Folder support
+GET    /api/documents/folder/:path  // List folder contents
+POST   /api/documents/folder/:path  // Create folder
+```
+
+**Folder Structure:**
+
+```
+documents/
+├── blog/
+│   ├── 2025-11-01-first-post.md
+│   ├── 2025-11-05-second-post.md
+│   └── drafts/
+│       └── upcoming-post.md
+├── docs/
+│   ├── getting-started.md
+│   ├── api-reference.md
+│   └── tutorials/
+│       ├── basic-tutorial.md
+│       └── advanced-tutorial.md
+└── pages/
+    ├── about.md
+    ├── contact.md
+    └── privacy-policy.md
+```
+
+**Sidebar Organization:**
+
+```
+┌───────────────────────┐
+│ Documents             │
+├───────────────────────┤
+│ 📁 blog               │
+│   📄 first-post.md    │
+│   📄 second-post.md   │
+│   📁 drafts           │
+│ 📁 docs               │
+│   📄 getting-start... │
+│   📄 api-reference.md │
+│   📁 tutorials        │
+│ 📁 pages              │
+│   📄 about.md         │
+│   📄 contact.md       │
+│                       │
+│ [+ New Doc] [+ Folder]│
+└───────────────────────┘
+```
+
+**Advantages:**
+
+- Clean separation from scripts
+- Better organization for many docs
+- Easier to find content
+- Supports hierarchical structure
+
+**Disadvantages:**
+
+- More complex storage system
+- Need folder management UI
+
+### Recommended Implementation Path
+
+**Phase 1: Basic Markdown Editing**
+
+1. Add Monaco markdown language support
+2. Simple preview pane with marked.js
+3. Save documents as assets or in separate storage
+4. Syntax highlighting for code blocks
+
+**Estimated Effort:** 4-6 hours
+
+**Phase 2: Enhanced Preview & Styling**
+
+1. Synchronized scrolling between editor and preview
+2. Custom CSS themes for preview
+3. Table of contents generation
+4. Export to HTML
+
+**Estimated Effort:** 1 day
+
+**Phase 3: AI-Assisted Writing**
+
+1. Content generation from prompts
+2. Improvement suggestions
+3. Grammar and style checking
+4. SEO optimization suggestions
+
+**Estimated Effort:** 2-3 days
+
+**Phase 4: Advanced Features**
+
+1. Front matter support with metadata editor
+2. Document templates library
+3. WYSIWYG mode toggle
+4. Image upload and embedding
+5. Folder-based organization
+
+**Estimated Effort:** 1 week
+
+### Technical Considerations
+
+**Markdown Parser Options:**
+
+- **marked** - Fast, lightweight (20KB)
+- **markdown-it** - Extensible, plugins (45KB)
+- **remark** - AST-based, powerful (60KB)
+- **micromark** - Spec-compliant (50KB)
+
+**Recommended:** marked.js for simplicity and size
+
+**Syntax Highlighting:**
+
+```javascript
+import hljs from "highlight.js";
+import "highlight.js/styles/vs2015.css";
+
+marked.setOptions({
+  highlight: function (code, lang) {
+    const language = hljs.getLanguage(lang) ? lang : "plaintext";
+    return hljs.highlight(code, { language }).value;
+  },
+});
+```
+
+**Sanitization:**
+
+Always sanitize HTML output to prevent XSS:
+
+```javascript
+import DOMPurify from "dompurify";
+
+const dirty = marked.parse(userInput);
+const clean = DOMPurify.sanitize(dirty);
+```
+
+**Storage Strategy:**
+
+**Option A: Store as Assets**
+
+```
+/assets/documents/blog/post.md
+```
+
+Pros: Uses existing asset system
+Cons: Mixed with images/CSS
+
+**Option B: Dedicated Document Storage**
+
+```javascript
+// Store in database with metadata
+{
+  path: '/blog/first-post.md',
+  content: '# Title\n\nContent...',
+  metadata: {
+    title: 'First Post',
+    date: '2025-11-09',
+    author: 'Lasse'
+  },
+  created_at: '2025-11-09T10:00:00Z',
+  updated_at: '2025-11-09T11:30:00Z'
+}
+```
+
+Pros: Better metadata, queries, versioning
+Cons: Need new database schema
+
+**Option C: Hybrid Approach**
+
+- Documents stored as assets for serving
+- Metadata in database for querying/filtering
+- Best of both worlds
+
+### AI Prompt Examples
+
+**Content Generation:**
+
+```
+User: "Write a tutorial about building a REST API"
+AI: Creates complete markdown tutorial with:
+- Introduction
+- Prerequisites
+- Step-by-step instructions
+- Code examples
+- Testing section
+- Next steps
+
+User: "Create API documentation for /api/users endpoint"
+AI: Generates structured API docs with:
+- Endpoint description
+- Parameters table
+- Example request/response
+- Error codes
+```
+
+**Content Improvement:**
+
+```
+User: "Make this more technical"
+AI: Increases technical depth, adds jargon
+
+User: "Simplify for beginners"
+AI: Uses simpler language, adds more explanation
+
+User: "Add more examples"
+AI: Inserts relevant code/use case examples
+
+User: "Check for broken links"
+AI: Validates URLs, suggests fixes
+```
+
+**Formatting:**
+
+```
+User: "Convert this text to a bullet list"
+AI: Reformats as markdown list
+
+User: "Add section headings"
+AI: Structures content with ## headings
+
+User: "Create a comparison table"
+AI: Converts content to markdown table
+```
+
+### Document Rendering in Scripts
+
+**Integration with Scripts:**
+
+```javascript
+// Helper function to load and render markdown
+function loadDocument(path) {
+  const response = fetch(`/api/documents${path}`);
+  const markdown = JSON.parse(response).content;
+  return markdown;
+}
+
+function renderDocument(path) {
+  const markdown = loadDocument(path);
+
+  // Server-side rendering would need marked.js ported to JS runtime
+  // For now, return raw markdown and let client render
+  return {
+    status: 200,
+    body: markdown,
+    contentType: "text/markdown; charset=UTF-8",
+  };
+}
+
+// Blog post example
+function serveBlogPost(req) {
+  const slug = req.path.split("/").pop();
+  const markdown = loadDocument(`/blog/${slug}.md`);
+
+  // Parse front matter
+  const lines = markdown.split("\n");
+  let metadata = {};
+  let content = markdown;
+
+  if (lines[0] === "---") {
+    // Simple front matter parsing
+    const endIndex = lines.indexOf("---", 1);
+    // Parse YAML-like metadata
+    // ... metadata extraction logic ...
+    content = lines.slice(endIndex + 1).join("\n");
+  }
+
+  return {
+    status: 200,
+    body: JSON.stringify({
+      metadata: metadata,
+      content: content,
+    }),
+    contentType: "application/json",
+  };
+}
+
+function init(context) {
+  register("/blog/:slug", "serveBlogPost", "GET");
+}
+```
+
+### Success Metrics
+
+**Phase 1 Success:**
+
+- Can create and edit markdown documents
+- Live preview works smoothly
+- Documents saved and retrieved correctly
+
+**Phase 2 Success:**
+
+- Preview styling matches production
+- Code blocks highlighted correctly
+- TOC generates automatically
+
+**Phase 3 Success:**
+
+- AI generates quality content on demand
+- Improvement suggestions are useful
+- 30%+ reduction in writing time
+
+**Phase 4 Success:**
+
+- Front matter editing is intuitive
+- Templates speed up document creation
+- Complete documentation workflow in editor
+
+## Script and Asset Versioning
+
+### Problem Statement
+
+Currently, aiwebengine has no versioning system for scripts or assets. Once you save a change, the previous version is lost. This creates several problems:
+
+**Risk of Data Loss:**
+
+- Accidental overwrites
+- Bad deployments
+- No way to undo mistakes
+
+**No Audit Trail:**
+
+- Who changed what and when?
+- Why was a change made?
+- What was the previous working state?
+
+**Collaboration Challenges:**
+
+- Concurrent editing conflicts
+- No merge capabilities
+- Hard to review changes
+
+**Testing and Rollback:**
+
+- Can't safely test changes
+- No rollback to known-good state
+- Difficult to debug regressions
+
+### Use Cases
+
+**Accidental Overwrite:**
+
+```
+Developer: Saves script with breaking change
+System: Previous version lost forever
+Developer: "I need to undo this but can't!"
+```
+
+**Production Incident:**
+
+```
+User: "The API stopped working after today's deployment"
+Developer: "What changed? I can't see the diff"
+System: No history available
+```
+
+**Collaborative Development:**
+
+```
+Developer A: Editing user-api.js
+Developer B: Also editing user-api.js
+System: Last save wins, work lost
+```
+
+**Safe Experimentation:**
+
+```
+Developer: "I want to refactor but keep the working version"
+System: Currently requires copy-paste backup
+```
+
+### Option 1: Simple Versioning (Recommended First Step)
+
+**Description:** Keep last N versions with timestamps.
+
+**Storage Structure:**
+
+```javascript
+// In database
+{
+  script_name: "user-api.js",
+  versions: [
+    {
+      version: 5,
+      content: "// current content...",
+      created_at: "2025-11-09T12:00:00Z",
+      created_by: "lasse@example.com",
+      message: "Added user deletion endpoint",
+      size: 2048
+    },
+    {
+      version: 4,
+      content: "// previous content...",
+      created_at: "2025-11-09T10:30:00Z",
+      created_by: "lasse@example.com",
+      message: "Fixed validation bug",
+      size: 1987
+    },
+    // ... keep last 10 versions
+  ],
+  current_version: 5
+}
+```
+
+**API Endpoints:**
+
+```javascript
+GET    /api/scripts/:name/versions        // List all versions
+GET    /api/scripts/:name/versions/:num   // Get specific version
+POST   /api/scripts/:name/restore/:num    // Restore old version
+POST   /api/scripts/:name                 // Create new version (with message)
+GET    /api/scripts/:name/diff/:v1/:v2    // Compare versions
+```
+
+**UI - Version History Panel:**
+
+```
+┌─────────────────────────────────────────┐
+│ Version History: user-api.js            │
+├─────────────────────────────────────────┤
+│ ● v5  Nov 9, 12:00  Lasse    [Current] │
+│   "Added user deletion endpoint"        │
+│   [View] [Diff] [Restore]               │
+│                                         │
+│ ○ v4  Nov 9, 10:30  Lasse              │
+│   "Fixed validation bug"                │
+│   [View] [Diff] [Restore]               │
+│                                         │
+│ ○ v3  Nov 8, 16:45  Lasse              │
+│   "Added pagination support"            │
+│   [View] [Diff] [Restore]               │
+│                                         │
+│ ○ v2  Nov 8, 14:20  Lasse              │
+│   "Initial user API"                    │
+│   [View] [Diff] [Restore]               │
+└─────────────────────────────────────────┘
+```
+
+**Save Dialog with Version Message:**
+
+```
+┌─────────────────────────────────────────┐
+│ Save Script: user-api.js                │
+├─────────────────────────────────────────┤
+│ Describe your changes:                  │
+│ ┌─────────────────────────────────────┐ │
+│ │ Added user deletion endpoint        │ │
+│ │                                     │ │
+│ └─────────────────────────────────────┘ │
+│                                         │
+│ [Cancel]                 [Save Version] │
+└─────────────────────────────────────────┘
+```
+
+**Advantages:**
+
+- Simple to implement
+- Solves most common problems
+- Low storage overhead (text compresses well)
+- No external dependencies
+
+**Disadvantages:**
+
+- Limited to N versions
+- No branching
+- No merge capabilities
+- Basic diff only
+
+### Option 2: Git Integration
+
+**Description:** Use Git as the versioning backend.
+
+**Implementation:**
+
+```javascript
+// Initialize git repo for scripts
+git init /data/scripts
+git config user.name "aiwebengine"
+git config user.email "system@aiwebengine.local"
+
+// On script save
+async function saveScript(scriptName, content, userId, message) {
+  // Write file
+  writeFile(`/data/scripts/${scriptName}`, content);
+
+  // Git commit
+  exec(`cd /data/scripts && git add ${scriptName}`);
+  exec(`cd /data/scripts && git commit -m "${message}" --author="${userId}"`);
+
+  return { success: true, hash: getLatestHash() };
+}
+
+// Get versions
+async function getVersions(scriptName) {
+  const log = exec(`cd /data/scripts && git log --follow -- ${scriptName}`);
+  return parseGitLog(log);
+}
+
+// Restore version
+async function restoreVersion(scriptName, hash) {
+  exec(`cd /data/scripts && git checkout ${hash} -- ${scriptName}`);
+}
+
+// Diff versions
+async function diffVersions(scriptName, hash1, hash2) {
+  return exec(`cd /data/scripts && git diff ${hash1}..${hash2} -- ${scriptName}`);
+}
+```
+
+**UI Features:**
+
+- Git commit history
+- Branch visualization
+- Merge conflict resolution
+- Blame view (who changed which line)
+
+**Advantages:**
+
+- Industry-standard versioning
+- Powerful branching/merging
+- Complete history forever
+- Familiar to developers
+- Can push to GitHub/GitLab
+
+**Disadvantages:**
+
+- Requires Git installed
+- More complex implementation
+- Overkill for simple use cases
+- Git learning curve for users
+
+### Option 3: Snapshot-Based Versioning
+
+**Description:** Create named snapshots at key moments.
+
+**Snapshot Types:**
+
+```javascript
+const SNAPSHOT_TYPES = {
+  MANUAL: "manual", // User creates snapshot
+  AUTO: "auto", // Auto-save every N minutes
+  DEPLOY: "deploy", // Before deployment
+  BACKUP: "backup", // Daily backup
+};
+```
+
+**Snapshot Creation:**
+
+```
+User clicks "Create Snapshot"
+┌─────────────────────────────────────────┐
+│ Create Snapshot                         │
+├─────────────────────────────────────────┤
+│ Name: [Production Deploy 2025-11-09   ]│
+│                                         │
+│ Description:                            │
+│ ┌─────────────────────────────────────┐ │
+│ │ Stable version before refactoring   │ │
+│ │ All features working and tested     │ │
+│ └─────────────────────────────────────┘ │
+│                                         │
+│ Include:                                │
+│ ☑ All scripts (15 files)                │
+│ ☑ All assets (23 files)                 │
+│ ☑ Configuration                         │
+│                                         │
+│ [Cancel]                  [Create]      │
+└─────────────────────────────────────────┘
+```
+
+**Snapshot Browser:**
+
+```
+┌─────────────────────────────────────────┐
+│ Snapshots                               │
+├─────────────────────────────────────────┤
+│ 📸 Production Deploy 2025-11-09         │
+│    Nov 9, 12:00 • Manual • 38 files     │
+│    "Stable version before refactoring"  │
+│    [Restore] [View] [Download]          │
+│                                         │
+│ 📸 Auto-save 2025-11-09 10:30           │
+│    Nov 9, 10:30 • Auto • 38 files       │
+│    [Restore] [View] [Download]          │
+│                                         │
+│ 📸 Pre-deployment 2025-11-08            │
+│    Nov 8, 16:00 • Deploy • 36 files     │
+│    "Before adding auth system"          │
+│    [Restore] [View] [Download]          │
+└─────────────────────────────────────────┘
+```
+
+**Advantages:**
+
+- Simple mental model
+- Named checkpoints
+- Can snapshot entire system
+- Easy rollback
+
+**Disadvantages:**
+
+- Manual snapshot creation
+- Storage grows quickly
+- Less granular than per-save versions
+
+### Option 4: Time-Travel Debugging
+
+**Description:** Store every version with timestamps, browse history like video playback.
+
+**Time-Travel UI:**
+
+```
+┌─────────────────────────────────────────┐
+│ Time Travel: user-api.js                │
+├─────────────────────────────────────────┤
+│                                         │
+│ ◀◀ ◀ ▶ ▶▶  [========●=======]  Now     │
+│                                         │
+│ Nov 8              Nov 9                │
+│ 14:00             12:00                 │
+│                                         │
+│ Currently viewing:                      │
+│ Nov 9, 2025 10:30:45                    │
+│ By: lasse@example.com                   │
+│ Changes: +15 lines, -3 lines            │
+│                                         │
+├─────────────────────────────────────────┤
+│ function handleGetUser(req) {           │
+│   const userId = req.params.id;         │
+│   // ... code at this point in time ... │
+│ }                                       │
+└─────────────────────────────────────────┘
+```
+
+**Features:**
+
+- Scrub timeline to any point
+- See code at any moment
+- Animate changes over time
+- Find when bug was introduced
+
+**Advantages:**
+
+- Visual and intuitive
+- Great for debugging
+- Find exact moment of change
+- No manual versioning needed
+
+**Disadvantages:**
+
+- Very complex implementation
+- Large storage requirements
+- Performance challenges
+
+### Option 5: Differential Storage
+
+**Description:** Only store diffs between versions to save space.
+
+**Storage Optimization:**
+
+```javascript
+// Instead of storing full content each time
+versions: [
+  { v: 1, content: "full content..." }, // 2KB
+  { v: 2, content: "full content..." }, // 2KB
+  { v: 3, content: "full content..." }, // 2KB
+];
+// Total: 6KB for 3 versions
+
+// Store base + diffs
+versions: [
+  { v: 1, type: "full", content: "full content..." }, // 2KB
+  { v: 2, type: "diff", patch: "+10 lines..." }, // 200B
+  { v: 3, type: "diff", patch: "-2 lines..." }, // 150B
+];
+// Total: 2.35KB for 3 versions
+```
+
+**Reconstruction:**
+
+```javascript
+function getVersion(scriptName, versionNum) {
+  const versions = loadVersions(scriptName);
+
+  // Find last full version before requested
+  let content = findLastFullVersion(versions, versionNum);
+
+  // Apply diffs sequentially
+  for (let v of getVersionsInRange(lastFull, versionNum)) {
+    if (v.type === "diff") {
+      content = applyPatch(content, v.patch);
+    }
+  }
+
+  return content;
+}
+```
+
+**Advantages:**
+
+- Minimal storage usage
+- Unlimited version history
+- Efficient for small changes
+
+**Disadvantages:**
+
+- Complex implementation
+- Need diff/patch library
+- Slower version reconstruction
+- Risk if diff chain corrupted
+
+### Recommended Implementation Path
+
+**Phase 1: Basic Versioning (MVP)**
+
+1. Store last 10 versions per script
+2. Timestamp and user tracking
+3. Simple restore functionality
+4. Version list UI
+
+**Estimated Effort:** 2-3 days
+
+**Phase 2: Enhanced History**
+
+1. Diff viewer between versions
+2. Version comparison UI
+3. Optional commit messages
+4. Search version history
+
+**Estimated Effort:** 3-4 days
+
+**Phase 3: Snapshots**
+
+1. Create named snapshots
+2. Snapshot browser
+3. Full system restore
+4. Auto-snapshot before deployments
+
+**Estimated Effort:** 1 week
+
+**Phase 4: Advanced Features**
+
+1. Branching (experimental versions)
+2. Merge capabilities
+3. Collaborative editing with conflict detection
+4. Git backend option
+
+**Estimated Effort:** 2-3 weeks
+
+### Technical Considerations
+
+**Storage Strategy:**
+
+**Option A: Database Storage**
+
+```sql
+CREATE TABLE script_versions (
+  id SERIAL PRIMARY KEY,
+  script_name VARCHAR(255),
+  version INTEGER,
+  content TEXT,
+  created_at TIMESTAMP,
+  created_by VARCHAR(255),
+  message TEXT,
+  size INTEGER,
+  hash VARCHAR(64)  -- SHA-256 of content
+);
+
+CREATE INDEX idx_script_versions
+ON script_versions(script_name, version DESC);
+```
+
+**Option B: File System Storage**
+
+```
+/data/versions/
+  user-api.js/
+    v001_2025-11-08T14-20-00.js
+    v002_2025-11-08T16-45-00.js
+    v003_2025-11-09T10-30-00.js
+    manifest.json
+```
+
+**Option C: Hybrid**
+
+- Current version in regular storage
+- Historical versions in archive storage (S3, compressed)
+- Metadata in database
+
+**Retention Policies:**
+
+```javascript
+const RETENTION_POLICY = {
+  keep_all: "7 days", // Keep every version for 1 week
+  keep_daily: "30 days", // Then daily snapshots for month
+  keep_weekly: "1 year", // Then weekly for year
+  keep_monthly: "forever", // Then monthly forever
+};
+```
+
+**Diff Algorithm:**
+
+- **Myers diff** - Standard, used by Git
+- **Patience diff** - Better for code
+- **Histogram diff** - Fast, good results
+
+Libraries:
+
+- `diff` (npm) - Pure JavaScript
+- `fast-diff` - Faster alternative
+- `diff-match-patch` - Google's implementation
+
+**Conflict Resolution:**
+
+```javascript
+// Detect concurrent edits
+function detectConflict(scriptName, baseVersion) {
+  const currentVersion = getCurrentVersion(scriptName);
+  return currentVersion !== baseVersion;
+}
+
+// 3-way merge
+function mergeVersions(base, yours, theirs) {
+  const diff1 = diff(base, yours);
+  const diff2 = diff(base, theirs);
+
+  // If changes don't overlap, auto-merge
+  if (!hasConflicts(diff1, diff2)) {
+    return applyBoth(base, diff1, diff2);
+  }
+
+  // Otherwise, present conflict UI
+  return {
+    conflict: true,
+    sections: markConflicts(diff1, diff2),
+  };
+}
+```
+
+### AI Integration with Versioning
+
+**AI-Assisted Commit Messages:**
+
+```
+User saves script
+AI analyzes changes:
+- Added 2 new functions
+- Modified 1 function
+- Removed 5 lines
+
+AI suggests: "Added user deletion and email verification functions"
+User can accept, edit, or write own message
+```
+
+**AI Change Summaries:**
+
+```
+Viewing version history:
+
+v5 → v6
+AI Summary: "Refactored authentication to use JWT tokens
+instead of session cookies. Added token refresh endpoint."
+
+v4 → v5
+AI Summary: "Fixed bug where null emails caused crashes.
+Added email validation."
+```
+
+**Smart Rollback:**
+
+```
+User: "Undo the change that broke user login"
+AI: Analyzes recent versions
+AI: "The issue was introduced in v7. Recommending
+     rollback to v6 which has working authentication."
+User: [Confirm Rollback]
+```
+
+### Success Metrics
+
+**Phase 1 Success:**
+
+- No accidental data loss
+- Can restore any of last 10 versions
+- Version history visible in UI
+
+**Phase 2 Success:**
+
+- Diff viewer clearly shows changes
+- Commit messages provide context
+- Can find specific past versions
+
+**Phase 3 Success:**
+
+- Snapshots created before risky changes
+- Quick rollback to known-good state
+- Team members can see change history
+
+**Phase 4 Success:**
+
+- Concurrent editing doesn't lose work
+- Merge conflicts handled gracefully
+- Complete audit trail of all changes
+
 ## Editor UI Improvements
 
 ### Context Awareness Indicators

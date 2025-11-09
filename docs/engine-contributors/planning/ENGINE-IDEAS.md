@@ -67,7 +67,7 @@ engine object
 
 scriptStorage object
 
-userStorage object
+userStorage object (personalStorage)
 
 graphQLRegistry object
 
@@ -84,7 +84,7 @@ identityStorage object
 
 - addUserRole -> assignUserRole
 
-timerEventService object
+timerEventService object (scheduler)
 
 - None -> registerSingleShotTimer(name, delayMs, handler)
 - None -> registerRecurringTimer(name, intervalMs, handler)
