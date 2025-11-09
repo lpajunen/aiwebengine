@@ -893,43 +893,173 @@ The current editor focuses on JavaScript scripts but doesn't provide adequate su
 
 ### Option 1: In-Editor Asset Editing (Recommended)
 
-**Description:** Extend Monaco Editor to support CSS and SVG editing with proper syntax highlighting and preview.
+**Description:** Redesign the Assets tab to mirror the Scripts tab layout, providing a unified editing experience for text-based assets with Monaco Editor.
+
+**UI Layout (Similar to Scripts Tab):**
+
+```
+┌─────────────────────────────────────────────────┐
+│ Assets Tab                                      │
+├──────────────────┬──────────────────────────────┤
+│ Assets           │                              │
+│ [+ New] [Upload] │ Current File: editor.css     │
+│                  │ [Save] [Delete]              │
+├──────────────────┼──────────────────────────────┤
+│ 📁 css/          │                              │
+│   📄 editor.css  │  /* Monaco Editor */         │
+│   📄 engine.css  │  .button {                   │
+│ 📁 images/       │    background: #007acc;      │
+│   🖼️ logo.png    │    padding: 10px;            │
+│   🖼️ icon.svg    │  }                           │
+│ 📁 fonts/        │                              │
+│   📄 inter.woff2 │                              │
+│                  │                              │
+└──────────────────┴──────────────────────────────┘
+```
 
 **Features:**
 
-- Detect asset type by extension (.css, .svg, .json)
-- Auto-switch Monaco language mode
-- Unified editing experience with scripts
-- Save through existing asset API
+**Asset Sidebar:**
 
-**Implementation:**
+- List of all assets organized by type/folder
+- Icons indicating file type (text vs binary)
+- **[+ New]** button - Create new text-based asset
+- **[Upload]** button - Upload files (text or binary)
+- Click to select and edit
+
+**Asset Editor Panel:**
+
+- Monaco Editor for text-based formats
+- Auto-detect language by extension:
+  - `.css` → CSS
+  - `.svg` → XML
+  - `.json` → JSON
+  - `.html` → HTML
+  - `.md` → Markdown
+  - `.txt` → Plain text
+  - `.js` → JavaScript
+  - `.xml` → XML
+- **[Save]** button - Save changes (enabled when modified)
+- **[Delete]** button - Delete asset (with confirmation)
+- Binary format indicator - Show message: "Binary file - cannot be edited in text editor"
+
+**File Type Detection:**
 
 ```javascript
-// In loadAsset() method
-const language =
-  {
+// Detect if asset is text or binary
+function isTextAsset(path) {
+  const textExtensions = [
+    ".css",
+    ".svg",
+    ".json",
+    ".html",
+    ".md",
+    ".txt",
+    ".js",
+    ".xml",
+    ".csv",
+    ".yaml",
+    ".yml",
+    ".toml",
+  ];
+  const ext = path.substring(path.lastIndexOf("."));
+  return textExtensions.includes(ext);
+}
+
+// Get Monaco language mode
+function getLanguageMode(path) {
+  const ext = path.substring(path.lastIndexOf("."));
+  const languageMap = {
     ".css": "css",
     ".svg": "xml",
     ".json": "json",
     ".html": "html",
     ".md": "markdown",
-  }[fileExtension] || "plaintext";
+    ".txt": "plaintext",
+    ".js": "javascript",
+    ".xml": "xml",
+    ".yaml": "yaml",
+    ".yml": "yaml",
+  };
+  return languageMap[ext] || "plaintext";
+}
 
-this.monacoEditor.setValue(content);
-monaco.editor.setModelLanguage(this.monacoEditor.getModel(), language);
+// In loadAsset() method
+if (isTextAsset(assetPath)) {
+  // Load in Monaco editor
+  const content = fetchAsset(assetPath);
+  const language = getLanguageMode(assetPath);
+  this.monacoEditor.setValue(content);
+  monaco.editor.setModelLanguage(this.monacoEditor.getModel(), language);
+  this.showEditor();
+} else {
+  // Binary file - show info panel instead
+  this.hideEditor();
+  this.showBinaryInfo(assetPath);
+}
 ```
+
+**Binary Asset Handling:**
+
+When a binary asset (image, font, etc.) is selected:
+
+- Hide Monaco editor
+- Show info panel with:
+  - File name and path
+  - File size
+  - MIME type
+  - Preview thumbnail (for images)
+  - Message: "This is a binary file and cannot be edited as text"
+  - **[Download]** button
+  - **[Replace]** button (upload new version)
+  - **[Delete]** button
+
+**New Asset Creation:**
+
+Clicking **[+ New]** opens dialog:
+
+```
+┌─────────────────────────────────────────┐
+│ Create New Asset                        │
+├─────────────────────────────────────────┤
+│ File Name: [styles/custom.css        ] │
+│                                         │
+│ Type:  [CSS ▼]                          │
+│   - CSS                                 │
+│   - SVG                                 │
+│   - JSON                                │
+│   - HTML                                │
+│   - Markdown                            │
+│   - Plain Text                          │
+│                                         │
+│ [Cancel]                     [Create]   │
+└─────────────────────────────────────────┘
+```
+
+**Upload Asset:**
+
+Clicking **[Upload]** opens file picker:
+
+- Supports both text and binary files
+- Multiple file selection enabled
+- Shows upload progress
+- Auto-detects MIME type
+- Confirms before overwriting existing files
 
 **Advantages:**
 
-- Simple implementation (Monaco already supports these languages)
-- Consistent UX with script editing
-- No new dependencies
-- Immediate value
+- **Consistent UX** - Same workflow as Scripts tab
+- **Simple implementation** - Monaco already supports these languages
+- **No new dependencies** - Uses existing editor infrastructure
+- **Clear distinction** - Text vs binary files handled appropriately
+- **Immediate value** - Edit CSS, SVG, JSON, etc. inline
+- **Familiar patterns** - Users already know how to use Scripts tab
 
 **Disadvantages:**
 
-- No visual editing for SVG
-- No live preview (initially)
+- No visual editing for SVG (could be Phase 2)
+- No live preview initially (could be Phase 2)
+- Binary files still require download/upload cycle
 
 ### Option 2: Split-Pane Preview System
 
