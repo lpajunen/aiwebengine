@@ -597,10 +597,22 @@ function apiGetAsset(req) {
 
           const mimetype = getMimeTypeFromPath(assetPath);
 
+          // Add charset=UTF-8 for text-based MIME types
+          let contentType = mimetype;
+          if (
+            mimetype.startsWith("text/") ||
+            mimetype === "application/json" ||
+            mimetype === "application/javascript" ||
+            mimetype === "application/xml" ||
+            mimetype === "image/svg+xml"
+          ) {
+            contentType = mimetype + "; charset=UTF-8";
+          }
+
           return {
             status: 200,
             body: binaryString,
-            contentType: mimetype,
+            contentType: contentType,
           };
         } catch (decodeError) {
           console.log(
@@ -840,6 +852,8 @@ function apiAIAssistant(req) {
   const prompt = body.prompt || "";
   const currentScript = body.currentScript || null;
   const currentScriptContent = body.currentScriptContent || null;
+  const currentAsset = body.currentAsset || null;
+  const currentAssetContent = body.currentAssetContent || null;
 
   // Check if Anthropic API key is configured
   if (!Secrets.exists("anthropic_api_key")) {
@@ -957,12 +971,23 @@ AVAILABLE JAVASCRIPT APIs:
     - Returns: JSON string with GraphQL response
 
 RESPONSE FORMAT - YOU MUST RESPOND WITH ONLY THIS JSON STRUCTURE:
+
+For scripts:
 {
   "type": "explanation" | "create_script" | "edit_script" | "delete_script",
   "message": "Human-readable explanation",
   "script_name": "name.js",
   "code": "complete JavaScript code",
   "original_code": "original code (for edits only)"
+}
+
+For assets (CSS, SVG, HTML, JSON, etc.):
+{
+  "type": "explanation" | "create_asset" | "edit_asset" | "delete_asset",
+  "message": "Human-readable explanation",
+  "asset_path": "/path/to/file.css",
+  "code": "complete file content",
+  "original_code": "original content (for edits only)"
 }
 
 CRITICAL JSON RULES:
@@ -1041,9 +1066,27 @@ Example 4 - Selective Broadcasting Chat:
 Example 5 - GraphQL Subscription with Selective Broadcasting:
 {"type":"create_script","message":"Creating a GraphQL subscription with selective broadcasting for personalized notifications","script_name":"notification-subscription.js","code":"// GraphQL Subscription with Selective Broadcasting\\n\\nfunction init(context) {\\n  registerGraphQLSubscription(\\n    'userNotifications',\\n    'type Subscription { userNotifications: String }',\\n    'userNotificationsResolver'\\n  );\\n  register('/notify/user', 'sendUserNotification', 'POST');\\n  return { success: true };\\n}\\n\\nfunction userNotificationsResolver() {\\n  return 'User notifications subscription active';\\n}\\n\\nfunction sendUserNotification(req) {\\n  const { userId, message, type } = req.form;\\n  \\n  const result = sendSubscriptionMessageToConnections('userNotifications', {\\n    type: type || 'notification',\\n    message: message,\\n    timestamp: new Date().toISOString()\\n  }, JSON.stringify({ user_id: userId }));\\n  \\n  return {\\n    status: 200,\\n    body: JSON.stringify({ success: true, result: result }),\\n    contentType: 'application/json; charset=UTF-8'\\n  };\\n}"}
 
-IMPORTANT: In these examples, each \\n represents ONE newline character in the JavaScript code. When you output JSON, a newline in the source code becomes \\n in the JSON string.
+Example 6 - Create CSS file:
+{"type":"create_asset","message":"Creating a custom stylesheet","asset_path":"/styles/custom.css","code":":root {\\n  --primary-color: #007acc;\\n  --secondary-color: #5a5a5a;\\n}\\n\\nbody {\\n  font-family: 'Arial', sans-serif;\\n  color: var(--secondary-color);\\n}\\n\\n.button {\\n  background-color: var(--primary-color);\\n  color: white;\\n  padding: 10px 20px;\\n  border: none;\\n  border-radius: 4px;\\n  cursor: pointer;\\n}\\n\\n.button:hover {\\n  opacity: 0.9;\\n}"}
 
-Remember: You are creating JavaScript scripts that run on the SERVER and handle HTTP requests. When someone asks for a "web page", you create a script that SERVES that HTML page!`;
+Example 7 - Create SVG icon:
+{"type":"create_asset","message":"Creating a simple SVG icon","asset_path":"/icons/check.svg","code":"<svg xmlns=\\"http://www.w3.org/2000/svg\\" viewBox=\\"0 0 24 24\\" width=\\"24\\" height=\\"24\\">\\n  <path fill=\\"#28a745\\" d=\\"M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z\\"/>\\n</svg>"}
+
+Example 8 - Edit CSS file:
+{"type":"edit_asset","message":"Adding dark mode support to existing CSS","asset_path":"/styles/main.css","original_code":".container {\\n  background: white;\\n  color: black;\\n}","code":".container {\\n  background: white;\\n  color: black;\\n}\\n\\n@media (prefers-color-scheme: dark) {\\n  .container {\\n    background: #1e1e1e;\\n    color: #ffffff;\\n  }\\n}"}
+
+IMPORTANT: In these examples, each \\n represents ONE newline character in the source code. When you output JSON, a newline in the source code becomes \\n in the JSON string.
+
+ASSET CREATION GUIDELINES:
+- For CSS files: Use modern CSS features (variables, flexbox, grid), include proper formatting
+- For SVG files: Use clean, optimized SVG code with proper xmlns attribute
+- For JSON files: Ensure valid JSON structure with proper formatting
+- For HTML files: Use semantic HTML5 markup
+- For Markdown files: Use proper markdown syntax
+- Always use the asset_path field (not script_name) for asset operations
+- Asset paths should start with / (e.g., "/styles/main.css", "/icons/logo.svg")
+
+Remember: You are creating JavaScript scripts that run on the SERVER and handle HTTP requests. When someone asks for a "web page", you create a script that SERVES that HTML page! For styling, images, or static content, create assets instead of scripts.`;
 
   // Build contextual user prompt
   let contextualPrompt = "";
@@ -1058,6 +1101,29 @@ Remember: You are creating JavaScript scripts that run on the SERVER and handle 
       "\\n```\\n\\n";
   }
 
+  // Add context about current asset if available
+  if (currentAsset && currentAssetContent) {
+    contextualPrompt += "CURRENT ASSET CONTEXT:\\n";
+    contextualPrompt += "Asset Path: " + currentAsset + "\\n";
+
+    // Determine file type for appropriate code fence
+    let fileType = "text";
+    if (currentAsset.endsWith(".css")) fileType = "css";
+    else if (currentAsset.endsWith(".svg") || currentAsset.endsWith(".xml"))
+      fileType = "xml";
+    else if (currentAsset.endsWith(".json")) fileType = "json";
+    else if (currentAsset.endsWith(".html")) fileType = "html";
+    else if (currentAsset.endsWith(".md")) fileType = "markdown";
+    else if (currentAsset.endsWith(".js")) fileType = "javascript";
+
+    contextualPrompt +=
+      "Asset Content:\\n```" +
+      fileType +
+      "\\n" +
+      currentAssetContent +
+      "\\n```\\n\\n";
+  }
+
   // Add available scripts list
   try {
     const scripts = typeof listScripts === "function" ? listScripts() : [];
@@ -1066,6 +1132,18 @@ Remember: You are creating JavaScript scripts that run on the SERVER and handle 
     }
   } catch (e) {
     console.log("Could not list scripts: " + e);
+  }
+
+  // Add available assets list
+  try {
+    const assets = typeof listAssets === "function" ? listAssets() : [];
+    if (assets.length > 0) {
+      const assetPaths = assets.map((a) => a.path || a);
+      contextualPrompt +=
+        "AVAILABLE ASSETS: " + assetPaths.join(", ") + "\\n\\n";
+    }
+  } catch (e) {
+    console.log("Could not list assets: " + e);
   }
 
   // Add user's actual prompt

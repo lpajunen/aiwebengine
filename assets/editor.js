@@ -494,7 +494,11 @@ function init(context) {
       // Load text asset in Monaco editor
       try {
         const response = await fetch(`/api/assets${path}`);
-        const content = await response.text();
+
+        // Get the content as an ArrayBuffer first, then decode as UTF-8
+        const buffer = await response.arrayBuffer();
+        const decoder = new TextDecoder("utf-8");
+        const content = decoder.decode(buffer);
 
         this.monacoAssetEditor.setValue(content);
         const language = this.getLanguageMode(path);
@@ -587,8 +591,8 @@ function init(context) {
     const content = this.monacoAssetEditor.getValue();
 
     try {
-      // Convert content to base64
-      const base64 = btoa(unescape(encodeURIComponent(content)));
+      // Convert content to base64 using UTF-8 safe encoding
+      const base64 = this.textToBase64(content);
 
       // Determine MIME type from extension
       const ext = this.currentAsset
@@ -898,6 +902,22 @@ function init(context) {
     });
   }
 
+  // UTF-8 safe base64 encoding for text content
+  textToBase64(text) {
+    // Convert text to UTF-8 bytes using TextEncoder
+    const encoder = new TextEncoder();
+    const utf8Bytes = encoder.encode(text);
+
+    // Convert bytes to binary string
+    let binaryString = "";
+    for (let i = 0; i < utf8Bytes.length; i++) {
+      binaryString += String.fromCharCode(utf8Bytes[i]);
+    }
+
+    // Encode to base64
+    return btoa(binaryString);
+  }
+
   formatBytes(bytes) {
     if (bytes === 0) return "0 Bytes";
     const k = 1024;
@@ -970,13 +990,20 @@ function init(context) {
     responseDiv.classList.add("loading");
 
     try {
-      // Include current script context
+      // Include current context (script or asset)
       const requestBody = {
         prompt: prompt,
         currentScript: this.currentScript,
         currentScriptContent: this.monacoEditor
           ? this.monacoEditor.getValue()
           : null,
+        currentAsset: this.currentAsset,
+        currentAssetContent:
+          this.monacoAssetEditor &&
+          this.currentAsset &&
+          this.isTextAsset(this.currentAsset)
+            ? this.monacoAssetEditor.getValue()
+            : null,
       };
 
       const response = await fetch("/api/ai-assistant", {
@@ -1039,6 +1066,7 @@ function init(context) {
     const actionType = parsed.type;
     const message = parsed.message || "AI suggestion";
     const scriptName = parsed.script_name || "untitled.js";
+    const assetPath = parsed.asset_path || parsed.asset_name || null;
     const code = parsed.code || "";
     const originalCode = parsed.original_code || "";
 
@@ -1046,6 +1074,7 @@ function init(context) {
     this.pendingAIAction = {
       type: actionType,
       scriptName: scriptName,
+      assetPath: assetPath,
       code: code,
       originalCode: originalCode,
       message: message,
@@ -1091,6 +1120,33 @@ function init(context) {
         </div>
         </div>
       `;
+    } else if (actionType === "create_asset") {
+      html += `
+        <p><strong>Asset Path:</strong> <code>${this.escapeHtml(assetPath)}</code></p>
+        <div class="ai-code-preview">
+          <pre><code>${this.escapeHtml(code.substring(0, 300))}${code.length > 300 ? "..." : ""}</code></pre>
+        </div>
+        <div class="ai-action-buttons">
+          <button class="btn btn-success" onclick="window.editor.applyPendingAIAction()">Preview & Create</button>
+        </div>
+        </div>
+      `;
+    } else if (actionType === "edit_asset") {
+      html += `
+        <p><strong>Asset Path:</strong> <code>${this.escapeHtml(assetPath)}</code></p>
+        <div class="ai-action-buttons">
+          <button class="btn btn-primary" onclick="window.editor.applyPendingAIAction()">Preview Changes</button>
+        </div>
+        </div>
+      `;
+    } else if (actionType === "delete_asset") {
+      html += `
+        <p><strong>Asset Path:</strong> <code>${this.escapeHtml(assetPath)}</code></p>
+        <div class="ai-action-buttons">
+          <button class="btn btn-danger" onclick="window.editor.applyPendingAIAction()">Confirm Delete</button>
+        </div>
+        </div>
+      `;
     }
 
     html += `
@@ -1108,11 +1164,18 @@ function init(context) {
       return;
     }
 
-    const { type, scriptName, code, originalCode, message } =
+    const { type, scriptName, assetPath, code, originalCode, message } =
       this.pendingAIAction;
 
     if (type === "create_script") {
-      await this.showDiffModal(scriptName, "", code, message, "create");
+      await this.showDiffModal(
+        scriptName,
+        "",
+        code,
+        message,
+        "create",
+        "script",
+      );
     } else if (type === "edit_script") {
       await this.showDiffModal(
         scriptName,
@@ -1120,22 +1183,44 @@ function init(context) {
         code,
         message,
         "edit",
+        "script",
       );
     } else if (type === "delete_script") {
       this.confirmDeleteScript(scriptName, message);
+    } else if (type === "create_asset") {
+      await this.showDiffModal(assetPath, "", code, message, "create", "asset");
+    } else if (type === "edit_asset") {
+      await this.showDiffModal(
+        assetPath,
+        originalCode || "",
+        code,
+        message,
+        "edit",
+        "asset",
+      );
+    } else if (type === "delete_asset") {
+      this.confirmDeleteAsset(assetPath, message);
     }
   }
 
-  async showDiffModal(scriptName, originalCode, newCode, explanation, action) {
+  async showDiffModal(
+    name,
+    originalCode,
+    newCode,
+    explanation,
+    action,
+    contentType,
+  ) {
     const modal = document.getElementById("diff-modal");
     const title = document.getElementById("diff-modal-title");
     const explanationDiv = document.getElementById("diff-explanation");
 
-    // Set title based on action
+    // Set title based on action and type
+    const typeLabel = contentType === "asset" ? "Asset" : "Script";
     if (action === "create") {
-      title.textContent = `Create Script: ${scriptName}`;
+      title.textContent = `Create ${typeLabel}: ${name}`;
     } else if (action === "edit") {
-      title.textContent = `Edit Script: ${scriptName}`;
+      title.textContent = `Edit ${typeLabel}: ${name}`;
     }
 
     explanationDiv.innerHTML = `<p>${this.escapeHtml(explanation)}</p>`;
@@ -1143,18 +1228,25 @@ function init(context) {
     // Show modal
     modal.style.display = "flex";
 
+    // Determine language mode based on content type
+    let language = "javascript";
+    if (contentType === "asset") {
+      language = this.getLanguageMode(name);
+    }
+
     // Create diff editor
-    await this.createDiffEditor(originalCode || "", newCode);
+    await this.createDiffEditor(originalCode || "", newCode, language);
 
     // Store data for apply action
     this.pendingChange = {
-      scriptName: scriptName,
+      name: name,
       newCode: newCode,
       action: action,
+      contentType: contentType,
     };
   }
 
-  async createDiffEditor(originalCode, newCode) {
+  async createDiffEditor(originalCode, newCode, language = "javascript") {
     const container = document.getElementById("monaco-diff-editor");
 
     // Clear any existing content
@@ -1175,9 +1267,9 @@ function init(context) {
 
       const original = monaco.editor.createModel(
         originalCode || "// New file",
-        "javascript",
+        language,
       );
-      const modified = monaco.editor.createModel(newCode, "javascript");
+      const modified = monaco.editor.createModel(newCode, language);
 
       this.monacoDiffEditor.setModel({
         original: original,
@@ -1203,33 +1295,147 @@ function init(context) {
   async applyPendingChange() {
     if (!this.pendingChange) return;
 
-    const { scriptName, newCode, action } = this.pendingChange;
+    const { name, newCode, action, contentType } = this.pendingChange;
 
     try {
-      if (action === "create" || action === "edit") {
-        const encodedScriptName = encodeURIComponent(scriptName);
-        const response = await fetch(`/api/scripts/${encodedScriptName}`, {
-          method: "POST",
-          body: newCode,
-        });
+      if (contentType === "asset") {
+        // Handle asset creation/editing
+        if (action === "create" || action === "edit") {
+          // Convert content to base64 using UTF-8 safe encoding
+          const base64 = this.textToBase64(newCode);
 
-        if (!response.ok) {
-          throw new Error(`Failed to save script: ${response.status}`);
+          // Determine MIME type from extension
+          const ext = name.substring(name.lastIndexOf(".")).toLowerCase();
+          const mimeTypes = {
+            ".css": "text/css",
+            ".svg": "image/svg+xml",
+            ".json": "application/json",
+            ".html": "text/html",
+            ".md": "text/markdown",
+            ".txt": "text/plain",
+            ".js": "application/javascript",
+            ".xml": "application/xml",
+            ".yaml": "text/yaml",
+            ".yml": "text/yaml",
+          };
+          const mimetype = mimeTypes[ext] || "text/plain";
+
+          const response = await fetch("/api/assets", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              publicPath: name,
+              mimetype: mimetype,
+              content: base64,
+            }),
+          });
+
+          if (!response.ok) {
+            throw new Error(`Failed to save asset: ${response.status}`);
+          }
+
+          this.showStatus(
+            `Asset ${action === "create" ? "created" : "updated"} successfully`,
+            "success",
+          );
+          this.loadAssets();
+
+          // Switch to Assets tab and set the content directly
+          this.switchTab("assets");
+
+          // Set the asset directly from newCode instead of loading from server
+          // This avoids any server-side encoding issues
+          this.currentAsset = name;
+
+          // Update active state in list
+          document.querySelectorAll(".asset-item").forEach((item) => {
+            item.classList.remove("active");
+          });
+
+          // Update toolbar
+          document.getElementById("current-asset-name").textContent = name;
+          document.getElementById("save-asset-btn").disabled = false;
+          document.getElementById("delete-asset-btn").disabled = false;
+
+          // Set content directly from newCode
+          this.monacoAssetEditor.setValue(newCode);
+          const language = this.getLanguageMode(name);
+          monaco.editor.setModelLanguage(
+            this.monacoAssetEditor.getModel(),
+            language,
+          );
+
+          // Show editor
+          document.getElementById("monaco-asset-editor").style.display =
+            "block";
+          document.getElementById("binary-asset-info").style.display = "none";
+          document.getElementById("no-asset-selected").style.display = "none";
+
+          // Wait a bit for the list to reload, then update the active item
+          setTimeout(() => {
+            const activeItem = document.querySelector(`[data-path="${name}"]`);
+            if (activeItem) {
+              activeItem.classList.add("active");
+            }
+          }, 100);
         }
+      } else {
+        // Handle script creation/editing (existing logic)
+        if (action === "create" || action === "edit") {
+          const encodedScriptName = encodeURIComponent(name);
+          const response = await fetch(`/api/scripts/${encodedScriptName}`, {
+            method: "POST",
+            body: newCode,
+          });
 
-        this.showStatus(
-          `Script ${action === "create" ? "created" : "updated"} successfully`,
-          "success",
-        );
-        this.loadScripts();
+          if (!response.ok) {
+            throw new Error(`Failed to save script: ${response.status}`);
+          }
 
-        // Load the script in editor
-        this.loadScript(scriptName);
+          this.showStatus(
+            `Script ${action === "create" ? "created" : "updated"} successfully`,
+            "success",
+          );
+          this.loadScripts();
+
+          // Load the script in editor
+          this.loadScript(name);
+        }
       }
 
       this.closeDiffModal();
     } catch (error) {
       this.showStatus(`Error applying changes: ${error.message}`, "error");
+    }
+  }
+
+  confirmDeleteAsset(assetPath, explanation) {
+    if (
+      confirm(`${explanation}\n\nAre you sure you want to delete ${assetPath}?`)
+    ) {
+      fetch(`/api/assets${assetPath}`, {
+        method: "DELETE",
+      })
+        .then(() => {
+          this.showStatus("Asset deleted successfully", "success");
+          this.loadAssets();
+
+          if (this.currentAsset === assetPath) {
+            this.currentAsset = null;
+            document.getElementById("current-asset-name").textContent =
+              "No asset selected";
+            document.getElementById("monaco-asset-editor").style.display =
+              "none";
+            document.getElementById("binary-asset-info").style.display = "none";
+            document.getElementById("no-asset-selected").style.display =
+              "block";
+          }
+        })
+        .catch((error) => {
+          this.showStatus("Error deleting asset: " + error.message, "error");
+        });
     }
   }
 
