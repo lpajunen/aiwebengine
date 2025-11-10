@@ -494,20 +494,7 @@ function init(context) {
       // Load text asset in Monaco editor
       try {
         const response = await fetch(`/api/assets${path}`);
-
-        // The server sends UTF-8 bytes encoded as a Latin-1 string
-        // First, get it as text (which gives us Latin-1)
-        const latin1String = await response.text();
-
-        // Convert Latin-1 string back to UTF-8 bytes
-        const utf8Bytes = new Uint8Array(latin1String.length);
-        for (let i = 0; i < latin1String.length; i++) {
-          utf8Bytes[i] = latin1String.charCodeAt(i);
-        }
-
-        // Now decode the UTF-8 bytes properly
-        const decoder = new TextDecoder("utf-8");
-        const content = decoder.decode(utf8Bytes);
+        const content = await response.text();
 
         this.monacoAssetEditor.setValue(content);
         const language = this.getLanguageMode(path);

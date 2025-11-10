@@ -616,7 +616,8 @@ async fn test_secure_request_execution() {
     match request_result {
         Ok(response) => {
             assert_eq!(response.status, 200);
-            assert!(response.body.contains("Secure request handled"));
+            let body_str = String::from_utf8_lossy(&response.body);
+            assert!(body_str.contains("Secure request handled"));
             assert_eq!(response.content_type, Some("application/json".to_string()));
         }
         Err(e) => panic!("Secure request execution failed: {}", e),

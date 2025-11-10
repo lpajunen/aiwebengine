@@ -468,16 +468,25 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
 #[derive(Debug, Clone)]
 pub struct JsHttpResponse {
     pub status: u16,
-    pub body: String,
+    pub body: Vec<u8>,
     pub content_type: Option<String>,
     pub headers: std::collections::HashMap<String, String>,
 }
 
 impl JsHttpResponse {
-    pub fn new(status: u16, body: String) -> Self {
+    pub fn new(status: u16, body: Vec<u8>) -> Self {
         Self {
             status,
             body,
+            content_type: None,
+            headers: std::collections::HashMap::new(),
+        }
+    }
+
+    pub fn from_string(status: u16, body: String) -> Self {
+        Self {
+            status,
+            body: body.into_bytes(),
             content_type: None,
             headers: std::collections::HashMap::new(),
         }
@@ -606,9 +615,21 @@ pub fn execute_script_for_request_secure(
             let status: i32 = response_obj
                 .get("status")
                 .map_err(|e| format!("missing status: {}", e))?;
-            let body: String = response_obj
-                .get("body")
-                .map_err(|e| format!("missing body: {}", e))?;
+
+            // Try to get bodyBase64 first (for binary data), otherwise fall back to body (for text)
+            let body: Vec<u8> = if let Ok(body_base64) = response_obj.get::<_, String>("bodyBase64")
+            {
+                // Decode base64 to bytes
+                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &body_base64)
+                    .map_err(|e| format!("failed to decode bodyBase64: {}", e))?
+            } else {
+                // Fall back to string body
+                let body_string: String = response_obj
+                    .get("body")
+                    .map_err(|e| format!("missing body or bodyBase64: {}", e))?;
+                body_string.into_bytes()
+            };
+
             let content_type: Option<String> = response_obj.get("contentType").ok();
 
             // Extract headers if present
@@ -644,8 +665,9 @@ pub fn execute_script_for_request_secure(
                     .as_string()
                     .and_then(|s| s.to_string().ok())
                     .unwrap_or_else(|| "<conversion error>".to_string())
+                    .into_bytes()
             } else {
-                "<no response>".to_string()
+                "<no response>".to_string().into_bytes()
             };
             Ok(JsHttpResponse::new(200, body))
         }

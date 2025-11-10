@@ -581,52 +581,26 @@ function apiGetAsset(req) {
 
       if (assetData && !assetData.startsWith("Asset '")) {
         // fetchAsset returns base64 encoded content
-        // Decode it properly for HTTP serving
-        try {
-          const bytes = decodeBase64(assetData);
+        // Return it directly in the bodyBase64 field for proper binary handling
+        const mimetype = getMimeTypeFromPath(assetPath);
 
-          // Use a more reliable method to convert bytes to binary string
-          // that preserves all byte values correctly
-          const chunks = [];
-          const chunkSize = 8192; // Process in chunks to avoid stack overflow
-          for (let i = 0; i < bytes.length; i += chunkSize) {
-            const chunk = bytes.slice(i, i + chunkSize);
-            chunks.push(String.fromCharCode.apply(null, chunk));
-          }
-          const binaryString = chunks.join("");
-
-          const mimetype = getMimeTypeFromPath(assetPath);
-
-          // Add charset=UTF-8 for text-based MIME types
-          let contentType = mimetype;
-          if (
-            mimetype.startsWith("text/") ||
-            mimetype === "application/json" ||
-            mimetype === "application/javascript" ||
-            mimetype === "application/xml" ||
-            mimetype === "image/svg+xml"
-          ) {
-            contentType = mimetype + "; charset=UTF-8";
-          }
-
-          return {
-            status: 200,
-            body: binaryString,
-            contentType: contentType,
-          };
-        } catch (decodeError) {
-          console.log(
-            "Error decoding asset content for " +
-              assetPath +
-              ": " +
-              decodeError.message,
-          );
-          return {
-            status: 500,
-            body: "Error decoding asset content",
-            contentType: "text/plain; charset=UTF-8",
-          };
+        // Add charset=UTF-8 for text-based MIME types
+        let contentType = mimetype;
+        if (
+          mimetype.startsWith("text/") ||
+          mimetype === "application/json" ||
+          mimetype === "application/javascript" ||
+          mimetype === "application/xml" ||
+          mimetype === "image/svg+xml"
+        ) {
+          contentType = mimetype + "; charset=UTF-8";
         }
+
+        return {
+          status: 200,
+          bodyBase64: assetData,
+          contentType: contentType,
+        };
       } else {
         return {
           status: 404,
