@@ -2,7 +2,9 @@
 class AIWebEngineEditor {
   constructor() {
     this.currentScript = null;
+    this.currentAsset = null;
     this.monacoEditor = null;
+    this.monacoAssetEditor = null;
     this.templates = {};
     this.init();
   }
@@ -35,21 +37,11 @@ class AIWebEngineEditor {
         </div>
       `,
       "asset-item": (data) => `
-        <div class="asset-item" data-path="${data.path}">
-          <div class="asset-preview">
-            ${
-              data.isImage
-                ? `<img src="/api/assets${data.path}" alt="${data.name}" loading="lazy">`
-                : `<div class="asset-icon">${data.icon}</div>`
-            }
-          </div>
+        <div class="asset-item ${data.active ? "active" : ""}" data-path="${data.path}">
+          <div class="asset-icon">${data.icon}</div>
           <div class="asset-info">
             <div class="asset-name">${data.name}</div>
-            <div class="asset-meta">${data.size} • ${data.type}</div>
-          </div>
-          <div class="asset-actions">
-            <button class="btn btn-small btn-secondary download-btn" data-path="${data.path}">↓</button>
-            <button class="btn btn-small btn-danger delete-btn" data-path="${data.path}">×</button>
+            <div class="asset-meta">${data.isText ? "text" : "binary"} • ${data.size}</div>
           </div>
         </div>
       `,
@@ -95,11 +87,20 @@ class AIWebEngineEditor {
 
     // Asset management
     document
+      .getElementById("new-asset-btn")
+      .addEventListener("click", () => this.createNewAsset());
+    document
       .getElementById("upload-asset-btn")
       .addEventListener("click", () => this.triggerAssetUpload());
     document
       .getElementById("asset-upload")
       .addEventListener("change", (e) => this.uploadAssets(e.target.files));
+    document
+      .getElementById("save-asset-btn")
+      .addEventListener("click", () => this.saveCurrentAsset());
+    document
+      .getElementById("delete-asset-btn")
+      .addEventListener("click", () => this.deleteCurrentAsset());
 
     // Logs
     document
@@ -158,6 +159,7 @@ class AIWebEngineEditor {
       });
 
       require(["vs/editor/editor.main"], () => {
+        // Script editor
         this.monacoEditor = monaco.editor.create(
           document.getElementById("monaco-editor"),
           {
@@ -174,6 +176,25 @@ class AIWebEngineEditor {
 
         this.monacoEditor.onDidChangeModelContent(() => {
           this.updateSaveButton();
+        });
+
+        // Asset editor
+        this.monacoAssetEditor = monaco.editor.create(
+          document.getElementById("monaco-asset-editor"),
+          {
+            value: "// Select an asset to edit",
+            language: "plaintext",
+            theme: "vs-dark",
+            fontSize: 14,
+            minimap: { enabled: true },
+            scrollBeyondLastLine: false,
+            automaticLayout: true,
+            wordWrap: "on",
+          },
+        );
+
+        this.monacoAssetEditor.onDidChangeModelContent(() => {
+          this.updateAssetSaveButton();
         });
 
         resolve();
@@ -377,38 +398,288 @@ function init(context) {
       const response = await fetch("/api/assets");
       const data = await response.json();
 
-      const assetsGrid = document.getElementById("assets-grid");
-      assetsGrid.innerHTML = "";
+      const assetsList = document.getElementById("assets-list");
+      assetsList.innerHTML = "";
 
       data.assets.forEach((asset) => {
         const assetElement = document.createElement("div");
-        // Exclude .ico files from being displayed as images since they don't render well
-        const isDisplayableImage =
-          asset.type.startsWith("image/") && asset.type !== "image/x-icon";
+        const isText = this.isTextAsset(asset.path);
+
         assetElement.innerHTML = this.templates["asset-item"]({
           path: asset.path,
           name: asset.name,
           size: this.formatBytes(asset.size),
           type: asset.type,
-          isImage: isDisplayableImage,
-          icon: this.getFileIcon(asset.type),
+          isText: isText,
+          icon: this.getFileIcon(asset.type, isText),
+          active: this.currentAsset === asset.path,
         });
 
-        // Add event listeners
-        const item = assetElement.querySelector(".asset-item");
-        item.querySelector(".download-btn").addEventListener("click", (e) => {
-          e.stopPropagation();
-          this.downloadAsset(asset.path);
-        });
-        item.querySelector(".delete-btn").addEventListener("click", (e) => {
-          e.stopPropagation();
-          this.deleteAsset(asset.path);
-        });
+        // Add click listener to select asset
+        const item = assetElement.firstElementChild;
+        item.addEventListener("click", () => this.selectAsset(asset.path));
 
-        assetsGrid.appendChild(assetElement.firstElementChild);
+        assetsList.appendChild(item);
       });
     } catch (error) {
       this.showStatus("Error loading assets: " + error.message, "error");
+    }
+  }
+
+  isTextAsset(path) {
+    const textExtensions = [
+      ".css",
+      ".svg",
+      ".json",
+      ".html",
+      ".md",
+      ".txt",
+      ".js",
+      ".xml",
+      ".csv",
+      ".yaml",
+      ".yml",
+      ".toml",
+      ".log",
+      ".ini",
+      ".conf",
+      ".config",
+    ];
+    const ext = path.substring(path.lastIndexOf(".")).toLowerCase();
+    return textExtensions.includes(ext);
+  }
+
+  getLanguageMode(path) {
+    const ext = path.substring(path.lastIndexOf(".")).toLowerCase();
+    const languageMap = {
+      ".css": "css",
+      ".svg": "xml",
+      ".json": "json",
+      ".html": "html",
+      ".md": "markdown",
+      ".txt": "plaintext",
+      ".js": "javascript",
+      ".xml": "xml",
+      ".yaml": "yaml",
+      ".yml": "yaml",
+      ".toml": "ini",
+      ".log": "plaintext",
+      ".ini": "ini",
+      ".conf": "plaintext",
+      ".config": "plaintext",
+    };
+    return languageMap[ext] || "plaintext";
+  }
+
+  async selectAsset(path) {
+    this.currentAsset = path;
+
+    // Update active state in list
+    document.querySelectorAll(".asset-item").forEach((item) => {
+      item.classList.remove("active");
+    });
+    const activeItem = document.querySelector(`[data-path="${path}"]`);
+    if (activeItem) {
+      activeItem.classList.add("active");
+    }
+
+    // Update toolbar
+    document.getElementById("current-asset-name").textContent = path;
+    document.getElementById("save-asset-btn").disabled = false;
+    document.getElementById("delete-asset-btn").disabled = false;
+
+    const isText = this.isTextAsset(path);
+
+    if (isText) {
+      // Load text asset in Monaco editor
+      try {
+        const response = await fetch(`/api/assets${path}`);
+        const content = await response.text();
+
+        this.monacoAssetEditor.setValue(content);
+        const language = this.getLanguageMode(path);
+        monaco.editor.setModelLanguage(
+          this.monacoAssetEditor.getModel(),
+          language,
+        );
+
+        // Show editor, hide binary info
+        document.getElementById("monaco-asset-editor").style.display = "block";
+        document.getElementById("binary-asset-info").style.display = "none";
+        document.getElementById("no-asset-selected").style.display = "none";
+        document.getElementById("save-asset-btn").disabled = false;
+      } catch (error) {
+        this.showStatus("Error loading asset: " + error.message, "error");
+      }
+    } else {
+      // Binary asset - show info panel
+      this.showBinaryAssetInfo(path);
+      document.getElementById("save-asset-btn").disabled = true;
+    }
+  }
+
+  showBinaryAssetInfo(path) {
+    const filename = path.split("/").pop();
+    const ext = path.substring(path.lastIndexOf(".")).toLowerCase();
+
+    // Hide editor, show binary info
+    document.getElementById("monaco-asset-editor").style.display = "none";
+    document.getElementById("no-asset-selected").style.display = "none";
+    document.getElementById("binary-asset-info").style.display = "block";
+
+    const detailsDiv = document.getElementById("binary-asset-details");
+    detailsDiv.innerHTML = `
+      <p><strong>File:</strong> ${filename}</p>
+      <p><strong>Path:</strong> ${path}</p>
+      <p><strong>Type:</strong> Binary file</p>
+      <div class="binary-actions">
+        <button class="btn btn-secondary" onclick="window.editor.downloadAsset('${path}')">Download</button>
+      </div>
+    `;
+
+    const previewDiv = document.getElementById("binary-asset-preview");
+    previewDiv.innerHTML = "";
+
+    // Show preview for images
+    const imageExtensions = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"];
+    if (imageExtensions.includes(ext)) {
+      previewDiv.innerHTML = `
+        <div class="image-preview">
+          <img src="/api/assets${path}" alt="${filename}" style="max-width: 100%; max-height: 400px;">
+        </div>
+      `;
+    }
+  }
+
+  createNewAsset() {
+    const filename = prompt("Enter asset filename (e.g., styles/custom.css):");
+    if (!filename) return;
+
+    // Ensure it starts with /
+    const path = filename.startsWith("/") ? filename : "/" + filename;
+
+    if (!this.isTextAsset(path)) {
+      alert(
+        "Only text-based assets can be created. Use Upload for binary files.",
+      );
+      return;
+    }
+
+    // Create empty asset
+    this.currentAsset = path;
+    this.monacoAssetEditor.setValue("");
+    const language = this.getLanguageMode(path);
+    monaco.editor.setModelLanguage(this.monacoAssetEditor.getModel(), language);
+
+    document.getElementById("current-asset-name").textContent = path + " (new)";
+    document.getElementById("monaco-asset-editor").style.display = "block";
+    document.getElementById("binary-asset-info").style.display = "none";
+    document.getElementById("no-asset-selected").style.display = "none";
+    document.getElementById("save-asset-btn").disabled = false;
+    document.getElementById("delete-asset-btn").disabled = true;
+
+    this.showStatus("Create your asset and click Save", "info");
+  }
+
+  async saveCurrentAsset() {
+    if (!this.currentAsset) return;
+
+    const content = this.monacoAssetEditor.getValue();
+
+    try {
+      // Convert content to base64
+      const base64 = btoa(unescape(encodeURIComponent(content)));
+
+      // Determine MIME type from extension
+      const ext = this.currentAsset
+        .substring(this.currentAsset.lastIndexOf("."))
+        .toLowerCase();
+      const mimeTypes = {
+        ".css": "text/css",
+        ".svg": "image/svg+xml",
+        ".json": "application/json",
+        ".html": "text/html",
+        ".md": "text/markdown",
+        ".txt": "text/plain",
+        ".js": "application/javascript",
+        ".xml": "application/xml",
+        ".yaml": "text/yaml",
+        ".yml": "text/yaml",
+      };
+      const mimetype = mimeTypes[ext] || "text/plain";
+
+      const response = await fetch("/api/assets", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          publicPath: this.currentAsset,
+          mimetype: mimetype,
+          content: base64,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Save failed with status ${response.status}`);
+      }
+
+      this.showStatus("Asset saved successfully", "success");
+
+      // Update the display name to remove (new) if it was there
+      document.getElementById("current-asset-name").textContent =
+        this.currentAsset;
+      document.getElementById("delete-asset-btn").disabled = false;
+
+      // Reload assets list
+      this.loadAssets();
+    } catch (error) {
+      this.showStatus("Error saving asset: " + error.message, "error");
+    }
+  }
+
+  async deleteCurrentAsset() {
+    if (!this.currentAsset) return;
+
+    if (!confirm(`Are you sure you want to delete ${this.currentAsset}?`))
+      return;
+
+    try {
+      const response = await fetch(`/api/assets${this.currentAsset}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(
+          `Delete failed with status ${response.status}: ${errorText}`,
+        );
+      }
+
+      this.showStatus("Asset deleted successfully", "success");
+
+      // Clear editor
+      this.currentAsset = null;
+      document.getElementById("current-asset-name").textContent =
+        "No asset selected";
+      document.getElementById("monaco-asset-editor").style.display = "none";
+      document.getElementById("binary-asset-info").style.display = "none";
+      document.getElementById("no-asset-selected").style.display = "block";
+      document.getElementById("save-asset-btn").disabled = true;
+      document.getElementById("delete-asset-btn").disabled = true;
+
+      // Reload assets list
+      this.loadAssets();
+    } catch (error) {
+      this.showStatus("Error deleting asset: " + error.message, "error");
+    }
+  }
+
+  updateAssetSaveButton() {
+    const saveBtn = document.getElementById("save-asset-btn");
+    if (this.currentAsset && this.isTextAsset(this.currentAsset)) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = "Save *";
     }
   }
 
@@ -444,36 +715,6 @@ function init(context) {
     }
 
     this.loadAssets();
-  }
-
-  async deleteAsset(path) {
-    if (!confirm(`Are you sure you want to delete ${path}?`)) return;
-
-    try {
-      console.log(`Attempting to delete asset: ${path}`);
-      const response = await fetch(`/api/assets${path}`, {
-        method: "DELETE",
-      });
-
-      console.log(`Delete response status: ${response.status}`);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error(`Delete failed: ${errorText}`);
-        throw new Error(
-          `Delete failed with status ${response.status}: ${errorText}`,
-        );
-      }
-
-      const result = await response.json();
-      console.log(`Delete successful:`, result);
-
-      this.loadAssets();
-      this.showStatus("Asset deleted successfully", "success");
-    } catch (error) {
-      console.error("Error deleting asset:", error);
-      this.showStatus("Error deleting asset: " + error.message, "error");
-    }
   }
 
   downloadAsset(path) {
@@ -665,8 +906,29 @@ function init(context) {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
   }
 
-  getFileIcon(type) {
-    if (type === "image/x-icon") return "⭐"; // Special icon for favicons
+  getFileIcon(type, isText) {
+    // If isText is provided, use that to determine icon
+    if (isText !== undefined) {
+      if (isText) {
+        // Text-based files
+        if (type.includes("css")) return "🎨";
+        if (type.includes("svg") || type.includes("xml")) return "🖼️";
+        if (type.includes("json")) return "📋";
+        if (type.includes("html")) return "📄";
+        if (type.includes("markdown")) return "📝";
+        if (type.includes("javascript")) return "📜";
+        return "📄";
+      } else {
+        // Binary files
+        if (type === "image/x-icon") return "⭐";
+        if (type.startsWith("image/")) return "🖼️";
+        if (type.includes("font")) return "🔤";
+        return "📦";
+      }
+    }
+
+    // Fallback to original logic
+    if (type === "image/x-icon") return "⭐";
     if (type.startsWith("image/")) return "🖼️";
     if (type.startsWith("text/")) return "📄";
     if (type.includes("javascript")) return "📜";

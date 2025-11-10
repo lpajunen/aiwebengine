@@ -144,15 +144,41 @@ function serveEditor(req) {
             <!-- Assets Tab -->
             <div id="assets-tab" class="tab-content">
                 <div class="assets-container">
-                    <div class="assets-header">
-                        <h3>Assets</h3>
-                        <div class="upload-area">
-                            <input type="file" id="asset-upload" multiple style="display: none;">
-                            <button id="upload-asset-btn" class="btn btn-primary">Upload Assets</button>
+                    <div class="assets-sidebar">
+                        <div class="sidebar-header">
+                            <h3>Assets</h3>
+                            <div class="asset-buttons">
+                                <button id="new-asset-btn" class="btn btn-primary btn-small">+ New</button>
+                                <input type="file" id="asset-upload" multiple style="display: none;">
+                                <button id="upload-asset-btn" class="btn btn-primary btn-small">Upload</button>
+                            </div>
+                        </div>
+                        <div id="assets-list" class="assets-list">
+                            <!-- Assets will be loaded here -->
                         </div>
                     </div>
-                    <div id="assets-grid" class="assets-grid">
-                        <!-- Assets will be loaded here -->
+                    <div class="assets-editor">
+                        <div class="editor-toolbar">
+                            <span id="current-asset-name" class="current-file">No asset selected</span>
+                            <div class="toolbar-actions">
+                                <button id="save-asset-btn" class="btn btn-success" disabled>Save</button>
+                                <button id="delete-asset-btn" class="btn btn-danger" disabled>Delete</button>
+                            </div>
+                        </div>
+                        <div id="asset-editor-content" class="asset-editor-content">
+                            <div id="monaco-asset-editor" class="monaco-container" style="display: none;"></div>
+                            <div id="binary-asset-info" class="binary-asset-info" style="display: none;">
+                                <div class="binary-info-content">
+                                    <h3>Binary File</h3>
+                                    <p>This is a binary file and cannot be edited as text.</p>
+                                    <div id="binary-asset-details" class="binary-details"></div>
+                                    <div id="binary-asset-preview" class="binary-preview"></div>
+                                </div>
+                            </div>
+                            <div id="no-asset-selected" class="no-selection">
+                                <p>Select an asset to view or edit</p>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
