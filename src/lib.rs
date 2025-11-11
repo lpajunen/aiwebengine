@@ -9,6 +9,7 @@ use std::sync::Arc;
 use tokio_stream::wrappers::BroadcastStream;
 use tracing::{debug, error, info, warn};
 
+pub mod asset_registry;
 pub mod config;
 pub mod database;
 pub mod error;
@@ -1018,18 +1019,28 @@ document.addEventListener('DOMContentLoaded', function() {
         let path = req.uri().path().to_string();
         let request_method = req.method().to_string();
 
-        // Check for assets first if it's a GET request
-        if request_method == "GET"
-            && let Some(asset) = repository::fetch_asset(&path)
-        {
-            let mut response = asset.content.into_response();
-            response.headers_mut().insert(
-                axum::http::header::CONTENT_TYPE,
-                axum::http::HeaderValue::from_str(&asset.mimetype).unwrap_or(
-                    axum::http::HeaderValue::from_static("application/octet-stream"),
-                ),
-            );
-            return response;
+        // Check for registered asset paths first if it's a GET request
+        if request_method == "GET" {
+            // Check if this path is registered in the asset registry
+            if let Some(asset_name) = asset_registry::get_global_registry().get_asset_name(&path) {
+                // Fetch the asset by name from the repository
+                if let Some(asset) = repository::fetch_asset(&asset_name) {
+                    let mut response = asset.content.into_response();
+                    response.headers_mut().insert(
+                        axum::http::header::CONTENT_TYPE,
+                        axum::http::HeaderValue::from_str(&asset.mimetype).unwrap_or(
+                            axum::http::HeaderValue::from_static("application/octet-stream"),
+                        ),
+                    );
+                    return response;
+                } else {
+                    warn!(
+                        "Asset '{}' registered for path '{}' but not found in repository",
+                        asset_name, path
+                    );
+                    // Fall through to route handling
+                }
+            }
         }
 
         // Check if this is a request to a registered stream path

@@ -512,6 +512,13 @@ function init(context) {
     console.log(`Initializing core.js script at ${new Date().toISOString()}`);
     console.log(`Init context: ${JSON.stringify(context)}`);
 
+    // Register public asset paths
+    registerPublicAsset("/logo.svg", "logo.svg");
+    registerPublicAsset("/favicon.ico", "favicon.ico");
+    registerPublicAsset("/editor.css", "editor.css");
+    registerPublicAsset("/editor.js", "editor.js");
+    registerPublicAsset("/engine.css", "engine.css");
+
     // Register HTTP endpoints
     register("/", "core_root", "GET");
     register("/", "core_root", "POST");
@@ -571,6 +578,7 @@ function init(context) {
       success: true,
       message: "Core script initialized successfully",
       registeredEndpoints: 7,
+      registeredAssets: 5,
       registeredGraphQLOperations: 8,
     };
   } catch (error) {

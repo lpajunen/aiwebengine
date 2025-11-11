@@ -137,7 +137,7 @@ impl SecureOperations {
 
         // Call actual asset storage
         let asset = crate::repository::Asset {
-            public_path: filename.clone(),
+            asset_name: filename.clone(),
             mimetype: mimetype.to_string(),
             content,
         };

@@ -103,6 +103,9 @@ impl SecureGlobalContext {
         // Setup route registration function first
         self.setup_route_registration(ctx, register_fn)?;
 
+        // Setup asset path registration function
+        self.setup_asset_path_registration(ctx, script_uri)?;
+
         if self.config.enable_logging {
             self.setup_logging_functions(ctx, script_uri)?;
         }
@@ -173,6 +176,67 @@ impl SecureGlobalContext {
             )?;
             global.set("register", reg_noop)?;
         }
+
+        Ok(())
+    }
+
+    /// Setup asset path registration function
+    fn setup_asset_path_registration(
+        &self,
+        ctx: &rquickjs::Ctx<'_>,
+        script_uri: &str,
+    ) -> JsResult<()> {
+        let global = ctx.globals();
+        let script_uri_owned = script_uri.to_string();
+        let user_context = self.user_context.clone();
+
+        let register_public_asset = Function::new(
+            ctx.clone(),
+            move |_c: rquickjs::Ctx<'_>,
+                  path: String,
+                  asset_name: String|
+                  -> Result<String, rquickjs::Error> {
+                // Check capability
+                if let Err(e) =
+                    user_context.require_capability(&crate::security::Capability::WriteAssets)
+                {
+                    return Ok(format!("Access denied: {}", e));
+                }
+
+                // Validate path
+                if !path.starts_with('/') {
+                    return Ok("Path must start with '/'".to_string());
+                }
+                if path.len() > 500 {
+                    return Ok("Path too long (max 500 characters)".to_string());
+                }
+
+                // Validate asset name
+                if asset_name.is_empty() || asset_name.len() > 255 {
+                    return Ok("Invalid asset name: must be 1-255 characters".to_string());
+                }
+                if asset_name.contains("..")
+                    || asset_name.contains('/')
+                    || asset_name.contains('\\')
+                {
+                    return Ok("Invalid asset name: path characters not allowed".to_string());
+                }
+
+                // Register the path in the global asset registry
+                match crate::asset_registry::get_global_registry().register_path(
+                    &path,
+                    &asset_name,
+                    &script_uri_owned,
+                ) {
+                    Ok(()) => Ok(format!(
+                        "Asset path '{}' registered to asset '{}'",
+                        path, asset_name
+                    )),
+                    Err(e) => Ok(format!("Failed to register asset path: {}", e)),
+                }
+            },
+        )?;
+        global.set("registerPublicAsset", register_public_asset)?;
 
         Ok(())
     }
@@ -801,7 +865,7 @@ impl SecureGlobalContext {
 
                 // Call repository directly (sync operation)
                 let asset = repository::Asset {
-                    public_path: asset_name.clone(),
+                    asset_name: asset_name.clone(),
                     mimetype,
                     content,
                 };

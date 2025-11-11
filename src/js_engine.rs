@@ -857,10 +857,10 @@ pub fn execute_graphql_resolver(
 
         let upsert_asset_resolver = Function::new(
             ctx.clone(),
-            move |_c: rquickjs::Ctx<'_>, path: String, content: String, mime_type: String| -> Result<(), rquickjs::Error> {
-                debug!("JavaScript called upsertAsset with path: {}", path);
+            move |_c: rquickjs::Ctx<'_>, asset_name: String, content: String, mime_type: String| -> Result<(), rquickjs::Error> {
+                debug!("JavaScript called upsertAsset with asset_name: {}", asset_name);
                 let asset = repository::Asset {
-                    public_path: path,
+                    asset_name,
                     content: content.into_bytes(),
                     mimetype: mime_type,
                 };
