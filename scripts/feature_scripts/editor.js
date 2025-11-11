@@ -576,8 +576,14 @@ function apiGetAsset(req) {
     // URL decode the asset path in case it contains encoded characters
     assetPath = decodeURIComponent(assetPath);
 
+    // Remove leading slash to get asset name (new system uses names, not paths)
+    let assetName = assetPath;
+    if (assetName.startsWith("/")) {
+      assetName = assetName.substring(1);
+    }
+
     if (typeof fetchAsset === "function") {
-      const assetData = fetchAsset(assetPath);
+      const assetData = fetchAsset(assetName);
 
       if (assetData && !assetData.startsWith("Asset '")) {
         // fetchAsset returns base64 encoded content
@@ -691,21 +697,22 @@ function apiSaveAsset(req) {
       };
     }
 
-    // Normalize publicPath to ensure it starts with "/"
-    let normalizedPath = publicPath;
-    if (!normalizedPath.startsWith("/")) {
-      normalizedPath = "/" + normalizedPath;
+    // Extract asset name from path (remove leading slash)
+    let assetName = publicPath;
+    if (assetName.startsWith("/")) {
+      assetName = assetName.substring(1);
     }
+
     console.log(
-      "apiSaveAsset: original path '" +
+      "apiSaveAsset: publicPath '" +
         publicPath +
-        "' -> normalized '" +
-        normalizedPath +
+        "' -> asset name '" +
+        assetName +
         "'",
     );
 
     if (typeof upsertAsset === "function") {
-      upsertAsset(normalizedPath, content, mimetype);
+      upsertAsset(assetName, content, mimetype);
       return {
         status: 200,
         body: JSON.stringify({ message: "Asset saved successfully" }),
@@ -736,15 +743,21 @@ function apiDeleteAsset(req) {
     // URL decode the asset path in case it contains encoded characters
     assetPath = decodeURIComponent(assetPath);
 
-    console.log("apiDeleteAsset: attempting to delete asset: " + assetPath);
+    // Remove leading slash to get asset name (new system uses names, not paths)
+    let assetName = assetPath;
+    if (assetName.startsWith("/")) {
+      assetName = assetName.substring(1);
+    }
+
+    console.log("apiDeleteAsset: attempting to delete asset: " + assetName);
 
     if (typeof deleteAsset === "function") {
-      const deleted = deleteAsset(assetPath);
+      const deleted = deleteAsset(assetName);
 
       console.log("apiDeleteAsset: deleteAsset returned: " + deleted);
 
       if (deleted) {
-        console.log("apiDeleteAsset: successfully deleted asset: " + assetPath);
+        console.log("apiDeleteAsset: successfully deleted asset: " + assetName);
         return {
           status: 200,
           body: JSON.stringify({
@@ -754,7 +767,7 @@ function apiDeleteAsset(req) {
           contentType: "application/json",
         };
       } else {
-        console.log("apiDeleteAsset: asset not found: " + assetPath);
+        console.log("apiDeleteAsset: asset not found: " + assetName);
         return {
           status: 404,
           body: JSON.stringify({

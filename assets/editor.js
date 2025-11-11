@@ -493,7 +493,7 @@ function init(context) {
     if (isText) {
       // Load text asset in Monaco editor
       try {
-        const response = await fetch(`/api/assets${path}`);
+        const response = await fetch(`/api/assets/${path}`);
         const content = await response.text();
 
         this.monacoAssetEditor.setValue(content);
@@ -545,7 +545,7 @@ function init(context) {
     if (imageExtensions.includes(ext)) {
       previewDiv.innerHTML = `
         <div class="image-preview">
-          <img src="/api/assets${path}" alt="${filename}" style="max-width: 100%; max-height: 400px;">
+          <img src="/api/assets/${path}" alt="${filename}" style="max-width: 100%; max-height: 400px;">
         </div>
       `;
     }
@@ -645,7 +645,7 @@ function init(context) {
       return;
 
     try {
-      const response = await fetch(`/api/assets${this.currentAsset}`, {
+      const response = await fetch(`/api/assets/${this.currentAsset}`, {
         method: "DELETE",
       });
 
@@ -725,7 +725,7 @@ function init(context) {
 
     if (isIco) {
       // For ICO files, use fetch + blob to ensure proper binary handling
-      fetch(`/api/assets${path}`)
+      fetch(`/api/assets/${path}`)
         .then((response) => {
           console.log(`Download response status: ${response.status}`);
           if (!response.ok) {
@@ -749,11 +749,11 @@ function init(context) {
           console.error("ICO download failed:", error);
           this.showStatus(`Download failed: ${error.message}`, "error");
           // Fallback to window.open
-          window.open(`/api/assets${path}`, "_blank");
+          window.open(`/api/assets/${path}`, "_blank");
         });
     } else {
       // For other files, use the simple window.open approach
-      window.open(`/api/assets${path}`, "_blank");
+      window.open(`/api/assets/${path}`, "_blank");
     }
   }
 
@@ -1411,7 +1411,7 @@ function init(context) {
     if (
       confirm(`${explanation}\n\nAre you sure you want to delete ${assetPath}?`)
     ) {
-      fetch(`/api/assets${assetPath}`, {
+      fetch(`/api/assets/${assetPath}`, {
         method: "DELETE",
       })
         .then(() => {
