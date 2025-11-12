@@ -769,7 +769,7 @@ document.addEventListener('DOMContentLoaded', function() {
         nav.style.cssText = 'position: absolute; top: 10px; right: 10px; z-index: 1000; display: flex; gap: 8px;';
         
         const editorLink = document.createElement('a');
-        editorLink.href = '/editor';
+        editorLink.href = '/engine/editor';
         editorLink.textContent = 'Editor';
         editorLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
         
@@ -894,7 +894,7 @@ document.addEventListener('DOMContentLoaded', function() {
             // For subscriptions, create a connection with metadata to enable selective broadcasting
             // Extract subscription name from the query to determine the stream path
             let subscription_name = extract_subscription_name(&request.query);
-            let stream_path = format!("/graphql/subscription/{}", subscription_name);
+            let stream_path = format!("/engine/graphql/subscription/{}", subscription_name);
 
             // Use query parameters as client metadata for selective broadcasting
             let client_metadata = if query_params.is_empty() {
@@ -1311,15 +1311,25 @@ document.addEventListener('DOMContentLoaded', function() {
         // GraphQL endpoints with require_editor_or_admin_middleware
         let auth_mgr_for_graphql = Arc::clone(auth_mgr);
         let graphql_router = Router::new()
-            .route("/graphql", axum::routing::get(graphql_get_handler))
-            .route("/graphql", axum::routing::post(graphql_post))
-            .route("/graphql/sse", axum::routing::post(graphql_sse))
+            .route("/engine/graphql", axum::routing::get(graphql_get_handler))
             .layer(axum::middleware::from_fn_with_state(
                 auth_mgr_for_graphql,
                 auth::require_editor_or_admin_middleware,
             ));
 
         app = app.merge(graphql_router);
+
+        // GraphQL API endpoints (queries, mutations, subscriptions)
+        let auth_mgr_for_graphql_api = Arc::clone(auth_mgr);
+        let graphql_api_router = Router::new()
+            .route("/graphql", axum::routing::post(graphql_post))
+            .route("/graphql/sse", axum::routing::post(graphql_sse))
+            .layer(axum::middleware::from_fn_with_state(
+                auth_mgr_for_graphql_api,
+                auth::require_editor_or_admin_middleware,
+            ));
+
+        app = app.merge(graphql_api_router);
 
         // Mount authentication routes
         let auth_router = auth::create_auth_router(Arc::clone(auth_mgr));
@@ -1329,7 +1339,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // GraphQL endpoints without authentication
         app = app
-            .route("/graphql", axum::routing::get(graphql_get_handler))
+            .route("/engine/graphql", axum::routing::get(graphql_get_handler))
             .route("/graphql", axum::routing::post(graphql_post))
             .route("/graphql/sse", axum::routing::post(graphql_sse));
     }

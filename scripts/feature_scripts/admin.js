@@ -228,8 +228,8 @@ function handleManagerUI(request) {
                 <p class="text-muted">Manage user roles and permissions</p>
                 <div class="nav-links">
                     <a href="/" class="nav-link">← Back to Home</a>
-                    <a href="/editor" class="nav-link">Editor</a>
-                    <a href="/graphql" class="nav-link">GraphQL</a>
+                    <a href="/engine/editor" class="nav-link">Editor</a>
+                    <a href="/engine/graphql" class="nav-link">GraphQL</a>
                 </div>
             </div>
         </header>

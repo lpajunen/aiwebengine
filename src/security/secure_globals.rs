@@ -1826,7 +1826,7 @@ impl SecureGlobalContext {
                 );
 
                 // Send to the auto-registered stream path for this subscription
-                let stream_path = format!("/graphql/subscription/{}", subscription_name);
+                let stream_path = format!("/engine/graphql/subscription/{}", subscription_name);
 
                 // Call actual stream message sending (sync operation)
                 match crate::stream_registry::GLOBAL_STREAM_REGISTRY
@@ -1937,7 +1937,7 @@ impl SecureGlobalContext {
                 );
 
                 // Send to the auto-registered stream path for this subscription with filtering
-                let stream_path = format!("/graphql/subscription/{}", subscription_name);
+                let stream_path = format!("/engine/graphql/subscription/{}", subscription_name);
 
                 // Call selective broadcasting (sync operation)
                 let result = crate::stream_registry::GLOBAL_STREAM_REGISTRY

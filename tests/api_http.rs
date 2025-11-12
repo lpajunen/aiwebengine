@@ -481,7 +481,7 @@ async fn test_graphql_endpoints() {
 
     // Test GraphiQL GET endpoint
     let graphiql_response = client
-        .get(format!("http://127.0.0.1:{}/graphql", port))
+        .get(format!("http://127.0.0.1:{}/engine/graphql", port))
         .send()
         .await
         .expect("GraphiQL request failed");

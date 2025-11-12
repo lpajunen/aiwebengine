@@ -89,7 +89,7 @@ function serveEditor(req) {
             </div>
             <div class="header-right">
                 <a href="/engine/docs" class="header-link" title="View Documentation">📚 Docs</a>
-                <a href="/graphql" class="header-link" title="GraphQL Editor">🔗 GraphQL</a>
+                <a href="/engine/graphql" class="header-link" title="GraphQL Editor">🔗 GraphQL</a>
                 <span id="server-status" class="status-indicator">● Connected</span>
             </div>
         </header>
@@ -1275,7 +1275,7 @@ Remember: You are creating JavaScript scripts that run on the SERVER and handle 
 // Initialization function
 function init(context) {
   console.log("Initializing editor.js at " + new Date().toISOString());
-  register("/editor", "serveEditor", "GET");
+  register("/engine/editor", "serveEditor", "GET");
   register("/api/scripts", "apiListScripts", "GET");
   register("/api/scripts/*", "apiGetScript", "GET");
   register("/api/scripts/*", "apiSaveScript", "POST");

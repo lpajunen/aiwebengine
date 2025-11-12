@@ -240,7 +240,7 @@ pub fn register_graphql_subscription(
 
     // With execute_stream, we still need stream paths for sendSubscriptionMessage compatibility
     // This ensures existing JavaScript APIs continue to work
-    let stream_path = format!("/graphql/subscription/{}", name);
+    let stream_path = format!("/engine/graphql/subscription/{}", name);
     match crate::stream_registry::GLOBAL_STREAM_REGISTRY.register_stream(&stream_path, &script_uri)
     {
         Ok(()) => {
@@ -843,7 +843,8 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
 
                         // For execute_stream compatibility, we need to maintain the legacy bridge
                         // where sendSubscriptionMessage still works via the stream registry
-                        let stream_path = format!("/graphql/subscription/{}", subscription_name);
+                        let stream_path =
+                            format!("/engine/graphql/subscription/{}", subscription_name);
 
                         // Create a unified stream using boxed trait objects
                         use std::pin::Pin;
