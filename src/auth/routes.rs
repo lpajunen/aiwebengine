@@ -268,7 +268,6 @@ async fn logout(
     headers: HeaderMap,
 ) -> Result<Response, ErrorResponse> {
     let config = auth_manager.config();
-    let cookie_prefix = format!("{}=", config.session_cookie_name);
 
     // Extract session token from cookie
     let session_token = headers
@@ -276,14 +275,19 @@ async fn logout(
         .and_then(|v| v.to_str().ok())
         .and_then(|cookies| {
             cookies.split(';').find_map(|cookie| {
-                let cookie = cookie.trim();
-                cookie.strip_prefix(&cookie_prefix)
+                let trimmed = cookie.trim();
+                let (name, value) = trimmed.split_once('=')?;
+                if name == config.session_cookie_name {
+                    Some(value.to_string())
+                } else {
+                    None
+                }
             })
         });
 
     if let Some(token) = session_token {
         // Destroy session
-        if let Err(e) = auth_manager.logout(token, false).await {
+        if let Err(e) = auth_manager.logout(&token, false).await {
             tracing::error!("Failed to logout session: {}", e);
             // Continue anyway to clear the cookie
         } else {
@@ -319,7 +323,6 @@ async fn auth_status(
     let user_agent = get_user_agent(&headers);
 
     let config = auth_manager.config();
-    let cookie_prefix = format!("{}=", config.session_cookie_name);
 
     // Extract session token
     let session_token = headers
@@ -327,13 +330,19 @@ async fn auth_status(
         .and_then(|v| v.to_str().ok())
         .and_then(|cookies| {
             cookies.split(';').find_map(|cookie| {
-                let cookie = cookie.trim();
-                cookie.strip_prefix(&cookie_prefix)
+                let trimmed = cookie.trim();
+                let (name, value) = trimmed.split_once('=')?;
+                if name == config.session_cookie_name {
+                    Some(value.to_string())
+                } else {
+                    None
+                }
             })
         });
-
     if let Some(token) = session_token
-        && let Ok(session) = auth_manager.get_session(token, &ip_addr, &user_agent).await
+        && let Ok(session) = auth_manager
+            .get_session(&token, &ip_addr, &user_agent)
+            .await
     {
         return Json(AuthResponse {
             success: true,
