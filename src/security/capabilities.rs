@@ -50,6 +50,8 @@ impl UserContext {
                 Capability::WriteAssets,
                 Capability::DeleteScripts, // Allow script deletion in dev mode
                 Capability::DeleteAssets,  // Allow asset deletion in dev mode
+                Capability::ManageGraphQL, // Allow GraphQL operations in dev mode
+                Capability::ManageStreams, // Allow stream operations in dev mode
             ]
             .into_iter()
             .collect()
@@ -188,9 +190,7 @@ mod tests {
         assert!(user.require_capability(&Capability::ReadScripts).is_ok());
         assert!(user.require_capability(&Capability::WriteScripts).is_ok());
         assert!(user.require_capability(&Capability::DeleteScripts).is_ok()); // OK in dev mode
-
-        // Should still fail for some capabilities
-        assert!(user.require_capability(&Capability::ManageGraphQL).is_err());
-        assert!(user.require_capability(&Capability::ManageStreams).is_err());
+        assert!(user.require_capability(&Capability::ManageGraphQL).is_ok()); // OK in dev mode for demo
+        assert!(user.require_capability(&Capability::ManageStreams).is_ok()); // OK in dev mode for demo
     }
 }
