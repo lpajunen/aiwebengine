@@ -4,6 +4,19 @@
 // The subscription resolver - called when a client subscribes
 function liveMessagesResolver() {
   console.log("Client subscribed to liveMessages");
+
+  // Send a "user joined" message to all subscribers
+  const joinMessageData = {
+    id: Math.random().toString(36).substr(2, 9),
+    text: "Guest joined",
+    timestamp: new Date().toISOString(),
+    sender: "system",
+    type: "join"
+  };
+
+  console.log("Sending join message to liveMessages subscribers");
+  sendSubscriptionMessage("liveMessages", JSON.stringify(joinMessageData));
+
   return "Subscription initialized - waiting for messages...";
 }
 
@@ -143,6 +156,16 @@ function subscriptionDemoPage(req) {
 
                 .message strong {
                     color: var(--primary-color);
+                }
+
+                .join-message {
+                    margin: 0.5rem 0;
+                    padding: 0.5rem 0.75rem;
+                    background: var(--info-bg);
+                    border-radius: var(--border-radius);
+                    border-left: 3px solid var(--info-color);
+                    font-style: italic;
+                    color: var(--info-color);
                 }
 
                 .status-indicator {
@@ -325,10 +348,19 @@ function subscriptionDemoPage(req) {
                             throw new Error('Invalid message format');
                         }
                         
-                        messageEl.innerHTML = \`
-                            <strong>#\${messageData.id}</strong> [\${messageData.timestamp}]<br>
-                            \${messageData.text}
-                        \`;
+                        if (messageData.type === 'join') {
+                            // Special styling for join messages
+                            messageEl.className = 'message join-message';
+                            messageEl.innerHTML = \`
+                                <em>[\${messageData.timestamp}] \${messageData.text}</em>
+                            \`;
+                        } else {
+                            // Regular message styling
+                            messageEl.innerHTML = \`
+                                <strong>#\${messageData.id}</strong> [\${messageData.timestamp}]<br>
+                                \${messageData.text}
+                            \`;
+                        }
                     } catch (e) {
                         messageEl.textContent = \`[\${new Date().toISOString()}] \${message}\`;
                     }
