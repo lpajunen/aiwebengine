@@ -8,6 +8,14 @@ The API should use as little namespace as possible from the actual scripts and h
 
 The goal is to make the API more consistent and easier to use. The following are some proposed changes:
 
+would it make sense to rename concept script to server script or to server code? at least in the documentation?
+
+the engine is in horizontal lower layer providing services to the upper layer applications. the engine provides services such as storage, routing, logging, events, assets, secrets, identity management, scheduling, etc. the engine also provides an api for the upper layer applications to interact with these services. the engine also provides a way to run user scripts that can use these services and api.
+
+the vertical upper layer applications are the ones that provide the user interface and business logic. these applications can be built using various frameworks and technologies. the engine should provide a way to integrate with these applications seamlessly.
+
+in addition to horizontal lower layer, the engine also provides higher level vertical functions like logging, auditing, monitoring, metrics, tracing, etc. these functions are essential for the proper functioning of the engine and the upper layer applications.
+
 ### Engine API Changes
 
 codeStorage object
@@ -96,13 +104,19 @@ timerEventService object (scheduler)
 
 init function
 
+- returns nothing
+
 handler function
 
 - req.auth
+- req.params
+- return value or {statusCode, headers, body}
 
 connectionHandler function
 
 - req.auth
+- req.params
+- return filterCriteria | null
 
 event function
 
