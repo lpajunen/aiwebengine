@@ -448,7 +448,7 @@ docker-compose logs --tail=50 aiwebengine | grep -i error
 /health                     # Health check
 /auth/login                 # OAuth login page
 /auth/callback/google       # Google OAuth callback
-/manager                    # Admin management UI
+/engine/admin               # Admin management UI
 /editor                     # Script editor (solution developers)
 /graphql                    # GraphQL endpoint (if enabled)
 ```

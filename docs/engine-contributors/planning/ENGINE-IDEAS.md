@@ -29,14 +29,16 @@ routeRegistry object
 - None -> unregisterStreamRoute(path)
 - sendStreamMessageToPath -> sendStreamMessage(path, message, filterCriteria | null)
 - sendStreamMessageToConnection -> None
-- listRoutes -> [{path, method}] listRoutes()
+- listRoutes -> [{path, method, handler | asset name}] listRoutes()
+- registerPublicAsset -> registerAssetRoute(path, assetName)
+- None -> unregisterAssetRoute(path)
 
 - connectionHandler gets req object as parameter and returns filterCriteria for that connection
 
 - all scripts owned by editors and admins can list all routes and register new routes
 - unregisterRoute, unregisterStreamRoute, sendStreamMessage only for scripts where they were registered or owned by admin
 
-console object
+console object (implemented)
 
 - writeLog -> log
 
@@ -55,7 +57,7 @@ eventRegistry object
 
 assetStorage / assetRegistry object
 
-- upsertAsset -> setAsset / publishAsset
+- upsertAsset -> setAsset
 
 secretStorage object
 
@@ -176,16 +178,21 @@ AI understanding / context of scripts
   - login, logout, token refresh
   - unauthorized
   - implement OAuth2 / OIDC protocols
+  - auth status check
 - /engine/... for engine management endpoints
-  - engine status, health checks
-  - metrics
-  - development and admin operations (console)
-    - user management
+  - /engine/status for engine status and health checks
+  - /engine/metrics for metrics
+  - /engine/editor for editor operations
     - script management
     - asset management
-    - secret management
+    - solution secret management (addition to engine secrets in config)
     - log management
-  - external cli (deployer) tool operations
+  - /engine/graphql for graphql test console
+  - /engine/admin for admin operations
+    - user management
+  - /engine/docs for docs and api reference
+  - /engine/cli/... for external cli (deployer) tool operations
+  - /engine/api/... for engine related api endpoints
 - /graphql/... for GraphQL related endpoints
   - implement GraphQL queries, mutations, subscriptions
 - /mcp/... for Model-Context-Protocol related endpoints

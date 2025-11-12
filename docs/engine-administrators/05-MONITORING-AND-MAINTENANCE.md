@@ -226,7 +226,7 @@ Configure log forwarding via filebeat or similar.
 
 ## User Management
 
-The Manager UI (`/manager`) provides administrators with a web interface to view and manage user roles in the AIWebEngine system.
+The Manager UI (`/engine/admin`) provides administrators with a web interface to view and manage user roles in the AIWebEngine system.
 
 ### Access Control
 
@@ -249,17 +249,17 @@ After signing in with this email via OAuth, you'll automatically have Administra
 ### Accessing the Manager UI
 
 1. Ensure you're logged in as an administrator
-2. Navigate to `/manager` in your browser
+2. Navigate to `/engine/admin` in your browser
 3. View the user list and statistics
 
 **Example:**
 
 ```bash
 # Local
-open http://localhost:3000/manager
+open http://localhost:3000/engine/admin
 
 # Production
-open https://yourdomain.com/manager
+open https://yourdomain.com/engine/admin
 ```
 
 ### Features
@@ -335,7 +335,7 @@ The Manager UI uses these API endpoints (for reference):
 
 #### List Users
 
-**Endpoint:** `GET /api/manager/users`
+**Endpoint:** `GET /api/engine/admin/users`
 
 **Authentication:** Required (Admin only)
 
@@ -359,7 +359,7 @@ The Manager UI uses these API endpoints (for reference):
 
 #### Update User Role
 
-**Endpoint:** `POST /api/manager/users/:userId/roles`
+**Endpoint:** `POST /api/engine/admin/users/:userId/roles`
 
 **Authentication:** Required (Admin only)
 

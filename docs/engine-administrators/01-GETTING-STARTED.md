@@ -259,7 +259,7 @@ docker-compose ps
 
 ```bash
 # Access the management UI
-open http://localhost:3000/manager
+open http://localhost:3000/engine/admin
 ```
 
 You should see the management interface where you can:
@@ -418,7 +418,7 @@ When using Docker:
 
 Now that your instance is running:
 
-1. **Explore the Management UI:** `http://localhost:3000/manager`
+1. **Explore the Management UI:** `http://localhost:3000/engine/admin`
 2. **Write JavaScript scripts:** See [Solution Developer Documentation](../solution-developers/)
 3. **Try the editor:** `http://localhost:3000/editor` (if enabled)
 

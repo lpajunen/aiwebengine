@@ -91,9 +91,7 @@ function asset_handler(req) {
 // Initialization function - called when script is loaded or updated
 function init(context) {
   try {
-    console.log(
-      `Initializing asset_mgmt.js script at ${new Date().toISOString()}`,
-    );
+    console.log(`Initializing cli.js script at ${new Date().toISOString()}`);
     console.log(`Init context: ${JSON.stringify(context)}`);
 
     // Register the routes

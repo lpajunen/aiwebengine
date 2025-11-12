@@ -225,7 +225,7 @@ function scriptUpdatesDemoPage(req) {
 			<div class="nav-links">
 				<a href="/">🏠 Home</a>
 				<a href="/editor">✏️ Editor</a>
-				<a href="/manager">👥 User Manager</a>
+				<a href="/engine/admin">👥 User Manager</a>
 				<a href="/docs">📚 Documentation</a>
 			</div>
 		</main>

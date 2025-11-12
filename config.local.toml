@@ -94,7 +94,7 @@ max_concurrent_sessions = 10
 # Bootstrap admin emails
 # Users with these emails will automatically receive Administrator role on first sign-in
 # This allows you to bootstrap the system with an initial admin who can then
-# grant roles to other users through the /manager UI
+# grant roles to other users through the /engine/admin UI
 #
 # FOR LOCAL DEVELOPMENT: Add your own email here
 # Example: bootstrap_admins = ["your-email@gmail.com", "another@example.com"]

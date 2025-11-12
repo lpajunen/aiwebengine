@@ -337,17 +337,15 @@ pub async fn require_editor_or_admin_middleware(
 
                     let full_path = format!("{}{}", path, query);
                     let return_url = urlencoding::encode(&full_path);
-                    let insufficient_permissions_url =
-                        format!("/insufficient-permissions?attempted={}", return_url);
+                    let auth_url = format!("/auth/unauthorized?attempted={}", return_url);
 
                     tracing::info!(
                         "🚫 Redirecting user without required role from {} to {}",
                         full_path,
-                        insufficient_permissions_url
+                        auth_url
                     );
 
-                    return axum::response::Redirect::to(&insufficient_permissions_url)
-                        .into_response();
+                    return axum::response::Redirect::to(&auth_url).into_response();
                 }
             }
             Err(e) => {

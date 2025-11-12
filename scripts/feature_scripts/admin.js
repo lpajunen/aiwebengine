@@ -24,9 +24,9 @@
 
 function init(context) {
   // Register routes for user management
-  register("/manager", "handleManagerUI", "GET");
-  register("/api/manager/users", "handleListUsers", "GET");
-  register("/api/manager/users/*", "handleUpdateUserRole", "POST");
+  register("/engine/admin", "handleManagerUI", "GET");
+  register("/api/engine/admin/users", "handleListUsers", "GET");
+  register("/api/engine/admin/users/*", "handleUpdateUserRole", "POST");
 
   return { success: true };
 }
@@ -38,7 +38,7 @@ function handleManagerUI(request) {
   if (!auth || !auth.isAuthenticated) {
     return {
       status: 302,
-      headers: { Location: "/auth/login?redirect=/manager" },
+      headers: { Location: "/auth/login?redirect=/engine/admin" },
       body: "",
     };
   }
@@ -271,7 +271,7 @@ function handleManagerUI(request) {
             const usersContainer = document.getElementById('users-container');
             
             try {
-                const response = await fetch('/api/manager/users');
+                const response = await fetch('/api/engine/admin/users');
                 
                 if (!response.ok) {
                     const error = await response.json();
@@ -386,7 +386,7 @@ function handleManagerUI(request) {
             errorContainer.innerHTML = '';
             
             try {
-                const response = await fetch(\`/api/manager/users/\${userId}/roles\`, {
+                const response = await fetch("/api/engine/admin/users/" + userId + "/roles", {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -405,22 +405,14 @@ function handleManagerUI(request) {
                 await loadUsers();
                 
                 // Show success message briefly
-                errorContainer.innerHTML = \`
-                    <div class="alert alert-success">
-                        <strong>Success:</strong> Role \${action === 'add' ? 'added' : 'removed'} successfully
-                    </div>
-                \`;
+                errorContainer.innerHTML = '<div class="alert alert-success"><strong>Success:</strong> Role ' + (action === 'add' ? 'added' : 'removed') + ' successfully</div>';
                 
                 setTimeout(() => {
                     errorContainer.innerHTML = '';
                 }, 3000);
                 
             } catch (error) {
-                errorContainer.innerHTML = \`
-                    <div class="alert alert-danger">
-                        <strong>Error:</strong> \${error.message}
-                    </div>
-                \`;
+                errorContainer.innerHTML = '<div class="alert alert-danger"><strong>Error:</strong> ' + error.message + '</div>';
             }
         }
         

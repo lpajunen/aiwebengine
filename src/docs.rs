@@ -224,7 +224,7 @@ pub fn markdown_to_html(markdown: &str, title: &str) -> String {
             <a href="/docs/">📚 Documentation Home</a>
             <a href="/">🏠 Home</a>
             <a href="/editor">✏️ Editor</a>
-            <a href="/manager">👥 User Manager</a>
+            <a href="/engine/admin">👥 User Manager</a>
         </nav>
         <main class="docs-content">
             {}

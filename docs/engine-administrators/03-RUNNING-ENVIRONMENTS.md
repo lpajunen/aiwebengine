@@ -178,7 +178,7 @@ tail -f logs/aiwebengine-dev.log
 # Access services
 open http://localhost:3000              # Main application
 open http://localhost:3000/auth/login   # Sign in
-open http://localhost:3000/manager      # Admin UI
+open http://localhost:3000/engine/admin      # Admin UI
 open http://localhost:3000/editor       # Script editor
 ```
 

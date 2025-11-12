@@ -801,26 +801,16 @@ pub fn fetch_scripts() -> HashMap<String, String> {
     // Always include core functionality scripts (fallback or when no database)
     if m.is_empty() {
         let core = include_str!("../scripts/feature_scripts/core.js");
-        let asset_mgmt = include_str!("../scripts/feature_scripts/asset_mgmt.js");
+        let cli = include_str!("../scripts/feature_scripts/cli.js");
         let editor = include_str!("../scripts/feature_scripts/editor.js");
-        let manager = include_str!("../scripts/feature_scripts/manager.js");
-        let insufficient_permissions =
-            include_str!("../scripts/feature_scripts/insufficient_permissions.js");
+        let admin = include_str!("../scripts/feature_scripts/admin.js");
+        let auth = include_str!("../scripts/feature_scripts/auth.js");
 
         m.insert("https://example.com/core".to_string(), core.to_string());
-        m.insert(
-            "https://example.com/asset_mgmt".to_string(),
-            asset_mgmt.to_string(),
-        );
+        m.insert("https://example.com/cli".to_string(), cli.to_string());
         m.insert("https://example.com/editor".to_string(), editor.to_string());
-        m.insert(
-            "https://example.com/manager".to_string(),
-            manager.to_string(),
-        );
-        m.insert(
-            "https://example.com/insufficient_permissions".to_string(),
-            insufficient_permissions.to_string(),
-        );
+        m.insert("https://example.com/admin".to_string(), admin.to_string());
+        m.insert("https://example.com/auth".to_string(), auth.to_string());
 
         // Include test scripts when appropriate
         let include_test_scripts =
@@ -1240,20 +1230,20 @@ pub fn bootstrap_scripts() -> Result<(), RepositoryError> {
                 include_str!("../scripts/feature_scripts/core.js"),
             ),
             (
-                "https://example.com/asset_mgmt",
-                include_str!("../scripts/feature_scripts/asset_mgmt.js"),
+                "https://example.com/cli",
+                include_str!("../scripts/feature_scripts/cli.js"),
             ),
             (
                 "https://example.com/editor",
                 include_str!("../scripts/feature_scripts/editor.js"),
             ),
             (
-                "https://example.com/manager",
-                include_str!("../scripts/feature_scripts/manager.js"),
+                "https://example.com/admin",
+                include_str!("../scripts/feature_scripts/admin.js"),
             ),
             (
-                "https://example.com/insufficient_permissions",
-                include_str!("../scripts/feature_scripts/insufficient_permissions.js"),
+                "https://example.com/auth",
+                include_str!("../scripts/feature_scripts/auth.js"),
             ),
         ];
 

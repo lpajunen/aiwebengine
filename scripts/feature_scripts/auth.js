@@ -273,17 +273,11 @@ function serveInsufficientPermissions(req) {
 // Initialization function - called when script is loaded or updated
 function init(context) {
   try {
-    console.log(
-      `Initializing insufficient_permissions.js script at ${new Date().toISOString()}`,
-    );
+    console.log(`Initializing auth.js script at ${new Date().toISOString()}`);
     console.log(`Init context: ${JSON.stringify(context)}`);
 
     // Register the route
-    register(
-      "/insufficient-permissions",
-      "serveInsufficientPermissions",
-      "GET",
-    );
+    register("/auth/unauthorized", "serveInsufficientPermissions", "GET");
 
     console.log("Insufficient permissions script initialized successfully");
 
