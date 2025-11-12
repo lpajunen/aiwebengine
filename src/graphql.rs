@@ -379,6 +379,77 @@ fn extract_return_type(sdl: &str, field_name: &str) -> TypeRef {
     }
 }
 
+/// Extract arguments from SDL field definition
+fn extract_arguments(sdl: &str, field_name: &str) -> Vec<(String, TypeRef)> {
+    debug!(
+        "Extracting arguments for field '{}' from SDL: {}",
+        field_name, sdl
+    );
+
+    // Pattern to match field with arguments: fieldName(arg1: Type1, arg2: Type2): ReturnType
+    let pattern = format!(r"{}\s*\(([^)]*)\)", regex::escape(field_name));
+
+    if let Some(captures) = regex::Regex::new(&pattern).unwrap().captures(sdl) {
+        let args_str = &captures[1];
+        debug!("Found arguments string: '{}'", args_str);
+
+        let mut arguments = Vec::new();
+
+        // Split by comma and parse each argument
+        for arg_part in args_str
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            if let Some(colon_pos) = arg_part.find(':') {
+                let arg_name = arg_part[..colon_pos].trim().to_string();
+                let type_str = arg_part[colon_pos + 1..].trim();
+
+                debug!("Parsing argument: {} : {}", arg_name, type_str);
+
+                let type_ref = match type_str {
+                    "String!" => TypeRef::named_nn(TypeRef::STRING),
+                    "String" => TypeRef::named(TypeRef::STRING),
+                    "Int!" => TypeRef::named_nn(TypeRef::INT),
+                    "Int" => TypeRef::named(TypeRef::INT),
+                    "Boolean!" => TypeRef::named_nn(TypeRef::BOOLEAN),
+                    "Boolean" => TypeRef::named(TypeRef::BOOLEAN),
+                    "Float!" => TypeRef::named_nn(TypeRef::FLOAT),
+                    "Float" => TypeRef::named(TypeRef::FLOAT),
+                    s if s.starts_with('[') && s.contains(']') => {
+                        // Handle array types like [String!]! or [String]
+                        let inner_type = s.trim_matches(|c| c == '[' || c == ']' || c == '!');
+                        debug!(
+                            "Detected array argument type with inner type: '{}'",
+                            inner_type
+                        );
+                        TypeRef::named_nn_list_nn(inner_type)
+                    }
+                    _ => {
+                        // Check if it's a custom type
+                        let clean_type =
+                            type_str.trim_matches(|c| c == '[' || c == ']' || c == '!');
+                        debug!("Using custom type for argument: '{}'", clean_type);
+                        if type_str.ends_with('!') {
+                            TypeRef::named_nn(clean_type)
+                        } else {
+                            TypeRef::named(clean_type)
+                        }
+                    }
+                };
+
+                arguments.push((arg_name, type_ref));
+            }
+        }
+
+        debug!("Extracted {} arguments", arguments.len());
+        arguments
+    } else {
+        debug!("No arguments found for field '{}'", field_name);
+        Vec::new()
+    }
+}
+
 /// Parse JSON result to appropriate GraphQL value
 fn parse_json_to_graphql_value(json_str: &str) -> Result<async_graphql::Value, serde_json::Error> {
     let json_value: serde_json::Value = serde_json::from_str(json_str)?;
@@ -756,25 +827,67 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
                     .argument(InputValue::new("uri", TypeRef::named_nn(TypeRef::STRING)));
                 mutation_builder = mutation_builder.field(mutation_field);
             } else {
-                // Handle mutations without special argument handling
-                mutation_builder = mutation_builder.field(Field::new(
-                    field_name,
-                    TypeRef::named(TypeRef::STRING),
-                    move |_ctx| {
-                        let uri = resolver_uri.clone();
-                        let func = resolver_fn.clone();
-                        FieldFuture::new(async move {
-                            // Call JavaScript resolver function
-                            match crate::js_engine::execute_graphql_resolver(&uri, &func, None) {
-                                Ok(result) => Ok(Some(async_graphql::Value::String(result))),
-                                Err(e) => {
-                                    error!("GraphQL resolver error for {}::{}: {}", uri, func, e);
-                                    Ok(Some(async_graphql::Value::String(format!("Error: {}", e))))
+                // Handle mutations with dynamic argument parsing
+                let return_type = extract_return_type(&operation.sdl, &field_name);
+                let arguments = extract_arguments(&operation.sdl, &field_name);
+                let arguments_clone = arguments.clone();
+
+                let mut mutation_field = Field::new(field_name.clone(), return_type, move |ctx| {
+                    let uri = resolver_uri.clone();
+                    let func = resolver_fn.clone();
+                    let args_defs = arguments_clone.clone();
+                    FieldFuture::new(async move {
+                        // Extract arguments from GraphQL context
+                        let mut args_json = serde_json::Map::new();
+                        for (arg_name, _arg_type) in &args_defs {
+                            if let Some(accessor) = ctx.args.get(arg_name) {
+                                if let Ok(value) = accessor.deserialize::<serde_json::Value>() {
+                                    args_json.insert(arg_name.clone(), value);
                                 }
                             }
-                        })
-                    },
-                ));
+                        }
+
+                        let args = if args_json.is_empty() {
+                            None
+                        } else {
+                            Some(serde_json::Value::Object(args_json))
+                        };
+
+                        // Call JavaScript resolver function
+                        match crate::js_engine::execute_graphql_resolver(&uri, &func, args) {
+                            Ok(result) => {
+                                // Try to parse as JSON first, then as string
+                                if result.trim().starts_with('{') || result.trim().starts_with('[')
+                                {
+                                    match serde_json::from_str::<serde_json::Value>(&result) {
+                                        Ok(json_value) => {
+                                            match async_graphql::Value::from_json(json_value) {
+                                                Ok(graphql_value) => Ok(Some(graphql_value)),
+                                                Err(_) => {
+                                                    Ok(Some(async_graphql::Value::String(result)))
+                                                }
+                                            }
+                                        }
+                                        Err(_) => Ok(Some(async_graphql::Value::String(result))),
+                                    }
+                                } else {
+                                    Ok(Some(async_graphql::Value::String(result)))
+                                }
+                            }
+                            Err(e) => {
+                                error!("GraphQL resolver error for {}::{}: {}", uri, func, e);
+                                Ok(Some(async_graphql::Value::String(format!("Error: {}", e))))
+                            }
+                        }
+                    })
+                });
+
+                // Add arguments to the field
+                for (arg_name, arg_type) in arguments {
+                    mutation_field = mutation_field.argument(InputValue::new(&arg_name, arg_type));
+                }
+
+                mutation_builder = mutation_builder.field(mutation_field);
             }
         }
     } else {
