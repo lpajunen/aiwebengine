@@ -587,18 +587,35 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
 
         // Handle queries with dynamic argument parsing
         let return_type = extract_return_type(&operation.sdl, &field_name);
-        let sdl_for_closure = operation.sdl.clone();
+        let arguments = extract_arguments(&operation.sdl, &field_name);
+        let arguments_clone = arguments.clone();
 
-        let field = Field::new(field_name.clone(), return_type, move |ctx| {
+        let mut query_field = Field::new(field_name.clone(), return_type, move |ctx| {
             let uri = resolver_uri.clone();
             let func = resolver_fn.clone();
-            let _sdl_clone = sdl_for_closure.clone();
+            let args_defs = arguments_clone.clone();
             FieldFuture::new(async move {
                 // Extract auth context from GraphQL context
                 let auth_context = ctx.data::<crate::auth::JsAuthContext>().ok().cloned();
 
+                // Extract arguments from GraphQL context
+                let mut args_json = serde_json::Map::new();
+                for (arg_name, _arg_type) in &args_defs {
+                    if let Some(accessor) = ctx.args.get(arg_name)
+                        && let Ok(value) = accessor.deserialize::<serde_json::Value>()
+                    {
+                        args_json.insert(arg_name.clone(), value);
+                    }
+                }
+
+                let args = if args_json.is_empty() {
+                    None
+                } else {
+                    Some(serde_json::Value::Object(args_json))
+                };
+
                 // Call JavaScript resolver function
-                match crate::js_engine::execute_graphql_resolver(&uri, &func, None, auth_context) {
+                match crate::js_engine::execute_graphql_resolver(&uri, &func, args, auth_context) {
                     Ok(result) => {
                         debug!("GraphQL resolver result: {}", &result);
                         // Special handling for JSON responses - parse and return as GraphQL value
@@ -625,7 +642,13 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
                 }
             })
         });
-        query_builder = query_builder.field(field);
+
+        // Add arguments to the field
+        for (arg_name, arg_type) in arguments {
+            query_field = query_field.argument(InputValue::new(&arg_name, arg_type));
+        }
+
+        query_builder = query_builder.field(query_field);
         debug!("Added field {} to query builder", field_name);
     }
     if !has_queries {
