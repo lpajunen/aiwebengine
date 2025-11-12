@@ -589,53 +589,66 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
         if field_name == "script" {
             let return_type = extract_return_type(&operation.sdl, &field_name);
             let mut script_field = Field::new(field_name, return_type, move |ctx| {
-                let uri = resolver_uri.clone();
-                let func = resolver_fn.clone();
                 FieldFuture::new(async move {
                     // Extract uri argument
                     let uri_arg = ctx.args.get("uri");
-                    let args = if let Some(accessor) = uri_arg {
+                    if let Some(accessor) = uri_arg {
                         if let Ok(uri_val) = accessor.deserialize::<String>() {
-                            Some(serde_json::json!({ "uri": uri_val }))
+                            // Fetch script directly from repository
+                            match crate::repository::fetch_script(&uri_val) {
+                                Some(content) => {
+                                    // Return script details as GraphQL object
+                                    let script_detail = async_graphql::Value::Object({
+                                        let mut map = async_graphql::indexmap::IndexMap::new();
+                                        map.insert(
+                                            async_graphql::Name::new("uri"),
+                                            async_graphql::Value::String(uri_val),
+                                        );
+                                        map.insert(
+                                            async_graphql::Name::new("content"),
+                                            async_graphql::Value::String(content.clone()),
+                                        );
+                                        map.insert(
+                                            async_graphql::Name::new("chars"),
+                                            async_graphql::Value::Number(content.len().into()),
+                                        );
+                                        map
+                                    });
+                                    Ok(Some(script_detail))
+                                }
+                                None => Ok(None),
+                            }
                         } else {
-                            None
+                            Ok(None)
                         }
                     } else {
-                        None
-                    };
-
-                    // Call JavaScript resolver function
-                    match crate::js_engine::execute_graphql_resolver(&uri, &func, args) {
-                        Ok(result) => match parse_json_to_graphql_value(&result) {
-                            Ok(graphql_value) => Ok(Some(graphql_value)),
-                            Err(e) => {
-                                error!("Failed to parse JSON result: {}", e);
-                                Ok(Some(async_graphql::Value::String(result)))
-                            }
-                        },
-                        Err(e) => {
-                            error!("GraphQL resolver error for {}::{}: {}", uri, func, e);
-                            Ok(Some(async_graphql::Value::String(format!("Error: {}", e))))
-                        }
+                        Ok(None)
                     }
                 })
             });
             script_field =
                 script_field.argument(InputValue::new("uri", TypeRef::named_nn(TypeRef::STRING)));
             query_builder = query_builder.field(script_field);
-            debug!("Added script field to query builder");
         } else {
             // Handle queries without arguments
             let return_type = extract_return_type(&operation.sdl, &field_name);
             let sdl_for_closure = operation.sdl.clone();
 
-            let field = Field::new(field_name.clone(), return_type, move |_ctx| {
+            let field = Field::new(field_name.clone(), return_type, move |ctx| {
                 let uri = resolver_uri.clone();
                 let func = resolver_fn.clone();
                 let _sdl_clone = sdl_for_closure.clone();
                 FieldFuture::new(async move {
+                    // Extract auth context from GraphQL context
+                    let auth_context = ctx.data::<crate::auth::JsAuthContext>().ok().cloned();
+
                     // Call JavaScript resolver function
-                    match crate::js_engine::execute_graphql_resolver(&uri, &func, None) {
+                    match crate::js_engine::execute_graphql_resolver(
+                        &uri,
+                        &func,
+                        None,
+                        auth_context,
+                    ) {
                         Ok(result) => {
                             debug!("GraphQL resolver result: {}", &result);
                             // Special handling for JSON responses - parse and return as GraphQL value
@@ -697,63 +710,81 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
                     field_name,
                     TypeRef::named("UpsertScriptResponse"),
                     move |ctx| {
-                        let uri = resolver_uri.clone();
-                        let func = resolver_fn.clone();
                         FieldFuture::new(async move {
                             // Extract uri and content arguments
                             let uri_arg = ctx.args.get("uri");
                             let content_arg = ctx.args.get("content");
-                            let args = if let (Some(uri_accessor), Some(content_accessor)) =
+                            if let (Some(uri_accessor), Some(content_accessor)) =
                                 (uri_arg, content_arg)
                             {
                                 if let (Ok(uri_val), Ok(content_val)) = (
                                     uri_accessor.deserialize::<String>(),
                                     content_accessor.deserialize::<String>(),
                                 ) {
-                                    Some(
-                                        serde_json::json!({ "uri": uri_val, "content": content_val }),
-                                    )
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            };
-
-                            // Call JavaScript resolver function
-                            match crate::js_engine::execute_graphql_resolver(&uri, &func, args) {
-                                Ok(result) => {
-                                    // Parse the JSON response from JavaScript
-                                    match serde_json::from_str::<serde_json::Value>(&result) {
-                                        Ok(json_value) => {
-                                            // Convert serde_json::Value to async_graphql::Value
-                                            match async_graphql::Value::from_json(json_value) {
-                                                Ok(graphql_value) => Ok(Some(graphql_value)),
-                                                Err(e) => {
-                                                    error!(
-                                                        "Failed to convert JSON to GraphQL value: {}",
-                                                        e
-                                                    );
-                                                    Ok(Some(async_graphql::Value::String(format!(
-                                                        "Error: Failed to parse response: {}",
-                                                        e
-                                                    ))))
-                                                }
-                                            }
+                                    // Upsert script directly in repository
+                                    match crate::repository::upsert_script(&uri_val, &content_val) {
+                                        Ok(_) => {
+                                            // Return success response
+                                            let response = async_graphql::Value::Object({
+                                                let mut map =
+                                                    async_graphql::indexmap::IndexMap::new();
+                                                map.insert(
+                                                    async_graphql::Name::new("success"),
+                                                    async_graphql::Value::Boolean(true),
+                                                );
+                                                map.insert(
+                                                    async_graphql::Name::new("message"),
+                                                    async_graphql::Value::String(
+                                                        "Script upserted successfully".to_string(),
+                                                    ),
+                                                );
+                                                map.insert(
+                                                    async_graphql::Name::new("uri"),
+                                                    async_graphql::Value::String(uri_val),
+                                                );
+                                                map.insert(
+                                                    async_graphql::Name::new("chars"),
+                                                    async_graphql::Value::Number(
+                                                        content_val.len().into(),
+                                                    ),
+                                                );
+                                                map
+                                            });
+                                            Ok(Some(response))
                                         }
                                         Err(e) => {
-                                            error!("Failed to parse JSON response: {}", e);
-                                            Ok(Some(async_graphql::Value::String(format!(
-                                                "Error: Invalid JSON response: {}",
-                                                e
-                                            ))))
+                                            let response = async_graphql::Value::Object({
+                                                let mut map =
+                                                    async_graphql::indexmap::IndexMap::new();
+                                                map.insert(
+                                                    async_graphql::Name::new("success"),
+                                                    async_graphql::Value::Boolean(false),
+                                                );
+                                                map.insert(
+                                                    async_graphql::Name::new("message"),
+                                                    async_graphql::Value::String(format!(
+                                                        "Error: {}",
+                                                        e
+                                                    )),
+                                                );
+                                                map.insert(
+                                                    async_graphql::Name::new("uri"),
+                                                    async_graphql::Value::String(uri_val),
+                                                );
+                                                map.insert(
+                                                    async_graphql::Name::new("chars"),
+                                                    async_graphql::Value::Number(0.into()),
+                                                );
+                                                map
+                                            });
+                                            Ok(Some(response))
                                         }
                                     }
+                                } else {
+                                    Ok(None)
                                 }
-                                Err(e) => {
-                                    error!("GraphQL resolver error for {}::{}: {}", uri, func, e);
-                                    Ok(Some(async_graphql::Value::String(format!("Error: {}", e))))
-                                }
+                            } else {
+                                Ok(None)
                             }
                         })
                     },
@@ -770,55 +801,60 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
                     field_name,
                     TypeRef::named("DeleteScriptResponse"),
                     move |ctx| {
-                        let uri = resolver_uri.clone();
-                        let func = resolver_fn.clone();
                         FieldFuture::new(async move {
                             // Extract uri argument
                             let uri_arg = ctx.args.get("uri");
-                            let args = if let Some(accessor) = uri_arg {
+                            if let Some(accessor) = uri_arg {
                                 if let Ok(uri_val) = accessor.deserialize::<String>() {
-                                    Some(serde_json::json!({ "uri": uri_val }))
+                                    // Delete script directly from repository
+                                    let success = crate::repository::delete_script(&uri_val);
+                                    if success {
+                                        // Return success response
+                                        let response = async_graphql::Value::Object({
+                                            let mut map = async_graphql::indexmap::IndexMap::new();
+                                            map.insert(
+                                                async_graphql::Name::new("success"),
+                                                async_graphql::Value::Boolean(true),
+                                            );
+                                            map.insert(
+                                                async_graphql::Name::new("message"),
+                                                async_graphql::Value::String(
+                                                    "Script deleted successfully".to_string(),
+                                                ),
+                                            );
+                                            map.insert(
+                                                async_graphql::Name::new("uri"),
+                                                async_graphql::Value::String(uri_val),
+                                            );
+                                            map
+                                        });
+                                        Ok(Some(response))
+                                    } else {
+                                        let response = async_graphql::Value::Object({
+                                            let mut map = async_graphql::indexmap::IndexMap::new();
+                                            map.insert(
+                                                async_graphql::Name::new("success"),
+                                                async_graphql::Value::Boolean(false),
+                                            );
+                                            map.insert(
+                                                async_graphql::Name::new("message"),
+                                                async_graphql::Value::String(
+                                                    "Script not found".to_string(),
+                                                ),
+                                            );
+                                            map.insert(
+                                                async_graphql::Name::new("uri"),
+                                                async_graphql::Value::String(uri_val),
+                                            );
+                                            map
+                                        });
+                                        Ok(Some(response))
+                                    }
                                 } else {
-                                    None
+                                    Ok(None)
                                 }
                             } else {
-                                None
-                            };
-
-                            // Call JavaScript resolver function
-                            match crate::js_engine::execute_graphql_resolver(&uri, &func, args) {
-                                Ok(result) => {
-                                    // Parse the JSON response from JavaScript
-                                    match serde_json::from_str::<serde_json::Value>(&result) {
-                                        Ok(json_value) => {
-                                            // Convert serde_json::Value to async_graphql::Value
-                                            match async_graphql::Value::from_json(json_value) {
-                                                Ok(graphql_value) => Ok(Some(graphql_value)),
-                                                Err(e) => {
-                                                    error!(
-                                                        "Failed to convert JSON to GraphQL value: {}",
-                                                        e
-                                                    );
-                                                    Ok(Some(async_graphql::Value::String(format!(
-                                                        "Error: Failed to parse response: {}",
-                                                        e
-                                                    ))))
-                                                }
-                                            }
-                                        }
-                                        Err(e) => {
-                                            error!("Failed to parse JSON response: {}", e);
-                                            Ok(Some(async_graphql::Value::String(format!(
-                                                "Error: Invalid JSON response: {}",
-                                                e
-                                            ))))
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    error!("GraphQL resolver error for {}::{}: {}", uri, func, e);
-                                    Ok(Some(async_graphql::Value::String(format!("Error: {}", e))))
-                                }
+                                Ok(None)
                             }
                         })
                     },
@@ -854,7 +890,7 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
                         };
 
                         // Call JavaScript resolver function
-                        match crate::js_engine::execute_graphql_resolver(&uri, &func, args) {
+                        match crate::js_engine::execute_graphql_resolver(&uri, &func, args, None) {
                             Ok(result) => {
                                 // Try to parse as JSON first, then as string
                                 if result.trim().starts_with('{') || result.trim().starts_with('[')
@@ -924,35 +960,42 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
             let subscription_field = SubscriptionField::new(
                 field_name.clone(),
                 return_type, // Use dynamic return type from SDL
-                move |_ctx| {
+                move |ctx| {
                     let subscription_name = subscription_name.clone();
                     let uri = resolver_uri.clone();
                     let func = resolver_fn.clone();
 
                     // Return a SubscriptionFieldFuture directly
                     SubscriptionFieldFuture::new(async move {
+                        // Extract auth context from GraphQL context
+                        let auth_context = ctx.data::<crate::auth::JsAuthContext>().ok().cloned();
+
                         // Initialize the subscription by calling the JavaScript resolver
-                        let initial_result =
-                            match crate::js_engine::execute_graphql_resolver(&uri, &func, None) {
-                                Ok(result) => {
-                                    debug!(
-                                        "Subscription '{}' initialized: {}",
-                                        subscription_name, result
-                                    );
-                                    // Try to parse as JSON object, fallback to string
-                                    match parse_json_to_graphql_value(&result) {
-                                        Ok(graphql_value) => graphql_value,
-                                        Err(_) => async_graphql::Value::String(result),
-                                    }
+                        let initial_result = match crate::js_engine::execute_graphql_resolver(
+                            &uri,
+                            &func,
+                            None,
+                            auth_context,
+                        ) {
+                            Ok(result) => {
+                                debug!(
+                                    "Subscription '{}' initialized: {}",
+                                    subscription_name, result
+                                );
+                                // Try to parse as JSON object, fallback to string
+                                match parse_json_to_graphql_value(&result) {
+                                    Ok(graphql_value) => graphql_value,
+                                    Err(_) => async_graphql::Value::String(result),
                                 }
-                                Err(e) => {
-                                    error!(
-                                        "Failed to initialize subscription '{}': {}",
-                                        subscription_name, e
-                                    );
-                                    async_graphql::Value::String(format!("Error: {}", e))
-                                }
-                            };
+                            }
+                            Err(e) => {
+                                error!(
+                                    "Failed to initialize subscription '{}': {}",
+                                    subscription_name, e
+                                );
+                                async_graphql::Value::String(format!("Error: {}", e))
+                            }
+                        };
 
                         // For execute_stream compatibility, we need to maintain the legacy bridge
                         // where sendSubscriptionMessage still works via the stream registry

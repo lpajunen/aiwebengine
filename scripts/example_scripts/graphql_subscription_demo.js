@@ -2,26 +2,37 @@
 // This script shows how to create GraphQL subscriptions that work with Server-Sent Events
 
 // The subscription resolver - called when a client subscribes
-function liveMessagesResolver() {
-  console.log("Client subscribed to liveMessages");
+function liveMessagesResolver(req) {
+  console.log("Client subscribed to liveMessages from:", req.path);
+
+  // Get user information
+  let userName = "Guest";
+  try {
+    const user = auth.currentUser();
+    if (user && user.name) {
+      userName = user.name;
+    }
+  } catch (e) {
+    console.log("Auth not available, using Guest");
+  }
 
   // Send a "user joined" message to all subscribers
   const joinMessageData = {
     id: Math.random().toString(36).substr(2, 9),
-    text: "Guest joined",
+    text: `${userName} joined`,
     timestamp: new Date().toISOString(),
     sender: "system",
-    type: "join"
+    type: "join",
   };
 
-  console.log("Sending join message to liveMessages subscribers");
+  console.log(`Sending join message: ${userName} joined`);
   sendSubscriptionMessage("liveMessages", JSON.stringify(joinMessageData));
 
   return "Subscription initialized - waiting for messages...";
 }
 
 // The mutation resolver - triggers subscription messages
-function sendMessageResolver(args) {
+function sendMessageResolver(req, args) {
   const message = args.text;
   const timestamp = new Date().toISOString();
 

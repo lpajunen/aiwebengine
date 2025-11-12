@@ -798,6 +798,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // GraphQL POST handler - executes queries
     async fn graphql_post(req: axum::http::Request<axum::body::Body>) -> impl IntoResponse {
+        // Extract authentication context before consuming the request
+        let auth_user = req.extensions().get::<auth::AuthUser>().cloned();
+
         let (_parts, body) = req.into_parts();
         let body_bytes = match axum::body::to_bytes(body, usize::MAX).await {
             Ok(bytes) => bytes,
@@ -827,12 +830,29 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         };
 
-        let response = schema.execute(request).await;
+        // Create authentication context for GraphQL execution
+        let js_auth_context = if let Some(ref auth_user) = auth_user {
+            auth::JsAuthContext::authenticated(
+                auth_user.user_id.clone(),
+                auth_user.email.clone(),
+                auth_user.name.clone(),
+                auth_user.provider.clone(),
+                auth_user.is_admin,
+                auth_user.is_editor,
+            )
+        } else {
+            auth::JsAuthContext::anonymous()
+        };
+
+        let response = schema.execute(request.data(js_auth_context)).await;
         axum::response::Json(serde_json::to_value(response).unwrap_or(serde_json::Value::Null))
     }
 
     // GraphQL SSE handler - handles subscriptions over Server-Sent Events using execute_stream
     async fn graphql_sse(req: axum::http::Request<axum::body::Body>) -> impl IntoResponse {
+        // Extract authentication context before consuming the request
+        let auth_user = req.extensions().get::<auth::AuthUser>().cloned();
+
         let (parts, body) = req.into_parts();
         let query_string = parts.uri.query().map(|s| s.to_string()).unwrap_or_default();
         let query_params = parse_query_string(&query_string);
@@ -887,6 +907,20 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         };
 
+        // Create authentication context for GraphQL execution
+        let js_auth_context = if let Some(ref auth_user) = auth_user {
+            auth::JsAuthContext::authenticated(
+                auth_user.user_id.clone(),
+                auth_user.email.clone(),
+                auth_user.name.clone(),
+                auth_user.provider.clone(),
+                auth_user.is_admin,
+                auth_user.is_editor,
+            )
+        } else {
+            auth::JsAuthContext::anonymous()
+        };
+
         // Check if this is a subscription operation
         let is_subscription = request.query.trim_start().starts_with("subscription");
 
@@ -939,7 +973,7 @@ document.addEventListener('DOMContentLoaded', function() {
             let (tx, rx) = tokio::sync::mpsc::channel(100);
 
             tokio::spawn(async move {
-                let stream = schema.execute_stream(request);
+                let stream = schema.execute_stream(request.data(js_auth_context));
 
                 // Convert each GraphQL response to SSE event and send via channel
                 let mut stream = std::pin::pin!(stream);
@@ -976,7 +1010,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 .into_response()
         } else {
             // Handle regular queries/mutations as single response
-            let response = schema.execute(request).await;
+            let response = schema.execute(request.data(js_auth_context)).await;
             let json_data = serde_json::to_string(&response).unwrap_or_else(|_| "{}".to_string());
 
             // Return SSE formatted response for consistency

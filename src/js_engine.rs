@@ -825,6 +825,7 @@ pub fn execute_graphql_resolver(
     script_uri: &str,
     resolver_function: &str,
     args: Option<serde_json::Value>,
+    auth_context: Option<crate::auth::JsAuthContext>,
 ) -> Result<String, String> {
     let script_uri_owned = script_uri.to_string();
     let resolver_function_owned = resolver_function.to_string();
@@ -845,7 +846,7 @@ pub fn execute_graphql_resolver(
 
         // GraphQL resolvers run with admin context to allow script management operations
         // In production, this should be secured via GraphQL-level authentication/authorization
-        setup_secure_global_functions(&ctx, &script_uri_owned, UserContext::admin("graphql-resolver".to_string()), &config, None, None, None)?;
+        setup_secure_global_functions(&ctx, &script_uri_owned, UserContext::admin("graphql-resolver".to_string()), &config, None, auth_context.clone(), None)?;
 
         // Override specific functions that have different signatures for GraphQL resolver context
         let global = ctx.globals();
@@ -932,14 +933,56 @@ pub fn execute_graphql_resolver(
             rquickjs::Value::new_undefined(ctx.clone())
         };
 
-        // Call the resolver function
+        // Call the resolver function with req object and args
         let resolver_result: rquickjs::Value = ctx.globals().get(&resolver_function_owned)?;
         let resolver_func = resolver_result.as_function().ok_or_else(|| rquickjs::Error::new_from_js("Function", "not found"))?;
 
+        // Create req object for GraphQL resolvers (similar to HTTP handlers)
+        let req_obj = rquickjs::Object::new(ctx.clone())?;
+        req_obj.set("path", "/graphql")?;
+        req_obj.set("method", "POST")?;
+
+        // Add query parameters (empty for GraphQL)
+        let query_obj = rquickjs::Object::new(ctx.clone())?;
+        req_obj.set("query", query_obj)?;
+
+        // Add form data (empty for GraphQL)
+        let form_obj = rquickjs::Object::new(ctx.clone())?;
+        req_obj.set("form", form_obj)?;
+
+        // Add empty body for GraphQL
+        req_obj.set("body", "")?;
+
         let result_value = if args_value.is_undefined() {
-            resolver_func.call::<_, rquickjs::Value>(())?
+            // Try calling with req object first (new format)
+            match resolver_func.call::<_, rquickjs::Value>((req_obj.clone(),)) {
+                Ok(result) => {
+                    debug!("Called resolver with req object only (new format)");
+                    result
+                },
+                Err(e) => {
+                    debug!("Failed to call with req object: {}, trying old format", e);
+                    // Fall back to calling without req object (old format)
+                    let result = resolver_func.call::<_, rquickjs::Value>(())?;
+                    debug!("Called resolver with no arguments (old format)");
+                    result
+                }
+            }
         } else {
-            resolver_func.call::<_, rquickjs::Value>((args_value,))?
+            // Try calling with req object and args first (new format)
+            match resolver_func.call::<_, rquickjs::Value>((req_obj.clone(), args_value.clone())) {
+                Ok(result) => {
+                    debug!("Called resolver with req and args (new format)");
+                    result
+                },
+                Err(e) => {
+                    debug!("Failed to call with req and args: {}, trying old format", e);
+                    // Fall back to calling with just args (old format)
+                    let result = resolver_func.call::<_, rquickjs::Value>((args_value,))?;
+                    debug!("Called resolver with args only (old format)");
+                    result
+                }
+            }
         };
 
         // Convert the result to a JSON string
@@ -1322,7 +1365,7 @@ mod tests {
         // Ignore errors for test
         let _ = repository::upsert_script("test-resolver", script_content).is_ok();
 
-        let result = execute_graphql_resolver("test-resolver", "testResolver", None);
+        let result = execute_graphql_resolver("test-resolver", "testResolver", None, None);
 
         assert!(result.is_ok(), "Simple resolver should succeed");
         let json_result = result.unwrap();
@@ -1332,7 +1375,7 @@ mod tests {
     #[test]
     fn test_execute_graphql_resolver_with_args() {
         let script_content = r#"
-            function greetUser(args) {
+            function greetUser(req, args) {
                 return "Hello " + args.name + "!";
             }
         "#;
@@ -1341,7 +1384,7 @@ mod tests {
         let _ = repository::upsert_script("greet-resolver", script_content);
 
         let args = serde_json::json!({"name": "Alice"});
-        let result = execute_graphql_resolver("greet-resolver", "greetUser", Some(args));
+        let result = execute_graphql_resolver("greet-resolver", "greetUser", Some(args), None);
 
         assert!(result.is_ok(), "Resolver with args should succeed");
         let json_result = result.unwrap();
@@ -1361,7 +1404,7 @@ mod tests {
         "#;
 
         let _ = repository::upsert_script("user-resolver", script_content);
-        let result = execute_graphql_resolver("user-resolver", "getUserInfo", None);
+        let result = execute_graphql_resolver("user-resolver", "getUserInfo", None, None);
 
         assert!(result.is_ok(), "Resolver returning object should succeed");
         let json_result = result.unwrap();
@@ -1371,7 +1414,7 @@ mod tests {
 
     #[test]
     fn test_execute_graphql_resolver_nonexistent_script() {
-        let result = execute_graphql_resolver("nonexistent-script", "someFunction", None);
+        let result = execute_graphql_resolver("nonexistent-script", "someFunction", None, None);
 
         assert!(result.is_err(), "Should fail when script doesn't exist");
     }
@@ -1385,8 +1428,12 @@ mod tests {
         "#;
 
         let _ = repository::upsert_script("missing-function-resolver", script_content);
-        let result =
-            execute_graphql_resolver("missing-function-resolver", "nonExistentFunction", None);
+        let result = execute_graphql_resolver(
+            "missing-function-resolver",
+            "nonExistentFunction",
+            None,
+            None,
+        );
 
         assert!(result.is_err(), "Should fail when function doesn't exist");
         assert!(result.unwrap_err().contains("not found"));
@@ -1401,7 +1448,7 @@ mod tests {
         "#;
 
         let _ = repository::upsert_script("throwing-resolver", script_content);
-        let result = execute_graphql_resolver("throwing-resolver", "throwingResolver", None);
+        let result = execute_graphql_resolver("throwing-resolver", "throwingResolver", None, None);
 
         assert!(
             result.is_err(),
