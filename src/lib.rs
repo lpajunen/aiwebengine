@@ -1319,15 +1319,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
         app = app.merge(graphql_router);
 
-        // GraphQL API endpoints (queries, mutations, subscriptions)
-        let auth_mgr_for_graphql_api = Arc::clone(auth_mgr);
+        // GraphQL API endpoints (queries, mutations, subscriptions) - NO authentication required
         let graphql_api_router = Router::new()
             .route("/graphql", axum::routing::post(graphql_post))
-            .route("/graphql/sse", axum::routing::post(graphql_sse))
-            .layer(axum::middleware::from_fn_with_state(
-                auth_mgr_for_graphql_api,
-                auth::require_editor_or_admin_middleware,
-            ));
+            .route("/graphql/sse", axum::routing::post(graphql_sse));
 
         app = app.merge(graphql_api_router);
 
