@@ -221,7 +221,7 @@ pub fn markdown_to_html(markdown: &str, title: &str) -> String {
             <h1>{}</h1>
         </header>
         <nav class="docs-nav">
-            <a href="/docs/">📚 Documentation Home</a>
+            <a href="/engine/docs/">📚 Documentation Home</a>
             <a href="/">🏠 Home</a>
             <a href="/editor">✏️ Editor</a>
             <a href="/engine/admin">👥 User Manager</a>

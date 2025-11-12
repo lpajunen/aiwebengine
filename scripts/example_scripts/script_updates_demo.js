@@ -226,7 +226,7 @@ function scriptUpdatesDemoPage(req) {
 				<a href="/">🏠 Home</a>
 				<a href="/editor">✏️ Editor</a>
 				<a href="/engine/admin">👥 User Manager</a>
-				<a href="/docs">📚 Documentation</a>
+				<a href="/engine/docs">📚 Documentation</a>
 			</div>
 		</main>
 	</div>

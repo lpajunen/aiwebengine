@@ -774,7 +774,7 @@ document.addEventListener('DOMContentLoaded', function() {
         editorLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
         
         const docsLink = document.createElement('a');
-        docsLink.href = '/docs';
+        docsLink.href = '/engine/docs';
         docsLink.textContent = 'Docs';
         docsLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
         
@@ -1336,14 +1336,17 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Add documentation routes
     app = app.route(
-        "/docs",
+        "/engine/docs",
         axum::routing::get(|axum::extract::Path(()): axum::extract::Path<()>| async {
-            axum::response::Redirect::permanent("/docs/").into_response()
+            axum::response::Redirect::permanent("/engine/docs/").into_response()
         }),
     );
-    app = app.route("/docs/", axum::routing::get(docs::handle_docs_request));
     app = app.route(
-        "/docs/{*path}",
+        "/engine/docs/",
+        axum::routing::get(docs::handle_docs_request),
+    );
+    app = app.route(
+        "/engine/docs/{*path}",
         axum::routing::get(docs::handle_docs_request),
     );
 
