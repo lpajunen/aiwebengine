@@ -590,6 +590,19 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
             let return_type = extract_return_type(&operation.sdl, &field_name);
             let mut script_field = Field::new(field_name, return_type, move |ctx| {
                 FieldFuture::new(async move {
+                    // Extract auth context from GraphQL context
+                    let auth_context = ctx.data::<crate::auth::JsAuthContext>().ok().cloned();
+
+                    // Check capability
+                    if let Some(auth) = &auth_context {
+                        let user_ctx = auth.to_user_context();
+                        if let Err(e) = user_ctx.require_capability(
+                            &crate::security::validation::Capability::ReadScripts,
+                        ) {
+                            return Err(async_graphql::Error::new(format!("Access denied: {}", e)));
+                        }
+                    }
+
                     // Extract uri argument
                     let uri_arg = ctx.args.get("uri");
                     if let Some(accessor) = uri_arg {
@@ -711,6 +724,23 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
                     TypeRef::named("UpsertScriptResponse"),
                     move |ctx| {
                         FieldFuture::new(async move {
+                            // Extract auth context from GraphQL context
+                            let auth_context =
+                                ctx.data::<crate::auth::JsAuthContext>().ok().cloned();
+
+                            // Check capability
+                            if let Some(auth) = &auth_context {
+                                let user_ctx = auth.to_user_context();
+                                if let Err(e) = user_ctx.require_capability(
+                                    &crate::security::validation::Capability::WriteScripts,
+                                ) {
+                                    return Err(async_graphql::Error::new(format!(
+                                        "Access denied: {}",
+                                        e
+                                    )));
+                                }
+                            }
+
                             // Extract uri and content arguments
                             let uri_arg = ctx.args.get("uri");
                             let content_arg = ctx.args.get("content");
@@ -802,6 +832,23 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
                     TypeRef::named("DeleteScriptResponse"),
                     move |ctx| {
                         FieldFuture::new(async move {
+                            // Extract auth context from GraphQL context
+                            let auth_context =
+                                ctx.data::<crate::auth::JsAuthContext>().ok().cloned();
+
+                            // Check capability
+                            if let Some(auth) = &auth_context {
+                                let user_ctx = auth.to_user_context();
+                                if let Err(e) = user_ctx.require_capability(
+                                    &crate::security::validation::Capability::DeleteScripts,
+                                ) {
+                                    return Err(async_graphql::Error::new(format!(
+                                        "Access denied: {}",
+                                        e
+                                    )));
+                                }
+                            }
+
                             // Extract uri argument
                             let uri_arg = ctx.args.get("uri");
                             if let Some(accessor) = uri_arg {
@@ -873,6 +920,9 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
                     let func = resolver_fn.clone();
                     let args_defs = arguments_clone.clone();
                     FieldFuture::new(async move {
+                        // Extract auth context from GraphQL context
+                        let auth_context = ctx.data::<crate::auth::JsAuthContext>().ok().cloned();
+
                         // Extract arguments from GraphQL context
                         let mut args_json = serde_json::Map::new();
                         for (arg_name, _arg_type) in &args_defs {
@@ -890,7 +940,12 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
                         };
 
                         // Call JavaScript resolver function
-                        match crate::js_engine::execute_graphql_resolver(&uri, &func, args, None) {
+                        match crate::js_engine::execute_graphql_resolver(
+                            &uri,
+                            &func,
+                            args,
+                            auth_context,
+                        ) {
                             Ok(result) => {
                                 // Try to parse as JSON first, then as string
                                 if result.trim().starts_with('{') || result.trim().starts_with('[')
