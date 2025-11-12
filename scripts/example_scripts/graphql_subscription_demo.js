@@ -314,8 +314,17 @@ function subscriptionDemoPage(req) {
                     const messageEl = document.createElement('div');
                     messageEl.className = 'message';
 
+                    let messageData;
                     try {
-                        const messageData = JSON.parse(message);
+                        // Handle both JSON string and already-parsed object
+                        if (typeof message === 'string') {
+                            messageData = JSON.parse(message);
+                        } else if (typeof message === 'object' && message !== null) {
+                            messageData = message;
+                        } else {
+                            throw new Error('Invalid message format');
+                        }
+                        
                         messageEl.innerHTML = \`
                             <strong>#\${messageData.id}</strong> [\${messageData.timestamp}]<br>
                             \${messageData.text}

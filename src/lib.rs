@@ -944,23 +944,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Convert each GraphQL response to SSE event and send via channel
                 let mut stream = std::pin::pin!(stream);
                 while let Some(response) = FuturesStreamExt::next(&mut stream).await {
-                    let event = if response.data != async_graphql::Value::Null {
-                        // Send data as SSE event
-                        let json_data = serde_json::to_string(&response.data)
-                            .unwrap_or_else(|_| "{}".to_string());
-                        Ok::<Event, std::convert::Infallible>(Event::default().data(json_data))
-                    } else if !response.errors.is_empty() {
-                        // Send errors as SSE event
-                        let error_json = serde_json::json!({
-                            "errors": response.errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
-                        });
-                        Ok::<Event, std::convert::Infallible>(
-                            Event::default().data(error_json.to_string()),
-                        )
-                    } else {
-                        // Send empty data
-                        Ok::<Event, std::convert::Infallible>(Event::default().data("{}"))
-                    };
+                    // Send the full GraphQL response as SSE event (same as non-subscription)
+                    let json_data =
+                        serde_json::to_string(&response).unwrap_or_else(|_| "{}".to_string());
+                    let event =
+                        Ok::<Event, std::convert::Infallible>(Event::default().data(json_data));
 
                     if tx.send(event).await.is_err() {
                         // Connection closed, clean up the subscription connection
