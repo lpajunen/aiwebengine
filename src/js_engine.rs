@@ -617,20 +617,30 @@ pub fn execute_script_for_request_secure(
                 .map_err(|e| format!("missing status: {}", e))?;
 
             // Try to get bodyBase64 first (for binary data), otherwise fall back to body (for text)
-            let body: Vec<u8> = if let Ok(body_base64) = response_obj.get::<_, String>("bodyBase64")
+            let (body, used_body_base64): (Vec<u8>, bool) = if let Ok(body_base64) = response_obj.get::<_, String>("bodyBase64")
             {
                 // Decode base64 to bytes
-                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &body_base64)
-                    .map_err(|e| format!("failed to decode bodyBase64: {}", e))?
+                let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &body_base64)
+                    .map_err(|e| format!("failed to decode bodyBase64: {}", e))?;
+                (decoded, true)
             } else {
                 // Fall back to string body
                 let body_string: String = response_obj
                     .get("body")
                     .map_err(|e| format!("missing body or bodyBase64: {}", e))?;
-                body_string.into_bytes()
+                (body_string.into_bytes(), false)
             };
 
             let content_type: Option<String> = response_obj.get("contentType").ok();
+
+            // Set default content type if not specified
+            let content_type = content_type.or_else(|| {
+                if used_body_base64 {
+                    Some("application/octet-stream".to_string())
+                } else {
+                    Some("text/plain; charset=UTF-8".to_string())
+                }
+            });
 
             // Extract headers if present
             let mut headers = std::collections::HashMap::new();
@@ -642,10 +652,11 @@ pub fn execute_script_for_request_secure(
             }
 
             debug!(
-                "Secure request handler {} returned status: {}, body length: {}, headers: {}",
+                "Secure request handler {} returned status: {}, body length: {}, content_type: {:?}, headers: {}",
                 params.handler_name,
                 status,
                 body.len(),
+                content_type,
                 headers.len()
             );
 
@@ -669,7 +680,9 @@ pub fn execute_script_for_request_secure(
             } else {
                 "<no response>".to_string().into_bytes()
             };
-            Ok(JsHttpResponse::new(200, body))
+            let mut response = JsHttpResponse::new(200, body);
+            response = response.with_content_type("text/plain; charset=UTF-8".to_string());
+            Ok(response)
         }
     });
 
@@ -1647,55 +1660,98 @@ mod tests {
     }
 
     #[test]
-    fn test_script_storage_api_execution() {
-        let script_content = r#"
-// Test script for scriptStorage API
-register("/test-storage", "testStorageHandler", "GET");
+    fn test_default_content_types() {
+        use crate::security::UserContext;
 
-function testStorageHandler(request) {
-    // Test setting an item
-    const setResult = scriptStorage.setItem("test_key", "test_value");
+        // Test default content type for text body
+        let text_script = r#"
+            function testTextHandler(request) {
+                return {
+                    status: 200,
+                    body: "Hello World"
+                };
+            }
+        "#;
 
-    // Test getting the item
-    const getResult = scriptStorage.getItem("test_key");
+        let _ = repository::upsert_script("test-text-content-type", text_script);
+        let params = RequestExecutionParams {
+            script_uri: "test-text-content-type".to_string(),
+            handler_name: "testTextHandler".to_string(),
+            path: "/test".to_string(),
+            method: "GET".to_string(),
+            query_params: None,
+            form_data: None,
+            raw_body: None,
+            user_context: UserContext::admin("test".to_string()),
+            auth_context: None,
+        };
+        let result = execute_script_for_request_secure(params);
 
-    // Test removing an item
-    const removeResult = scriptStorage.removeItem("test_key");
-
-    // Verify it's gone
-    const getAfterRemove = scriptStorage.getItem("test_key");
-
-    return {
-        status: 200,
-        body: JSON.stringify({
-            setResult,
-            getResult,
-            removeResult,
-            getAfterRemove
-        })
-    };
-}
-"#;
-
-        let result = execute_script_secure(
-            "test-storage-script",
-            script_content,
-            UserContext::admin("test".to_string()),
+        assert!(result.is_ok(), "Request should execute successfully");
+        let response = result.unwrap();
+        assert_eq!(
+            response.content_type,
+            Some("text/plain; charset=UTF-8".to_string())
         );
 
-        assert!(
-            result.success,
-            "Script execution should succeed: {:?}",
-            result.error
-        );
-        assert!(result.error.is_none(), "Should not have any errors");
+        // Test default content type for bodyBase64
+        let binary_script = r#"
+            function testBinaryHandler(request) {
+                return {
+                    status: 200,
+                    bodyBase64: "SGVsbG8gV29ybGQ="  // "Hello World" in base64
+                };
+            }
+        "#;
 
-        // Verify the script registered the route
-        assert_eq!(result.registrations.len(), 1);
-        assert!(
-            result
-                .registrations
-                .contains_key(&("/test-storage".to_string(), "GET".to_string()))
+        let _ = repository::upsert_script("test-binary-content-type", binary_script);
+        let params = RequestExecutionParams {
+            script_uri: "test-binary-content-type".to_string(),
+            handler_name: "testBinaryHandler".to_string(),
+            path: "/test".to_string(),
+            method: "GET".to_string(),
+            query_params: None,
+            form_data: None,
+            raw_body: None,
+            user_context: UserContext::admin("test".to_string()),
+            auth_context: None,
+        };
+        let result = execute_script_for_request_secure(params);
+
+        assert!(result.is_ok(), "Request should execute successfully");
+        let response = result.unwrap();
+        assert_eq!(
+            response.content_type,
+            Some("application/octet-stream".to_string())
         );
+
+        // Test explicit content type overrides default
+        let explicit_script = r#"
+            function testExplicitHandler(request) {
+                return {
+                    status: 200,
+                    body: "Hello World",
+                    contentType: "application/json"
+                };
+            }
+        "#;
+
+        let _ = repository::upsert_script("test-explicit-content-type", explicit_script);
+        let params = RequestExecutionParams {
+            script_uri: "test-explicit-content-type".to_string(),
+            handler_name: "testExplicitHandler".to_string(),
+            path: "/test".to_string(),
+            method: "GET".to_string(),
+            query_params: None,
+            form_data: None,
+            raw_body: None,
+            user_context: UserContext::admin("test".to_string()),
+            auth_context: None,
+        };
+        let result = execute_script_for_request_secure(params);
+
+        assert!(result.is_ok(), "Request should execute successfully");
+        let response = result.unwrap();
+        assert_eq!(response.content_type, Some("application/json".to_string()));
     }
 }

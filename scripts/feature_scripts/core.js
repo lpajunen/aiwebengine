@@ -7,7 +7,7 @@ function core_root(req) {
   } else {
     console.log("Anonymous user");
   }
-  return { status: 200, body: "Core handler: OK" };
+  return { status: 200, body: "Core handler: OK", contentType: "text/plain; charset=UTF-8" };
 }
 
 // Health check endpoint
