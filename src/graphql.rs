@@ -876,10 +876,10 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
                         // Extract arguments from GraphQL context
                         let mut args_json = serde_json::Map::new();
                         for (arg_name, _arg_type) in &args_defs {
-                            if let Some(accessor) = ctx.args.get(arg_name) {
-                                if let Ok(value) = accessor.deserialize::<serde_json::Value>() {
-                                    args_json.insert(arg_name.clone(), value);
-                                }
+                            if let Some(accessor) = ctx.args.get(arg_name)
+                                && let Ok(value) = accessor.deserialize::<serde_json::Value>()
+                            {
+                                args_json.insert(arg_name.clone(), value);
                             }
                         }
 
