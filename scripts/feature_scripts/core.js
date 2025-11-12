@@ -52,7 +52,7 @@ function health_check(req) {
 }
 
 // GraphQL subscription resolver for script updates
-function scriptUpdatesResolver() {
+function scriptUpdatesResolver(req, args) {
   console.log("Client subscribed to scriptUpdates GraphQL subscription");
   return {
     type: "subscription_init",
@@ -357,7 +357,7 @@ function script_logs_handler(req) {
 }
 
 // GraphQL resolvers
-function scriptsQuery() {
+function scriptsQuery(req, args) {
   try {
     const scripts = listScripts();
     const scriptArray = Object.keys(scripts).map((uri) => ({
@@ -371,7 +371,7 @@ function scriptsQuery() {
   }
 }
 
-function scriptQuery(args) {
+function scriptQuery(req, args) {
   try {
     const content = getScript(args.uri);
     const logs = listLogsForUri(args.uri);
@@ -404,7 +404,7 @@ function scriptQuery(args) {
   }
 }
 
-function scriptInitStatusQuery(args) {
+function scriptInitStatusQuery(req, args) {
   try {
     const status = getScriptInitStatus(args.uri);
     if (status) {
@@ -419,7 +419,7 @@ function scriptInitStatusQuery(args) {
   }
 }
 
-function allScriptsInitStatusQuery() {
+function allScriptsInitStatusQuery(req, args) {
   try {
     const scripts = listScripts();
     const statusArray = [];
@@ -439,7 +439,7 @@ function allScriptsInitStatusQuery() {
   }
 }
 
-function upsertScriptMutation(args) {
+function upsertScriptMutation(req, args) {
   try {
     // Check if script already exists to determine action
     const existingScript = getScript(args.uri);
@@ -467,14 +467,14 @@ function upsertScriptMutation(args) {
     console.error(`Script upsert mutation failed: ${error.message}`);
     return JSON.stringify({
       message: `Error: Failed to upsert script: ${error.message}`,
-      uri: args.uri,
-      chars: args.content ? args.content.length : 0,
+      uri: args ? args.uri : null,
+      chars: args && args.content ? args.content.length : 0,
       success: false,
     });
   }
 }
 
-function deleteScriptMutation(args) {
+function deleteScriptMutation(req, args) {
   try {
     const result = deleteScript(args.uri);
     // deleteScript now returns boolean: true if deleted, false if not found

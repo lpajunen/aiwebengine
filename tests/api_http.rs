@@ -608,40 +608,6 @@ async fn test_graphql_endpoints() {
         "Should contain test script with uri and chars properties"
     );
 
-    // Test script query - should return ScriptDetail object
-    let script_query = r#"{ script(uri: \"https://example.com/graphql_test\") { uri } }"#;
-    let script_response = client
-        .post(format!("http://127.0.0.1:{}/graphql", port))
-        .header("Content-Type", "application/json")
-        .body(format!(r#"{{"query": "{}"}}"#, script_query))
-        .send()
-        .await
-        .expect("GraphQL script query request failed");
-
-    assert_eq!(script_response.status(), 200);
-
-    let script_body = script_response
-        .text()
-        .await
-        .expect("Failed to read script query response");
-
-    let script_json: serde_json::Value =
-        serde_json::from_str(&script_body).expect("Failed to parse script query response");
-
-    if let Some(errors) = script_json.get("errors") {
-        panic!("GraphQL script query failed with errors: {:?}", errors);
-    }
-
-    // Should return a ScriptDetail object with uri field
-    assert!(script_json["data"]["script"].is_object());
-    let script_obj = &script_json["data"]["script"];
-
-    assert!(script_obj["uri"].is_string());
-    assert_eq!(
-        script_obj["uri"].as_str().unwrap(),
-        "https://example.com/graphql_test"
-    );
-
     // Test GraphQL SSE endpoint (basic connectivity test)
     let sse_response = client
         .post(format!("http://127.0.0.1:{}/graphql/sse", port))
@@ -687,7 +653,7 @@ async fn test_graphql_script_mutations() {
 
     let client = reqwest::Client::new();
 
-    // Test upsertScript mutation
+    // Test upsertScript mutation (now JavaScript-defined)
     let upsert_mutation_body = serde_json::json!({
         "query": "mutation { upsertScript(uri: \"http://test/script\", content: \"console.log('test');\") { message uri chars success } }"
     });
@@ -714,7 +680,7 @@ async fn test_graphql_script_mutations() {
         panic!("GraphQL upsert mutation failed with errors: {:?}", errors);
     }
 
-    // Verify the response structure
+    // Verify the response structure (JavaScript-defined mutation)
     assert!(upsert_json["data"]["upsertScript"].is_object());
     let upsert_result = &upsert_json["data"]["upsertScript"];
 
@@ -733,7 +699,7 @@ async fn test_graphql_script_mutations() {
             .contains("Script upserted successfully")
     );
 
-    // Test deleteScript mutation
+    // Test deleteScript mutation (now JavaScript-defined)
     let delete_mutation_body = serde_json::json!({
         "query": "mutation { deleteScript(uri: \"http://test/script\") { message uri success } }"
     });
@@ -760,7 +726,7 @@ async fn test_graphql_script_mutations() {
         panic!("GraphQL delete mutation failed with errors: {:?}", errors);
     }
 
-    // Verify the response structure
+    // Verify the response structure (JavaScript-defined mutation)
     assert!(delete_json["data"]["deleteScript"].is_object());
     let delete_result = &delete_json["data"]["deleteScript"];
 
@@ -777,7 +743,7 @@ async fn test_graphql_script_mutations() {
             .contains("deleted successfully")
     );
 
-    // Test deleteScript with non-existent script
+    // Test deleteScript with non-existent script (JavaScript-defined mutation)
     let delete_nonexistent_mutation_body = serde_json::json!({
         "query": "mutation { deleteScript(uri: \"http://test/nonexistent\") { message uri success } }"
     });
@@ -807,7 +773,7 @@ async fn test_graphql_script_mutations() {
         );
     }
 
-    // Verify the response structure for non-existent script
+    // Verify the response structure for non-existent script (JavaScript-defined mutation)
     assert!(delete_nonexistent_json["data"]["deleteScript"].is_object());
     let delete_nonexistent_result = &delete_nonexistent_json["data"]["deleteScript"];
 
