@@ -311,7 +311,7 @@ Selective broadcasting allows you to send messages to specific clients based on 
 
 ```javascript
 // Register one stream for all chat messages
-registerWebStream("/chat");
+routeRegistry.registerStreamRoute("/chat");
 
 // Send personalized messages using metadata filtering
 function sendPersonalMessage(req) {
@@ -334,7 +334,7 @@ function sendPersonalMessage(req) {
   return { status: 200, body: result };
 }
 
-register("/chat/personal", "sendPersonalMessage", "POST");
+routeRegistry.registerRoute("/chat/personal", "sendPersonalMessage", "POST");
 ```
 
 ### Advanced Filtering
@@ -498,7 +498,7 @@ testConnection.onmessage = (event) => {
 #### 1. Chat Applications
 
 ```javascript
-registerWebStream("/chat");
+routeRegistry.registerStreamRoute("/chat");
 
 function sendRoomMessage(req) {
   const { room, message, sender } = req.form;
@@ -531,14 +531,14 @@ function sendPrivateMessage(req) {
   );
 }
 
-register("/chat/room", "sendRoomMessage", "POST");
-register("/chat/private", "sendPrivateMessage", "POST");
+routeRegistry.registerRoute("/chat/room", "sendRoomMessage", "POST");
+routeRegistry.registerRoute("/chat/private", "sendPrivateMessage", "POST");
 ```
 
 #### 2. Role-Based Notifications
 
 ```javascript
-registerWebStream("/notifications");
+routeRegistry.registerStreamRoute("/notifications");
 
 function sendAdminAlert(req) {
   const { message, priority } = req.form;
@@ -569,14 +569,14 @@ function sendUserNotification(req) {
   );
 }
 
-register("/notify/admin", "sendAdminAlert", "POST");
-register("/notify/user", "sendUserNotification", "POST");
+routeRegistry.registerRoute("/notify/admin", "sendAdminAlert", "POST");
+routeRegistry.registerRoute("/notify/user", "sendUserNotification", "POST");
 ```
 
 #### 3. Multi-Tenant Applications
 
 ```javascript
-registerWebStream("/tenant-updates");
+routeRegistry.registerStreamRoute("/tenant-updates");
 
 function broadcastTenantUpdate(req) {
   const { tenantId, message } = req.form;
@@ -592,7 +592,11 @@ function broadcastTenantUpdate(req) {
   );
 }
 
-register("/tenant/broadcast", "broadcastTenantUpdate", "POST");
+routeRegistry.registerRoute(
+  "/tenant/broadcast",
+  "broadcastTenantUpdate",
+  "POST",
+);
 ```
 
 ### Best Practices for Selective Broadcasting
@@ -770,12 +774,12 @@ curl -X POST http://localhost:3000/trigger-notification
 Perfect for alerting users about important events:
 
 ```javascript
-registerWebStream("/notifications");
+routeRegistry.registerStreamRoute("/notifications");
 
 function sendAlert(req) {
   const { type, message, priority } = req.form;
 
-  sendStreamMessageToPath("/notifications", {
+  routeRegistry.sendStreamMessage("/notifications", {
     type: "alert",
     alertType: type,
     message: message,
@@ -786,7 +790,7 @@ function sendAlert(req) {
   return { status: 200, body: "Alert sent" };
 }
 
-register("/send-alert", "sendAlert", "POST");
+routeRegistry.registerRoute("/send-alert", "sendAlert", "POST");
 ```
 
 ### 2. Real-Time Dashboard
@@ -794,7 +798,7 @@ register("/send-alert", "sendAlert", "POST");
 Stream live metrics and status updates:
 
 ```javascript
-registerWebStream("/dashboard");
+routeRegistry.registerStreamRoute("/dashboard");
 
 function updateMetrics(req) {
   // Simulate gathering metrics
@@ -806,11 +810,11 @@ function updateMetrics(req) {
     timestamp: new Date().toISOString(),
   };
 
-  sendStreamMessageToPath("/dashboard", metrics);
+  routeRegistry.sendStreamMessage("/dashboard", metrics);
   return { status: 200, body: "Metrics updated" };
 }
 
-register("/update-metrics", "updateMetrics", "POST");
+routeRegistry.registerRoute("/update-metrics", "updateMetrics", "POST");
 ```
 
 ### 3. Chat System
@@ -818,12 +822,12 @@ register("/update-metrics", "updateMetrics", "POST");
 Build real-time communication:
 
 ```javascript
-registerWebStream("/chat");
+routeRegistry.registerStreamRoute("/chat");
 
 function sendMessage(req) {
   const { user, room, message } = req.form;
 
-  sendStreamMessageToPath("/chat", {
+  routeRegistry.sendStreamMessage("/chat", {
     type: "chat_message",
     user: user,
     room: room,
@@ -834,7 +838,7 @@ function sendMessage(req) {
   return { status: 200, body: "Message sent" };
 }
 
-register("/chat/send", "sendMessage", "POST");
+routeRegistry.registerRoute("/chat/send", "sendMessage", "POST");
 ```
 
 ### 4. Live Data Feed
@@ -842,7 +846,7 @@ register("/chat/send", "sendMessage", "POST");
 Stream continuous data updates:
 
 ```javascript
-registerWebStream("/data-feed");
+routeRegistry.registerStreamRoute("/data-feed");
 
 function broadcastData(req) {
   // Simulate real-time data
@@ -855,11 +859,11 @@ function broadcastData(req) {
     timestamp: new Date().toISOString(),
   };
 
-  sendStreamMessageToPath("/data-feed", data);
+  routeRegistry.sendStreamMessage("/data-feed", data);
   return { status: 200, body: "Data broadcasted" };
 }
 
-register("/broadcast-data", "broadcastData", "GET");
+routeRegistry.registerRoute("/broadcast-data", "broadcastData", "GET");
 ```
 
 ## Best Practices
@@ -870,13 +874,13 @@ register("/broadcast-data", "broadcastData", "GET");
 
    ```javascript
    // Good
-   registerWebStream("/notifications/user123");
-   registerWebStream("/chat/room/general");
-   registerWebStream("/status/server/production");
+   routeRegistry.registerStreamRoute("/notifications/user123");
+   routeRegistry.registerStreamRoute("/chat/room/general");
+   routeRegistry.registerStreamRoute("/status/server/production");
 
    // Avoid
-   registerWebStream("/stream1");
-   registerWebStream("/s");
+   routeRegistry.registerStreamRoute("/stream1");
+   routeRegistry.registerStreamRoute("/s");
    ```
 
 2. **Structure Your Messages Consistently**
@@ -896,9 +900,9 @@ register("/broadcast-data", "broadcastData", "GET");
 3. **Handle Different Message Types**
 
 ```javascript
-sendStreamMessageToPath('/notifications', { type: 'notification', ... });
-sendStreamMessageToPath('/updates', { type: 'update', ... });
-sendStreamMessageToPath('/errors', { type: 'error', ... });
+routeRegistry.sendStreamMessage('/notifications', { type: 'notification', ... });
+routeRegistry.sendStreamMessage('/updates', { type: 'update', ... });
+routeRegistry.sendStreamMessage('/errors', { type: 'error', ... });
 ```
 
 ### Client-Side Best Practices
@@ -966,14 +970,14 @@ window.addEventListener("beforeunload", function () {
    function safeHandler(req) {
      try {
        // Your logic here
-       sendStreamMessageToPath("/notifications", {
+       routeRegistry.sendStreamMessage("/notifications", {
          type: "success",
          data: result,
        });
        return { status: 200, body: "OK" };
      } catch (error) {
        console.error("Error in handler: " + error.message);
-       sendStreamMessageToPath("/notifications", {
+       routeRegistry.sendStreamMessage("/notifications", {
          type: "error",
          message: "Something went wrong",
          timestamp: new Date().toISOString(),
@@ -1016,12 +1020,15 @@ eventSource.onerror = function (event) {
    ```javascript
    // Check if stream is registered
    console.log("Registering stream...");
-   registerWebStream("/my-stream");
+   routeRegistry.registerStreamRoute("/my-stream");
    console.log("Stream registered");
 
    // Verify message sending
    console.log("Sending message...");
-   sendStreamMessageToPath("/my-stream", { type: "test", message: "Hello" });
+   routeRegistry.sendStreamMessage("/my-stream", {
+     type: "test",
+     message: "Hello",
+   });
    console.log("Message sent");
    ```
 
@@ -1091,14 +1098,14 @@ When using multiple streams, coordinate them effectively:
 
 ```javascript
 // Register different streams for different data types
-registerWebStream("/notifications"); // User notifications
-registerWebStream("/system-status"); // System health
-registerWebStream("/chat"); // Chat messages
+routeRegistry.registerStreamRoute("/notifications"); // User notifications
+routeRegistry.registerStreamRoute("/system-status"); // System health
+routeRegistry.registerStreamRoute("/chat"); // Chat messages
 
 // Send targeted messages based on context
 function handleUserAction(req) {
   // Notify about user action
-  sendStreamMessageToPath("/notifications", {
+  routeRegistry.sendStreamMessage("/notifications", {
     type: "user_action",
     action: req.form.action,
     user: req.form.user,
@@ -1106,7 +1113,7 @@ function handleUserAction(req) {
 
   // Update system status if needed
   if (req.form.action === "critical_operation") {
-    sendStreamMessageToPath("/system-status", {
+    routeRegistry.sendStreamMessage("/system-status", {
       type: "system_status",
       status: "busy",
       operation: req.form.action,
@@ -1122,14 +1129,14 @@ function handleUserAction(req) {
 Connect streams to external data sources:
 
 ```javascript
-registerWebStream("/external-updates");
+routeRegistry.registerStreamRoute("/external-updates");
 
 // Webhook handler for external system notifications
 function webhookHandler(req) {
   const webhookData = JSON.parse(req.body);
 
   // Transform external data for your stream
-  sendStreamMessageToPath("/external-updates", {
+  routeRegistry.sendStreamMessage("/external-updates", {
     type: "external_update",
     source: "github",
     event: webhookData.action,
@@ -1140,7 +1147,7 @@ function webhookHandler(req) {
   return { status: 200, body: "Webhook processed" };
 }
 
-register("/webhook/github", "webhookHandler", "POST");
+routeRegistry.registerRoute("/webhook/github", "webhookHandler", "POST");
 ```
 
 ### GraphQL Subscriptions with Selective Broadcasting

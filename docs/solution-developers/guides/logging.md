@@ -149,7 +149,7 @@ function logsHandler(req) {
   };
 }
 
-register("/my-logs", "logsHandler", "GET");
+routeRegistry.registerRoute("/my-logs", "logsHandler", "GET");
 ```
 
 ### Method 3: `listLogsForUri()` Function
@@ -177,7 +177,7 @@ function allLogsHandler(req) {
   };
 }
 
-register("/logs", "allLogsHandler", "GET");
+routeRegistry.registerRoute("/logs", "allLogsHandler", "GET");
 // Usage: /logs?uri=/api/users
 ```
 
@@ -237,7 +237,7 @@ function logViewerHandler(req) {
   };
 }
 
-register("/logs-viewer", "logViewerHandler", "GET");
+routeRegistry.registerRoute("/logs-viewer", "logViewerHandler", "GET");
 ```
 
 ### Advanced Log Viewer with Filtering
@@ -331,7 +331,11 @@ function advancedLogViewerHandler(req) {
   };
 }
 
-register("/advanced-logs", "advancedLogViewerHandler", "GET");
+routeRegistry.registerRoute(
+  "/advanced-logs",
+  "advancedLogViewerHandler",
+  "GET",
+);
 ```
 
 ## Debugging Techniques
@@ -543,7 +547,7 @@ function statsHandler(req) {
   return jsonResponse(200, stats);
 }
 
-register("/stats", "statsHandler", "GET");
+routeRegistry.registerRoute("/stats", "statsHandler", "GET");
 ```
 
 ## Best Practices

@@ -180,7 +180,7 @@ function uploadHandler(req) {
   }
 }
 
-register("/upload-asset", "uploadHandler", "POST");
+routeRegistry.registerRoute("/upload-asset", "uploadHandler", "POST");
 ```
 
 ## Using Assets in Scripts
@@ -411,7 +411,7 @@ function assetGalleryHandler(req) {
   };
 }
 
-register("/assets-gallery", "assetGalleryHandler", "GET");
+routeRegistry.registerRoute("/assets-gallery", "assetGalleryHandler", "GET");
 ```
 
 ### Asset Upload Form
@@ -485,7 +485,7 @@ function uploadFormHandler(req) {
   };
 }
 
-register("/upload-form", "uploadFormHandler", "GET");
+routeRegistry.registerRoute("/upload-form", "uploadFormHandler", "GET");
 ```
 
 ## Asset API Reference
@@ -745,7 +745,7 @@ function pwaManifestHandler(req) {
   };
 }
 
-register("/manifest.json", "pwaManifestHandler", "GET");
+routeRegistry.registerRoute("/manifest.json", "pwaManifestHandler", "GET");
 ```
 
 ## Troubleshooting

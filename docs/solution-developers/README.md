@@ -207,7 +207,7 @@ Real-world code examples:
 
 ```javascript
 // Route registration
-register(path, handlerName, method);
+routeRegistry.registerRoute(path, handlerName, method);
 
 // Logging
 console.log(message);
@@ -221,8 +221,8 @@ const asset = fetchAsset(path);
 const response = fetch(url, options);
 
 // Streaming
-registerWebStream(path);
-sendStreamMessageToPath(path, data);
+routeRegistry.registerStreamRoute(path);
+routeRegistry.sendStreamMessage(path, data);
 ```
 
 ### Handler Template
@@ -262,7 +262,7 @@ function myHandler(req) {
 }
 
 function init() {
-  register("/my-endpoint", "myHandler", "GET");
+  routeRegistry.registerRoute("/my-endpoint", "myHandler", "GET");
 }
 
 init();

@@ -174,7 +174,7 @@ Create `.vscode/aiwebengine.code-snippets`:
     "prefix": "awe-script",
     "body": [
       "function init() {",
-      "  register('${1:GET}', '${2:/}', ${3:handler});",
+      "  routeRegistry.registerRoute('${2:/}', '${3:handler}', '${1:GET}');",
       "}",
       "",
       "function ${3:handler}(request) {",

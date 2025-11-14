@@ -28,7 +28,7 @@ function helloHandler(req) {
   };
 }
 
-register("/hello", "helloHandler", "GET");
+routeRegistry.registerRoute("/hello", "helloHandler", "GET");
 ```
 
 ---

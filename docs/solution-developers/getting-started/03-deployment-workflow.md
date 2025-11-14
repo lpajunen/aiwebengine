@@ -70,7 +70,7 @@ function helloHandler(req) {
 }
 
 function init() {
-  register("/api/hello", "helloHandler", "GET");
+  routeRegistry.registerRoute("/api/hello", "helloHandler", "GET");
 }
 
 init();
@@ -146,7 +146,7 @@ function usersHandler(req) {
 }
 
 function init() {
-  register("/api/users", "usersHandler", "GET");
+  routeRegistry.registerRoute("/api/users", "usersHandler", "GET");
 }
 
 init();
@@ -335,7 +335,7 @@ aiwebengine exposes REST APIs for script management (if editor is enabled):
 curl -X POST "http://localhost:8080/api/scripts/api/hello.js" \
   -H "Content-Type: application/json" \
   -d '{
-    "content": "function helloHandler(req) { return { status: 200, body: \"Hello\" }; } function init() { register(\"/api/hello\", \"helloHandler\", \"GET\"); } init();"
+    "content": "function helloHandler(req) { return { status: 200, body: \"Hello\" }; } function init() { routeRegistry.registerRoute(\"/api/hello\", \"helloHandler\", \"GET\"); } init();"
   }'
 ```
 
@@ -701,7 +701,7 @@ mv scripts/api/users.js.backup scripts/api/users.js
 
 **Check:**
 
-- `register()` called in `init()`
+- `routeRegistry.registerRoute()` called in `init()`
 - Path starts with `/`
 - Handler name matches function name
 - No duplicate routes

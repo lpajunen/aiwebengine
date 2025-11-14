@@ -5,7 +5,7 @@
 As of November 2025, aiwebengine has been refactored to use a more flexible asset registration system. Assets are now:
 
 1. **Stored by name** in the repository (not by HTTP path)
-2. **Registered to HTTP paths at runtime** using `registerPublicAsset()`
+2. **Registered to HTTP paths at runtime** using `routeRegistry.registerAssetRoute()`
 3. **Managed through JavaScript** in init() functions, similar to route registration
 
 ## Key Changes
@@ -19,13 +19,13 @@ As of November 2025, aiwebengine has been refactored to use a more flexible asse
 ### After (New System)
 
 - Assets stored with `asset_name` (e.g., `logo.svg`)
-- HTTP paths registered dynamically using `registerPublicAsset(path, asset_name)`
+- HTTP paths registered dynamically using `routeRegistry.registerAssetRoute(path, asset_name)`
 - Same asset can be served at multiple HTTP paths
 - Paths can be changed without touching the database
 
 ## Asset Functions
 
-### registerPublicAsset(path, asset_name)
+### routeRegistry.registerAssetRoute(path, asset_name)
 
 Registers an HTTP path to serve a specific asset.
 
@@ -39,16 +39,16 @@ Registers an HTTP path to serve a specific asset.
 ```javascript
 function init(context) {
   // Register built-in assets
-  registerPublicAsset("/logo.svg", "logo.svg");
-  registerPublicAsset("/favicon.ico", "favicon.ico");
+  routeRegistry.registerAssetRoute("/logo.svg", "logo.svg");
+  routeRegistry.registerAssetRoute("/favicon.ico", "favicon.ico");
 
   // Register custom assets
-  registerPublicAsset("/css/main.css", "main.css");
-  registerPublicAsset("/css/theme.css", "theme.css");
-  registerPublicAsset("/js/app.js", "app.js");
+  routeRegistry.registerAssetRoute("/css/main.css", "main.css");
+  routeRegistry.registerAssetRoute("/css/theme.css", "theme.css");
+  routeRegistry.registerAssetRoute("/js/app.js", "app.js");
 
   // Same asset at multiple paths
-  registerPublicAsset("/img/logo.svg", "logo.svg"); // Same logo at different path
+  routeRegistry.registerAssetRoute("/img/logo.svg", "logo.svg"); // Same logo at different path
 
   return { success: true };
 }
@@ -201,16 +201,16 @@ function init(context) {
   console.log("Initializing asset demo");
 
   // Register HTTP routes
-  register("/", "homePage", "GET");
+  routeRegistry.registerRoute("/", "homePage", "GET");
 
   // Register asset paths
   // Built-in assets
-  registerPublicAsset("/favicon.ico", "favicon.ico");
-  registerPublicAsset("/images/logo.svg", "logo.svg");
+  routeRegistry.registerAssetRoute("/favicon.ico", "favicon.ico");
+  routeRegistry.registerAssetRoute("/images/logo.svg", "logo.svg");
 
   // Custom assets (must be uploaded first via upsertAsset)
-  registerPublicAsset("/styles/main.css", "main.css");
-  registerPublicAsset("/scripts/app.js", "app.js");
+  routeRegistry.registerAssetRoute("/styles/main.css", "main.css");
+  routeRegistry.registerAssetRoute("/scripts/app.js", "app.js");
 
   console.log("Asset paths registered");
   return { success: true };
@@ -234,7 +234,7 @@ const assetPath = "/css/main.css";
 ```javascript
 function init(context) {
   // Register the asset path in init()
-  registerPublicAsset("/css/main.css", "main.css");
+  routeRegistry.registerAssetRoute("/css/main.css", "main.css");
 
   return { success: true };
 }
@@ -254,11 +254,11 @@ The following assets are provided by the system and should be registered in your
 
 ```javascript
 function init(context) {
-  registerPublicAsset("/logo.svg", "logo.svg");
-  registerPublicAsset("/favicon.ico", "favicon.ico");
-  registerPublicAsset("/editor.css", "editor.css");
-  registerPublicAsset("/editor.js", "editor.js");
-  registerPublicAsset("/engine.css", "engine.css");
+  routeRegistry.registerAssetRoute("/logo.svg", "logo.svg");
+  routeRegistry.registerAssetRoute("/favicon.ico", "favicon.ico");
+  routeRegistry.registerAssetRoute("/editor.css", "editor.css");
+  routeRegistry.registerAssetRoute("/editor.js", "editor.js");
+  routeRegistry.registerAssetRoute("/engine.css", "engine.css");
 
   // ... rest of your init code
 }
@@ -266,7 +266,7 @@ function init(context) {
 
 ## Best Practices
 
-1. **Register in init()**: Always call `registerPublicAsset()` in your script's `init()` function
+1. **Register in init()**: Always call `routeRegistry.registerAssetRoute()` in your script's `init()` function
 2. **Use descriptive names**: Asset names should be descriptive (e.g., `logo.svg`, `main.css`)
 3. **Organize paths**: Use logical HTTP paths (e.g., `/css/`, `/js/`, `/images/`)
 4. **One asset, multiple paths**: You can serve the same asset at multiple HTTP paths
@@ -274,7 +274,7 @@ function init(context) {
 
 ## Error Handling
 
-The `registerPublicAsset()` function will return an error message if:
+The `routeRegistry.registerAssetRoute()` function will return an error message if:
 
 - Path doesn't start with `/`
 - Path is too long (>500 characters)
@@ -286,7 +286,7 @@ The `registerPublicAsset()` function will return an error message if:
 
 ```javascript
 function init(context) {
-  const result = registerPublicAsset("/logo.svg", "logo.svg");
+  const result = routeRegistry.registerAssetRoute("/logo.svg", "logo.svg");
 
   // Result is a string, check for success
   if (result.includes("registered")) {

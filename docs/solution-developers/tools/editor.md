@@ -627,7 +627,7 @@ function myHandler(req) {
 
 // Type: init
 function init() {
-  register("/path", "handlerName", "GET");
+  routeRegistry.registerRoute("/path", "handlerName", "GET");
 }
 
 init();

@@ -506,7 +506,7 @@ Step 5: "Add rate limiting for registration attempts"
 ```text
 Use the aiwebengine fetch() function to call the API
 
-Use Server-Sent Events (registerWebStream) for real-time updates
+Use Server-Sent Events (routeRegistry.registerStreamRoute) for real-time updates
 
 Use the built-in console.log() for logging
 
@@ -552,14 +552,14 @@ web application engine. Scripts are server-side handlers that:
 
 - Receive a `req` object with method, path, query, form, headers
 - Must return an object with status, body, contentType
-- Use register(path, handlerName, method) to map routes
+- Use routeRegistry.registerRoute(path, handlerName, method) to map routes
 - Can use console.log(message) for logging
 - Can use fetch(url, options) for external API calls
-- Can use registerWebStream(path) and sendStreamMessage(data) for SSE
+- Can use routeRegistry.registerStreamRoute(path) and routeRegistry.sendStreamMessage(data) for SSE
 
 Available functions:
-- register(), console.log(), listLogs(), listLogsForUri()
-- fetch(), registerWebStream(), sendStreamMessage()
+- routeRegistry.registerRoute(), console.log(), listLogs(), listLogsForUri()
+- fetch(), routeRegistry.registerStreamRoute(), routeRegistry.sendStreamMessage()
 - listAssets(), fetchAsset(), upsertAsset(), deleteAsset()
 
 Can you help me create a [your request]?
@@ -609,7 +609,7 @@ not client-side JavaScript
 
 ```text
 Use only QuickJS-compatible code. Available functions are:
-register(), console.log(), fetch(), JSON.parse(), JSON.stringify()
+routeRegistry.registerRoute(), console.log(), fetch(), JSON.parse(), JSON.stringify()
 ```
 
 ### AI Generates Too Much Code

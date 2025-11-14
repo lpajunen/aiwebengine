@@ -468,7 +468,7 @@ Explain how the streaming works in this script
    }
 
    function init() {
-     register("/api/myapi", "apiHandler", "GET");
+     routeRegistry.registerRoute("/api/myapi", "apiHandler", "GET");
    }
 
    init();
@@ -502,7 +502,7 @@ Explain how the streaming works in this script
    }
 
    function init() {
-     register("/", "homeHandler", "GET");
+     routeRegistry.registerRoute("/", "homeHandler", "GET");
    }
 
    init();

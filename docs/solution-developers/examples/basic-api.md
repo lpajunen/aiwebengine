@@ -8,7 +8,7 @@ The most basic API returns JSON data:
 
 ```javascript
 function init() {
-  register("GET", "/api/hello", helloHandler);
+  routeRegistry.registerRoute("/api/hello", "helloHandler", "GET");
 }
 
 function helloHandler(request) {
@@ -50,7 +50,7 @@ Handle query parameters for filtering and searching:
 
 ```javascript
 function init() {
-  register("GET", "/api/users", getUsersHandler);
+  routeRegistry.registerRoute("/api/users", "getUsersHandler", "GET");
 }
 
 function getUsersHandler(request) {
@@ -129,7 +129,7 @@ Extract parameters from the URL path:
 
 ```javascript
 function init() {
-  register("GET", "/api/users/:id", getUserByIdHandler);
+  routeRegistry.registerRoute("/api/users/:id", "getUserByIdHandler", "GET");
 }
 
 function getUserByIdHandler(request) {
@@ -188,7 +188,7 @@ Handle POST requests with JSON body:
 
 ```javascript
 function init() {
-  register("POST", "/api/users", createUserHandler);
+  routeRegistry.registerRoute("/api/users", "createUserHandler", "POST");
 }
 
 function createUserHandler(request) {
@@ -270,7 +270,7 @@ Full update of a resource:
 
 ```javascript
 function init() {
-  register("PUT", "/api/users/:id", updateUserHandler);
+  routeRegistry.registerRoute("/api/users/:id", "updateUserHandler", "PUT");
 }
 
 function updateUserHandler(request) {
@@ -341,7 +341,7 @@ Delete a resource:
 
 ```javascript
 function init() {
-  register("DELETE", "/api/users/:id", deleteUserHandler);
+  routeRegistry.registerRoute("/api/users/:id", "deleteUserHandler", "DELETE");
 }
 
 function deleteUserHandler(request) {
@@ -400,11 +400,11 @@ let users = [
 let nextId = 4;
 
 function init() {
-  register("GET", "/api/users", listUsers);
-  register("GET", "/api/users/:id", getUser);
-  register("POST", "/api/users", createUser);
-  register("PUT", "/api/users/:id", updateUser);
-  register("DELETE", "/api/users/:id", deleteUser);
+  routeRegistry.registerRoute("/api/users", "listUsers", "GET");
+  routeRegistry.registerRoute("/api/users/:id", "getUser", "GET");
+  routeRegistry.registerRoute("/api/users", "createUser", "POST");
+  routeRegistry.registerRoute("/api/users/:id", "updateUser", "PUT");
+  routeRegistry.registerRoute("/api/users/:id", "deleteUser", "DELETE");
 }
 
 // LIST - Get all users
@@ -734,16 +734,16 @@ function parseJsonBody(body) {
 
 ```javascript
 // GET endpoint
-register("GET", "/api/resource", handler);
+routeRegistry.registerRoute("/api/resource", "handler", "GET");
 
 // POST endpoint
-register("POST", "/api/resource", handler);
+routeRegistry.registerRoute("/api/resource", "handler", "POST");
 
 // PUT endpoint
-register("PUT", "/api/resource/:id", handler);
+routeRegistry.registerRoute("/api/resource/:id", "handler", "PUT");
 
 // DELETE endpoint
-register("DELETE", "/api/resource/:id", handler);
+routeRegistry.registerRoute("/api/resource/:id", "handler", "DELETE");
 
 // JSON response
 return {

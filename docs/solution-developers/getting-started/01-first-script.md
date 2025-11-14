@@ -35,7 +35,7 @@ function myHandler(req) {
 
 // 2. Initialization Function - registers routes
 function init() {
-  register("/hello", "myHandler", "GET");
+  routeRegistry.registerRoute("/hello", "myHandler", "GET");
 }
 
 // 3. Init call - runs when script loads
@@ -46,7 +46,7 @@ init();
 
 - **Handler functions** receive a `req` object and return a response object
 - **`init()` function** registers your routes when the script loads
-- **`register(path, handlerName, method)`** maps URLs to handler functions
+- **`routeRegistry.registerRoute(path, handlerName, method)`** maps URLs to handler functions
 
 ## Step 2: Create Your First Script
 
@@ -99,7 +99,7 @@ function helloHandler(req) {
 
 function init() {
   // Register the route
-  register("/hello", "helloHandler", "GET");
+  routeRegistry.registerRoute("/hello", "helloHandler", "GET");
   console.log("Hello script initialized successfully");
 }
 
@@ -265,7 +265,7 @@ function helloHandler(req) {
 }
 
 function init() {
-  register("/hello", "helloHandler", "GET");
+  routeRegistry.registerRoute("/hello", "helloHandler", "GET");
   console.log("Enhanced hello script initialized");
 }
 
@@ -294,7 +294,7 @@ Response:
 
 ```javascript
 function init() {
-  register("/hello", "helloHandler", "GET");
+  routeRegistry.registerRoute("/hello", "helloHandler", "GET");
 }
 // Forgot to call init()!
 ```
@@ -309,11 +309,11 @@ function helloHandler(req) {
 }
 
 function init() {
-  register("/hello", "hello", "GET"); // Wrong name!
+  routeRegistry.registerRoute("/hello", "hello", "GET"); // Wrong name!
 }
 ```
 
-**Solution:** Use the exact function name as a string in `register()`.
+**Solution:** Use the exact function name as a string in `routeRegistry.registerRoute()`.
 
 ### ❌ Mistake 3: Forgetting to return a response
 
@@ -353,7 +353,7 @@ Now that you've created your first script, you can:
 
 ```javascript
 // Register a route
-register(path, handlerName, method);
+routeRegistry.registerRoute(path, handlerName, method);
 
 // Write to logs
 console.log(message);
@@ -389,7 +389,7 @@ function myHandler(req) {
 }
 
 function init() {
-  register("/my-path", "myHandler", "GET");
+  routeRegistry.registerRoute("/my-path", "myHandler", "GET");
 }
 
 init();

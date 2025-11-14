@@ -11,13 +11,17 @@ SSE allows servers to push updates to clients over HTTP. Perfect for one-way rea
 ```javascript
 function init() {
   // Register a WebSocket stream
-  registerWebStream("/notifications");
+  routeRegistry.registerStreamRoute("/notifications");
 
   // Page to display notifications
-  register("GET", "/notifications-demo", showNotificationsPage);
+  routeRegistry.registerRoute(
+    "GET",
+    "/notifications-demo",
+    showNotificationsPage,
+  );
 
   // Endpoint to send a notification
-  register("POST", "/send-notification", sendNotification);
+  routeRegistry.registerRoute("POST", "/send-notification", sendNotification);
 }
 
 function showNotificationsPage(request) {
@@ -226,10 +230,10 @@ A complete real-time chat system:
 
 ```javascript
 function init() {
-  registerWebStream("/chat");
-  register("GET", "/chat", showChatPage);
-  register("POST", "/chat/send", sendMessage);
-  register("POST", "/chat/typing", sendTypingIndicator);
+  routeRegistry.registerStreamRoute("/chat");
+  routeRegistry.registerRoute("GET", "/chat", showChatPage);
+  routeRegistry.registerRoute("POST", "/chat/send", sendMessage);
+  routeRegistry.registerRoute("POST", "/chat/typing", sendTypingIndicator);
 }
 
 function showChatPage(request) {
@@ -578,9 +582,9 @@ Real-time system monitoring dashboard:
 
 ```javascript
 function init() {
-  registerWebStream("/system-stats");
-  register("GET", "/dashboard", showDashboard);
-  register("POST", "/update-stats", updateSystemStats);
+  routeRegistry.registerStreamRoute("/system-stats");
+  routeRegistry.registerRoute("GET", "/dashboard", showDashboard);
+  routeRegistry.registerRoute("POST", "/update-stats", updateSystemStats);
 }
 
 function showDashboard(request) {
@@ -877,9 +881,9 @@ Real-time stock price updates:
 
 ```javascript
 function init() {
-  registerWebStream("/stock-prices");
-  register("GET", "/stocks", showStockTicker);
-  register("POST", "/update-prices", updatePrices);
+  routeRegistry.registerStreamRoute("/stock-prices");
+  routeRegistry.registerRoute("GET", "/stocks", showStockTicker);
+  routeRegistry.registerRoute("POST", "/update-prices", updatePrices);
 }
 
 function showStockTicker(request) {
@@ -1122,9 +1126,9 @@ Real-time user activity stream:
 
 ```javascript
 function init() {
-  registerWebStream("/activity");
-  register("GET", "/activity-feed", showActivityFeed);
-  register("POST", "/activity/log", logActivity);
+  routeRegistry.registerStreamRoute("/activity");
+  routeRegistry.registerRoute("GET", "/activity-feed", showActivityFeed);
+  routeRegistry.registerRoute("POST", "/activity/log", logActivity);
 }
 
 function showActivityFeed(request) {
@@ -1377,8 +1381,8 @@ sendStreamMessage({
 ### 4. Use Appropriate Stream Types
 
 ```javascript
-// One-way updates: Use SSE (registerWebStream)
-registerWebStream("/notifications");
+// One-way updates: Use SSE (routeRegistry.registerStreamRoute)
+routeRegistry.registerStreamRoute("/notifications");
 
 // For bidirectional: Consider GraphQL subscriptions
 // See graphql-subscriptions guide
@@ -1450,10 +1454,10 @@ setInterval(() => {
 
 ```javascript
 // Register stream
-registerWebStream("/my-stream");
+routeRegistry.registerStreamRoute("/my-stream");
 
 // Send message to all connected clients
-sendStreamMessage({ type: "update", data: value });
+routeRegistry.sendStreamMessage("/my-stream", { type: "update", data: value });
 
 // Client-side connection
 const eventSource = new EventSource("/my-stream");

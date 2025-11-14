@@ -592,7 +592,7 @@ function aiChatHandler(req) {
   };
 }
 
-register('/api/chat', 'aiChatHandler', 'POST');
+routeRegistry.registerRoute('/api/chat', 'aiChatHandler', 'POST');
 ```
 
 ### Common Application Secrets

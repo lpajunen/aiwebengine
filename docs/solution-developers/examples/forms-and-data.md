@@ -8,8 +8,8 @@ A basic form with GET (display) and POST (submit) handlers:
 
 ```javascript
 function init() {
-  register("GET", "/contact", showContactForm);
-  register("POST", "/contact", handleContactForm);
+  routeRegistry.registerRoute("GET", "/contact", showContactForm);
+  routeRegistry.registerRoute("POST", "/contact", handleContactForm);
 }
 
 function showContactForm(request) {
@@ -162,8 +162,8 @@ Add server-side validation:
 
 ```javascript
 function init() {
-  register("GET", "/signup", showSignupForm);
-  register("POST", "/signup", handleSignup);
+  routeRegistry.registerRoute("GET", "/signup", showSignupForm);
+  routeRegistry.registerRoute("POST", "/signup", handleSignup);
 }
 
 function showSignupForm(request) {
@@ -437,8 +437,8 @@ Modern async form handling:
 
 ```javascript
 function init() {
-  register("GET", "/feedback", showFeedbackForm);
-  register("POST", "/api/feedback", handleFeedbackAPI);
+  routeRegistry.registerRoute("GET", "/feedback", showFeedbackForm);
+  routeRegistry.registerRoute("POST", "/api/feedback", handleFeedbackAPI);
 }
 
 function showFeedbackForm(request) {
@@ -734,8 +734,8 @@ Handle file uploads (for when assets API is used):
 
 ```javascript
 function init() {
-  register("GET", "/upload", showUploadForm);
-  register("POST", "/upload", handleUpload);
+  routeRegistry.registerRoute("GET", "/upload", showUploadForm);
+  routeRegistry.registerRoute("POST", "/upload", handleUpload);
 }
 
 function showUploadForm(request) {
@@ -965,8 +965,8 @@ Create a multi-step registration process:
 
 ```javascript
 function init() {
-  register("GET", "/wizard", showWizard);
-  register("POST", "/api/wizard/step", handleWizardStep);
+  routeRegistry.registerRoute("GET", "/wizard", showWizard);
+  routeRegistry.registerRoute("POST", "/api/wizard/step", handleWizardStep);
 }
 
 function showWizard(request) {

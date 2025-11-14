@@ -50,7 +50,7 @@ graphQLRegistry.sendSubscriptionMessage(
 ```
 
 **Note**: With the new execute_stream approach, this function maintains backward compatibility but logs a deprecation warning. For new development, consider generating subscription messages directly within subscription resolvers for better GraphQL compliance.
-sendStreamMessageToPath("/graphql/subscription/subscriptionName", JSON.stringify(data));
+routeRegistry.sendStreamMessage("/graphql/subscription/subscriptionName", JSON.stringify(data));
 
 ````
 
@@ -155,7 +155,11 @@ function sendNotificationResolver(args) {
 }
 
 // You can also trigger from HTTP endpoints or other events
-register("/trigger-notification", "triggerNotificationHandler", "POST");
+routeRegistry.registerRoute(
+  "/trigger-notification",
+  "triggerNotificationHandler",
+  "POST",
+);
 
 function triggerNotificationHandler(req) {
   const message = req.body || "Default notification";

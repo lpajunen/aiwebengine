@@ -624,7 +624,7 @@ function logUserAction(req) {
   };
 }
 
-register("/log-action", "logUserAction", "POST");
+routeRegistry.registerRoute("/log-action", "logUserAction", "POST");
 ```
 
 ### graphQLRegistry.executeGraphQL(query, variables)

@@ -12,8 +12,8 @@ Create a content generation tool:
 
 ```javascript
 function init() {
-  register("GET", "/ai-writer", showAIWriter);
-  register("POST", "/api/generate", generateContent);
+  routeRegistry.registerRoute("GET", "/ai-writer", showAIWriter);
+  routeRegistry.registerRoute("POST", "/api/generate", generateContent);
 }
 
 function showAIWriter(request) {
@@ -416,8 +416,8 @@ Create an interactive AI chatbot:
 
 ```javascript
 function init() {
-  register("GET", "/chatbot", showChatbot);
-  register("POST", "/api/chat", handleChat);
+  routeRegistry.registerRoute("GET", "/chatbot", showChatbot);
+  routeRegistry.registerRoute("POST", "/api/chat", handleChat);
 }
 
 function showChatbot(request) {
@@ -787,8 +787,8 @@ Generate descriptions for images:
 
 ```javascript
 function init() {
-  register("GET", "/image-analyzer", showImageAnalyzer);
-  register("POST", "/api/analyze-image", analyzeImage);
+  routeRegistry.registerRoute("GET", "/image-analyzer", showImageAnalyzer);
+  routeRegistry.registerRoute("POST", "/api/analyze-image", analyzeImage);
 }
 
 function showImageAnalyzer(request) {
@@ -1101,8 +1101,8 @@ Intelligent search with AI:
 
 ```javascript
 function init() {
-  register("GET", "/smart-search", showSmartSearch);
-  register("POST", "/api/search", performSearch);
+  routeRegistry.registerRoute("GET", "/smart-search", showSmartSearch);
+  routeRegistry.registerRoute("POST", "/api/search", performSearch);
 }
 
 function showSmartSearch(request) {

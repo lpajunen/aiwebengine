@@ -118,7 +118,7 @@ Use this in handlers that require authentication - it will automatically reject 
 
 ```javascript
 // Protected endpoint - only accessible to authenticated users
-register("/api/protected", function (request) {
+routeRegistry.registerRoute("/api/protected", function (request) {
   // This will throw an error if not authenticated
   const user = auth.requireAuth();
 
@@ -137,7 +137,7 @@ register("/api/protected", function (request) {
 ### Public Endpoint (Optional Authentication)
 
 ```javascript
-register("/api/greeting", function (request) {
+routeRegistry.registerRoute("/api/greeting", function (request) {
   if (auth.isAuthenticated) {
     return {
       message: `Hello, ${auth.userName || auth.userId}!`,
@@ -155,7 +155,7 @@ register("/api/greeting", function (request) {
 ### Protected Endpoint (Required Authentication)
 
 ```javascript
-register("/api/profile", function (request) {
+routeRegistry.registerRoute("/api/profile", function (request) {
   const user = auth.requireAuth(); // Throws if not authenticated
 
   return {
@@ -172,7 +172,7 @@ register("/api/profile", function (request) {
 ### Conditional Logic Based on Provider
 
 ```javascript
-register("/api/data", function (request) {
+routeRegistry.registerRoute("/api/data", function (request) {
   const user = auth.currentUser();
 
   if (!user) {
@@ -205,7 +205,7 @@ register("/api/data", function (request) {
 ### User-Specific Resources
 
 ```javascript
-register("/api/user-data", function (request) {
+routeRegistry.registerRoute("/api/user-data", function (request) {
   if (!auth.isAuthenticated) {
     return {
       status: 401,
@@ -226,7 +226,7 @@ register("/api/user-data", function (request) {
 ### Graceful Degradation
 
 ```javascript
-register("/api/content", function (request) {
+routeRegistry.registerRoute("/api/content", function (request) {
   const user = auth.currentUser();
 
   // Public content available to everyone
@@ -258,7 +258,7 @@ register("/api/content", function (request) {
 ### Handling `requireAuth()` Errors
 
 ```javascript
-register("/api/secure", function (request) {
+routeRegistry.registerRoute("/api/secure", function (request) {
   try {
     const user = auth.requireAuth();
 
@@ -289,7 +289,7 @@ function requireUser() {
   return auth.currentUser();
 }
 
-register("/api/custom-protected", function (request) {
+routeRegistry.registerRoute("/api/custom-protected", function (request) {
   const user = requireUser();
 
   return {
@@ -314,13 +314,13 @@ The middleware handles authentication before your JavaScript handler runs, so th
 
 ```javascript
 // ❌ BAD - Don't trust user-provided data
-register("/api/bad-example", function (request) {
+routeRegistry.registerRoute("/api/bad-example", function (request) {
   const userId = request.query.userId; // DON'T DO THIS
   // Attacker could impersonate any user
 });
 
 // ✅ GOOD - Use authenticated user ID
-register("/api/good-example", function (request) {
+routeRegistry.registerRoute("/api/good-example", function (request) {
   const user = auth.requireAuth();
   const userId = user.id; // This is verified by the server
   // Safe to use for authorization
@@ -331,14 +331,14 @@ register("/api/good-example", function (request) {
 
 ```javascript
 // ❌ RISKY - Checking if userId exists
-register("/api/risky", function (request) {
+routeRegistry.registerRoute("/api/risky", function (request) {
   if (auth.userId) {
     // This is okay but requireAuth() is clearer
   }
 });
 
 // ✅ BETTER - Use requireAuth() for clarity
-register("/api/better", function (request) {
+routeRegistry.registerRoute("/api/better", function (request) {
   const user = auth.requireAuth();
   // Intent is clear - authentication required
 });
@@ -348,12 +348,12 @@ register("/api/better", function (request) {
 
 ```javascript
 // Public endpoint
-register("/api/public/status", function (request) {
+routeRegistry.registerRoute("/api/public/status", function (request) {
   return { status: "online" };
 });
 
 // Private endpoint
-register("/api/private/admin", function (request) {
+routeRegistry.registerRoute("/api/private/admin", function (request) {
   const user = auth.requireAuth();
 
   // Add additional authorization checks
