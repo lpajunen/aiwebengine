@@ -77,25 +77,6 @@ impl SecureGlobalContext {
             },
         )?;
 
-        // Create console object using JavaScript to avoid multiple ctx.clone() calls
-        // This creates wrapper functions in JavaScript space that call write_log with different levels
-        global.set("__writeLog", write_log)?;
-        ctx.eval::<(), _>(
-            r#"
-            (function() {
-                const writeLog = globalThis.__writeLog;
-                globalThis.console = {
-                    log: function(msg) { return writeLog(msg, "LOG"); },
-                    info: function(msg) { return writeLog(msg, "INFO"); },
-                    warn: function(msg) { return writeLog(msg, "WARN"); },
-                    error: function(msg) { return writeLog(msg, "ERROR"); },
-                    debug: function(msg) { return writeLog(msg, "DEBUG"); }
-                };
-                delete globalThis.__writeLog;  // Clean up temporary
-            })();
-        "#,
-        )?;
-
         // Secure listLogs function
         let user_ctx_list = user_context.clone();
         let list_logs = Function::new(
@@ -103,16 +84,35 @@ impl SecureGlobalContext {
             move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
                 debug!(
                     user_id = ?user_ctx_list.user_id,
-                    "Secure listLogs called"
+                    "Secure console.listLogs called"
                 );
 
                 let logs = repository::fetch_log_messages("");
-                Ok(serde_json::to_string(&logs).unwrap_or_else(|_| "[]".to_string()))
+
+                // Create JSON array of log objects (same format as secure_globals.rs)
+                let log_objects: Vec<serde_json::Value> = logs
+                    .iter()
+                    .map(|log_entry| {
+                        // Convert SystemTime to milliseconds since UNIX_EPOCH
+                        let timestamp_ms = log_entry
+                            .timestamp
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as f64;
+
+                        serde_json::json!({
+                            "message": log_entry.message,
+                            "level": log_entry.level,
+                            "timestamp": timestamp_ms
+                        })
+                    })
+                    .collect();
+
+                Ok(serde_json::to_string(&log_objects).unwrap_or_else(|_| "[]".to_string()))
             },
         )?;
-        global.set("listLogs", list_logs)?;
 
-        // Secure listLogsForUri function
+        // Secure listLogsForUri function - now returns same format as listLogs
         let user_ctx_list_uri = user_context.clone();
         let list_logs_for_uri = Function::new(
             ctx.clone(),
@@ -120,14 +120,61 @@ impl SecureGlobalContext {
                 debug!(
                     uri = %uri,
                     user_id = ?user_ctx_list_uri.user_id,
-                    "Secure listLogsForUri called"
+                    "Secure console.listLogsForUri called"
                 );
 
                 let logs = repository::fetch_log_messages(&uri);
-                Ok(serde_json::to_string(&logs).unwrap_or_else(|_| "[]".to_string()))
+
+                // Create JSON array of log objects (same format as listLogs)
+                let log_objects: Vec<serde_json::Value> = logs
+                    .iter()
+                    .map(|log_entry| {
+                        // Convert SystemTime to milliseconds since UNIX_EPOCH
+                        let timestamp_ms = log_entry
+                            .timestamp
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as f64;
+
+                        serde_json::json!({
+                            "message": log_entry.message,
+                            "level": log_entry.level,
+                            "timestamp": timestamp_ms
+                        })
+                    })
+                    .collect();
+
+                Ok(serde_json::to_string(&log_objects).unwrap_or_else(|_| "[]".to_string()))
             },
         )?;
-        global.set("listLogsForUri", list_logs_for_uri)?;
+
+        // Create console object using JavaScript to avoid multiple ctx.clone() calls
+        // This creates wrapper functions in JavaScript space that call write_log with different levels
+        // and also attaches listLogs and listLogsForUri as methods
+        global.set("__writeLog", write_log)?;
+        global.set("__listLogs", list_logs)?;
+        global.set("__listLogsForUri", list_logs_for_uri)?;
+        ctx.eval::<(), _>(
+            r#"
+            (function() {
+                const writeLog = globalThis.__writeLog;
+                const listLogs = globalThis.__listLogs;
+                const listLogsForUri = globalThis.__listLogsForUri;
+                globalThis.console = {
+                    log: function(msg) { return writeLog(msg, "LOG"); },
+                    info: function(msg) { return writeLog(msg, "INFO"); },
+                    warn: function(msg) { return writeLog(msg, "WARN"); },
+                    error: function(msg) { return writeLog(msg, "ERROR"); },
+                    debug: function(msg) { return writeLog(msg, "DEBUG"); },
+                    listLogs: function() { return listLogs(); },
+                    listLogsForUri: function(uri) { return listLogsForUri(uri); }
+                };
+                delete globalThis.__writeLog;
+                delete globalThis.__listLogs;
+                delete globalThis.__listLogsForUri;
+            })();
+        "#,
+        )?;
 
         Ok(())
     }

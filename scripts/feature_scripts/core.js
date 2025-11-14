@@ -327,8 +327,9 @@ function script_logs_handler(req) {
       };
     }
 
-    // Call the listLogsForUri function
-    const logs = listLogsForUri(uri);
+    // Call the console.listLogsForUri function
+    const logsJson = console.listLogsForUri(uri);
+    const logs = JSON.parse(logsJson);
 
     console.log(`Retrieved ${logs.length} log entries for script: ${uri}`);
 
@@ -374,7 +375,8 @@ function scriptsQuery(req, args) {
 function scriptQuery(req, args) {
   try {
     const content = getScript(args.uri);
-    const logs = listLogsForUri(args.uri);
+    const logsJson = console.listLogsForUri(args.uri);
+    const logs = JSON.parse(logsJson);
 
     // getScript returns null if script not found
     if (content !== null && content !== undefined) {

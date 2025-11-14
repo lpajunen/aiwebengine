@@ -854,7 +854,8 @@ async fn test_stream_messaging() {
     // Verify logs were written
     let logs = repository::fetch_log_messages("notification-test");
     assert!(
-        logs.iter().any(|log| log.contains("Sent notification")),
+        logs.iter()
+            .any(|log| log.message.contains("Sent notification")),
         "Should have logged the sent notification"
     );
 

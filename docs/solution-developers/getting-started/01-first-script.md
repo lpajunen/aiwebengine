@@ -361,8 +361,9 @@ console.log(message);
 // List all scripts
 const scripts = listScripts();
 
-// List logs for current script
-const logs = listLogs();
+// List logs for current script (returns JSON string)
+const logsJson = console.listLogs();
+const logs = JSON.parse(logsJson);
 ```
 
 ### Handler Template

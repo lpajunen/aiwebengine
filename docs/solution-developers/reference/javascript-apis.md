@@ -895,8 +895,13 @@ Basic console logging (output goes to server logs).
 
 **Methods:**
 
-- `console.log(message)`: Log a message
-- `console.error(message)`: Log an error message
+- `console.log(message)`: Log a message (level: LOG)
+- `console.info(message)`: Log an informational message (level: INFO)
+- `console.warn(message)`: Log a warning message (level: WARN)
+- `console.error(message)`: Log an error message (level: ERROR)
+- `console.debug(message)`: Log a debug message (level: DEBUG)
+- `console.listLogs()`: Retrieve all log entries as a JSON string
+- `console.listLogsForUri(uri)`: Retrieve log entries for a specific script URI as a JSON string
 
 **Example:**
 
@@ -906,6 +911,23 @@ function debugHandler(req) {
   console.error("This is an error message");
 
   return { status: 200, body: "Check logs" };
+}
+
+function viewLogsHandler(req) {
+  // Get all logs
+  const allLogsJson = console.listLogs();
+  const allLogs = JSON.parse(allLogsJson);
+
+  // Get logs for a specific script
+  const scriptLogsJson = console.listLogsForUri("/api/users");
+  const scriptLogs = JSON.parse(scriptLogsJson);
+
+  // Each log entry has: message, level, timestamp (in milliseconds)
+  return {
+    status: 200,
+    body: JSON.stringify({ allLogs, scriptLogs }),
+    contentType: "application/json",
+  };
 }
 ```
 

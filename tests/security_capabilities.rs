@@ -559,7 +559,7 @@ async fn test_secure_script_execution_anonymous() {
     let user_context = UserContext::anonymous();
     let script_content = r#"
         // Anonymous users can view logs
-        listLogs();
+        console.listLogs();
         
         // But cannot upsert scripts (should fail with capability error)
         upsertScript("test_script", "console.log('test');");

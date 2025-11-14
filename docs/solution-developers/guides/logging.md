@@ -689,10 +689,10 @@ console.log(`Card ending in ${sanitizeCardNumber(cardNumber)}`);
 console.log("Message");
 
 // Get logs for current script
-const logs = listLogs();
+const logs = JSON.parse(console.listLogs());
 
 // Get logs for specific script URI
-const logs = listLogsForUri("/api/users");
+const logs = JSON.parse(console.listLogsForUri("/api/users"));
 
 // Log helper functions
 function logError(msg) {

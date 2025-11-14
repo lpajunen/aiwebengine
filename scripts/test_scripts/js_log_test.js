@@ -7,7 +7,7 @@ function js_log_test_handler(req) {
 
 function js_list_handler(req) {
   try {
-    const logs = listLogs();
+    const logs = console.listLogs();
     return { status: 200, body: JSON.stringify(logs) };
   } catch (e) {
     return { status: 500, body: String(e) };

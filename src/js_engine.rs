@@ -1616,7 +1616,7 @@ mod tests {
         let logs = repository::fetch_log_messages("stream-message-test");
         assert!(
             logs.iter()
-                .any(|log| log.contains("Message sent successfully")),
+                .any(|log| log.message.contains("Message sent successfully")),
             "Should have logged successful message sending"
         );
     }
@@ -1674,7 +1674,7 @@ mod tests {
         let logs = repository::fetch_log_messages("stream-json-test");
         assert!(
             logs.iter()
-                .any(|log| log.contains("Complex JSON message sent")),
+                .any(|log| log.message.contains("Complex JSON message sent")),
             "Should have logged successful JSON message sending"
         );
     }

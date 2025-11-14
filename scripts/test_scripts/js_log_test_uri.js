@@ -1,11 +1,15 @@
-// JS test script: tests listLogsForUri function
+// JS test script: tests console.listLogsForUri function
 
 function list_logs_for_uri_handler(req) {
   try {
     // Test with the current script's URI
-    const current_logs = listLogsForUri("https://example.com/js-log-test-uri");
+    const current_logs = console.listLogsForUri(
+      "https://example.com/js-log-test-uri",
+    );
     // Test with a different URI
-    const other_logs = listLogsForUri("https://example.com/other-script");
+    const other_logs = console.listLogsForUri(
+      "https://example.com/other-script",
+    );
     return {
       status: 200,
       body: JSON.stringify({

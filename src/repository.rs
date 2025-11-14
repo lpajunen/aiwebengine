@@ -508,10 +508,10 @@ async fn db_insert_log_message(
 async fn db_fetch_log_messages(
     pool: &PgPool,
     script_uri: &str,
-) -> Result<Vec<String>, RepositoryError> {
+) -> Result<Vec<LogEntry>, RepositoryError> {
     let rows = sqlx::query(
         r#"
-        SELECT message FROM logs
+        SELECT message, log_level, created_at FROM logs
         WHERE script_uri = $1
         ORDER BY created_at DESC
         "#,
@@ -526,10 +526,17 @@ async fn db_fetch_log_messages(
 
     let messages = rows
         .into_iter()
-        .map(|row| row.try_get("message"))
-        .collect::<Result<Vec<String>, _>>()
+        .map(|row| {
+            let message: String = row.try_get("message")?;
+            let log_level: String = row.try_get("log_level")?;
+            let created_at: DateTime<Utc> = row.try_get("created_at")?;
+            // Convert chrono DateTime to SystemTime
+            let system_time = SystemTime::from(created_at);
+            Ok(LogEntry::new(message, log_level, system_time))
+        })
+        .collect::<Result<Vec<LogEntry>, sqlx::Error>>()
         .map_err(|e| {
-            error!("Database error getting message: {}", e);
+            error!("Database error getting message/level/timestamp: {}", e);
             RepositoryError::InvalidData(format!("Database error: {}", e))
         })?;
 
@@ -933,7 +940,7 @@ pub fn insert_log_message(script_uri: &str, message: &str, log_level: &str) {
 }
 
 /// Fetch log messages with error handling
-pub fn fetch_log_messages(script_uri: &str) -> Vec<String> {
+pub fn fetch_log_messages(script_uri: &str) -> Vec<LogEntry> {
     // Try database first if configured
     if let Some(db) = get_db_pool() {
         let result = tokio::task::block_in_place(|| {
@@ -962,10 +969,26 @@ pub fn fetch_log_messages(script_uri: &str) -> Vec<String> {
 
     // Fall back to in-memory implementation
     match safe_lock_logs() {
-        Ok(guard) => guard.get(script_uri).cloned().unwrap_or_default(),
+        Ok(guard) => {
+            let now = SystemTime::now();
+            guard
+                .get(script_uri)
+                .map(|messages| {
+                    messages
+                        .iter()
+                        .map(|msg| LogEntry::new(msg.clone(), "INFO".to_string(), now))
+                        .collect()
+                })
+                .unwrap_or_default()
+        }
         Err(e) => {
             error!("Failed to fetch log messages for {}: {}", script_uri, e);
-            vec![format!("Error: Could not retrieve logs - {}", e)]
+            let now = SystemTime::now();
+            vec![LogEntry::new(
+                format!("Error: Could not retrieve logs - {}", e),
+                "ERROR".to_string(),
+                now,
+            )]
         }
     }
 }

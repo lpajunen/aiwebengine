@@ -191,7 +191,7 @@ async fn js_write_log_and_listlogs() {
     // Verify the log message was written via Rust API
     let msgs = repository::fetch_log_messages("https://example.com/js-log-test");
     assert!(
-        msgs.iter().any(|m| m == "js-log-test-called"),
+        msgs.iter().any(|m| m.message == "js-log-test-called"),
         "Expected log entry 'js-log-test-called' not found in logs: {:?}",
         msgs
     );
@@ -320,25 +320,36 @@ async fn js_list_logs_for_uri() {
     let response: serde_json::Value =
         serde_json::from_str(&body).expect("Failed to parse JSON response");
 
+    // The current and other fields are now JSON strings (from console.listLogsForUri)
+    // Parse them to get the actual log arrays
+    let current_logs_str = response["current"]
+        .as_str()
+        .expect("current should be a string");
+    let current_logs: Vec<serde_json::Value> =
+        serde_json::from_str(current_logs_str).expect("Failed to parse current logs");
+
     // Check that current logs contain the expected messages
-    let current_logs = response["current"]
-        .as_array()
-        .expect("current should be an array");
     assert!(
-        current_logs.iter().any(|v| v == "test-message-1"),
+        current_logs
+            .iter()
+            .any(|v| v["message"] == "test-message-1"),
         "Expected 'test-message-1' in current logs"
     );
     assert!(
-        current_logs.iter().any(|v| v == "test-message-2"),
+        current_logs
+            .iter()
+            .any(|v| v["message"] == "test-message-2"),
         "Expected 'test-message-2' in current logs"
     );
 
     // Check that other logs contain the expected message
-    let other_logs = response["other"]
-        .as_array()
-        .expect("other should be an array");
+    let other_logs_str = response["other"]
+        .as_str()
+        .expect("other should be a string");
+    let other_logs: Vec<serde_json::Value> =
+        serde_json::from_str(other_logs_str).expect("Failed to parse other logs");
     assert!(
-        other_logs.iter().any(|v| v == "other-message"),
+        other_logs.iter().any(|v| v["message"] == "other-message"),
         "Expected 'other-message' in other logs"
     );
 

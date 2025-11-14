@@ -85,8 +85,8 @@ fn test_insert_and_list_log_messages() {
     );
     // Last two messages should be the ones we inserted
     let last = &msgs[msgs.len() - 2..];
-    assert_eq!(last[0], "log-one");
-    assert_eq!(last[1], "log-two");
+    assert_eq!(last[0].message, "log-one");
+    assert_eq!(last[1].message, "log-two");
 }
 
 #[test]
@@ -103,7 +103,7 @@ fn test_prune_keeps_latest_20_logs() {
     // Ensure the latest message is the last one we inserted
     if let Some(last) = msgs.last() {
         assert!(
-            last.contains("prune-test-24"),
+            last.message.contains("prune-test-24"),
             "expected latest message to be prune-test-24"
         );
     } else {

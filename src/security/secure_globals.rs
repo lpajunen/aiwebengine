@@ -321,25 +321,6 @@ impl SecureGlobalContext {
             },
         )?;
 
-        // Create console object using JavaScript to avoid multiple ctx.clone() calls
-        // This creates wrapper functions in JavaScript space that call write_log with different levels
-        global.set("__writeLog", write_log)?;
-        ctx.eval::<(), _>(
-            r#"
-            (function() {
-                const writeLog = globalThis.__writeLog;
-                globalThis.console = {
-                    log: function(msg) { return writeLog(msg, "LOG"); },
-                    info: function(msg) { return writeLog(msg, "INFO"); },
-                    warn: function(msg) { return writeLog(msg, "WARN"); },
-                    error: function(msg) { return writeLog(msg, "ERROR"); },
-                    debug: function(msg) { return writeLog(msg, "DEBUG"); }
-                };
-                delete globalThis.__writeLog;  // Clean up temporary
-            })();
-        "#,
-        )?;
-
         // Secure listLogs function
         let user_ctx_list = user_context.clone();
         let list_logs = Function::new(
@@ -355,7 +336,7 @@ impl SecureGlobalContext {
 
                 debug!(
                     user_id = ?user_ctx_list.user_id,
-                    "Secure listLogs called"
+                    "Secure console.listLogs called"
                 );
 
                 // Fetch all logs from all script URIs
@@ -390,32 +371,85 @@ impl SecureGlobalContext {
                 }
             },
         )?;
-        global.set("listLogs", list_logs)?;
 
-        // Secure listLogsForUri function
+        // Secure listLogsForUri function - now returns same format as listLogs
         let user_ctx_list_uri = user_context.clone();
         let list_logs_for_uri = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, uri: String| -> JsResult<Vec<String>> {
+            move |_ctx: rquickjs::Ctx<'_>, uri: String| -> JsResult<String> {
                 // Check capability
                 if let Err(_e) =
                     user_ctx_list_uri.require_capability(&crate::security::Capability::ViewLogs)
                 {
-                    // Return empty array if no permission (JavaScript expects an array)
-                    return Ok(Vec::new());
+                    // Return empty array if no permission (JavaScript expects a JSON array)
+                    return Ok("[]".to_string());
                 }
 
                 debug!(
                     user_id = ?user_ctx_list_uri.user_id,
                     uri = %uri,
-                    "Secure listLogsForUri called"
+                    "Secure console.listLogsForUri called"
                 );
 
                 let logs = repository::fetch_log_messages(&uri);
-                Ok(logs)
+
+                // Create JSON array of log objects (same format as listLogs)
+                let log_objects: Vec<serde_json::Value> = logs
+                    .iter()
+                    .map(|log_entry| {
+                        // Convert SystemTime to milliseconds since UNIX_EPOCH
+                        let timestamp_ms = log_entry
+                            .timestamp
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as f64;
+
+                        serde_json::json!({
+                            "message": log_entry.message,
+                            "level": log_entry.level,
+                            "timestamp": timestamp_ms
+                        })
+                    })
+                    .collect();
+
+                // Serialize to JSON string
+                match serde_json::to_string(&log_objects) {
+                    Ok(json) => Ok(json),
+                    Err(e) => {
+                        warn!("Failed to serialize logs to JSON: {}", e);
+                        Ok("[]".to_string())
+                    }
+                }
             },
         )?;
-        global.set("listLogsForUri", list_logs_for_uri)?;
+
+        // Create console object using JavaScript to avoid multiple ctx.clone() calls
+        // This creates wrapper functions in JavaScript space that call write_log with different levels
+        // and also attaches listLogs and listLogsForUri as methods
+        global.set("__writeLog", write_log)?;
+        global.set("__listLogs", list_logs)?;
+        global.set("__listLogsForUri", list_logs_for_uri)?;
+        ctx.eval::<(), _>(
+            r#"
+            (function() {
+                const writeLog = globalThis.__writeLog;
+                const listLogs = globalThis.__listLogs;
+                const listLogsForUri = globalThis.__listLogsForUri;
+                globalThis.console = {
+                    log: function(msg) { return writeLog(msg, "LOG"); },
+                    info: function(msg) { return writeLog(msg, "INFO"); },
+                    warn: function(msg) { return writeLog(msg, "WARN"); },
+                    error: function(msg) { return writeLog(msg, "ERROR"); },
+                    debug: function(msg) { return writeLog(msg, "DEBUG"); },
+                    listLogs: function() { return listLogs(); },
+                    listLogsForUri: function(uri) { return listLogsForUri(uri); }
+                };
+                delete globalThis.__writeLog;
+                delete globalThis.__listLogs;
+                delete globalThis.__listLogsForUri;
+            })();
+        "#,
+        )?;
 
         Ok(())
     }

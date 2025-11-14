@@ -515,7 +515,8 @@ function apiDeleteScript(req) {
 // API: Get logs
 function apiGetLogs(req) {
   try {
-    const logsJson = typeof listLogs === "function" ? listLogs() : "[]";
+    const logsJson =
+      typeof console.listLogs === "function" ? console.listLogs() : "[]";
     const logs = JSON.parse(logsJson);
     const formattedLogs = logs.map((log) => ({
       timestamp: new Date(log.timestamp),
@@ -894,13 +895,16 @@ AVAILABLE JAVASCRIPT APIs:
    - handlerName: string (name of your handler function)
    - method: "GET" | "POST" | "PUT" | "DELETE"
 
-2. Console logging - Write messages to server logs
-   - console.log(message) - General logging
-   - console.debug(message) - Debug-level logging
-   - console.info(message) - Informational logging
-   - console.warn(message) - Warning-level logging
-   - console.error(message) - Error-level logging
+2. Console logging - Write messages to server logs and retrieve log entries
+   - console.log(message) - General logging (level: LOG)
+   - console.debug(message) - Debug-level logging (level: DEBUG)
+   - console.info(message) - Informational logging (level: INFO)
+   - console.warn(message) - Warning-level logging (level: WARN)
+   - console.error(message) - Error-level logging (level: ERROR)
+   - console.listLogs() - Retrieve all log entries as JSON string (returns array of {message, level, timestamp})
+   - console.listLogsForUri(uri) - Retrieve log entries for specific script URI as JSON string
    - message: string
+   - uri: string (script URI)
 
 3. scriptStorage - Persistent key-value storage per script
    - scriptStorage.getItem(key) - Get stored value (returns string or null)
