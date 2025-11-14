@@ -696,6 +696,23 @@ impl StreamRegistry {
         }
     }
 
+    /// Get a list of all registered streams with metadata (path and script URI)
+    pub fn list_streams_with_metadata(&self) -> Result<Vec<(String, String)>, String> {
+        match self.streams.lock() {
+            Ok(streams) => {
+                let result: Vec<(String, String)> = streams
+                    .iter()
+                    .map(|(path, registration)| (path.clone(), registration.script_uri.clone()))
+                    .collect();
+                Ok(result)
+            }
+            Err(e) => {
+                error!("Failed to acquire stream registry lock: {}", e);
+                Err("Failed to list streams with metadata: registry lock error".to_string())
+            }
+        }
+    }
+
     /// Gracefully shutdown all streams and connections
     pub fn shutdown_all_streams(&self) -> Result<usize, String> {
         match self.streams.lock() {

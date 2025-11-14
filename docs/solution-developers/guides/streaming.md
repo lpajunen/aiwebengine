@@ -40,7 +40,7 @@ aiwebengine provides built-in support for real-time streaming through Server-Sen
 
 1. **Stream Registry**: Manages registered stream paths and active connections
 2. **Connection Manager**: Handles client connections and cleanup
-3. **JavaScript Engine Integration**: Provides `registerWebStream()` and `sendStreamMessageToPath()` functions
+3. **JavaScript Engine Integration**: Provides `routeRegistry.registerStreamRoute()` and `routeRegistry.sendStreamMessage()` functions
 4. **SSE Server**: Handles HTTP connections and message broadcasting
 
 ### Flow Diagram
@@ -48,12 +48,14 @@ aiwebengine provides built-in support for real-time streaming through Server-Sen
 ```text
 JavaScript Script          Stream Registry          Connected Clients
      |                          |                         |
-     | registerWebStream()      |                         |
+     | routeRegistry.           |                         |
+     | registerStreamRoute()    |                         |
      |------------------------->|                         |
      |                          |                         |
      |                          | <--- Client connects ---|
      |                          |                         |
-     | sendStreamMessageToPath()|                         |
+     | routeRegistry.           |                         |
+     | sendStreamMessage()      |                         |
      |------------------------->|                         |
      |                          |---- Send to specific -->|
      |                          |---- stream clients ---->|
@@ -61,9 +63,9 @@ JavaScript Script          Stream Registry          Connected Clients
 
 ### Connection Lifecycle
 
-1. **Registration**: Script calls `registerWebStream('/path')` to create a stream endpoint
+1. **Registration**: Script calls `routeRegistry.registerStreamRoute('/path')` to create a stream endpoint
 2. **Client Connection**: Browser connects using `new EventSource('/path')`
-3. **Broadcasting**: Script calls `sendStreamMessageToPath('/path', data)` to send data to clients on that specific stream
+3. **Broadcasting**: Script calls `routeRegistry.sendStreamMessage('/path', data)` or `routeRegistry.sendStreamMessageFiltered('/path', data, filterJson)` to send data to clients
 4. **Cleanup**: Connections automatically cleaned up when clients disconnect
 
 ## Quick Start
@@ -72,11 +74,11 @@ JavaScript Script          Stream Registry          Connected Clients
 
 ```javascript
 // Register a stream endpoint
-registerWebStream("/events");
+routeRegistry.registerStreamRoute("/events");
 
 // Handler to send events
 function triggerEvent(req) {
-  sendStreamMessageToPath("/events", {
+  routeRegistry.sendStreamMessage("/events", {
     type: "event",
     message: "Something happened!",
     timestamp: new Date().toISOString(),
@@ -85,7 +87,7 @@ function triggerEvent(req) {
   return { status: 200, body: "Event sent" };
 }
 
-register("/trigger", "triggerEvent", "POST");
+routeRegistry.registerRoute("/trigger", "triggerEvent", "POST");
 ```
 
 ### 2. Client-Side Connection
@@ -124,9 +126,9 @@ register("/trigger", "triggerEvent", "POST");
 
 ## API Reference
 
-### JavaScript Functions
+### routeRegistry Stream Functions
 
-#### registerWebStream(path)
+#### routeRegistry.registerStreamRoute(path)
 
 Registers a Server-Sent Events endpoint that clients can connect to.
 
@@ -134,16 +136,16 @@ Registers a Server-Sent Events endpoint that clients can connect to.
 
 - `path` (string): Stream path (must start with `/`, max 200 characters)
 
-**Returns:** Nothing
+**Returns:** String describing registration result
 
 **Throws:** Error if path is invalid or registration fails
 
 **Example:**
 
 ```javascript
-registerWebStream("/notifications");
-registerWebStream("/chat/room1");
-registerWebStream("/status/server1");
+routeRegistry.registerStreamRoute("/notifications");
+routeRegistry.registerStreamRoute("/chat/room1");
+routeRegistry.registerStreamRoute("/status/server1");
 ```
 
 **Path Requirements:**
@@ -153,7 +155,7 @@ registerWebStream("/status/server1");
 - Should be unique per script
 - Case-sensitive
 
-#### sendStreamMessageToPath(path, data)
+#### routeRegistry.sendStreamMessage(path, data)
 
 Sends a message to all clients connected to a specific stream path.
 
@@ -162,12 +164,12 @@ Sends a message to all clients connected to a specific stream path.
 - `path` (string): Stream path to send to (must start with `/`)
 - `data` (object): Data to send (will be JSON serialized)
 
-**Returns:** Nothing
+**Returns:** String describing broadcast result
 
 **Example:**
 
 ```javascript
-sendStreamMessageToPath("/notifications", {
+routeRegistry.sendStreamMessage("/notifications", {
   type: "notification",
   title: "New Message",
   body: "You have a new message",
@@ -183,7 +185,7 @@ sendStreamMessageToPath("/notifications", {
 - Use consistent field names across your application
 - Keep messages reasonably sized (< 1MB recommended)
 
-#### sendStreamMessageToConnections(path, data, filterJson) [Advanced]
+#### routeRegistry.sendStreamMessageFiltered(path, data, filterJson) [Advanced]
 
 Sends a message to specific clients connected to a stream path based on connection metadata filtering.
 
@@ -199,7 +201,7 @@ Sends a message to specific clients connected to a stream path based on connecti
 
 ```javascript
 // Send to connections where user_id matches "user123" and room is "general"
-sendStreamMessageToConnections(
+routeRegistry.sendStreamMessageFiltered(
   "/chat",
   {
     type: "chat_message",
@@ -213,7 +215,7 @@ sendStreamMessageToConnections(
 );
 
 // Send to all connections (empty filter)
-sendStreamMessageToConnections(
+routeRegistry.sendStreamMessageFiltered(
   "/notifications",
   {
     type: "system_alert",

@@ -1,5 +1,5 @@
 // Test script for selective broadcasting functionality
-// This demonstrates the new sendStreamMessageToConnections and sendSubscriptionMessageToConnections functions
+// This demonstrates the new routeRegistry.sendStreamMessageFiltered and graphQLRegistry.sendSubscriptionMessageFiltered functions
 
 // Initialization function - called once when script is loaded
 function init(context) {
@@ -9,8 +9,8 @@ function init(context) {
   );
 
   // Register test stream endpoints
-  registerWebStream("/test/chat");
-  registerWebStream("/test/metadata-demo");
+  routeRegistry.registerStreamRoute("/test/chat");
+  routeRegistry.registerStreamRoute("/test/metadata-demo");
 
   // Register GraphQL subscription for testing
   graphQLRegistry.registerSubscription(
@@ -33,7 +33,7 @@ function testSelectiveStreamBroadcasting() {
   console.log("Testing selective stream broadcasting...");
 
   // This would send to connections where metadata.user_id == "user123" and metadata.room == "general"
-  const streamResult = sendStreamMessageToConnections(
+  const streamResult = routeRegistry.sendStreamMessageFiltered(
     "/test/chat",
     JSON.stringify({
       type: "selective_chat",
@@ -46,7 +46,7 @@ function testSelectiveStreamBroadcasting() {
   console.log("Stream broadcast result: " + streamResult);
 
   // Test broadcasting to all connections (empty filter)
-  const allResult = sendStreamMessageToConnections(
+  const allResult = routeRegistry.sendStreamMessageFiltered(
     "/test/chat",
     JSON.stringify({
       type: "broadcast_all",
@@ -82,7 +82,7 @@ function testMetadataDemo(req) {
   console.log("Testing metadata demo endpoint...");
 
   // Send a message that will be filtered by the metadata from query params
-  const result = sendStreamMessageToConnections(
+  const result = routeRegistry.sendStreamMessageFiltered(
     "/test/metadata-demo",
     JSON.stringify({
       type: "metadata_test",
@@ -106,13 +106,17 @@ function testMetadataDemo(req) {
 }
 
 // Register test endpoints
-register("/test/selective/stream", "testSelectiveStreamBroadcasting", "POST");
-register(
+routeRegistry.registerRoute(
+  "/test/selective/stream",
+  "testSelectiveStreamBroadcasting",
+  "POST",
+);
+routeRegistry.registerRoute(
   "/test/selective/subscription",
   "testSelectiveSubscriptionBroadcasting",
   "POST",
 );
-register("/test/metadata-demo", "testMetadataDemo", "POST");
+routeRegistry.registerRoute("/test/metadata-demo", "testMetadataDemo", "POST");
 
 // Run the tests
 testSelectiveStreamBroadcasting();

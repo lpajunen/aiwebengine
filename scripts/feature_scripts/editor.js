@@ -389,7 +389,10 @@ function apiSaveScript(req) {
       upsertScript(fullUri, req.body);
 
       // Broadcast the script update notification
-      if (typeof sendStreamMessageToPath === "function") {
+      if (
+        typeof routeRegistry !== "undefined" &&
+        typeof routeRegistry.sendStreamMessage === "function"
+      ) {
         try {
           const message = {
             type: "script_update",
@@ -400,7 +403,10 @@ function apiSaveScript(req) {
             previousExists: !!existingScript,
             via: "editor",
           };
-          sendStreamMessageToPath("/script_updates", JSON.stringify(message));
+          routeRegistry.sendStreamMessage(
+            "/script_updates",
+            JSON.stringify(message),
+          );
           console.log(
             "Broadcasted script update from editor: " + action + " " + fullUri,
           );
@@ -450,7 +456,10 @@ function apiDeleteScript(req) {
 
       if (deleted) {
         // Broadcast the script removal notification
-        if (typeof sendStreamMessageToPath === "function") {
+        if (
+          typeof routeRegistry !== "undefined" &&
+          typeof routeRegistry.sendStreamMessage === "function"
+        ) {
           try {
             const message = {
               type: "script_update",
@@ -459,7 +468,10 @@ function apiDeleteScript(req) {
               timestamp: new Date().toISOString(),
               via: "editor",
             };
-            sendStreamMessageToPath("/script_updates", JSON.stringify(message));
+            routeRegistry.sendStreamMessage(
+              "/script_updates",
+              JSON.stringify(message),
+            );
             console.log("Broadcasted script deletion from editor: " + fullUri);
           } catch (broadcastError) {
             console.log(
@@ -890,10 +902,41 @@ WHAT ARE aiwebengine SCRIPTS?
 - Must have an init() function that registers routes
 
 AVAILABLE JAVASCRIPT APIs:
-1. register(path, handlerName, method) - Register HTTP routes
+1. routeRegistry - Object containing all HTTP route and stream-related functions:
+   
+   routeRegistry.registerRoute(path, handlerName, method) - Register HTTP routes
    - path: string (e.g., "/api/users" or "/hello")
    - handlerName: string (name of your handler function)
    - method: "GET" | "POST" | "PUT" | "DELETE"
+
+   routeRegistry.registerStreamRoute(path) - Register SSE (Server-Sent Events) stream endpoint
+   - path: string (must start with /)
+   - Returns: string describing registration result
+
+   routeRegistry.registerAssetRoute(assetPath) - Register static asset for serving
+   - assetPath: string (path to asset file)
+   - Returns: string describing registration result
+
+   routeRegistry.sendStreamMessage(path, data) - Broadcast message to all connections on a stream path
+   - path: string (must start with /)
+   - data: object (will be JSON serialized)
+   - Returns: string describing broadcast result
+
+   routeRegistry.sendStreamMessageFiltered(path, data, filterJson) - Send message to filtered connections based on metadata
+   - path: string (must start with /)
+   - data: object (will be JSON serialized)
+   - filterJson: string (optional JSON string with metadata filter criteria, empty "{}" matches all)
+   - Returns: string describing broadcast result with success/failure counts
+   - Use for personalized broadcasting to specific users/groups on stable endpoints
+
+   routeRegistry.listRoutes() - List all registered HTTP routes
+   - Returns: JSON string with array of route metadata
+
+   routeRegistry.listStreams() - List all registered stream endpoints
+   - Returns: JSON string with array of [{path: string, uri: string}]
+
+   routeRegistry.listAssets() - List all registered asset paths
+   - Returns: JSON string with array of asset names
 
 2. Console logging - Write messages to server logs and retrieve log entries
    - console.log(message) - General logging (level: LOG)
@@ -920,28 +963,7 @@ AVAILABLE JAVASCRIPT APIs:
    - Supports {{secret:identifier}} in headers for secure API keys
    - Returns: JSON string with {status, ok, headers, body}
 
-5. registerWebStream(path) - Register SSE stream endpoint
-   - path: string (must start with /)
-
-6. sendStreamMessageToPath(path, data) - Send message to specific stream path
-   - path: string (must start with /)
-   - data: object (will be JSON serialized)
-
-7. sendStreamMessageToConnections(path, data, filterJson) - Send message to specific connections based on metadata filtering
-   - path: string (must start with /)
-   - data: object (will be JSON serialized)
-   - filterJson: string (optional JSON string with metadata filter criteria, empty "{}" matches all)
-   - Returns: string describing broadcast result with success/failure counts
-   - Use for personalized broadcasting to specific users/groups on stable endpoints
-
-8. sendSubscriptionMessageToConnections(subscriptionName, data, filterJson) - DEPRECATED: Use graphQLRegistry.sendSubscriptionMessageFiltered() instead
-   - subscriptionName: string (name of GraphQL subscription)
-   - data: object (will be JSON serialized)
-   - filterJson: string (optional JSON string with metadata filter criteria, empty "{}" matches all)
-   - Returns: string describing broadcast result with success/failure counts
-   - Use for personalized GraphQL subscription broadcasting
-
-9. graphQLRegistry - Object containing all GraphQL-related functions:
+5. graphQLRegistry - Object containing all GraphQL-related functions:
    
    graphQLRegistry.registerQuery(name, schema, resolverName) - Register GraphQL query
    - name: string (query name)
@@ -1023,7 +1045,7 @@ function handlerName(req) {
 
 function init(context) {
   console.log('Initializing script');
-  register('/your-path', 'handlerName', 'GET');
+  routeRegistry.registerRoute('/your-path', 'handlerName', 'GET');
   return { success: true };
 }
 
@@ -1033,9 +1055,9 @@ IMPORTANT CONCEPTS:
 3. To create an API, return JSON in the body with contentType: 'application/json; charset=UTF-8'
 4. Scripts don't have access to browser APIs or Node.js APIs
 5. Use fetch() to call external APIs
-6. Use register() in init() to map URLs to handler functions
-7. For real-time features, use registerWebStream() and sendStreamMessageToPath()
-8. For personalized broadcasting, use sendStreamMessageToConnections() with metadata filters
+6. Use routeRegistry.registerRoute() in init() to map URLs to handler functions
+7. For real-time features, use routeRegistry.registerStreamRoute() and routeRegistry.sendStreamMessage()
+8. For personalized broadcasting, use routeRegistry.sendStreamMessageFiltered() with metadata filters
 9. Selective broadcasting enables chat apps and user-specific notifications without dynamic endpoints
 
 RULES:
@@ -1043,7 +1065,7 @@ RULES:
 2. Include complete, working JavaScript code
 3. Use try-catch blocks in all handlers
 4. ALWAYS include init() function that calls at least one registration function:
-   - For HTTP services: register() or registerWebStream()
+   - For HTTP services: routeRegistry.registerRoute() or routeRegistry.registerStreamRoute()
    - For GraphQL services: graphQLRegistry.registerQuery(), graphQLRegistry.registerMutation(), or graphQLRegistry.registerSubscription()
    - A script may use multiple registration types
 5. Use console.log() for debugging
@@ -1056,19 +1078,19 @@ RULES:
 EXAMPLES OF CORRECT RESPONSES:
 
 Example 1 - Create web page:
-{"type":"create_script","message":"Creating a script that serves an HTML page","script_name":"hello-page.js","code":"// Hello page\\n\\nfunction servePage(req) {\\n  const html = '<!DOCTYPE html><html><head><title>Hello</title></head><body><h1>Hello World!</h1></body></html>';\\n  return { status: 200, body: html, contentType: 'text/html; charset=UTF-8' };\\n}\\n\\nfunction init(context) {\\n  register('/hello', 'servePage', 'GET');\\n  return { success: true };\\n}"}
+{"type":"create_script","message":"Creating a script that serves an HTML page","script_name":"hello-page.js","code":"// Hello page\\n\\nfunction servePage(req) {\\n  const html = '<!DOCTYPE html><html><head><title>Hello</title></head><body><h1>Hello World!</h1></body></html>';\\n  return { status: 200, body: html, contentType: 'text/html; charset=UTF-8' };\\n}\\n\\nfunction init(context) {\\n  routeRegistry.registerRoute('/hello', 'servePage', 'GET');\\n  return { success: true };\\n}"}
 
 Example 2 - Create JSON API:
-{"type":"create_script","message":"Creating a REST API endpoint","script_name":"users-api.js","code":"// Users API\\n\\nfunction getUsers(req) {\\n  const users = [{id: 1, name: 'Alice'}, {id: 2, name: 'Bob'}];\\n  return { status: 200, body: JSON.stringify(users), contentType: 'application/json; charset=UTF-8' };\\n}\\n\\nfunction init(context) {\\n  register('/api/users', 'getUsers', 'GET');\\n  return { success: true };\\n}"}
+{"type":"create_script","message":"Creating a REST API endpoint","script_name":"users-api.js","code":"// Users API\\n\\nfunction getUsers(req) {\\n  const users = [{id: 1, name: 'Alice'}, {id: 2, name: 'Bob'}];\\n  return { status: 200, body: JSON.stringify(users), contentType: 'application/json; charset=UTF-8' };\\n}\\n\\nfunction init(context) {\\n  routeRegistry.registerRoute('/api/users', 'getUsers', 'GET');\\n  return { success: true };\\n}"}
 
 Example 3 - Explanation:
 {"type":"explanation","message":"This script registers a GET endpoint that returns JSON user data with proper error handling and content type."}
 
 Example 4 - Selective Broadcasting Chat:
-{"type":"create_script","message":"Creating a chat application with selective broadcasting for personalized messages","script_name":"chat-app.js","code":"// Chat Application with Selective Broadcasting\\n\\n// Register one stream for all chat messages\\nfunction init(context) {\\n  registerWebStream('/chat');\\n  register('/chat/send', 'sendMessage', 'POST');\\n  register('/chat/personal', 'sendPersonalMessage', 'POST');\\n  return { success: true };\\n}\\n\\n// Send message to specific room\\nfunction sendMessage(req) {\\n  const { room, message, sender } = req.form;\\n  \\n  const result = sendStreamMessageToConnections('/chat', {\\n    type: 'room_message',\\n    room: room,\\n    message: message,\\n    sender: sender,\\n    timestamp: new Date().toISOString()\\n  }, JSON.stringify({ room: room }));\\n  \\n  return {\\n    status: 200,\\n    body: JSON.stringify({ success: true, result: result }),\\n    contentType: 'application/json; charset=UTF-8'\\n  };\\n}\\n\\n// Send personal message to specific user\\nfunction sendPersonalMessage(req) {\\n  const { targetUser, message, sender } = req.form;\\n  \\n  const result = sendStreamMessageToConnections('/chat', {\\n    type: 'personal_message',\\n    message: message,\\n    sender: sender,\\n    timestamp: new Date().toISOString()\\n  }, JSON.stringify({ user_id: targetUser }));\\n  \\n  return {\\n    status: 200,\\n    body: JSON.stringify({ success: true, result: result }),\\n    contentType: 'application/json; charset=UTF-8'\\n  };\\n}"}
+{"type":"create_script","message":"Creating a chat application with selective broadcasting for personalized messages","script_name":"chat-app.js","code":"// Chat Application with Selective Broadcasting\\n\\n// Register one stream for all chat messages\\nfunction init(context) {\\n  routeRegistry.registerStreamRoute('/chat');\\n  routeRegistry.registerRoute('/chat/send', 'sendMessage', 'POST');\\n  routeRegistry.registerRoute('/chat/personal', 'sendPersonalMessage', 'POST');\\n  return { success: true };\\n}\\n\\n// Send message to specific room\\nfunction sendMessage(req) {\\n  const { room, message, sender } = req.form;\\n  \\n  const result = routeRegistry.sendStreamMessageFiltered('/chat', {\\n    type: 'room_message',\\n    room: room,\\n    message: message,\\n    sender: sender,\\n    timestamp: new Date().toISOString()\\n  }, JSON.stringify({ room: room }));\\n  \\n  return {\\n    status: 200,\\n    body: JSON.stringify({ success: true, result: result }),\\n    contentType: 'application/json; charset=UTF-8'\\n  };\\n}\\n\\n// Send personal message to specific user\\nfunction sendPersonalMessage(req) {\\n  const { targetUser, message, sender } = req.form;\\n  \\n  const result = routeRegistry.sendStreamMessageFiltered('/chat', {\\n    type: 'personal_message',\\n    message: message,\\n    sender: sender,\\n    timestamp: new Date().toISOString()\\n  }, JSON.stringify({ user_id: targetUser }));\\n  \\n  return {\\n    status: 200,\\n    body: JSON.stringify({ success: true, result: result }),\\n    contentType: 'application/json; charset=UTF-8'\\n  };\\n}"}
 
 Example 5 - GraphQL Subscription with Selective Broadcasting:
-{"type":"create_script","message":"Creating a GraphQL subscription with selective broadcasting for personalized notifications","script_name":"notification-subscription.js","code":"// GraphQL Subscription with Selective Broadcasting\\n\\nfunction init(context) {\\n  graphQLRegistry.registerSubscription(\\n    'userNotifications',\\n    'type Subscription { userNotifications: String }',\\n    'userNotificationsResolver'\\n  );\\n  register('/notify/user', 'sendUserNotification', 'POST');\\n  return { success: true };\\n}\\n\\nfunction userNotificationsResolver() {\\n  return 'User notifications subscription active';\\n}\\n\\nfunction sendUserNotification(req) {\\n  const { userId, message, type } = req.form;\\n  \\n  const result = graphQLRegistry.sendSubscriptionMessageFiltered('userNotifications', {\\n    type: type || 'notification',\\n    message: message,\\n    timestamp: new Date().toISOString()\\n  }, JSON.stringify({ user_id: userId }));\\n  \\n  return {\\n    status: 200,\\n    body: JSON.stringify({ success: true, result: result }),\\n    contentType: 'application/json; charset=UTF-8'\\n  };\\n}"}
+{"type":"create_script","message":"Creating a GraphQL subscription with selective broadcasting for personalized notifications","script_name":"notification-subscription.js","code":"// GraphQL Subscription with Selective Broadcasting\\n\\nfunction init(context) {\\n  graphQLRegistry.registerSubscription(\\n    'userNotifications',\\n    'type Subscription { userNotifications: String }',\\n    'userNotificationsResolver'\\n  );\\n  routeRegistry.registerRoute('/notify/user', 'sendUserNotification', 'POST');\\n  return { success: true };\\n}\\n\\nfunction userNotificationsResolver() {\\n  return 'User notifications subscription active';\\n}\\n\\nfunction sendUserNotification(req) {\\n  const { userId, message, type } = req.form;\\n  \\n  const result = graphQLRegistry.sendSubscriptionMessageFiltered('userNotifications', {\\n    type: type || 'notification',\\n    message: message,\\n    timestamp: new Date().toISOString()\\n  }, JSON.stringify({ user_id: userId }));\\n  \\n  return {\\n    status: 200,\\n    body: JSON.stringify({ success: true, result: result }),\\n    contentType: 'application/json; charset=UTF-8'\\n  };\\n}"}
 
 Example 6 - Create CSS file:
 {"type":"create_asset","message":"Creating a custom stylesheet","asset_path":"/styles/custom.css","code":":root {\\n  --primary-color: #007acc;\\n  --secondary-color: #5a5a5a;\\n}\\n\\nbody {\\n  font-family: 'Arial', sans-serif;\\n  color: var(--secondary-color);\\n}\\n\\n.button {\\n  background-color: var(--primary-color);\\n  color: white;\\n  padding: 10px 20px;\\n  border: none;\\n  border-radius: 4px;\\n  cursor: pointer;\\n}\\n\\n.button:hover {\\n  opacity: 0.9;\\n}"}
@@ -1292,18 +1314,18 @@ Remember: You are creating JavaScript scripts that run on the SERVER and handle 
 // Initialization function
 function init(context) {
   console.log("Initializing editor.js at " + new Date().toISOString());
-  register("/engine/editor", "serveEditor", "GET");
-  register("/api/scripts", "apiListScripts", "GET");
-  register("/api/scripts/*", "apiGetScript", "GET");
-  register("/api/scripts/*", "apiSaveScript", "POST");
-  register("/api/scripts/*", "apiDeleteScript", "DELETE");
-  register("/api/logs", "apiGetLogs", "GET");
-  register("/api/assets", "apiGetAssets", "GET");
-  register("/api/assets", "apiSaveAsset", "POST");
-  register("/api/assets/*", "apiGetAsset", "GET");
-  register("/api/assets/*", "apiDeleteAsset", "DELETE");
-  register("/api/routes", "apiListRoutes", "GET");
-  register("/api/ai-assistant", "apiAIAssistant", "POST");
+  routeRegistry.registerRoute("/engine/editor", "serveEditor", "GET");
+  routeRegistry.registerRoute("/api/scripts", "apiListScripts", "GET");
+  routeRegistry.registerRoute("/api/scripts/*", "apiGetScript", "GET");
+  routeRegistry.registerRoute("/api/scripts/*", "apiSaveScript", "POST");
+  routeRegistry.registerRoute("/api/scripts/*", "apiDeleteScript", "DELETE");
+  routeRegistry.registerRoute("/api/logs", "apiGetLogs", "GET");
+  routeRegistry.registerRoute("/api/assets", "apiGetAssets", "GET");
+  routeRegistry.registerRoute("/api/assets", "apiSaveAsset", "POST");
+  routeRegistry.registerRoute("/api/assets/*", "apiGetAsset", "GET");
+  routeRegistry.registerRoute("/api/assets/*", "apiDeleteAsset", "DELETE");
+  routeRegistry.registerRoute("/api/routes", "apiListRoutes", "GET");
+  routeRegistry.registerRoute("/api/ai-assistant", "apiAIAssistant", "POST");
   console.log("Editor endpoints registered");
   return { success: true };
 }

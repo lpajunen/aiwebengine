@@ -1,4 +1,4 @@
-// Test script for sendStreamMessageToPath functionality
+// Test script for routeRegistry.sendStreamMessage functionality
 // This script demonstrates how to register a stream and send messages to it
 
 // Initialization function - called once when script is loaded
@@ -8,8 +8,8 @@ function init(context) {
   );
 
   // Register stream endpoints
-  registerWebStream("/notifications");
-  registerWebStream("/chat");
+  routeRegistry.registerStreamRoute("/notifications");
+  routeRegistry.registerStreamRoute("/chat");
 
   console.log("Stream endpoints registered successfully");
   return { success: true };
@@ -18,7 +18,7 @@ function init(context) {
 // Send different types of messages
 function sendTestMessages() {
   // Simple text message
-  sendStreamMessageToPath("/notifications", '"Hello World!"');
+  routeRegistry.sendStreamMessage("/notifications", '"Hello World!"');
 
   // JSON object message
   var notification = {
@@ -28,7 +28,10 @@ function sendTestMessages() {
     timestamp: new Date().toISOString(),
     priority: "high",
   };
-  sendStreamMessageToPath("/notifications", JSON.stringify(notification));
+  routeRegistry.sendStreamMessage(
+    "/notifications",
+    JSON.stringify(notification),
+  );
 
   // Chat message
   var chatMessage = {
@@ -38,7 +41,7 @@ function sendTestMessages() {
     channel: "general",
     timestamp: Date.now(),
   };
-  sendStreamMessageToPath("/chat", JSON.stringify(chatMessage));
+  routeRegistry.sendStreamMessage("/chat", JSON.stringify(chatMessage));
 
   // Status update
   var statusUpdate = {
@@ -52,7 +55,10 @@ function sendTestMessages() {
       requests_per_sec: 120,
     },
   };
-  sendStreamMessageToPath("/notifications", JSON.stringify(statusUpdate));
+  routeRegistry.sendStreamMessage(
+    "/notifications",
+    JSON.stringify(statusUpdate),
+  );
 }
 
 // Call the function to send test messages

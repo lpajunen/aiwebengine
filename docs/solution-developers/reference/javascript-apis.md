@@ -2,9 +2,11 @@
 
 This page provides a complete reference for the JavaScript APIs available in aiwebengine scripts. These functions and objects allow you to handle HTTP requests, generate responses, log information, and interact with the server environment.
 
-## Global Functions
+## Route Registry
 
-### register(path, handlerName, method)
+The `routeRegistry` object provides all HTTP route and streaming functionality in a unified namespace.
+
+### routeRegistry.registerRoute(path, handlerName, method)
 
 Registers a route that maps a URL path to a handler function.
 
@@ -13,6 +15,8 @@ Registers a route that maps a URL path to a handler function.
 - `path` (string): URL path to register (e.g., `"/api/users"`)
 - `handlerName` (string): Name of your handler function
 - `method` (string): HTTP method (`"GET"`, `"POST"`, `"PUT"`, `"DELETE"`)
+
+**Returns:** String describing registration result
 
 **Example:**
 
@@ -25,8 +29,190 @@ function getUsers(req) {
   };
 }
 
-register("/api/users", "getUsers", "GET");
+routeRegistry.registerRoute("/api/users", "getUsers", "GET");
 ```
+
+### routeRegistry.registerStreamRoute(path)
+
+Registers a Server-Sent Events (SSE) stream endpoint that clients can connect to for real-time updates.
+
+**Parameters:**
+
+- `path` (string): Stream path to register (must start with `/`, max 200 characters)
+
+**Returns:** String describing registration result
+
+**Example:**
+
+```javascript
+// Register a stream for live notifications
+routeRegistry.registerStreamRoute("/notifications");
+
+// Register a stream for chat messages
+routeRegistry.registerStreamRoute("/chat/room1");
+```
+
+**Notes:**
+
+- Stream paths must be unique
+- Multiple clients can connect to the same stream
+- Streams persist until the server restarts or the script is reloaded
+- Use meaningful, descriptive paths for better organization
+
+### routeRegistry.registerAssetRoute(assetPath)
+
+Registers a static asset for serving via HTTP.
+
+**Parameters:**
+
+- `assetPath` (string): Path to asset file in the asset repository
+
+**Returns:** String describing registration result
+
+**Example:**
+
+```javascript
+routeRegistry.registerAssetRoute("/styles/main.css", "main.css");
+routeRegistry.registerAssetRoute("/images/logo.svg", "logo.svg");
+```
+
+### routeRegistry.sendStreamMessage(path, data)
+
+Sends a message to all clients connected to a specific stream path.
+
+**Parameters:**
+
+- `path` (string): Stream path to send to (must start with `/`)
+- `data` (object): Data object to send (will be JSON serialized)
+
+**Returns:** String describing broadcast result
+
+**Example:**
+
+```javascript
+function notifyHandler(req) {
+  // Send notification to specific stream
+  routeRegistry.sendStreamMessage("/notifications", {
+    type: "notification",
+    message: "New update available",
+    timestamp: new Date().toISOString(),
+    priority: "high",
+  });
+
+  return { status: 200, body: "Notification sent" };
+}
+
+// Register the handler
+routeRegistry.registerRoute("/notify", "notifyHandler", "POST");
+```
+
+**Real-time Chat Example:**
+
+```javascript
+// Register a chat stream
+routeRegistry.registerStreamRoute("/chat");
+
+function sendMessage(req) {
+  const { user, message } = req.form;
+
+  if (!user || !message) {
+    return { status: 400, body: "Missing user or message" };
+  }
+
+  // Send to the chat stream
+  routeRegistry.sendStreamMessage("/chat", {
+    type: "chat_message",
+    user: user,
+    message: message,
+    timestamp: new Date().toISOString(),
+  });
+
+  return { status: 200, body: "Message sent" };
+}
+
+routeRegistry.registerRoute("/chat/send", "sendMessage", "POST");
+```
+
+### routeRegistry.sendStreamMessageFiltered(path, data, filterJson)
+
+Sends a message to specific connections on a stream based on metadata filtering. This enables personalized broadcasting to subsets of users on stable endpoints.
+
+**Parameters:**
+
+- `path` (string): Stream path to send to (must start with `/`)
+- `data` (object): Data object to send (will be JSON serialized)
+- `filterJson` (string): JSON string with metadata filter criteria (empty `"{}"` matches all connections)
+
+**Returns:** String describing broadcast result with success/failure counts
+
+**Example:**
+
+```javascript
+// Send to connections where metadata.room == "general"
+routeRegistry.sendStreamMessageFiltered(
+  "/chat",
+  {
+    type: "room_message",
+    message: "Hello room!",
+    timestamp: new Date().toISOString(),
+  },
+  JSON.stringify({ room: "general" }),
+);
+
+// Send to specific user by ID
+routeRegistry.sendStreamMessageFiltered(
+  "/notifications",
+  {
+    type: "personal",
+    message: "You have a new message",
+  },
+  JSON.stringify({ user_id: "user123" }),
+);
+```
+
+### routeRegistry.listRoutes()
+
+Lists all registered HTTP routes.
+
+**Returns:** JSON string with array of route metadata
+
+**Example:**
+
+```javascript
+const routes = JSON.parse(routeRegistry.listRoutes());
+console.log("Registered routes:", routes);
+```
+
+### routeRegistry.listStreams()
+
+Lists all registered stream endpoints with their metadata.
+
+**Returns:** JSON string with array of objects containing `path` and `uri` properties
+
+**Example:**
+
+```javascript
+const streams = JSON.parse(routeRegistry.listStreams());
+// Returns: [{ path: "/chat", uri: "https://..." }, ...]
+streams.forEach((stream) => {
+  console.log("Stream path:", stream.path, "URI:", stream.uri);
+});
+```
+
+### routeRegistry.listAssets()
+
+Lists all registered asset paths.
+
+**Returns:** JSON string with array of asset names
+
+**Example:**
+
+```javascript
+const assets = JSON.parse(routeRegistry.listAssets());
+console.log("Registered assets:", assets);
+```
+
+## Console Logging
 
 ### console.log(message)
 
@@ -49,85 +235,7 @@ function myHandler(req) {
 }
 ```
 
-### registerWebStream(path)
-
-Registers a Server-Sent Events (SSE) stream endpoint that clients can connect to for real-time updates.
-
-**Parameters:**
-
-- `path` (string): Stream path to register (must start with `/`, max 200 characters)
-
-**Example:**
-
-```javascript
-// Register a stream for live notifications
-registerWebStream("/notifications");
-
-// Register a stream for chat messages
-registerWebStream("/chat/room1");
-```
-
-**Notes:**
-
-- Stream paths must be unique
-- Multiple clients can connect to the same stream
-- Streams persist until the server restarts or the script is reloaded
-- Use meaningful, descriptive paths for better organization
-
-### sendStreamMessageToPath(path, data)
-
-Sends a message to all clients connected to a specific stream path.
-
-**Parameters:**
-
-- `path` (string): Stream path to send to (must start with `/`)
-- `data` (object): Data object to send (will be JSON serialized)
-
-**Example:**
-
-```javascript
-function notifyHandler(req) {
-  // Send notification to specific stream
-  sendStreamMessageToPath("/notifications", {
-    type: "notification",
-    message: "New update available",
-    timestamp: new Date().toISOString(),
-    priority: "high",
-  });
-
-  return { status: 200, body: "Notification sent" };
-}
-
-// Register the handler
-register("/notify", "notifyHandler", "POST");
-```
-
-**Real-time Chat Example:**
-
-```javascript
-// Register a chat stream
-registerWebStream("/chat");
-
-function sendMessage(req) {
-  const { user, message } = req.form;
-
-  if (!user || !message) {
-    return { status: 400, body: "Missing user or message" };
-  }
-
-  // Send to the chat stream
-  sendStreamMessageToPath("/chat", {
-    type: "chat_message",
-    user: user,
-    message: message,
-    timestamp: new Date().toISOString(),
-  });
-
-  return { status: 200, body: "Message sent" };
-}
-
-register("/chat/send", "sendMessage", "POST");
-```
+## HTTP Fetch
 
 ### fetch(url, options)
 
@@ -319,19 +427,20 @@ eventSource.onerror = function (event) {
 
 ### Stream Lifecycle
 
-1. **Registration**: Use `registerWebStream()` to create a stream endpoint
+1. **Registration**: Use `routeRegistry.registerStreamRoute()` to create a stream endpoint
 2. **Connection**: Clients connect using EventSource or compatible SSE clients
-3. **Broadcasting**: Use `sendStreamMessageToPath()` to send data to connected clients on specific streams
+3. **Broadcasting**: Use `routeRegistry.sendStreamMessage()` or `routeRegistry.sendStreamMessageFiltered()` to send data to connected clients
 4. **Cleanup**: Connections are automatically cleaned up when clients disconnect
 
 ### Best Practices for Streaming
 
-- **Register streams early**: Call `registerWebStream()` when your script loads
+- **Register streams early**: Call `routeRegistry.registerStreamRoute()` when your script loads
 - **Structure your data**: Use consistent message formats with `type` fields
 - **Handle disconnections**: Clients should implement reconnection logic
 - **Limit message frequency**: Avoid overwhelming clients with too many messages
-- **Use meaningful paths**: Organize streams logically (e.g., `/chat/room1`, `/notifications/user123`)
-- **Target specific streams**: Use `sendStreamMessageToPath()` to send messages to the appropriate stream
+- **Use meaningful paths**: Organize streams logically (e.g., `/chat/room1`, `/notifications`)
+- **Use filtered broadcasting**: Use `routeRegistry.sendStreamMessageFiltered()` for personalized messages instead of creating dynamic endpoints
+- **Leverage metadata**: Store user/room information in connection metadata for efficient filtering
 
 ## GraphQL APIs
 

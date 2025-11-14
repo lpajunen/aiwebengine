@@ -22,10 +22,10 @@ function delete_handler(req) {
 function init(context) {
   console.log("Initializing method_test.js at " + new Date().toISOString());
   // Register handlers for different methods on the same path
-  register("/api/test", "get_handler", "GET");
-  register("/api/test", "post_handler", "POST");
-  register("/api/test", "put_handler", "PUT");
-  register("/api/test", "delete_handler", "DELETE");
+  routeRegistry.registerRoute("/api/test", "get_handler", "GET");
+  routeRegistry.registerRoute("/api/test", "post_handler", "POST");
+  routeRegistry.registerRoute("/api/test", "put_handler", "PUT");
+  routeRegistry.registerRoute("/api/test", "delete_handler", "DELETE");
   console.log("HTTP method test endpoints registered");
   return { success: true };
 }

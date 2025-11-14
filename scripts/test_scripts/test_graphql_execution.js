@@ -64,7 +64,7 @@ function testGraphQLHandler(req) {
 
 function init(context) {
   console.log("Initializing GraphQL test script");
-  register("/test-graphql", "testGraphQLHandler", "GET");
+  routeRegistry.registerRoute("/test-graphql", "testGraphQLHandler", "GET");
   console.log("GraphQL test endpoint registered at /test-graphql");
   return { success: true };
 }

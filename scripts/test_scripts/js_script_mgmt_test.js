@@ -56,7 +56,7 @@ function init(context) {
   console.log(
     "Initializing js_script_mgmt_test.js at " + new Date().toISOString(),
   );
-  register("/js-mgmt-check", "js_mgmt_check", "GET");
+  routeRegistry.registerRoute("/js-mgmt-check", "js_mgmt_check", "GET");
   console.log("JS script management test endpoint registered");
   return { success: true };
 }

@@ -1194,7 +1194,7 @@ mod tests {
     #[test]
     fn test_execute_script_simple_registration() {
         let content = r#"
-            register("/test", "handler_function", "GET");
+            routeRegistry.registerRoute("/test", "handler_function", "GET");
         "#;
 
         let result = execute_script("test-script", content);
@@ -1213,9 +1213,9 @@ mod tests {
     #[test]
     fn test_execute_script_multiple_registrations() {
         let content = r#"
-            register("/api/users", "getUsers", "GET");
-            register("/api/users", "createUser", "POST");
-            register("/api/users/:id", "updateUser", "PUT");
+            routeRegistry.registerRoute("/api/users", "getUsers", "GET");
+            routeRegistry.registerRoute("/api/users", "createUser", "POST");
+            routeRegistry.registerRoute("/api/users/:id", "updateUser", "PUT");
         "#;
 
         let result = execute_script("multi-script", content);
@@ -1242,7 +1242,7 @@ mod tests {
     #[test]
     fn test_execute_script_with_default_method() {
         let content = r#"
-            register("/default-method", "handler", "GET");
+            routeRegistry.registerRoute("/default-method", "handler", "GET");
         "#;
 
         let result = execute_script("default-method-script", content);
@@ -1297,8 +1297,8 @@ mod tests {
     fn test_execute_script_with_complex_javascript() {
         let content = r#"
             function setupRoutes() {
-                register("/api/health", "healthCheck", "GET");
-                register("/api/status", "statusCheck", "GET");
+                routeRegistry.registerRoute("/api/health", "healthCheck", "GET");
+                routeRegistry.registerRoute("/api/status", "statusCheck", "GET");
             }
 
             setupRoutes();
@@ -1512,7 +1512,7 @@ mod tests {
         });
 
         let script_content = r#"
-            registerWebStream('/test-stream-func');
+            routeRegistry.registerStreamRoute('/test-stream-func');
             console.log('Stream registered successfully');
         "#;
 
@@ -1581,10 +1581,10 @@ mod tests {
 
         let script_content = r#"
             // Register a stream first
-            registerWebStream('/test-message-stream');
+            routeRegistry.registerStreamRoute('/test-message-stream');
 
             // Send a message to the specific stream
-            sendStreamMessageToPath('/test-message-stream', '{"type": "test", "data": "Hello World"}');
+            routeRegistry.sendStreamMessage('/test-message-stream', '{"type": "test", "data": "Hello World"}');
 
             console.log('Message sent successfully');
         "#;
@@ -1627,7 +1627,7 @@ mod tests {
 
         let script_content = r#"
             // Register a stream first
-            registerWebStream('/test-json-stream');
+            routeRegistry.registerStreamRoute('/test-json-stream');
 
             // Send a complex JSON message
             var messageObj = {
@@ -1642,7 +1642,7 @@ mod tests {
             };
 
             // JavaScript must stringify the object before sending
-            sendStreamMessageToPath('/test-json-stream', JSON.stringify(messageObj));
+            routeRegistry.sendStreamMessage('/test-json-stream', JSON.stringify(messageObj));
 
             console.log('Complex JSON message sent');
         "#;

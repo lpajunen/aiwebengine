@@ -100,11 +100,8 @@ impl SecureGlobalContext {
         script_uri: &str,
         register_fn: Option<RouteRegisterFn>,
     ) -> JsResult<()> {
-        // Setup route registration function first
-        self.setup_route_registration(ctx, register_fn)?;
-
-        // Setup asset path registration function
-        self.setup_asset_path_registration(ctx, script_uri)?;
+        // Setup routeRegistry object with all route-related functions
+        self.setup_route_registry(ctx, script_uri, register_fn)?;
 
         if self.config.enable_logging {
             self.setup_logging_functions(ctx, script_uri)?;
@@ -134,16 +131,14 @@ impl SecureGlobalContext {
         // Always setup GraphQL functions, but they will be no-ops if disabled
         self.setup_graphql_functions(ctx, script_uri)?;
 
-        // Always setup stream functions, but they will be no-ops if disabled
-        self.setup_stream_functions(ctx, script_uri)?;
-
         // Setup user management functions (admin-only)
         self.setup_user_management_functions(ctx, script_uri)?;
 
         Ok(())
     }
 
-    /// Setup route registration function
+    /// Setup route registration function (deprecated - use setup_route_registry instead)
+    #[allow(dead_code)]
     fn setup_route_registration(
         &self,
         ctx: &rquickjs::Ctx<'_>,
@@ -180,7 +175,8 @@ impl SecureGlobalContext {
         Ok(())
     }
 
-    /// Setup asset path registration function
+    /// Setup asset path registration function (deprecated - use setup_route_registry instead)
+    #[allow(dead_code)]
     fn setup_asset_path_registration(
         &self,
         ctx: &rquickjs::Ctx<'_>,
@@ -1684,7 +1680,8 @@ impl SecureGlobalContext {
         Ok(())
     }
 
-    /// Setup secure stream functions
+    /// Setup secure stream functions (deprecated - use setup_route_registry instead)
+    #[allow(dead_code)]
     fn setup_stream_functions(&self, ctx: &rquickjs::Ctx<'_>, script_uri: &str) -> JsResult<()> {
         let global = ctx.globals();
         let user_context = self.user_context.clone();
@@ -2011,6 +2008,479 @@ impl SecureGlobalContext {
             "sendStreamMessageToConnections",
             send_stream_message_to_connections,
         )?;
+
+        Ok(())
+    }
+
+    /// Setup routeRegistry object with all route-related functions
+    fn setup_route_registry(
+        &self,
+        ctx: &rquickjs::Ctx<'_>,
+        script_uri: &str,
+        register_fn: Option<RouteRegisterFn>,
+    ) -> JsResult<()> {
+        let global = ctx.globals();
+        let user_context = self.user_context.clone();
+        let auditor = self.auditor.clone();
+        let script_uri_owned = script_uri.to_string();
+        let config = self.config.clone();
+
+        // Create the routeRegistry object
+        let route_registry = rquickjs::Object::new(ctx.clone())?;
+
+        // 1. registerRoute function
+        if let Some(register_impl) = register_fn {
+            let register_route = Function::new(
+                ctx.clone(),
+                move |_c: rquickjs::Ctx<'_>,
+                      path: String,
+                      handler: String,
+                      method: Option<String>|
+                      -> Result<(), rquickjs::Error> {
+                    let method_ref = method.as_deref();
+                    register_impl(&path, &handler, method_ref)
+                },
+            )?;
+            route_registry.set("registerRoute", register_route)?;
+        } else {
+            // No-op register function
+            let reg_noop = Function::new(
+                ctx.clone(),
+                |_c: rquickjs::Ctx<'_>,
+                 _p: String,
+                 _h: String,
+                 _m: Option<String>|
+                 -> Result<(), rquickjs::Error> { Ok(()) },
+            )?;
+            route_registry.set("registerRoute", reg_noop)?;
+        }
+
+        // 2. registerStreamRoute function
+        let user_ctx_stream = user_context.clone();
+        let auditor_stream = auditor.clone();
+        let config_stream = config.clone();
+        let script_uri_stream = script_uri_owned.clone();
+        let register_stream_route = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, path: String| -> JsResult<String> {
+                // If streams are disabled, return success without doing anything
+                if !config_stream.enable_streams {
+                    return Ok(format!(
+                        "Stream registration disabled (stream '{}' not registered)",
+                        path
+                    ));
+                }
+
+                // Validate path format
+                if path.is_empty() || !path.starts_with('/') {
+                    return Ok(format!(
+                        "Invalid stream path '{}': path must start with '/' and not be empty",
+                        path
+                    ));
+                }
+
+                if path.len() > 200 {
+                    return Ok(format!(
+                        "Invalid stream path '{}': path too long (max 200 characters)",
+                        path
+                    ));
+                }
+
+                // Check capability
+                if let Err(e) =
+                    user_ctx_stream.require_capability(&crate::security::Capability::ManageStreams)
+                {
+                    if config_stream.enable_audit_logging
+                        && let Ok(rt) = tokio::runtime::Handle::try_current()
+                    {
+                        let auditor_clone = auditor_stream.clone();
+                        let user_id = user_ctx_stream.user_id.clone();
+                        rt.spawn(async move {
+                            let _ = auditor_clone
+                                .log_event(
+                                    crate::security::SecurityEvent::new(
+                                        crate::security::SecurityEventType::AuthorizationFailure,
+                                        crate::security::SecuritySeverity::Medium,
+                                        user_id,
+                                    )
+                                    .with_resource("stream".to_string())
+                                    .with_action("register".to_string()),
+                                )
+                                .await;
+                        });
+                    }
+                    return Ok(format!("Error: {}", e));
+                }
+
+                // Validate stream path
+                if path.contains("..") || path.contains('\\') {
+                    return Ok("Invalid stream path: path traversal not allowed".to_string());
+                }
+
+                // Log the operation attempt
+                if config_stream.enable_audit_logging
+                    && let Ok(rt) = tokio::runtime::Handle::try_current()
+                {
+                    let auditor_clone = auditor_stream.clone();
+                    let user_id = user_ctx_stream.user_id.clone();
+                    let path_clone = path.clone();
+                    let script_uri_clone = script_uri_stream.clone();
+                    rt.spawn(async move {
+                        let _ = auditor_clone
+                            .log_event(
+                                crate::security::SecurityEvent::new(
+                                    crate::security::SecurityEventType::SystemSecurityEvent,
+                                    crate::security::SecuritySeverity::Medium,
+                                    user_id,
+                                )
+                                .with_resource("stream".to_string())
+                                .with_action("register".to_string())
+                                .with_detail("path", &path_clone)
+                                .with_detail("script_uri", &script_uri_clone),
+                            )
+                            .await;
+                    });
+                }
+
+                // Register the stream
+                match crate::stream_registry::GLOBAL_STREAM_REGISTRY
+                    .register_stream(&path, &script_uri_stream)
+                {
+                    Ok(()) => Ok(format!("Web stream '{}' registered successfully", path)),
+                    Err(e) => Ok(format!("Failed to register stream '{}': {}", path, e)),
+                }
+            },
+        )?;
+        route_registry.set("registerStreamRoute", register_stream_route)?;
+
+        // 3. registerAssetRoute function
+        let user_ctx_asset = user_context.clone();
+        let script_uri_asset = script_uri_owned.clone();
+        let register_asset_route = Function::new(
+            ctx.clone(),
+            move |_c: rquickjs::Ctx<'_>,
+                  path: String,
+                  asset_name: String|
+                  -> Result<String, rquickjs::Error> {
+                // Check capability
+                if let Err(e) =
+                    user_ctx_asset.require_capability(&crate::security::Capability::WriteAssets)
+                {
+                    return Ok(format!("Access denied: {}", e));
+                }
+
+                // Validate path
+                if !path.starts_with('/') {
+                    return Ok("Path must start with '/'".to_string());
+                }
+                if path.len() > 500 {
+                    return Ok("Path too long (max 500 characters)".to_string());
+                }
+
+                // Validate asset name
+                if asset_name.is_empty() || asset_name.len() > 255 {
+                    return Ok("Invalid asset name: must be 1-255 characters".to_string());
+                }
+                if asset_name.contains("..")
+                    || asset_name.contains('/')
+                    || asset_name.contains('\\')
+                {
+                    return Ok("Invalid asset name: path characters not allowed".to_string());
+                }
+
+                // Register the path in the global asset registry
+                match crate::asset_registry::get_global_registry().register_path(
+                    &path,
+                    &asset_name,
+                    &script_uri_asset,
+                ) {
+                    Ok(()) => Ok(format!(
+                        "Asset path '{}' registered to asset '{}'",
+                        path, asset_name
+                    )),
+                    Err(e) => Ok(format!("Failed to register asset path: {}", e)),
+                }
+            },
+        )?;
+        route_registry.set("registerAssetRoute", register_asset_route)?;
+
+        // 4. sendStreamMessage function
+        let user_ctx_send = user_context.clone();
+        let auditor_send = auditor.clone();
+        let send_stream_message = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, path: String, message: String| -> JsResult<String> {
+                // Allow system-level broadcasting without capability checks for certain paths
+                let is_system_broadcast = path == "/script_updates" || path.starts_with("/system/");
+
+                if !is_system_broadcast {
+                    // Check capability for non-system operations
+                    if let Err(e) = user_ctx_send
+                        .require_capability(&crate::security::Capability::ManageStreams)
+                    {
+                        let auditor_clone = auditor_send.clone();
+                        let user_id = user_ctx_send.user_id.clone();
+                        tokio::task::spawn(async move {
+                            let _ = auditor_clone
+                                .log_event(
+                                    crate::security::SecurityEvent::new(
+                                        crate::security::SecurityEventType::AuthorizationFailure,
+                                        crate::security::SecuritySeverity::Medium,
+                                        user_id,
+                                    )
+                                    .with_resource("stream".to_string())
+                                    .with_action("send_message".to_string()),
+                                )
+                                .await;
+                        });
+                        return Ok(format!("Error: {}", e));
+                    }
+                }
+
+                // Log the operation attempt
+                let auditor_clone = auditor_send.clone();
+                let user_id = user_ctx_send.user_id.clone();
+                let path_clone = path.clone();
+                let message_clone = message.clone();
+                tokio::task::spawn(async move {
+                    let _ = auditor_clone
+                        .log_event(
+                            crate::security::SecurityEvent::new(
+                                crate::security::SecurityEventType::SystemSecurityEvent,
+                                crate::security::SecuritySeverity::Low,
+                                user_id,
+                            )
+                            .with_resource("stream".to_string())
+                            .with_action("send_message".to_string())
+                            .with_detail("path", &path_clone)
+                            .with_detail("message_length", message_clone.len().to_string()),
+                        )
+                        .await;
+                });
+
+                // Send the message
+                match crate::stream_registry::GLOBAL_STREAM_REGISTRY
+                    .broadcast_to_stream(&path, &message)
+                {
+                    Ok(result) => {
+                        if result.is_fully_successful() {
+                            Ok(format!(
+                                "Successfully sent message to {} connections on path '{}'",
+                                result.successful_sends, path
+                            ))
+                        } else {
+                            Ok(format!(
+                                "Sent message to {}/{} connections on path '{}' ({} failed)",
+                                result.successful_sends,
+                                result.total_connections,
+                                path,
+                                result.failed_connections.len()
+                            ))
+                        }
+                    }
+                    Err(e) => Ok(format!("Failed to send message to path '{}': {}", path, e)),
+                }
+            },
+        )?;
+        route_registry.set("sendStreamMessage", send_stream_message)?;
+
+        // 5. sendStreamMessageFiltered function
+        let user_ctx_filtered = user_context.clone();
+        let auditor_filtered = auditor.clone();
+        let send_stream_message_filtered = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  path: String,
+                  message: String,
+                  filter_json: Option<String>|
+                  -> JsResult<String> {
+                // Parse filter criteria
+                let metadata_filter: HashMap<String, String> = if let Some(json_str) = filter_json {
+                    serde_json::from_str(&json_str).map_err(|e| {
+                        rquickjs::Error::new_from_js_message(
+                            "filter",
+                            "MetadataFilter",
+                            &format!("Invalid filter JSON: {}", e),
+                        )
+                    })?
+                } else {
+                    HashMap::new()
+                };
+
+                // Allow system-level broadcasting for certain paths
+                let is_system_broadcast = path == "/script_updates" || path.starts_with("/system/");
+
+                if !is_system_broadcast
+                    && let Err(e) = user_ctx_filtered
+                        .require_capability(&crate::security::Capability::ManageStreams)
+                {
+                    let auditor_clone = auditor_filtered.clone();
+                    let user_id = user_ctx_filtered.user_id.clone();
+                    tokio::task::spawn(async move {
+                        let _ = auditor_clone
+                            .log_event(
+                                crate::security::SecurityEvent::new(
+                                    crate::security::SecurityEventType::AuthorizationFailure,
+                                    crate::security::SecuritySeverity::Medium,
+                                    user_id,
+                                )
+                                .with_resource("stream".to_string())
+                                .with_action("send_filtered_message".to_string()),
+                            )
+                            .await;
+                    });
+                    return Ok(format!("Error: {}", e));
+                }
+
+                // Log the operation
+                let auditor_clone = auditor_filtered.clone();
+                let user_id = user_ctx_filtered.user_id.clone();
+                let path_clone = path.clone();
+                let message_clone = message.clone();
+                let filter_clone = metadata_filter.clone();
+                tokio::task::spawn(async move {
+                    let _ = auditor_clone
+                        .log_event(
+                            crate::security::SecurityEvent::new(
+                                crate::security::SecurityEventType::SystemSecurityEvent,
+                                crate::security::SecuritySeverity::Low,
+                                user_id,
+                            )
+                            .with_resource("stream".to_string())
+                            .with_action("send_filtered_message".to_string())
+                            .with_detail("path", &path_clone)
+                            .with_detail("message_length", message_clone.len().to_string())
+                            .with_detail("filter_criteria_count", filter_clone.len().to_string()),
+                        )
+                        .await;
+                });
+
+                // Send filtered message
+                let result = crate::stream_registry::GLOBAL_STREAM_REGISTRY
+                    .broadcast_to_stream_with_filter(&path, &message, &metadata_filter);
+
+                match result {
+                    Ok(broadcast_result) => {
+                        if broadcast_result.is_fully_successful() {
+                            Ok(format!(
+                                "Successfully sent filtered message to {} connections on path '{}'",
+                                broadcast_result.successful_sends, path
+                            ))
+                        } else {
+                            Ok(format!(
+                                "Sent filtered message to {}/{} connections on path '{}' ({} failed)",
+                                broadcast_result.successful_sends,
+                                broadcast_result.total_connections,
+                                path,
+                                broadcast_result.failed_connections.len()
+                            ))
+                        }
+                    }
+                    Err(e) => Ok(format!(
+                        "Failed to send filtered message to path '{}': {}",
+                        path, e
+                    )),
+                }
+            },
+        )?;
+        route_registry.set("sendStreamMessageFiltered", send_stream_message_filtered)?;
+
+        // 6. listRoutes function
+        let user_ctx_list_routes = user_context.clone();
+        let list_routes = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
+                // Check capability
+                if let Err(_e) = user_ctx_list_routes
+                    .require_capability(&crate::security::Capability::ReadScripts)
+                {
+                    return Ok("[]".to_string());
+                }
+
+                // Get all script metadata
+                match repository::get_all_script_metadata() {
+                    Ok(metadata_list) => {
+                        let mut all_routes = Vec::new();
+                        for metadata in metadata_list {
+                            if metadata.initialized && !metadata.registrations.is_empty() {
+                                for ((path, method), handler) in metadata.registrations {
+                                    all_routes.push(serde_json::json!({
+                                        "path": path,
+                                        "method": method,
+                                        "handler": handler,
+                                        "script_uri": metadata.uri,
+                                    }));
+                                }
+                            }
+                        }
+                        match serde_json::to_string(&all_routes) {
+                            Ok(json) => Ok(json),
+                            Err(e) => Ok(format!("Error serializing routes: {}", e)),
+                        }
+                    }
+                    Err(e) => Ok(format!("Error fetching routes: {}", e)),
+                }
+            },
+        )?;
+        route_registry.set("listRoutes", list_routes)?;
+
+        // 7. listStreams function
+        let user_ctx_list_streams = user_context.clone();
+        let list_streams = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
+                // Check capability
+                if let Err(_e) = user_ctx_list_streams
+                    .require_capability(&crate::security::Capability::ManageStreams)
+                {
+                    return Ok("[]".to_string());
+                }
+
+                // Get streams with metadata
+                match crate::stream_registry::GLOBAL_STREAM_REGISTRY.list_streams_with_metadata() {
+                    Ok(streams) => {
+                        let stream_objects: Vec<serde_json::Value> = streams
+                            .iter()
+                            .map(|(path, uri)| {
+                                serde_json::json!({
+                                    "path": path,
+                                    "uri": uri,
+                                })
+                            })
+                            .collect();
+
+                        match serde_json::to_string(&stream_objects) {
+                            Ok(json) => Ok(json),
+                            Err(e) => Ok(format!("Error serializing streams: {}", e)),
+                        }
+                    }
+                    Err(e) => Ok(format!("Error fetching streams: {}", e)),
+                }
+            },
+        )?;
+        route_registry.set("listStreams", list_streams)?;
+
+        // 8. listAssets function
+        let user_ctx_list_assets = user_context.clone();
+        let list_assets = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<Vec<String>> {
+                // Check capability
+                if let Err(_e) = user_ctx_list_assets
+                    .require_capability(&crate::security::Capability::ReadAssets)
+                {
+                    return Ok(Vec::new());
+                }
+
+                let assets = repository::fetch_assets();
+                let asset_names: Vec<String> = assets.keys().cloned().collect();
+                Ok(asset_names)
+            },
+        )?;
+        route_registry.set("listAssets", list_assets)?;
+
+        // Set the routeRegistry object on global scope
+        global.set("routeRegistry", route_registry)?;
 
         Ok(())
     }

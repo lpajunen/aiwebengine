@@ -277,7 +277,11 @@ function init(context) {
     console.log(`Init context: ${JSON.stringify(context)}`);
 
     // Register the route
-    register("/auth/unauthorized", "serveInsufficientPermissions", "GET");
+    routeRegistry.registerRoute(
+      "/auth/unauthorized",
+      "serveInsufficientPermissions",
+      "GET",
+    );
 
     console.log("Insufficient permissions script initialized successfully");
 

@@ -17,8 +17,8 @@ function js_list_handler(req) {
 // Initialization function
 function init(context) {
   console.log("Initializing js_log_test.js at " + new Date().toISOString());
-  register("/js-log-test", "js_log_test_handler", "GET");
-  register("/js-list", "js_list_handler", "GET");
+  routeRegistry.registerRoute("/js-log-test", "js_log_test_handler", "GET");
+  routeRegistry.registerRoute("/js-list", "js_list_handler", "GET");
   console.log("JS log test endpoints registered");
   return { success: true };
 }

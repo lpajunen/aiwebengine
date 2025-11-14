@@ -79,7 +79,7 @@ function broadcastScriptUpdate(uri, action, details = {}) {
       }
     }
 
-    sendStreamMessageToPath("/script_updates", JSON.stringify(message));
+    routeRegistry.sendStreamMessage("/script_updates", JSON.stringify(message));
 
     // Send to GraphQL subscription using modern approach
     graphQLRegistry.sendSubscriptionMessage(
@@ -522,23 +522,31 @@ function init(context) {
     console.log(`Init context: ${JSON.stringify(context)}`);
 
     // Register public asset paths
-    registerPublicAsset("/logo.svg", "logo.svg");
-    registerPublicAsset("/favicon.ico", "favicon.ico");
-    registerPublicAsset("/editor.css", "editor.css");
-    registerPublicAsset("/editor.js", "editor.js");
-    registerPublicAsset("/engine.css", "engine.css");
+    routeRegistry.registerAssetRoute("/logo.svg", "logo.svg");
+    routeRegistry.registerAssetRoute("/favicon.ico", "favicon.ico");
+    routeRegistry.registerAssetRoute("/editor.css", "editor.css");
+    routeRegistry.registerAssetRoute("/editor.js", "editor.js");
+    routeRegistry.registerAssetRoute("/engine.css", "engine.css");
 
     // Register HTTP endpoints
-    register("/", "core_root", "GET");
-    register("/", "core_root", "POST");
-    register("/health", "health_check", "GET");
-    register("/upsert_script", "upsert_script_handler", "POST");
-    register("/delete_script", "delete_script_handler", "POST");
-    register("/read_script", "read_script_handler", "GET");
-    register("/script_logs", "script_logs_handler", "GET");
+    routeRegistry.registerRoute("/", "core_root", "GET");
+    routeRegistry.registerRoute("/", "core_root", "POST");
+    routeRegistry.registerRoute("/health", "health_check", "GET");
+    routeRegistry.registerRoute(
+      "/upsert_script",
+      "upsert_script_handler",
+      "POST",
+    );
+    routeRegistry.registerRoute(
+      "/delete_script",
+      "delete_script_handler",
+      "POST",
+    );
+    routeRegistry.registerRoute("/read_script", "read_script_handler", "GET");
+    routeRegistry.registerRoute("/script_logs", "script_logs_handler", "GET");
 
     // Register WebSocket stream endpoint
-    registerWebStream("/script_updates");
+    routeRegistry.registerStreamRoute("/script_updates");
 
     // Register GraphQL subscription
     graphQLRegistry.registerSubscription(

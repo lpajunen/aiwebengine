@@ -83,8 +83,9 @@ async fn test_core_js_registers_root_path() {
     // Ensure core.js contains a registration for '/'
     let core = repository::fetch_script("https://example.com/core").expect("core script missing");
     assert!(
-        core.contains("register('/") || core.contains("register(\"/\""),
-        "core.js must register '/' path"
+        core.contains("routeRegistry.registerRoute('/")
+            || core.contains("routeRegistry.registerRoute(\"/\""),
+        "core.js must register '/' path with routeRegistry"
     );
 }
 
@@ -489,7 +490,7 @@ function test_endpoint_handler(req) {
 }
 
 function init(context) {
-    register('/test-endpoint', 'test_endpoint_handler', 'GET');
+    routeRegistry.registerRoute('/test-endpoint', 'test_endpoint_handler', 'GET');
     return { success: true };
 }
 "#;
@@ -592,7 +593,7 @@ function delete_test_handler(req) {
 }
 
 function init(context) {
-    register('/delete-test-endpoint', 'delete_test_handler', 'GET');
+    routeRegistry.registerRoute('/delete-test-endpoint', 'delete_test_handler', 'GET');
     return { success: true };
 }
 "#;
@@ -758,7 +759,7 @@ function lifecycle_test_handler(req) {
 }
 
 function init(context) {
-    register('/lifecycle-test', 'lifecycle_test_handler', 'GET');
+    routeRegistry.registerRoute('/lifecycle-test', 'lifecycle_test_handler', 'GET');
     return { success: true };
 }
 "#;
@@ -883,7 +884,7 @@ function read_test_handler(req) {
 }
 
 function init(context) {
-    register('/read-test-endpoint', 'read_test_handler', 'GET');
+    routeRegistry.registerRoute('/read-test-endpoint', 'read_test_handler', 'GET');
     return { success: true };
 }
 "#;

@@ -1,5 +1,5 @@
 // Test script for scriptStorage functionality
-register("/test-storage", "testStorageHandler", "GET");
+routeRegistry.registerRoute("/test-storage", "testStorageHandler", "GET");
 
 function testStorageHandler(request) {
   // Test setting an item

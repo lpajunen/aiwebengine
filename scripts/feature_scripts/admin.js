@@ -24,9 +24,17 @@
 
 function init(context) {
   // Register routes for user management
-  register("/engine/admin", "handleManagerUI", "GET");
-  register("/api/engine/admin/users", "handleListUsers", "GET");
-  register("/api/engine/admin/users/*", "handleUpdateUserRole", "POST");
+  routeRegistry.registerRoute("/engine/admin", "handleManagerUI", "GET");
+  routeRegistry.registerRoute(
+    "/api/engine/admin/users",
+    "handleListUsers",
+    "GET",
+  );
+  routeRegistry.registerRoute(
+    "/api/engine/admin/users/*",
+    "handleUpdateUserRole",
+    "POST",
+  );
 
   return { success: true };
 }

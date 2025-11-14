@@ -26,7 +26,11 @@ function list_logs_for_uri_handler(req) {
 // Initialization function
 function init(context) {
   console.log("Initializing js_log_test_uri.js at " + new Date().toISOString());
-  register("/js-list-for-uri", "list_logs_for_uri_handler", "GET");
+  routeRegistry.registerRoute(
+    "/js-list-for-uri",
+    "list_logs_for_uri_handler",
+    "GET",
+  );
   console.log("JS log test URI endpoint registered");
   return { success: true };
 }

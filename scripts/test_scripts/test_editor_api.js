@@ -22,7 +22,7 @@ function testEditorAPI(req) {
 // Initialization function
 function init(context) {
   console.log("Initializing test_editor_api.js at " + new Date().toISOString());
-  register("/test-editor-api", "testEditorAPI", "GET");
+  routeRegistry.registerRoute("/test-editor-api", "testEditorAPI", "GET");
   console.log("Editor API test endpoint registered");
   return { success: true };
 }

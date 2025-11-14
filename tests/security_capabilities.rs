@@ -527,7 +527,7 @@ async fn test_secure_script_execution_authenticated() {
         // Try to upsert a script (should work with WriteScripts capability)
         upsertScript("test_script", "console.log('test');");
         
-        register("/test", "handleTest", "GET");
+        routeRegistry.registerRoute("/test", "handleTest", "GET");
         
         function handleTest(request) {
             return {

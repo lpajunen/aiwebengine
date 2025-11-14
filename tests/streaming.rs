@@ -238,7 +238,7 @@ async fn test_basic_streaming_functionality() {
 
     let test_script = r#"
         // Register the stream
-        registerWebStream('/test_stream');
+        routeRegistry.registerStreamRoute('/test_stream');
     "#;
 
     info!("Testing basic streaming functionality");
@@ -276,7 +276,7 @@ async fn test_basic_streaming_functionality() {
 
     // Send a message to the stream
     let send_script = r#"
-        sendStreamMessageToPath('/test_stream', JSON.stringify({
+        routeRegistry.sendStreamMessage('/test_stream', JSON.stringify({
             type: 'test_message',
             content: 'Hello from test!',
             timestamp: new Date().toISOString()
@@ -329,10 +329,10 @@ async fn test_direct_stream_message() {
     // Test direct stream message sending without using request handlers
 
     let test_script = r#"
-        registerWebStream('/direct_test');
+        routeRegistry.registerStreamRoute('/direct_test');
         
         // Send a message directly
-        sendStreamMessageToPath('/direct_test', JSON.stringify({
+        routeRegistry.sendStreamMessage('/direct_test', JSON.stringify({
             type: 'direct_message',
             content: 'Direct test message',
             timestamp: new Date().toISOString()
@@ -371,7 +371,7 @@ async fn test_direct_stream_message() {
     let result2 = js_engine::execute_script(
         "test_direct2.js",
         r#"
-        sendStreamMessageToPath('/direct_test', JSON.stringify({
+        routeRegistry.sendStreamMessage('/direct_test', JSON.stringify({
             type: 'second_direct_message',
             content: 'Second direct test message',
             timestamp: new Date().toISOString()
@@ -430,7 +430,7 @@ async fn test_script_update_streaming_integration() {
     // First, upsert the streaming test script
     let core_script_content = r#"
         // Register script updates stream endpoint
-        registerWebStream('/script_updates');
+        routeRegistry.registerStreamRoute('/script_updates');
 
         // Helper function to broadcast script update messages
         function broadcastScriptUpdate(uri, action, details = {}) {
@@ -443,7 +443,7 @@ async fn test_script_update_streaming_integration() {
                     ...details
                 };
                 
-                sendStreamMessageToPath('/script_updates', JSON.stringify(message));
+                routeRegistry.sendStreamMessage('/script_updates', JSON.stringify(message));
                 console.log(`Broadcasted script update: ${action} ${uri}`);
             } catch (error) {
                 console.error(`Failed to broadcast script update: ${error.message}`);
@@ -532,7 +532,7 @@ async fn test_script_update_message_format() {
                 ...details
             };
             
-            sendStreamMessageToPath('/script_updates_format_test', JSON.stringify(message));
+            routeRegistry.sendStreamMessage('/script_updates_format_test', JSON.stringify(message));
             console.log(`Broadcast ${action} for ${uri}`);
         }
 
@@ -562,8 +562,8 @@ async fn test_script_update_message_format() {
 
         function init(context) {
             console.log('Initializing message format test script at ' + new Date().toISOString());
-            registerWebStream('/script_updates_format_test');
-            register('/test_message_format', 'test_message_format', 'GET');
+            routeRegistry.registerStreamRoute('/script_updates_format_test');
+            routeRegistry.registerRoute('/test_message_format', 'test_message_format', 'GET');
             console.log('Message format test script initialized');
             return { success: true };
         }
@@ -649,9 +649,9 @@ async fn test_stream_endpoints() {
         function init(context) {
             console.log('Initializing stream integration test');
             // Register a stream endpoint
-            registerWebStream('/test-stream');
+            routeRegistry.registerStreamRoute('/test-stream');
             // Register a regular handler to test stream vs regular route handling
-            register('/regular-endpoint', 'handleRegular', 'GET');
+            routeRegistry.registerRoute('/regular-endpoint', 'handleRegular', 'GET');
             console.log('Stream and regular endpoints registered');
             return { success: true };
         }
@@ -755,7 +755,7 @@ async fn test_stream_messaging() {
                 timestamp: new Date().toISOString()
             };
             
-            sendStreamMessageToPath('/notification-stream', JSON.stringify(message));
+            routeRegistry.sendStreamMessage('/notification-stream', JSON.stringify(message));
             console.log('POST - Sent notification: ' + JSON.stringify(message));
             return { 
                 status: 200, 
@@ -772,7 +772,7 @@ async fn test_stream_messaging() {
                 timestamp: new Date().toISOString()
             };
             
-            sendStreamMessageToPath('/notification-stream', JSON.stringify(message));
+            routeRegistry.sendStreamMessage('/notification-stream', JSON.stringify(message));
             console.log('GET - Sent notification: ' + JSON.stringify(message));
             return { 
                 status: 200, 
@@ -784,10 +784,10 @@ async fn test_stream_messaging() {
         function init(context) {
             console.log('Initializing notification system');
             // Register a stream endpoint
-            registerWebStream('/notification-stream');
+            routeRegistry.registerStreamRoute('/notification-stream');
             // Register an endpoint to send messages for both GET and POST
-            register('/send-notification', 'sendNotification', 'POST');
-            register('/send-notification', 'sendNotificationGet', 'GET');
+            routeRegistry.registerRoute('/send-notification', 'sendNotification', 'POST');
+            routeRegistry.registerRoute('/send-notification', 'sendNotificationGet', 'GET');
             console.log('Registered POST and GET /send-notification');
             console.log('Notification system initialized');
             return { success: true };
@@ -808,10 +808,10 @@ async fn test_stream_messaging() {
     let minimal_test = r#"
         console.log('Testing sendStreamMessage in isolation');
         try {
-            sendStreamMessageToPath('/notification-stream', '{"test": "isolation"}');
-            console.log('sendStreamMessageToPath isolation test: SUCCESS');
+            routeRegistry.sendStreamMessage('/notification-stream', '{"test": "isolation"}');
+            console.log('routeRegistry.sendStreamMessage isolation test: SUCCESS');
         } catch (error) {
-            console.error('sendStreamMessageToPath isolation test ERROR: ' + error.toString());
+            console.error('routeRegistry.sendStreamMessage isolation test ERROR: ' + error.toString());
         }
     "#;
 
@@ -1094,7 +1094,7 @@ fn test_simple_stream_registration() {
     // Test just the stream registration part first
 
     let test_script = r#"
-        registerWebStream('/simple_test');
+        routeRegistry.registerStreamRoute('/simple_test');
         console.log('Stream registered successfully');
     "#;
 
@@ -1128,7 +1128,7 @@ fn test_simple_message_sending() {
 
     let test_script = r#"
         try {
-            sendStreamMessageToPath('/simple_test', { type: 'test', message: 'hello' });
+            routeRegistry.sendStreamMessage('/simple_test', { type: 'test', message: 'hello' });
             console.log('Message sent successfully');
         } catch (error) {
             console.error('Error sending message: ' + error.message);
@@ -1156,11 +1156,11 @@ fn test_combined_functionality() {
     // Test both registration and sending together
 
     let test_script = r#"
-        registerWebStream('/combined_test');
+        routeRegistry.registerStreamRoute('/combined_test');
         console.log('Stream registered');
         
         try {
-            sendStreamMessageToPath('/combined_test', { type: 'combined_test', message: 'hello combined' });
+            routeRegistry.sendStreamMessage('/combined_test', { type: 'combined_test', message: 'hello combined' });
             console.log('Message sent successfully');
         } catch (error) {
             console.error('Error sending message: ' + error.message);

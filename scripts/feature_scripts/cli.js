@@ -95,10 +95,10 @@ function init(context) {
     console.log(`Init context: ${JSON.stringify(context)}`);
 
     // Register the routes
-    register("/assets", "asset_handler", "GET");
-    register("/assets", "asset_handler", "POST");
-    register("/assets/*", "asset_handler", "GET");
-    register("/assets/*", "asset_handler", "DELETE");
+    routeRegistry.registerRoute("/assets", "asset_handler", "GET");
+    routeRegistry.registerRoute("/assets", "asset_handler", "POST");
+    routeRegistry.registerRoute("/assets/*", "asset_handler", "GET");
+    routeRegistry.registerRoute("/assets/*", "asset_handler", "DELETE");
 
     console.log("Asset management script initialized successfully");
 

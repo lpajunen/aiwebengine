@@ -89,20 +89,20 @@ function init(context) {
   );
 
   // Register HTTP routes
-  register("/asset-test", "serveAssetTestPage", "GET");
-  register("/asset-test/upload", "uploadTestAsset", "POST");
+  routeRegistry.registerRoute("/asset-test", "serveAssetTestPage", "GET");
+  routeRegistry.registerRoute("/asset-test/upload", "uploadTestAsset", "POST");
 
   // Register public asset paths
   // These map HTTP paths to asset names in the repository
 
   // Map /test/* paths to test assets
-  registerPublicAsset("/test/styles.css", "test-styles.css");
-  registerPublicAsset("/test/sample-image.svg", "test-image.svg");
-  registerPublicAsset("/test/script.js", "test-script.js");
+  routeRegistry.registerAssetRoute("/test/styles.css", "test-styles.css");
+  routeRegistry.registerAssetRoute("/test/sample-image.svg", "test-image.svg");
+  routeRegistry.registerAssetRoute("/test/script.js", "test-script.js");
 
   // Demonstrate: Same asset at multiple HTTP paths
   // Register the built-in logo at an alternate path
-  registerPublicAsset("/alternate/logo.svg", "logo.svg");
+  routeRegistry.registerAssetRoute("/alternate/logo.svg", "logo.svg");
 
   console.log("Asset registration test endpoints configured");
 
