@@ -82,7 +82,10 @@ function broadcastScriptUpdate(uri, action, details = {}) {
     sendStreamMessageToPath("/script_updates", JSON.stringify(message));
 
     // Send to GraphQL subscription using modern approach
-    sendSubscriptionMessage("scriptUpdates", JSON.stringify(message));
+    graphQLRegistry.sendSubscriptionMessage(
+      "scriptUpdates",
+      JSON.stringify(message),
+    );
 
     console.log("Broadcasted script update: " + action + " " + uri);
   } catch (error) {
@@ -538,41 +541,41 @@ function init(context) {
     registerWebStream("/script_updates");
 
     // Register GraphQL subscription
-    registerGraphQLSubscription(
+    graphQLRegistry.registerSubscription(
       "scriptUpdates",
       "type ScriptUpdate { type: String!, uri: String!, action: String!, timestamp: String!, contentLength: Int, previousExists: Boolean, via: String } type Subscription { scriptUpdates: ScriptUpdate! }",
       "scriptUpdatesResolver",
     );
 
     // Register GraphQL queries
-    registerGraphQLQuery(
+    graphQLRegistry.registerQuery(
       "scripts",
       "type ScriptInfo { uri: String!, chars: Int! } type Query { scripts: [ScriptInfo!]! }",
       "scriptsQuery",
     );
-    registerGraphQLQuery(
+    graphQLRegistry.registerQuery(
       "script",
       "type ScriptDetail { uri: String!, content: String!, contentLength: Int!, logs: [String!]! } type Query { script(uri: String!): ScriptDetail }",
       "scriptQuery",
     );
-    registerGraphQLQuery(
+    graphQLRegistry.registerQuery(
       "scriptInitStatus",
       "type ScriptInitStatus { scriptName: String!, initialized: Boolean!, initError: String, lastInitTime: Float, createdAt: Float, updatedAt: Float } type Query { scriptInitStatus(uri: String!): ScriptInitStatus }",
       "scriptInitStatusQuery",
     );
-    registerGraphQLQuery(
+    graphQLRegistry.registerQuery(
       "allScriptsInitStatus",
       "type ScriptInitStatus { scriptName: String!, initialized: Boolean!, initError: String, lastInitTime: Float, createdAt: Float, updatedAt: Float } type Query { allScriptsInitStatus: [ScriptInitStatus!]! }",
       "allScriptsInitStatusQuery",
     );
 
     // Register GraphQL mutations
-    registerGraphQLMutation(
+    graphQLRegistry.registerMutation(
       "upsertScript",
       "type UpsertScriptResponse { message: String!, uri: String!, chars: Int!, success: Boolean! } type Mutation { upsertScript(uri: String!, content: String!): UpsertScriptResponse! }",
       "upsertScriptMutation",
     );
-    registerGraphQLMutation(
+    graphQLRegistry.registerMutation(
       "deleteScript",
       "type DeleteScriptResponse { message: String!, uri: String!, success: Boolean! } type Mutation { deleteScript(uri: String!): DeleteScriptResponse! }",
       "deleteScriptMutation",

@@ -241,14 +241,14 @@ JSON.stringify({}); // Match all connections (empty filter)
 - **Role-Based Broadcasting**: Send different messages based on user roles or groups
 - **Multi-Tenant Systems**: Filter by tenant, organization, or workspace
 
-#### sendSubscriptionMessageToConnections(subscriptionName, data, filterJson) [Advanced]
+#### graphQLRegistry.sendSubscriptionMessageFiltered(subscriptionName, data, filterJson) [Advanced]
 
 Sends a message to specific clients subscribed to a GraphQL subscription based on connection metadata filtering.
 
 **Parameters:**
 
 - `subscriptionName` (string): Name of the GraphQL subscription
-- `data` (object): Data to send (will be JSON serialized)
+- `data` (string): JSON string containing the data to send to subscribers
 - `filterJson` (string, optional): JSON string containing metadata filter criteria. Empty string `{}` matches all connections.
 
 **Returns:** String describing the broadcast result including success/failure counts
@@ -257,20 +257,20 @@ Sends a message to specific clients subscribed to a GraphQL subscription based o
 
 ```javascript
 // Register GraphQL subscription first
-registerGraphQLSubscription(
+graphQLRegistry.registerSubscription(
   "chatMessages",
   "type Subscription { chatMessages: String }",
   "chatMessagesResolver",
 );
 
 // Send to connections where user_id matches "user456"
-sendSubscriptionMessageToConnections(
+graphQLRegistry.sendSubscriptionMessageFiltered(
   "chatMessages",
-  {
+  JSON.stringify({
     type: "chat_message",
     message: "Private message for you!",
     timestamp: new Date().toISOString(),
-  },
+  }),
   JSON.stringify({
     user_id: "user456",
   }),
@@ -1171,17 +1171,17 @@ fetch("/graphql/sse?user_id=user123&room=general", {
 
 ```javascript
 // Send to all subscribers of chatMessages
-sendSubscriptionMessage("chatMessages", data);
+graphQLRegistry.sendSubscriptionMessage("chatMessages", data);
 
 // Send selectively to subscribers with specific metadata
-sendSubscriptionMessageToConnections(
+graphQLRegistry.sendSubscriptionMessageFiltered(
   "chatMessages",
   data,
   JSON.stringify({ user_id: "user123" }),
 );
 
 // Send to subscribers in a specific room
-sendSubscriptionMessageToConnections(
+graphQLRegistry.sendSubscriptionMessageFiltered(
   "chatMessages",
   data,
   JSON.stringify({ room: "general" }),
@@ -1199,7 +1199,7 @@ sendSubscriptionMessageToConnections(
 1. Client connects to `/graphql/sse?user_id=user123&room=general`
 2. Client sends GraphQL subscription: `subscription { chatMessages { ... } }`
 3. Server creates connection to `/graphql/subscription/chatMessages` with metadata `{user_id: "user123", room: "general"}`
-4. Server can selectively broadcast using `sendSubscriptionMessageToConnections("chatMessages", data, filter)`
+4. Server can selectively broadcast using `graphQLRegistry.sendSubscriptionMessageFiltered("chatMessages", data, filter)`
 
 **Use Cases:**
 

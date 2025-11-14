@@ -335,9 +335,9 @@ eventSource.onerror = function (event) {
 
 ## GraphQL APIs
 
-aiwebengine provides comprehensive GraphQL support, allowing you to register GraphQL operations and execute queries directly from your JavaScript scripts.
+aiwebengine provides comprehensive GraphQL support through the `graphQLRegistry` object, which contains all GraphQL-related functions for registering operations and executing queries directly from your JavaScript scripts.
 
-### registerGraphQLQuery(name, schema, resolverName)
+### graphQLRegistry.registerQuery(name, schema, resolverName)
 
 Registers a GraphQL query that can be executed through the GraphQL endpoint.
 
@@ -359,7 +359,7 @@ function getUsers() {
 }
 
 // Register the query
-registerGraphQLQuery(
+graphQLRegistry.registerQuery(
   "users",
   `type User {
     id: Int!
@@ -388,7 +388,7 @@ function getUserById(args) {
   return user ? JSON.stringify(user) : JSON.stringify(null);
 }
 
-registerGraphQLQuery(
+graphQLRegistry.registerQuery(
   "user",
   `type User {
     id: Int!
@@ -402,7 +402,7 @@ registerGraphQLQuery(
 );
 ```
 
-### registerGraphQLMutation(name, schema, resolverName)
+### graphQLRegistry.registerMutation(name, schema, resolverName)
 
 Registers a GraphQL mutation for modifying data.
 
@@ -431,7 +431,7 @@ function createUser(args) {
   return JSON.stringify(newUser);
 }
 
-registerGraphQLMutation(
+graphQLRegistry.registerMutation(
   "createUser",
   `type User {
     id: Int!
@@ -446,7 +446,7 @@ registerGraphQLMutation(
 );
 ```
 
-### registerGraphQLSubscription(name, schema, resolverName)
+### graphQLRegistry.registerSubscription(name, schema, resolverName)
 
 Registers a GraphQL subscription for real-time data streaming.
 
@@ -468,7 +468,7 @@ function onUserActivity() {
   };
 }
 
-registerGraphQLSubscription(
+graphQLRegistry.registerSubscription(
   "userActivity",
   `type ActivityEvent {
     type: String!
@@ -483,7 +483,7 @@ registerGraphQLSubscription(
 );
 ```
 
-### sendSubscriptionMessage(subscriptionName, data)
+### graphQLRegistry.sendSubscriptionMessage(subscriptionName, data)
 
 Sends a message to all clients subscribed to a specific GraphQL subscription.
 
@@ -506,7 +506,7 @@ function logUserAction(req) {
     timestamp: new Date().toISOString(),
   });
 
-  sendSubscriptionMessage("userActivity", message);
+  graphQLRegistry.sendSubscriptionMessage("userActivity", message);
 
   return {
     status: 200,
@@ -518,7 +518,7 @@ function logUserAction(req) {
 register("/log-action", "logUserAction", "POST");
 ```
 
-### executeGraphQL(query, variables)
+### graphQLRegistry.executeGraphQL(query, variables)
 
 Executes a GraphQL query or mutation directly against the registered schema without making an HTTP request.
 
@@ -543,7 +543,7 @@ function listScriptsHandler(req) {
   `;
 
   try {
-    const resultJson = executeGraphQL(query);
+    const resultJson = graphQLRegistry.executeGraphQL(query);
     const result = JSON.parse(resultJson);
 
     if (result.errors) {
@@ -600,7 +600,7 @@ function getScriptHandler(req) {
     uri: scriptUri,
   });
 
-  const resultJson = executeGraphQL(query, variables);
+  const resultJson = graphQLRegistry.executeGraphQL(query, variables);
   const result = JSON.parse(resultJson);
 
   return {
@@ -641,7 +641,7 @@ function createScriptHandler(req) {
     content: content,
   });
 
-  const resultJson = executeGraphQL(mutation, variables);
+  const resultJson = graphQLRegistry.executeGraphQL(mutation, variables);
   const result = JSON.parse(resultJson);
 
   if (result.data?.upsertScript?.success) {
@@ -780,8 +780,8 @@ fetch("/graphql", {
 4. **Use meaningful errors**: Return descriptive error messages
 5. **Log important operations**: Use `console.log()` for debugging mutations
 6. **Keep resolvers simple**: Complex logic should be in separate functions
-7. **Use executeGraphQL for internal calls**: Prefer `executeGraphQL()` over HTTP fetch for internal GraphQL operations
-8. **Handle subscription connections**: Use `sendSubscriptionMessage()` to broadcast real-time updates
+7. **Use executeGraphQL for internal calls**: Prefer `graphQLRegistry.executeGraphQL()` over HTTP fetch for internal GraphQL operations
+8. **Handle subscription connections**: Use `graphQLRegistry.sendSubscriptionMessage()` to broadcast real-time updates
 
 ## Request Object
 

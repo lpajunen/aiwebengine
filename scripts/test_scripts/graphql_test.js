@@ -1,11 +1,15 @@
 // Test GraphQL registrations
-registerGraphQLQuery("hello", "type Query { hello: String }", "helloResolver");
-registerGraphQLMutation(
+graphQLRegistry.registerQuery(
+  "hello",
+  "type Query { hello: String }",
+  "helloResolver",
+);
+graphQLRegistry.registerMutation(
   "createUser",
   "type Mutation { createUser(name: String!): String }",
   "createUserResolver",
 );
-registerGraphQLSubscription(
+graphQLRegistry.registerSubscription(
   "userUpdates",
   "type Subscription { userUpdates: String }",
   "userUpdatesResolver",
@@ -26,7 +30,7 @@ function userUpdatesResolver() {
 }
 
 // Add a mutation to trigger user updates
-registerGraphQLMutation(
+graphQLRegistry.registerMutation(
   "triggerUserUpdate",
   "type Mutation { triggerUserUpdate(userId: String!): String }",
   "triggerUserUpdateResolver",
@@ -40,7 +44,10 @@ function triggerUserUpdateResolver(args) {
   };
 
   console.log(`Triggering user update for: ${args.userId}`);
-  sendSubscriptionMessage("userUpdates", JSON.stringify(updateData));
+  graphQLRegistry.sendSubscriptionMessage(
+    "userUpdates",
+    JSON.stringify(updateData),
+  );
 
   return `User update triggered for ${args.userId}`;
 }

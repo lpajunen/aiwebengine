@@ -13,7 +13,7 @@ function init(context) {
   registerWebStream("/test/metadata-demo");
 
   // Register GraphQL subscription for testing
-  registerGraphQLSubscription(
+  graphQLRegistry.registerSubscription(
     "chatMessages",
     "type Subscription { chatMessages: String }",
     "chatMessagesResolver",
@@ -64,7 +64,7 @@ function testSelectiveSubscriptionBroadcasting() {
   console.log("Testing selective subscription broadcasting...");
 
   // This would send to connections where metadata.user_id == "user456"
-  const subscriptionResult = sendSubscriptionMessageToConnections(
+  const subscriptionResult = graphQLRegistry.sendSubscriptionMessageFiltered(
     "chatMessages",
     JSON.stringify({
       type: "selective_subscription",

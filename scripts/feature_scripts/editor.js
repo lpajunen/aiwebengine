@@ -934,32 +934,45 @@ AVAILABLE JAVASCRIPT APIs:
    - Returns: string describing broadcast result with success/failure counts
    - Use for personalized broadcasting to specific users/groups on stable endpoints
 
-8. sendSubscriptionMessageToConnections(subscriptionName, data, filterJson) - Send message to specific GraphQL subscription connections
+8. sendSubscriptionMessageToConnections(subscriptionName, data, filterJson) - DEPRECATED: Use graphQLRegistry.sendSubscriptionMessageFiltered() instead
    - subscriptionName: string (name of GraphQL subscription)
    - data: object (will be JSON serialized)
    - filterJson: string (optional JSON string with metadata filter criteria, empty "{}" matches all)
    - Returns: string describing broadcast result with success/failure counts
    - Use for personalized GraphQL subscription broadcasting
 
-9. registerGraphQLQuery(name, schema, resolverName) - Register GraphQL query
+9. graphQLRegistry - Object containing all GraphQL-related functions:
+   
+   graphQLRegistry.registerQuery(name, schema, resolverName) - Register GraphQL query
    - name: string (query name)
    - schema: string (GraphQL schema definition)
    - resolverName: string (name of resolver function)
 
-10. registerGraphQLMutation(name, schema, resolverName) - Register GraphQL mutation
-    - name: string (mutation name)
-    - schema: string (GraphQL schema definition)
-    - resolverName: string (name of resolver function)
+   graphQLRegistry.registerMutation(name, schema, resolverName) - Register GraphQL mutation
+   - name: string (mutation name)
+   - schema: string (GraphQL schema definition)
+   - resolverName: string (name of resolver function)
 
-11. registerGraphQLSubscription(name, schema, resolverName) - Register GraphQL subscription
-    - name: string (subscription name)
-    - schema: string (GraphQL schema definition)
-    - resolverName: string (name of resolver function)
+   graphQLRegistry.registerSubscription(name, schema, resolverName) - Register GraphQL subscription
+   - name: string (subscription name)
+   - schema: string (GraphQL schema definition)
+   - resolverName: string (name of resolver function)
 
-12. executeGraphQL(query, variables) - Execute GraphQL query
-    - query: string (GraphQL query string)
-    - variables: string (optional JSON string of variables)
-    - Returns: JSON string with GraphQL response
+   graphQLRegistry.executeGraphQL(query, variables) - Execute GraphQL query
+   - query: string (GraphQL query string)
+   - variables: string (optional JSON string of variables)
+   - Returns: JSON string with GraphQL response
+
+   graphQLRegistry.sendSubscriptionMessage(subscriptionName, data) - Broadcast to all GraphQL subscription connections
+   - subscriptionName: string (name of subscription)
+   - data: string (JSON string to send to subscribers)
+   - Returns: string describing broadcast result
+
+   graphQLRegistry.sendSubscriptionMessageFiltered(subscriptionName, data, filterJson) - Send to filtered GraphQL subscription connections
+   - subscriptionName: string (name of subscription)
+   - data: string (JSON string to send to subscribers)
+   - filterJson: string (optional JSON string with metadata filter criteria, empty "{}" matches all)
+   - Returns: string describing broadcast result with success/failure counts
 
 RESPONSE FORMAT - YOU MUST RESPOND WITH ONLY THIS JSON STRUCTURE:
 
@@ -1031,7 +1044,7 @@ RULES:
 3. Use try-catch blocks in all handlers
 4. ALWAYS include init() function that calls at least one registration function:
    - For HTTP services: register() or registerWebStream()
-   - For GraphQL services: registerGraphQLQuery(), registerGraphQLMutation(), or registerGraphQLSubscription()
+   - For GraphQL services: graphQLRegistry.registerQuery(), graphQLRegistry.registerMutation(), or graphQLRegistry.registerSubscription()
    - A script may use multiple registration types
 5. Use console.log() for debugging
 6. For edits, include both original_code and code fields
@@ -1055,7 +1068,7 @@ Example 4 - Selective Broadcasting Chat:
 {"type":"create_script","message":"Creating a chat application with selective broadcasting for personalized messages","script_name":"chat-app.js","code":"// Chat Application with Selective Broadcasting\\n\\n// Register one stream for all chat messages\\nfunction init(context) {\\n  registerWebStream('/chat');\\n  register('/chat/send', 'sendMessage', 'POST');\\n  register('/chat/personal', 'sendPersonalMessage', 'POST');\\n  return { success: true };\\n}\\n\\n// Send message to specific room\\nfunction sendMessage(req) {\\n  const { room, message, sender } = req.form;\\n  \\n  const result = sendStreamMessageToConnections('/chat', {\\n    type: 'room_message',\\n    room: room,\\n    message: message,\\n    sender: sender,\\n    timestamp: new Date().toISOString()\\n  }, JSON.stringify({ room: room }));\\n  \\n  return {\\n    status: 200,\\n    body: JSON.stringify({ success: true, result: result }),\\n    contentType: 'application/json; charset=UTF-8'\\n  };\\n}\\n\\n// Send personal message to specific user\\nfunction sendPersonalMessage(req) {\\n  const { targetUser, message, sender } = req.form;\\n  \\n  const result = sendStreamMessageToConnections('/chat', {\\n    type: 'personal_message',\\n    message: message,\\n    sender: sender,\\n    timestamp: new Date().toISOString()\\n  }, JSON.stringify({ user_id: targetUser }));\\n  \\n  return {\\n    status: 200,\\n    body: JSON.stringify({ success: true, result: result }),\\n    contentType: 'application/json; charset=UTF-8'\\n  };\\n}"}
 
 Example 5 - GraphQL Subscription with Selective Broadcasting:
-{"type":"create_script","message":"Creating a GraphQL subscription with selective broadcasting for personalized notifications","script_name":"notification-subscription.js","code":"// GraphQL Subscription with Selective Broadcasting\\n\\nfunction init(context) {\\n  registerGraphQLSubscription(\\n    'userNotifications',\\n    'type Subscription { userNotifications: String }',\\n    'userNotificationsResolver'\\n  );\\n  register('/notify/user', 'sendUserNotification', 'POST');\\n  return { success: true };\\n}\\n\\nfunction userNotificationsResolver() {\\n  return 'User notifications subscription active';\\n}\\n\\nfunction sendUserNotification(req) {\\n  const { userId, message, type } = req.form;\\n  \\n  const result = sendSubscriptionMessageToConnections('userNotifications', {\\n    type: type || 'notification',\\n    message: message,\\n    timestamp: new Date().toISOString()\\n  }, JSON.stringify({ user_id: userId }));\\n  \\n  return {\\n    status: 200,\\n    body: JSON.stringify({ success: true, result: result }),\\n    contentType: 'application/json; charset=UTF-8'\\n  };\\n}"}
+{"type":"create_script","message":"Creating a GraphQL subscription with selective broadcasting for personalized notifications","script_name":"notification-subscription.js","code":"// GraphQL Subscription with Selective Broadcasting\\n\\nfunction init(context) {\\n  graphQLRegistry.registerSubscription(\\n    'userNotifications',\\n    'type Subscription { userNotifications: String }',\\n    'userNotificationsResolver'\\n  );\\n  register('/notify/user', 'sendUserNotification', 'POST');\\n  return { success: true };\\n}\\n\\nfunction userNotificationsResolver() {\\n  return 'User notifications subscription active';\\n}\\n\\nfunction sendUserNotification(req) {\\n  const { userId, message, type } = req.form;\\n  \\n  const result = graphQLRegistry.sendSubscriptionMessageFiltered('userNotifications', {\\n    type: type || 'notification',\\n    message: message,\\n    timestamp: new Date().toISOString()\\n  }, JSON.stringify({ user_id: userId }));\\n  \\n  return {\\n    status: 200,\\n    body: JSON.stringify({ success: true, result: result }),\\n    contentType: 'application/json; charset=UTF-8'\\n  };\\n}"}
 
 Example 6 - Create CSS file:
 {"type":"create_asset","message":"Creating a custom stylesheet","asset_path":"/styles/custom.css","code":":root {\\n  --primary-color: #007acc;\\n  --secondary-color: #5a5a5a;\\n}\\n\\nbody {\\n  font-family: 'Arial', sans-serif;\\n  color: var(--secondary-color);\\n}\\n\\n.button {\\n  background-color: var(--primary-color);\\n  color: white;\\n  padding: 10px 20px;\\n  border: none;\\n  border-radius: 4px;\\n  cursor: pointer;\\n}\\n\\n.button:hover {\\n  opacity: 0.9;\\n}"}

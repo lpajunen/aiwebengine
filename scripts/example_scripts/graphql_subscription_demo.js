@@ -26,7 +26,10 @@ function liveMessagesResolver(req) {
   };
 
   console.log(`Sending join message: ${userName} joined`);
-  sendSubscriptionMessage("liveMessages", JSON.stringify(joinMessageData));
+  graphQLRegistry.sendSubscriptionMessage(
+    "liveMessages",
+    JSON.stringify(joinMessageData),
+  );
 
   return "Subscription initialized - waiting for messages...";
 }
@@ -48,7 +51,10 @@ function sendMessageResolver(req, args) {
 
   // Send the message to the subscription using the convenience function
   // This will broadcast to all clients subscribed to the 'liveMessages' subscription
-  sendSubscriptionMessage("liveMessages", JSON.stringify(messageData));
+  graphQLRegistry.sendSubscriptionMessage(
+    "liveMessages",
+    JSON.stringify(messageData),
+  );
 
   return `Message sent: ${message}`;
 }
@@ -458,14 +464,14 @@ function init(context) {
     console.log(`Init context: ${JSON.stringify(context)}`);
 
     // Register a GraphQL subscription
-    registerGraphQLSubscription(
+    graphQLRegistry.registerSubscription(
       "liveMessages",
       "type Subscription { liveMessages: String }",
       "liveMessagesResolver",
     );
 
     // Register a GraphQL mutation to trigger the subscription
-    registerGraphQLMutation(
+    graphQLRegistry.registerMutation(
       "sendMessage",
       "type Mutation { sendMessage(text: String!): String }",
       "sendMessageResolver",

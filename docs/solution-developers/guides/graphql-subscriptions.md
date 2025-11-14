@@ -17,7 +17,7 @@ GraphQL subscriptions in aiwebengine now use the native `schema.execute_stream()
 ### Registering Subscriptions
 
 ```javascript
-registerGraphQLSubscription(
+graphQLRegistry.registerSubscription(
   "subscriptionName",
   "type Subscription { subscriptionName: String }",
   "resolverFunctionName",
@@ -40,7 +40,7 @@ function mySubscriptionResolver() {
 Use the convenience function (legacy compatibility):
 
 ```javascript
-sendSubscriptionMessage(
+graphQLRegistry.sendSubscriptionMessage(
   "subscriptionName",
   JSON.stringify({
     message: "Hello subscribers!",
@@ -117,14 +117,14 @@ eventSource.onmessage = function (event) {
 
 ```javascript
 // Register the subscription
-registerGraphQLSubscription(
+graphQLRegistry.registerSubscription(
   "liveNotifications",
   "type Subscription { liveNotifications: String }",
   "liveNotificationsResolver",
 );
 
 // Register a mutation to trigger notifications
-registerGraphQLMutation(
+graphQLRegistry.registerMutation(
   "sendNotification",
   "type Mutation { sendNotification(message: String!): String }",
   "sendNotificationResolver",
@@ -146,7 +146,10 @@ function sendNotificationResolver(args) {
   };
 
   // Send to all subscription clients
-  sendSubscriptionMessage("liveNotifications", JSON.stringify(notification));
+  graphQLRegistry.sendSubscriptionMessage(
+    "liveNotifications",
+    JSON.stringify(notification),
+  );
 
   return `Notification sent: ${args.message}`;
 }
@@ -157,7 +160,7 @@ register("/trigger-notification", "triggerNotificationHandler", "POST");
 function triggerNotificationHandler(req) {
   const message = req.body || "Default notification";
 
-  sendSubscriptionMessage(
+  graphQLRegistry.sendSubscriptionMessage(
     "liveNotifications",
     JSON.stringify({
       id: Math.random().toString(36).substr(2, 9),
@@ -266,7 +269,7 @@ function triggerNotificationHandler(req) {
 
 ### Native execute_stream Implementation
 
-When you call `registerGraphQLSubscription("mySubscription", ...)`, the system:
+When you call `graphQLRegistry.registerSubscription("mySubscription", ...)`, the system:
 
 1. Registers the GraphQL subscription field in the dynamic schema
 2. **No longer auto-registers stream paths** - uses native GraphQL subscription lifecycle
@@ -292,7 +295,7 @@ When you call `registerGraphQLSubscription("mySubscription", ...)`, the system:
 
 The system maintains backward compatibility:
 
-- `sendSubscriptionMessage()` still works but logs deprecation warnings
+- `graphQLRegistry.sendSubscriptionMessage()` still works but logs deprecation warnings
 - Existing scripts continue to function without modification
 - Stream registry is still used for legacy compatibility bridge
 
@@ -310,7 +313,7 @@ The system maintains backward compatibility:
 
 #### Subscription not receiving messages
 
-- Check that the subscription name matches between registration and `sendSubscriptionMessage()`
+- Check that the subscription name matches between registration and `graphQLRegistry.sendSubscriptionMessage()`
 - Check if you see deprecation warnings in logs (legacy compatibility mode)
 - Verify GraphQL subscription is properly registered in the schema
 - Check server logs for execute_stream connection and message flow

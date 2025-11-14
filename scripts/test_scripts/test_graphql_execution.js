@@ -16,7 +16,7 @@ function testGraphQLHandler(req) {
     `;
 
     console.log("Executing GraphQL query: " + query1.trim());
-    const result1 = executeGraphQL(query1);
+    const result1 = graphQLRegistry.executeGraphQL(query1);
     console.log("Query result: " + result1);
 
     // Example 2: Query with variables (if supported)
@@ -35,7 +35,7 @@ function testGraphQLHandler(req) {
     });
 
     console.log("Executing GraphQL query with variables");
-    const result2 = executeGraphQL(query2, variables);
+    const result2 = graphQLRegistry.executeGraphQL(query2, variables);
     console.log("Query with variables result: " + result2);
 
     // Return results
