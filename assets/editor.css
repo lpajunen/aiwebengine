@@ -216,6 +216,30 @@ body {
 .script-meta {
   font-size: 11px;
   color: var(--text-muted);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.privileged-pill {
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border: 1px solid transparent;
+}
+
+.privileged-pill.privileged {
+  border-color: rgba(40, 167, 69, 0.3);
+  color: #7fffb7;
+  background-color: rgba(40, 167, 69, 0.1);
+}
+
+.privileged-pill.restricted {
+  border-color: rgba(220, 53, 69, 0.3);
+  color: #ffb3b8;
+  background-color: rgba(220, 53, 69, 0.1);
 }
 
 .scripts-editor {
@@ -232,6 +256,42 @@ body {
   background-color: var(--darker-bg);
   border-bottom: 1px solid var(--border-color);
   height: 40px;
+}
+
+.script-security-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 6px 15px;
+  background-color: var(--darker-bg);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.privileged-badge {
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+.privileged-badge.privileged {
+  color: #7fffb7;
+  border-color: rgba(40, 167, 69, 0.4);
+  background: rgba(40, 167, 69, 0.1);
+}
+
+.privileged-badge.restricted {
+  color: #ffb3b8;
+  border-color: rgba(220, 53, 69, 0.4);
+  background: rgba(220, 53, 69, 0.1);
+}
+
+.privileged-badge.neutral {
+  color: var(--text-muted);
+  border-color: var(--border-color);
+  background: transparent;
 }
 
 .current-file {

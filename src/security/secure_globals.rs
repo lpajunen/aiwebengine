@@ -563,6 +563,77 @@ impl SecureGlobalContext {
         )?;
         global.set("getScriptInitStatus", get_script_init_status)?;
 
+        // Secure getScriptSecurityProfile function
+        let user_ctx_security = user_context.clone();
+        let get_script_security_profile = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, script_name: String| -> JsResult<Option<String>> {
+                if let Err(_e) =
+                    user_ctx_security.require_capability(&crate::security::Capability::ReadScripts)
+                {
+                    return Ok(None);
+                }
+
+                match repository::get_script_security_profile(&script_name) {
+                    Ok(profile) => {
+                        let json = serde_json::to_string(&profile).unwrap_or_default();
+                        Ok(Some(json))
+                    }
+                    Err(e) => {
+                        warn!(
+                            script = %script_name,
+                            error = %e,
+                            "Failed to get script security profile"
+                        );
+                        Ok(None)
+                    }
+                }
+            },
+        )?;
+        global.set("getScriptSecurityProfile", get_script_security_profile)?;
+
+        // Secure setScriptPrivileged function (admin only)
+        let user_ctx_set_privileged = user_context.clone();
+        let set_script_privileged = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  script_name: String,
+                  privileged: bool|
+                  -> JsResult<bool> {
+                if !user_ctx_set_privileged
+                    .has_capability(&crate::security::Capability::DeleteScripts)
+                {
+                    return Err(rquickjs::Error::new_from_js_message(
+                        "setScriptPrivileged",
+                        "permission_denied",
+                        "Administrator privileges required",
+                    ));
+                }
+
+                repository::set_script_privileged(&script_name, privileged).map_err(|e| {
+                    rquickjs::Error::new_from_js_message(
+                        "setScriptPrivileged",
+                        "repository_error",
+                        &format!("{}", e),
+                    )
+                })?;
+
+                Ok(true)
+            },
+        )?;
+        global.set("setScriptPrivileged", set_script_privileged)?;
+
+        // Helper to allow UI to detect admin capability
+        let user_ctx_manage_privileges = user_context.clone();
+        let can_manage_privileges = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<bool> {
+                Ok(user_ctx_manage_privileges
+                    .has_capability(&crate::security::Capability::DeleteScripts))
+            },
+        )?;
+        global.set("canManageScriptPrivileges", can_manage_privileges)?;
+
         // Secure listRoutes function - returns all route registrations from all scripts
         let user_ctx_routes = user_context.clone();
         let list_routes = Function::new(
@@ -2030,6 +2101,7 @@ impl SecureGlobalContext {
 
         // 1. registerRoute function
         if let Some(register_impl) = register_fn {
+            let script_uri_for_register = script_uri_owned.clone();
             let register_route = Function::new(
                 ctx.clone(),
                 move |_c: rquickjs::Ctx<'_>,
@@ -2037,6 +2109,30 @@ impl SecureGlobalContext {
                       handler: String,
                       method: Option<String>|
                       -> Result<(), rquickjs::Error> {
+                    match repository::is_script_privileged(&script_uri_for_register) {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            return Err(rquickjs::Error::new_from_js_message(
+                                "routeRegistry.registerRoute",
+                                "permission_denied",
+                                &format!(
+                                    "Script '{}' is not privileged to register HTTP routes",
+                                    script_uri_for_register
+                                ),
+                            ));
+                        }
+                        Err(e) => {
+                            return Err(rquickjs::Error::new_from_js_message(
+                                "routeRegistry.registerRoute",
+                                "privilege_lookup_failed",
+                                &format!(
+                                    "Unable to verify privileges for '{}': {}",
+                                    script_uri_for_register, e
+                                ),
+                            ));
+                        }
+                    }
+
                     let method_ref = method.as_deref();
                     register_impl(&path, &handler, method_ref)
                 },
@@ -2069,6 +2165,22 @@ impl SecureGlobalContext {
                         "Stream registration disabled (stream '{}' not registered)",
                         path
                     ));
+                }
+
+                match repository::is_script_privileged(&script_uri_stream) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        return Ok(format!(
+                            "Stream route '{}' denied: script '{}' is not privileged",
+                            path, script_uri_stream
+                        ));
+                    }
+                    Err(e) => {
+                        return Ok(format!(
+                            "Stream route '{}' denied: privilege lookup failed ({})",
+                            path, e
+                        ));
+                    }
                 }
 
                 // Validate path format
@@ -2162,6 +2274,22 @@ impl SecureGlobalContext {
                   path: String,
                   asset_name: String|
                   -> Result<String, rquickjs::Error> {
+                match repository::is_script_privileged(&script_uri_asset) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        return Ok(format!(
+                            "Asset route '{}' denied: script '{}' is not privileged",
+                            path, script_uri_asset
+                        ));
+                    }
+                    Err(e) => {
+                        return Ok(format!(
+                            "Asset route '{}' denied: privilege lookup failed ({})",
+                            path, e
+                        ));
+                    }
+                }
+
                 // Check capability
                 if let Err(e) =
                     user_ctx_asset.require_capability(&crate::security::Capability::WriteAssets)

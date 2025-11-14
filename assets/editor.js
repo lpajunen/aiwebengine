@@ -6,6 +6,8 @@ class AIWebEngineEditor {
     this.monacoEditor = null;
     this.monacoAssetEditor = null;
     this.templates = {};
+    this.scriptSecurityProfiles = {};
+    this.permissions = { canTogglePrivileged: false };
     this.init();
   }
 
@@ -14,6 +16,7 @@ class AIWebEngineEditor {
     this.compileTemplates();
     console.log("[Editor] Templates compiled");
     this.setupEventListeners();
+    this.renderScriptSecurity(null);
     console.log("[Editor] Event listeners set up");
     await this.setupMonacoEditor();
     console.log("[Editor] Monaco editor ready");
@@ -32,7 +35,12 @@ class AIWebEngineEditor {
           <div class="script-icon">📄</div>
           <div class="script-info">
             <div class="script-name">${data.name}</div>
-            <div class="script-meta">${data.size} bytes</div>
+            <div class="script-meta">
+              <span class="script-size">${data.size} bytes</span>
+              <span class="privileged-pill ${data.privileged ? "privileged" : "restricted"}">
+                ${data.privileged ? "Privileged" : "Restricted"}
+              </span>
+            </div>
           </div>
         </div>
       `,
@@ -84,6 +92,9 @@ class AIWebEngineEditor {
     document
       .getElementById("delete-script-btn")
       .addEventListener("click", () => this.deleteCurrentScript());
+    document
+      .getElementById("toggle-privileged-btn")
+      .addEventListener("click", () => this.togglePrivilegedFlag());
 
     // Asset management
     document
@@ -238,18 +249,32 @@ class AIWebEngineEditor {
     try {
       const response = await fetch("/api/scripts");
       console.log("[Editor] API response status:", response.status);
-      const scripts = await response.json();
+      const payload = await response.json();
+      const scripts = Array.isArray(payload) ? payload : payload.scripts || [];
+      const permissions = Array.isArray(payload)
+        ? this.permissions
+        : payload.permissions || {};
+
+      this.permissions = {
+        canTogglePrivileged: !!permissions.canTogglePrivileged,
+      };
+      this.scriptSecurityProfiles = {};
       console.log("[Editor] Loaded scripts:", scripts);
 
       const scriptsList = document.getElementById("scripts-list");
       scriptsList.innerHTML = "";
 
       scripts.forEach((script) => {
+        this.scriptSecurityProfiles[script.name] = {
+          privileged: !!script.privileged,
+          defaultPrivileged: !!script.defaultPrivileged,
+        };
         const scriptElement = document.createElement("div");
         scriptElement.innerHTML = this.templates["script-item"]({
           name: script.name,
           size: script.size || 0,
           active: script.name === this.currentScript,
+          privileged: !!script.privileged,
         });
 
         scriptElement
@@ -260,6 +285,8 @@ class AIWebEngineEditor {
 
         scriptsList.appendChild(scriptElement.firstElementChild);
       });
+
+      this.renderScriptSecurity(this.currentScript);
     } catch (error) {
       this.showStatus("Error loading scripts: " + error.message, "error");
     }
@@ -291,6 +318,8 @@ class AIWebEngineEditor {
       });
 
       document.getElementById("delete-script-btn").disabled = false;
+
+      this.renderScriptSecurity(scriptName);
     } catch (error) {
       this.showStatus("Error loading script: " + error.message, "error");
     }
@@ -376,6 +405,7 @@ function init(context) {
         }
 
         this.loadScripts();
+        this.renderScriptSecurity(null);
         this.showStatus("Script deleted successfully", "success");
       })
       .catch((error) => {
@@ -389,6 +419,90 @@ function init(context) {
       saveBtn.disabled = false;
     } else {
       saveBtn.disabled = true;
+    }
+  }
+
+  renderScriptSecurity(scriptName) {
+    const badge = document.getElementById("script-privileged-badge");
+    const toggleBtn = document.getElementById("toggle-privileged-btn");
+
+    if (!badge || !toggleBtn) {
+      return;
+    }
+
+    if (!scriptName || !this.scriptSecurityProfiles[scriptName]) {
+      badge.textContent = "No script selected";
+      badge.className = "privileged-badge neutral";
+      toggleBtn.textContent = "Toggle Privileged";
+      toggleBtn.disabled = true;
+      return;
+    }
+
+    const profile = this.scriptSecurityProfiles[scriptName];
+    const privileged = !!profile.privileged;
+
+    badge.textContent = privileged ? "Privileged script" : "Restricted script";
+    badge.className = `privileged-badge ${privileged ? "privileged" : "restricted"}`;
+
+    if (this.permissions.canTogglePrivileged) {
+      toggleBtn.disabled = false;
+      toggleBtn.textContent = privileged
+        ? "Revoke Privileged Access"
+        : "Grant Privileged Access";
+    } else {
+      toggleBtn.disabled = true;
+      toggleBtn.textContent = "Admin only";
+    }
+  }
+
+  async togglePrivilegedFlag() {
+    if (!this.currentScript || !this.permissions.canTogglePrivileged) {
+      return;
+    }
+
+    const profile = this.scriptSecurityProfiles[this.currentScript];
+    const nextValue = !(profile && profile.privileged);
+    const encoded = encodeURIComponent(this.currentScript);
+
+    try {
+      const response = await fetch(`/api/script-security/${encoded}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ privileged: nextValue }),
+      });
+
+      if (!response.ok) {
+        let message = `Failed to update privilege (status ${response.status})`;
+        try {
+          const errorBody = await response.json();
+          if (errorBody && errorBody.error) {
+            message = errorBody.error;
+          }
+        } catch (err) {
+          console.warn("[Editor] Failed to parse privilege error:", err);
+        }
+        throw new Error(message);
+      }
+
+      if (!this.scriptSecurityProfiles[this.currentScript]) {
+        this.scriptSecurityProfiles[this.currentScript] = {
+          privileged: nextValue,
+          defaultPrivileged: false,
+        };
+      } else {
+        this.scriptSecurityProfiles[this.currentScript].privileged = nextValue;
+      }
+
+      this.showStatus(
+        `Script ${this.currentScript} is now ${nextValue ? "privileged" : "restricted"}`,
+        "success",
+      );
+      this.renderScriptSecurity(this.currentScript);
+      this.loadScripts();
+    } catch (error) {
+      this.showStatus("Error updating privilege: " + error.message, "error");
     }
   }
 

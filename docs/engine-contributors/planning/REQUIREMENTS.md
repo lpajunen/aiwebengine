@@ -977,6 +977,19 @@ The engine SHOULD maintain comprehensive audit logs for compliance and security:
 - Audit log retention policies
 - Export audit logs for compliance reporting
 
+#### REQ-SCR-011: Script Privilege Controls
+
+**Priority**: HIGH  
+**Status**: IMPLEMENTED
+
+The engine MUST protect public surface areas by gating them behind a privileged flag per script:
+
+- Bootstrap scripts (core, cli, editor, admin, auth) default to **privileged**
+- Newly-created/ uploaded scripts default to **restricted** until an administrator reviews them
+- Only administrators (DeleteScripts capability) may toggle the flag through the editor or API
+- Non-privileged scripts are blocked from registering HTTP routes, asset paths, or stream routes
+- The editor UI must display the current privilege status and expose an admin-only toggle action
+
 ---
 
 ## Real-Time Features
@@ -1709,7 +1722,7 @@ The engine MUST provide secure interface for secrets management:
 
 **API Endpoints**:
 
-```
+```text
 GET    /editor/api/secrets           - List secret identifiers
 POST   /editor/api/secrets           - Create new secret
 GET    /editor/api/secrets/:id       - Get secret metadata (not value)

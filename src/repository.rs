@@ -6,6 +6,25 @@ use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::SystemTime;
 use tracing::{debug, error, info, warn};
 
+/// Built-in scripts that must remain privileged by default
+pub const PRIVILEGED_BOOTSTRAP_SCRIPTS: &[&str] = &[
+    "https://example.com/core",
+    "https://example.com/cli",
+    "https://example.com/editor",
+    "https://example.com/admin",
+    "https://example.com/auth",
+];
+
+fn is_bootstrap_script(uri: &str) -> bool {
+    PRIVILEGED_BOOTSTRAP_SCRIPTS
+        .iter()
+        .any(|bootstrap_uri| bootstrap_uri == &uri)
+}
+
+fn default_privileged_for(uri: &str) -> bool {
+    is_bootstrap_script(uri)
+}
+
 /// Defines the types of repository errors that can occur
 #[derive(Debug, thiserror::Error)]
 pub enum RepositoryError {
@@ -52,6 +71,7 @@ pub struct ScriptMetadata {
     pub last_init_time: Option<SystemTime>,
     /// Cached route registrations from init() function
     pub registrations: RouteRegistrations,
+    pub privileged: bool,
 }
 
 impl ScriptMetadata {
@@ -67,6 +87,7 @@ impl ScriptMetadata {
             init_error: None,
             last_init_time: None,
             registrations: HashMap::new(),
+            privileged: false,
         }
     }
 
@@ -104,6 +125,14 @@ impl ScriptMetadata {
     }
 }
 
+/// Script security metadata exposed to admin tooling
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ScriptSecurityProfile {
+    pub uri: String,
+    pub privileged: bool,
+    pub default_privileged: bool,
+}
+
 /// Asset representation
 /// Assets are stored by name and can be registered to public HTTP paths at runtime
 #[derive(Debug, Clone)]
@@ -118,6 +147,7 @@ static DYNAMIC_LOGS: OnceLock<Mutex<HashMap<String, Vec<String>>>> = OnceLock::n
 static DYNAMIC_ASSETS: OnceLock<Mutex<HashMap<String, Asset>>> = OnceLock::new();
 static DYNAMIC_SHARED_STORAGE: OnceLock<Mutex<HashMap<String, HashMap<String, String>>>> =
     OnceLock::new();
+static SCRIPT_PRIVILEGE_OVERRIDES: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
 
 /// Safe mutex access with recovery from poisoned state
 fn safe_lock_scripts()
@@ -184,6 +214,22 @@ fn safe_lock_shared_storage() -> Result<SharedStorageGuard<'static>, RepositoryE
                     "Failed to recover from poisoned shared storage mutex: {}",
                     e
                 );
+                RepositoryError::LockError(format!("Unrecoverable mutex poisoning: {}", e))
+            })
+        }
+    }
+}
+
+fn safe_lock_privilege_overrides()
+-> Result<std::sync::MutexGuard<'static, HashMap<String, bool>>, RepositoryError> {
+    let store = SCRIPT_PRIVILEGE_OVERRIDES.get_or_init(|| Mutex::new(HashMap::new()));
+
+    match store.lock() {
+        Ok(guard) => Ok(guard),
+        Err(PoisonError { .. }) => {
+            warn!("Privilege override mutex was poisoned, recovering with new data");
+            store.lock().map_err(|e| {
+                error!("Failed to recover from poisoned privilege mutex: {}", e);
                 RepositoryError::LockError(format!("Unrecoverable mutex poisoning: {}", e))
             })
         }
@@ -322,6 +368,59 @@ async fn db_delete_script(pool: &PgPool, uri: &str) -> Result<bool, RepositoryEr
     }
 
     Ok(existed)
+}
+
+/// Database-backed getter for script privilege flag
+async fn db_get_script_privileged(
+    pool: &PgPool,
+    uri: &str,
+) -> Result<Option<bool>, RepositoryError> {
+    let row = sqlx::query(
+        r#"
+        SELECT privileged FROM scripts WHERE uri = $1
+        "#,
+    )
+    .bind(uri)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error getting script privilege: {}", e);
+        RepositoryError::InvalidData(format!("Database error: {}", e))
+    })?;
+
+    if let Some(row) = row {
+        let privileged: bool = row.try_get("privileged").map_err(|e| {
+            error!("Database error parsing privilege flag: {}", e);
+            RepositoryError::InvalidData(format!("Database error: {}", e))
+        })?;
+        Ok(Some(privileged))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Database-backed setter for script privilege flag
+async fn db_set_script_privileged(
+    pool: &PgPool,
+    uri: &str,
+    privileged: bool,
+) -> Result<(), RepositoryError> {
+    sqlx::query(
+        r#"
+        UPDATE scripts SET privileged = $1, updated_at = $2 WHERE uri = $3
+        "#,
+    )
+    .bind(privileged)
+    .bind(chrono::Utc::now())
+    .bind(uri)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error updating script privilege: {}", e);
+        RepositoryError::InvalidData(format!("Database error: {}", e))
+    })?;
+
+    Ok(())
 }
 
 /// Database-backed set shared storage item
@@ -891,6 +990,117 @@ pub fn fetch_script(uri: &str) -> Option<String> {
     }
 }
 
+/// Determine current privilege state for a script
+pub fn get_script_security_profile(uri: &str) -> Result<ScriptSecurityProfile, RepositoryError> {
+    let default_privileged = default_privileged_for(uri);
+
+    // Prefer database when configured
+    if let Some(db) = get_db_pool() {
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(async { db_get_script_privileged(db.pool(), uri).await })
+        });
+
+        match result {
+            Ok(Some(value)) => {
+                return Ok(ScriptSecurityProfile {
+                    uri: uri.to_string(),
+                    privileged: value,
+                    default_privileged,
+                });
+            }
+            Ok(None) => {
+                // Not persisted, fall through to in-memory/static defaults
+            }
+            Err(e) => {
+                warn!(
+                    "Database privilege lookup failed for {}: {}. Falling back to cache",
+                    uri, e
+                );
+            }
+        }
+    }
+
+    // Dynamic scripts stored in memory
+    if let Ok(guard) = safe_lock_scripts() {
+        if let Some(metadata) = guard.get(uri) {
+            return Ok(ScriptSecurityProfile {
+                uri: uri.to_string(),
+                privileged: metadata.privileged,
+                default_privileged,
+            });
+        }
+    }
+
+    // Local overrides for static scripts when no database is configured
+    if let Ok(guard) = safe_lock_privilege_overrides() {
+        if let Some(value) = guard.get(uri) {
+            return Ok(ScriptSecurityProfile {
+                uri: uri.to_string(),
+                privileged: *value,
+                default_privileged,
+            });
+        }
+    }
+
+    Ok(ScriptSecurityProfile {
+        uri: uri.to_string(),
+        privileged: default_privileged,
+        default_privileged,
+    })
+}
+
+/// Helper used by security enforcement
+pub fn is_script_privileged(uri: &str) -> Result<bool, RepositoryError> {
+    Ok(get_script_security_profile(uri)?.privileged)
+}
+
+/// Update the privilege flag for a script
+pub fn set_script_privileged(uri: &str, privileged: bool) -> Result<(), RepositoryError> {
+    // Ensure script exists before toggling
+    if fetch_script(uri).is_none() {
+        return Err(RepositoryError::ScriptNotFound(uri.to_string()));
+    }
+
+    // Update database when available
+    if let Some(db) = get_db_pool() {
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(async { db_set_script_privileged(db.pool(), uri, privileged).await })
+        });
+
+        if let Err(e) = result {
+            warn!(
+                "Failed to persist privileged flag for {} in database: {}. Falling back to in-memory override",
+                uri, e
+            );
+        }
+    }
+
+    // Update dynamic metadata cache if present
+    if let Ok(mut guard) = safe_lock_scripts() {
+        if let Some(metadata) = guard.get_mut(uri) {
+            metadata.privileged = privileged;
+            debug!(
+                script = %uri,
+                privileged,
+                "Updated in-memory script privilege"
+            );
+            return Ok(());
+        }
+    }
+
+    // Persist override for static scripts or when metadata not present
+    let mut guard = safe_lock_privilege_overrides()?;
+    guard.insert(uri.to_string(), privileged);
+    debug!(
+        script = %uri,
+        privileged,
+        "Stored privilege override in memory"
+    );
+    Ok(())
+}
+
 /// Insert log message with error handling
 pub fn insert_log_message(script_uri: &str, message: &str, log_level: &str) {
     // Try database first if configured
@@ -1297,6 +1507,12 @@ pub fn bootstrap_scripts() -> Result<(), RepositoryError> {
                         return Err(e);
                     } else {
                         info!("Bootstrapped script into database: {}", uri);
+                        if let Err(e) = db_set_script_privileged(pool, uri, true).await {
+                            warn!(
+                                "Failed to flag bootstrapped script {} as privileged: {}",
+                                uri, e
+                            );
+                        }
                     }
                 }
                 Ok(())
@@ -2036,5 +2252,33 @@ mod tests {
         // Test oversized value (simulate by creating a large string)
         let large_value = "x".repeat(1_000_001); // Just over 1MB
         assert!(set_shared_storage_item("test://script", "key", &large_value).is_err());
+    }
+
+    #[test]
+    fn test_script_privileged_flag_defaults() {
+        let bootstrap_uri = "https://example.com/core";
+        let bootstrap_profile =
+            get_script_security_profile(bootstrap_uri).expect("bootstrap profile available");
+        assert!(
+            bootstrap_profile.privileged,
+            "Bootstrap scripts should default to privileged"
+        );
+
+        let custom_uri = "test://privileged-script";
+        let code = "function handler() { return { status: 200 }; }";
+        upsert_script(custom_uri, code).expect("Should upsert script");
+
+        let initial_profile =
+            get_script_security_profile(custom_uri).expect("custom profile available");
+        assert!(
+            !initial_profile.privileged,
+            "Custom scripts start restricted"
+        );
+
+        set_script_privileged(custom_uri, true).expect("Should toggle privileged flag");
+
+        let updated_profile =
+            get_script_security_profile(custom_uri).expect("updated profile available");
+        assert!(updated_profile.privileged, "Flag update must persist");
     }
 }

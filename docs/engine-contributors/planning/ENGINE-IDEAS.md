@@ -18,7 +18,7 @@ in addition to horizontal lower layer, the engine also provides higher level ver
 
 ### Engine API Changes
 
-codeStorage object
+scriptStorage object
 
 - getScript -> value | null getItem(key) (use similar api structure as localStorage)
 - upsertScript -> bool setItem(key, value)
@@ -77,7 +77,7 @@ engine object
 
 sharedStorage object
 
-userStorage object (personalStorage)
+personalStorage object
 
 graphQLRegistry object
 
@@ -90,7 +90,7 @@ graphQLRegistry object
 - sendSubscriptionMessageToConnections -> sendSubscriptionMessage(name, message, filterCriteria | null)
 - executeGraphQL -> executeGraphQL(query, variables | null)
 
-identityStorage object
+roleRegistry / roleStorage object
 
 - addUserRole -> assignUserRole
 

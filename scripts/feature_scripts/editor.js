@@ -136,6 +136,10 @@ function serveEditor(req) {
                                 <button id="delete-script-btn" class="btn btn-danger" disabled>Delete</button>
                             </div>
                         </div>
+                        <div class="script-security-panel">
+                          <span id="script-privileged-badge" class="privileged-badge neutral">No script selected</span>
+                          <button id="toggle-privileged-btn" class="btn btn-secondary btn-small" disabled>Toggle Privileged</button>
+                        </div>
                         <div id="monaco-editor" class="monaco-container"></div>
                     </div>
                 </div>
@@ -290,15 +294,27 @@ function apiListScripts(req) {
     // Sort scripts alphabetically (case-insensitive)
     scripts.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
 
+    const canTogglePrivileged =
+      typeof canManageScriptPrivileges === "function"
+        ? !!canManageScriptPrivileges()
+        : false;
+
     const scriptDetails = scripts.map((name) => ({
       name: name,
       size: 0,
       lastModified: new Date().toISOString(),
+      privileged: getSecurityField(name, "privileged"),
+      defaultPrivileged: getSecurityField(name, "default_privileged"),
     }));
 
     return {
       status: 200,
-      body: JSON.stringify(scriptDetails),
+      body: JSON.stringify({
+        scripts: scriptDetails,
+        permissions: {
+          canTogglePrivileged,
+        },
+      }),
       contentType: "application/json",
     };
   } catch (error) {
@@ -307,6 +323,32 @@ function apiListScripts(req) {
       body: JSON.stringify({ error: error.message }),
       contentType: "application/json",
     };
+  }
+}
+
+function getSecurityField(scriptUri, field) {
+  if (typeof getScriptSecurityProfile !== "function") {
+    return field === "default_privileged" ? false : false;
+  }
+
+  try {
+    const profileJson = getScriptSecurityProfile(scriptUri);
+    if (!profileJson) {
+      return false;
+    }
+    const profile = JSON.parse(profileJson);
+    if (field === "privileged") {
+      return !!profile.privileged;
+    }
+    if (field === "default_privileged") {
+      return !!profile.default_privileged;
+    }
+    return false;
+  } catch (err) {
+    console.log(
+      "Failed to parse security profile for " + scriptUri + ": " + err.message,
+    );
+    return false;
   }
 }
 
@@ -519,6 +561,82 @@ function apiDeleteScript(req) {
         error: "Failed to delete script",
         details: error.message,
       }),
+      contentType: "application/json",
+    };
+  }
+}
+
+// API: Update privileged flag
+function apiUpdateScriptPrivilege(req) {
+  try {
+    if (typeof setScriptPrivileged !== "function") {
+      return {
+        status: 500,
+        body: JSON.stringify({ error: "Privilege API unavailable" }),
+        contentType: "application/json",
+      };
+    }
+
+    // Expect path /api/script-security/<script>
+    let scriptName = req.path.replace("/api/script-security/", "");
+    scriptName = decodeURIComponent(scriptName);
+
+    let fullUri;
+    if (scriptName.startsWith("https://")) {
+      fullUri = scriptName;
+    } else {
+      fullUri = "https://example.com/" + scriptName;
+    }
+
+    let payload = {};
+    if (req.body) {
+      try {
+        payload = JSON.parse(req.body);
+      } catch (err) {
+        return {
+          status: 400,
+          body: JSON.stringify({ error: "Invalid JSON payload" }),
+          contentType: "application/json",
+        };
+      }
+    }
+
+    if (typeof payload.privileged !== "boolean") {
+      return {
+        status: 400,
+        body: JSON.stringify({ error: "privileged must be a boolean" }),
+        contentType: "application/json",
+      };
+    }
+
+    try {
+      setScriptPrivileged(fullUri, payload.privileged);
+    } catch (error) {
+      const message = error && error.message ? error.message : String(error);
+      const forbidden =
+        message.includes("Administrator privileges") ||
+        message.includes("permission_denied");
+
+      return {
+        status: forbidden ? 403 : 500,
+        body: JSON.stringify({ error: message }),
+        contentType: "application/json",
+      };
+    }
+
+    return {
+      status: 200,
+      body: JSON.stringify({
+        message: "Script privilege updated",
+        privileged: payload.privileged,
+        uri: fullUri,
+      }),
+      contentType: "application/json",
+    };
+  } catch (error) {
+    return {
+      status: 500,
+      body: JSON.stringify({ error: error.message }),
       contentType: "application/json",
     };
   }
@@ -1319,6 +1437,11 @@ function init(context) {
   routeRegistry.registerRoute("/api/scripts/*", "apiGetScript", "GET");
   routeRegistry.registerRoute("/api/scripts/*", "apiSaveScript", "POST");
   routeRegistry.registerRoute("/api/scripts/*", "apiDeleteScript", "DELETE");
+  routeRegistry.registerRoute(
+    "/api/script-security/*",
+    "apiUpdateScriptPrivilege",
+    "POST",
+  );
   routeRegistry.registerRoute("/api/logs", "apiGetLogs", "GET");
   routeRegistry.registerRoute("/api/assets", "apiGetAssets", "GET");
   routeRegistry.registerRoute("/api/assets", "apiSaveAsset", "POST");
