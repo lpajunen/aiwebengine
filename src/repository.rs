@@ -116,7 +116,7 @@ pub struct Asset {
 static DYNAMIC_SCRIPTS: OnceLock<Mutex<HashMap<String, ScriptMetadata>>> = OnceLock::new();
 static DYNAMIC_LOGS: OnceLock<Mutex<HashMap<String, Vec<String>>>> = OnceLock::new();
 static DYNAMIC_ASSETS: OnceLock<Mutex<HashMap<String, Asset>>> = OnceLock::new();
-static DYNAMIC_SCRIPT_STORAGE: OnceLock<Mutex<HashMap<String, HashMap<String, String>>>> =
+static DYNAMIC_SHARED_STORAGE: OnceLock<Mutex<HashMap<String, HashMap<String, String>>>> =
     OnceLock::new();
 
 /// Safe mutex access with recovery from poisoned state
@@ -170,18 +170,18 @@ fn safe_lock_assets()
     }
 }
 
-type ScriptStorageGuard<'a> = std::sync::MutexGuard<'a, HashMap<String, HashMap<String, String>>>;
+type SharedStorageGuard<'a> = std::sync::MutexGuard<'a, HashMap<String, HashMap<String, String>>>;
 
-fn safe_lock_script_storage() -> Result<ScriptStorageGuard<'static>, RepositoryError> {
-    let store = DYNAMIC_SCRIPT_STORAGE.get_or_init(|| Mutex::new(HashMap::new()));
+fn safe_lock_shared_storage() -> Result<SharedStorageGuard<'static>, RepositoryError> {
+    let store = DYNAMIC_SHARED_STORAGE.get_or_init(|| Mutex::new(HashMap::new()));
 
     match store.lock() {
         Ok(guard) => Ok(guard),
         Err(PoisonError { .. }) => {
-            warn!("Script storage mutex was poisoned, recovering with new data");
+            warn!("Shared storage mutex was poisoned, recovering with new data");
             store.lock().map_err(|e| {
                 error!(
-                    "Failed to recover from poisoned script storage mutex: {}",
+                    "Failed to recover from poisoned shared storage mutex: {}",
                     e
                 );
                 RepositoryError::LockError(format!("Unrecoverable mutex poisoning: {}", e))
@@ -324,8 +324,8 @@ async fn db_delete_script(pool: &PgPool, uri: &str) -> Result<bool, RepositoryEr
     Ok(existed)
 }
 
-/// Database-backed set script storage item
-async fn db_set_script_storage_item(
+/// Database-backed set shared storage item
+async fn db_set_shared_storage_item(
     pool: &PgPool,
     script_uri: &str,
     key: &str,
@@ -336,7 +336,7 @@ async fn db_set_script_storage_item(
     // Try to update existing item
     let update_result = sqlx::query(
         r#"
-        UPDATE script_storage
+        UPDATE shared_storage
         SET value = $1, updated_at = $2
         WHERE script_uri = $3 AND key = $4
         "#,
@@ -348,13 +348,13 @@ async fn db_set_script_storage_item(
     .execute(pool)
     .await
     .map_err(|e| {
-        error!("Database error updating script storage: {}", e);
+        error!("Database error updating shared storage: {}", e);
         RepositoryError::InvalidData(format!("Database error: {}", e))
     })?;
 
     if update_result.rows_affected() > 0 {
         debug!(
-            "Updated script storage item in database: {}:{}",
+            "Updated shared storage item in database: {}:{}",
             script_uri, key
         );
         return Ok(());
@@ -363,7 +363,7 @@ async fn db_set_script_storage_item(
     // Item doesn't exist, create new one
     sqlx::query(
         r#"
-        INSERT INTO script_storage (script_uri, key, value, created_at, updated_at)
+        INSERT INTO shared_storage (script_uri, key, value, created_at, updated_at)
         VALUES ($1, $2, $3, $4, $4)
         "#,
     )
@@ -374,26 +374,26 @@ async fn db_set_script_storage_item(
     .execute(pool)
     .await
     .map_err(|e| {
-        error!("Database error creating script storage item: {}", e);
+        error!("Database error creating shared storage item: {}", e);
         RepositoryError::InvalidData(format!("Database error: {}", e))
     })?;
 
     debug!(
-        "Created new script storage item in database: {}:{}",
+        "Created new shared storage item in database: {}:{}",
         script_uri, key
     );
     Ok(())
 }
 
-/// Database-backed get script storage item
-async fn db_get_script_storage_item(
+/// Database-backed get shared storage item
+async fn db_get_shared_storage_item(
     pool: &PgPool,
     script_uri: &str,
     key: &str,
 ) -> Result<Option<String>, RepositoryError> {
     let row = sqlx::query(
         r#"
-        SELECT value FROM script_storage WHERE script_uri = $1 AND key = $2
+        SELECT value FROM shared_storage WHERE script_uri = $1 AND key = $2
         "#,
     )
     .bind(script_uri)
@@ -401,7 +401,7 @@ async fn db_get_script_storage_item(
     .fetch_optional(pool)
     .await
     .map_err(|e| {
-        error!("Database error getting script storage item: {}", e);
+        error!("Database error getting shared storage item: {}", e);
         RepositoryError::InvalidData(format!("Database error: {}", e))
     })?;
 
@@ -416,15 +416,15 @@ async fn db_get_script_storage_item(
     }
 }
 
-/// Database-backed remove script storage item
-async fn db_remove_script_storage_item(
+/// Database-backed remove shared storage item
+async fn db_remove_shared_storage_item(
     pool: &PgPool,
     script_uri: &str,
     key: &str,
 ) -> Result<bool, RepositoryError> {
     let result = sqlx::query(
         r#"
-        DELETE FROM script_storage WHERE script_uri = $1 AND key = $2
+        DELETE FROM shared_storage WHERE script_uri = $1 AND key = $2
         "#,
     )
     .bind(script_uri)
@@ -432,7 +432,7 @@ async fn db_remove_script_storage_item(
     .execute(pool)
     .await
     .map_err(|e| {
-        error!("Database error removing script storage item: {}", e);
+        error!("Database error removing shared storage item: {}", e);
         RepositoryError::InvalidData(format!("Database error: {}", e))
     })?;
 
@@ -452,18 +452,18 @@ async fn db_remove_script_storage_item(
     Ok(existed)
 }
 
-/// Database-backed clear all script storage for a script
-async fn db_clear_script_storage(pool: &PgPool, script_uri: &str) -> Result<(), RepositoryError> {
+/// Database-backed clear all shared storage for a script
+async fn db_clear_shared_storage(pool: &PgPool, script_uri: &str) -> Result<(), RepositoryError> {
     sqlx::query(
         r#"
-        DELETE FROM script_storage WHERE script_uri = $1
+        DELETE FROM shared_storage WHERE script_uri = $1
         "#,
     )
     .bind(script_uri)
     .execute(pool)
     .await
     .map_err(|e| {
-        error!("Database error clearing script storage: {}", e);
+        error!("Database error clearing shared storage: {}", e);
         RepositoryError::InvalidData(format!("Database error: {}", e))
     })?;
 
@@ -1698,22 +1698,22 @@ pub fn get_repository_stats() -> HashMap<String, usize> {
         }
     }
 
-    // Count script storage entries
-    match safe_lock_script_storage() {
+    // Count shared storage entries
+    match safe_lock_shared_storage() {
         Ok(guard) => {
             let total_entries: usize = guard.values().map(|script_map| script_map.len()).sum();
-            stats.insert("script_storage_entries".to_string(), total_entries);
+            stats.insert("shared_storage_entries".to_string(), total_entries);
         }
         Err(_) => {
-            stats.insert("script_storage_entries".to_string(), 0);
+            stats.insert("shared_storage_entries".to_string(), 0);
         }
     }
 
     stats
 }
 
-/// Set a script storage item (key-value pair for a specific script)
-pub fn set_script_storage_item(
+/// Set a shared storage item (key-value pair for a specific script)
+pub fn set_shared_storage_item(
     script_uri: &str,
     key: &str,
     value: &str,
@@ -1741,16 +1741,16 @@ pub fn set_script_storage_item(
     if let Some(db) = get_db_pool() {
         let result = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
-                db_set_script_storage_item(db.pool(), script_uri, key, value).await
+                db_set_shared_storage_item(db.pool(), script_uri, key, value).await
             })
         });
 
         match result {
             Ok(()) => {
                 // Also update in-memory cache for consistency
-                let _ = set_script_storage_item_in_memory(script_uri, key, value);
+                let _ = set_shared_storage_item_in_memory(script_uri, key, value);
                 debug!(
-                    "Set script storage item to database: {}:{} = {} bytes",
+                    "Set shared storage item to database: {}:{} = {} bytes",
                     script_uri,
                     key,
                     value.len()
@@ -1765,16 +1765,16 @@ pub fn set_script_storage_item(
     }
 
     // Fall back to in-memory implementation
-    set_script_storage_item_in_memory(script_uri, key, value)
+    set_shared_storage_item_in_memory(script_uri, key, value)
 }
 
-/// Get a script storage item
-pub fn get_script_storage_item(script_uri: &str, key: &str) -> Option<String> {
+/// Get a shared storage item
+pub fn get_shared_storage_item(script_uri: &str, key: &str) -> Option<String> {
     // Try database first
     if let Some(db) = get_db_pool() {
         let result = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current()
-                .block_on(async { db_get_script_storage_item(db.pool(), script_uri, key).await })
+                .block_on(async { db_get_shared_storage_item(db.pool(), script_uri, key).await })
         });
 
         match result {
@@ -1796,14 +1796,14 @@ pub fn get_script_storage_item(script_uri: &str, key: &str) -> Option<String> {
     }
 
     // Check in-memory storage
-    match safe_lock_script_storage() {
+    match safe_lock_shared_storage() {
         Ok(guard) => guard
             .get(script_uri)
             .and_then(|script_map| script_map.get(key))
             .cloned(),
         Err(e) => {
             error!(
-                "Failed to access script storage for get {}:{}: {}",
+                "Failed to access shared storage for get {}:{}: {}",
                 script_uri, key, e
             );
             None
@@ -1811,19 +1811,19 @@ pub fn get_script_storage_item(script_uri: &str, key: &str) -> Option<String> {
     }
 }
 
-/// Remove a script storage item
-pub fn remove_script_storage_item(script_uri: &str, key: &str) -> bool {
+/// Remove a shared storage item
+pub fn remove_shared_storage_item(script_uri: &str, key: &str) -> bool {
     // Try database first
     if let Some(db) = get_db_pool() {
         let result = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current()
-                .block_on(async { db_remove_script_storage_item(db.pool(), script_uri, key).await })
+                .block_on(async { db_remove_shared_storage_item(db.pool(), script_uri, key).await })
         });
 
         match result {
             Ok(existed) => {
                 // Also remove from in-memory cache for consistency
-                let _ = safe_lock_script_storage()
+                let _ = safe_lock_shared_storage()
                     .map(|mut guard| {
                         if let Some(script_map) = guard.get_mut(script_uri) {
                             script_map.remove(key);
@@ -1852,7 +1852,7 @@ pub fn remove_script_storage_item(script_uri: &str, key: &str) -> bool {
     }
 
     // Fall back to in-memory implementation
-    match safe_lock_script_storage() {
+    match safe_lock_shared_storage() {
         Ok(mut guard) => {
             let existed = if let Some(script_map) = guard.get_mut(script_uri) {
                 script_map.remove(key).is_some()
@@ -1862,12 +1862,12 @@ pub fn remove_script_storage_item(script_uri: &str, key: &str) -> bool {
 
             if existed {
                 debug!(
-                    "Removed script storage item from memory: {}:{}",
+                    "Removed shared storage item from memory: {}:{}",
                     script_uri, key
                 );
             } else {
                 debug!(
-                    "Script storage item not found in memory for removal: {}:{}",
+                    "Shared storage item not found in memory for removal: {}:{}",
                     script_uri, key
                 );
             }
@@ -1883,26 +1883,26 @@ pub fn remove_script_storage_item(script_uri: &str, key: &str) -> bool {
     }
 }
 
-/// Clear all script storage items for a specific script
-pub fn clear_script_storage(script_uri: &str) -> Result<(), RepositoryError> {
+/// Clear all shared storage items for a specific script
+pub fn clear_shared_storage(script_uri: &str) -> Result<(), RepositoryError> {
     // Try database first
     if let Some(db) = get_db_pool() {
         let result = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current()
-                .block_on(async { db_clear_script_storage(db.pool(), script_uri).await })
+                .block_on(async { db_clear_shared_storage(db.pool(), script_uri).await })
         });
 
         match result {
             Ok(()) => {
                 // Also clear from in-memory cache for consistency
-                let _ = safe_lock_script_storage()
+                let _ = safe_lock_shared_storage()
                     .map(|mut guard| {
                         guard.remove(script_uri);
                     })
                     .map_err(|e| warn!("Failed to clear from memory cache: {}", e));
 
                 debug!(
-                    "Cleared all script storage items from database for script: {}",
+                    "Cleared all shared storage items from database for script: {}",
                     script_uri
                 );
                 return Ok(());
@@ -1915,29 +1915,29 @@ pub fn clear_script_storage(script_uri: &str) -> Result<(), RepositoryError> {
     }
 
     // Fall back to in-memory implementation
-    match safe_lock_script_storage() {
+    match safe_lock_shared_storage() {
         Ok(mut guard) => {
             guard.remove(script_uri);
             debug!(
-                "Cleared all script storage items from memory for script: {}",
+                "Cleared all shared storage items from memory for script: {}",
                 script_uri
             );
             Ok(())
         }
         Err(e) => {
-            error!("Failed to clear script storage for {}: {}", script_uri, e);
+            error!("Failed to clear shared storage for {}: {}", script_uri, e);
             Err(e)
         }
     }
 }
 
 /// In-memory implementation of set script storage item
-fn set_script_storage_item_in_memory(
+fn set_shared_storage_item_in_memory(
     script_uri: &str,
     key: &str,
     value: &str,
 ) -> Result<(), RepositoryError> {
-    let mut guard = safe_lock_script_storage()?;
+    let mut guard = safe_lock_shared_storage()?;
 
     let script_map = guard
         .entry(script_uri.to_string())
@@ -1945,7 +1945,7 @@ fn set_script_storage_item_in_memory(
     script_map.insert(key.to_string(), value.to_string());
 
     debug!(
-        "Set script storage item in memory: {}:{} = {} bytes",
+        "Set shared storage item in memory: {}:{} = {} bytes",
         script_uri,
         key,
         value.len()
@@ -1995,46 +1995,46 @@ mod tests {
     }
 
     #[test]
-    fn test_script_storage_operations() {
+    fn test_shared_storage_operations() {
         let script_uri = "test://storage-script";
         let key = "test_key";
         let value = "test_value";
 
         // Test set item
-        assert!(set_script_storage_item(script_uri, key, value).is_ok());
+        assert!(set_shared_storage_item(script_uri, key, value).is_ok());
 
         // Test get item
-        let retrieved = get_script_storage_item(script_uri, key);
+        let retrieved = get_shared_storage_item(script_uri, key);
         assert_eq!(retrieved, Some(value.to_string()));
 
         // Test remove item
-        assert!(remove_script_storage_item(script_uri, key));
+        assert!(remove_shared_storage_item(script_uri, key));
 
         // Verify item is gone
-        let retrieved_after_remove = get_script_storage_item(script_uri, key);
+        let retrieved_after_remove = get_shared_storage_item(script_uri, key);
         assert_eq!(retrieved_after_remove, None);
 
         // Test clear storage
-        assert!(set_script_storage_item(script_uri, "key1", "value1").is_ok());
-        assert!(set_script_storage_item(script_uri, "key2", "value2").is_ok());
+        assert!(set_shared_storage_item(script_uri, "key1", "value1").is_ok());
+        assert!(set_shared_storage_item(script_uri, "key2", "value2").is_ok());
 
-        assert!(clear_script_storage(script_uri).is_ok());
+        assert!(clear_shared_storage(script_uri).is_ok());
 
         // Verify both items are gone
-        assert_eq!(get_script_storage_item(script_uri, "key1"), None);
-        assert_eq!(get_script_storage_item(script_uri, "key2"), None);
+        assert_eq!(get_shared_storage_item(script_uri, "key1"), None);
+        assert_eq!(get_shared_storage_item(script_uri, "key2"), None);
     }
 
     #[test]
-    fn test_script_storage_validation() {
+    fn test_shared_storage_validation() {
         // Test empty script URI
-        assert!(set_script_storage_item("", "key", "value").is_err());
+        assert!(set_shared_storage_item("", "key", "value").is_err());
 
         // Test empty key
-        assert!(set_script_storage_item("test://script", "", "value").is_err());
+        assert!(set_shared_storage_item("test://script", "", "value").is_err());
 
         // Test oversized value (simulate by creating a large string)
         let large_value = "x".repeat(1_000_001); // Just over 1MB
-        assert!(set_script_storage_item("test://script", "key", &large_value).is_err());
+        assert!(set_shared_storage_item("test://script", "key", &large_value).is_err());
     }
 }

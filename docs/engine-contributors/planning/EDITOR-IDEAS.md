@@ -615,7 +615,7 @@ AI Assistant Response:
 │                                                           │
 │ [posts-api.js]──────────────────────────────────────────│
 │ + function handleGetPosts(req) {                         │
-│ +   const posts = scriptStorage.getItem('posts');       │
+│ +   const posts = sharedStorage.getItem('posts');       │
 │ +   return { status: 200, body: posts || '[]' };        │
 │ + }                                                       │
 │ [Show Full Diff]                                         │
@@ -3112,7 +3112,7 @@ User: [Confirm Rollback]
 - Cache script embeddings (if using Phase 3)
 - Cache dependency graph
 - Invalidate on script save
-- Store in scriptStorage or browser localStorage
+- Store in sharedStorage or browser localStorage
 
 ### Performance
 

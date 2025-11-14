@@ -949,11 +949,11 @@ AVAILABLE JAVASCRIPT APIs:
    - message: string
    - uri: string (script URI)
 
-3. scriptStorage - Persistent key-value storage per script
-   - scriptStorage.getItem(key) - Get stored value (returns string or null)
-   - scriptStorage.setItem(key, value) - Store key-value pair (returns success message)
-   - scriptStorage.removeItem(key) - Delete key-value pair (returns boolean)
-   - scriptStorage.clear() - Remove all data for this script (returns success message)
+3. sharedStorage - Persistent key-value storage per script
+   - sharedStorage.getItem(key) - Get stored value (returns string or null)
+   - sharedStorage.setItem(key, value) - Store key-value pair (returns success message)
+   - sharedStorage.removeItem(key) - Delete key-value pair (returns boolean)
+   - sharedStorage.clear() - Remove all data for this script (returns success message)
    - Each script has its own isolated storage namespace
    - Data persists across requests and server restarts (when PostgreSQL configured)
 

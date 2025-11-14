@@ -75,7 +75,7 @@ engine object
 
 - checkDatabaseHealth -> isDatabaseHealthy
 
-scriptStorage object
+sharedStorage object
 
 userStorage object (personalStorage)
 

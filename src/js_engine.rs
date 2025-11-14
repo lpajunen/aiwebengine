@@ -1680,7 +1680,7 @@ mod tests {
     }
 
     #[test]
-    fn test_script_storage_validation() {
+    fn test_shared_storage_validation() {
         // Test with a script that exceeds the default 1MB limit
         let large_script = "// ".repeat(600_000) + "register('/test', 'handler');";
         assert!(large_script.len() > 1_000_000);
