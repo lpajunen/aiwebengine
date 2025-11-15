@@ -693,7 +693,11 @@ function apiGetLogs(req) {
 // API: Get assets
 function apiGetAssets(req) {
   try {
-    const assets = typeof listAssets === "function" ? listAssets() : [];
+    const assets =
+      typeof assetStorage !== "undefined" &&
+      typeof assetStorage.listAssets === "function"
+        ? assetStorage.listAssets()
+        : [];
     const assetDetails = assets.map((path) => ({
       path: path,
       name: path.split("/").pop(),
@@ -735,8 +739,11 @@ function apiGetAsset(req) {
       assetName = assetName.substring(1);
     }
 
-    if (typeof fetchAsset === "function") {
-      const assetData = fetchAsset(assetName);
+    if (
+      typeof assetStorage !== "undefined" &&
+      typeof assetStorage.fetchAsset === "function"
+    ) {
+      const assetData = assetStorage.fetchAsset(assetName);
 
       if (assetData && !assetData.startsWith("Asset '")) {
         // fetchAsset returns base64 encoded content
@@ -864,8 +871,11 @@ function apiSaveAsset(req) {
         "'",
     );
 
-    if (typeof upsertAsset === "function") {
-      upsertAsset(assetName, content, mimetype);
+    if (
+      typeof assetStorage !== "undefined" &&
+      typeof assetStorage.upsertAsset === "function"
+    ) {
+      assetStorage.upsertAsset(assetName, content, mimetype);
       return {
         status: 200,
         body: JSON.stringify({ message: "Asset saved successfully" }),
@@ -904,8 +914,11 @@ function apiDeleteAsset(req) {
 
     console.log("apiDeleteAsset: attempting to delete asset: " + assetName);
 
-    if (typeof deleteAsset === "function") {
-      const deleted = deleteAsset(assetName);
+    if (
+      typeof assetStorage !== "undefined" &&
+      typeof assetStorage.deleteAsset === "function"
+    ) {
+      const deleted = assetStorage.deleteAsset(assetName);
 
       console.log("apiDeleteAsset: deleteAsset returned: " + deleted);
 
@@ -1302,7 +1315,11 @@ Remember: You are creating JavaScript scripts that run on the SERVER and handle 
 
   // Add available assets list
   try {
-    const assets = typeof listAssets === "function" ? listAssets() : [];
+    const assets =
+      typeof assetStorage !== "undefined" &&
+      typeof assetStorage.listAssets === "function"
+        ? assetStorage.listAssets()
+        : [];
     if (assets.length > 0) {
       const assetPaths = assets.map((a) => a.path || a);
       contextualPrompt +=

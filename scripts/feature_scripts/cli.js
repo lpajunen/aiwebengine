@@ -7,7 +7,7 @@ function asset_handler(req) {
     if (method === "GET") {
       if (path === "/assets") {
         // List all assets
-        const assets = listAssets();
+        const assets = assetStorage.listAssets();
         return {
           status: 200,
           body: JSON.stringify({ assets }),
@@ -16,7 +16,7 @@ function asset_handler(req) {
       } else if (path.startsWith("/assets/")) {
         // Fetch specific asset
         const publicPath = path.substring("/assets/".length);
-        const assetJson = fetchAsset("/" + publicPath);
+        const assetJson = assetStorage.fetchAsset("/" + publicPath);
         if (assetJson !== "null") {
           return {
             status: 200,
@@ -36,7 +36,11 @@ function asset_handler(req) {
         // Create/update asset
         const body = JSON.parse(req.body || "{}");
         if (body.publicPath && body.mimetype && body.content) {
-          upsertAsset(body.publicPath, body.mimetype, body.content);
+          assetStorage.upsertAsset(
+            body.publicPath,
+            body.mimetype,
+            body.content,
+          );
           return {
             status: 201,
             body: JSON.stringify({ message: "Asset created/updated" }),
@@ -56,7 +60,7 @@ function asset_handler(req) {
       if (path.startsWith("/assets/")) {
         // Delete asset
         const publicPath = path.substring("/assets/".length);
-        const deleted = deleteAsset("/" + publicPath);
+        const deleted = assetStorage.deleteAsset("/" + publicPath);
         if (deleted) {
           return {
             status: 200,

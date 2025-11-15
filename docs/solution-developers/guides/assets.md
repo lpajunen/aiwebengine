@@ -128,25 +128,25 @@ Files are immediately available at their URLs.
 **Use the Asset Management API:**
 
 ```javascript
-// List all assets
-const assets = listAssets();
-console.log(assets); // ["/logo.png", "/css/style.css", ...]
+// List available assets
+const assetPaths = assetStorage.listAssets();
+console.log("Available assets:", assetPaths);
 
 // Fetch asset data
-const assetData = fetchAsset("/logo.png");
+const assetData = assetStorage.fetchAsset("/logo.png");
 const asset = JSON.parse(assetData);
 console.log(asset.mimetype); // "image/png"
 console.log(asset.contentB64); // Base64 encoded content
 
 // Create or update asset
-upsertAsset(
+assetStorage.upsertAsset(
   "/new-image.png", // Public path
   "image/png", // MIME type
   base64EncodedContent, // Base64 string
 );
 
 // Delete asset
-const deleted = deleteAsset("/old-image.png");
+const deleted = assetStorage.deleteAsset("/old-image.png");
 console.log(deleted); // true if deleted
 ```
 
@@ -159,7 +159,7 @@ function uploadHandler(req) {
   const contentB64 = req.form.content; // Base64 string
 
   try {
-    upsertAsset(publicPath, mimetype, contentB64);
+    assetStorage.upsertAsset(publicPath, mimetype, contentB64);
     console.log(`Asset uploaded: ${publicPath}`);
 
     return {
@@ -364,7 +364,7 @@ assets/
 ```javascript
 function assetGalleryHandler(req) {
   // Get all assets
-  const assetPaths = listAssets();
+  const assetPaths = assetStorage.listAssets();
 
   // Filter for images
   const images = assetPaths.filter((path) => {
@@ -490,21 +490,21 @@ routeRegistry.registerRoute("/upload-form", "uploadFormHandler", "GET");
 
 ## Asset API Reference
 
-### `listAssets()`
+### `assetStorage.listAssets()`
 
 Returns array of all asset paths.
 
 ```javascript
-const assets = listAssets();
+const assets = assetStorage.listAssets();
 // ["/logo.png", "/css/style.css", "/js/app.js"]
 ```
 
-### `fetchAsset(publicPath)`
+### `assetStorage.fetchAsset(publicPath)`
 
 Returns JSON string with asset data.
 
 ```javascript
-const assetJson = fetchAsset("/logo.png");
+const assetJson = assetStorage.fetchAsset("/logo.png");
 const asset = JSON.parse(assetJson);
 
 // Returns:
@@ -517,12 +517,12 @@ const asset = JSON.parse(assetJson);
 
 Returns `"null"` if asset not found.
 
-### `upsertAsset(publicPath, mimetype, contentB64)`
+### `assetStorage.upsertAsset(publicPath, mimetype, contentB64)`
 
 Creates or updates an asset.
 
 ```javascript
-upsertAsset(
+assetStorage.upsertAsset(
   "/images/new.png",
   "image/png",
   "iVBORw0KGgoAAAANS...", // Base64 encoded
@@ -535,12 +535,12 @@ upsertAsset(
 - `mimetype` - MIME type (e.g., `image/jpeg`)
 - `contentB64` - Base64 encoded file content
 
-### `deleteAsset(publicPath)`
+### `assetStorage.deleteAsset(publicPath)`
 
 Deletes an asset. Returns `true` if deleted, `false` if not found.
 
 ```javascript
-const deleted = deleteAsset("/old-image.png");
+const deleted = assetStorage.deleteAsset("/old-image.png");
 if (deleted) {
   console.log("Asset deleted");
 } else {
@@ -651,11 +651,11 @@ Regularly remove assets that are no longer referenced:
 
 ```javascript
 function cleanupHandler(req) {
-  const assets = listAssets();
+  const assets = assetStorage.listAssets();
   const unusedAssets = findUnusedAssets(assets);
 
   unusedAssets.forEach((asset) => {
-    deleteAsset(asset);
+    assetStorage.deleteAsset(asset);
     console.log(`Deleted unused asset: ${asset}`);
   });
 
@@ -796,15 +796,15 @@ routeRegistry.registerRoute("/manifest.json", "pwaManifestHandler", "GET");
 
 ```javascript
 // List all assets
-const assets = listAssets();
+const assets = assetStorage.listAssets();
 
 // Get asset data
-const assetJson = fetchAsset("/logo.png");
+const assetJson = assetStorage.fetchAsset("/logo.png");
 const asset = JSON.parse(assetJson);
 
 // Create/update asset
-upsertAsset("/new.png", "image/png", base64Content);
+assetStorage.upsertAsset("/new.png", "image/png", base64Content);
 
 // Delete asset
-deleteAsset("/old.png");
+assetStorage.deleteAsset("/old.png");
 ```

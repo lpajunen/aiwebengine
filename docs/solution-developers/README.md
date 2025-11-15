@@ -214,8 +214,8 @@ console.log(message);
 const logs = listLogs();
 
 // Assets
-const assets = listAssets();
-const asset = fetchAsset(path);
+const assets = assetStorage.listAssets();
+const asset = assetStorage.fetchAsset(path);
 
 // HTTP requests
 const response = fetch(url, options);

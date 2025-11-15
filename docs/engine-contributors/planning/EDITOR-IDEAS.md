@@ -987,7 +987,7 @@ function getLanguageMode(path) {
 // In loadAsset() method
 if (isTextAsset(assetPath)) {
   // Load in Monaco editor
-  const content = fetchAsset(assetPath);
+  const content = assetStorage.fetchAsset(assetPath);
   const language = getLanguageMode(assetPath);
   this.monacoEditor.setValue(content);
   monaco.editor.setModelLanguage(this.monacoEditor.getModel(), language);

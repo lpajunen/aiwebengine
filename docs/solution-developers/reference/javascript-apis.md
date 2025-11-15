@@ -212,6 +212,302 @@ const assets = JSON.parse(routeRegistry.listAssets());
 console.log("Registered assets:", assets);
 ```
 
+## Asset Storage
+
+The `assetStorage` object provides functions for managing assets (files) in the asset repository. Assets can be uploaded, retrieved, listed, and deleted programmatically from your scripts.
+
+### assetStorage.listAssets()
+
+Returns an array of all asset names in the repository.
+
+**Returns:** Array of strings (asset names)
+
+**Required Capability:** `ReadAssets`
+
+**Example:**
+
+```javascript
+function listAllAssets(req) {
+  const assetNames = assetStorage.listAssets();
+
+  return {
+    status: 200,
+    body: JSON.stringify({ assets: assetNames, count: assetNames.length }),
+    contentType: "application/json",
+  };
+}
+
+routeRegistry.registerRoute("/assets", "listAllAssets", "GET");
+```
+
+### assetStorage.fetchAsset(asset_name)
+
+Retrieves an asset's content from the repository.
+
+**Parameters:**
+
+- `asset_name` (string): Name of the asset to retrieve
+
+**Returns:** Base64-encoded string containing the asset content, or an error message if the asset is not found
+
+**Required Capability:** `ReadAssets`
+
+**Example:**
+
+```javascript
+function getAsset(req) {
+  const assetName = req.query.name;
+
+  if (!assetName) {
+    return {
+      status: 400,
+      body: "Missing asset name",
+      contentType: "text/plain; charset=UTF-8",
+    };
+  }
+
+  const contentB64 = assetStorage.fetchAsset(assetName);
+
+  if (contentB64.startsWith("Asset '")) {
+    // Error message returned
+    return {
+      status: 404,
+      body: contentB64,
+      contentType: "text/plain; charset=UTF-8",
+    };
+  }
+
+  // Successfully retrieved
+  return {
+    status: 200,
+    bodyBase64: contentB64,
+    contentType: getMimeType(assetName),
+  };
+}
+
+routeRegistry.registerRoute("/asset", "getAsset", "GET");
+```
+
+### assetStorage.upsertAsset(asset_name, content_b64, mimetype)
+
+Creates a new asset or updates an existing one in the repository.
+
+**Parameters:**
+
+- `asset_name` (string): Name of the asset (1-255 characters, no path traversal characters)
+- `content_b64` (string): Base64-encoded asset content
+- `mimetype` (string): MIME type of the asset (e.g., `"image/png"`, `"text/css"`)
+
+**Returns:** Success message string, or error message if validation fails
+
+**Required Capability:** `WriteAssets`
+
+**Validation Rules:**
+
+- Asset name must be 1-255 characters
+- No path traversal characters (`..`, `\`)
+- Content size limited to 10MB
+- Content must be valid base64
+
+**Example:**
+
+```javascript
+function uploadAsset(req) {
+  const { name, content, mimetype } = req.form;
+
+  if (!name || !content || !mimetype) {
+    return {
+      status: 400,
+      body: "Missing required fields: name, content, mimetype",
+      contentType: "text/plain; charset=UTF-8",
+    };
+  }
+
+  const result = assetStorage.upsertAsset(name, content, mimetype);
+
+  if (result.startsWith("Error") || result.startsWith("Invalid")) {
+    return {
+      status: 400,
+      body: result,
+      contentType: "text/plain; charset=UTF-8",
+    };
+  }
+
+  return {
+    status: 201,
+    body: JSON.stringify({ message: result, assetName: name }),
+    contentType: "application/json",
+  };
+}
+
+routeRegistry.registerRoute("/upload-asset", "uploadAsset", "POST");
+```
+
+**Example - Upload from form data:**
+
+```javascript
+function handleImageUpload(req) {
+  // Assume req.form.image contains base64 encoded image
+  const imageB64 = req.form.image;
+  const filename = req.form.filename || "uploaded-image.png";
+
+  try {
+    const result = assetStorage.upsertAsset(filename, imageB64, "image/png");
+
+    console.log("Asset uploaded: " + filename);
+
+    return {
+      status: 200,
+      body: JSON.stringify({
+        success: true,
+        message: result,
+        filename: filename,
+      }),
+      contentType: "application/json",
+    };
+  } catch (error) {
+    console.error("Upload failed: " + error);
+    return {
+      status: 500,
+      body: JSON.stringify({ success: false, error: error.message }),
+      contentType: "application/json",
+    };
+  }
+}
+```
+
+### assetStorage.deleteAsset(asset_name)
+
+Deletes an asset from the repository.
+
+**Parameters:**
+
+- `asset_name` (string): Name of the asset to delete
+
+**Returns:** Success message if deleted, or error message if not found
+
+**Required Capability:** `DeleteAssets`
+
+**Example:**
+
+```javascript
+function removeAsset(req) {
+  const assetName = req.query.name;
+
+  if (!assetName) {
+    return {
+      status: 400,
+      body: "Missing asset name",
+      contentType: "text/plain; charset=UTF-8",
+    };
+  }
+
+  const result = assetStorage.deleteAsset(assetName);
+
+  if (result.includes("deleted successfully")) {
+    console.log("Asset deleted: " + assetName);
+    return {
+      status: 200,
+      body: result,
+      contentType: "text/plain; charset=UTF-8",
+    };
+  } else {
+    return {
+      status: 404,
+      body: result,
+      contentType: "text/plain; charset=UTF-8",
+    };
+  }
+}
+
+routeRegistry.registerRoute("/delete-asset", "removeAsset", "DELETE");
+```
+
+### Asset Management Example
+
+Complete example showing asset CRUD operations:
+
+```javascript
+function assetHandler(req) {
+  const method = req.method;
+  const path = req.path;
+
+  if (method === "GET" && path === "/assets") {
+    // List all assets
+    const assets = assetStorage.listAssets();
+    return {
+      status: 200,
+      body: JSON.stringify({ assets: assets }),
+      contentType: "application/json",
+    };
+  }
+
+  if (method === "GET" && path.startsWith("/assets/")) {
+    // Get specific asset
+    const assetName = path.substring("/assets/".length);
+    const content = assetStorage.fetchAsset(assetName);
+
+    if (content.startsWith("Asset '")) {
+      return { status: 404, body: "Asset not found" };
+    }
+
+    return {
+      status: 200,
+      bodyBase64: content,
+      contentType: "application/octet-stream",
+    };
+  }
+
+  if (method === "POST" && path === "/assets") {
+    // Create/update asset
+    const { name, content, mimetype } = req.form;
+    const result = assetStorage.upsertAsset(name, content, mimetype);
+
+    return {
+      status: 201,
+      body: JSON.stringify({ message: result }),
+      contentType: "application/json",
+    };
+  }
+
+  if (method === "DELETE" && path.startsWith("/assets/")) {
+    // Delete asset
+    const assetName = path.substring("/assets/".length);
+    const result = assetStorage.deleteAsset(assetName);
+
+    return {
+      status: 200,
+      body: JSON.stringify({ message: result }),
+      contentType: "application/json",
+    };
+  }
+
+  return { status: 404, body: "Not found" };
+}
+
+routeRegistry.registerRoute("/assets", "assetHandler", "GET");
+routeRegistry.registerRoute("/assets", "assetHandler", "POST");
+routeRegistry.registerRoute("/assets", "assetHandler", "DELETE");
+```
+
+### Asset Security
+
+- **Access Control**: Asset operations require specific capabilities (`ReadAssets`, `WriteAssets`, `DeleteAssets`)
+- **Validation**: Asset names and content are validated to prevent security issues
+- **Size Limits**: Assets are limited to 10MB to prevent resource exhaustion
+- **Audit Logging**: Asset operations are logged for security monitoring
+- **Path Traversal Protection**: Asset names cannot contain `..` or `\` characters
+
+### Best Practices for Assets
+
+1. **Validate file types**: Check MIME types match expected formats
+2. **Handle errors gracefully**: Always check return messages for errors
+3. **Use meaningful names**: Name assets descriptively for easy management
+4. **Clean up unused assets**: Regularly delete assets that are no longer needed
+5. **Check capabilities**: Ensure your script has required asset capabilities
+6. **Log operations**: Use `console.log()` to track asset modifications
+7. **Verify base64 encoding**: Ensure content is properly base64 encoded before upload
+
 ## Console Logging
 
 ### console.log(message)

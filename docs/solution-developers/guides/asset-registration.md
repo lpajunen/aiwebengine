@@ -54,7 +54,7 @@ function init(context) {
 }
 ```
 
-### upsertAsset(asset_name, content_base64, mimetype)
+### assetStorage.upsertAsset(asset_name, content_base64, mimetype)
 
 Creates or updates an asset in the repository.
 
@@ -72,7 +72,7 @@ function uploadAsset(req) {
   const content = req.form.content; // Base64 string
   const mimetype = req.form.mimetype; // "image/png"
 
-  upsertAsset(name, content, mimetype);
+  assetStorage.upsertAsset(name, content, mimetype);
 
   return {
     status: 201,
@@ -82,7 +82,7 @@ function uploadAsset(req) {
 }
 ```
 
-### fetchAsset(asset_name)
+### assetStorage.fetchAsset(asset_name)
 
 Retrieves an asset by name from the repository.
 
@@ -99,7 +99,7 @@ Retrieves an asset by name from the repository.
 ```javascript
 function getAssetInfo(req) {
   const name = req.query.name; // "logo.svg"
-  const content = fetchAsset(name);
+  const content = assetStorage.fetchAsset(name);
 
   if (content && !content.startsWith("Asset")) {
     return {
@@ -117,7 +117,7 @@ function getAssetInfo(req) {
 }
 ```
 
-### deleteAsset(asset_name)
+### assetStorage.deleteAsset(asset_name)
 
 Deletes an asset from the repository.
 
@@ -134,7 +134,7 @@ Deletes an asset from the repository.
 ```javascript
 function removeAsset(req) {
   const name = req.query.name;
-  const deleted = deleteAsset(name);
+  const deleted = assetStorage.deleteAsset(name);
 
   return {
     status: deleted ? 200 : 404,
@@ -144,7 +144,7 @@ function removeAsset(req) {
 }
 ```
 
-### listAssets()
+### assetStorage.listAssets()
 
 Lists all asset names in the repository.
 
@@ -156,7 +156,7 @@ Lists all asset names in the repository.
 
 ```javascript
 function listAllAssets(req) {
-  const assetNames = listAssets();
+  const assetNames = assetStorage.listAssets();
 
   return {
     status: 200,

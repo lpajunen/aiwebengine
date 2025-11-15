@@ -800,6 +800,9 @@ impl SecureGlobalContext {
         let auditor = self.auditor.clone();
         let script_uri_owned = script_uri.to_string();
 
+        // Create assetStorage object
+        let asset_storage = rquickjs::Object::new(ctx.clone())?;
+
         // Secure listAssets function
         let user_ctx_list = user_context.clone();
         let list_assets = Function::new(
@@ -823,7 +826,7 @@ impl SecureGlobalContext {
                 Ok(asset_names)
             },
         )?;
-        global.set("listAssets", list_assets)?;
+        asset_storage.set("listAssets", list_assets)?;
 
         // Secure fetchAsset function
         let user_ctx_fetch = user_context.clone();
@@ -852,7 +855,7 @@ impl SecureGlobalContext {
                 }
             },
         )?;
-        global.set("fetchAsset", fetch_asset)?;
+        asset_storage.set("fetchAsset", fetch_asset)?;
 
         // Secure upsertAsset function
         let user_ctx_upsert_asset = user_context.clone();
@@ -929,7 +932,7 @@ impl SecureGlobalContext {
                 }
             },
         )?;
-        global.set("upsertAsset", upsert_asset)?;
+        asset_storage.set("upsertAsset", upsert_asset)?;
 
         // Secure deleteAsset function
         let user_ctx_delete_asset = user_context.clone();
@@ -988,7 +991,10 @@ impl SecureGlobalContext {
                 }
             },
         )?;
-        global.set("deleteAsset", delete_asset)?;
+        asset_storage.set("deleteAsset", delete_asset)?;
+
+        // Set the assetStorage object on the global scope
+        global.set("assetStorage", asset_storage)?;
         Ok(())
     }
 
