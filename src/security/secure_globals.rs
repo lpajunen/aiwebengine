@@ -462,6 +462,9 @@ impl SecureGlobalContext {
         let auditor = self.auditor.clone();
         let _script_uri_owned = script_uri.to_string();
 
+        // Create scriptStorage object
+        let script_storage = rquickjs::Object::new(ctx.clone())?;
+
         // Secure listScripts function
         let user_ctx_list = user_context.clone();
         let list_scripts = Function::new(
@@ -484,7 +487,7 @@ impl SecureGlobalContext {
                 Ok(scripts.keys().cloned().collect())
             },
         )?;
-        global.set("listScripts", list_scripts)?;
+        script_storage.set("listScripts", list_scripts)?;
 
         // Secure getScript function
         let user_ctx_get = user_context.clone();
@@ -513,7 +516,7 @@ impl SecureGlobalContext {
                 Ok(repository::fetch_script(&script_name))
             },
         )?;
-        global.set("getScript", get_script)?;
+        script_storage.set("getScript", get_script)?;
 
         // Secure getScriptInitStatus function - returns init metadata
         let user_ctx_meta = user_context.clone();
@@ -561,7 +564,7 @@ impl SecureGlobalContext {
                 }
             },
         )?;
-        global.set("getScriptInitStatus", get_script_init_status)?;
+        script_storage.set("getScriptInitStatus", get_script_init_status)?;
 
         // Secure getScriptSecurityProfile function
         let user_ctx_security = user_context.clone();
@@ -590,7 +593,7 @@ impl SecureGlobalContext {
                 }
             },
         )?;
-        global.set("getScriptSecurityProfile", get_script_security_profile)?;
+        script_storage.set("getScriptSecurityProfile", get_script_security_profile)?;
 
         // Secure setScriptPrivileged function (admin only)
         let user_ctx_set_privileged = user_context.clone();
@@ -621,7 +624,7 @@ impl SecureGlobalContext {
                 Ok(true)
             },
         )?;
-        global.set("setScriptPrivileged", set_script_privileged)?;
+        script_storage.set("setScriptPrivileged", set_script_privileged)?;
 
         // Helper to allow UI to detect admin capability
         let user_ctx_manage_privileges = user_context.clone();
@@ -632,62 +635,9 @@ impl SecureGlobalContext {
                     .has_capability(&crate::security::Capability::DeleteScripts))
             },
         )?;
-        global.set("canManageScriptPrivileges", can_manage_privileges)?;
+        script_storage.set("canManageScriptPrivileges", can_manage_privileges)?;
 
-        // Secure listRoutes function - returns all route registrations from all scripts
-        let user_ctx_routes = user_context.clone();
-        let list_routes = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
-                // Check capability - same as getScript
-                if let Err(_e) =
-                    user_ctx_routes.require_capability(&crate::security::Capability::ReadScripts)
-                {
-                    return Ok("[]".to_string()); // Return empty array if no permission
-                }
-
-                debug!(
-                    user_id = ?user_ctx_routes.user_id,
-                    "Secure listRoutes called"
-                );
-
-                // Get all script metadata
-                match repository::get_all_script_metadata() {
-                    Ok(metadata_list) => {
-                        // Collect all route registrations
-                        let mut routes = Vec::new();
-
-                        for metadata in metadata_list {
-                            if metadata.initialized {
-                                for ((path, method), handler) in &metadata.registrations {
-                                    routes.push(serde_json::json!({
-                                        "path": path,
-                                        "method": method,
-                                        "handler": handler,
-                                        "script": metadata.uri
-                                    }));
-                                }
-                            }
-                        }
-
-                        // Sort routes by path for consistent ordering
-                        routes.sort_by(|a, b| {
-                            let path_a = a.get("path").and_then(|p| p.as_str()).unwrap_or("");
-                            let path_b = b.get("path").and_then(|p| p.as_str()).unwrap_or("");
-                            path_a.cmp(path_b)
-                        });
-
-                        // Serialize to JSON string
-                        Ok(serde_json::to_string(&routes).unwrap_or_else(|_| "[]".to_string()))
-                    }
-                    Err(e) => {
-                        warn!("Failed to get script metadata for routes: {}", e);
-                        Ok("[]".to_string())
-                    }
-                }
-            },
-        )?;
-        global.set("listRoutes", list_routes)?;
+        // Secure upsertScript function
         let user_ctx_upsert = user_context.clone();
         let _config_upsert = self.config.clone();
         let upsert_script = Function::new(
@@ -768,7 +718,7 @@ impl SecureGlobalContext {
                 Ok(format!("Script '{}' upserted successfully", script_name))
             },
         )?;
-        global.set("upsertScript", upsert_script)?;
+        script_storage.set("upsertScript", upsert_script)?;
 
         // Secure deleteScript function
         let user_ctx_delete = user_context.clone();
@@ -830,7 +780,10 @@ impl SecureGlobalContext {
                 Ok(repository::delete_script(&script_name))
             },
         )?;
-        global.set("deleteScript", delete_script)?;
+        script_storage.set("deleteScript", delete_script)?;
+
+        // Set the scriptStorage object on the global scope
+        global.set("scriptStorage", script_storage)?;
 
         Ok(())
     }
@@ -2102,6 +2055,7 @@ impl SecureGlobalContext {
         // 1. registerRoute function
         if let Some(register_impl) = register_fn {
             let script_uri_for_register = script_uri_owned.clone();
+            let user_ctx_route = user_context.clone();
             let register_route = Function::new(
                 ctx.clone(),
                 move |_c: rquickjs::Ctx<'_>,
@@ -2109,28 +2063,35 @@ impl SecureGlobalContext {
                       handler: String,
                       method: Option<String>|
                       -> Result<(), rquickjs::Error> {
-                    match repository::is_script_privileged(&script_uri_for_register) {
-                        Ok(true) => {}
-                        Ok(false) => {
-                            return Err(rquickjs::Error::new_from_js_message(
-                                "routeRegistry.registerRoute",
-                                "permission_denied",
-                                &format!(
-                                    "Script '{}' is not privileged to register HTTP routes",
-                                    script_uri_for_register
-                                ),
-                            ));
-                        }
-                        Err(e) => {
-                            return Err(rquickjs::Error::new_from_js_message(
-                                "routeRegistry.registerRoute",
-                                "privilege_lookup_failed",
-                                &format!(
-                                    "Unable to verify privileges for '{}': {}",
-                                    script_uri_for_register, e
-                                ),
-                            ));
-                        }
+                    // Check if script is privileged OR user has admin privileges
+                    let script_privileged =
+                        match repository::is_script_privileged(&script_uri_for_register) {
+                            Ok(true) => true,
+                            Ok(false) => false,
+                            Err(e) => {
+                                return Err(rquickjs::Error::new_from_js_message(
+                                    "routeRegistry.registerRoute",
+                                    "privilege_lookup_failed",
+                                    &format!(
+                                        "Unable to verify privileges for '{}': {}",
+                                        script_uri_for_register, e
+                                    ),
+                                ));
+                            }
+                        };
+
+                    let user_is_admin =
+                        user_ctx_route.has_capability(&crate::security::Capability::DeleteScripts);
+
+                    if !script_privileged && !user_is_admin {
+                        return Err(rquickjs::Error::new_from_js_message(
+                            "routeRegistry.registerRoute",
+                            "permission_denied",
+                            &format!(
+                                "Script '{}' is not privileged to register HTTP routes",
+                                script_uri_for_register
+                            ),
+                        ));
                     }
 
                     let method_ref = method.as_deref();
@@ -2167,20 +2128,26 @@ impl SecureGlobalContext {
                     ));
                 }
 
-                match repository::is_script_privileged(&script_uri_stream) {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        return Ok(format!(
-                            "Stream route '{}' denied: script '{}' is not privileged",
-                            path, script_uri_stream
-                        ));
-                    }
+                // Check if script is privileged OR user has admin privileges
+                let script_privileged = match repository::is_script_privileged(&script_uri_stream) {
+                    Ok(true) => true,
+                    Ok(false) => false,
                     Err(e) => {
                         return Ok(format!(
                             "Stream route '{}' denied: privilege lookup failed ({})",
                             path, e
                         ));
                     }
+                };
+
+                let user_is_admin =
+                    user_ctx_stream.has_capability(&crate::security::Capability::DeleteScripts);
+
+                if !script_privileged && !user_is_admin {
+                    return Ok(format!(
+                        "Stream route '{}' denied: script '{}' is not privileged",
+                        path, script_uri_stream
+                    ));
                 }
 
                 // Validate path format
@@ -2274,20 +2241,26 @@ impl SecureGlobalContext {
                   path: String,
                   asset_name: String|
                   -> Result<String, rquickjs::Error> {
-                match repository::is_script_privileged(&script_uri_asset) {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        return Ok(format!(
-                            "Asset route '{}' denied: script '{}' is not privileged",
-                            path, script_uri_asset
-                        ));
-                    }
+                // Check if script is privileged OR user has admin privileges
+                let script_privileged = match repository::is_script_privileged(&script_uri_asset) {
+                    Ok(true) => true,
+                    Ok(false) => false,
                     Err(e) => {
                         return Ok(format!(
                             "Asset route '{}' denied: privilege lookup failed ({})",
                             path, e
                         ));
                     }
+                };
+
+                let user_is_admin =
+                    user_ctx_asset.has_capability(&crate::security::Capability::DeleteScripts);
+
+                if !script_privileged && !user_is_admin {
+                    return Ok(format!(
+                        "Asset route '{}' denied: script '{}' is not privileged",
+                        path, script_uri_asset
+                    ));
                 }
 
                 // Check capability

@@ -231,9 +231,9 @@ AI Assistant
 ```javascript
 // 1. Pre-compute and cache embeddings
 async function indexScripts() {
-  const scripts = listScripts();
+  const scripts = scriptStorage.listScripts();
   for (const script of scripts) {
-    const content = getScript(script);
+    const content = scriptStorage.getScript(script);
     const embedding = await computeEmbedding(content);
     embeddings[script] = embedding;
   }
@@ -677,7 +677,7 @@ class FileTransaction {
   addOperation(type, scriptName, content) {
     // Backup original if editing
     if (type === "edit" || type === "delete") {
-      this.backups.set(scriptName, getScript(scriptName));
+      this.backups.set(scriptName, scriptStorage.getScript(scriptName));
     }
     this.operations.push({ type, scriptName, content });
   }

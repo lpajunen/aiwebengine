@@ -519,13 +519,13 @@ use aiwebengine::js_engine::{
 
 #[tokio::test]
 async fn test_secure_script_execution_authenticated() {
-    // Test with authenticated user
-    let user_context = UserContext::authenticated("test_user".to_string());
+    // Test with admin user (needs route registration capability)
+    let user_context = UserContext::admin("test_admin".to_string());
     let script_content = r#"
         console.log("Hello from secure context!");
         
         // Try to upsert a script (should work with WriteScripts capability)
-        upsertScript("test_script", "console.log('test');");
+        scriptStorage.upsertScript("test_script", "console.log('test');");
         
         routeRegistry.registerRoute("/test", "handleTest", "GET");
         
@@ -562,7 +562,7 @@ async fn test_secure_script_execution_anonymous() {
         console.listLogs();
         
         // But cannot upsert scripts (should fail with capability error)
-        upsertScript("test_script", "console.log('test');");
+        scriptStorage.upsertScript("test_script", "console.log('test');");
     "#;
 
     let result = execute_script_secure("/test_anonymous", script_content, user_context);
@@ -649,7 +649,7 @@ async fn test_capability_enforcement() {
 
     let script_content = r#"
         // This should fail due to insufficient capabilities
-        deleteScript("some_script");
+        scriptStorage.deleteScript("some_script");
     "#;
 
     let result = execute_script_secure("/test_capabilities", script_content, user_context);

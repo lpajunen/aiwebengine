@@ -16,7 +16,15 @@ const testScriptContent =
 
 // Create and test script management operations
 try {
-  upsertScript("https://example.com/from_js", testScriptContent);
+  if (
+    typeof scriptStorage !== "undefined" &&
+    typeof scriptStorage.upsertScript === "function"
+  ) {
+    scriptStorage.upsertScript(
+      "https://example.com/from_js",
+      testScriptContent,
+    );
+  }
 } catch (e) {
   // ignore errors when host function not available
 }
@@ -25,21 +33,29 @@ try {
 function js_mgmt_check(req) {
   try {
     const got =
-      typeof getScript === "function"
-        ? (getScript("https://example.com/from_js") ?? null)
+      typeof scriptStorage !== "undefined" &&
+      typeof scriptStorage.getScript === "function"
+        ? (scriptStorage.getScript("https://example.com/from_js") ?? null)
         : null;
-    const list = typeof listScripts === "function" ? (listScripts() ?? []) : [];
+    const list =
+      typeof scriptStorage !== "undefined" &&
+      typeof scriptStorage.listScripts === "function"
+        ? (scriptStorage.listScripts() ?? [])
+        : [];
     const deleted_before =
-      typeof deleteScript === "function"
-        ? !!deleteScript("https://example.com/does-not-exist")
+      typeof scriptStorage !== "undefined" &&
+      typeof scriptStorage.deleteScript === "function"
+        ? !!scriptStorage.deleteScript("https://example.com/does-not-exist")
         : false;
     const deleted =
-      typeof deleteScript === "function"
-        ? !!deleteScript("https://example.com/from_js")
+      typeof scriptStorage !== "undefined" &&
+      typeof scriptStorage.deleteScript === "function"
+        ? !!scriptStorage.deleteScript("https://example.com/from_js")
         : false;
     const after =
-      typeof getScript === "function"
-        ? (getScript("https://example.com/from_js") ?? null)
+      typeof scriptStorage !== "undefined" &&
+      typeof scriptStorage.getScript === "function"
+        ? (scriptStorage.getScript("https://example.com/from_js") ?? null)
         : null;
 
     return {

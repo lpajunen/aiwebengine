@@ -289,14 +289,19 @@ function serveEditor(req) {
 // API: List all scripts
 function apiListScripts(req) {
   try {
-    const scripts = typeof listScripts === "function" ? listScripts() : [];
+    const scripts =
+      typeof scriptStorage !== "undefined" &&
+      typeof scriptStorage.listScripts === "function"
+        ? scriptStorage.listScripts()
+        : [];
 
     // Sort scripts alphabetically (case-insensitive)
     scripts.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
 
     const canTogglePrivileged =
-      typeof canManageScriptPrivileges === "function"
-        ? !!canManageScriptPrivileges()
+      typeof scriptStorage !== "undefined" &&
+      typeof scriptStorage.canManageScriptPrivileges === "function"
+        ? !!scriptStorage.canManageScriptPrivileges()
         : false;
 
     const scriptDetails = scripts.map((name) => ({
@@ -327,12 +332,15 @@ function apiListScripts(req) {
 }
 
 function getSecurityField(scriptUri, field) {
-  if (typeof getScriptSecurityProfile !== "function") {
+  if (
+    typeof scriptStorage === "undefined" ||
+    typeof scriptStorage.getScriptSecurityProfile !== "function"
+  ) {
     return field === "default_privileged" ? false : false;
   }
 
   try {
-    const profileJson = getScriptSecurityProfile(scriptUri);
+    const profileJson = scriptStorage.getScriptSecurityProfile(scriptUri);
     if (!profileJson) {
       return false;
     }
@@ -373,12 +381,15 @@ function apiGetScript(req) {
 
     let content = "";
 
-    if (typeof getScript === "function") {
-      content = getScript(fullUri) || "";
+    if (
+      typeof scriptStorage !== "undefined" &&
+      typeof scriptStorage.getScript === "function"
+    ) {
+      content = scriptStorage.getScript(fullUri) || "";
     } else {
       return {
         status: 500,
-        body: "getScript function not available",
+        body: "scriptStorage.getScript function not available",
         contentType: "text/plain; charset=UTF-8",
       };
     }
@@ -423,12 +434,17 @@ function apiSaveScript(req) {
       fullUri = "https://example.com/" + scriptName;
     }
 
-    if (typeof upsertScript === "function") {
+    if (
+      typeof scriptStorage !== "undefined" &&
+      typeof scriptStorage.upsertScript === "function"
+    ) {
       // Check if script already exists to determine action
-      const existingScript = getScript ? getScript(fullUri) : null;
+      const existingScript = scriptStorage.getScript
+        ? scriptStorage.getScript(fullUri)
+        : null;
       const action = existingScript ? "updated" : "inserted";
 
-      upsertScript(fullUri, req.body);
+      scriptStorage.upsertScript(fullUri, req.body);
 
       // Broadcast the script update notification
       if (
@@ -493,8 +509,11 @@ function apiDeleteScript(req) {
       fullUri = "https://example.com/" + scriptName;
     }
 
-    if (typeof deleteScript === "function") {
-      const deleted = deleteScript(fullUri);
+    if (
+      typeof scriptStorage !== "undefined" &&
+      typeof scriptStorage.deleteScript === "function"
+    ) {
+      const deleted = scriptStorage.deleteScript(fullUri);
 
       if (deleted) {
         // Broadcast the script removal notification
@@ -548,7 +567,7 @@ function apiDeleteScript(req) {
       return {
         status: 500,
         body: JSON.stringify({
-          error: "deleteScript function not available",
+          error: "scriptStorage.deleteScript function not available",
         }),
         contentType: "application/json",
       };
@@ -569,7 +588,10 @@ function apiDeleteScript(req) {
 // API: Update privileged flag
 function apiUpdateScriptPrivilege(req) {
   try {
-    if (typeof setScriptPrivileged !== "function") {
+    if (
+      typeof scriptStorage === "undefined" ||
+      typeof scriptStorage.setScriptPrivileged !== "function"
+    ) {
       return {
         status: 500,
         body: JSON.stringify({ error: "Privilege API unavailable" }),
@@ -610,7 +632,7 @@ function apiUpdateScriptPrivilege(req) {
     }
 
     try {
-      setScriptPrivileged(fullUri, payload.privileged);
+      scriptStorage.setScriptPrivileged(fullUri, payload.privileged);
     } catch (error) {
       const message = error && error.message ? error.message : String(error);
       const forbidden =

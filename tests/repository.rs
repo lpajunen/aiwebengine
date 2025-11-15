@@ -73,13 +73,16 @@ fn test_upsert_overwrites_existing_script() {
 
 #[test]
 fn test_insert_and_list_log_messages() {
+    // Use a unique URI for this test to avoid interference from other tests
+    let test_uri = "test_insert_and_list_log_messages";
+
     // Record starting length so test is robust to previous state
-    let start = repository::fetch_log_messages("test").len();
+    let start = repository::fetch_log_messages(test_uri).len();
 
-    repository::insert_log_message("test", "log-one", "INFO");
-    repository::insert_log_message("test", "log-two", "INFO");
+    repository::insert_log_message(test_uri, "log-one", "INFO");
+    repository::insert_log_message(test_uri, "log-two", "INFO");
 
-    let msgs = repository::fetch_log_messages("test");
+    let msgs = repository::fetch_log_messages(test_uri);
     assert!(
         msgs.len() >= start + 2,
         "expected at least two new messages"
@@ -92,13 +95,16 @@ fn test_insert_and_list_log_messages() {
 
 #[test]
 fn test_prune_keeps_latest_20_logs() {
+    // Use a unique URI for this test to avoid interference from other tests
+    let test_uri = "test_prune_keeps_latest_20_logs";
+
     // Insert 25 distinct messages
     for i in 0..25 {
-        repository::insert_log_message("test", &format!("prune-test-{}", i), "INFO");
+        repository::insert_log_message(test_uri, &format!("prune-test-{}", i), "INFO");
     }
 
     let _ = repository::prune_log_messages();
-    let msgs = repository::fetch_log_messages("test");
+    let msgs = repository::fetch_log_messages(test_uri);
     assert!(msgs.len() <= 20, "prune should keep at most 20 messages");
 
     // Ensure the latest message is the last one we inserted

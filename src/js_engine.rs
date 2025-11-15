@@ -851,6 +851,9 @@ pub fn execute_graphql_resolver(
         // Override specific functions that have different signatures for GraphQL resolver context
         let global = ctx.globals();
 
+        // Create scriptStorage object for GraphQL resolvers
+        let script_storage = rquickjs::Object::new(ctx.clone())?;
+
         let list_scripts_resolver = Function::new(
             ctx.clone(),
             move |_c: rquickjs::Ctx<'_>| -> Result<std::collections::HashMap<String, String>, rquickjs::Error> {
@@ -858,31 +861,7 @@ pub fn execute_graphql_resolver(
                 Ok(repository::fetch_scripts())
             },
         )?;
-        global.set("listScripts", list_scripts_resolver)?;
-
-        let fetch_asset_resolver = Function::new(
-            ctx.clone(),
-            move |_c: rquickjs::Ctx<'_>, path: String| -> Result<Option<String>, rquickjs::Error> {
-                debug!("JavaScript called fetchAsset with path: {}", path);
-                Ok(repository::fetch_asset(&path).and_then(|asset| String::from_utf8(asset.content).ok()))
-            },
-        )?;
-        global.set("fetchAsset", fetch_asset_resolver)?;
-
-        let upsert_asset_resolver = Function::new(
-            ctx.clone(),
-            move |_c: rquickjs::Ctx<'_>, asset_name: String, content: String, mime_type: String| -> Result<(), rquickjs::Error> {
-                debug!("JavaScript called upsertAsset with asset_name: {}", asset_name);
-                let asset = repository::Asset {
-                    asset_name,
-                    content: content.into_bytes(),
-                    mimetype: mime_type,
-                };
-                let _ = repository::upsert_asset(asset);
-                Ok(())
-            },
-        )?;
-        global.set("upsertAsset", upsert_asset_resolver)?;
+        script_storage.set("listScripts", list_scripts_resolver)?;
 
         let get_script_resolver = Function::new(
             ctx.clone(),
@@ -891,7 +870,32 @@ pub fn execute_graphql_resolver(
                 Ok(repository::fetch_script(&uri))
             },
         )?;
-        global.set("getScript", get_script_resolver)?;
+        script_storage.set("getScript", get_script_resolver)?;
+
+        // Add upsertScript for GraphQL mutations
+        let upsert_script_resolver = Function::new(
+            ctx.clone(),
+            move |_c: rquickjs::Ctx<'_>, uri: String, content: String| -> Result<bool, rquickjs::Error> {
+                debug!("JavaScript called upsertScript with uri: {}", uri);
+                match repository::upsert_script(&uri, &content) {
+                    Ok(_) => Ok(true),
+                    Err(_) => Ok(false),
+                }
+            },
+        )?;
+        script_storage.set("upsertScript", upsert_script_resolver)?;
+
+        // Add deleteScript for GraphQL mutations
+        let delete_script_resolver = Function::new(
+            ctx.clone(),
+            move |_c: rquickjs::Ctx<'_>, uri: String| -> Result<bool, rquickjs::Error> {
+                debug!("JavaScript called deleteScript with uri: {}", uri);
+                Ok(repository::delete_script(&uri))
+            },
+        )?;
+        script_storage.set("deleteScript", delete_script_resolver)?;
+
+        global.set("scriptStorage", script_storage)?;
 
         // Load and execute the script
         let script_content = repository::fetch_script(&script_uri_owned)

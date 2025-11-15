@@ -4,7 +4,11 @@ function testEditorAPI(req) {
 
   try {
     // Test 1: List scripts
-    const scripts = typeof listScripts === "function" ? listScripts() : [];
+    const scripts =
+      typeof scriptStorage !== "undefined" &&
+      typeof scriptStorage.listScripts === "function"
+        ? scriptStorage.listScripts()
+        : [];
     result += "Available scripts: " + JSON.stringify(scripts) + "\n\n";
   } catch (error) {
     result += "Error listing scripts: " + error.message + "\n\n";

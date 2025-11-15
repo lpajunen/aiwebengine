@@ -137,11 +137,30 @@ function upsert_script_handler(req) {
     }
 
     // Check if script already exists to determine action
-    const existingScript = getScript(uri);
+    const existingScript =
+      typeof scriptStorage !== "undefined" &&
+      typeof scriptStorage.getScript === "function"
+        ? scriptStorage.getScript(uri)
+        : null;
     const action = existingScript ? "updated" : "inserted";
 
     // Call the upsertScript function
-    upsertScript(uri, content);
+    const success =
+      typeof scriptStorage !== "undefined" &&
+      typeof scriptStorage.upsertScript === "function"
+        ? scriptStorage.upsertScript(uri, content)
+        : false;
+
+    if (!success) {
+      return {
+        status: 500,
+        body: JSON.stringify({
+          error: "Failed to upsert script",
+          timestamp: new Date().toISOString(),
+        }),
+        contentType: "application/json",
+      };
+    }
 
     // Broadcast the script update
     broadcastScriptUpdate(uri, action, {
@@ -204,7 +223,11 @@ function delete_script_handler(req) {
     }
 
     // Call the deleteScript function
-    const deleted = deleteScript(uri);
+    const deleted =
+      typeof scriptStorage !== "undefined" &&
+      typeof scriptStorage.deleteScript === "function"
+        ? scriptStorage.deleteScript(uri)
+        : false;
 
     if (deleted) {
       // Broadcast the script removal
@@ -271,7 +294,11 @@ function read_script_handler(req) {
     }
 
     // Call the getScript function
-    const content = getScript(uri);
+    const content =
+      typeof scriptStorage !== "undefined" &&
+      typeof scriptStorage.getScript === "function"
+        ? scriptStorage.getScript(uri)
+        : null;
 
     // getScript returns null if script not found or access denied
     if (content !== null && content !== undefined) {
@@ -363,11 +390,23 @@ function script_logs_handler(req) {
 // GraphQL resolvers
 function scriptsQuery(req, args) {
   try {
-    const scripts = listScripts();
-    const scriptArray = Object.keys(scripts).map((uri) => ({
-      uri: uri,
-      chars: scripts[uri].length,
-    }));
+    const scriptsData =
+      typeof scriptStorage !== "undefined" &&
+      typeof scriptStorage.listScripts === "function"
+        ? scriptStorage.listScripts()
+        : [];
+    // Handle both array (secure context) and object (GraphQL context) formats
+    const scriptUris = Array.isArray(scriptsData)
+      ? scriptsData
+      : Object.keys(scriptsData);
+    const scriptArray = scriptUris.map((uri) => {
+      const content =
+        typeof scriptStorage !== "undefined" &&
+        typeof scriptStorage.getScript === "function"
+          ? scriptStorage.getScript(uri)
+          : scriptsData[uri] || null;
+      return { uri: uri, chars: content ? content.length : 0 };
+    });
     return JSON.stringify(scriptArray);
   } catch (error) {
     console.error(`Scripts query failed: ${error.message}`);
@@ -377,7 +416,11 @@ function scriptsQuery(req, args) {
 
 function scriptQuery(req, args) {
   try {
-    const content = getScript(args.uri);
+    const content =
+      typeof scriptStorage !== "undefined" &&
+      typeof scriptStorage.getScript === "function"
+        ? scriptStorage.getScript(args.uri)
+        : null;
     const logsJson = console.listLogsForUri(args.uri);
     const logs = JSON.parse(logsJson);
 
@@ -426,11 +469,19 @@ function scriptInitStatusQuery(req, args) {
 
 function allScriptsInitStatusQuery(req, args) {
   try {
-    const scripts = listScripts();
+    const scriptUris =
+      typeof scriptStorage !== "undefined" &&
+      typeof scriptStorage.listScripts === "function"
+        ? scriptStorage.listScripts()
+        : [];
     const statusArray = [];
 
-    for (const uri of Object.keys(scripts)) {
-      const statusStr = getScriptInitStatus(uri);
+    for (const uri of scriptUris) {
+      const statusStr =
+        typeof scriptStorage !== "undefined" &&
+        typeof scriptStorage.getScriptInitStatus === "function"
+          ? scriptStorage.getScriptInitStatus(uri)
+          : null;
       if (statusStr) {
         const status = JSON.parse(statusStr);
         statusArray.push(status);
@@ -447,10 +498,27 @@ function allScriptsInitStatusQuery(req, args) {
 function upsertScriptMutation(req, args) {
   try {
     // Check if script already exists to determine action
-    const existingScript = getScript(args.uri);
+    const existingScript =
+      typeof scriptStorage !== "undefined" &&
+      typeof scriptStorage.getScript === "function"
+        ? scriptStorage.getScript(args.uri)
+        : null;
     const action = existingScript ? "updated" : "inserted";
 
-    upsertScript(args.uri, args.content);
+    const success =
+      typeof scriptStorage !== "undefined" &&
+      typeof scriptStorage.upsertScript === "function"
+        ? scriptStorage.upsertScript(args.uri, args.content)
+        : false;
+
+    if (!success) {
+      return JSON.stringify({
+        message: "Failed to upsert script",
+        uri: args.uri,
+        chars: 0,
+        success: false,
+      });
+    }
 
     // Broadcast the script update
     broadcastScriptUpdate(args.uri, action, {
@@ -481,7 +549,11 @@ function upsertScriptMutation(req, args) {
 
 function deleteScriptMutation(req, args) {
   try {
-    const result = deleteScript(args.uri);
+    const result =
+      typeof scriptStorage !== "undefined" &&
+      typeof scriptStorage.deleteScript === "function"
+        ? scriptStorage.deleteScript(args.uri)
+        : false;
     // deleteScript now returns boolean: true if deleted, false if not found
 
     if (result) {

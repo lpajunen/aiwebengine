@@ -42,9 +42,13 @@ async fn test_editor_api_endpoints() {
         .expect("Failed to read list response");
     println!("Scripts list: {}", list_body);
 
-    // Parse the JSON response
-    let scripts: Vec<serde_json::Value> =
+    // Parse the JSON response - new format with scripts and permissions
+    let response: serde_json::Value =
         serde_json::from_str(&list_body).expect("Failed to parse scripts JSON");
+    let scripts = response["scripts"]
+        .as_array()
+        .expect("Expected scripts array")
+        .clone();
 
     // Test GET /api/scripts/{name} - get specific script
     if !scripts.is_empty() {
@@ -250,9 +254,13 @@ async fn test_editor_functionality() {
         .await
         .expect("Failed to read scripts response");
 
-    // Parse the JSON response
-    let scripts: Vec<serde_json::Value> =
+    // Parse the JSON response - new format with scripts and permissions
+    let response: serde_json::Value =
         serde_json::from_str(&scripts_body).expect("Failed to parse scripts JSON");
+    let scripts = response["scripts"]
+        .as_array()
+        .expect("Expected scripts array")
+        .clone();
 
     // Verify that test_editor and test_editor_api scripts are loaded
     let script_names: Vec<String> = scripts
@@ -282,7 +290,7 @@ async fn test_editor_functionality() {
         .expect("Failed to read test editor script response");
 
     assert!(test_editor_body.contains("testEditorAPI"));
-    assert!(test_editor_body.contains("listScripts"));
+    assert!(test_editor_body.contains("scriptStorage.listScripts"));
 
     // Cleanup
     context.cleanup().await.expect("Failed to cleanup");

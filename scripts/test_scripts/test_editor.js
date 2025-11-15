@@ -7,29 +7,47 @@ function testEditorAPI(req) {
   try {
     // Test 1: List scripts
     testResults.push("Testing script listing...");
-    const scripts = listScripts();
+    const scripts =
+      typeof scriptStorage !== "undefined" &&
+      typeof scriptStorage.listScripts === "function"
+        ? scriptStorage.listScripts()
+        : [];
     testResults.push(`Found ${scripts.length} scripts: ${scripts.join(", ")}`);
 
     // Test 2: List assets
     testResults.push("Testing asset listing...");
-    const assets = listAssets();
+    const assets =
+      typeof assetStorage !== "undefined" &&
+      typeof assetStorage.listAssets === "function"
+        ? assetStorage.listAssets()
+        : [];
     testResults.push(`Found ${assets.length} assets: ${assets.join(", ")}`);
 
     // Test 3: List logs
     testResults.push("Testing log listing...");
-    const logs = listLogs();
+    const logs =
+      typeof logStorage !== "undefined" &&
+      typeof logStorage.listLogs === "function"
+        ? logStorage.listLogs()
+        : [];
     testResults.push(`Found ${logs.length} log entries`);
 
     // Test 4: Check if editor files exist
     testResults.push("Checking editor files...");
     // Note: editor.html is not a public asset - it's served via /editor endpoint
-    const editorCss = fetchAsset("/editor.css");
-    const editorJs = fetchAsset("/editor.js");
+    const editorCss =
+      typeof assetStorage !== "undefined" &&
+      typeof assetStorage.getAsset === "function"
+        ? assetStorage.getAsset("/editor.css")
+        : null;
+    const editorJs =
+      typeof assetStorage !== "undefined" &&
+      typeof assetStorage.getAsset === "function"
+        ? assetStorage.getAsset("/editor.js")
+        : null;
 
-    testResults.push(
-      `Editor CSS: ${editorCss !== "null" ? "Found" : "Missing"}`,
-    );
-    testResults.push(`Editor JS: ${editorJs !== "null" ? "Found" : "Missing"}`);
+    testResults.push(`Editor CSS: ${editorCss !== null ? "Found" : "Missing"}`);
+    testResults.push(`Editor JS: ${editorJs !== null ? "Found" : "Missing"}`);
 
     return {
       status: 200,

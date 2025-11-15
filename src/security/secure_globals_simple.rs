@@ -188,6 +188,27 @@ impl SecureGlobalContext {
         let global = ctx.globals();
         let user_context = self.user_context.clone();
 
+        // Create scriptStorage object
+        let script_storage = rquickjs::Object::new(ctx.clone())?;
+
+        // Secure listScripts function
+        let user_ctx_list = user_context.clone();
+        let list_scripts = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<Vec<String>> {
+                // Check capability
+                if let Err(_e) =
+                    user_ctx_list.require_capability(&crate::security::Capability::ReadScripts)
+                {
+                    return Ok(Vec::new());
+                }
+
+                let scripts = repository::fetch_scripts();
+                Ok(scripts.keys().cloned().collect())
+            },
+        )?;
+        script_storage.set("listScripts", list_scripts)?;
+
         // Secure getScript function
         let user_ctx_get = user_context.clone();
         let get_script = Function::new(
@@ -202,7 +223,7 @@ impl SecureGlobalContext {
                 Ok(repository::fetch_script(&script_name))
             },
         )?;
-        global.set("getScript", get_script)?;
+        script_storage.set("getScript", get_script)?;
 
         // Secure getScriptInitStatus function
         let user_ctx_meta = user_context.clone();
@@ -241,7 +262,78 @@ impl SecureGlobalContext {
                 }
             },
         )?;
-        global.set("getScriptInitStatus", get_script_init_status)?;
+        script_storage.set("getScriptInitStatus", get_script_init_status)?;
+
+        // Secure getScriptSecurityProfile function
+        let user_ctx_security = user_context.clone();
+        let get_script_security_profile = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, script_name: String| -> JsResult<Option<String>> {
+                if let Err(_e) =
+                    user_ctx_security.require_capability(&crate::security::Capability::ReadScripts)
+                {
+                    return Ok(None);
+                }
+
+                match repository::get_script_security_profile(&script_name) {
+                    Ok(profile) => {
+                        let json = serde_json::to_string(&profile).unwrap_or_default();
+                        Ok(Some(json))
+                    }
+                    Err(e) => {
+                        warn!(
+                            script = %script_name,
+                            error = %e,
+                            "Failed to get script security profile"
+                        );
+                        Ok(None)
+                    }
+                }
+            },
+        )?;
+        script_storage.set("getScriptSecurityProfile", get_script_security_profile)?;
+
+        // Secure setScriptPrivileged function (admin only)
+        let user_ctx_set_privileged = user_context.clone();
+        let set_script_privileged = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  script_name: String,
+                  privileged: bool|
+                  -> JsResult<bool> {
+                if !user_ctx_set_privileged
+                    .has_capability(&crate::security::Capability::DeleteScripts)
+                {
+                    return Err(rquickjs::Error::new_from_js_message(
+                        "setScriptPrivileged",
+                        "permission_denied",
+                        "Administrator privileges required",
+                    ));
+                }
+
+                repository::set_script_privileged(&script_name, privileged).map_err(|e| {
+                    rquickjs::Error::new_from_js_message(
+                        "setScriptPrivileged",
+                        "repository_error",
+                        &format!("{}", e),
+                    )
+                })?;
+
+                Ok(true)
+            },
+        )?;
+        script_storage.set("setScriptPrivileged", set_script_privileged)?;
+
+        // Helper to allow UI to detect admin capability
+        let user_ctx_manage_privileges = user_context.clone();
+        let can_manage_privileges = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<bool> {
+                Ok(user_ctx_manage_privileges
+                    .has_capability(&crate::security::Capability::DeleteScripts))
+            },
+        )?;
+        script_storage.set("canManageScriptPrivileges", can_manage_privileges)?;
 
         // Secure upsertScript function - simplified for testing
         let user_ctx_upsert = user_context.clone();
@@ -305,7 +397,7 @@ impl SecureGlobalContext {
                 Ok(format!("Script '{}' upserted successfully", script_name))
             },
         )?;
-        global.set("upsertScript", upsert_script)?;
+        script_storage.set("upsertScript", upsert_script)?;
 
         // Secure deleteScript function - simplified for testing
         let user_ctx_delete = user_context.clone();
@@ -334,7 +426,10 @@ impl SecureGlobalContext {
                 Ok(repository::delete_script(&script_name))
             },
         )?;
-        global.set("deleteScript", delete_script)?;
+        script_storage.set("deleteScript", delete_script)?;
+
+        // Set the scriptStorage object on the global scope
+        global.set("scriptStorage", script_storage)?;
 
         Ok(())
     }

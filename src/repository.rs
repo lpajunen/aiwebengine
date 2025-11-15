@@ -1022,25 +1022,25 @@ pub fn get_script_security_profile(uri: &str) -> Result<ScriptSecurityProfile, R
     }
 
     // Dynamic scripts stored in memory
-    if let Ok(guard) = safe_lock_scripts() {
-        if let Some(metadata) = guard.get(uri) {
-            return Ok(ScriptSecurityProfile {
-                uri: uri.to_string(),
-                privileged: metadata.privileged,
-                default_privileged,
-            });
-        }
+    if let Ok(guard) = safe_lock_scripts()
+        && let Some(metadata) = guard.get(uri)
+    {
+        return Ok(ScriptSecurityProfile {
+            uri: uri.to_string(),
+            privileged: metadata.privileged,
+            default_privileged,
+        });
     }
 
     // Local overrides for static scripts when no database is configured
-    if let Ok(guard) = safe_lock_privilege_overrides() {
-        if let Some(value) = guard.get(uri) {
-            return Ok(ScriptSecurityProfile {
-                uri: uri.to_string(),
-                privileged: *value,
-                default_privileged,
-            });
-        }
+    if let Ok(guard) = safe_lock_privilege_overrides()
+        && let Some(value) = guard.get(uri)
+    {
+        return Ok(ScriptSecurityProfile {
+            uri: uri.to_string(),
+            privileged: *value,
+            default_privileged,
+        });
     }
 
     Ok(ScriptSecurityProfile {
@@ -1078,16 +1078,16 @@ pub fn set_script_privileged(uri: &str, privileged: bool) -> Result<(), Reposito
     }
 
     // Update dynamic metadata cache if present
-    if let Ok(mut guard) = safe_lock_scripts() {
-        if let Some(metadata) = guard.get_mut(uri) {
-            metadata.privileged = privileged;
-            debug!(
-                script = %uri,
-                privileged,
-                "Updated in-memory script privilege"
-            );
-            return Ok(());
-        }
+    if let Ok(mut guard) = safe_lock_scripts()
+        && let Some(metadata) = guard.get_mut(uri)
+    {
+        metadata.privileged = privileged;
+        debug!(
+            script = %uri,
+            privileged,
+            "Updated in-memory script privilege"
+        );
+        return Ok(());
     }
 
     // Persist override for static scripts or when metadata not present

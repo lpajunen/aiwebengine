@@ -359,7 +359,7 @@ routeRegistry.registerRoute(path, handlerName, method);
 console.log(message);
 
 // List all scripts
-const scripts = listScripts();
+const scripts = scriptStorage.listScripts();
 
 // List logs for current script (returns JSON string)
 const logsJson = console.listLogs();
