@@ -502,7 +502,11 @@ function init(context) {
     console.log(`Init context: ${JSON.stringify(context)}`);
 
     // Register the demo page endpoint
-    register("/script-updates-demo", "scriptUpdatesDemoPage", "GET");
+    routeRegistry.registerRoute(
+      "/script-updates-demo",
+      "scriptUpdatesDemoPage",
+      "GET",
+    );
 
     console.log("Script updates demo script initialized successfully");
 

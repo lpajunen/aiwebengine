@@ -177,7 +177,7 @@ function hello_handler(req) {
     };
 }
 
-register('/hello', 'hello_handler', 'GET');
+routeRegistry.registerRoute('/hello', 'hello_handler', 'GET');
             </div>
 
             <h2>Advanced Features</h2>
@@ -213,7 +213,7 @@ function init(context) {
     console.log(`Init context: ${JSON.stringify(context)}`);
 
     // Register the blog endpoint
-    register("/blog", "blog_handler", "GET");
+    routeRegistry.registerRoute("/blog", "blog_handler", "GET");
 
     console.log("Blog script initialized successfully");
 

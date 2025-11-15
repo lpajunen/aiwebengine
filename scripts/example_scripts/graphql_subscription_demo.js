@@ -60,7 +60,7 @@ function sendMessageResolver(req, args) {
 }
 
 // Optional: You can also use the lower-level API
-// sendStreamMessageToPath("/graphql/subscription/liveMessages", JSON.stringify(messageData));
+// routeRegistry.sendStreamMessage("/graphql/subscription/liveMessages", JSON.stringify(messageData));
 
 function triggerMessageHandler(req) {
   const message = req.body || "Hello from HTTP trigger!";
@@ -478,10 +478,18 @@ function init(context) {
     );
 
     // Register HTTP endpoints for testing
-    register("/trigger-message", "triggerMessageHandler", "POST");
+    routeRegistry.registerRoute(
+      "/trigger-message",
+      "triggerMessageHandler",
+      "POST",
+    );
 
     // Test page to demonstrate subscription usage
-    register("/subscription-demo", "subscriptionDemoPage", "GET");
+    routeRegistry.registerRoute(
+      "/subscription-demo",
+      "subscriptionDemoPage",
+      "GET",
+    );
 
     console.log("GraphQL subscription example script initialized successfully");
 

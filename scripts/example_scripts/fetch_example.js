@@ -3,9 +3,9 @@
 
 function init(context) {
   console.log("Initializing fetch_example.js");
-  register("/fetch/example", "fetchExample", "GET");
-  register("/fetch/with-secret", "fetchWithSecret", "GET");
-  register("/fetch/post", "fetchPost", "POST");
+  routeRegistry.registerRoute("/fetch/example", "fetchExample", "GET");
+  routeRegistry.registerRoute("/fetch/with-secret", "fetchWithSecret", "GET");
+  routeRegistry.registerRoute("/fetch/post", "fetchPost", "POST");
   return { success: true };
 }
 

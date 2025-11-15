@@ -350,7 +350,7 @@ function handler(req) {
 
 function init(context) {
     console.log('Initializing ${fullName} at ' + new Date().toISOString());
-    register('/', 'handler', 'GET');
+    routeRegistry.registerRoute('/', 'handler', 'GET');
     console.log('${fullName} endpoints registered');
     return { success: true };
 }`,

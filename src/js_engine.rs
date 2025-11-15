@@ -175,7 +175,7 @@ fn setup_secure_global_functions(
 /// Represents the result of executing a JavaScript script
 #[derive(Debug, Clone)]
 pub struct ScriptExecutionResult {
-    /// The registrations made by the script via register() calls
+    /// The registrations made by the script via routeRegistry.registerRoute() calls
     pub registrations: HashMap<(String, String), String>,
     /// Whether the script executed successfully
     pub success: bool,
@@ -207,7 +207,7 @@ impl ScriptExecutionResult {
     }
 }
 
-/// Executes a JavaScript script and captures any register() method calls
+/// Executes a JavaScript script and captures any routeRegistry.registerRoute() method calls
 ///
 /// Executes a JavaScript script in a secure environment with proper authentication and validation.
 /// This function creates a QuickJS runtime, sets up the register function,
@@ -1040,7 +1040,7 @@ pub fn call_init_if_exists(
 
     let ctx = Context::full(&rt).map_err(|e| format!("Failed to create context: {}", e))?;
 
-    // Create registrations map to capture register() calls during init
+    // Create registrations map to capture routeRegistry.registerRoute() calls during init
     let registrations = Rc::new(RefCell::new(HashMap::new()));
     let uri_owned = script_uri.to_string();
 
@@ -1270,7 +1270,7 @@ mod tests {
     #[test]
     fn test_execute_script_with_syntax_error() {
         let content = r#"
-            register("/test", "handler"
+            routeRegistry.registerRoute("/test", "handler"
             // Missing closing parenthesis - syntax error
         "#;
 
@@ -1340,7 +1340,7 @@ mod tests {
     #[test]
     fn test_execute_script_with_console_log() {
         let content = r#"
-            register("/logged", "loggedHandler", "GET");
+            routeRegistry.registerRoute("/logged", "loggedHandler", "GET");
         "#;
 
         let result = execute_script("console-script", content);
@@ -1554,7 +1554,7 @@ mod tests {
     fn test_register_web_stream_invalid_path() {
         let script_content = r#"
             try {
-                registerWebStream('invalid-path-test');
+                routeRegistry.registerStreamRoute('invalid-path-test');
                 console.error('ERROR: Should have failed');
             } catch (e) {
                 console.log('Expected error: ' + String(e));
@@ -1686,7 +1686,8 @@ mod tests {
     #[test]
     fn test_shared_storage_validation() {
         // Test with a script that exceeds the default 1MB limit
-        let large_script = "// ".repeat(600_000) + "register('/test', 'handler');";
+        let large_script =
+            "// ".repeat(600_000) + "routeRegistry.registerRoute('/test', 'handler');";
         assert!(large_script.len() > 1_000_000);
 
         let result = execute_script("test-large-script", &large_script);

@@ -1,10 +1,10 @@
-// Minimal test to isolate sendStreamMessageToPath issue
-console.log("Starting minimal sendStreamMessageToPath test");
+// Minimal test to isolate routeRegistry.sendStreamMessage issue
+console.log("Starting minimal routeRegistry.sendStreamMessage test");
 
 try {
-  console.log("Calling sendStreamMessageToPath...");
-  sendStreamMessageToPath("/test-stream", '{"test": "message"}');
-  console.log("sendStreamMessageToPath call completed successfully");
+  console.log("Calling routeRegistry.sendStreamMessage...");
+  routeRegistry.sendStreamMessage("/test-stream", '{"test": "message"}');
+  console.log("routeRegistry.sendStreamMessage call completed successfully");
 } catch (error) {
   console.log("Error caught: " + error.toString());
 }

@@ -2,7 +2,7 @@
 ///
 /// This module manages runtime registration of public HTTP paths to asset names.
 /// Assets are stored by name in the repository, and scripts can register them to
-/// specific HTTP paths using registerPublicAsset() in their init() functions.
+/// specific HTTP paths using routeRegistry.registerAssetRoute() in their init() functions.
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use tracing::{debug, info, warn};

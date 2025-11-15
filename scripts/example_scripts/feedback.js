@@ -341,8 +341,8 @@ function init(context) {
     console.log(`Init context: ${JSON.stringify(context)}`);
 
     // Register both GET (form) and POST (submission) handlers
-    register("/feedback", "feedback_form_handler", "GET");
-    register("/feedback", "feedback_submit_handler", "POST");
+    routeRegistry.registerRoute("/feedback", "feedback_form_handler", "GET");
+    routeRegistry.registerRoute("/feedback", "feedback_submit_handler", "POST");
 
     console.log("Feedback script initialized successfully");
 
