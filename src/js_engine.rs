@@ -856,56 +856,18 @@ pub fn execute_graphql_resolver(
 
         // GraphQL resolvers run with admin context to allow script management operations
         // In production, this should be secured via GraphQL-level authentication/authorization
-        setup_secure_global_functions(&ctx, &script_uri_owned, UserContext::admin("graphql-resolver".to_string()), &config, None, auth_context.clone(), None)?;
+        setup_secure_global_functions(
+            &ctx,
+            &script_uri_owned,
+            UserContext::admin("graphql-resolver".to_string()),
+            &config,
+            None,
+            auth_context.clone(),
+            None,
+        )?;
 
         // Override specific functions that have different signatures for GraphQL resolver context
-        let global = ctx.globals();
-
-        // Create scriptStorage object for GraphQL resolvers
-        let script_storage = rquickjs::Object::new(ctx.clone())?;
-
-        let list_scripts_resolver = Function::new(
-            ctx.clone(),
-            move |_c: rquickjs::Ctx<'_>| -> Result<std::collections::HashMap<String, String>, rquickjs::Error> {
-                debug!("JavaScript called listScripts");
-                Ok(repository::fetch_scripts())
-            },
-        )?;
-        script_storage.set("listScripts", list_scripts_resolver)?;
-
-        let get_script_resolver = Function::new(
-            ctx.clone(),
-            move |_c: rquickjs::Ctx<'_>, uri: String| -> Result<Option<String>, rquickjs::Error> {
-                debug!("JavaScript called getScript with uri: {}", uri);
-                Ok(repository::fetch_script(&uri))
-            },
-        )?;
-        script_storage.set("getScript", get_script_resolver)?;
-
-        // Add upsertScript for GraphQL mutations
-        let upsert_script_resolver = Function::new(
-            ctx.clone(),
-            move |_c: rquickjs::Ctx<'_>, uri: String, content: String| -> Result<bool, rquickjs::Error> {
-                debug!("JavaScript called upsertScript with uri: {}", uri);
-                match repository::upsert_script(&uri, &content) {
-                    Ok(_) => Ok(true),
-                    Err(_) => Ok(false),
-                }
-            },
-        )?;
-        script_storage.set("upsertScript", upsert_script_resolver)?;
-
-        // Add deleteScript for GraphQL mutations
-        let delete_script_resolver = Function::new(
-            ctx.clone(),
-            move |_c: rquickjs::Ctx<'_>, uri: String| -> Result<bool, rquickjs::Error> {
-                debug!("JavaScript called deleteScript with uri: {}", uri);
-                Ok(repository::delete_script(&uri))
-            },
-        )?;
-        script_storage.set("deleteScript", delete_script_resolver)?;
-
-        global.set("scriptStorage", script_storage)?;
+        let _global = ctx.globals();
 
         // Load and execute the script
         let script_content = repository::fetch_script(&script_uri_owned)
@@ -934,13 +896,13 @@ pub fn execute_graphql_resolver(
                                 } else if let Some(f) = n.as_f64() {
                                     args_obj.set(key, f)?;
                                 }
-                            },
+                            }
                             serde_json::Value::Bool(b) => args_obj.set(key, b)?,
                             _ => {} // Skip other types for now
                         }
                     }
                     args_obj.into_value()
-                },
+                }
                 _ => rquickjs::Value::new_undefined(ctx.clone()),
             }
         } else {
@@ -949,7 +911,9 @@ pub fn execute_graphql_resolver(
 
         // Call the resolver function with req object and args
         let resolver_result: rquickjs::Value = ctx.globals().get(&resolver_function_owned)?;
-        let resolver_func = resolver_result.as_function().ok_or_else(|| rquickjs::Error::new_from_js("Function", "not found"))?;
+        let resolver_func = resolver_result
+            .as_function()
+            .ok_or_else(|| rquickjs::Error::new_from_js("Function", "not found"))?;
 
         // Create req object for GraphQL resolvers (similar to HTTP handlers)
         let req_obj = rquickjs::Object::new(ctx.clone())?;
@@ -979,7 +943,7 @@ pub fn execute_graphql_resolver(
                 Ok(result) => {
                     debug!("Called resolver with req object only (new format)");
                     result
-                },
+                }
                 Err(e) => {
                     debug!("Failed to call with req object: {}, trying old format", e);
                     // Fall back to calling without req object (old format)
@@ -994,7 +958,7 @@ pub fn execute_graphql_resolver(
                 Ok(result) => {
                     debug!("Called resolver with req and args (new format)");
                     result
-                },
+                }
                 Err(e) => {
                     debug!("Failed to call with req and args: {}, trying old format", e);
                     // Fall back to calling with just args (old format)

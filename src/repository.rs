@@ -1335,7 +1335,17 @@ pub fn get_script_metadata(uri: &str) -> Result<ScriptMetadata, RepositoryError>
 /// Get all script metadata
 pub fn get_all_script_metadata() -> Result<Vec<ScriptMetadata>, RepositoryError> {
     let guard = safe_lock_scripts()?;
-    Ok(guard.values().cloned().collect())
+    let mut metadata_list: Vec<ScriptMetadata> = guard.values().cloned().collect();
+    drop(guard); // Release lock before calling get_script_security_profile
+
+    // Update privileged status for each script
+    for metadata in &mut metadata_list {
+        if let Ok(profile) = get_script_security_profile(&metadata.uri) {
+            metadata.privileged = profile.privileged;
+        }
+    }
+
+    Ok(metadata_list)
 }
 
 /// Mark a script as initialized successfully

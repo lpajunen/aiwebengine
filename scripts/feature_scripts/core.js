@@ -390,23 +390,19 @@ function script_logs_handler(req) {
 // GraphQL resolvers
 function scriptsQuery(req, args) {
   try {
-    const scriptsData =
+    const scriptsJson =
       typeof scriptStorage !== "undefined" &&
       typeof scriptStorage.listScripts === "function"
         ? scriptStorage.listScripts()
-        : [];
-    // Handle both array (secure context) and object (GraphQL context) formats
-    const scriptUris = Array.isArray(scriptsData)
-      ? scriptsData
-      : Object.keys(scriptsData);
-    const scriptArray = scriptUris.map((uri) => {
-      const content =
-        typeof scriptStorage !== "undefined" &&
-        typeof scriptStorage.getScript === "function"
-          ? scriptStorage.getScript(uri)
-          : scriptsData[uri] || null;
-      return { uri: uri, chars: content ? content.length : 0 };
-    });
+        : "[]";
+
+    const scriptMetadata = JSON.parse(scriptsJson);
+
+    const scriptArray = scriptMetadata.map((meta) => ({
+      uri: meta.uri,
+      chars: meta.size || 0,
+    }));
+
     return JSON.stringify(scriptArray);
   } catch (error) {
     console.error(`Scripts query failed: ${error.message}`);
@@ -469,11 +465,13 @@ function scriptInitStatusQuery(req, args) {
 
 function allScriptsInitStatusQuery(req, args) {
   try {
-    const scriptUris =
+    const scriptsJson =
       typeof scriptStorage !== "undefined" &&
       typeof scriptStorage.listScripts === "function"
         ? scriptStorage.listScripts()
-        : [];
+        : "[]";
+    const scriptMetadata = JSON.parse(scriptsJson);
+    const scriptUris = scriptMetadata.map((meta) => meta.uri);
     const statusArray = [];
 
     for (const uri of scriptUris) {

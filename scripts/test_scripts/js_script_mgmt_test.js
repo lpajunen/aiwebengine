@@ -37,11 +37,13 @@ function js_mgmt_check(req) {
       typeof scriptStorage.getScript === "function"
         ? (scriptStorage.getScript("https://example.com/from_js") ?? null)
         : null;
-    const list =
+    const listJson =
       typeof scriptStorage !== "undefined" &&
       typeof scriptStorage.listScripts === "function"
-        ? (scriptStorage.listScripts() ?? [])
-        : [];
+        ? (scriptStorage.listScripts() ?? "[]")
+        : "[]";
+    const listMetadata = JSON.parse(listJson);
+    const list = listMetadata.map((meta) => meta.uri);
     const deleted_before =
       typeof scriptStorage !== "undefined" &&
       typeof scriptStorage.deleteScript === "function"

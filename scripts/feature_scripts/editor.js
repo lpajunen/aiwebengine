@@ -291,14 +291,20 @@ function serveEditor(req) {
 // API: List all scripts
 function apiListScripts(req) {
   try {
-    const scripts =
+    const scriptsJson =
       typeof scriptStorage !== "undefined" &&
       typeof scriptStorage.listScripts === "function"
         ? scriptStorage.listScripts()
-        : [];
+        : "[]";
+
+    const scriptMetadata = JSON.parse(scriptsJson);
+
+    console.log("Script metadata from listScripts:", scriptMetadata);
 
     // Sort scripts alphabetically (case-insensitive)
-    scripts.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+    scriptMetadata.sort((a, b) =>
+      a.uri.toLowerCase().localeCompare(b.uri.toLowerCase()),
+    );
 
     const canTogglePrivileged =
       typeof scriptStorage !== "undefined" &&
@@ -306,12 +312,12 @@ function apiListScripts(req) {
         ? !!scriptStorage.canManageScriptPrivileges()
         : false;
 
-    const scriptDetails = scripts.map((name) => ({
-      name: name,
-      size: 0,
-      lastModified: new Date().toISOString(),
-      privileged: getSecurityField(name, "privileged"),
-      defaultPrivileged: getSecurityField(name, "default_privileged"),
+    const scriptDetails = scriptMetadata.map((meta) => ({
+      name: meta.uri,
+      size: meta.size || 0,
+      lastModified: new Date(meta.updatedAt || Date.now()).toISOString(),
+      privileged: !!meta.privileged,
+      defaultPrivileged: getSecurityField(meta.uri, "default_privileged"),
     }));
 
     return {
@@ -1307,7 +1313,13 @@ Remember: You are creating JavaScript scripts that run on the SERVER and handle 
 
   // Add available scripts list
   try {
-    const scripts = typeof listScripts === "function" ? listScripts() : [];
+    const scriptsJson =
+      typeof scriptStorage !== "undefined" &&
+      typeof scriptStorage.listScripts === "function"
+        ? scriptStorage.listScripts()
+        : "[]";
+    const scriptMetadata = JSON.parse(scriptsJson);
+    const scripts = scriptMetadata.map((meta) => meta.uri);
     if (scripts.length > 0) {
       contextualPrompt += "AVAILABLE SCRIPTS: " + scripts.join(", ") + "\\n\\n";
     }

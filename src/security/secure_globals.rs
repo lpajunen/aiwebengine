@@ -369,13 +369,13 @@ impl SecureGlobalContext {
         let user_ctx_list = user_context.clone();
         let list_scripts = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<Vec<String>> {
+            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
                 // Check capability
                 if let Err(_e) =
                     user_ctx_list.require_capability(&crate::security::Capability::ReadScripts)
                 {
-                    // Return empty array if no permission (JavaScript expects an array)
-                    return Ok(Vec::new());
+                    // Return empty array JSON if no permission
+                    return Ok("[]".to_string());
                 }
 
                 debug!(
@@ -383,8 +383,43 @@ impl SecureGlobalContext {
                     "Secure listScripts called"
                 );
 
-                let scripts = repository::fetch_scripts();
-                Ok(scripts.keys().cloned().collect())
+                let metadata_list = match repository::get_all_script_metadata() {
+                    Ok(metadata) => metadata,
+                    Err(e) => {
+                        warn!("Failed to get script metadata: {}", e);
+                        return Ok("[]".to_string());
+                    }
+                };
+
+                // Build JSON array of script metadata
+                let scripts_json: Vec<serde_json::Value> = metadata_list
+                    .iter()
+                    .map(|meta| {
+                        serde_json::json!({
+                            "uri": meta.uri,
+                            "size": meta.code.len(),
+                            "updatedAt": meta.updated_at
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as f64,
+                            "createdAt": meta.created_at
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as f64,
+                            "privileged": meta.privileged,
+                            "initialized": meta.initialized,
+                            "initError": meta.init_error.as_deref()
+                        })
+                    })
+                    .collect();
+
+                match serde_json::to_string(&scripts_json) {
+                    Ok(json) => Ok(json),
+                    Err(e) => {
+                        warn!("Failed to serialize script metadata: {}", e);
+                        Ok("[]".to_string())
+                    }
+                }
             },
         )?;
         script_storage.set("listScripts", list_scripts)?;

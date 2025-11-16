@@ -7,11 +7,13 @@ function testEditorAPI(req) {
   try {
     // Test 1: List scripts
     testResults.push("Testing script listing...");
-    const scripts =
+    const scriptsJson =
       typeof scriptStorage !== "undefined" &&
       typeof scriptStorage.listScripts === "function"
         ? scriptStorage.listScripts()
-        : [];
+        : "[]";
+    const scriptMetadata = JSON.parse(scriptsJson);
+    const scripts = scriptMetadata.map((meta) => meta.uri);
     testResults.push(`Found ${scripts.length} scripts: ${scripts.join(", ")}`);
 
     // Test 2: List assets
