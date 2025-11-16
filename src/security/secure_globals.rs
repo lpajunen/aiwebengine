@@ -2439,7 +2439,6 @@ impl SecureGlobalContext {
                 })
             },
         )?;
-        global.set("listUsers", list_users)?;
 
         // addUserRole - Add a role to a user (admin only)
         let user_ctx_add = user_context.clone();
@@ -2498,7 +2497,6 @@ impl SecureGlobalContext {
                 Ok(())
             },
         )?;
-        global.set("addUserRole", add_user_role)?;
 
         // removeUserRole - Remove a role from a user (admin only)
         let user_ctx_remove = user_context.clone();
@@ -2560,7 +2558,13 @@ impl SecureGlobalContext {
                 Ok(())
             },
         )?;
-        global.set("removeUserRole", remove_user_role)?;
+
+        // Create userStorage object and set methods on it
+        let user_storage = rquickjs::Object::new(ctx.clone())?;
+        user_storage.set("listUsers", list_users)?;
+        user_storage.set("addUserRole", add_user_role)?;
+        user_storage.set("removeUserRole", remove_user_role)?;
+        global.set("userStorage", user_storage)?;
 
         debug!("User management functions initialized (admin-only)");
         Ok(())

@@ -472,7 +472,7 @@ function handleListUsers(request) {
 
   try {
     // Call Rust function to list users (returns JSON string)
-    const usersJson = listUsers();
+    const usersJson = userStorage.listUsers();
     const users = JSON.parse(usersJson);
 
     return {
@@ -576,9 +576,9 @@ function handleUpdateUserRole(request) {
 
     // Call Rust function to update role
     if (action === "add") {
-      addUserRole(userId, role);
+      userStorage.addUserRole(userId, role);
     } else {
-      removeUserRole(userId, role);
+      userStorage.removeUserRole(userId, role);
     }
 
     return {
