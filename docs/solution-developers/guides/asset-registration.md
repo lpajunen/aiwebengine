@@ -146,21 +146,30 @@ function removeAsset(req) {
 
 ### assetStorage.listAssets()
 
-Lists all asset names in the repository.
+Lists all assets with metadata in the repository.
 
 **Returns:**
 
-- Array of asset names (strings)
+- JSON string with array of asset metadata objects containing:
+  - `name`: Asset name/identifier
+  - `size`: Size in bytes
+  - `mimetype`: MIME type
+  - `createdAt`: Creation timestamp (ms since epoch)
+  - `updatedAt`: Last update timestamp (ms since epoch)
 
 **Example:**
 
 ```javascript
 function listAllAssets(req) {
-  const assetNames = assetStorage.listAssets();
+  const assetsJson = assetStorage.listAssets();
+  const assets = JSON.parse(assetsJson);
 
   return {
     status: 200,
-    body: JSON.stringify({ assets: assetNames }),
+    body: JSON.stringify({
+      assets: assets,
+      count: assets.length,
+    }),
     contentType: "application/json",
   };
 }

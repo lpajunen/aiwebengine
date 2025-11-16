@@ -699,22 +699,27 @@ function apiGetLogs(req) {
 // API: Get assets
 function apiGetAssets(req) {
   try {
-    const assets =
+    const assetsJson =
       typeof assetStorage !== "undefined" &&
       typeof assetStorage.listAssets === "function"
         ? assetStorage.listAssets()
-        : [];
-    const assetDetails = assets.map((path) => ({
-      path: path,
-      name: path.split("/").pop(),
-      size: 0, // TODO: Get actual size
-      type: getMimeTypeFromPath(path),
-    }));
+        : "[]";
+
+    const assetMetadata = JSON.parse(assetsJson);
 
     // Sort assets alphabetically by name (case-insensitive)
-    assetDetails.sort((a, b) =>
+    assetMetadata.sort((a, b) =>
       a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
     );
+
+    const assetDetails = assetMetadata.map((meta) => ({
+      path: meta.name,
+      name: meta.name.split("/").pop(),
+      size: meta.size || 0,
+      type: meta.mimetype || getMimeTypeFromPath(meta.name),
+      createdAt: new Date(meta.createdAt || Date.now()).toISOString(),
+      updatedAt: new Date(meta.updatedAt || Date.now()).toISOString(),
+    }));
 
     return {
       status: 200,
@@ -1338,15 +1343,16 @@ Remember: You are creating JavaScript scripts that run on the SERVER and handle 
 
   // Add available assets list
   try {
-    const assets =
+    const assetsJson =
       typeof assetStorage !== "undefined" &&
       typeof assetStorage.listAssets === "function"
         ? assetStorage.listAssets()
-        : [];
-    if (assets.length > 0) {
-      const assetPaths = assets.map((a) => a.path || a);
+        : "[]";
+    const assetMetadata = JSON.parse(assetsJson);
+    if (assetMetadata.length > 0) {
+      const assetNames = assetMetadata.map((a) => a.name);
       contextualPrompt +=
-        "AVAILABLE ASSETS: " + assetPaths.join(", ") + "\\n\\n";
+        "AVAILABLE ASSETS: " + assetNames.join(", ") + "\\n\\n";
     }
   } catch (e) {
     console.log("Could not list assets: " + e);

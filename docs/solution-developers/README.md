@@ -213,9 +213,10 @@ routeRegistry.registerRoute(path, handlerName, method);
 console.log(message);
 const logs = listLogs();
 
-// Assets
-const assets = assetStorage.listAssets();
-const asset = assetStorage.fetchAsset(path);
+// Assets (returns JSON metadata)
+const assetsJson = assetStorage.listAssets();
+const assets = JSON.parse(assetsJson);
+const assetContent = assetStorage.fetchAsset(name);
 
 // HTTP requests
 const response = fetch(url, options);

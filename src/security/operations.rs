@@ -136,10 +136,13 @@ impl SecureOperations {
         };
 
         // Call actual asset storage
+        let now = std::time::SystemTime::now();
         let asset = crate::repository::Asset {
             asset_name: filename.clone(),
             mimetype: mimetype.to_string(),
             content,
+            created_at: now,
+            updated_at: now,
         };
 
         match crate::repository::upsert_asset(asset) {

@@ -140,6 +140,8 @@ pub struct Asset {
     pub asset_name: String,
     pub mimetype: String,
     pub content: Vec<u8>,
+    pub created_at: std::time::SystemTime,
+    pub updated_at: std::time::SystemTime,
 }
 
 static DYNAMIC_SCRIPTS: OnceLock<Mutex<HashMap<String, ScriptMetadata>>> = OnceLock::new();
@@ -779,7 +781,7 @@ async fn db_upsert_asset(pool: &PgPool, asset: &Asset) -> Result<(), RepositoryE
 async fn db_get_asset(pool: &PgPool, asset_name: &str) -> Result<Option<Asset>, RepositoryError> {
     let row = sqlx::query(
         r#"
-        SELECT asset_name, mimetype, content FROM assets WHERE asset_name = $1
+        SELECT asset_name, mimetype, content, created_at, updated_at FROM assets WHERE asset_name = $1
         "#,
     )
     .bind(asset_name)
@@ -803,10 +805,20 @@ async fn db_get_asset(pool: &PgPool, asset_name: &str) -> Result<Option<Asset>, 
             error!("Database error getting content: {}", e);
             RepositoryError::InvalidData(format!("Database error: {}", e))
         })?;
+        let created_at: chrono::DateTime<chrono::Utc> = row.try_get("created_at").map_err(|e| {
+            error!("Database error getting created_at: {}", e);
+            RepositoryError::InvalidData(format!("Database error: {}", e))
+        })?;
+        let updated_at: chrono::DateTime<chrono::Utc> = row.try_get("updated_at").map_err(|e| {
+            error!("Database error getting updated_at: {}", e);
+            RepositoryError::InvalidData(format!("Database error: {}", e))
+        })?;
         Ok(Some(Asset {
             asset_name,
             mimetype,
             content,
+            created_at: created_at.into(),
+            updated_at: updated_at.into(),
         }))
     } else {
         Ok(None)
@@ -817,7 +829,7 @@ async fn db_get_asset(pool: &PgPool, asset_name: &str) -> Result<Option<Asset>, 
 async fn db_list_assets(pool: &PgPool) -> Result<HashMap<String, Asset>, RepositoryError> {
     let rows = sqlx::query(
         r#"
-        SELECT asset_name, mimetype, content FROM assets ORDER BY asset_name
+        SELECT asset_name, mimetype, content, created_at, updated_at FROM assets ORDER BY asset_name
         "#,
     )
     .fetch_all(pool)
@@ -841,12 +853,22 @@ async fn db_list_assets(pool: &PgPool) -> Result<HashMap<String, Asset>, Reposit
             error!("Database error getting content: {}", e);
             RepositoryError::InvalidData(format!("Database error: {}", e))
         })?;
+        let created_at: chrono::DateTime<chrono::Utc> = row.try_get("created_at").map_err(|e| {
+            error!("Database error getting created_at: {}", e);
+            RepositoryError::InvalidData(format!("Database error: {}", e))
+        })?;
+        let updated_at: chrono::DateTime<chrono::Utc> = row.try_get("updated_at").map_err(|e| {
+            error!("Database error getting updated_at: {}", e);
+            RepositoryError::InvalidData(format!("Database error: {}", e))
+        })?;
         assets.insert(
             asset_name.clone(),
             Asset {
                 asset_name,
                 mimetype,
                 content,
+                created_at: created_at.into(),
+                updated_at: updated_at.into(),
             },
         );
     }
@@ -1644,6 +1666,7 @@ pub fn delete_script(uri: &str) -> bool {
 /// Helper function to get static assets embedded at compile time
 fn get_static_assets() -> HashMap<String, Asset> {
     let mut m = HashMap::new();
+    let now = std::time::SystemTime::now();
 
     // Logo asset
     let logo_content = include_bytes!("../assets/logo.svg").to_vec();
@@ -1651,6 +1674,8 @@ fn get_static_assets() -> HashMap<String, Asset> {
         asset_name: "logo.svg".to_string(),
         mimetype: "image/svg+xml".to_string(),
         content: logo_content,
+        created_at: now,
+        updated_at: now,
     };
     m.insert("logo.svg".to_string(), logo);
 
@@ -1664,6 +1689,8 @@ fn get_static_assets() -> HashMap<String, Asset> {
         asset_name: "editor.css".to_string(),
         mimetype: "text/css".to_string(),
         content: editor_css_content,
+        created_at: now,
+        updated_at: now,
     };
     m.insert("editor.css".to_string(), editor_css);
 
@@ -1672,6 +1699,8 @@ fn get_static_assets() -> HashMap<String, Asset> {
         asset_name: "engine.css".to_string(),
         mimetype: "text/css".to_string(),
         content: engine_css_content,
+        created_at: now,
+        updated_at: now,
     };
     m.insert("engine.css".to_string(), engine_css);
 
@@ -1680,6 +1709,8 @@ fn get_static_assets() -> HashMap<String, Asset> {
         asset_name: "editor.js".to_string(),
         mimetype: "application/javascript".to_string(),
         content: editor_js_content,
+        created_at: now,
+        updated_at: now,
     };
     m.insert("editor.js".to_string(), editor_js);
 
@@ -1688,6 +1719,8 @@ fn get_static_assets() -> HashMap<String, Asset> {
         asset_name: "favicon.ico".to_string(),
         mimetype: "image/x-icon".to_string(),
         content: favicon_content,
+        created_at: now,
+        updated_at: now,
     };
     m.insert("favicon.ico".to_string(), favicon);
 

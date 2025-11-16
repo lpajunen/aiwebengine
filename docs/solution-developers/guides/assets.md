@@ -129,8 +129,14 @@ Files are immediately available at their URLs.
 
 ```javascript
 // List available assets
-const assetPaths = assetStorage.listAssets();
-console.log("Available assets:", assetPaths);
+const assetsJson = assetStorage.listAssets();
+const assets = JSON.parse(assetsJson);
+console.log("Available assets:", assets);
+
+// Access asset metadata
+assets.forEach((asset) => {
+  console.log(`${asset.name}: ${asset.size} bytes, ${asset.mimetype}`);
+});
 
 // Fetch asset data
 const assetData = assetStorage.fetchAsset("/logo.png");
@@ -363,20 +369,25 @@ assets/
 
 ```javascript
 function assetGalleryHandler(req) {
-  // Get all assets
-  const assetPaths = assetStorage.listAssets();
+  // Get all assets with metadata
+  const assetsJson = assetStorage.listAssets();
+  const assets = JSON.parse(assetsJson);
 
   // Filter for images
-  const images = assetPaths.filter((path) => {
-    const ext = path.split(".").pop().toLowerCase();
-    return ["png", "jpg", "jpeg", "gif", "svg"].includes(ext);
+  const images = assets.filter((asset) => {
+    return asset.mimetype.startsWith(\"image/\");
   });
 
   // Build HTML gallery
   const imageCards = images
-    .map((path) => {
+    .map((asset) => {
       return `
-      <div class="image-card">
+      <div class=\"image-card\">
+        <img src=\"/${asset.name}\" alt=\"${asset.name}\">
+        <p>${asset.name} (${Math.round(asset.size / 1024)}KB)</p>
+      </div>
+    `;
+    })
         <img src="${path}" alt="${path}">
         <p>${path}</p>
       </div>
@@ -492,11 +503,21 @@ routeRegistry.registerRoute("/upload-form", "uploadFormHandler", "GET");
 
 ### `assetStorage.listAssets()`
 
-Returns array of all asset paths.
+Returns JSON string with metadata for all assets.
 
 ```javascript
-const assets = assetStorage.listAssets();
-// ["/logo.png", "/css/style.css", "/js/app.js"]
+const assetsJson = assetStorage.listAssets();
+const assets = JSON.parse(assetsJson);
+// [
+//   {
+//     "name": "logo.png",
+//     "size": 1024,
+//     "mimetype": "image/png",
+//     "createdAt": 1699564800000,
+//     "updatedAt": 1699564800000
+//   },
+//   { ... }
+// ]
 ```
 
 ### `assetStorage.fetchAsset(publicPath)`
@@ -795,8 +816,10 @@ routeRegistry.registerRoute("/manifest.json", "pwaManifestHandler", "GET");
 ## Quick Reference
 
 ```javascript
-// List all assets
-const assets = assetStorage.listAssets();
+// List all assets with metadata
+const assetsJson = assetStorage.listAssets();
+const assets = JSON.parse(assetsJson);
+// Each asset has: name, size, mimetype, createdAt, updatedAt
 
 // Get asset data
 const assetJson = assetStorage.fetchAsset("/logo.png");

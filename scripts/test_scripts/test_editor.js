@@ -18,12 +18,16 @@ function testEditorAPI(req) {
 
     // Test 2: List assets
     testResults.push("Testing asset listing...");
-    const assets =
+    const assetsJson =
       typeof assetStorage !== "undefined" &&
       typeof assetStorage.listAssets === "function"
         ? assetStorage.listAssets()
-        : [];
-    testResults.push(`Found ${assets.length} assets: ${assets.join(", ")}`);
+        : "[]";
+    const assetMetadata = JSON.parse(assetsJson);
+    const assetNames = assetMetadata.map((a) => a.name);
+    testResults.push(
+      `Found ${assetNames.length} assets: ${assetNames.join(", ")}`,
+    );
 
     // Test 3: List logs
     testResults.push("Testing log listing...");

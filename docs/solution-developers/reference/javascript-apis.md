@@ -218,9 +218,15 @@ The `assetStorage` object provides functions for managing assets (files) in the 
 
 ### assetStorage.listAssets()
 
-Returns an array of all asset names in the repository.
+Returns a JSON string containing metadata for all assets in the repository.
 
-**Returns:** Array of strings (asset names)
+**Returns:** JSON string with array of asset metadata objects. Each object contains:
+
+- `name` (string): Asset name/identifier
+- `size` (number): Size in bytes
+- `mimetype` (string): MIME type of the asset
+- `createdAt` (number): Creation timestamp (milliseconds since Unix epoch)
+- `updatedAt` (number): Last update timestamp (milliseconds since Unix epoch)
 
 **Required Capability:** `ReadAssets`
 
@@ -228,11 +234,24 @@ Returns an array of all asset names in the repository.
 
 ```javascript
 function listAllAssets(req) {
-  const assetNames = assetStorage.listAssets();
+  const assetsJson = assetStorage.listAssets();
+  const assetMetadata = JSON.parse(assetsJson);
+
+  // Map to simpler format if needed
+  const assetList = assetMetadata.map((asset) => ({
+    name: asset.name,
+    size: asset.size,
+    type: asset.mimetype,
+    created: new Date(asset.createdAt).toISOString(),
+    updated: new Date(asset.updatedAt).toISOString(),
+  }));
 
   return {
     status: 200,
-    body: JSON.stringify({ assets: assetNames, count: assetNames.length }),
+    body: JSON.stringify({
+      assets: assetList,
+      count: assetList.length,
+    }),
     contentType: "application/json",
   };
 }
@@ -433,11 +452,15 @@ function assetHandler(req) {
   const path = req.path;
 
   if (method === "GET" && path === "/assets") {
-    // List all assets
-    const assets = assetStorage.listAssets();
+    // List all assets with metadata
+    const assetsJson = assetStorage.listAssets();
+    const assets = JSON.parse(assetsJson);
     return {
       status: 200,
-      body: JSON.stringify({ assets: assets }),
+      body: JSON.stringify({
+        assets: assets,
+        count: assets.length,
+      }),
       contentType: "application/json",
     };
   }

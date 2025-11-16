@@ -138,10 +138,13 @@ fn test_asset_management() {
 
     // Test upsert and fetch dynamic asset
     let test_content = b"test content".to_vec();
+    let now = std::time::SystemTime::now();
     let test_asset = repository::Asset {
         asset_name: "test.txt".to_string(),
         mimetype: "text/plain".to_string(),
         content: test_content.clone(),
+        created_at: now,
+        updated_at: now,
     };
     let _ = repository::upsert_asset(test_asset);
 

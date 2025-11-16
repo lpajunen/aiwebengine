@@ -2,7 +2,7 @@ use base64::Engine;
 use rquickjs::{Function, Result as JsResult, function::Opt};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 
 use crate::repository;
 use crate::secrets::SecretsManager;
@@ -742,13 +742,13 @@ impl SecureGlobalContext {
         let user_ctx_list = user_context.clone();
         let list_assets = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<Vec<String>> {
+            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
                 // Check capability
                 if let Err(_e) =
                     user_ctx_list.require_capability(&crate::security::Capability::ReadAssets)
                 {
-                    // Return empty array if no permission (JavaScript expects an array)
-                    return Ok(Vec::new());
+                    // Return empty array JSON if no permission
+                    return Ok("[]".to_string());
                 }
 
                 debug!(
@@ -757,8 +757,34 @@ impl SecureGlobalContext {
                 );
 
                 let assets = repository::fetch_assets();
-                let asset_names: Vec<String> = assets.keys().cloned().collect();
-                Ok(asset_names)
+
+                // Build JSON array of asset metadata (matching listScripts pattern)
+                let assets_json: Vec<serde_json::Value> = assets
+                    .values()
+                    .map(|asset| {
+                        serde_json::json!({
+                            "name": asset.asset_name,
+                            "size": asset.content.len(),
+                            "mimetype": asset.mimetype,
+                            "createdAt": asset.created_at
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as f64,
+                            "updatedAt": asset.updated_at
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as f64,
+                        })
+                    })
+                    .collect();
+
+                match serde_json::to_string(&assets_json) {
+                    Ok(json) => Ok(json),
+                    Err(e) => {
+                        error!("Failed to serialize assets to JSON: {}", e);
+                        Ok("[]".to_string())
+                    }
+                }
             },
         )?;
         asset_storage.set("listAssets", list_assets)?;
@@ -856,10 +882,13 @@ impl SecureGlobalContext {
                 });
 
                 // Call repository directly (sync operation)
+                let now = std::time::SystemTime::now();
                 let asset = repository::Asset {
                     asset_name: asset_name.clone(),
                     mimetype,
                     content,
+                    created_at: now,
+                    updated_at: now,
                 };
                 match repository::upsert_asset(asset) {
                     Ok(_) => Ok(format!("Asset '{}' upserted successfully", asset_name)),

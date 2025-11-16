@@ -7,10 +7,13 @@ function asset_handler(req) {
     if (method === "GET") {
       if (path === "/assets") {
         // List all assets
-        const assets = assetStorage.listAssets();
+        const assetsJson = assetStorage.listAssets();
+        const assetMetadata = JSON.parse(assetsJson);
+        // Extract just the names for backwards compatibility
+        const assetNames = assetMetadata.map((a) => a.name);
         return {
           status: 200,
-          body: JSON.stringify({ assets }),
+          body: JSON.stringify({ assets: assetNames, metadata: assetMetadata }),
           contentType: "application/json",
         };
       } else if (path.startsWith("/assets/")) {
