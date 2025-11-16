@@ -49,7 +49,7 @@ function fetchWithSecret(req) {
   console.log("Fetching with secret injection");
 
   // Check if the secret exists
-  if (!Secrets.exists("example_api_key")) {
+  if (!secretStorage.exists("example_api_key")) {
     return {
       status: 503,
       body: JSON.stringify({

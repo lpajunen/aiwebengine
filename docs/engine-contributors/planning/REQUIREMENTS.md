@@ -437,8 +437,8 @@ The engine MUST provide comprehensive secret management:
 
 - **JavaScript can only reference secrets by identifier** - Never retrieve values
 - **Rust layer injects secrets at point of use** - HTTP requests (via template syntax), AI API calls, database connections
-- Scripts can check if a secret exists (`Secrets.exists()`) without seeing its value
-- Scripts can list secret identifiers (`Secrets.list()`) but never values
+- Scripts can check if a secret exists (`secretStorage.exists()`) without seeing its value
+- Scripts can list secret identifiers (`secretStorage.list()`) but never values
 - Editor interface shows secret identifiers but never reveals values after creation
 - No API (JavaScript, REST, or otherwise) can retrieve secret values after storage
 
@@ -1507,9 +1507,9 @@ The engine MUST expose secrets management API to JavaScript:
 
 **Core API**:
 
-- `Secrets.exists(identifier)` - Check if secret exists without retrieving value (returns boolean)
-- `Secrets.list()` - List available secret identifiers (not values, returns array of strings)
-- ~~`Secrets.get(identifier)`~~ - **REMOVED** - JavaScript must never retrieve secret values directly
+- `secretStorage.exists(identifier)` - Check if secret exists without retrieving value (returns boolean)
+- `secretStorage.list()` - List available secret identifiers (not values, returns array of strings)
+- ~~`secretStorage.get(identifier)`~~ - **REMOVED** - JavaScript must never retrieve secret values directly
 
 **Critical Security Principle**:
 
@@ -1534,7 +1534,7 @@ JavaScript code can ONLY check if secrets exist or list their identifiers. JavaS
 
 ```javascript
 // Check if secret is configured before using a feature
-if (Secrets.exists("sendgrid_api_key")) {
+if (secretStorage.exists("sendgrid_api_key")) {
   // Enable email integration
   // Actual secret will be injected by Rust during fetch()
 } else {
@@ -1547,7 +1547,7 @@ if (Secrets.exists("sendgrid_api_key")) {
 }
 
 // List available secrets (identifiers only) for feature discovery
-const availableSecrets = Secrets.list();
+const availableSecrets = secretStorage.list();
 // Returns: ['stripe_api_key', 'sendgrid_token', 'anthropic_api_key']
 
 // Use secrets in HTTP requests via template syntax (see REQ-JSAPI-007)

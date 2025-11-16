@@ -299,8 +299,6 @@ function apiListScripts(req) {
 
     const scriptMetadata = JSON.parse(scriptsJson);
 
-    console.log("Script metadata from listScripts:", scriptMetadata);
-
     // Sort scripts alphabetically (case-insensitive)
     scriptMetadata.sort((a, b) =>
       a.uri.toLowerCase().localeCompare(b.uri.toLowerCase()),
@@ -1017,7 +1015,7 @@ function apiAIAssistant(req) {
   const currentAssetContent = body.currentAssetContent || null;
 
   // Check if Anthropic API key is configured
-  if (!Secrets.exists("anthropic_api_key")) {
+  if (!secretStorage.exists("anthropic_api_key")) {
     console.log(`AI Assistant: ERROR - Anthropic API key not configured`);
     return {
       status: 503,
@@ -1118,13 +1116,20 @@ AVAILABLE JAVASCRIPT APIs:
    - Each script has its own isolated storage namespace
    - Data persists across requests and server restarts (when PostgreSQL configured)
 
-4. fetch(url, options) - Make HTTP requests to external APIs
+4. secretStorage - Read-only access to check secret availability
+   - secretStorage.exists(identifier) - Check if a secret exists (returns boolean)
+   - secretStorage.list() - List all secret identifiers (returns array of strings)
+   - SECURITY: Secret values are NEVER exposed to JavaScript
+   - Use {{secret:identifier}} syntax in fetch() headers to inject secret values
+   - identifier: string (secret name)
+
+5. fetch(url, options) - Make HTTP requests to external APIs
    - url: string
    - options: JSON string with {method, headers, body, timeout_ms}
    - Supports {{secret:identifier}} in headers for secure API keys
    - Returns: JSON string with {status, ok, headers, body}
 
-5. graphQLRegistry - Object containing all GraphQL-related functions:
+6. graphQLRegistry - Object containing all GraphQL-related functions:
    
    graphQLRegistry.registerQuery(name, schema, resolverName) - Register GraphQL query
    - name: string (query name)

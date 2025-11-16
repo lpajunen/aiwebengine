@@ -39,8 +39,8 @@ aiwebengine provides secure secrets management that keeps sensitive values (API 
               ↕ (Safe API)
 ┌─────────────────────────────────────┐
 │   JavaScript Layer (Untrusted)      │
-│  • Can check: Secrets.exists()      │
-│  • Can list: Secrets.list()         │
+│  • Can check: secretStorage.exists()│
+│  • Can list: secretStorage.list()   │
 │  • CANNOT access secret values      │
 └─────────────────────────────────────┘
 ```
@@ -532,7 +532,7 @@ JavaScript code can check if secrets exist but CANNOT access values:
 
 ```javascript
 // ✅ Check if secret exists
-if (Secrets.exists("anthropic_api_key")) {
+if (secretStorage.exists("anthropic_api_key")) {
   console.log("Anthropic API key is configured");
 } else {
   return {
@@ -543,12 +543,12 @@ if (Secrets.exists("anthropic_api_key")) {
 }
 
 // ✅ List all available secrets
-const secrets = Secrets.list();
+const secrets = secretStorage.list();
 console.log("Available secrets:", secrets);
 // Output: ['anthropic_api_key', 'openai_api_key', 'stripe_api_key']
 
 // ❌ Cannot get secret values
-// Secrets.get('anthropic_api_key');  // This function does NOT exist!
+// secretStorage.get('anthropic_api_key');  // This function does NOT exist!
 ```
 
 #### Template Injection in HTTP Requests
@@ -558,7 +558,8 @@ Secret values are automatically injected by Rust when making HTTP requests:
 ```javascript
 function aiChatHandler(req) {
   // Check secret exists first
-  if (!Secrets.exists('anthropic_api_key')) {
+  function handleRequest(req) {
+  if (!secretStorage.exists('anthropic_api_key')) {
     return {
       status: 503,
       body: 'API key not configured',
@@ -913,7 +914,7 @@ ALTER USER aiwebengine_new RENAME TO aiwebengine;
 
 ### Secret Not Found
 
-**Symptom:** `Secrets.exists('key')` returns false
+**Symptom:** `secretStorage.exists('key')` returns false
 
 **Solution:**
 
@@ -933,7 +934,7 @@ ALTER USER aiwebengine_new RENAME TO aiwebengine;
 
 **Solution:**
 
-1. Verify secret exists: `Secrets.exists('key')`
+1. Verify secret exists: `secretStorage.exists('key')`
 2. Check template syntax (no spaces)
 3. Verify identifier matches exactly
 4. Check server logs for injection errors

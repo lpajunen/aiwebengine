@@ -936,8 +936,8 @@ impl SecureGlobalContext {
     /// Setup secure secrets functions
     ///
     /// Exposes a read-only JavaScript API for secrets management:
-    /// - Secrets.exists(identifier): boolean - Check if a secret exists
-    /// - Secrets.list(): string[] - List all secret identifiers
+    /// - secretStorage.exists(identifier): boolean - Check if a secret exists
+    /// - secretStorage.list(): string[] - List all secret identifiers
     ///
     /// SECURITY: Secret values are NEVER exposed to JavaScript. Only existence checks
     /// and identifier listing are allowed. Actual secret values are injected by Rust
@@ -951,10 +951,10 @@ impl SecureGlobalContext {
             .clone()
             .or_else(crate::secrets::get_global_secrets_manager);
 
-        // Create the Secrets namespace object
-        let secrets_obj = rquickjs::Object::new(ctx.clone())?;
+        // Create the secretStorage namespace object
+        let secret_storage_obj = rquickjs::Object::new(ctx.clone())?;
 
-        // Secrets.exists(identifier) - Check if a secret exists
+        // secretStorage.exists(identifier) - Check if a secret exists
         let secrets_mgr_exists = secrets_manager.clone();
         let exists_fn = Function::new(
             ctx.clone(),
@@ -967,9 +967,9 @@ impl SecureGlobalContext {
                 }
             },
         )?;
-        secrets_obj.set("exists", exists_fn)?;
+        secret_storage_obj.set("exists", exists_fn)?;
 
-        // Secrets.list() - List all secret identifiers
+        // secretStorage.list() - List all secret identifiers
         let secrets_mgr_list = secrets_manager.clone();
         let list_fn = Function::new(
             ctx.clone(),
@@ -982,12 +982,12 @@ impl SecureGlobalContext {
                 }
             },
         )?;
-        secrets_obj.set("list", list_fn)?;
+        secret_storage_obj.set("list", list_fn)?;
 
-        // Set the Secrets object on the global scope
-        global.set("Secrets", secrets_obj)?;
+        // Set the secretStorage object on the global scope
+        global.set("secretStorage", secret_storage_obj)?;
 
-        debug!("Secrets JavaScript API initialized (read-only interface)");
+        debug!("secretStorage JavaScript API initialized (read-only interface)");
 
         Ok(())
     }

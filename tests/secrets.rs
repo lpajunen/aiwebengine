@@ -3,9 +3,9 @@ use aiwebengine::security::UserContext;
 
 #[test]
 fn test_secrets_exists_returns_false_without_manager() {
-    // Test that Secrets.exists() returns false when no secrets manager is provided
+    // Test that secretStorage.exists() returns false when no secrets manager is provided
     let script = r#"
-        const result = Secrets.exists('test_secret');
+        const result = secretStorage.exists('test_secret');
         if (result !== false) {
             throw new Error('Expected false when no secrets manager');
         }
@@ -23,9 +23,9 @@ fn test_secrets_exists_returns_false_without_manager() {
 
 #[test]
 fn test_secrets_list_returns_empty_without_manager() {
-    // Test that Secrets.list() returns empty array when no secrets manager is provided
+    // Test that secretStorage.list() returns empty array when no secrets manager is provided
     let script = r#"
-        const result = Secrets.list();
+        const result = secretStorage.list();
         if (!Array.isArray(result)) {
             throw new Error('Expected array');
         }
@@ -46,10 +46,10 @@ fn test_secrets_list_returns_empty_without_manager() {
 
 #[test]
 fn test_secrets_get_not_exposed() {
-    // Test that Secrets.get() does NOT exist (security requirement)
+    // Test that secretStorage.get() does NOT exist (security requirement)
     let script = r#"
-        if (typeof Secrets.get !== 'undefined') {
-            throw new Error('Secrets.get() should NOT be exposed to JavaScript');
+        if (typeof secretStorage.get !== 'undefined') {
+            throw new Error('secretStorage.get() should NOT be exposed to JavaScript');
         }
     "#;
 
@@ -70,7 +70,7 @@ fn test_secrets_cannot_access_values_directly() {
         // Try various tricks to access secret values
         try {
             // Try to call internal functions
-            if (Secrets.constructor) {
+            if (secretStorage.constructor) {
                 throw new Error('Should not access constructor');
             }
         } catch (e) {
@@ -79,7 +79,7 @@ fn test_secrets_cannot_access_values_directly() {
         
         // Verify only safe methods exist
         const allowedMethods = ['exists', 'list'];
-        const actualMethods = Object.keys(Secrets).filter(key => typeof Secrets[key] === 'function');
+        const actualMethods = Object.keys(secretStorage).filter(key => typeof secretStorage[key] === 'function');
         
         for (const method of actualMethods) {
             if (!allowedMethods.includes(method)) {
@@ -100,6 +100,6 @@ fn test_secrets_cannot_access_values_directly() {
 
 // Note: Tests with actual SecretsManager will be added once main.rs integration is complete
 // Those tests will verify:
-// - Secrets.exists() returns true for configured secrets
-// - Secrets.list() returns configured secret identifiers
+// - secretStorage.exists() returns true for configured secrets
+// - secretStorage.list() returns configured secret identifiers
 // - Secret values are never exposed to JavaScript

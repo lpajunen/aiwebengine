@@ -1214,7 +1214,7 @@ End-to-end scenarios combining multiple features.
    - AI generates HTML form for user input
    - AI generates POST handler that processes form data
    - AI generates code to call external API using stored credentials
-   - Script references key by identifier only: `Secrets.get("stripe_api_key")`
+   - Script references key by identifier only: `secretStorage.exists("stripe_api_key")`
 4. **End User** submits form:
    - Fills out form with required data
    - Submits to engine endpoint
@@ -1277,7 +1277,7 @@ async function submitContactForm(req) {
 
   try {
     // Check if API key is configured
-    if (!Secrets.exists("sendgrid_api_key")) {
+    if (!secretStorage.exists("sendgrid_api_key")) {
       return Response.json(
         { error: "Email service not configured" },
         { status: 503 },
@@ -1376,7 +1376,7 @@ Response: {
 
 **Security Constraints**:
 
-1. **Scripts cannot access secret values directly** - Only through `Secrets.get()` API
+1. **Scripts cannot access secret values directly** - Only check existence via `secretStorage.exists()` and list via `secretStorage.list()`
 2. **Secrets never in logs** - Engine redacts secrets from all log output
 3. **Secrets never in error messages** - Errors mention key identifier only
 4. **Secrets never in responses** - Scripts cannot accidentally expose keys
