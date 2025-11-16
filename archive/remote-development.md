@@ -152,9 +152,9 @@ if (Secrets.exists("anthropic_api_key")) {
 - Auto-refresh every 5 seconds
 - Shows all server activity including script executions
 
-### Manual Refresh
+### Jump to latest
 
-- Click **"Refresh"** to manually update logs
+- Click **"Jump to latest"** to scroll the view to the newest log entry
 - Useful when auto-refresh is disabled
 
 ## API Testing

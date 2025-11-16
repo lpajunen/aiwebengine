@@ -50,6 +50,7 @@ impl UserContext {
                 Capability::WriteAssets,
                 Capability::DeleteScripts, // Allow script deletion in dev mode
                 Capability::DeleteAssets,  // Allow asset deletion in dev mode
+                Capability::DeleteLogs,    // Allow log management in dev mode
                 Capability::ManageGraphQL, // Allow GraphQL operations in dev mode
                 Capability::ManageStreams, // Allow stream operations in dev mode
             ]
@@ -89,6 +90,7 @@ impl UserContext {
             Capability::ReadAssets,
             Capability::WriteAssets,
             Capability::DeleteAssets,
+            Capability::DeleteLogs,
             Capability::ViewLogs,
             Capability::ManageStreams,
             Capability::ManageGraphQL,
@@ -130,6 +132,7 @@ mod tests {
         assert!(!dev_user.is_authenticated);
         assert!(dev_user.user_id.is_none());
         assert!(dev_user.has_capability(&Capability::ViewLogs));
+        assert!(dev_user.has_capability(&Capability::DeleteLogs)); // Allowed in dev mode
         assert!(dev_user.has_capability(&Capability::ReadScripts));
         assert!(dev_user.has_capability(&Capability::WriteScripts));
         assert!(dev_user.has_capability(&Capability::ReadAssets));
@@ -165,6 +168,7 @@ mod tests {
         assert_eq!(user.user_id, Some("user123".to_string()));
         assert!(user.has_capability(&Capability::WriteScripts));
         assert!(!user.has_capability(&Capability::DeleteScripts));
+        assert!(!user.has_capability(&Capability::DeleteLogs));
     }
 
     #[test]
@@ -175,6 +179,7 @@ mod tests {
         assert!(user.has_capability(&Capability::DeleteScripts));
         assert!(user.has_capability(&Capability::WriteScripts));
         assert!(user.has_capability(&Capability::ManageGraphQL));
+        assert!(user.has_capability(&Capability::DeleteLogs));
     }
 
     #[test]

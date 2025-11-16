@@ -295,3 +295,46 @@ async fn test_editor_functionality() {
     // Cleanup
     context.cleanup().await.expect("Failed to cleanup");
 }
+
+#[tokio::test]
+async fn test_prune_logs_endpoint() {
+    let context = common::TestContext::new();
+
+    // Start server
+    let port = context
+        .start_server()
+        .await
+        .expect("Server failed to start");
+    common::wait_for_server(port, 20)
+        .await
+        .expect("Server not ready");
+
+    // Seed logs to ensure pruning will be required
+    let script_uri = "test://prune-endpoint";
+    for i in 0..30 {
+        repository::insert_log_message(script_uri, &format!("log-{}", i), "INFO");
+    }
+
+    // Confirm logs exist
+    let pre_count = repository::fetch_log_messages(script_uri).len();
+    assert!(pre_count >= 30, "Expected at least 30 logs before prune");
+
+    let client = reqwest::Client::new();
+    let delete_response = client
+        .delete(format!("http://127.0.0.1:{}/api/logs", port))
+        .send()
+        .await
+        .expect("Delete logs request failed");
+
+    assert_eq!(delete_response.status(), 200);
+
+    // Verify pruning occurred - less or equal to 20 for the specific script
+    let post_count = repository::fetch_log_messages(script_uri).len();
+    assert!(
+        post_count <= 20,
+        "Expected logs pruned to 20 or less after DELETE"
+    );
+
+    // Cleanup
+    context.cleanup().await.expect("Failed to cleanup");
+}

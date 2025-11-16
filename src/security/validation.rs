@@ -54,6 +54,7 @@ pub enum Capability {
     ReadAssets,
     WriteAssets,
     DeleteAssets,
+    DeleteLogs,
     ViewLogs,
     ManageStreams,
     ManageGraphQL,

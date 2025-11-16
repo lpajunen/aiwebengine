@@ -42,7 +42,7 @@ A web-based editor for managing scripts and assets in aiwebengine.
 
 - **View Logs**: Logs are displayed in real-time with timestamps
 - **Auto-refresh**: Logs automatically refresh every 5 seconds
-- **Manual Refresh**: Click "Refresh" to manually update logs
+- **Jump to latest**: Click "Jump to latest" to scroll the view to the newest log entry
 
 ### API Testing
 

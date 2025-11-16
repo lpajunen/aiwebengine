@@ -195,11 +195,11 @@ function serveEditor(req) {
                     <div class="logs-header">
                         <h3>Server Logs</h3>
                         <div class="logs-controls">
-                            <button id="refresh-logs-btn" class="btn btn-secondary">Refresh</button>
+                            <button id="refresh-logs-btn" class="btn btn-secondary" aria-label="Jump to latest logs">Jump to latest</button>
                             <button id="clear-logs-btn" class="btn btn-warning">Clear</button>
                         </div>
                     </div>
-                    <div id="logs-content" class="logs-content">
+                    <div id="logs-content" class="logs-content" tabindex="0">
                         <!-- Logs will be loaded here -->
                     </div>
                 </div>
@@ -685,6 +685,34 @@ function apiGetLogs(req) {
     return {
       status: 200,
       body: JSON.stringify(formattedLogs),
+      contentType: "application/json",
+    };
+  } catch (error) {
+    return {
+      status: 500,
+      body: JSON.stringify({ error: error.message }),
+      contentType: "application/json",
+    };
+  }
+}
+
+// API: Prune logs (DELETE /api/logs)
+function apiPruneLogs(req) {
+  try {
+    const result =
+      typeof console.pruneLogs === "function" ? console.pruneLogs() : "";
+    // If the console.pruneLogs() returns an error message, respond with 500
+    if (typeof result === "string" && result.startsWith("Error:")) {
+      return {
+        status: 500,
+        body: JSON.stringify({ error: result }),
+        contentType: "application/json",
+      };
+    }
+
+    return {
+      status: 200,
+      body: JSON.stringify({ message: result || "Pruned logs" }),
       contentType: "application/json",
     };
   } catch (error) {
@@ -1511,6 +1539,7 @@ function init(context) {
     "POST",
   );
   routeRegistry.registerRoute("/api/logs", "apiGetLogs", "GET");
+  routeRegistry.registerRoute("/api/logs", "apiPruneLogs", "DELETE");
   routeRegistry.registerRoute("/api/assets", "apiGetAssets", "GET");
   routeRegistry.registerRoute("/api/assets", "apiSaveAsset", "POST");
   routeRegistry.registerRoute("/api/assets/*", "apiGetAsset", "GET");

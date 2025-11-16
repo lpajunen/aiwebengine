@@ -325,12 +325,62 @@ impl SecureGlobalContext {
         global.set("__writeLog", write_log)?;
         global.set("__listLogs", list_logs)?;
         global.set("__listLogsForUri", list_logs_for_uri)?;
+        // Secure pruneLogs function - allows pruning of logs per repository (keeps 20 entries per script)
+        let user_ctx_prune = user_context.clone();
+        let auditor_prune = auditor.clone();
+        let script_uri_prune = script_uri_owned.clone();
+        let config_prune = config.clone();
+        let prune_logs = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
+                // Check capability
+                if let Err(e) =
+                    user_ctx_prune.require_capability(&crate::security::Capability::DeleteLogs)
+                {
+                    if config_prune.enable_audit_logging {
+                        let rt = tokio::runtime::Handle::try_current();
+                        if let Ok(_rt) = rt {
+                            let auditor_clone = auditor_prune.clone();
+                            let user_id = user_ctx_prune.user_id.clone();
+                            tokio::spawn(async move {
+                                let _ = auditor_clone
+                                    .log_authz_failure(
+                                        user_id,
+                                        "log".to_string(),
+                                        "delete".to_string(),
+                                        "DeleteLogs".to_string(),
+                                    )
+                                    .await;
+                            });
+                        }
+                    }
+                    return Ok(format!("Error: {}", e));
+                }
+
+                debug!(
+                    script_uri = %script_uri_prune,
+                    user_id = ?user_ctx_prune.user_id,
+                    "Secure console.pruneLogs called"
+                );
+
+                // Call repository prune
+                match repository::prune_log_messages() {
+                    Ok(_) => Ok("Pruned logs".to_string()),
+                    Err(e) => {
+                        warn!("Failed to prune logs: {}", e);
+                        Ok(format!("Error: {}", e))
+                    }
+                }
+            },
+        )?;
+        global.set("__pruneLogs", prune_logs)?;
         ctx.eval::<(), _>(
             r#"
             (function() {
                 const writeLog = globalThis.__writeLog;
                 const listLogs = globalThis.__listLogs;
                 const listLogsForUri = globalThis.__listLogsForUri;
+                const pruneLogs = globalThis.__pruneLogs;
                 globalThis.console = {
                     log: function(msg) { return writeLog(msg, "LOG"); },
                     info: function(msg) { return writeLog(msg, "INFO"); },
@@ -338,11 +388,13 @@ impl SecureGlobalContext {
                     error: function(msg) { return writeLog(msg, "ERROR"); },
                     debug: function(msg) { return writeLog(msg, "DEBUG"); },
                     listLogs: function() { return listLogs(); },
-                    listLogsForUri: function(uri) { return listLogsForUri(uri); }
+                    listLogsForUri: function(uri) { return listLogsForUri(uri); },
+                    pruneLogs: function() { return pruneLogs(); }
                 };
                 delete globalThis.__writeLog;
                 delete globalThis.__listLogs;
                 delete globalThis.__listLogsForUri;
+                delete globalThis.__pruneLogs;
             })();
         "#,
         )?;

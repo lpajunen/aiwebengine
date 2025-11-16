@@ -366,9 +366,9 @@ function homeHandler(req) {
 2. Matching entries highlighted
 3. Use for debugging specific issues
 
-**Manual refresh:**
+**Jump to latest:**
 
-Click "Refresh" button for immediate update.
+Click "Jump to latest" to scroll the view to the newest log entry.
 
 ### Log Patterns in Output
 
@@ -803,7 +803,7 @@ utils/ - Helper scripts
 - Add `console.log()` to script
 - Execute script (make a request)
 - Select correct script
-- Click manual refresh
+- Click "Jump to latest" (scrolls view to newest entry)
 
 ## Editor API Endpoints
 

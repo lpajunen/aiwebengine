@@ -130,7 +130,7 @@ The easiest way to view logs:
 
 - Real-time updates
 - Filter by script
-- Manual refresh button
+- Jump to latest button (scrolls view to newest entry)
 - Timestamps included
 
 ### Method 2: `listLogs()` Function

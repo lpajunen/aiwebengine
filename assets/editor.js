@@ -113,13 +113,15 @@ class AIWebEngineEditor {
       .getElementById("delete-asset-btn")
       .addEventListener("click", () => this.deleteCurrentAsset());
 
-    // Logs
-    document
-      .getElementById("refresh-logs-btn")
-      .addEventListener("click", () => this.loadLogs());
-    document
-      .getElementById("clear-logs-btn")
-      .addEventListener("click", () => this.clearLogs());
+    // Logs - Jump to Latest (guarded event listeners)
+    const refreshLogsBtn = document.getElementById("refresh-logs-btn");
+    if (refreshLogsBtn) {
+      refreshLogsBtn.addEventListener("click", () => this.jumpToLatestLogs());
+    }
+    const clearLogsBtn = document.getElementById("clear-logs-btn");
+    if (clearLogsBtn) {
+      clearLogsBtn.addEventListener("click", () => this.clearLogs());
+    }
 
     // Routes
     document
@@ -904,6 +906,19 @@ function init(context) {
     }
   }
 
+  // Jump to the latest log entry without reloading
+  jumpToLatestLogs() {
+    const logsContent = document.getElementById("logs-content");
+    if (!logsContent) return;
+
+    // Scroll to the bottom of logs
+    logsContent.scrollTop = logsContent.scrollHeight;
+
+    // Briefly flash the logs area to indicate action (CSS handles animation)
+    logsContent.classList.add("logs-flash");
+    setTimeout(() => logsContent.classList.remove("logs-flash"), 500);
+  }
+
   // Helper method to check if element is scrolled to bottom
   isScrolledToBottom(element) {
     // Consider "at bottom" if within 50px of the bottom
@@ -916,8 +931,28 @@ function init(context) {
   }
 
   async clearLogs() {
-    // Note: This would require a backend endpoint to clear logs
-    this.showStatus("Clear logs functionality not implemented yet", "warning");
+    try {
+      this.showStatus("Clearing logs...", "info");
+      const response = await fetch("/api/logs", { method: "DELETE" });
+      if (response.ok) {
+        this.showStatus("Logs pruned successfully", "success");
+        // Refresh logs after successful prune
+        await this.loadLogs();
+      } else {
+        let body = {};
+        try {
+          body = await response.json();
+        } catch (e) {
+          /* ignore */
+        }
+        this.showStatus(
+          "Failed to prune logs: " + (body.error || response.statusText),
+          "error",
+        );
+      }
+    } catch (error) {
+      this.showStatus("Error pruning logs: " + error.message, "error");
+    }
   }
 
   // Routes Management
