@@ -908,7 +908,7 @@ async fn test_automatic_failed_connection_cleanup() {
 
     // Register a stream
     registry
-        .register_stream("/test_cleanup", "test_script.js")
+        .register_stream("/test_cleanup", "test_script.js", None)
         .unwrap();
 
     // Create connections
@@ -948,7 +948,7 @@ async fn test_global_registry_error_handling() {
 
     // Register a stream
     GLOBAL_STREAM_REGISTRY
-        .register_stream("/test_global", "test_script.js")
+        .register_stream("/test_global", "test_script.js", None)
         .unwrap();
 
     // Create a connection
@@ -987,10 +987,10 @@ async fn test_stream_registry_health_status() {
 
     // Register multiple streams
     registry
-        .register_stream("/health_test1", "script1.js")
+        .register_stream("/health_test1", "script1.js", None)
         .unwrap();
     registry
-        .register_stream("/health_test2", "script2.js")
+        .register_stream("/health_test2", "script2.js", None)
         .unwrap();
 
     // Add connections to one stream
@@ -1019,10 +1019,10 @@ async fn test_graceful_shutdown() {
 
     // Register streams and add connections
     registry
-        .register_stream("/shutdown_test1", "script1.js")
+        .register_stream("/shutdown_test1", "script1.js", None)
         .unwrap();
     registry
-        .register_stream("/shutdown_test2", "script2.js")
+        .register_stream("/shutdown_test2", "script2.js", None)
         .unwrap();
 
     let conn1 = StreamConnection::new();
@@ -1056,7 +1056,7 @@ async fn test_stale_connection_cleanup() {
 
     // Register a stream
     registry
-        .register_stream("/stale_test", "script.js")
+        .register_stream("/stale_test", "script.js", None)
         .unwrap();
 
     // Add connections

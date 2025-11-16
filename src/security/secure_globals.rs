@@ -1,5 +1,5 @@
 use base64::Engine;
-use rquickjs::{Function, Result as JsResult};
+use rquickjs::{Function, Result as JsResult, function::Opt};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, warn};
@@ -1728,7 +1728,12 @@ impl SecureGlobalContext {
         let script_uri_stream = script_uri_owned.clone();
         let register_stream_route = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, path: String| -> JsResult<String> {
+            move |_ctx: rquickjs::Ctx<'_>,
+                  path: String,
+                  customization_function: Opt<String>|
+                  -> JsResult<String> {
+                // Convert Opt to Option
+                let customization_function = customization_function.0;
                 // If streams are disabled, return success without doing anything
                 if !config_stream.enable_streams {
                     return Ok(format!(
@@ -1772,6 +1777,25 @@ impl SecureGlobalContext {
                         "Invalid stream path '{}': path too long (max 200 characters)",
                         path
                     ));
+                }
+
+                // Validate customization function name if provided
+                if let Some(ref func_name) = customization_function {
+                    if func_name.is_empty() {
+                        return Ok(
+                            "Invalid customization function: name cannot be empty".to_string()
+                        );
+                    }
+                    if func_name.len() > 100 {
+                        return Ok(
+                            "Invalid customization function: name too long (max 100 characters)"
+                                .to_string(),
+                        );
+                    }
+                    // Basic validation: should be a valid identifier
+                    if !func_name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                        return Ok("Invalid customization function: name must contain only alphanumeric characters and underscores".to_string());
+                    }
                 }
 
                 // Check capability
@@ -1831,9 +1855,11 @@ impl SecureGlobalContext {
                 }
 
                 // Register the stream
-                match crate::stream_registry::GLOBAL_STREAM_REGISTRY
-                    .register_stream(&path, &script_uri_stream)
-                {
+                match crate::stream_registry::GLOBAL_STREAM_REGISTRY.register_stream(
+                    &path,
+                    &script_uri_stream,
+                    customization_function,
+                ) {
                     Ok(()) => Ok(format!("Web stream '{}' registered successfully", path)),
                     Err(e) => Ok(format!("Failed to register stream '{}': {}", path, e)),
                 }

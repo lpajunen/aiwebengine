@@ -52,17 +52,35 @@ function health_check(req) {
 }
 
 // GraphQL subscription resolver for script updates
+// NEW: Returns filter criteria (empty object = broadcast to all connections)
 function scriptUpdatesResolver(req, args) {
   console.log("Client subscribed to scriptUpdates GraphQL subscription");
-  return {
-    type: "subscription_init",
-    uri: "system",
-    action: "initialized",
-    timestamp: new Date().toISOString(),
-  };
+  console.log("Request context: " + JSON.stringify(req));
+
+  // Return empty object to broadcast to all connections
+  // To filter, return an object like: { userId: req.auth.userId, role: "admin" }
+  return {};
+}
+
+// Stream customization function for script_updates
+// NEW: Returns connection filter criteria based on request context
+// This function is called once when a client connects to the stream
+function scriptUpdatesCustomizer(req) {
+  console.log("Customizing script_updates stream connection");
+  console.log("Request path: " + req.path);
+  console.log("Request query: " + JSON.stringify(req.query));
+  console.log("Request auth: " + JSON.stringify(req.auth));
+
+  // Return empty object to receive all messages
+  // To filter messages, return criteria like: { category: "feature_scripts" }
+  // Only messages with matching metadata will be sent to this connection
+  return {};
 }
 
 // Helper function to broadcast script update messages
+// NEW SEMANTICS: Message metadata in the JSON object will be used for filtering
+// Connections receive messages when their filter criteria (set by customization function)
+// is a subset of the message metadata
 function broadcastScriptUpdate(uri, action, details = {}) {
   try {
     var message = {
@@ -73,12 +91,15 @@ function broadcastScriptUpdate(uri, action, details = {}) {
     };
 
     // Add details to the message
+    // These properties become message metadata for filtering
     for (var key in details) {
       if (details.hasOwnProperty(key)) {
         message[key] = details[key];
       }
     }
 
+    // Broadcast to /script_updates stream
+    // All connections will receive this since we return {} from customization function
     routeRegistry.sendStreamMessage("/script_updates", JSON.stringify(message));
 
     // Send to GraphQL subscription using modern approach
@@ -615,8 +636,13 @@ function init(context) {
     routeRegistry.registerRoute("/read_script", "read_script_handler", "GET");
     routeRegistry.registerRoute("/script_logs", "script_logs_handler", "GET");
 
-    // Register WebSocket stream endpoint
-    routeRegistry.registerStreamRoute("/script_updates");
+    // Register WebSocket stream endpoint with customization function
+    // NEW API: registerStreamRoute(path, customizationFunction)
+    // The customization function returns filter criteria for each connection
+    routeRegistry.registerStreamRoute(
+      "/script_updates",
+      "scriptUpdatesCustomizer",
+    );
 
     // Register GraphQL subscription
     graphQLRegistry.registerSubscription(

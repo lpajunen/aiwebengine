@@ -993,6 +993,142 @@ pub fn execute_graphql_resolver(
     Ok(result_string)
 }
 
+/// Execute a stream customization function to get connection filter criteria
+///
+/// This function loads a script and calls the specified customization function with a request context.
+/// The function should return a JSON object representing the filter criteria for this connection.
+///
+/// # Arguments
+/// * `script_uri` - The URI of the script containing the customization function
+/// * `function_name` - The name of the customization function to call
+/// * `path` - The stream path
+/// * `query_params` - Query parameters from the connection request
+/// * `auth_context` - Optional authentication context
+///
+/// # Returns
+/// * `Ok(HashMap<String, String>)` - The filter criteria as key-value pairs
+/// * `Err(String)` - Error message if execution fails
+pub fn execute_stream_customization_function(
+    script_uri: &str,
+    function_name: &str,
+    path: &str,
+    query_params: &std::collections::HashMap<String, String>,
+    auth_context: Option<crate::auth::JsAuthContext>,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    let script_uri_owned = script_uri.to_string();
+    let function_name_owned = function_name.to_string();
+    let path_owned = path.to_string();
+    let query_params_owned = query_params.clone();
+
+    let rt = Runtime::new().map_err(|e| format!("runtime new: {}", e))?;
+    let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
+
+    let result_exec = ctx.with(
+        |ctx| -> Result<std::collections::HashMap<String, String>, rquickjs::Error> {
+            // Set up global functions with minimal security for customization function
+            let config = GlobalSecurityConfig {
+                enable_graphql_registration: false,
+                enable_streams: false,
+                enable_audit_logging: false,
+                ..Default::default()
+            };
+
+            setup_secure_global_functions(
+                &ctx,
+                &script_uri_owned,
+                UserContext::admin("stream-customization".to_string()),
+                &config,
+                None,
+                auth_context.clone(),
+                None,
+            )?;
+
+            // Load and execute the script
+            let script_content = repository::fetch_script(&script_uri_owned)
+                .ok_or_else(|| rquickjs::Error::new_from_js("Script", "not found"))?;
+
+            ctx.eval::<(), _>(script_content.as_str())?;
+
+            // Build request context object
+            let req_obj = rquickjs::Object::new(ctx.clone())?;
+
+            // Set path
+            req_obj.set("path", path_owned.clone())?;
+
+            // Set query params
+            let query_obj = rquickjs::Object::new(ctx.clone())?;
+            for (key, value) in &query_params_owned {
+                query_obj.set(key.as_str(), value.clone())?;
+            }
+            req_obj.set("query", query_obj)?;
+
+            // Set auth context
+            if let Some(ref auth) = auth_context {
+                let auth_obj = rquickjs::Object::new(ctx.clone())?;
+                auth_obj.set("isAuthenticated", auth.is_authenticated)?;
+                auth_obj.set("userId", auth.user_id.clone())?;
+                auth_obj.set("email", auth.email.clone())?;
+                auth_obj.set("name", auth.name.clone())?;
+                auth_obj.set("provider", auth.provider.clone())?;
+                auth_obj.set("isAdmin", auth.is_admin)?;
+                auth_obj.set("isEditor", auth.is_editor)?;
+                req_obj.set("auth", auth_obj)?;
+            } else {
+                let auth_obj = rquickjs::Object::new(ctx.clone())?;
+                auth_obj.set("isAuthenticated", false)?;
+                req_obj.set("auth", auth_obj)?;
+            }
+
+            // Get the customization function
+            let customization_func: rquickjs::Function =
+                ctx.globals().get(&function_name_owned).map_err(|_| {
+                    let msg = format!("'{}' not found", function_name_owned);
+                    rquickjs::Error::new_from_js("Function", msg.leak())
+                })?;
+
+            // Call the function with req object
+            let result_value: rquickjs::Value = customization_func.call((req_obj,))?;
+
+            // Convert result to HashMap
+            let mut filter_criteria = std::collections::HashMap::new();
+
+            if result_value.is_object()
+                && let Some(result_obj) = result_value.as_object()
+            {
+                // Iterate over object properties
+                for key_str in result_obj.keys::<String>().flatten() {
+                    if let Ok(value) = result_obj.get::<_, rquickjs::Value>(&key_str) {
+                        // Convert value to string
+                        let value_str = if value.is_string() {
+                            value
+                                .as_string()
+                                .and_then(|s| s.to_string().ok())
+                                .unwrap_or_default()
+                        } else {
+                            // Use JSON.stringify for non-string values
+                            let json_obj: rquickjs::Object = ctx.globals().get("JSON")?;
+                            let json_stringify: rquickjs::Function = json_obj.get("stringify")?;
+                            json_stringify
+                                .call::<_, String>((value,))
+                                .unwrap_or_default()
+                        };
+                        filter_criteria.insert(key_str, value_str);
+                    }
+                }
+            }
+
+            Ok(filter_criteria)
+        },
+    );
+
+    let filter_criteria =
+        result_exec.map_err(|e| format!("Customization function execution error: {}", e))?;
+
+    // Ensure clean shutdown
+    drop(ctx);
+    Ok(filter_criteria)
+}
+
 /// Calls the init() function in a script if it exists
 ///
 /// This function executes a script and checks if it has an `init()` function defined.

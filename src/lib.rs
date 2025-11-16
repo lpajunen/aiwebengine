@@ -166,16 +166,84 @@ async fn handle_stream_request(req: Request<Body>) -> Response {
     let query_string = req.uri().query().map(|s| s.to_string()).unwrap_or_default();
     let query_params = parse_query_string(&query_string);
 
+    // Extract auth context before consuming the request
+    let auth_user = req.extensions().get::<auth::AuthUser>().cloned();
+
     info!(
         "Handling stream request for path: {} with query params: {:?}",
         path, query_params
     );
 
-    // Use query parameters as client metadata for selective broadcasting
-    let client_metadata = if query_params.is_empty() {
-        None
+    // Get stream info to check for customization function
+    let stream_info = stream_registry::GLOBAL_STREAM_REGISTRY.get_stream_info(&path);
+
+    let client_metadata = if let Some((script_uri, customization_function)) = stream_info {
+        if let Some(func_name) = customization_function {
+            // Execute customization function to get filter criteria
+            let auth_context = auth_user.as_ref().map(|user| {
+                auth::JsAuthContext::authenticated(
+                    user.user_id.clone(),
+                    user.email.clone(),
+                    user.name.clone(),
+                    user.provider.clone(),
+                    user.is_admin,
+                    user.is_editor,
+                )
+            });
+
+            match js_engine::execute_stream_customization_function(
+                &script_uri,
+                &func_name,
+                &path,
+                &query_params,
+                auth_context,
+            ) {
+                Ok(filter_criteria) => {
+                    info!(
+                        "Customization function '{}' returned filter criteria: {:?}",
+                        func_name, filter_criteria
+                    );
+                    if filter_criteria.is_empty() {
+                        None
+                    } else {
+                        Some(filter_criteria)
+                    }
+                }
+                Err(e) => {
+                    error!(
+                        "Customization function '{}' failed for stream '{}': {}",
+                        func_name, path, e
+                    );
+                    // Log error and return HTTP 500
+                    return Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .header("content-type", "text/plain")
+                        .body(Body::from(format!(
+                            "Stream customization function failed: {}",
+                            e
+                        )))
+                        .unwrap_or_else(|err| {
+                            error!("Failed to build error response: {}", err);
+                            Response::new(Body::from("Internal Server Error"))
+                        });
+                }
+            }
+        } else {
+            // No customization function, use query params as fallback
+            if query_params.is_empty() {
+                None
+            } else {
+                Some(query_params)
+            }
+        }
     } else {
-        Some(query_params)
+        // Stream not registered or error getting stream info
+        // Use query params as fallback
+        if query_params.is_empty() {
+            None
+        } else {
+            Some(query_params)
+        }
     };
 
     // Create a connection with the stream manager
@@ -925,16 +993,72 @@ document.addEventListener('DOMContentLoaded', function() {
         let is_subscription = request.query.trim_start().starts_with("subscription");
 
         if is_subscription {
-            // For subscriptions, create a connection with metadata to enable selective broadcasting
+            // For subscriptions, create a connection with metadata for filtering
             // Extract subscription name from the query to determine the stream path
             let subscription_name = extract_subscription_name(&request.query);
             let stream_path = format!("/engine/graphql/subscription/{}", subscription_name);
 
-            // Use query parameters as client metadata for selective broadcasting
-            let client_metadata = if query_params.is_empty() {
-                None
+            // Get stream info to check for customization function (the resolver)
+            let stream_info = stream_registry::GLOBAL_STREAM_REGISTRY.get_stream_info(&stream_path);
+
+            let client_metadata = if let Some((script_uri, customization_function)) = stream_info {
+                if let Some(func_name) = customization_function {
+                    // Execute customization function (resolver) to get filter criteria
+                    match js_engine::execute_stream_customization_function(
+                        &script_uri,
+                        &func_name,
+                        &stream_path,
+                        &query_params,
+                        Some(js_auth_context.clone()),
+                    ) {
+                        Ok(filter_criteria) => {
+                            info!(
+                                "GraphQL subscription resolver '{}' returned filter criteria: {:?}",
+                                func_name, filter_criteria
+                            );
+                            if filter_criteria.is_empty() {
+                                None
+                            } else {
+                                Some(filter_criteria)
+                            }
+                        }
+                        Err(e) => {
+                            error!(
+                                "GraphQL subscription resolver '{}' failed for '{}': {}",
+                                func_name, subscription_name, e
+                            );
+                            // Log error and return HTTP 500
+                            return axum::response::Response::builder()
+                                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                                .header("content-type", "text/plain")
+                                .body(axum::body::Body::from(format!(
+                                    "Subscription resolver failed: {}",
+                                    e
+                                )))
+                                .unwrap_or_else(|err| {
+                                    error!("Failed to build error response: {}", err);
+                                    axum::response::Response::new(axum::body::Body::from(
+                                        "Internal Server Error",
+                                    ))
+                                });
+                        }
+                    }
+                } else {
+                    // No customization function, use query params
+                    if query_params.is_empty() {
+                        None
+                    } else {
+                        Some(query_params)
+                    }
+                }
             } else {
-                Some(query_params)
+                // Stream not registered or error getting stream info
+                // Use query params as fallback
+                if query_params.is_empty() {
+                    None
+                } else {
+                    Some(query_params)
+                }
             };
 
             // Create a connection with the stream manager for this subscription

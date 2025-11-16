@@ -234,24 +234,27 @@ pub fn register_graphql_subscription(
 
     let operation = GraphQLOperation {
         sdl,
-        resolver_function,
+        resolver_function: resolver_function.clone(),
         script_uri: script_uri.clone(),
     };
 
-    // With execute_stream, we still need stream paths for sendSubscriptionMessage compatibility
-    // This ensures existing JavaScript APIs continue to work
+    // Register stream with resolver as customization function
+    // The resolver will be called during connection initialization to return filter criteria
     let stream_path = format!("/engine/graphql/subscription/{}", name);
-    match crate::stream_registry::GLOBAL_STREAM_REGISTRY.register_stream(&stream_path, &script_uri)
-    {
+    match crate::stream_registry::GLOBAL_STREAM_REGISTRY.register_stream(
+        &stream_path,
+        &script_uri,
+        Some(resolver_function.clone()),
+    ) {
         Ok(()) => {
             debug!(
-                "Registered compatibility stream path '{}' for GraphQL subscription '{}'",
-                stream_path, name
+                "Registered stream path '{}' for GraphQL subscription '{}' with customization function '{}'",
+                stream_path, name, resolver_function
             );
         }
         Err(e) => {
             error!(
-                "Failed to register compatibility stream path '{}' for subscription '{}': {}",
+                "Failed to register stream path '{}' for subscription '{}': {}",
                 stream_path, name, e
             );
         }

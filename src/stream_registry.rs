@@ -104,11 +104,13 @@ pub struct StreamRegistration {
     pub registered_at: u64,
     /// Active connections for this stream path
     pub connections: HashMap<String, StreamConnection>,
+    /// Optional customization function to determine connection filter criteria
+    pub customization_function: Option<String>,
 }
 
 impl StreamRegistration {
     /// Create a new stream registration
-    pub fn new(path: String, script_uri: String) -> Self {
+    pub fn new(path: String, script_uri: String, customization_function: Option<String>) -> Self {
         Self {
             path,
             script_uri,
@@ -117,6 +119,7 @@ impl StreamRegistration {
                 .unwrap_or_default()
                 .as_secs(),
             connections: HashMap::new(),
+            customization_function,
         }
     }
 
@@ -235,8 +238,13 @@ impl StreamRegistry {
         }
     }
 
-    /// Register a new stream path
-    pub fn register_stream(&self, path: &str, script_uri: &str) -> Result<(), String> {
+    /// Register a new stream path with optional customization function
+    pub fn register_stream(
+        &self,
+        path: &str,
+        script_uri: &str,
+        customization_function: Option<String>,
+    ) -> Result<(), String> {
         match self.streams.lock() {
             Ok(mut streams) => {
                 if let Some(existing_registration) = streams.get(path) {
@@ -261,8 +269,11 @@ impl StreamRegistry {
                     );
                 }
 
-                let registration =
-                    StreamRegistration::new(path.to_string(), script_uri.to_string());
+                let registration = StreamRegistration::new(
+                    path.to_string(),
+                    script_uri.to_string(),
+                    customization_function,
+                );
                 streams.insert(path.to_string(), registration);
                 Ok(())
             }
@@ -313,6 +324,32 @@ impl StreamRegistry {
     pub fn get_stream_script_uri(&self, path: &str) -> Option<String> {
         match self.streams.lock() {
             Ok(streams) => streams.get(path).map(|reg| reg.script_uri.clone()),
+            Err(e) => {
+                error!("Failed to acquire stream registry lock: {}", e);
+                None
+            }
+        }
+    }
+
+    /// Get the customization function for a stream path
+    pub fn get_stream_customization_function(&self, path: &str) -> Option<String> {
+        match self.streams.lock() {
+            Ok(streams) => streams
+                .get(path)
+                .and_then(|reg| reg.customization_function.clone()),
+            Err(e) => {
+                error!("Failed to acquire stream registry lock: {}", e);
+                None
+            }
+        }
+    }
+
+    /// Get both script URI and customization function for a stream path
+    pub fn get_stream_info(&self, path: &str) -> Option<(String, Option<String>)> {
+        match self.streams.lock() {
+            Ok(streams) => streams
+                .get(path)
+                .map(|reg| (reg.script_uri.clone(), reg.customization_function.clone())),
             Err(e) => {
                 error!("Failed to acquire stream registry lock: {}", e);
                 None
@@ -543,17 +580,23 @@ impl StreamRegistry {
                         let mut total_matching_connections = 0;
 
                         for (connection_id, connection) in &registration.connections {
-                            // Check if connection metadata matches the filter
+                            // NEW SEMANTICS: Message metadata must contain all connection metadata keys/values
+                            // Connection metadata = minimum required fields that must be in message metadata
+                            // Empty connection metadata matches all messages
                             let matches_filter =
                                 if let Some(ref conn_metadata) = connection.metadata {
-                                    // All filter criteria must be present and match
-                                    metadata_filter.iter().all(|(key, expected_value)| {
-                                        conn_metadata.get(key) == Some(expected_value)
-                                    })
+                                    if conn_metadata.is_empty() {
+                                        // Empty connection metadata matches all messages
+                                        true
+                                    } else {
+                                        // All connection metadata keys must exist in message metadata with matching values
+                                        conn_metadata.iter().all(|(key, expected_value)| {
+                                            metadata_filter.get(key) == Some(expected_value)
+                                        })
+                                    }
                                 } else {
-                                    // If no filter criteria, match connections with no metadata
-                                    // If filter is empty, match all connections
-                                    metadata_filter.is_empty()
+                                    // No connection metadata matches all messages
+                                    true
                                 };
 
                             if matches_filter {
@@ -875,7 +918,7 @@ mod tests {
 
     #[test]
     fn test_stream_registration_creation() {
-        let reg = StreamRegistration::new("/test".to_string(), "test_script.js".to_string());
+        let reg = StreamRegistration::new("/test".to_string(), "test_script.js".to_string(), None);
         assert_eq!(reg.path, "/test");
         assert_eq!(reg.script_uri, "test_script.js");
         assert!(reg.registered_at > 0);
@@ -884,7 +927,8 @@ mod tests {
 
     #[test]
     fn test_stream_registration_add_remove_connections() {
-        let mut reg = StreamRegistration::new("/test".to_string(), "test_script.js".to_string());
+        let mut reg =
+            StreamRegistration::new("/test".to_string(), "test_script.js".to_string(), None);
 
         // Add a connection
         let conn = StreamConnection::new();
@@ -905,7 +949,8 @@ mod tests {
 
     #[test]
     fn test_stream_registration_broadcast() {
-        let mut reg = StreamRegistration::new("/test".to_string(), "test_script.js".to_string());
+        let mut reg =
+            StreamRegistration::new("/test".to_string(), "test_script.js".to_string(), None);
 
         // Add multiple connections
         let conn1 = StreamConnection::new();
@@ -932,7 +977,7 @@ mod tests {
         let registry = StreamRegistry::new();
 
         // Register a stream
-        let result = registry.register_stream("/test", "test_script.js");
+        let result = registry.register_stream("/test", "test_script.js", None);
         assert!(result.is_ok());
 
         // Check if registered
@@ -957,7 +1002,9 @@ mod tests {
         let registry = StreamRegistry::new();
 
         // Register a stream
-        registry.register_stream("/test", "test_script.js").unwrap();
+        registry
+            .register_stream("/test", "test_script.js", None)
+            .unwrap();
 
         // Add a connection
         let conn = StreamConnection::new();
@@ -982,8 +1029,12 @@ mod tests {
         let registry = StreamRegistry::new();
 
         // Register multiple streams
-        registry.register_stream("/stream1", "script1.js").unwrap();
-        registry.register_stream("/stream2", "script2.js").unwrap();
+        registry
+            .register_stream("/stream1", "script1.js", None)
+            .unwrap();
+        registry
+            .register_stream("/stream2", "script2.js", None)
+            .unwrap();
 
         // Add connections
         let conn1 = StreamConnection::new();
@@ -1019,7 +1070,9 @@ mod tests {
         let registry = StreamRegistry::new();
 
         // Register a stream and add connection
-        registry.register_stream("/test", "test_script.js").unwrap();
+        registry
+            .register_stream("/test", "test_script.js", None)
+            .unwrap();
         let conn = StreamConnection::new();
         let conn_id = conn.connection_id.clone();
         registry.add_connection("/test", conn).unwrap();
@@ -1043,7 +1096,9 @@ mod tests {
         let registry = StreamRegistry::new();
 
         // Register a stream
-        registry.register_stream("/test", "test_script.js").unwrap();
+        registry
+            .register_stream("/test", "test_script.js", None)
+            .unwrap();
 
         // Create an old connection (simulate by creating and waiting)
         let conn = StreamConnection::new();
