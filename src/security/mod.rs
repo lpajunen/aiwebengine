@@ -6,7 +6,6 @@ pub mod encryption;
 pub mod operations;
 pub mod rate_limiting;
 pub mod secure_globals;
-pub mod secure_globals_simple; // Simplified version for testing
 pub mod session;
 pub mod threat_detection;
 pub mod validation;
