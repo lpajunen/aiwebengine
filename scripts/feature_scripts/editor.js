@@ -976,7 +976,11 @@ function apiDeleteAsset(req) {
 // API: List all registered routes
 function apiListRoutes(req) {
   try {
-    const routes = typeof listRoutes === "function" ? listRoutes() : "[]";
+    const routes =
+      typeof routeRegistry !== "undefined" &&
+      typeof routeRegistry.listRoutes === "function"
+        ? routeRegistry.listRoutes()
+        : "[]";
     // Parse and re-stringify to ensure valid JSON
     const routesData = JSON.parse(routes);
 
