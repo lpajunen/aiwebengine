@@ -8,7 +8,7 @@ function liveMessagesResolver(req) {
   // Get user information
   let userName = "Guest";
   try {
-    const user = auth.currentUser();
+    const user = req.auth.currentUser();
     if (user && user.name) {
       userName = user.name;
     }

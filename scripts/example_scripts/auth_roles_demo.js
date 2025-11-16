@@ -1,13 +1,13 @@
 /**
  * Authentication Roles Demo
  *
- * Demonstrates how to use the auth.isAdmin, auth.isEditor, and auth.isAuthenticated
+ * Demonstrates how to use the req.auth.isAdmin, req.auth.isEditor, and req.auth.isAuthenticated
  * properties in JavaScript handlers.
  */
 
 export async function handleRequest(request) {
   // Check if user is authenticated
-  if (!auth.isAuthenticated) {
+  if (!request.auth.isAuthenticated) {
     return {
       status: 401,
       headers: { "Content-Type": "application/json" },
@@ -19,14 +19,14 @@ export async function handleRequest(request) {
   }
 
   // Get current user information
-  const user = auth.currentUser();
+  const user = request.auth.currentUser();
 
   // Build response based on user roles
   const roles = [];
-  if (auth.isAdmin) {
+  if (request.auth.isAdmin) {
     roles.push("Administrator");
   }
-  if (auth.isEditor) {
+  if (request.auth.isEditor) {
     roles.push("Editor");
   }
   if (roles.length === 0) {
@@ -39,7 +39,7 @@ export async function handleRequest(request) {
     request.method === "PUT" ||
     request.method === "DELETE"
   ) {
-    if (!auth.isEditor && !auth.isAdmin) {
+    if (!request.auth.isEditor && !request.auth.isAdmin) {
       return {
         status: 403,
         headers: { "Content-Type": "application/json" },
@@ -52,7 +52,7 @@ export async function handleRequest(request) {
   }
 
   // Example: Restrict admin-only actions
-  if (request.path === "/admin/settings" && !auth.isAdmin) {
+  if (request.path === "/admin/settings" && !request.auth.isAdmin) {
     return {
       status: 403,
       headers: { "Content-Type": "application/json" },
@@ -77,8 +77,8 @@ export async function handleRequest(request) {
       roles: roles,
       capabilities: {
         canView: true,
-        canEdit: auth.isEditor || auth.isAdmin,
-        canAdminister: auth.isAdmin,
+        canEdit: request.auth.isEditor || request.auth.isAdmin,
+        canAdminister: request.auth.isAdmin,
       },
       message: `Welcome ${user.name || user.email}! You have ${roles.join(", ")} access.`,
     }),
@@ -90,9 +90,9 @@ export async function handleRequest(request) {
  */
 export async function editorOnly(request) {
   // Simple check using requireAuth
-  const user = auth.requireAuth(); // Throws if not authenticated
+  const user = request.auth.requireAuth(); // Throws if not authenticated
 
-  if (!auth.isEditor && !auth.isAdmin) {
+  if (!request.auth.isEditor && !request.auth.isAdmin) {
     return {
       status: 403,
       headers: { "Content-Type": "application/json" },
@@ -113,9 +113,9 @@ export async function editorOnly(request) {
  * Example: Admin-only endpoint
  */
 export async function adminOnly(request) {
-  const user = auth.requireAuth();
+  const user = request.auth.requireAuth();
 
-  if (!auth.isAdmin) {
+  if (!request.auth.isAdmin) {
     return {
       status: 403,
       headers: { "Content-Type": "application/json" },

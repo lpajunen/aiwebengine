@@ -5,19 +5,19 @@
 function serveEditor(req) {
   // Debug logging for authentication
   console.log("=== Editor Authentication Check ===");
-  console.log("auth object exists: " + (typeof auth !== "undefined"));
-  if (typeof auth !== "undefined") {
-    console.log("auth.isAuthenticated: " + auth.isAuthenticated);
-    console.log("auth.userId: " + auth.userId);
-    console.log("auth.provider: " + auth.provider);
-    console.log("auth.isEditor: " + auth.isEditor);
-    console.log("auth.isAdmin: " + auth.isAdmin);
+  console.log("req.auth object exists: " + (typeof req.auth !== "undefined"));
+  if (typeof req.auth !== "undefined") {
+    console.log("req.auth.isAuthenticated: " + req.auth.isAuthenticated);
+    console.log("req.auth.userId: " + req.auth.userId);
+    console.log("req.auth.provider: " + req.auth.provider);
+    console.log("req.auth.isEditor: " + req.auth.isEditor);
+    console.log("req.auth.isAdmin: " + req.auth.isAdmin);
   }
 
   // Require authentication to access the editor
   let user;
   try {
-    user = auth.requireAuth();
+    user = req.auth.requireAuth();
     console.log("Authentication successful for user: " + user.id);
   } catch (error) {
     console.log("Authentication failed: " + error.message);
@@ -37,11 +37,13 @@ function serveEditor(req) {
   }
 
   // Check if user has Editor or Administrator role
-  if (!auth.isEditor && !auth.isAdmin) {
+  if (!req.auth.isEditor && !req.auth.isAdmin) {
     console.log(
       "User " + user.id + " does not have Editor or Administrator role",
     );
-    console.log("isEditor: " + auth.isEditor + ", isAdmin: " + auth.isAdmin);
+    console.log(
+      "isEditor: " + req.auth.isEditor + ", isAdmin: " + req.auth.isAdmin,
+    );
 
     // Redirect to insufficient permissions page
     const currentPath = encodeURIComponent(req.path || "/editor");
@@ -63,9 +65,9 @@ function serveEditor(req) {
     "User " +
       user.id +
       " has required permissions (isEditor: " +
-      auth.isEditor +
+      req.auth.isEditor +
       ", isAdmin: " +
-      auth.isAdmin +
+      req.auth.isAdmin +
       ")",
   );
 

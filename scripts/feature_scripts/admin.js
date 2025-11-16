@@ -2,17 +2,17 @@
 // Provides UI and API for managing user roles
 //
 // AUTHENTICATION USAGE:
-// - 'auth' is a GLOBAL object (not part of request)
+// - 'auth' is part of the request object (req.auth)
 // - Available properties:
-//   * auth.isAuthenticated (boolean) - whether user is logged in
-//   * auth.isAdmin (boolean) - whether user has admin privileges
-//   * auth.userId (string|null) - user's unique ID
-//   * auth.userEmail (string|null) - user's email address
-//   * auth.userName (string|null) - user's display name
-//   * auth.provider (string|null) - OAuth provider (google, microsoft, apple)
+//   * req.auth.isAuthenticated (boolean) - whether user is logged in
+//   * req.auth.isAdmin (boolean) - whether user has admin privileges
+//   * req.auth.userId (string|null) - user's unique ID
+//   * req.auth.userEmail (string|null) - user's email address
+//   * req.auth.userName (string|null) - user's display name
+//   * req.auth.provider (string|null) - OAuth provider (google, microsoft, apple)
 // - Available methods:
-//   * auth.currentUser() - returns user object or null
-//   * auth.requireAuth() - throws error if not authenticated
+//   * req.auth.currentUser() - returns user object or null
+//   * req.auth.requireAuth() - throws error if not authenticated
 //
 // REQUEST OBJECT:
 // - 'request' parameter passed to handlers contains:
@@ -21,6 +21,7 @@
 //   * request.query (object) - query string parameters
 //   * request.form (object) - form data (for POST requests)
 //   * request.body (string) - raw request body
+//   * request.auth (object) - authentication context (see above)
 
 function init(context) {
   // Register routes for user management
@@ -42,8 +43,7 @@ function init(context) {
 // Serve the management UI (HTML page)
 function handleManagerUI(request) {
   // Check if user is authenticated and is an administrator
-  // Note: 'auth' is a global object, not part of request
-  if (!auth || !auth.isAuthenticated) {
+  if (!request.auth || !request.auth.isAuthenticated) {
     return {
       status: 302,
       headers: { Location: "/auth/login?redirect=/engine/admin" },
@@ -51,7 +51,7 @@ function handleManagerUI(request) {
     };
   }
 
-  if (!auth.isAdmin) {
+  if (!request.auth.isAdmin) {
     return {
       status: 403,
       body: JSON.stringify({
@@ -452,8 +452,7 @@ function handleManagerUI(request) {
 // API endpoint to list all users
 function handleListUsers(request) {
   // Check if user is authenticated and is an administrator
-  // Note: 'auth' is a global object, not part of request
-  if (!auth || !auth.isAuthenticated) {
+  if (!request.auth || !request.auth.isAuthenticated) {
     return {
       status: 401,
       body: JSON.stringify({ error: "Authentication required" }),
@@ -461,7 +460,7 @@ function handleListUsers(request) {
     };
   }
 
-  if (!auth.isAdmin) {
+  if (!request.auth.isAdmin) {
     return {
       status: 403,
       body: JSON.stringify({
@@ -499,8 +498,7 @@ function handleListUsers(request) {
 // API endpoint to update user role
 function handleUpdateUserRole(request) {
   // Check if user is authenticated and is an administrator
-  // Note: 'auth' is a global object, not part of request
-  if (!auth || !auth.isAuthenticated) {
+  if (!request.auth || !request.auth.isAuthenticated) {
     return {
       status: 401,
       body: JSON.stringify({ error: "Authentication required" }),
@@ -508,7 +506,7 @@ function handleUpdateUserRole(request) {
     };
   }
 
-  if (!auth.isAdmin) {
+  if (!request.auth.isAdmin) {
     return {
       status: 403,
       body: JSON.stringify({

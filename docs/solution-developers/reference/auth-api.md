@@ -4,67 +4,101 @@
 
 The JavaScript Authentication API exposes user authentication information and functions to JavaScript handlers running in the QuickJS runtime. This allows your JavaScript code to check authentication status, require authentication, and access user information.
 
-## Global `auth` Object
+## Request Authentication Object
 
-When a JavaScript handler is executed, a global `auth` object is available with the following properties and methods:
+When a JavaScript handler is executed, authentication information is available via the `req.auth` property (or `request.auth` depending on your parameter name). This object contains the following properties and methods:
 
 ### Properties
 
-#### `auth.isAuthenticated` (boolean)
+#### `req.auth.isAuthenticated` (boolean)
 
 Indicates whether the current request is from an authenticated user.
 
 ```javascript
-if (auth.isAuthenticated) {
-  console.log("User is logged in");
-} else {
-  console.log("Anonymous user");
+function myHandler(req) {
+  if (req.auth.isAuthenticated) {
+    console.log("User is logged in");
+  } else {
+    console.log("Anonymous user");
+  }
 }
 ```
 
-#### `auth.userId` (string | null)
+#### `req.auth.userId` (string | null)
 
 The unique identifier of the authenticated user, or `null` if not authenticated.
 
 ```javascript
-if (auth.userId) {
-  console.log(`User ID: ${auth.userId}`);
+function myHandler(req) {
+  if (req.auth.userId) {
+    console.log(`User ID: ${req.auth.userId}`);
+  }
 }
 ```
 
-#### `auth.userEmail` (string | null)
+#### `req.auth.userEmail` (string | null)
 
 The email address of the authenticated user, or `null` if not available.
 
 ```javascript
-if (auth.userEmail) {
-  console.log(`Email: ${auth.userEmail}`);
+function myHandler(req) {
+  if (req.auth.userEmail) {
+    console.log(`Email: ${req.auth.userEmail}`);
+  }
 }
 ```
 
-#### `auth.userName` (string | null)
+#### `req.auth.userName` (string | null)
 
 The display name of the authenticated user, or `null` if not available.
 
 ```javascript
-if (auth.userName) {
-  console.log(`Welcome, ${auth.userName}!`);
+function myHandler(req) {
+  if (req.auth.userName) {
+    console.log(`Welcome, ${req.auth.userName}!`);
+  }
 }
 ```
 
-#### `auth.provider` (string | null)
+#### `req.auth.provider` (string | null)
 
 The OAuth2 provider used for authentication (`"google"`, `"microsoft"`, or `"apple"`), or `null` if not authenticated.
 
 ```javascript
-if (auth.provider === "google") {
-  console.log("Authenticated via Google");
+function myHandler(req) {
+  if (req.auth.provider === "google") {
+    console.log("Authenticated via Google");
+  }
+}
+```
+
+#### `req.auth.isAdmin` (boolean)
+
+Indicates whether the current user has administrator privileges.
+
+```javascript
+function myHandler(req) {
+  if (req.auth.isAdmin) {
+    console.log("User is an administrator");
+  }
+}
+```
+
+#### `req.auth.isEditor` (boolean)
+
+Indicates whether the current user has editor privileges.
+
+```javascript
+function myHandler(req) {
+  if (req.auth.isEditor) {
+    console.log("User is an editor");
+  }
 }
 ```
 
 ### Methods
 
-#### `auth.currentUser()` → object | null
+#### `req.auth.currentUser()` → object | null
 
 Returns an object with complete user information if authenticated, or `null` if not authenticated.
 
@@ -83,18 +117,20 @@ Returns an object with complete user information if authenticated, or `null` if 
 **Example:**
 
 ```javascript
-const user = auth.currentUser();
-if (user) {
-  console.log(`User ${user.id} logged in via ${user.provider}`);
-  if (user.email) {
-    console.log(`Email: ${user.email}`);
+function myHandler(req) {
+  const user = req.auth.currentUser();
+  if (user) {
+    console.log(`User ${user.id} logged in via ${user.provider}`);
+    if (user.email) {
+      console.log(`Email: ${user.email}`);
+    }
+  } else {
+    console.log("No user logged in");
   }
-} else {
-  console.log("No user logged in");
 }
 ```
 
-#### `auth.requireAuth()` → object
+#### `req.auth.requireAuth()` → object
 
 Returns the current user object if authenticated, or **throws an error** if not authenticated.
 
@@ -118,18 +154,22 @@ Use this in handlers that require authentication - it will automatically reject 
 
 ```javascript
 // Protected endpoint - only accessible to authenticated users
-routeRegistry.registerRoute("/api/protected", function (request) {
+function protectedHandler(req) {
   // This will throw an error if not authenticated
-  const user = auth.requireAuth();
+  const user = req.auth.requireAuth();
 
   return {
-    message: `Hello ${user.name || user.id}!`,
-    data: {
-      userId: user.id,
-      provider: user.provider,
-    },
+    status: 200,
+    body: JSON.stringify({
+      message: `Hello ${user.name || user.id}!`,
+      data: {
+        userId: user.id,
+        provider: user.provider,
+      },
+    }),
+    contentType: "application/json",
   };
-});
+}
 ```
 
 ## Usage Examples
@@ -137,46 +177,62 @@ routeRegistry.registerRoute("/api/protected", function (request) {
 ### Public Endpoint (Optional Authentication)
 
 ```javascript
-routeRegistry.registerRoute("/api/greeting", function (request) {
-  if (auth.isAuthenticated) {
+function greetingHandler(req) {
+  if (req.auth.isAuthenticated) {
     return {
-      message: `Hello, ${auth.userName || auth.userId}!`,
-      personalized: true,
+      status: 200,
+      body: JSON.stringify({
+        message: `Hello, ${req.auth.userName || req.auth.userId}!`,
+        personalized: true,
+      }),
+      contentType: "application/json",
     };
   } else {
     return {
-      message: "Hello, Guest!",
-      personalized: false,
+      status: 200,
+      body: JSON.stringify({
+        message: "Hello, Guest!",
+        personalized: false,
+      }),
+      contentType: "application/json",
     };
   }
-});
+}
 ```
 
 ### Protected Endpoint (Required Authentication)
 
 ```javascript
-routeRegistry.registerRoute("/api/profile", function (request) {
-  const user = auth.requireAuth(); // Throws if not authenticated
+function profileHandler(req) {
+  const user = req.auth.requireAuth(); // Throws if not authenticated
 
   return {
-    profile: {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      provider: user.provider,
-    },
+    status: 200,
+    body: JSON.stringify({
+      profile: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        provider: user.provider,
+      },
+    }),
+    contentType: "application/json",
   };
-});
+}
 ```
 
 ### Conditional Logic Based on Provider
 
 ```javascript
-routeRegistry.registerRoute("/api/data", function (request) {
-  const user = auth.currentUser();
+function dataHandler(req) {
+  const user = req.auth.currentUser();
 
   if (!user) {
-    return { error: "Authentication required" };
+    return {
+      status: 401,
+      body: JSON.stringify({ error: "Authentication required" }),
+      contentType: "application/json",
+    };
   }
 
   // Different behavior based on OAuth provider
@@ -196,38 +252,47 @@ routeRegistry.registerRoute("/api/data", function (request) {
   }
 
   return {
-    message: `Data from ${dataSource}`,
-    user: user.id,
+    status: 200,
+    body: JSON.stringify({
+      message: `Data from ${dataSource}`,
+      user: user.id,
+    }),
+    contentType: "application/json",
   };
-});
+}
 ```
 
 ### User-Specific Resources
 
 ```javascript
-routeRegistry.registerRoute("/api/user-data", function (request) {
-  if (!auth.isAuthenticated) {
+function userDataHandler(req) {
+  if (!req.auth.isAuthenticated) {
     return {
       status: 401,
-      body: { error: "Unauthorized" },
+      body: JSON.stringify({ error: "Unauthorized" }),
+      contentType: "application/json",
     };
   }
 
   // Use user ID to fetch user-specific data
-  const userData = getUserData(auth.userId);
+  const userData = getUserData(req.auth.userId);
 
   return {
-    userId: auth.userId,
-    data: userData,
+    status: 200,
+    body: JSON.stringify({
+      userId: req.auth.userId,
+      data: userData,
+    }),
+    contentType: "application/json",
   };
-});
+}
 ```
 
 ### Graceful Degradation
 
 ```javascript
-routeRegistry.registerRoute("/api/content", function (request) {
-  const user = auth.currentUser();
+function contentHandler(req) {
+  const user = req.auth.currentUser();
 
   // Public content available to everyone
   const publicContent = getPublicContent();
@@ -237,20 +302,28 @@ routeRegistry.registerRoute("/api/content", function (request) {
     const privateContent = getPrivateContent(user.id);
 
     return {
-      public: publicContent,
-      private: privateContent,
-      user: {
-        id: user.id,
-        name: user.name,
-      },
+      status: 200,
+      body: JSON.stringify({
+        public: publicContent,
+        private: privateContent,
+        user: {
+          id: user.id,
+          name: user.name,
+        },
+      }),
+      contentType: "application/json",
     };
   } else {
     return {
-      public: publicContent,
-      message: "Login to see more content",
+      status: 200,
+      body: JSON.stringify({
+        public: publicContent,
+        message: "Login to see more content",
+      }),
+      contentType: "application/json",
     };
   }
-});
+}
 ```
 
 ## Error Handling
@@ -258,45 +331,54 @@ routeRegistry.registerRoute("/api/content", function (request) {
 ### Handling `requireAuth()` Errors
 
 ```javascript
-routeRegistry.registerRoute("/api/secure", function (request) {
+function secureHandler(req) {
   try {
-    const user = auth.requireAuth();
+    const user = req.auth.requireAuth();
 
     return {
-      message: "Access granted",
-      userId: user.id,
+      status: 200,
+      body: JSON.stringify({
+        message: "Access granted",
+        userId: user.id,
+      }),
+      contentType: "application/json",
     };
   } catch (error) {
     // This will catch authentication errors
     return {
       status: 401,
-      body: {
+      body: JSON.stringify({
         error: error.message,
         loginUrl: "/auth/login",
-      },
+      }),
+      contentType: "application/json",
     };
   }
-});
+}
 ```
 
 ### Custom Authentication Check
 
 ```javascript
-function requireUser() {
-  if (!auth.isAuthenticated) {
+function requireUser(req) {
+  if (!req.auth.isAuthenticated) {
     throw new Error("Please login to access this resource");
   }
-  return auth.currentUser();
+  return req.auth.currentUser();
 }
 
-routeRegistry.registerRoute("/api/custom-protected", function (request) {
-  const user = requireUser();
+function customProtectedHandler(req) {
+  const user = requireUser(req);
 
   return {
-    message: "Authenticated!",
-    user: user.id,
+    status: 200,
+    body: JSON.stringify({
+      message: "Authenticated!",
+      user: user.id,
+    }),
+    contentType: "application/json",
   };
-});
+}
 ```
 
 ## Integration with Request Context
@@ -306,7 +388,7 @@ The authentication context is automatically extracted from:
 1. `Authorization: Bearer <token>` header
 2. `session` cookie
 
-The middleware handles authentication before your JavaScript handler runs, so the `auth` object is always available and up-to-date.
+The middleware handles authentication before your JavaScript handler runs, so the `req.auth` object is always available and up-to-date.
 
 ## Security Considerations
 
@@ -314,74 +396,88 @@ The middleware handles authentication before your JavaScript handler runs, so th
 
 ```javascript
 // ❌ BAD - Don't trust user-provided data
-routeRegistry.registerRoute("/api/bad-example", function (request) {
-  const userId = request.query.userId; // DON'T DO THIS
+function badExampleHandler(req) {
+  const userId = req.query.userId; // DON'T DO THIS
   // Attacker could impersonate any user
-});
+}
 
 // ✅ GOOD - Use authenticated user ID
-routeRegistry.registerRoute("/api/good-example", function (request) {
-  const user = auth.requireAuth();
+function goodExampleHandler(req) {
+  const user = req.auth.requireAuth();
   const userId = user.id; // This is verified by the server
   // Safe to use for authorization
-});
+}
 ```
 
 ### Check Authentication, Not Just Presence
 
 ```javascript
 // ❌ RISKY - Checking if userId exists
-routeRegistry.registerRoute("/api/risky", function (request) {
-  if (auth.userId) {
+function riskyHandler(req) {
+  if (req.auth.userId) {
     // This is okay but requireAuth() is clearer
   }
-});
+}
 
 // ✅ BETTER - Use requireAuth() for clarity
-routeRegistry.registerRoute("/api/better", function (request) {
-  const user = auth.requireAuth();
+function betterHandler(req) {
+  const user = req.auth.requireAuth();
   // Intent is clear - authentication required
-});
+}
 ```
 
 ### Separate Public and Private Endpoints
 
 ```javascript
 // Public endpoint
-routeRegistry.registerRoute("/api/public/status", function (request) {
-  return { status: "online" };
-});
+function publicStatusHandler(req) {
+  return {
+    status: 200,
+    body: JSON.stringify({ status: "online" }),
+    contentType: "application/json",
+  };
+}
 
 // Private endpoint
-routeRegistry.registerRoute("/api/private/admin", function (request) {
-  const user = auth.requireAuth();
+function adminHandler(req) {
+  const user = req.auth.requireAuth();
 
   // Add additional authorization checks
-  if (!isAdmin(user.id)) {
-    throw new Error("Admin access required");
+  if (!req.auth.isAdmin) {
+    return {
+      status: 403,
+      body: JSON.stringify({ error: "Admin access required" }),
+      contentType: "application/json",
+    };
   }
 
-  return { admin: true };
-});
+  return {
+    status: 200,
+    body: JSON.stringify({ admin: true }),
+    contentType: "application/json",
+  };
+}
 ```
 
 ## Implementation Details
 
 ### Context Extraction
 
-The `auth` object is populated from the request's session token, which is validated by the authentication middleware before the JavaScript handler runs.
+The `req.auth` object is populated from the request's session token, which is validated by the authentication middleware before the JavaScript handler runs.
 
 ### Performance
 
-Authentication context is extracted once per request and cached, so there's no performance penalty for accessing `auth` properties multiple times in your handler.
+Authentication context is extracted once per request and cached, so there's no performance penalty for accessing `req.auth` properties multiple times in your handler.
 
 ### Null Safety
 
 All user information properties (`userId`, `userEmail`, `userName`, `provider`) are `null` when not authenticated or not available, making them safe to check with standard JavaScript truthiness checks:
 
 ```javascript
-if (auth.userName) {
-  // userName is available and not null
+function myHandler(req) {
+  if (req.auth.userName) {
+    // userName is available and not null
+  }
 }
 ```
 
@@ -393,5 +489,5 @@ if (auth.userName) {
 
 ---
 
-**Version:** 1.0  
-**Last Updated:** January 2025
+**Version:** 2.0  
+**Last Updated:** November 2025

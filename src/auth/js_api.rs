@@ -103,13 +103,17 @@ impl AuthJsApi {
         Self { auth_context }
     }
 
-    /// Setup authentication globals in JavaScript context
+    /// Create authentication object for JavaScript context
     ///
-    /// Registers `auth` global object with properties and methods for accessing
+    /// Creates an `auth` object with properties and methods for accessing
     /// authentication information within JavaScript handlers.
-    pub fn setup_auth_globals(ctx: &Ctx<'_>, auth_context: JsAuthContext) -> JsResult<()> {
+    /// This object should be attached to the request object as `req.auth`.
+    pub fn create_auth_object<'js>(
+        ctx: &Ctx<'js>,
+        auth_context: JsAuthContext,
+    ) -> JsResult<Object<'js>> {
         debug!(
-            "Setting up auth globals, authenticated: {}",
+            "Creating auth object, authenticated: {}",
             auth_context.is_authenticated
         );
 
@@ -190,17 +194,16 @@ impl AuthJsApi {
         // Set the implementation function
         auth_obj.set("__requireAuthImpl", require_auth_fn)?;
 
-        // Set auth as global first so the eval can reference it
-        ctx.globals().set("auth", auth_obj)?;
-
         // Now wrap in functions that parse JSON
+        // We need to create a temporary global to run the eval, then remove it
+        ctx.globals().set("__tempAuth", auth_obj.clone())?;
         ctx.eval::<(), _>(
             r#"
-            auth.currentUser = function() {
+            __tempAuth.currentUser = function() {
                 const json = this.__currentUserImpl();
                 return json === "null" ? null : JSON.parse(json);
             };
-            auth.requireAuth = function() {
+            __tempAuth.requireAuth = function() {
                 try {
                     const json = this.__requireAuthImpl();
                     return JSON.parse(json);
@@ -211,8 +214,12 @@ impl AuthJsApi {
             "#
         )?;
 
-        debug!("Auth globals setup complete");
-        Ok(())
+        // Get the modified object back and remove the temp global
+        let auth_obj_with_methods: Object = ctx.globals().get("__tempAuth")?;
+        ctx.globals().remove("__tempAuth")?;
+
+        debug!("Auth object created successfully");
+        Ok(auth_obj_with_methods)
     }
 }
 
@@ -292,38 +299,43 @@ mod tests {
     }
 
     #[test]
-    fn test_setup_auth_globals_anonymous() {
+    fn test_create_auth_object_anonymous() {
         let rt = Runtime::new().unwrap();
         let ctx = Context::full(&rt).unwrap();
 
         ctx.with(|ctx| {
             let auth_context = JsAuthContext::anonymous();
-            AuthJsApi::setup_auth_globals(&ctx, auth_context).unwrap();
+            let auth_obj = AuthJsApi::create_auth_object(&ctx, auth_context).unwrap();
 
-            // Test that auth global exists
-            let result: bool = ctx.eval("typeof auth !== 'undefined'").unwrap();
+            // Create a req object and attach auth
+            let req = Object::new(ctx.clone()).unwrap();
+            req.set("auth", auth_obj).unwrap();
+            ctx.globals().set("req", req).unwrap();
+
+            // Test that req.auth exists
+            let result: bool = ctx.eval("typeof req.auth !== 'undefined'").unwrap();
             assert!(result);
 
             // Test isAuthenticated is false
-            let is_authed: bool = ctx.eval("auth.isAuthenticated").unwrap();
+            let is_authed: bool = ctx.eval("req.auth.isAuthenticated").unwrap();
             assert!(!is_authed);
 
             // Test isAdmin is false
-            let is_admin: bool = ctx.eval("auth.isAdmin").unwrap();
+            let is_admin: bool = ctx.eval("req.auth.isAdmin").unwrap();
             assert!(!is_admin);
 
             // Test isEditor is false
-            let is_editor: bool = ctx.eval("auth.isEditor").unwrap();
+            let is_editor: bool = ctx.eval("req.auth.isEditor").unwrap();
             assert!(!is_editor);
 
             // Test userId is null
-            let user_id_is_null: bool = ctx.eval("auth.userId === null").unwrap();
+            let user_id_is_null: bool = ctx.eval("req.auth.userId === null").unwrap();
             assert!(user_id_is_null);
         });
     }
 
     #[test]
-    fn test_setup_auth_globals_authenticated() {
+    fn test_create_auth_object_authenticated() {
         let rt = Runtime::new().unwrap();
         let ctx = Context::full(&rt).unwrap();
 
@@ -336,30 +348,35 @@ mod tests {
                 true,  // is_admin
                 false, // is_editor
             );
-            AuthJsApi::setup_auth_globals(&ctx, auth_context).unwrap();
+            let auth_obj = AuthJsApi::create_auth_object(&ctx, auth_context).unwrap();
+
+            // Create a req object and attach auth
+            let req = Object::new(ctx.clone()).unwrap();
+            req.set("auth", auth_obj).unwrap();
+            ctx.globals().set("req", req).unwrap();
 
             // Test isAuthenticated is true
-            let is_authed: bool = ctx.eval("auth.isAuthenticated").unwrap();
+            let is_authed: bool = ctx.eval("req.auth.isAuthenticated").unwrap();
             assert!(is_authed);
 
             // Test isAdmin is true
-            let is_admin: bool = ctx.eval("auth.isAdmin").unwrap();
+            let is_admin: bool = ctx.eval("req.auth.isAdmin").unwrap();
             assert!(is_admin);
 
             // Test isEditor is false
-            let is_editor: bool = ctx.eval("auth.isEditor").unwrap();
+            let is_editor: bool = ctx.eval("req.auth.isEditor").unwrap();
             assert!(!is_editor);
 
             // Test userId
-            let user_id: String = ctx.eval("auth.userId").unwrap();
+            let user_id: String = ctx.eval("req.auth.userId").unwrap();
             assert_eq!(user_id, "user123");
 
             // Test userEmail
-            let email: String = ctx.eval("auth.userEmail").unwrap();
+            let email: String = ctx.eval("req.auth.userEmail").unwrap();
             assert_eq!(email, "test@example.com");
 
             // Test provider
-            let provider: String = ctx.eval("auth.provider").unwrap();
+            let provider: String = ctx.eval("req.auth.provider").unwrap();
             assert_eq!(provider, "google");
         });
     }
@@ -378,14 +395,19 @@ mod tests {
                 false,
                 false,
             );
-            AuthJsApi::setup_auth_globals(&ctx, auth_context).unwrap();
+            let auth_obj = AuthJsApi::create_auth_object(&ctx, auth_context).unwrap();
+
+            // Create a req object and attach auth
+            let req = Object::new(ctx.clone()).unwrap();
+            req.set("auth", auth_obj).unwrap();
+            ctx.globals().set("req", req).unwrap();
 
             // Test currentUser() returns object
-            let has_user: bool = ctx.eval("auth.currentUser() !== null").unwrap();
+            let has_user: bool = ctx.eval("req.auth.currentUser() !== null").unwrap();
             assert!(has_user);
 
             // Test user properties
-            let user_id: String = ctx.eval("auth.currentUser().id").unwrap();
+            let user_id: String = ctx.eval("req.auth.currentUser().id").unwrap();
             assert_eq!(user_id, "user123");
         });
     }
@@ -397,10 +419,15 @@ mod tests {
 
         ctx.with(|ctx| {
             let auth_context = JsAuthContext::anonymous();
-            AuthJsApi::setup_auth_globals(&ctx, auth_context).unwrap();
+            let auth_obj = AuthJsApi::create_auth_object(&ctx, auth_context).unwrap();
+
+            // Create a req object and attach auth
+            let req = Object::new(ctx.clone()).unwrap();
+            req.set("auth", auth_obj).unwrap();
+            ctx.globals().set("req", req).unwrap();
 
             // Test currentUser() returns null for anonymous
-            let is_null: bool = ctx.eval("auth.currentUser() === null").unwrap();
+            let is_null: bool = ctx.eval("req.auth.currentUser() === null").unwrap();
             assert!(is_null);
         });
     }
@@ -412,13 +439,18 @@ mod tests {
 
         ctx.with(|ctx| {
             let auth_context = JsAuthContext::anonymous();
-            AuthJsApi::setup_auth_globals(&ctx, auth_context).unwrap();
+            let auth_obj = AuthJsApi::create_auth_object(&ctx, auth_context).unwrap();
+
+            // Create a req object and attach auth
+            let req = Object::new(ctx.clone()).unwrap();
+            req.set("auth", auth_obj).unwrap();
+            ctx.globals().set("req", req).unwrap();
 
             // Test requireAuth() throws error
             let result: Result<bool, JsError> = ctx.eval(
                 r#"
                 try {
-                    auth.requireAuth();
+                    req.auth.requireAuth();
                     false; // Should not reach here
                 } catch (e) {
                     if (e.message.includes("Authentication required")) {
@@ -451,10 +483,15 @@ mod tests {
                 false,
                 false,
             );
-            AuthJsApi::setup_auth_globals(&ctx, auth_context).unwrap();
+            let auth_obj = AuthJsApi::create_auth_object(&ctx, auth_context).unwrap();
+
+            // Create a req object and attach auth
+            let req = Object::new(ctx.clone()).unwrap();
+            req.set("auth", auth_obj).unwrap();
+            ctx.globals().set("req", req).unwrap();
 
             // Test requireAuth() returns user
-            let user_id: String = ctx.eval("auth.requireAuth().id").unwrap();
+            let user_id: String = ctx.eval("req.auth.requireAuth().id").unwrap();
             assert_eq!(user_id, "user123");
         });
     }
@@ -474,18 +511,23 @@ mod tests {
                 false, // not admin
                 true,  // is editor
             );
-            AuthJsApi::setup_auth_globals(&ctx, auth_context).unwrap();
+            let auth_obj = AuthJsApi::create_auth_object(&ctx, auth_context).unwrap();
+
+            // Create a req object and attach auth
+            let req = Object::new(ctx.clone()).unwrap();
+            req.set("auth", auth_obj).unwrap();
+            ctx.globals().set("req", req).unwrap();
 
             // Test isEditor is true
-            let is_editor: bool = ctx.eval("auth.isEditor").unwrap();
+            let is_editor: bool = ctx.eval("req.auth.isEditor").unwrap();
             assert!(is_editor);
 
             // Test isAdmin is false
-            let is_admin: bool = ctx.eval("auth.isAdmin").unwrap();
+            let is_admin: bool = ctx.eval("req.auth.isAdmin").unwrap();
             assert!(!is_admin);
 
             // Test isAuthenticated is true
-            let is_authed: bool = ctx.eval("auth.isAuthenticated").unwrap();
+            let is_authed: bool = ctx.eval("req.auth.isAuthenticated").unwrap();
             assert!(is_authed);
         });
     }
@@ -505,13 +547,18 @@ mod tests {
                 true, // is admin
                 true, // is editor
             );
-            AuthJsApi::setup_auth_globals(&ctx, auth_context).unwrap();
+            let auth_obj = AuthJsApi::create_auth_object(&ctx, auth_context).unwrap();
+
+            // Create a req object and attach auth
+            let req = Object::new(ctx.clone()).unwrap();
+            req.set("auth", auth_obj).unwrap();
+            ctx.globals().set("req", req).unwrap();
 
             // Test both flags are true
-            let is_admin: bool = ctx.eval("auth.isAdmin").unwrap();
+            let is_admin: bool = ctx.eval("req.auth.isAdmin").unwrap();
             assert!(is_admin);
 
-            let is_editor: bool = ctx.eval("auth.isEditor").unwrap();
+            let is_editor: bool = ctx.eval("req.auth.isEditor").unwrap();
             assert!(is_editor);
         });
     }

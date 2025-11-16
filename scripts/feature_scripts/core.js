@@ -2,7 +2,7 @@
 function core_root(req) {
   console.log("core-root-called");
   console.log("req: " + JSON.stringify(req));
-  if (auth.isAuthenticated) {
+  if (req.auth.isAuthenticated) {
     console.log("User is logged in");
   } else {
     console.log("Anonymous user");

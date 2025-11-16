@@ -141,13 +141,16 @@ type RegisterFunctionType = Box<dyn Fn(&str, &str, Option<&str>) -> Result<(), r
 ///
 /// This function replaces the old vulnerable setup_global_functions with a secure implementation
 /// that enforces all security validation in Rust before allowing JavaScript operations.
+///
+/// Note: Authentication context is no longer set up here. It should be attached to the
+/// request object as `req.auth` by the caller.
 fn setup_secure_global_functions(
     ctx: &rquickjs::Ctx<'_>,
     script_uri: &str,
     user_context: UserContext,
     config: &GlobalSecurityConfig,
     register_fn: Option<RegisterFunctionType>,
-    auth_context: Option<crate::auth::JsAuthContext>,
+    _auth_context: Option<crate::auth::JsAuthContext>, // Kept for API compatibility but unused
     secrets_manager: Option<std::sync::Arc<crate::secrets::SecretsManager>>,
 ) -> Result<(), rquickjs::Error> {
     let secure_context = if let Some(secrets) = secrets_manager {
@@ -159,10 +162,7 @@ fn setup_secure_global_functions(
     // Setup secure functions with proper capability validation
     secure_context.setup_secure_functions(ctx, script_uri, register_fn)?;
 
-    // Setup authentication globals if auth context is provided
-    if let Some(auth_ctx) = auth_context {
-        crate::auth::AuthJsApi::setup_auth_globals(ctx, auth_ctx)?;
-    }
+    // Auth is no longer set up as a global - it's attached to req.auth by the caller
 
     Ok(())
 }
@@ -514,6 +514,7 @@ pub fn execute_script_for_request_secure(
     params: RequestExecutionParams,
 ) -> Result<JsHttpResponse, String> {
     let script_uri_owned = params.script_uri.clone();
+    let auth_context = params.auth_context.clone(); // Clone for later use
     let rt = Runtime::new().map_err(|e| format!("runtime new: {}", e))?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
@@ -602,6 +603,15 @@ pub fn execute_script_for_request_secure(
             request_obj
                 .set("body", body)
                 .map_err(|e| format!("set body: {}", e))?;
+        }
+
+        // Add authentication context as req.auth
+        if let Some(ref auth_ctx) = auth_context {
+            let auth_obj = crate::auth::AuthJsApi::create_auth_object(&ctx, auth_ctx.clone())
+                .map_err(|e| format!("create auth obj: {}", e))?;
+            request_obj
+                .set("auth", auth_obj)
+                .map_err(|e| format!("set auth: {}", e))?;
         }
 
         // Call the handler function
@@ -956,6 +966,12 @@ pub fn execute_graphql_resolver(
 
         // Add empty body for GraphQL
         req_obj.set("body", "")?;
+
+        // Add authentication context as req.auth
+        if let Some(ref auth_ctx) = auth_context.clone() {
+            let auth_obj = crate::auth::AuthJsApi::create_auth_object(&ctx, auth_ctx.clone())?;
+            req_obj.set("auth", auth_obj)?;
+        }
 
         let result_value = if args_value.is_undefined() {
             // Try calling with req object first (new format)
