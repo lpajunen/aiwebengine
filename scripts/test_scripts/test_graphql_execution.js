@@ -1,7 +1,7 @@
 // Test script for executeGraphQL function
 // Demonstrates how to execute GraphQL queries from JavaScript
 
-function testGraphQLHandler(req) {
+function testGraphQLHandler(context) {
   try {
     console.log("Testing executeGraphQL function");
 

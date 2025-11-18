@@ -3,7 +3,8 @@
 // Message metadata is matched against connection criteria for delivery
 
 // Stream customization functions return filter criteria for connections
-function chatStreamCustomizer(req) {
+function chatStreamCustomizer(context) {
+  const req = context.request || {};
   console.log("Customizing /test/chat connection");
   console.log("Query params: " + JSON.stringify(req.query));
 
@@ -21,7 +22,8 @@ function chatStreamCustomizer(req) {
   return filter;
 }
 
-function metadataDemoCustomizer(req) {
+function metadataDemoCustomizer(context) {
+  const req = context.request || {};
   console.log("Customizing /test/metadata-demo connection");
 
   // Only connections with ?demo=true will receive messages with demo: "true"
@@ -34,7 +36,9 @@ function metadataDemoCustomizer(req) {
 }
 
 // GraphQL subscription resolver now returns filter criteria
-function chatMessagesResolver(req, args) {
+function chatMessagesResolver(context) {
+  const req = context.request || {};
+  const args = context.args || {};
   console.log("Client subscribed to chatMessages GraphQL subscription");
   console.log("Request context: " + JSON.stringify(req));
 
@@ -128,7 +132,8 @@ function testSelectiveSubscriptionBroadcasting() {
 }
 
 // Test metadata parsing from query parameters
-function testMetadataDemo(req) {
+function testMetadataDemo(context) {
+  const req = context.request || {};
   console.log("Testing metadata demo endpoint...");
 
   // Send a message with demo metadata

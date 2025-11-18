@@ -19,8 +19,10 @@ Welcome to the aiwebengine documentation! This guide helps you find the right in
 ### Quick Example
 
 ```javascript
-// Simple "Hello World" handler
-function helloHandler(req) {
+// Simple "Hello World" handler using the unified context object
+function helloHandler(context) {
+  const req = context.request;
+
   return {
     status: 200,
     body: `Hello, ${req.query.name || "World"}!`,
@@ -149,7 +151,7 @@ routeRegistry.registerRoute("/hello", "helloHandler", "GET");
 
 ## 🎯 Quick Start by Goal
 
-### I want to...
+### I Want To
 
 **Build my first script**
 → Start with [Your First Script](solution-developers/getting-started/01-first-script.md)

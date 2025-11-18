@@ -2,7 +2,8 @@
 // This page is displayed when a user is authenticated but doesn't have the required role
 // to access a particular resource (e.g., Editor or Administrator privileges required).
 
-function serveInsufficientPermissions(req) {
+function serveInsufficientPermissions(context) {
+  const req = context.request || {};
   // Get the attempted path from query parameters if available
   const attemptedPath = req.query?.attempted || "the requested page";
 

@@ -1,20 +1,23 @@
 // Test script demonstrating different HTTP methods
-function get_handler(req) {
+function get_handler(context) {
+  const req = context.request || {};
   return { status: 200, body: `GET request to ${req.path}` };
 }
 
-function post_handler(req) {
+function post_handler(context) {
+  const req = context.request || {};
   return {
     status: 201,
     body: `POST request to ${req.path} with method ${req.method}`,
   };
 }
 
-function put_handler(req) {
+function put_handler(context) {
+  const req = context.request || {};
   return { status: 200, body: `PUT request to ${req.path}` };
 }
 
-function delete_handler(req) {
+function delete_handler(context) {
   return { status: 204, body: "" };
 }
 

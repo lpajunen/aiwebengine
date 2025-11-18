@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tracing::{debug, error};
 
+use crate::js_engine::{GraphqlOperationKind, GraphqlResolverExecutionParams};
+
 /// Represents a GraphQL operation registration from JavaScript
 #[derive(Debug, Clone)]
 pub struct GraphQLOperation {
@@ -382,6 +384,16 @@ fn extract_return_type(sdl: &str, field_name: &str) -> TypeRef {
     }
 }
 
+fn graphql_arg_value_to_string(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Null => "null".to_string(),
+        _ => value.to_string(),
+    }
+}
+
 /// Extract arguments from SDL field definition
 fn extract_arguments(sdl: &str, field_name: &str) -> Vec<(String, TypeRef)> {
     debug!(
@@ -593,10 +605,12 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
         let arguments = extract_arguments(&operation.sdl, &field_name);
         let arguments_clone = arguments.clone();
 
+        let field_name_for_ctx = field_name.clone();
         let mut query_field = Field::new(field_name.clone(), return_type, move |ctx| {
             let uri = resolver_uri.clone();
             let func = resolver_fn.clone();
             let args_defs = arguments_clone.clone();
+            let field_name = field_name_for_ctx.clone();
             FieldFuture::new(async move {
                 // Extract auth context from GraphQL context
                 let auth_context = ctx.data::<crate::auth::JsAuthContext>().ok().cloned();
@@ -617,8 +631,17 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
                     Some(serde_json::Value::Object(args_json))
                 };
 
+                let params = GraphqlResolverExecutionParams {
+                    script_uri: uri.clone(),
+                    resolver_function: func.clone(),
+                    field_name,
+                    operation_kind: GraphqlOperationKind::Query,
+                    args,
+                    auth_context,
+                };
+
                 // Call JavaScript resolver function
-                match crate::js_engine::execute_graphql_resolver(&uri, &func, args, auth_context) {
+                match crate::js_engine::execute_graphql_resolver(params) {
                     Ok(result) => {
                         debug!("GraphQL resolver result: {}", &result);
                         // Special handling for JSON responses - parse and return as GraphQL value
@@ -683,10 +706,12 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
             let return_type = extract_return_type(&operation.sdl, &field_name);
             let arguments = extract_arguments(&operation.sdl, &field_name);
             let arguments_clone = arguments.clone();
+            let field_name_for_ctx = field_name.clone();
             let mut mutation_field = Field::new(field_name.clone(), return_type, move |ctx| {
                 let uri = resolver_uri.clone();
                 let func = resolver_fn.clone();
                 let args_defs = arguments_clone.clone();
+                let field_name = field_name_for_ctx.clone();
                 FieldFuture::new(async move {
                     // Extract auth context from GraphQL context
                     let auth_context = ctx.data::<crate::auth::JsAuthContext>().ok().cloned();
@@ -707,13 +732,17 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
                         Some(serde_json::Value::Object(args_json))
                     };
 
-                    // Call JavaScript resolver function
-                    match crate::js_engine::execute_graphql_resolver(
-                        &uri,
-                        &func,
+                    let params = GraphqlResolverExecutionParams {
+                        script_uri: uri.clone(),
+                        resolver_function: func.clone(),
+                        field_name,
+                        operation_kind: GraphqlOperationKind::Mutation,
                         args,
                         auth_context,
-                    ) {
+                    };
+
+                    // Call JavaScript resolver function
+                    match crate::js_engine::execute_graphql_resolver(params) {
                         Ok(result) => {
                             // Try to parse as JSON first, then as string
                             if result.trim().starts_with('{') || result.trim().starts_with('[') {
@@ -774,101 +803,128 @@ pub fn build_schema() -> Result<Schema, async_graphql::Error> {
             let resolver_uri = operation.script_uri.clone();
             let resolver_fn = operation.resolver_function.clone();
 
-            // Extract return type from SDL
+            // Extract return type and arguments from SDL
             let return_type = extract_return_type(&operation.sdl, &field_name);
+            let arguments = extract_arguments(&operation.sdl, &field_name);
+            let arguments_clone = arguments.clone();
 
             // Create a proper streaming subscription field for execute_stream
-            let subscription_field = SubscriptionField::new(
+            let mut subscription_field = SubscriptionField::new(
                 field_name.clone(),
                 return_type, // Use dynamic return type from SDL
                 move |ctx| {
                     let subscription_name = subscription_name.clone();
                     let uri = resolver_uri.clone();
                     let func = resolver_fn.clone();
+                    let args_defs = arguments_clone.clone();
 
                     // Return a SubscriptionFieldFuture directly
                     SubscriptionFieldFuture::new(async move {
                         // Extract auth context from GraphQL context
                         let auth_context = ctx.data::<crate::auth::JsAuthContext>().ok().cloned();
 
-                        // Initialize the subscription by calling the JavaScript resolver
-                        let initial_result = match crate::js_engine::execute_graphql_resolver(
-                            &uri,
-                            &func,
-                            None,
-                            auth_context,
-                        ) {
-                            Ok(result) => {
-                                debug!(
-                                    "Subscription '{}' initialized: {}",
-                                    subscription_name, result
-                                );
-                                // Try to parse as JSON object, fallback to string
-                                match parse_json_to_graphql_value(&result) {
-                                    Ok(graphql_value) => graphql_value,
-                                    Err(_) => async_graphql::Value::String(result),
-                                }
+                        // Collect GraphQL argument values for customization input
+                        let mut args_json = serde_json::Map::new();
+                        for (arg_name, _arg_type) in &args_defs {
+                            if let Some(accessor) = ctx.args.get(arg_name)
+                                && let Ok(value) = accessor.deserialize::<serde_json::Value>()
+                            {
+                                args_json.insert(arg_name.clone(), value);
                             }
-                            Err(e) => {
-                                error!(
-                                    "Failed to initialize subscription '{}': {}",
-                                    subscription_name, e
-                                );
-                                async_graphql::Value::String(format!("Error: {}", e))
-                            }
-                        };
+                        }
 
-                        // For execute_stream compatibility, we need to maintain the legacy bridge
-                        // where sendSubscriptionMessage still works via the stream registry
+                        let mut customization_input = HashMap::new();
+                        for (key, value) in &args_json {
+                            customization_input
+                                .insert(key.clone(), graphql_arg_value_to_string(value));
+                        }
+
                         let stream_path =
                             format!("/engine/graphql/subscription/{}", subscription_name);
 
-                        // Create a unified stream using boxed trait objects
-                        use std::pin::Pin;
-
-                        let stream: Pin<
-                            Box<
-                                dyn futures::Stream<
-                                        Item = Result<async_graphql::Value, async_graphql::Error>,
-                                    > + Send,
-                            >,
-                        > = if let Ok(connection) =
-                            crate::stream_manager::StreamConnectionManager::new()
-                                .create_connection(&stream_path, None)
-                                .await
-                        {
-                            let mut receiver = connection.receiver;
-                            let stream = async_stream::stream! {
-                                // Yield initial result
-                                yield Ok(initial_result);
-
-                                // Then listen for broadcast messages from sendSubscriptionMessage
-                                while let Ok(message) = receiver.recv().await {
-                                    // Try to parse incoming message as JSON object, fallback to string
-                                    let parsed_message = match parse_json_to_graphql_value(&message) {
-                                        Ok(graphql_value) => graphql_value,
-                                        Err(_) => async_graphql::Value::String(message)
-                                    };
-                                    yield Ok(parsed_message);
+                        let filter_criteria =
+                            match crate::js_engine::execute_stream_customization_function(
+                                &uri,
+                                &func,
+                                &stream_path,
+                                &customization_input,
+                                auth_context.clone(),
+                            ) {
+                                Ok(criteria) => criteria,
+                                Err(e) => {
+                                    error!(
+                                        "Subscription '{}' customization failed: {}",
+                                        subscription_name, e
+                                    );
+                                    return Err(async_graphql::Error::new(format!(
+                                        "Subscription setup failed: {}",
+                                        e
+                                    )));
                                 }
                             };
-                            Box::pin(stream)
+
+                        let client_metadata = if filter_criteria.is_empty() {
+                            None
                         } else {
-                            error!(
-                                "Failed to create connection for subscription '{}'",
-                                subscription_name
-                            );
-                            // Fallback: just emit the initial value
-                            let stream = async_stream::stream! {
-                                yield Ok(initial_result);
-                            };
-                            Box::pin(stream)
+                            Some(filter_criteria)
                         };
 
-                        Ok(stream)
+                        let connection = match crate::stream_manager::StreamConnectionManager::new()
+                            .create_connection(&stream_path, client_metadata)
+                            .await
+                        {
+                            Ok(connection) => connection,
+                            Err(e) => {
+                                error!(
+                                    "Failed to create connection for subscription '{}': {}",
+                                    subscription_name, e
+                                );
+                                return Err(async_graphql::Error::new(format!(
+                                    "Subscription connection failed: {}",
+                                    e
+                                )));
+                            }
+                        };
+
+                        let mut receiver = connection.receiver;
+                        let connection_id = connection.connection_id.clone();
+                        let path_for_cleanup = stream_path.clone();
+
+                        let stream = async_stream::stream! {
+                            while let Ok(message) = receiver.recv().await {
+                                let parsed_message = match parse_json_to_graphql_value(&message) {
+                                    Ok(graphql_value) => graphql_value,
+                                    Err(_) => async_graphql::Value::String(message.clone()),
+                                };
+                                yield Ok(parsed_message);
+                            }
+
+                            if let Err(cleanup_err) =
+                                crate::stream_registry::GLOBAL_STREAM_REGISTRY
+                                    .remove_connection(&path_for_cleanup, &connection_id)
+                            {
+                                error!(
+                                    "Failed to cleanup GraphQL subscription connection {}: {}",
+                                    connection_id, cleanup_err
+                                );
+                            } else {
+                                debug!(
+                                    "Cleaned up GraphQL subscription connection {} for {}",
+                                    connection_id, path_for_cleanup
+                                );
+                            }
+                        };
+
+                        Ok(Box::pin(stream))
                     })
                 },
             );
+
+            // Add arguments to subscription field definition
+            for (arg_name, arg_type) in arguments {
+                subscription_field =
+                    subscription_field.argument(InputValue::new(&arg_name, arg_type));
+            }
 
             subscription_builder = subscription_builder.field(subscription_field);
         }

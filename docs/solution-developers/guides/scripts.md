@@ -29,7 +29,9 @@ A script in aiwebengine is a JavaScript file that:
 ### Minimal Script Example
 
 ```javascript
-function helloHandler(req) {
+function helloHandler(context) {
+  const req = context.request;
+
   return {
     status: 200,
     body: "Hello, World!",
@@ -58,75 +60,44 @@ init();
 
 ### Recommended Structure
 
-```javascript
-/**
- * script-name.js - Brief description
- *
- * Longer description of what this script does.
- * List key features or routes.
- */
-
-// ============================================
-// Constants and Configuration
-// ============================================
-
-const MAX_ITEMS = 100;
-const API_VERSION = "v1";
-
-// ============================================
-// Data Storage (in-memory)
-// ============================================
-
-let items = [];
-let nextId = 1;
-
-// ============================================
-// Helper Functions
-// ============================================
-
-function validateItem(item) {
-  if (!item.name || item.name.length === 0) {
-    return { valid: false, error: "Name is required" };
-  }
-  if (item.name.length > 100) {
-    return { valid: false, error: "Name too long" };
-  }
-  return { valid: true };
+return { valid: true };
 }
 
 function createResponse(status, data) {
-  return {
-    status: status,
-    body: JSON.stringify(data),
-    contentType: "application/json",
-  };
+return {
+status: status,
+body: JSON.stringify(data),
+contentType: "application/json",
+};
 }
 
 // ============================================
 // Handler Functions
 // ============================================
 
-function listItemsHandler(req) {
-  console.log(`Listing items: ${items.length} total`);
-  return createResponse(200, { items: items });
+function listItemsHandler(context) {
+console.log(`Listing items: ${items.length} total`);
+return createResponse(200, { items: items });
 }
 
-function createItemHandler(req) {
-  const item = {
-    id: nextId++,
-    name: req.form.name,
-    created: new Date().toISOString(),
-  };
+function createItemHandler(context) {
+const req = context.request;
 
-  const validation = validateItem(item);
-  if (!validation.valid) {
-    return createResponse(400, { error: validation.error });
-  }
+const item = {
+id: nextId++,
+name: req.form.name,
+created: new Date().toISOString(),
+};
 
-  items.push(item);
-  console.log(`Item created: ${item.id}`);
+const validation = validateItem(item);
+if (!validation.valid) {
+return createResponse(400, { error: validation.error });
+}
 
-  return createResponse(201, { item: item });
+items.push(item);
+console.log(`Item created: ${item.id}`);
+
+return createResponse(201, { item: item });
 }
 
 // ============================================
@@ -134,12 +105,12 @@ function createItemHandler(req) {
 // ============================================
 
 function init() {
-  // Register routes
-  routeRegistry.registerRoute("/api/items", "listItemsHandler", "GET");
-  routeRegistry.registerRoute("/api/items", "createItemHandler", "POST");
+// Register routes
+routeRegistry.registerRoute("/api/items", "listItemsHandler", "GET");
+routeRegistry.registerRoute("/api/items", "createItemHandler", "POST");
 
-  // Log initialization
-  console.log("Items API initialized");
+// Log initialization
+console.log("Items API initialized");
 }
 
 // ============================================
@@ -147,7 +118,8 @@ function init() {
 // ============================================
 
 init();
-```
+
+````
 
 ### Key Sections
 
@@ -163,22 +135,33 @@ init();
 
 ### Handler Signature
 
-All handlers receive one parameter (`req`) and must return a response object:
+All handlers receive a single `context` object. Most HTTP handlers immediately alias `context.request` so existing patterns using `req` stay familiar:
 
 ```javascript
-function handlerName(req) {
-  // Process request
+function handlerName(context) {
+  const req = context.request;
+
   return {
     status: 200,
     body: "response content",
     contentType: "text/plain",
   };
 }
-```
+````
 
-### Request Object Structure
+### Context Overview
 
-The `req` parameter contains:
+Route handlers have access to the following `context` fields:
+
+- `request`: HTTP method, path, headers, query params, form/body
+- `args`: GraphQL or command arguments (null for plain HTTP routes)
+- `kind`: invocation type (`httpRoute`, `graphqlQuery`, etc.)
+- `scriptUri` / `handlerName`: metadata about the executing script
+- `meta`, `connectionMetadata`: populated for streaming/subscription handlers
+
+### Request Object Structure (context.request)
+
+The `context.request` object contains:
 
 ```javascript
 {
@@ -216,7 +199,7 @@ Handlers must return:
 **Simple text response:**
 
 ```javascript
-function textHandler(req) {
+function textHandler(context) {
   return {
     status: 200,
     body: "Plain text response",
@@ -228,7 +211,7 @@ function textHandler(req) {
 **JSON API response:**
 
 ```javascript
-function jsonHandler(req) {
+function jsonHandler(context) {
   const data = {
     message: "Success",
     timestamp: new Date().toISOString(),
@@ -246,7 +229,7 @@ function jsonHandler(req) {
 **HTML page:**
 
 ```javascript
-function htmlHandler(req) {
+function htmlHandler(context) {
   const html = `
     <!DOCTYPE html>
     <html>
@@ -272,7 +255,7 @@ function htmlHandler(req) {
 **Error response:**
 
 ```javascript
-function errorHandler(req) {
+function errorHandler(context) {
   return {
     status: 404,
     body: JSON.stringify({ error: "Resource not found" }),
@@ -333,7 +316,8 @@ Note: Path parameters like `:id` are not currently extracted automatically. Use 
 // Current approach
 routeRegistry.registerRoute("/api/users/get", "getUser", "GET");
 
-function getUser(req) {
+function getUser(context) {
+  const req = context.request;
   const id = req.query.id; // Access via ?id=123
   // ...
 }
@@ -363,10 +347,11 @@ function init() {
 
 ### Query Parameters
 
-Access via `req.query`:
+Access via `context.request.query` (or alias to `req`):
 
 ```javascript
-function searchHandler(req) {
+function searchHandler(context) {
+  const req = context.request;
   const query = req.query.q || "";
   const page = parseInt(req.query.page || "1");
   const limit = parseInt(req.query.limit || "10");
@@ -389,10 +374,11 @@ routeRegistry.registerRoute("/search", "searchHandler", "GET");
 
 ### Form Data (POST/PUT)
 
-Access via `req.form`:
+Access via `context.request.form`:
 
 ```javascript
-function createUserHandler(req) {
+function createUserHandler(context) {
+  const req = context.request;
   const name = req.form.name;
   const email = req.form.email;
   const age = parseInt(req.form.age || "0");
@@ -425,7 +411,8 @@ routeRegistry.registerRoute("/api/users", "createUserHandler", "POST");
 Parse JSON from form data:
 
 ```javascript
-function apiHandler(req) {
+function apiHandler(context) {
+  const req = context.request;
   try {
     // If client sends JSON with Content-Type: application/json
     // It may be available in req.form as a single key
@@ -450,10 +437,11 @@ function apiHandler(req) {
 
 ### Headers
 
-Access request headers via `req.headers`:
+Access request headers via `context.request.headers`:
 
 ```javascript
-function headerHandler(req) {
+function headerHandler(context) {
+  const req = context.request;
   const userAgent = req.headers["user-agent"] || "Unknown";
   const contentType = req.headers["content-type"] || "None";
   const authHeader = req.headers["authorization"] || "";
@@ -548,7 +536,7 @@ function errorResponse(status, message) {
 }
 
 // Usage
-function myHandler(req) {
+function myHandler(context) {
   return jsonResponse(200, { message: "Success" });
 }
 ```
@@ -565,12 +553,12 @@ let counter = 0;
 let users = [];
 let cache = {};
 
-function incrementHandler(req) {
+function incrementHandler(context) {
   counter++;
   return jsonResponse(200, { counter: counter });
 }
 
-function resetHandler(req) {
+function resetHandler(context) {
   counter = 0;
   return jsonResponse(200, { counter: counter });
 }
@@ -587,7 +575,8 @@ function resetHandler(req) {
 ```javascript
 const sessions = {};
 
-function loginHandler(req) {
+function loginHandler(context) {
+  const req = context.request;
   const sessionId = generateSessionId();
   sessions[sessionId] = {
     user: req.form.username,
@@ -597,7 +586,8 @@ function loginHandler(req) {
   return jsonResponse(200, { sessionId: sessionId });
 }
 
-function getUserHandler(req) {
+function getUserHandler(context) {
+  const req = context.request;
   const sessionId = req.headers["x-session-id"];
   const session = sessions[sessionId];
 
@@ -630,7 +620,8 @@ function setCachedData(key, data) {
   };
 }
 
-function apiHandler(req) {
+function apiHandler(context) {
+  const req = context.request;
   const cacheKey = `users_${req.query.page || 1}`;
 
   // Check cache
@@ -653,7 +644,8 @@ function apiHandler(req) {
 Always wrap risky operations:
 
 ```javascript
-function riskyHandler(req) {
+function riskyHandler(context) {
+  const req = context.request;
   try {
     // Operations that might fail
     const data = JSON.parse(req.form.data);
@@ -672,7 +664,8 @@ function riskyHandler(req) {
 Validate all inputs:
 
 ```javascript
-function createItemHandler(req) {
+function createItemHandler(context) {
+  const req = context.request;
   // Validate required fields
   if (!req.form.name) {
     return errorResponse(400, "Name is required");
@@ -719,7 +712,7 @@ function handleError(error, context) {
   };
 }
 
-function myHandler(req) {
+function myHandler(context) {
   try {
     // Your logic
     return jsonResponse(200, { success: true });
@@ -736,23 +729,24 @@ function myHandler(req) {
 **Good:**
 
 ```javascript
-function createUserHandler(req) {}
-function getUserByIdHandler(req) {}
-function updateUserEmailHandler(req) {}
+function createUserHandler(context) {}
+function getUserByIdHandler(context) {}
+function updateUserEmailHandler(context) {}
 ```
 
 **Bad:**
 
 ```javascript
-function handler1(req) {}
-function func(req) {}
-function process(req) {}
+function handler1(context) {}
+function func(context) {}
+function process(context) {}
 ```
 
 ### 2. Validate All Inputs
 
 ```javascript
-function safeHandler(req) {
+function safeHandler(context) {
+  const req = context.request;
   // Check required parameters
   if (!req.query.id) {
     return errorResponse(400, "Missing id parameter");
@@ -777,7 +771,8 @@ function safeHandler(req) {
 ### 3. Log Important Events
 
 ```javascript
-function handler(req) {
+function handler(context) {
+  const req = context.request;
   console.log(`Request started: ${req.path}`);
 
   try {
@@ -796,13 +791,13 @@ function handler(req) {
 **Good - Single Responsibility:**
 
 ```javascript
-function listUsers(req) {
+function listUsers(context) {
   const users = getAllUsers();
   return jsonResponse(200, { users: users });
 }
 
-function createUser(req) {
-  const user = buildUserFromForm(req.form);
+function createUser(context) {
+  const user = buildUserFromForm(context.request.form);
   saveUser(user);
   return jsonResponse(201, { user: user });
 }
@@ -811,7 +806,8 @@ function createUser(req) {
 **Bad - Too Much in One Handler:**
 
 ```javascript
-function usersHandler(req) {
+function usersHandler(context) {
+  const req = context.request;
   if (req.method === "GET") {
     // List logic
   } else if (req.method === "POST") {
@@ -842,7 +838,8 @@ function sanitizeInput(str) {
 }
 
 // Handler uses helpers
-function createHandler(req) {
+function createHandler(context) {
+  const req = context.request;
   const email = sanitizeInput(req.form.email);
 
   if (!validateEmail(email)) {
@@ -860,7 +857,8 @@ function createHandler(req) {
 
 ```javascript
 // Middleware functions
-function requireAuth(req, handler) {
+function requireAuth(context, handler) {
+  const req = context.request;
   const token = req.headers["authorization"];
   if (!token) {
     return errorResponse(401, "Authentication required");
@@ -872,20 +870,21 @@ function requireAuth(req, handler) {
   }
 
   // Call actual handler
-  return handler(req);
+  return handler(context);
 }
 
-function logRequest(req, handler) {
+function logRequest(context, handler) {
+  const req = context.request;
   console.log(`${req.method} ${req.path}`);
-  const response = handler(req);
+  const response = handler(context);
   console.log(`Response: ${response.status}`);
   return response;
 }
 
 // Protected handler
-function protectedDataHandler(req) {
-  return requireAuth(req, (req) => {
-    return logRequest(req, (req) => {
+function protectedDataHandler(context) {
+  return requireAuth(context, (ctx) => {
+    return logRequest(ctx, (finalCtx) => {
       return jsonResponse(200, { secret: "data" });
     });
   });
@@ -897,11 +896,12 @@ function protectedDataHandler(req) {
 ```javascript
 function createCrudHandlers(resourceName, storage) {
   return {
-    list: function (req) {
+    list: function (context) {
       return jsonResponse(200, { [resourceName]: storage });
     },
 
-    create: function (req) {
+    create: function (context) {
+      const req = context.request;
       const item = { id: generateId(), ...req.form };
       storage.push(item);
       return jsonResponse(201, { [resourceName]: item });
@@ -920,19 +920,20 @@ function init() {
   routeRegistry.registerRoute("/api/users", "createUserHandler", "POST");
 }
 
-function listUsersHandler(req) {
-  return userHandlers.list(req);
+function listUsersHandler(context) {
+  return userHandlers.list(context);
 }
 
-function createUserHandler(req) {
-  return userHandlers.create(req);
+function createUserHandler(context) {
+  return userHandlers.create(context);
 }
 ```
 
 ### Pagination Pattern
 
 ```javascript
-function paginatedHandler(req) {
+function paginatedHandler(context) {
+  const req = context.request;
   const page = parseInt(req.query.page || "1");
   const limit = parseInt(req.query.limit || "10");
 
@@ -977,7 +978,8 @@ console.log(message); // Write to logs
 ### Handler Template
 
 ```javascript
-function myHandler(req) {
+function myHandler(context) {
+  const req = context.request;
   try {
     // Extract parameters
     const param = req.query.param || req.form.param;

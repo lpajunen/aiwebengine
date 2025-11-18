@@ -23,6 +23,10 @@
 //   * request.body (string) - raw request body
 //   * request.auth (object) - authentication context (see above)
 
+function getRequest(context) {
+  return (context && context.request) || {};
+}
+
 function init(context) {
   // Register routes for user management
   routeRegistry.registerRoute("/engine/admin", "handleManagerUI", "GET");
@@ -41,7 +45,8 @@ function init(context) {
 }
 
 // Serve the management UI (HTML page)
-function handleManagerUI(request) {
+function handleManagerUI(context) {
+  const request = getRequest(context);
   // Check if user is authenticated and is an administrator
   if (!request.auth || !request.auth.isAuthenticated) {
     return {
@@ -450,7 +455,8 @@ function handleManagerUI(request) {
 }
 
 // API endpoint to list all users
-function handleListUsers(request) {
+function handleListUsers(context) {
+  const request = getRequest(context);
   // Check if user is authenticated and is an administrator
   if (!request.auth || !request.auth.isAuthenticated) {
     return {
@@ -496,7 +502,8 @@ function handleListUsers(request) {
 }
 
 // API endpoint to update user role
-function handleUpdateUserRole(request) {
+function handleUpdateUserRole(context) {
+  const request = getRequest(context);
   // Check if user is authenticated and is an administrator
   if (!request.auth || !request.auth.isAuthenticated) {
     return {

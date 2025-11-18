@@ -30,7 +30,7 @@ try {
 }
 
 // route that exercises getScript, listScripts, deleteScript
-function js_mgmt_check(req) {
+function js_mgmt_check(context) {
   try {
     const got =
       typeof scriptStorage !== "undefined" &&

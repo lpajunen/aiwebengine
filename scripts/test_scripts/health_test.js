@@ -1,5 +1,5 @@
 // Health check test script
-function health_test_handler(req) {
+function health_test_handler(context) {
   try {
     // Test basic health check functionality
     const timestamp = new Date().toISOString();

@@ -7,168 +7,94 @@ This document tracks potential improvements to the aiwebengine based on real-wor
 
 ---
 
+## Unified Handler Context (Implemented November 2025)
+
+As of November 17, 2025 every JavaScript entry point now receives the same single `context` argument created by `JsHandlerContextBuilder` (`src/js_engine.rs`). This fixes the historical split between `req`/`args`, removes the need for multiple resolver call signatures, and guarantees that connection metadata only requires one user-defined hook.
+
+### Context shape
+
+All handler kinds receive:
+
+- `context.kind`: one of `httpRoute`, `graphqlQuery`, `graphqlMutation`, `graphqlSubscription`, `streamCustomization`, or `init`.
+- `context.scriptUri` / `context.handlerName`: useful for logging inside user code.
+- `context.request`: normalized request info with `path`, `method`, `headers`, `query`, `form`, `body`, and the full `auth` helper built via `AuthJsApi`. HTTP routes inherit real headers; GraphQL/stream invocations get the synthetic values that match their transport.
+- `context.args`: always defined. When no inputs exist the runtime sets this to `null` (HTTP) or `{}` (GraphQL) so handlers never have to guess about optional parameters.
+- `context.connectionMetadata`: present only for long-lived transports (GraphQL subscriptions / custom streams) and mirrors the string-only metadata returned by customization hooks.
+- `context.meta`: structured metadata the host populates (e.g., `meta.graphql = { fieldName, operation }`, `meta.stream = { path }`).
+
+### HTTP route handlers
+
+- Source: `execute_script_for_request_secure` now builds the full context and passes it as the sole argument.
+- Headers and auth helpers are available for every request; `context.args` remains `null` because HTTP handlers consume request data directly from `context.request`.
+
+### GraphQL queries & mutations
+
+- Source: `build_schema` now constructs `GraphqlResolverExecutionParams` which flow through `execute_graphql_resolver` → `JsHandlerContextBuilder`.
+- Resolvers receive `context.kind = "graphqlQuery" | "graphqlMutation"`, `context.args` containing the strongly typed field arguments (never omitted), and `context.meta.graphql` describing the field and operation type.
+- Legacy two-argument fallbacks have been removed in favour of the single context payload; existing scripts need to destructure `context.request` / `context.args` instead of relying on arity inspection.
+
+### GraphQL subscriptions
+
+- The resolver only runs once per connection. Subscription variables are collected from the GraphQL executor, converted to strings for filter metadata, and attached to the single `context.args` object.
+- `execute_stream_customization_function` is still used behind the scenes, but the resolver itself is now the customization hook, meaning there is no second opaque invocation. The metadata returned by the handler is enforced to `HashMap<String, String>` and echoed back via `context.connectionMetadata` for message handlers.
+- SSE delivery happens entirely inside Rust; the JavaScript resolver is responsible solely for producing the initial filter map plus any asynchronous side effects.
+
+### Custom stream handlers (non-GraphQL)
+
+- Custom stream customization functions now receive the same `context` object with `meta.stream.path` and an `args` object built from query parameters.
+- Returning anything other than string values results in a descriptive runtime error before the connection is accepted.
+
+### Script init() hook
+
+- `call_init_if_exists` now invokes `init(context)` where `context.kind = "init"`, `context.meta` contains `{ "timestamp": <ISO>, "isStartup": bool }`, and auth/request fields are omitted.
+
+This unified shape eliminates the ambiguity called out in earlier sections (missing headers, absent helpers, and multi-call subscription behaviour). The remaining improvement ideas below reference the historical pain points for posterity, but the highest-priority ones (#1–#3) are already closed by this update.
+
+## GraphQL Resolver Parameter Shape – Multiple args vs single object
+
+- **Today’s behaviour:** The engine prefers `resolver(req, args)` but still supports the historical `resolver(args)` or `resolver(req)` fallbacks for legacy scripts. This is implemented in `execute_graphql_resolver` by trying multiple call signatures when `args` is `undefined`.
+- **Benefits of separate parameters:**
+  - Mirrors the mental model from GraphQL server libraries (`args` vs request context) and keeps mutations/queries aligned with HTTP handlers that only need `req`.
+  - Allows the engine to skip constructing/serializing `args` when a field has no inputs, which reduces per-request overhead.
+  - Backwards compatibility is easier: scripts that only expect `args` continue to work because `req` is just ignored.
+- **Costs:**
+  - Subscriptions never receive their variables in `args`, so resolver authors must special-case `req.query` for just that type.
+  - Every handler has to branch on whether `args` exists, even though the runtime could always supply an object (possibly empty).
+  - Maintaining dual call paths makes error reporting noisy—the engine swallows the first `TypeError` and re-invokes the function, which hides genuine bugs.
+- **Single-object alternative:** Introduce a consolidated payload such as `resolver(context)` where `context` contains `{ req, args, fieldName, operationType, connectionMetadata }`. Advantages include consistent ergonomics with HTTP handlers, space to add future metadata, and the ability to populate subscriptions’ arguments once without juggling multiple parameters. The downside is the breaking change: every existing resolver would need to destructure the new object, or the engine would need a long deprecation shim that inspects `resolver.length` and adapts dynamically.
+- **Recommended path:** keep `(req, args)` for queries/mutations in the near term but make the objects themselves consistent (always provide `args`—empty object if no inputs; always provide real `req.query`/`req.body` data). For subscriptions, phase in `args` support during the connection setup so resolver code can be uniform. Once that parity exists, revisiting a single-context object becomes easier because there is a predictable payload to wrap.
+
 ## High Priority Improvements
 
-### 1. Subscription Resolver Parameter Consistency
+### ✅ Completed: Subscription Resolver Parameter Consistency
 
-**Problem:**
-Subscription resolvers receive GraphQL variables via `req.query` (URL query parameters), while query and mutation resolvers receive them via the `args` parameter. This creates a confusing inconsistency in the API.
+**Status:** Implemented via the unified handler context (November 17, 2025).
 
-**Current Behavior:**
+- `GraphqlResolverExecutionParams` now serializes every subscription argument into `context.args` before the resolver runs, matching the shape used for queries/mutations.
+- URL query parameters are only used as a transport; the values are normalized into strings for filter metadata and made available through `context.connectionMetadata` as well.
+- Legacy `req.query` access continues to work for backwards compatibility, but new code can rely solely on `context.args`.
 
-```javascript
-// Query/Mutation resolvers
-function messagesResolver(req, args) {
-  const channelId = args.channelId; // ✓ Works as expected
-}
-
-// Subscription resolvers
-function chatUpdatesResolver(req, args) {
-  const channelId = args.channelId; // ✗ Always undefined
-  const channelId = req.query.channelId; // ✓ This is where it actually is
-}
-```
-
-**Impact:**
-
-- Very confusing for developers
-- Breaks GraphQL conventions
-- Required significant debugging time to discover
-- Forces different code patterns for different resolver types
-
-**Suggested Solution:**
-Pass subscription variables through the `args` parameter just like queries and mutations. The implementation should:
-
-1. Parse variables from the subscription request (whether from query params or request body)
-2. Pass them to the resolver via `args` parameter
-3. Keep `req.query` available for other metadata if needed
-4. Maintain backward compatibility with a deprecation notice
-
-**Implementation Notes:**
-
-- Check `src/graphql/subscription.rs` or equivalent subscription handling code
-- Modify how `execute_stream_customization_function` prepares resolver arguments
-- Update any internal subscription routing that relies on URL parameters
-
-**Estimated Effort:** Medium (4-8 hours)
+**Follow-up:** Update the public docs/examples to describe the new ergonomics (tracked under the "Update scripts/tests/docs" todo).
 
 ---
 
-### 2. Subscription Resolver Multiple Invocations
+### ✅ Completed: Subscription Resolver Single Invocation
 
-**Problem:**
-The subscription resolver function is called multiple times per connection without clear context about why each invocation occurs:
+**Status:** Delivered alongside the string-only filter enforcement.
 
-1. First call: Has proper `req.query` with variables → actual subscription setup
-2. Second call: Empty `req` or `req.query` → appears to be introspection or setup
+- The resolver doubles as the stream customization hook, so it now runs exactly once per connection with fully populated `context.args`, `context.request`, and `context.meta.graphql`.
+- The SSE pipeline performs all schema/introspection work without calling back into user code, eliminating the need for defensive `if (!req.query)` guards.
+- Error reporting is clearer: any exception thrown during the single invocation is surfaced directly to the client and to the server logs with the field name.
 
-**Current Workaround:**
-
-```javascript
-function chatUpdatesResolver(req, args) {
-  // Defensive checks required to avoid crashes
-  if (!req || !req.query || !req.query.channelId) {
-    return {}; // Silent return for introspection calls
-  }
-
-  // Actual subscription logic...
-}
-```
-
-**Impact:**
-
-- Forces defensive null checks in every subscription resolver
-- Produces confusing error logs
-- No clear documentation of this behavior
-- Developers don't know if empty calls are bugs or expected
-
-**Suggested Solutions:**
-
-**Option A: Single Invocation**
-
-- Only call the resolver once with complete context
-- Handle any internal setup separately without invoking user code
-
-**Option B: Context Flag**
-
-- Add `req.isIntrospection` or `req.invocationType` field
-- Document the different invocation types
-- Provide examples of how to handle each
-
-**Option C: Separate Hooks**
-
-- Split into `onSubscriptionSetup(req, args)` and `onSubscriptionMessage(req, args)`
-- Make the distinction explicit in the API
-
-**Recommended:** Option A (cleanest) or Option B (most flexible)
-
-**Implementation Notes:**
-
-- Investigate why multiple calls occur in subscription initialization
-- Check if GraphQL schema introspection is triggering extra calls
-- Review SSE connection setup flow
-
-**Estimated Effort:** Medium (6-10 hours including investigation)
+**Follow-up:** Documentation needs to highlight that returning a value from the resolver now solely controls the connection filter; message broadcasting still happens through `sendSubscriptionMessageFiltered`.
 
 ---
 
-### 3. req.auth API Consistency
+### ✅ Completed: req.auth API Consistency
 
-**Problem:**
-The authentication API is inconsistent between resolver types:
-
-- Query/Mutation resolvers: `req.auth.requireAuth()` method available
-- Subscription resolvers: Must manually check `req.auth.isAuthenticated` boolean
-
-**Current Code:**
-
-```javascript
-// Queries and Mutations
-function messagesResolver(req, args) {
-  const user = req.auth.requireAuth(); // ✓ Throws if not authenticated
-  // ... continue with authenticated user
-}
-
-// Subscriptions
-function chatUpdatesResolver(req, args) {
-  // req.auth.requireAuth() is undefined or doesn't work here
-  if (!req.auth || !req.auth.isAuthenticated) {
-    throw new Error("Authentication required"); // ✗ Manual check required
-  }
-  const user = {
-    id: req.auth.userId,
-    name: req.auth.name,
-    email: req.auth.email,
-  };
-}
-```
-
-**Impact:**
-
-- Inconsistent developer experience
-- Different authentication patterns for different resolver types
-- Easy to forget authentication in subscriptions (no helper method)
-- More verbose code in subscription resolvers
-
-**Suggested Solution:**
-Make `req.auth.requireAuth()` available and functional in subscription resolver context. It should:
-
-1. Validate authentication state
-2. Throw clear error if not authenticated
-3. Return user object with standard fields (id, name, email)
-4. Work identically across all resolver types
-
-**Alternative Solution:**
-If there's a technical reason `requireAuth()` can't work in subscription context, provide a clear alternative like `req.auth.getAuthenticatedUser()` and document why.
-
-**Implementation Notes:**
-
-- Check how `req.auth` object is populated in subscription context
-- Verify if the method exists but doesn't work, or is truly missing
-- Ensure authentication middleware runs before subscription resolver
-- Test error propagation in SSE streams
-
-**Estimated Effort:** Small-Medium (2-4 hours)
+- Every invocation path (HTTP, GraphQL queries/mutations/subscriptions, stream customizations) now routes through `JsHandlerContextBuilder::build_request_object`, which always installs the full `AuthJsApi` helper.
+- `requireAuth()` and the other helper methods behave identically regardless of transport, so subscription resolvers can drop the manual boolean checks shown in the older examples.
+- The auth object also flows into customization hooks, allowing filter logic to short-circuit unauthenticated subscribers before the SSE connection is accepted.
 
 ---
 

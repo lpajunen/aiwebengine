@@ -1,5 +1,6 @@
 // Test script for form data handling
-function form_handler(req) {
+function form_handler(context) {
+  const req = context.request || {};
   let formInfo = "none";
   if (req.form && Object.keys(req.form).length > 0) {
     // req.form is now an object with parsed form data

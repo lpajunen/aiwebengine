@@ -2,6 +2,21 @@
 
 This page provides a complete reference for the JavaScript APIs available in aiwebengine scripts. These functions and objects allow you to handle HTTP requests, generate responses, log information, and interact with the server environment.
 
+## Unified Handler Context
+
+Every handler/resolver now receives a single `context` object. For HTTP routes you usually alias `context.request` to the familiar `req` variable:
+
+```javascript
+function myHandler(context) {
+  const req = context.request;
+
+  // Access req.method, req.path, req.query, req.form, req.headers, req.body
+  // Use context.args, context.kind, context.meta as needed
+}
+```
+
+The examples below follow this pattern—code snippets declare `const req = context.request;` when they need request data. If a snippet still shows `req`, it assumes this alias exists.
+
 ## Route Registry
 
 The `routeRegistry` object provides all HTTP route and streaming functionality in a unified namespace.
@@ -21,7 +36,8 @@ Registers a route that maps a URL path to a handler function.
 **Example:**
 
 ```javascript
-function getUsers(req) {
+function getUsers(context) {
+  const req = context.request;
   return {
     status: 200,
     body: "User list",
@@ -90,7 +106,7 @@ Sends a message to all clients connected to a specific stream path.
 **Example:**
 
 ```javascript
-function notifyHandler(req) {
+function notifyHandler(context) {
   // Send notification to specific stream
   routeRegistry.sendStreamMessage("/notifications", {
     type: "notification",
@@ -112,7 +128,8 @@ routeRegistry.registerRoute("/notify", "notifyHandler", "POST");
 // Register a chat stream
 routeRegistry.registerStreamRoute("/chat");
 
-function sendMessage(req) {
+function sendMessage(context) {
+  const req = context.request;
   const { user, message } = req.form;
 
   if (!user || !message) {

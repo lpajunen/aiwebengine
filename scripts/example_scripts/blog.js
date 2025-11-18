@@ -1,7 +1,7 @@
 // Example blog script demonstrating aiwebengine capabilities
 // This script registers a /blog endpoint that serves a sample blog post
 
-function blog_handler(req) {
+function blog_handler(context) {
   const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -169,7 +169,7 @@ function blog_handler(req) {
 
             <div class="code-example">
 // Register a simple hello world endpoint
-function hello_handler(req) {
+function hello_handler(context) {
     return {
         status: 200,
         body: "Hello, aiwebengine!",

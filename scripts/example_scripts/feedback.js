@@ -1,7 +1,7 @@
 // Example feedback script demonstrating form handling
 // This script registers a /feedback endpoint with GET (form) and POST (submission) handlers
 
-function feedback_form_handler(req) {
+function feedback_form_handler(context) {
   const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -203,7 +203,8 @@ function feedback_form_handler(req) {
   };
 }
 
-function feedback_submit_handler(req) {
+function feedback_submit_handler(context) {
+  const req = context.request || {};
   // Extract form data
   let name = req.form?.name || "Anonymous";
   let email = req.form?.email || "";

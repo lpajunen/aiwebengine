@@ -1,4 +1,5 @@
 use rquickjs::{Context, Function, Runtime, Value};
+use serde_json::Value as JsonValue;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -111,8 +112,271 @@ pub struct RequestExecutionParams {
     pub query_params: Option<HashMap<String, String>>,
     pub form_data: Option<HashMap<String, String>>,
     pub raw_body: Option<String>,
+    pub headers: HashMap<String, String>,
     pub user_context: UserContext,
     /// Optional OAuth authentication context for JavaScript auth API
+    pub auth_context: Option<crate::auth::JsAuthContext>,
+}
+
+/// Kinds of handler invocations supported by the runtime.
+#[derive(Debug, Clone, Copy)]
+pub enum HandlerInvocationKind {
+    HttpRoute,
+    GraphqlQuery,
+    GraphqlMutation,
+    GraphqlSubscription,
+    StreamCustomization,
+    Init,
+}
+
+impl HandlerInvocationKind {
+    fn as_str(&self) -> &'static str {
+        match self {
+            HandlerInvocationKind::HttpRoute => "httpRoute",
+            HandlerInvocationKind::GraphqlQuery => "graphqlQuery",
+            HandlerInvocationKind::GraphqlMutation => "graphqlMutation",
+            HandlerInvocationKind::GraphqlSubscription => "graphqlSubscription",
+            HandlerInvocationKind::StreamCustomization => "streamCustomization",
+            HandlerInvocationKind::Init => "init",
+        }
+    }
+}
+
+/// Normalized view of inbound request data passed to JavaScript.
+#[derive(Debug, Clone, Default)]
+pub struct JsRequestContext {
+    pub path: Option<String>,
+    pub method: Option<String>,
+    pub headers: HashMap<String, String>,
+    pub query_params: HashMap<String, String>,
+    pub form_data: HashMap<String, String>,
+    pub body: Option<String>,
+}
+
+/// Builder that assembles the single context object passed to all handlers.
+#[derive(Debug, Clone)]
+pub struct JsHandlerContextBuilder {
+    kind: HandlerInvocationKind,
+    script_uri: Option<String>,
+    handler_name: Option<String>,
+    request: Option<JsRequestContext>,
+    args: Option<JsonValue>,
+    auth_context: Option<crate::auth::JsAuthContext>,
+    connection_metadata: Option<HashMap<String, String>>,
+    metadata: HashMap<String, JsonValue>,
+}
+
+impl JsHandlerContextBuilder {
+    pub fn new(kind: HandlerInvocationKind) -> Self {
+        Self {
+            kind,
+            script_uri: None,
+            handler_name: None,
+            request: None,
+            args: None,
+            auth_context: None,
+            connection_metadata: None,
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn with_script_metadata(
+        mut self,
+        script_uri: impl Into<String>,
+        handler: impl Into<String>,
+    ) -> Self {
+        self.script_uri = Some(script_uri.into());
+        self.handler_name = Some(handler.into());
+        self
+    }
+
+    pub fn with_request(mut self, request: JsRequestContext) -> Self {
+        self.request = Some(request);
+        self
+    }
+
+    pub fn with_args(mut self, args: JsonValue) -> Self {
+        self.args = Some(args);
+        self
+    }
+
+    pub fn with_auth_context(mut self, auth_ctx: crate::auth::JsAuthContext) -> Self {
+        self.auth_context = Some(auth_ctx);
+        self
+    }
+
+    pub fn with_connection_metadata(mut self, metadata: HashMap<String, String>) -> Self {
+        self.connection_metadata = Some(metadata);
+        self
+    }
+
+    pub fn with_metadata_value(mut self, key: &str, value: JsonValue) -> Self {
+        self.metadata.insert(key.to_string(), value);
+        self
+    }
+
+    fn build_request_object<'js>(
+        request: Option<JsRequestContext>,
+        auth_context: Option<crate::auth::JsAuthContext>,
+        ctx: &rquickjs::Ctx<'js>,
+    ) -> Result<Option<rquickjs::Object<'js>>, rquickjs::Error> {
+        let Some(request) = request else {
+            return Ok(None);
+        };
+
+        let request_obj = rquickjs::Object::new(ctx.clone())?;
+
+        if let Some(path) = &request.path {
+            request_obj.set("path", path)?;
+        }
+        if let Some(method) = &request.method {
+            request_obj.set("method", method)?;
+        }
+
+        // Headers
+        if !request.headers.is_empty() {
+            let headers_obj = rquickjs::Object::new(ctx.clone())?;
+            for (name, value) in &request.headers {
+                headers_obj.set(name.as_str(), value.as_str())?;
+            }
+            request_obj.set("headers", headers_obj)?;
+        }
+
+        // Query params
+        let query_obj = rquickjs::Object::new(ctx.clone())?;
+        for (key, value) in &request.query_params {
+            query_obj.set(key.as_str(), value.as_str())?;
+        }
+        request_obj.set("query", query_obj)?;
+
+        // Form data
+        let form_obj = rquickjs::Object::new(ctx.clone())?;
+        for (key, value) in &request.form_data {
+            form_obj.set(key.as_str(), value.as_str())?;
+        }
+        request_obj.set("form", form_obj)?;
+
+        if let Some(body) = &request.body {
+            request_obj.set("body", body)?;
+        }
+
+        if let Some(auth_ctx) = auth_context {
+            let auth_obj = crate::auth::AuthJsApi::create_auth_object(ctx, auth_ctx.clone())?;
+            request_obj.set("auth", auth_obj)?;
+        }
+
+        Ok(Some(request_obj))
+    }
+
+    pub fn build<'js>(
+        self,
+        ctx: &rquickjs::Ctx<'js>,
+    ) -> Result<rquickjs::Object<'js>, rquickjs::Error> {
+        let JsHandlerContextBuilder {
+            kind,
+            script_uri,
+            handler_name,
+            request,
+            args,
+            auth_context,
+            connection_metadata,
+            metadata,
+        } = self;
+
+        let request_obj = Self::build_request_object(request, auth_context, ctx)?;
+
+        let context_obj = rquickjs::Object::new(ctx.clone())?;
+        context_obj.set("kind", kind.as_str())?;
+
+        if let Some(script_uri) = script_uri {
+            context_obj.set("scriptUri", script_uri)?;
+        }
+
+        if let Some(handler_name) = handler_name {
+            context_obj.set("handlerName", handler_name)?;
+        }
+
+        if let Some(request_obj) = request_obj {
+            context_obj.set("request", request_obj)?;
+        }
+
+        if let Some(args) = args {
+            let args_value = serde_json_to_js_value(ctx, &args)?;
+            context_obj.set("args", args_value)?;
+        } else {
+            context_obj.set("args", rquickjs::Value::new_null(ctx.clone()))?;
+        }
+
+        if let Some(metadata) = connection_metadata {
+            let metadata_obj = rquickjs::Object::new(ctx.clone())?;
+            for (key, value) in metadata {
+                metadata_obj.set(key.as_str(), value.as_str())?;
+            }
+            context_obj.set("connectionMetadata", metadata_obj)?;
+        }
+
+        if !metadata.is_empty() {
+            let meta_obj = rquickjs::Object::new(ctx.clone())?;
+            for (key, value) in metadata {
+                let js_value = serde_json_to_js_value(ctx, &value)?;
+                meta_obj.set(key.as_str(), js_value)?;
+            }
+            context_obj.set("meta", meta_obj)?;
+        }
+
+        Ok(context_obj)
+    }
+}
+
+fn serde_json_to_js_value<'js>(
+    ctx: &rquickjs::Ctx<'js>,
+    value: &JsonValue,
+) -> Result<rquickjs::Value<'js>, rquickjs::Error> {
+    let json_string = serde_json::to_string(value).map_err(|e| {
+        let msg = format!("Failed to serialize JSON value: {}", e);
+        rquickjs::Error::new_from_js("JSON", Box::leak(msg.into_boxed_str()))
+    })?;
+
+    let json_obj: rquickjs::Object = ctx.globals().get("JSON")?;
+    let json_parse: rquickjs::Function = json_obj.get("parse")?;
+    let js_value: rquickjs::Value = json_parse.call((json_string,))?;
+    Ok(js_value)
+}
+
+/// GraphQL operation kind, used to map resolvers to handler kinds and metadata.
+#[derive(Debug, Clone, Copy)]
+pub enum GraphqlOperationKind {
+    Query,
+    Mutation,
+    Subscription,
+}
+
+impl GraphqlOperationKind {
+    fn as_str(&self) -> &'static str {
+        match self {
+            GraphqlOperationKind::Query => "query",
+            GraphqlOperationKind::Mutation => "mutation",
+            GraphqlOperationKind::Subscription => "subscription",
+        }
+    }
+
+    fn as_handler_kind(&self) -> HandlerInvocationKind {
+        match self {
+            GraphqlOperationKind::Query => HandlerInvocationKind::GraphqlQuery,
+            GraphqlOperationKind::Mutation => HandlerInvocationKind::GraphqlMutation,
+            GraphqlOperationKind::Subscription => HandlerInvocationKind::GraphqlSubscription,
+        }
+    }
+}
+
+/// Parameters for invoking a GraphQL resolver via JavaScript.
+#[derive(Debug, Clone)]
+pub struct GraphqlResolverExecutionParams {
+    pub script_uri: String,
+    pub resolver_function: String,
+    pub field_name: String,
+    pub operation_kind: GraphqlOperationKind,
+    pub args: Option<JsonValue>,
     pub auth_context: Option<crate::auth::JsAuthContext>,
 }
 
@@ -299,35 +563,17 @@ pub fn execute_script_secure(
 
                 let exec_result = match result {
                     Ok(_) => {
-                        debug!("Script {} executed successfully", uri);
-                        match registrations.try_borrow() {
-                            Ok(regs) => ScriptExecutionResult::success(
-                                regs.clone(),
-                                start_time.elapsed().as_millis() as u64,
-                            ),
-                            Err(_) => ScriptExecutionResult::failed(
-                                "Failed to access registrations".to_string(),
-                                start_time.elapsed().as_millis() as u64,
-                            ),
-                        }
+                        let final_regs = registrations.borrow().clone();
+                        let execution_time = start_time.elapsed().as_millis() as u64;
+                        ScriptExecutionResult::success(final_regs, execution_time)
                     }
                     Err(e) => {
-                        // Use detailed error information if available
-                        let error_msg = if let Ok(details_ref) = error_details.try_borrow() {
-                            if let Some(ref details) = *details_ref {
-                                details.clone()
-                            } else {
-                                format!("Script execution failed: {}", e)
-                            }
-                        } else {
-                            format!("Script execution failed: {}", e)
-                        };
-
-                        error!("Script {} execution failed: {}", uri, error_msg);
-                        ScriptExecutionResult::failed(
-                            error_msg,
-                            start_time.elapsed().as_millis() as u64,
-                        )
+                        let execution_time = start_time.elapsed().as_millis() as u64;
+                        let captured_details = error_details
+                            .borrow()
+                            .clone()
+                            .unwrap_or_else(|| format!("Script evaluation error: {}", e));
+                        ScriptExecutionResult::failed(captured_details, execution_time)
                     }
                 };
 
@@ -560,62 +806,29 @@ pub fn execute_script_for_request_secure(
             .get::<_, Function>(&params.handler_name)
             .map_err(|e| format!("no handler {}: {}", params.handler_name, e))?;
 
-        // Build the request object
-        let request_obj =
-            rquickjs::Object::new(ctx.clone()).map_err(|e| format!("create req obj: {}", e))?;
-        request_obj
-            .set("path", &params.path)
-            .map_err(|e| format!("set path: {}", e))?;
-        request_obj
-            .set("method", &params.method)
-            .map_err(|e| format!("set method: {}", e))?;
+        let request_context = JsRequestContext {
+            path: Some(params.path.clone()),
+            method: Some(params.method.clone()),
+            headers: params.headers.clone(),
+            query_params: params.query_params.clone().unwrap_or_default(),
+            form_data: params.form_data.clone().unwrap_or_default(),
+            body: params.raw_body.clone(),
+        };
 
-        // Add query parameters if present
-        if let Some(ref query_params) = params.query_params {
-            let params_obj = rquickjs::Object::new(ctx.clone())
-                .map_err(|e| format!("create params obj: {}", e))?;
-            for (key, value) in query_params {
-                params_obj
-                    .set(key.as_str(), value.as_str())
-                    .map_err(|e| format!("set param {}: {}", key, e))?;
-            }
-            request_obj
-                .set("query", params_obj)
-                .map_err(|e| format!("set query: {}", e))?;
-        }
+        let mut context_builder = JsHandlerContextBuilder::new(HandlerInvocationKind::HttpRoute)
+            .with_script_metadata(&params.script_uri, &params.handler_name)
+            .with_request(request_context);
 
-        // Add form data if present
-        if let Some(ref form_data) = params.form_data {
-            let form_obj = rquickjs::Object::new(ctx.clone())
-                .map_err(|e| format!("create form obj: {}", e))?;
-            for (key, value) in form_data {
-                form_obj
-                    .set(key.as_str(), value.as_str())
-                    .map_err(|e| format!("set form {}: {}", key, e))?;
-            }
-            request_obj
-                .set("form", form_obj)
-                .map_err(|e| format!("set form: {}", e))?;
-        }
-
-        // Add raw body if present
-        if let Some(ref body) = params.raw_body {
-            request_obj
-                .set("body", body)
-                .map_err(|e| format!("set body: {}", e))?;
-        }
-
-        // Add authentication context as req.auth
         if let Some(ref auth_ctx) = auth_context {
-            let auth_obj = crate::auth::AuthJsApi::create_auth_object(&ctx, auth_ctx.clone())
-                .map_err(|e| format!("create auth obj: {}", e))?;
-            request_obj
-                .set("auth", auth_obj)
-                .map_err(|e| format!("set auth: {}", e))?;
+            context_builder = context_builder.with_auth_context(auth_ctx.clone());
         }
+
+        let handler_context = context_builder
+            .build(&ctx)
+            .map_err(|e| format!("build context: {}", e))?;
 
         // Call the handler function
-        let result: Value = func.call::<_, Value>((request_obj,)).map_err(|e| {
+        let result: Value = func.call::<_, Value>((handler_context,)).map_err(|e| {
             let details = extract_error_details(&ctx, &e);
             format!("call handler: {}", details)
         })?;
@@ -718,6 +931,7 @@ pub fn execute_script_for_request(
     raw_body: Option<String>,
 ) -> Result<(u16, String, Option<String>), String> {
     let script_uri_owned = script_uri.to_string();
+    let auth_ctx = crate::auth::JsAuthContext::anonymous();
     let rt = Runtime::new().map_err(|e| format!("runtime new: {}", e))?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
@@ -731,16 +945,14 @@ pub fn execute_script_for_request(
         };
 
         // Always provide an anonymous auth context so scripts can safely check auth state
-        let auth_ctx = crate::auth::JsAuthContext::anonymous();
-
         setup_secure_global_functions(
             &ctx,
             &script_uri_owned,
             UserContext::anonymous(),
             &config,
             None,
-            Some(auth_ctx), // Provide anonymous auth context
-            None,           // No secrets manager yet
+            Some(auth_ctx.clone()), // Provide anonymous auth context
+            None,                   // No secrets manager yet
         )?;
 
         Ok(())
@@ -760,51 +972,28 @@ pub fn execute_script_for_request(
                 .get::<_, Function>(handler_name)
                 .map_err(|e| format!("no handler {}: {}", handler_name, e))?;
 
-            let req_obj =
-                rquickjs::Object::new(ctx.clone()).map_err(|e| format!("make req obj: {}", e))?;
+            let request_context = JsRequestContext {
+                path: Some(path.to_string()),
+                method: Some(method.to_string()),
+                headers: HashMap::new(),
+                query_params: query_params.cloned().unwrap_or_default(),
+                form_data: form_data.cloned().unwrap_or_default(),
+                body: raw_body.clone(),
+            };
 
-            req_obj
-                .set("method", method)
-                .map_err(|e| format!("set method: {}", e))?;
+            let mut context_builder =
+                JsHandlerContextBuilder::new(HandlerInvocationKind::HttpRoute)
+                    .with_script_metadata(script_uri, handler_name)
+                    .with_request(request_context);
 
-            req_obj
-                .set("path", path)
-                .map_err(|e| format!("set path: {}", e))?;
+            context_builder = context_builder.with_auth_context(auth_ctx.clone());
 
-            if let Some(qp) = query_params {
-                let query_obj = rquickjs::Object::new(ctx.clone())
-                    .map_err(|e| format!("make query obj: {}", e))?;
-                for (key, value) in qp {
-                    query_obj
-                        .set(key, value)
-                        .map_err(|e| format!("set query param {}: {}", key, e))?;
-                }
-                req_obj
-                    .set("query", query_obj)
-                    .map_err(|e| format!("set query: {}", e))?;
-            }
-
-            if let Some(fd) = form_data {
-                let form_obj = rquickjs::Object::new(ctx.clone())
-                    .map_err(|e| format!("make form obj: {}", e))?;
-                for (key, value) in fd {
-                    form_obj
-                        .set(key, value)
-                        .map_err(|e| format!("set form param {}: {}", key, e))?;
-                }
-                req_obj
-                    .set("form", form_obj)
-                    .map_err(|e| format!("set form: {}", e))?;
-            }
-
-            if let Some(rb) = raw_body {
-                req_obj
-                    .set("body", rb)
-                    .map_err(|e| format!("set body: {}", e))?;
-            }
+            let handler_context = context_builder
+                .build(&ctx)
+                .map_err(|e| format!("build context: {}", e))?;
 
             let val = func
-                .call::<_, Value>((req_obj,))
+                .call::<_, Value>((handler_context,))
                 .map_err(|e| format!("call error: {}", e))?;
 
             let obj = val
@@ -831,15 +1020,11 @@ pub fn execute_script_for_request(
 
 /// Executes a JavaScript GraphQL resolver function and returns the result as a string.
 /// This is used by the GraphQL system to call JavaScript resolver functions.
-pub fn execute_graphql_resolver(
-    script_uri: &str,
-    resolver_function: &str,
-    args: Option<serde_json::Value>,
-    auth_context: Option<crate::auth::JsAuthContext>,
-) -> Result<String, String> {
-    let script_uri_owned = script_uri.to_string();
-    let resolver_function_owned = resolver_function.to_string();
-    let args_owned = args;
+pub fn execute_graphql_resolver(params: GraphqlResolverExecutionParams) -> Result<String, String> {
+    let script_uri_owned = params.script_uri.clone();
+    let resolver_function_owned = params.resolver_function.clone();
+    let args_owned = params.args.clone();
+    let auth_context = params.auth_context.clone();
 
     let rt = Runtime::new().map_err(|e| format!("runtime new: {}", e))?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
@@ -876,98 +1061,43 @@ pub fn execute_graphql_resolver(
         // Execute the script
         ctx.eval::<(), _>(script_content.as_str())?;
 
-        // Prepare arguments for the resolver function
-        let args_value = if let Some(args) = args_owned {
-            // Convert serde_json::Value to QuickJS value
-            match args {
-                serde_json::Value::Object(obj) => {
-                    let obj_val = ctx.globals().get::<_, rquickjs::Object>("Object")?;
-                    let create = obj_val.get::<_, rquickjs::Function>("create")?;
-                    let proto = ctx.globals().get::<_, rquickjs::Object>("Object")?;
-                    let proto = proto.get::<_, rquickjs::Object>("prototype")?;
-                    let args_obj: rquickjs::Object = create.call((proto,))?;
-
-                    for (key, value) in obj {
-                        match value {
-                            serde_json::Value::String(s) => args_obj.set(key, s)?,
-                            serde_json::Value::Number(n) => {
-                                if let Some(i) = n.as_i64() {
-                                    args_obj.set(key, i)?;
-                                } else if let Some(f) = n.as_f64() {
-                                    args_obj.set(key, f)?;
-                                }
-                            }
-                            serde_json::Value::Bool(b) => args_obj.set(key, b)?,
-                            _ => {} // Skip other types for now
-                        }
-                    }
-                    args_obj.into_value()
-                }
-                _ => rquickjs::Value::new_undefined(ctx.clone()),
-            }
-        } else {
-            rquickjs::Value::new_undefined(ctx.clone())
-        };
-
-        // Call the resolver function with req object and args
         let resolver_result: rquickjs::Value = ctx.globals().get(&resolver_function_owned)?;
         let resolver_func = resolver_result
             .as_function()
             .ok_or_else(|| rquickjs::Error::new_from_js("Function", "not found"))?;
 
-        // Create req object for GraphQL resolvers (similar to HTTP handlers)
-        let req_obj = rquickjs::Object::new(ctx.clone())?;
-        req_obj.set("path", "/graphql")?;
-        req_obj.set("method", "POST")?;
+        let request_context = JsRequestContext {
+            path: Some("/graphql".to_string()),
+            method: Some("POST".to_string()),
+            headers: HashMap::new(),
+            query_params: HashMap::new(),
+            form_data: HashMap::new(),
+            body: None,
+        };
 
-        // Add query parameters (empty for GraphQL)
-        let query_obj = rquickjs::Object::new(ctx.clone())?;
-        req_obj.set("query", query_obj)?;
+        let mut context_builder =
+            JsHandlerContextBuilder::new(params.operation_kind.as_handler_kind())
+                .with_script_metadata(&params.script_uri, &params.resolver_function)
+                .with_request(request_context)
+                .with_metadata_value(
+                    "graphql",
+                    serde_json::json!({
+                        "fieldName": params.field_name,
+                        "operation": params.operation_kind.as_str()
+                    }),
+                );
 
-        // Add form data (empty for GraphQL)
-        let form_obj = rquickjs::Object::new(ctx.clone())?;
-        req_obj.set("form", form_obj)?;
-
-        // Add empty body for GraphQL
-        req_obj.set("body", "")?;
-
-        // Add authentication context as req.auth
-        if let Some(ref auth_ctx) = auth_context.clone() {
-            let auth_obj = crate::auth::AuthJsApi::create_auth_object(&ctx, auth_ctx.clone())?;
-            req_obj.set("auth", auth_obj)?;
+        if let Some(args) = args_owned {
+            context_builder = context_builder.with_args(args);
         }
 
-        let result_value = if args_value.is_undefined() {
-            // Try calling with req object first (new format)
-            match resolver_func.call::<_, rquickjs::Value>((req_obj.clone(),)) {
-                Ok(result) => {
-                    debug!("Called resolver with req object only (new format)");
-                    result
-                }
-                Err(e) => {
-                    debug!("Failed to call with req object: {}, trying old format", e);
-                    // Fall back to calling without req object (old format)
-                    let result = resolver_func.call::<_, rquickjs::Value>(())?;
-                    debug!("Called resolver with no arguments (old format)");
-                    result
-                }
-            }
-        } else {
-            // Try calling with req object and args first (new format)
-            match resolver_func.call::<_, rquickjs::Value>((req_obj.clone(), args_value.clone())) {
-                Ok(result) => {
-                    debug!("Called resolver with req and args (new format)");
-                    result
-                }
-                Err(e) => {
-                    debug!("Failed to call with req and args: {}, trying old format", e);
-                    // Fall back to calling with just args (old format)
-                    let result = resolver_func.call::<_, rquickjs::Value>((args_value,))?;
-                    debug!("Called resolver with args only (old format)");
-                    result
-                }
-            }
-        };
+        if let Some(auth_ctx) = auth_context.clone() {
+            context_builder = context_builder.with_auth_context(auth_ctx);
+        }
+
+        let handler_context = context_builder.build(&ctx)?;
+
+        let result_value = resolver_func.call::<_, rquickjs::Value>((handler_context,))?;
 
         // Convert the result to a JSON string
         let result_string: String = if result_value.is_string() {
@@ -1049,35 +1179,36 @@ pub fn execute_stream_customization_function(
 
             ctx.eval::<(), _>(script_content.as_str())?;
 
-            // Build request context object
-            let req_obj = rquickjs::Object::new(ctx.clone())?;
+            let request_context = JsRequestContext {
+                path: Some(path_owned.clone()),
+                method: Some("GET".to_string()),
+                headers: HashMap::new(),
+                query_params: query_params_owned.clone(),
+                form_data: HashMap::new(),
+                body: None,
+            };
 
-            // Set path
-            req_obj.set("path", path_owned.clone())?;
+            let mut context_builder =
+                JsHandlerContextBuilder::new(HandlerInvocationKind::StreamCustomization)
+                    .with_script_metadata(&script_uri_owned, &function_name_owned)
+                    .with_request(request_context)
+                    .with_metadata_value("stream", serde_json::json!({ "path": path_owned }));
 
-            // Set query params
-            let query_obj = rquickjs::Object::new(ctx.clone())?;
-            for (key, value) in &query_params_owned {
-                query_obj.set(key.as_str(), value.clone())?;
+            if !query_params_owned.is_empty() {
+                let args_json = JsonValue::Object(
+                    query_params_owned
+                        .iter()
+                        .map(|(key, value)| (key.clone(), JsonValue::String(value.clone())))
+                        .collect(),
+                );
+                context_builder = context_builder.with_args(args_json);
             }
-            req_obj.set("query", query_obj)?;
 
-            // Set auth context
             if let Some(ref auth) = auth_context {
-                let auth_obj = rquickjs::Object::new(ctx.clone())?;
-                auth_obj.set("isAuthenticated", auth.is_authenticated)?;
-                auth_obj.set("userId", auth.user_id.clone())?;
-                auth_obj.set("email", auth.email.clone())?;
-                auth_obj.set("name", auth.name.clone())?;
-                auth_obj.set("provider", auth.provider.clone())?;
-                auth_obj.set("isAdmin", auth.is_admin)?;
-                auth_obj.set("isEditor", auth.is_editor)?;
-                req_obj.set("auth", auth_obj)?;
-            } else {
-                let auth_obj = rquickjs::Object::new(ctx.clone())?;
-                auth_obj.set("isAuthenticated", false)?;
-                req_obj.set("auth", auth_obj)?;
+                context_builder = context_builder.with_auth_context(auth.clone());
             }
+
+            let handler_context = context_builder.build(&ctx)?;
 
             // Get the customization function
             let customization_func: rquickjs::Function =
@@ -1087,32 +1218,27 @@ pub fn execute_stream_customization_function(
                 })?;
 
             // Call the function with req object
-            let result_value: rquickjs::Value = customization_func.call((req_obj,))?;
+            let result_value: rquickjs::Value = customization_func.call((handler_context,))?;
 
             // Convert result to HashMap
             let mut filter_criteria = std::collections::HashMap::new();
 
-            if result_value.is_object()
-                && let Some(result_obj) = result_value.as_object()
-            {
-                // Iterate over object properties
-                for key_str in result_obj.keys::<String>().flatten() {
-                    if let Ok(value) = result_obj.get::<_, rquickjs::Value>(&key_str) {
-                        // Convert value to string
-                        let value_str = if value.is_string() {
-                            value
-                                .as_string()
-                                .and_then(|s| s.to_string().ok())
-                                .unwrap_or_default()
-                        } else {
-                            // Use JSON.stringify for non-string values
-                            let json_obj: rquickjs::Object = ctx.globals().get("JSON")?;
-                            let json_stringify: rquickjs::Function = json_obj.get("stringify")?;
-                            json_stringify
-                                .call::<_, String>((value,))
-                                .unwrap_or_default()
-                        };
-                        filter_criteria.insert(key_str, value_str);
+            let Some(result_obj) = result_value.as_object() else {
+                return Err(rquickjs::Error::new_from_js(
+                    "Customization",
+                    "Expected object result",
+                ));
+            };
+
+            for key_str in result_obj.keys::<String>().flatten() {
+                if let Ok(value) = result_obj.get::<_, rquickjs::Value>(&key_str) {
+                    if let Some(value_str) = value.as_string().and_then(|s| s.to_string().ok()) {
+                        filter_criteria.insert(key_str.clone(), value_str);
+                    } else {
+                        return Err(rquickjs::Error::new_from_js(
+                            "Customization",
+                            "Filter values must be strings",
+                        ));
                     }
                 }
             }
@@ -1247,22 +1373,27 @@ pub fn call_init_if_exists(
                 .as_function()
                 .ok_or_else(|| rquickjs::Error::new_from_js("init", "not a function"))?;
 
-            // Create context object to pass to init()
-            let context_obj = rquickjs::Object::new(ctx.clone())?;
-            context_obj.set("scriptName", context.script_name.clone())?;
-
             // Convert SystemTime to milliseconds since UNIX_EPOCH
             let timestamp_ms = context
                 .timestamp
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as f64;
-            context_obj.set("timestamp", timestamp_ms)?;
-            context_obj.set("isStartup", context.is_startup)?;
+
+            let init_metadata = serde_json::json!({
+                "scriptName": context.script_name.clone(),
+                "timestamp": timestamp_ms,
+                "isStartup": context.is_startup,
+            });
+
+            let handler_context = JsHandlerContextBuilder::new(HandlerInvocationKind::Init)
+                .with_script_metadata(script_uri.to_string(), "init")
+                .with_metadata_value("init", init_metadata)
+                .build(&ctx)?;
 
             // Call init function with context
             debug!("Calling init() function for script: {}", script_uri);
-            let call_result = init_func.call::<_, ()>((context_obj,));
+            let call_result = init_func.call::<_, ()>((handler_context,));
 
             if let Err(ref e) = call_result {
                 let details = extract_error_details(&ctx, e);
@@ -1485,7 +1616,16 @@ mod tests {
         // Ignore errors for test
         let _ = repository::upsert_script("test-resolver", script_content).is_ok();
 
-        let result = execute_graphql_resolver("test-resolver", "testResolver", None, None);
+        let params = GraphqlResolverExecutionParams {
+            script_uri: "test-resolver".to_string(),
+            resolver_function: "testResolver".to_string(),
+            field_name: "testResolver".to_string(),
+            operation_kind: GraphqlOperationKind::Query,
+            args: None,
+            auth_context: None,
+        };
+
+        let result = execute_graphql_resolver(params);
 
         assert!(result.is_ok(), "Simple resolver should succeed");
         let json_result = result.unwrap();
@@ -1495,7 +1635,8 @@ mod tests {
     #[test]
     fn test_execute_graphql_resolver_with_args() {
         let script_content = r#"
-            function greetUser(req, args) {
+            function greetUser(context) {
+                const args = context.args || {};
                 return "Hello " + args.name + "!";
             }
         "#;
@@ -1504,7 +1645,15 @@ mod tests {
         let _ = repository::upsert_script("greet-resolver", script_content);
 
         let args = serde_json::json!({"name": "Alice"});
-        let result = execute_graphql_resolver("greet-resolver", "greetUser", Some(args), None);
+        let params = GraphqlResolverExecutionParams {
+            script_uri: "greet-resolver".to_string(),
+            resolver_function: "greetUser".to_string(),
+            field_name: "greetUser".to_string(),
+            operation_kind: GraphqlOperationKind::Query,
+            args: Some(args),
+            auth_context: None,
+        };
+        let result = execute_graphql_resolver(params);
 
         assert!(result.is_ok(), "Resolver with args should succeed");
         let json_result = result.unwrap();
@@ -1524,7 +1673,15 @@ mod tests {
         "#;
 
         let _ = repository::upsert_script("user-resolver", script_content);
-        let result = execute_graphql_resolver("user-resolver", "getUserInfo", None, None);
+        let params = GraphqlResolverExecutionParams {
+            script_uri: "user-resolver".to_string(),
+            resolver_function: "getUserInfo".to_string(),
+            field_name: "getUserInfo".to_string(),
+            operation_kind: GraphqlOperationKind::Query,
+            args: None,
+            auth_context: None,
+        };
+        let result = execute_graphql_resolver(params);
 
         assert!(result.is_ok(), "Resolver returning object should succeed");
         let json_result = result.unwrap();
@@ -1534,7 +1691,15 @@ mod tests {
 
     #[test]
     fn test_execute_graphql_resolver_nonexistent_script() {
-        let result = execute_graphql_resolver("nonexistent-script", "someFunction", None, None);
+        let params = GraphqlResolverExecutionParams {
+            script_uri: "nonexistent-script".to_string(),
+            resolver_function: "someFunction".to_string(),
+            field_name: "someFunction".to_string(),
+            operation_kind: GraphqlOperationKind::Query,
+            args: None,
+            auth_context: None,
+        };
+        let result = execute_graphql_resolver(params);
 
         assert!(result.is_err(), "Should fail when script doesn't exist");
     }
@@ -1548,12 +1713,15 @@ mod tests {
         "#;
 
         let _ = repository::upsert_script("missing-function-resolver", script_content);
-        let result = execute_graphql_resolver(
-            "missing-function-resolver",
-            "nonExistentFunction",
-            None,
-            None,
-        );
+        let params = GraphqlResolverExecutionParams {
+            script_uri: "missing-function-resolver".to_string(),
+            resolver_function: "nonExistentFunction".to_string(),
+            field_name: "nonExistentFunction".to_string(),
+            operation_kind: GraphqlOperationKind::Query,
+            args: None,
+            auth_context: None,
+        };
+        let result = execute_graphql_resolver(params);
 
         assert!(result.is_err(), "Should fail when function doesn't exist");
         assert!(result.unwrap_err().contains("not found"));
@@ -1568,7 +1736,15 @@ mod tests {
         "#;
 
         let _ = repository::upsert_script("throwing-resolver", script_content);
-        let result = execute_graphql_resolver("throwing-resolver", "throwingResolver", None, None);
+        let params = GraphqlResolverExecutionParams {
+            script_uri: "throwing-resolver".to_string(),
+            resolver_function: "throwingResolver".to_string(),
+            field_name: "throwingResolver".to_string(),
+            operation_kind: GraphqlOperationKind::Query,
+            args: None,
+            auth_context: None,
+        };
+        let result = execute_graphql_resolver(params);
 
         assert!(
             result.is_err(),
@@ -1850,6 +2026,7 @@ mod tests {
             query_params: None,
             form_data: None,
             raw_body: None,
+            headers: HashMap::new(),
             user_context: UserContext::admin("test".to_string()),
             auth_context: None,
         };
@@ -1881,6 +2058,7 @@ mod tests {
             query_params: None,
             form_data: None,
             raw_body: None,
+            headers: HashMap::new(),
             user_context: UserContext::admin("test".to_string()),
             auth_context: None,
         };
@@ -1913,6 +2091,7 @@ mod tests {
             query_params: None,
             form_data: None,
             raw_body: None,
+            headers: HashMap::new(),
             user_context: UserContext::admin("test".to_string()),
             auth_context: None,
         };

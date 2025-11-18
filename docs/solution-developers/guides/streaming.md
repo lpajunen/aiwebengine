@@ -77,7 +77,7 @@ JavaScript Script          Stream Registry          Connected Clients
 routeRegistry.registerStreamRoute("/events");
 
 // Handler to send events
-function triggerEvent(req) {
+function triggerEvent(context) {
   routeRegistry.sendStreamMessage("/events", {
     type: "event",
     message: "Something happened!",
@@ -314,7 +314,8 @@ Selective broadcasting allows you to send messages to specific clients based on 
 routeRegistry.registerStreamRoute("/chat");
 
 // Send personalized messages using metadata filtering
-function sendPersonalMessage(req) {
+function sendPersonalMessage(context) {
+  const req = context.request;
   const { targetUser, message } = req.form;
 
   // Send only to connections where user_id matches targetUser
@@ -500,7 +501,8 @@ testConnection.onmessage = (event) => {
 ```javascript
 routeRegistry.registerStreamRoute("/chat");
 
-function sendRoomMessage(req) {
+function sendRoomMessage(context) {
+  const req = context.request;
   const { room, message, sender } = req.form;
 
   return sendStreamMessageToConnections(
@@ -516,7 +518,8 @@ function sendRoomMessage(req) {
   );
 }
 
-function sendPrivateMessage(req) {
+function sendPrivateMessage(context) {
+  const req = context.request;
   const { targetUser, message, sender } = req.form;
 
   return sendStreamMessageToConnections(
@@ -540,7 +543,8 @@ routeRegistry.registerRoute("/chat/private", "sendPrivateMessage", "POST");
 ```javascript
 routeRegistry.registerStreamRoute("/notifications");
 
-function sendAdminAlert(req) {
+function sendAdminAlert(context) {
+  const req = context.request;
   const { message, priority } = req.form;
 
   return sendStreamMessageToConnections(
@@ -555,7 +559,8 @@ function sendAdminAlert(req) {
   );
 }
 
-function sendUserNotification(req) {
+function sendUserNotification(context) {
+  const req = context.request;
   const { userId, message } = req.form;
 
   return sendStreamMessageToConnections(
@@ -578,7 +583,8 @@ routeRegistry.registerRoute("/notify/user", "sendUserNotification", "POST");
 ```javascript
 routeRegistry.registerStreamRoute("/tenant-updates");
 
-function broadcastTenantUpdate(req) {
+function broadcastTenantUpdate(context) {
+  const req = context.request;
   const { tenantId, message } = req.form;
 
   return sendStreamMessageToConnections(
@@ -619,7 +625,7 @@ routeRegistry.registerRoute(
 4. **Error Handling**
 
 ```javascript
-function safeBroadcast(req) {
+function safeBroadcast(context) {
   try {
     const result = sendStreamMessageToConnections("/chat", data, filter);
     console.log("Broadcast result: " + result);
@@ -652,7 +658,9 @@ console.log("Broadcast result: " + result);
 
 // Test with empty filter to verify basic functionality
 sendStreamMessageToConnections("/test", { type: "test" }, "{}");
-```## Client Integration
+```
+
+## Client Integration
 
 ### EventSource API
 
@@ -776,7 +784,8 @@ Perfect for alerting users about important events:
 ```javascript
 routeRegistry.registerStreamRoute("/notifications");
 
-function sendAlert(req) {
+function sendAlert(context) {
+  const req = context.request;
   const { type, message, priority } = req.form;
 
   routeRegistry.sendStreamMessage("/notifications", {
@@ -800,7 +809,7 @@ Stream live metrics and status updates:
 ```javascript
 routeRegistry.registerStreamRoute("/dashboard");
 
-function updateMetrics(req) {
+function updateMetrics(context) {
   // Simulate gathering metrics
   const metrics = {
     type: "metrics",
@@ -824,7 +833,8 @@ Build real-time communication:
 ```javascript
 routeRegistry.registerStreamRoute("/chat");
 
-function sendMessage(req) {
+function sendMessage(context) {
+  const req = context.request;
   const { user, room, message } = req.form;
 
   routeRegistry.sendStreamMessage("/chat", {
@@ -848,7 +858,8 @@ Stream continuous data updates:
 ```javascript
 routeRegistry.registerStreamRoute("/data-feed");
 
-function broadcastData(req) {
+function broadcastData(context) {
+  const req = context.request;
   // Simulate real-time data
   const data = {
     type: "data_update",
@@ -966,28 +977,28 @@ window.addEventListener("beforeunload", function () {
 
 1. **Server-Side**
 
-   ```javascript
-   function safeHandler(req) {
-     try {
-       // Your logic here
-       routeRegistry.sendStreamMessage("/notifications", {
-         type: "success",
-         data: result,
-       });
-       return { status: 200, body: "OK" };
-     } catch (error) {
-       console.error("Error in handler: " + error.message);
-       routeRegistry.sendStreamMessage("/notifications", {
-         type: "error",
-         message: "Something went wrong",
-         timestamp: new Date().toISOString(),
-       });
-       return { status: 500, body: "Error occurred" };
-     }
-   }
-   ```
+```javascript
+function safeHandler(context) {
+  try {
+    // Your logic here
+    routeRegistry.sendStreamMessage("/notifications", {
+      type: "success",
+      data: result,
+    });
+    return { status: 200, body: "OK" };
+  } catch (error) {
+    console.error("Error in handler: " + error.message);
+    routeRegistry.sendStreamMessage("/notifications", {
+      type: "error",
+      message: "Something went wrong",
+      timestamp: new Date().toISOString(),
+    });
+    return { status: 500, body: "Error occurred" };
+  }
+}
+```
 
-2. **Client-Side**
+1. **Client-Side**
 
 ```javascript
 eventSource.onerror = function (event) {
@@ -1103,7 +1114,8 @@ routeRegistry.registerStreamRoute("/system-status"); // System health
 routeRegistry.registerStreamRoute("/chat"); // Chat messages
 
 // Send targeted messages based on context
-function handleUserAction(req) {
+function handleUserAction(context) {
+  const req = context.request;
   // Notify about user action
   routeRegistry.sendStreamMessage("/notifications", {
     type: "user_action",
@@ -1132,7 +1144,8 @@ Connect streams to external data sources:
 routeRegistry.registerStreamRoute("/external-updates");
 
 // Webhook handler for external system notifications
-function webhookHandler(req) {
+function webhookHandler(context) {
+  const req = context.request;
   const webhookData = JSON.parse(req.body);
 
   // Transform external data for your stream

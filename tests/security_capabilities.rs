@@ -22,6 +22,7 @@ use aiwebengine::security::{
     Capability, InputValidator, RateLimitKey, RateLimiter, SecureOperations, UpsertScriptRequest,
     UserContext,
 };
+use std::collections::HashMap;
 use std::time::Duration;
 
 // Helper function to create a user with specific capabilities
@@ -608,6 +609,7 @@ async fn test_secure_request_execution() {
         query_params: None,
         form_data: None,
         raw_body: None,
+        headers: HashMap::new(),
         user_context,
         auth_context: None,
     };

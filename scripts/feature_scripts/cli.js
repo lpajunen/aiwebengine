@@ -1,5 +1,6 @@
 // asset management script: demonstrates asset CRUD operations
-function asset_handler(req) {
+function asset_handler(context) {
+  const req = context.request || {};
   try {
     const path = req.path;
     const method = req.method;

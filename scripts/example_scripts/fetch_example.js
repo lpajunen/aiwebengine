@@ -10,7 +10,7 @@ function init(context) {
 }
 
 // Example 1: Simple GET request
-function fetchExample(req) {
+function fetchExample(context) {
   console.log("Fetching data from httpbin.org");
 
   try {
@@ -45,7 +45,7 @@ function fetchExample(req) {
 }
 
 // Example 2: Using secret injection for API keys
-function fetchWithSecret(req) {
+function fetchWithSecret(context) {
   console.log("Fetching with secret injection");
 
   // Check if the secret exists
@@ -103,7 +103,8 @@ function fetchWithSecret(req) {
 }
 
 // Example 3: POST request with JSON body
-function fetchPost(req) {
+function fetchPost(context) {
+  const req = context.request || {};
   console.log("Making POST request");
 
   try {

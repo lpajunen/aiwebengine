@@ -1,7 +1,7 @@
 // Test script for sharedStorage functionality
 routeRegistry.registerRoute("/test-storage", "testStorageHandler", "GET");
 
-function testStorageHandler(request) {
+function testStorageHandler(context) {
   // Test setting an item
   const setResult = sharedStorage.setItem("test_key", "test_value");
   console.log("Set result: " + setResult);

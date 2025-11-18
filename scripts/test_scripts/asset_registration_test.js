@@ -1,7 +1,7 @@
 // Test script demonstrating the new asset registration system
 // This script shows how to register assets to public HTTP paths
 
-function serveAssetTestPage(req) {
+function serveAssetTestPage(context) {
   const html = `
     <!DOCTYPE html>
     <html>
@@ -27,7 +27,7 @@ function serveAssetTestPage(req) {
   };
 }
 
-function uploadTestAsset(req) {
+function uploadTestAsset(context) {
   try {
     // Create a simple CSS asset
     const cssContent = `

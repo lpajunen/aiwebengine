@@ -1,7 +1,8 @@
 // Test script for routeRegistry.registerStreamRoute functionality
 // This script demonstrates the new streaming API
 
-function stream_test_handler(req) {
+function stream_test_handler(context) {
+  const req = context.request || {};
   console.log("stream_test_handler called");
   return {
     status: 200,

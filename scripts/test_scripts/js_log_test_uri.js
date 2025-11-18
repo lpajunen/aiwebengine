@@ -1,6 +1,6 @@
 // JS test script: tests console.listLogsForUri function
 
-function list_logs_for_uri_handler(req) {
+function list_logs_for_uri_handler(context) {
   try {
     // Test with the current script's URI
     const current_logs = console.listLogsForUri(

@@ -1,5 +1,14 @@
+function getRequest(context) {
+  return (context && context.request) || {};
+}
+
+function getArgs(context) {
+  return (context && context.args) || {};
+}
+
 // core script: registers root handler
-function core_root(req) {
+function core_root(context) {
+  const req = getRequest(context);
   console.log("core-root-called");
   console.log("req: " + JSON.stringify(req));
   if (req.auth.isAuthenticated) {
@@ -15,7 +24,8 @@ function core_root(req) {
 }
 
 // Health check endpoint
-function health_check(req) {
+function health_check(context) {
+  const req = getRequest(context);
   // Call Rust function to check database health
   var databaseHealth;
   try {
@@ -53,7 +63,9 @@ function health_check(req) {
 
 // GraphQL subscription resolver for script updates
 // NEW: Returns filter criteria (empty object = broadcast to all connections)
-function scriptUpdatesResolver(req, args) {
+function scriptUpdatesResolver(context) {
+  const req = getRequest(context);
+  const args = getArgs(context);
   console.log("Client subscribed to scriptUpdates GraphQL subscription");
   console.log("Request context: " + JSON.stringify(req));
 
@@ -65,7 +77,8 @@ function scriptUpdatesResolver(req, args) {
 // Stream customization function for script_updates
 // NEW: Returns connection filter criteria based on request context
 // This function is called once when a client connects to the stream
-function scriptUpdatesCustomizer(req) {
+function scriptUpdatesCustomizer(context) {
+  const req = getRequest(context);
   console.log("Customizing script_updates stream connection");
   console.log("Request path: " + req.path);
   console.log("Request query: " + JSON.stringify(req.query));
@@ -115,7 +128,8 @@ function broadcastScriptUpdate(uri, action, details = {}) {
 }
 
 // Script management endpoint
-function upsert_script_handler(req) {
+function upsert_script_handler(context) {
+  const req = getRequest(context);
   try {
     // Extract parameters from form data (for POST requests)
     let uri = null;
@@ -217,7 +231,8 @@ function upsert_script_handler(req) {
 }
 
 // Script deletion endpoint
-function delete_script_handler(req) {
+function delete_script_handler(context) {
+  const req = getRequest(context);
   try {
     // Extract uri parameter from form data (for POST requests)
     let uri = null;
@@ -293,7 +308,8 @@ function delete_script_handler(req) {
 }
 
 // Script reading endpoint
-function read_script_handler(req) {
+function read_script_handler(context) {
+  const req = getRequest(context);
   try {
     // Extract uri parameter from query string
     let uri = null;
@@ -357,7 +373,8 @@ function read_script_handler(req) {
 }
 
 // Script logs endpoint
-function script_logs_handler(req) {
+function script_logs_handler(context) {
+  const req = getRequest(context);
   try {
     // Extract uri parameter from query string
     let uri = null;
@@ -409,7 +426,9 @@ function script_logs_handler(req) {
 }
 
 // GraphQL resolvers
-function scriptsQuery(req, args) {
+function scriptsQuery(context) {
+  const req = getRequest(context);
+  const args = getArgs(context);
   try {
     const scriptsJson =
       typeof scriptStorage !== "undefined" &&
@@ -431,7 +450,9 @@ function scriptsQuery(req, args) {
   }
 }
 
-function scriptQuery(req, args) {
+function scriptQuery(context) {
+  const req = getRequest(context);
+  const args = getArgs(context);
   try {
     const content =
       typeof scriptStorage !== "undefined" &&
@@ -469,7 +490,9 @@ function scriptQuery(req, args) {
   }
 }
 
-function scriptInitStatusQuery(req, args) {
+function scriptInitStatusQuery(context) {
+  const req = getRequest(context);
+  const args = getArgs(context);
   try {
     const status = getScriptInitStatus(args.uri);
     if (status) {
@@ -484,7 +507,9 @@ function scriptInitStatusQuery(req, args) {
   }
 }
 
-function allScriptsInitStatusQuery(req, args) {
+function allScriptsInitStatusQuery(context) {
+  const req = getRequest(context);
+  const args = getArgs(context);
   try {
     const scriptsJson =
       typeof scriptStorage !== "undefined" &&
@@ -514,7 +539,9 @@ function allScriptsInitStatusQuery(req, args) {
   }
 }
 
-function upsertScriptMutation(req, args) {
+function upsertScriptMutation(context) {
+  const req = getRequest(context);
+  const args = getArgs(context);
   try {
     // Check if script already exists to determine action
     const existingScript =
@@ -566,7 +593,9 @@ function upsertScriptMutation(req, args) {
   }
 }
 
-function deleteScriptMutation(req, args) {
+function deleteScriptMutation(context) {
+  const req = getRequest(context);
+  const args = getArgs(context);
   try {
     const result =
       typeof scriptStorage !== "undefined" &&

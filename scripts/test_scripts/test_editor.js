@@ -1,7 +1,7 @@
 // Test script for the aiwebengine editor
 // This script tests the editor API endpoints
 
-function testEditorAPI(req) {
+function testEditorAPI(context) {
   const testResults = [];
 
   try {

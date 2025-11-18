@@ -1,5 +1,6 @@
 // Test script for query parameter handling
-function query_handler(req) {
+function query_handler(context) {
+  const req = context.request || {};
   let queryInfo = "none";
   if (req.query && Object.keys(req.query).length > 0) {
     // req.query is now an object with parsed parameters

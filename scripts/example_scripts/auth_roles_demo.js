@@ -5,7 +5,11 @@
  * properties in JavaScript handlers.
  */
 
-export async function handleRequest(request) {
+export async function handleRequest(context) {
+  const request = context.request || {};
+  if (!request.auth) {
+    throw new Error("Authentication context unavailable in handler");
+  }
   // Check if user is authenticated
   if (!request.auth.isAuthenticated) {
     return {
@@ -88,7 +92,11 @@ export async function handleRequest(request) {
 /**
  * Example: Editor-only endpoint
  */
-export async function editorOnly(request) {
+export async function editorOnly(context) {
+  const request = context.request || {};
+  if (!request.auth) {
+    throw new Error("Authentication context unavailable in handler");
+  }
   // Simple check using requireAuth
   const user = request.auth.requireAuth(); // Throws if not authenticated
 
@@ -112,7 +120,11 @@ export async function editorOnly(request) {
 /**
  * Example: Admin-only endpoint
  */
-export async function adminOnly(request) {
+export async function adminOnly(context) {
+  const request = context.request || {};
+  if (!request.auth) {
+    throw new Error("Authentication context unavailable in handler");
+  }
   const user = request.auth.requireAuth();
 
   if (!request.auth.isAdmin) {

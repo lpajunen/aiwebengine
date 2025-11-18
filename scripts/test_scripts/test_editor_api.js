@@ -1,5 +1,5 @@
 // Test endpoint for editor API
-function testEditorAPI(req) {
+function testEditorAPI(context) {
   let result = "Testing editor API endpoints...\n\n";
 
   try {

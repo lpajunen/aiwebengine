@@ -1,8 +1,17 @@
 // Simple aiwebengine Editor script
 // This script provides basic editor functionality
 
+function getRequest(context) {
+  return (context && context.request) || {};
+}
+
+function getArgs(context) {
+  return (context && context.args) || {};
+}
+
 // Serve the editor HTML page
-function serveEditor(req) {
+function serveEditor(context) {
+  const req = getRequest(context);
   // Debug logging for authentication
   console.log("=== Editor Authentication Check ===");
   console.log("req.auth object exists: " + (typeof req.auth !== "undefined"));
@@ -289,7 +298,7 @@ function serveEditor(req) {
 }
 
 // API: List all scripts
-function apiListScripts(req) {
+function apiListScripts(context) {
   try {
     const scriptsJson =
       typeof scriptStorage !== "undefined" &&
@@ -367,7 +376,8 @@ function getSecurityField(scriptUri, field) {
 }
 
 // API: Get script content
-function apiGetScript(req) {
+function apiGetScript(context) {
+  const req = getRequest(context);
   try {
     // Extract the script name from the path
     // The path will be something like /api/scripts/https://example.com/core
@@ -423,7 +433,8 @@ function apiGetScript(req) {
 }
 
 // API: Save/update script
-function apiSaveScript(req) {
+function apiSaveScript(context) {
+  const req = getRequest(context);
   try {
     // Extract the script name from the path
     let scriptName = req.path.replace("/api/scripts/", "");
@@ -498,7 +509,8 @@ function apiSaveScript(req) {
 }
 
 // API: Delete script
-function apiDeleteScript(req) {
+function apiDeleteScript(context) {
+  const req = getRequest(context);
   try {
     // Extract the script name from the path
     let scriptName = req.path.replace("/api/scripts/", "");
@@ -592,7 +604,8 @@ function apiDeleteScript(req) {
 }
 
 // API: Update privileged flag
-function apiUpdateScriptPrivilege(req) {
+function apiUpdateScriptPrivilege(context) {
+  const req = getRequest(context);
   try {
     if (
       typeof scriptStorage === "undefined" ||
@@ -671,7 +684,8 @@ function apiUpdateScriptPrivilege(req) {
 }
 
 // API: Get logs
-function apiGetLogs(req) {
+function apiGetLogs(context) {
+  const req = getRequest(context);
   try {
     const logsJson =
       typeof console.listLogs === "function" ? console.listLogs() : "[]";
@@ -697,7 +711,8 @@ function apiGetLogs(req) {
 }
 
 // API: Prune logs (DELETE /api/logs)
-function apiPruneLogs(req) {
+function apiPruneLogs(context) {
+  const req = getRequest(context);
   try {
     const result =
       typeof console.pruneLogs === "function" ? console.pruneLogs() : "";
@@ -725,7 +740,8 @@ function apiPruneLogs(req) {
 }
 
 // API: Get assets
-function apiGetAssets(req) {
+function apiGetAssets(context) {
+  const req = getRequest(context);
   try {
     const assetsJson =
       typeof assetStorage !== "undefined" &&
@@ -764,7 +780,8 @@ function apiGetAssets(req) {
 }
 
 // API: Get individual asset
-function apiGetAsset(req) {
+function apiGetAsset(context) {
+  const req = getRequest(context);
   try {
     // Extract the asset path from the URL
     let assetPath = req.path.replace("/api/assets", "");
@@ -883,7 +900,8 @@ function getMimeTypeFromPath(path) {
 }
 
 // API: Save/upload asset
-function apiSaveAsset(req) {
+function apiSaveAsset(context) {
+  const req = getRequest(context);
   try {
     const body = JSON.parse(req.body || "{}");
     const { publicPath, mimetype, content } = body;
@@ -937,7 +955,8 @@ function apiSaveAsset(req) {
 }
 
 // API: Delete asset
-function apiDeleteAsset(req) {
+function apiDeleteAsset(context) {
+  const req = getRequest(context);
   try {
     // Extract the asset path from the URL
     let assetPath = req.path.replace("/api/assets", "");
@@ -1007,7 +1026,8 @@ function apiDeleteAsset(req) {
 }
 
 // API: List all registered routes
-function apiListRoutes(req) {
+function apiListRoutes(context) {
+  const req = getRequest(context);
   try {
     const routes =
       typeof routeRegistry !== "undefined" &&
@@ -1032,7 +1052,8 @@ function apiListRoutes(req) {
 }
 
 // API: AI Assistant prompt handler
-function apiAIAssistant(req) {
+function apiAIAssistant(context) {
+  const req = getRequest(context);
   // Debug: Log the raw request body
   console.log(`AI Assistant: Raw request body: ${req.body}`);
 
@@ -1231,7 +1252,8 @@ SCRIPT STRUCTURE - Every script MUST follow this pattern:
 // Script description
 // Handles HTTP requests and returns responses
 
-function handlerName(req) {
+function handlerName(context) {
+  const req = getRequest(context);
   // req has: path, method, headers, query, form, body
   try {
     // Generate your response (HTML, JSON, etc.)

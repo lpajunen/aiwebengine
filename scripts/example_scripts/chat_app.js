@@ -68,7 +68,9 @@ function saveMessage(channelId, message) {
 // GraphQL Query Resolvers
 // ============================================
 
-function channelsResolver(req, args) {
+function channelsResolver(context) {
+  const req = context.request || {};
+  const args = context.args || {};
   try {
     // Require authentication
     req.auth.requireAuth();
@@ -81,7 +83,9 @@ function channelsResolver(req, args) {
   }
 }
 
-function messagesResolver(req, args) {
+function messagesResolver(context) {
+  const req = context.request || {};
+  const args = context.args || {};
   try {
     // Require authentication
     req.auth.requireAuth();
@@ -101,7 +105,9 @@ function messagesResolver(req, args) {
   }
 }
 
-function currentUserResolver(req, args) {
+function currentUserResolver(context) {
+  const req = context.request || {};
+  const args = context.args || {};
   try {
     const user = req.auth.requireAuth();
     return {
@@ -119,7 +125,9 @@ function currentUserResolver(req, args) {
 // GraphQL Mutation Resolvers
 // ============================================
 
-function createChannelResolver(req, args) {
+function createChannelResolver(context) {
+  const req = context.request || {};
+  const args = context.args || {};
   try {
     // Require authentication
     const user = req.auth.requireAuth();
@@ -171,7 +179,9 @@ function createChannelResolver(req, args) {
   }
 }
 
-function sendMessageResolver(req, args) {
+function sendMessageResolver(context) {
+  const req = context.request || {};
+  const args = context.args || {};
   try {
     // Require authentication
     const user = req.auth.requireAuth();
@@ -240,29 +250,20 @@ function sendMessageResolver(req, args) {
 // GraphQL Subscription Resolver
 // ============================================
 
-function chatUpdatesResolver(req, args) {
+function chatUpdatesResolver(context) {
   try {
-    // Defensive check - ensure req exists
-    if (!req) {
-      // Silent return - this is likely a schema introspection call
-      return {};
-    }
-
-    // Defensive check - ensure req.query exists
-    if (!req.query) {
-      // Silent return - this is likely a schema introspection call
-      return {};
-    }
-
-    const channelId = req.query.channelId;
+    const req = context.request || {};
+    const args = context.args || {};
+    const queryParams = req.query || {};
+    const channelId = args.channelId || queryParams.channelId;
 
     if (!channelId) {
       // Silent return - this is likely a schema introspection call or connection setup
       // Only log if there are other query params (indicating it might be an error)
-      if (Object.keys(req.query).length > 0) {
+      if (Object.keys(queryParams).length > 0) {
         console.error(
           "channelId not found in req.query:",
-          JSON.stringify(req.query),
+          JSON.stringify(queryParams),
         );
       }
       return {};
@@ -291,7 +292,7 @@ function chatUpdatesResolver(req, args) {
     // This will be converted to HashMap<String, String> and stored as connection metadata
     // sendSubscriptionMessageFiltered will match against these key-value pairs
     var filterCriteria = {};
-    filterCriteria.channelId = channelId;
+    filterCriteria.channelId = String(channelId);
     return filterCriteria;
   } catch (error) {
     console.error("Error in chatUpdatesResolver: " + error);
@@ -305,8 +306,9 @@ function chatUpdatesResolver(req, args) {
 // HTTP Handler - Chat Interface
 // ============================================
 
-function chatInterfaceHandler(req) {
+function chatInterfaceHandler(context) {
   try {
+    const req = context.request || {};
     // Require authentication
     const user = req.auth.requireAuth();
 
@@ -697,15 +699,14 @@ function chatInterfaceHandler(req) {
             // Create abort controller for this subscription
             currentSubscriptionController = new AbortController();
             
-            // Subscribe via GraphQL SSE endpoint
-            // Note: channelId is passed as URL query param for the subscription resolver
-            // The GraphQL subscription itself has no arguments - filtering happens via the resolver
+            // Subscribe via GraphQL SSE endpoint using explicit GraphQL args
             const subscriptionQuery = {
-                query: \`subscription { chatUpdates }\`
+              query:
+                "subscription ($channelId: String!) { chatUpdates(channelId: $channelId) }",
+              variables: { channelId },
             };
             
-            // Pass channelId as URL query parameter for the subscription resolver
-            fetch('/graphql/sse?channelId=' + encodeURIComponent(channelId), {
+            fetch('/graphql/sse', {
                 method: 'POST',
                 headers: { 
                     'Content-Type': 'application/json',
@@ -949,6 +950,7 @@ function chatInterfaceHandler(req) {
     };
   } catch (error) {
     // User not authenticated, redirect to login
+    const req = context.request || {};
     const currentPath = encodeURIComponent(req.path || "/chat");
     const loginUrl = "/auth/login?redirect=" + currentPath;
 
@@ -995,40 +997,39 @@ function init(context) {
     // Register GraphQL queries
     graphQLRegistry.registerQuery(
       "channels",
-      "type Channel { id: String!, name: String!, isPrivate: Boolean!, createdBy: String!, createdAt: String! } type Query { channels: String! }",
+      "type Channel { id: String!, name: String!, isPrivate: Boolean!, createdBy: String!, createdAt: String! } type Query { channels: [Channel!]! }",
       "channelsResolver",
     );
 
     graphQLRegistry.registerQuery(
       "messages",
-      "type Message { id: String!, sender: String!, text: String!, timestamp: String!, type: String! } type Query { messages(channelId: String!, limit: Int): String! }",
+      "type Message { id: String!, sender: String!, text: String!, timestamp: String!, type: String! } type Query { messages(channelId: String!, limit: Int): [Message!]! }",
       "messagesResolver",
     );
 
     graphQLRegistry.registerQuery(
       "currentUser",
-      "type User { id: String!, name: String!, email: String! } type Query { currentUser: String! }",
+      "type User { id: String!, name: String!, email: String! } type Query { currentUser: User! }",
       "currentUserResolver",
     );
 
     // Register GraphQL mutations
     graphQLRegistry.registerMutation(
       "createChannel",
-      "type Mutation { createChannel(name: String!, isPrivate: Boolean): String! }",
+      "type Mutation { createChannel(name: String!, isPrivate: Boolean): Channel! }",
       "createChannelResolver",
     );
 
     graphQLRegistry.registerMutation(
       "sendMessage",
-      "type Mutation { sendMessage(channelId: String!, text: String!): String! }",
+      "type Mutation { sendMessage(channelId: String!, text: String!): Message! }",
       "sendMessageResolver",
     );
 
-    // Register GraphQL subscription
-    // Note: channelId is passed via URL query params, not as a GraphQL argument
+    // Register GraphQL subscription with explicit channelId argument
     graphQLRegistry.registerSubscription(
       "chatUpdates",
-      "type Subscription { chatUpdates: String }",
+      "type Subscription { chatUpdates(channelId: String!): Message }",
       "chatUpdatesResolver",
     );
 

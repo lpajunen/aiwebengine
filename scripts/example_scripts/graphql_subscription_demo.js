@@ -1,8 +1,29 @@
 // GraphQL Subscription Example with Streaming
 // This script shows how to create GraphQL subscriptions that work with Server-Sent Events
 
+function broadcastLiveMessage(text, type) {
+  const payload = {
+    id: Math.random().toString(36).substr(2, 9),
+    text,
+    timestamp: new Date().toISOString(),
+    sender: "system",
+  };
+
+  if (type) {
+    payload.type = type;
+  }
+
+  graphQLRegistry.sendSubscriptionMessage(
+    "liveMessages",
+    JSON.stringify(payload),
+  );
+
+  return payload;
+}
+
 // The subscription resolver - called when a client subscribes
-function liveMessagesResolver(req) {
+function liveMessagesResolver(context) {
+  const req = context.request || {};
   console.log("Client subscribed to liveMessages from:", req.path);
 
   // Get user information
@@ -17,56 +38,38 @@ function liveMessagesResolver(req) {
   }
 
   // Send a "user joined" message to all subscribers
-  const joinMessageData = {
-    id: Math.random().toString(36).substr(2, 9),
-    text: `${userName} joined`,
-    timestamp: new Date().toISOString(),
-    sender: "system",
-    type: "join",
-  };
-
   console.log(`Sending join message: ${userName} joined`);
-  graphQLRegistry.sendSubscriptionMessage(
-    "liveMessages",
-    JSON.stringify(joinMessageData),
-  );
+  broadcastLiveMessage(`${userName} joined`, "join");
 
   return "Subscription initialized - waiting for messages...";
 }
 
 // The mutation resolver - triggers subscription messages
-function sendMessageResolver(req, args) {
+function sendMessageResolver(context) {
+  const args = context.args || {};
   const message = args.text;
-  const timestamp = new Date().toISOString();
 
-  // Create the message data
-  const messageData = {
-    id: Math.random().toString(36).substr(2, 9),
-    text: message,
-    timestamp: timestamp,
-    sender: "system",
-  };
+  if (!message || message.trim().length === 0) {
+    throw new Error("text argument is required");
+  }
 
   console.log(`Sending message to liveMessages subscribers: ${message}`);
-
-  // Send the message to the subscription using the convenience function
-  // This will broadcast to all clients subscribed to the 'liveMessages' subscription
-  graphQLRegistry.sendSubscriptionMessage(
-    "liveMessages",
-    JSON.stringify(messageData),
-  );
-
+  broadcastLiveMessage(message);
   return `Message sent: ${message}`;
 }
 
 // Optional: You can also use the lower-level API
 // routeRegistry.sendStreamMessage("/graphql/subscription/liveMessages", JSON.stringify(messageData));
 
-function triggerMessageHandler(req) {
-  const message = req.body || "Hello from HTTP trigger!";
+function triggerMessageHandler(context) {
+  const req = context.request || {};
+  const messageBody = req.body;
+  const message =
+    (typeof messageBody === "string" && messageBody.trim()) ||
+    req.form?.message ||
+    "Hello from HTTP trigger!";
 
-  // Trigger the subscription by calling the mutation resolver
-  sendMessageResolver({ text: message });
+  broadcastLiveMessage(message);
 
   return {
     status: 200,
@@ -75,7 +78,7 @@ function triggerMessageHandler(req) {
   };
 }
 
-function subscriptionDemoPage(req) {
+function subscriptionDemoPage(context) {
   return {
     status: 200,
     body: `

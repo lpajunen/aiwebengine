@@ -60,79 +60,6 @@ fn parse_query_string(query: &str) -> HashMap<String, String> {
     params
 }
 
-fn extract_subscription_name(query: &str) -> String {
-    // Simple extraction of subscription name from GraphQL query
-    // This is a basic implementation - in production you might want more sophisticated parsing
-
-    // Remove leading/trailing whitespace and normalize
-    let query = query.trim();
-
-    // Look for "subscription" keyword followed by the subscription name
-    if let Some(subscription_pos) = query.find("subscription") {
-        let after_subscription = &query[subscription_pos + "subscription".len()..];
-
-        // Skip whitespace after "subscription"
-        let after_subscription = after_subscription.trim_start();
-
-        // Check if it starts with '{', meaning no subscription name
-        if after_subscription.starts_with('{') {
-            // Extract the first field name from the subscription
-            if let Some(end_pos) = after_subscription.find('}') {
-                let subscription_body = &after_subscription[1..end_pos]; // Remove opening brace
-                // Find the first field name (skip whitespace and extract until whitespace or end)
-                let field_name = subscription_body.trim_start();
-                if let Some(space_pos) = field_name.find(char::is_whitespace) {
-                    field_name[..space_pos].trim().to_string()
-                } else if let Some(brace_pos) = field_name.find('{') {
-                    field_name[..brace_pos].trim().to_string()
-                } else {
-                    field_name.trim().to_string()
-                }
-            } else {
-                "anonymous_subscription".to_string()
-            }
-        } else {
-            // Look for the opening brace or whitespace that indicates the end of the subscription name
-            if let Some(brace_pos) = after_subscription.find('{') {
-                let subscription_name = after_subscription[..brace_pos].trim();
-                if !subscription_name.is_empty() {
-                    return subscription_name.to_string();
-                }
-            }
-
-            // Fallback: look for whitespace after subscription name
-            if let Some(space_pos) = after_subscription.find(char::is_whitespace) {
-                let subscription_name = after_subscription[..space_pos].trim();
-                if !subscription_name.is_empty() {
-                    return subscription_name.to_string();
-                }
-            }
-
-            // If we can't find a name, use the first field
-            if let Some(brace_pos) = after_subscription.find('{') {
-                let subscription_body = &after_subscription[brace_pos + 1..];
-                if let Some(end_pos) = subscription_body.find('}') {
-                    let field_name = subscription_body[..end_pos].trim_start();
-                    if let Some(space_pos) = field_name.find(char::is_whitespace) {
-                        field_name[..space_pos].trim().to_string()
-                    } else if let Some(brace_pos) = field_name.find('{') {
-                        field_name[..brace_pos].trim().to_string()
-                    } else {
-                        field_name.trim().to_string()
-                    }
-                } else {
-                    "anonymous_subscription".to_string()
-                }
-            } else {
-                "anonymous_subscription".to_string()
-            }
-        }
-    } else {
-        // Fallback to a generic name if we can't parse it
-        "unknown_subscription".to_string()
-    }
-}
-
 /// Parses form data from request body based on content type
 async fn parse_form_data(
     content_type: Option<&str>,
@@ -922,10 +849,7 @@ document.addEventListener('DOMContentLoaded', function() {
         let auth_user = req.extensions().get::<auth::AuthUser>().cloned();
 
         let (parts, body) = req.into_parts();
-        let query_string = parts.uri.query().map(|s| s.to_string()).unwrap_or_default();
-        let query_params = parse_query_string(&query_string);
-
-        info!("GraphQL SSE request with query params: {:?}", query_params);
+        info!("GraphQL SSE request for URI: {}", parts.uri);
 
         let body_bytes = match axum::body::to_bytes(body, usize::MAX).await {
             Ok(bytes) => bytes,
@@ -993,137 +917,21 @@ document.addEventListener('DOMContentLoaded', function() {
         let is_subscription = request.query.trim_start().starts_with("subscription");
 
         if is_subscription {
-            // For subscriptions, create a connection with metadata for filtering
-            // Extract subscription name from the query to determine the stream path
-            let subscription_name = extract_subscription_name(&request.query);
-            let stream_path = format!("/engine/graphql/subscription/{}", subscription_name);
-
-            // Get stream info to check for customization function (the resolver)
-            let stream_info = stream_registry::GLOBAL_STREAM_REGISTRY.get_stream_info(&stream_path);
-
-            let client_metadata = if let Some((script_uri, customization_function)) = stream_info {
-                if let Some(func_name) = customization_function {
-                    // Execute customization function (resolver) to get filter criteria
-                    match js_engine::execute_stream_customization_function(
-                        &script_uri,
-                        &func_name,
-                        &stream_path,
-                        &query_params,
-                        Some(js_auth_context.clone()),
-                    ) {
-                        Ok(filter_criteria) => {
-                            info!(
-                                "GraphQL subscription resolver '{}' returned filter criteria: {:?}",
-                                func_name, filter_criteria
-                            );
-                            if filter_criteria.is_empty() {
-                                None
-                            } else {
-                                Some(filter_criteria)
-                            }
-                        }
-                        Err(e) => {
-                            error!(
-                                "GraphQL subscription resolver '{}' failed for '{}': {}",
-                                func_name, subscription_name, e
-                            );
-                            // Log error and return HTTP 500
-                            return axum::response::Response::builder()
-                                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                                .header("content-type", "text/plain")
-                                .body(axum::body::Body::from(format!(
-                                    "Subscription resolver failed: {}",
-                                    e
-                                )))
-                                .unwrap_or_else(|err| {
-                                    error!("Failed to build error response: {}", err);
-                                    axum::response::Response::new(axum::body::Body::from(
-                                        "Internal Server Error",
-                                    ))
-                                });
-                        }
-                    }
-                } else {
-                    // No customization function, use query params
-                    if query_params.is_empty() {
-                        None
-                    } else {
-                        Some(query_params)
-                    }
-                }
-            } else {
-                // Stream not registered or error getting stream info
-                // Use query params as fallback
-                if query_params.is_empty() {
-                    None
-                } else {
-                    Some(query_params)
-                }
-            };
-
-            // Create a connection with the stream manager for this subscription
-            let connection = match stream_manager::StreamConnectionManager::new()
-                .create_connection(&stream_path, client_metadata)
-                .await
-            {
-                Ok(conn) => conn,
-                Err(e) => {
-                    error!(
-                        "Failed to create GraphQL subscription connection for '{}': {}",
-                        stream_path, e
-                    );
-                    return axum::response::Response::builder()
-                        .status(StatusCode::INTERNAL_SERVER_ERROR)
-                        .header("content-type", "text/plain")
-                        .body(Body::from(format!(
-                            "Failed to create subscription connection: {}",
-                            e
-                        )))
-                        .unwrap_or_else(|err| {
-                            error!("Failed to build error response: {}", err);
-                            Response::new(Body::from("Internal Server Error"))
-                        });
-                }
-            };
-
-            let connection_id = connection.connection_id.clone();
-            info!(
-                "Created GraphQL subscription connection {} for path '{}' with metadata: {:?}",
-                connection_id, stream_path, connection.client_metadata
-            );
-
-            // Use execute_stream for subscriptions - this provides native GraphQL subscription lifecycle
-            // We need to move the schema into a spawn to handle the lifetime requirements
+            // Execute subscription via async-graphql streaming and forward events
             let (tx, rx) = tokio::sync::mpsc::channel(100);
 
             tokio::spawn(async move {
                 let stream = schema.execute_stream(request.data(js_auth_context));
 
-                // Convert each GraphQL response to SSE event and send via channel
                 let mut stream = std::pin::pin!(stream);
                 while let Some(response) = FuturesStreamExt::next(&mut stream).await {
-                    // Send the full GraphQL response as SSE event (same as non-subscription)
                     let json_data =
                         serde_json::to_string(&response).unwrap_or_else(|_| "{}".to_string());
                     let event =
                         Ok::<Event, std::convert::Infallible>(Event::default().data(json_data));
 
                     if tx.send(event).await.is_err() {
-                        // Connection closed, clean up the subscription connection
-                        if let Err(cleanup_err) = stream_registry::GLOBAL_STREAM_REGISTRY
-                            .remove_connection(&stream_path, &connection_id)
-                        {
-                            error!(
-                                "Failed to cleanup GraphQL subscription connection {}: {}",
-                                connection_id, cleanup_err
-                            );
-                        } else {
-                            debug!(
-                                "Cleaned up GraphQL subscription connection {} from stream {}",
-                                connection_id, stream_path
-                            );
-                        }
-                        break; // Receiver dropped, stop streaming
+                        break;
                     }
                 }
             });
@@ -1279,6 +1087,14 @@ document.addEventListener('DOMContentLoaded', function() {
             auth_user.is_some()
         );
 
+        // Snapshot headers before consuming the request body
+        let mut header_map = HashMap::new();
+        for (name, value) in req.headers().iter() {
+            if let Ok(value_str) = value.to_str() {
+                header_map.insert(name.as_str().to_string(), value_str.to_string());
+            }
+        }
+
         // Extract content type before consuming the request
         let content_type = req
             .headers()
@@ -1324,6 +1140,7 @@ document.addEventListener('DOMContentLoaded', function() {
         };
 
         let path_clone = path.clone();
+        let headers_for_worker = header_map;
         let worker = move || -> Result<js_engine::JsHttpResponse, String> {
             // Create authentication context for JavaScript
             let auth_context = if let Some(ref auth_user) = auth_user {
@@ -1348,6 +1165,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 query_params: Some(query_params.clone()),
                 form_data: Some(form_data.clone()),
                 raw_body: raw_body.clone(),
+                headers: headers_for_worker.clone(),
                 user_context: security::UserContext::anonymous(), // TODO: Extract from auth
                 auth_context: Some(auth_context),
             };

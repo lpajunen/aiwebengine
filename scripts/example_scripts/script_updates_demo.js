@@ -1,7 +1,7 @@
 // GraphQL Script Updates Demo Page
 // This example demonstrates real-time script updates using GraphQL subscriptions
 
-function scriptUpdatesDemoPage(req) {
+function scriptUpdatesDemoPage(context) {
   return {
     status: 200,
     body: `

@@ -25,7 +25,9 @@ Every aiwebengine script has three key parts:
 
 ```javascript
 // 1. Handler Function - processes requests
-function myHandler(req) {
+function myHandler(context) {
+  const req = context.request;
+
   return {
     status: 200,
     body: "Hello!",
@@ -44,7 +46,7 @@ init();
 
 **Key Concepts:**
 
-- **Handler functions** receive a `req` object and return a response object
+- **Handler functions** receive a `context` object and return a response object
 - **`init()` function** registers your routes when the script loads
 - **`routeRegistry.registerRoute(path, handlerName, method)`** maps URLs to handler functions
 
@@ -54,19 +56,19 @@ init();
 
 1. **Open the editor:**
 
-   ```
-   http://localhost:8080/editor
-   ```
+```text
+http://localhost:8080/editor
+```
 
-2. **Click "New Script"**
+1. **Click "New Script"**
 
-3. **Enter script name:**
+1. **Enter script name:**
 
-   ```
-   hello.js
-   ```
+```text
+hello.js
+```
 
-4. **Paste this code:**
+1. **Paste this code:**
 
 ```javascript
 /**
@@ -79,7 +81,9 @@ init();
  * - Logging
  */
 
-function helloHandler(req) {
+function helloHandler(context) {
+  const req = context.request;
+
   // Extract the 'name' parameter from the query string
   const name = req.query.name || "World";
 
@@ -107,13 +111,14 @@ function init() {
 init();
 ```
 
-5. **Click "Save"**
+1. **Click "Save"**
 
 ### Option B: Using the Deployer Tool
 
 1. **Create a file `hello.js`** on your local machine with the code above
 
-2. **Deploy it:**
+1. **Deploy it:**
+
    ```bash
    cargo run --bin deployer \
      --uri "http://localhost:8080/hello" \
@@ -126,13 +131,13 @@ init();
 
 Open your browser and visit:
 
-```
+```text
 http://localhost:8080/hello
 ```
 
 You should see:
 
-```
+```text
 Hello, World! Welcome to aiwebengine.
 ```
 
@@ -140,13 +145,13 @@ Hello, World! Welcome to aiwebengine.
 
 Try adding a query parameter:
 
-```
+```text
 http://localhost:8080/hello?name=Alice
 ```
 
 You should see:
 
-```
+```text
 Hello, Alice! Welcome to aiwebengine.
 ```
 
@@ -170,11 +175,12 @@ Your script is logging each request. Let's see the logs:
 2. Select your `hello.js` script
 3. Click the "Logs" tab at the top
 4. You'll see entries like:
-   ```
-   [2024-10-24 10:30:15] Greeting requested for: Alice
-   [2024-10-24 10:30:12] Greeting requested for: World
-   [2024-10-24 10:30:00] Hello script initialized successfully
-   ```
+
+```text
+[2024-10-24 10:30:15] Greeting requested for: Alice
+[2024-10-24 10:30:12] Greeting requested for: World
+[2024-10-24 10:30:00] Hello script initialized successfully
+```
 
 ### Using the Logs API
 
@@ -184,11 +190,30 @@ Create a simple endpoint to fetch logs programmatically:
 curl "http://localhost:8080/api/logs?uri=/hello"
 ```
 
-## Understanding the Request and Response
+## Understanding the Context and Response
 
-### The Request Object (`req`)
+### The Handler Context (`context`)
 
-When a client makes a request to `/hello?name=Alice`, your handler receives:
+Every handler receives a single `context` object. It always includes:
+
+- `request`: normalized HTTP request information
+- `args`: resolver or command arguments (if applicable)
+- `kind`: invocation type (`httpRoute`, `graphqlQuery`, etc.)
+- `scriptUri` / `handlerName`: metadata about the running script
+- `meta` and `connectionMetadata`: optional maps for stream/subscription handlers
+
+Pattern most handlers use:
+
+```javascript
+function helloHandler(context) {
+  const req = context.request;
+  // use req as shown below
+}
+```
+
+### The Request Object (`context.request`)
+
+When a client makes a request to `/hello?name=Alice`, `context.request` looks like:
 
 ```javascript
 {
@@ -225,7 +250,8 @@ Your handler must return:
 Let's add some features to make it more robust:
 
 ```javascript
-function helloHandler(req) {
+function helloHandler(context) {
+  const req = context.request;
   const name = req.query.name;
 
   // Validate input
@@ -304,7 +330,8 @@ function init() {
 ### ❌ Mistake 2: Handler name mismatch
 
 ```javascript
-function helloHandler(req) {
+function helloHandler(context) {
+  const req = context.request;
   /* ... */
 }
 
@@ -318,7 +345,8 @@ function init() {
 ### ❌ Mistake 3: Forgetting to return a response
 
 ```javascript
-function badHandler(req) {
+function badHandler(context) {
+  const req = context.request;
   console.log("Processing request");
   // Forgot to return!
 }
@@ -369,7 +397,9 @@ const logs = JSON.parse(logsJson);
 ### Handler Template
 
 ```javascript
-function myHandler(req) {
+function myHandler(context) {
+  const req = context.request;
+
   try {
     // Your logic here
 
