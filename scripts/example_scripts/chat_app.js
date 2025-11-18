@@ -575,11 +575,12 @@ function chatInterfaceHandler(context) {
         async function loadChannels() {
             try {
                 const response = await fetch('/graphql', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        query: 'query { channels }'
-                    })
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    query:
+                      "query { channels { id name isPrivate createdBy createdAt } }",
+                  }),
                 });
                 
                 const result = await response.json();
@@ -642,12 +643,13 @@ function chatInterfaceHandler(context) {
         async function loadMessages(channelId) {
             try {
                 const response = await fetch('/graphql', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        query: 'query($channelId: String!, $limit: Int) { messages(channelId: $channelId, limit: $limit) }',
-                        variables: { channelId: channelId, limit: 50 }
-                    })
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    query:
+                      "query($channelId: String!, $limit: Int) { messages(channelId: $channelId, limit: $limit) { id sender text timestamp type } }",
+                    variables: { channelId: channelId, limit: 50 },
+                  }),
                 });
                 
                 const result = await response.json();
@@ -702,7 +704,7 @@ function chatInterfaceHandler(context) {
             // Subscribe via GraphQL SSE endpoint using explicit GraphQL args
             const subscriptionQuery = {
               query:
-                "subscription ($channelId: String!) { chatUpdates(channelId: $channelId) }",
+                "subscription ($channelId: String!) { chatUpdates(channelId: $channelId) { id sender text timestamp type } }",
               variables: { channelId },
             };
             
@@ -872,12 +874,13 @@ function chatInterfaceHandler(context) {
             
             try {
                 const response = await fetch('/graphql', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        query: 'mutation($channelId: String!, $text: String!) { sendMessage(channelId: $channelId, text: $text) }',
-                        variables: { channelId: currentChannel.id, text: text }
-                    })
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    query:
+                      "mutation($channelId: String!, $text: String!) { sendMessage(channelId: $channelId, text: $text) { id sender text timestamp type } }",
+                    variables: { channelId: currentChannel.id, text: text },
+                  }),
                 });
                 
                 const result = await response.json();
@@ -899,12 +902,13 @@ function chatInterfaceHandler(context) {
             
             try {
                 const response = await fetch('/graphql', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        query: 'mutation($name: String!, $isPrivate: Boolean) { createChannel(name: $name, isPrivate: $isPrivate) }',
-                        variables: { name: name, isPrivate: false }
-                    })
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    query:
+                      "mutation($name: String!, $isPrivate: Boolean) { createChannel(name: $name, isPrivate: $isPrivate) { id name isPrivate createdBy createdAt } }",
+                    variables: { name: name, isPrivate: false },
+                  }),
                 });
                 
                 const result = await response.json();
