@@ -1039,6 +1039,11 @@ function apiListRoutes(context) {
     // Parse and re-stringify to ensure valid JSON
     const routesData = JSON.parse(routes);
 
+    // Sort routes alphabetically by path (case-insensitive)
+    routesData.sort((a, b) =>
+      a.path.toLowerCase().localeCompare(b.path.toLowerCase()),
+    );
+
     return {
       status: 200,
       body: JSON.stringify(routesData),
