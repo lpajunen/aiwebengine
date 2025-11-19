@@ -31,10 +31,10 @@ class AIWebEngineEditor {
     // Using plain JavaScript template functions instead of Handlebars
     this.templates = {
       "script-item": (data) => `
-        <div class="script-item ${data.active ? "active" : ""}" data-script="${data.name}">
+        <div class="script-item ${data.active ? "active" : ""}" data-script="${data.uri}" title="${data.uri}">
           <div class="script-icon">📄</div>
           <div class="script-info">
-            <div class="script-name">${data.name}</div>
+            <div class="script-name">${data.displayName}</div>
             <div class="script-meta">
               <span class="script-size">${data.size} bytes</span>
               <span class="privileged-pill ${data.privileged ? "privileged" : "restricted"}">
@@ -45,10 +45,10 @@ class AIWebEngineEditor {
         </div>
       `,
       "asset-item": (data) => `
-        <div class="asset-item ${data.active ? "active" : ""}" data-path="${data.path}">
+        <div class="asset-item ${data.active ? "active" : ""}" data-path="${data.uri}" title="${data.uri}">
           <div class="asset-icon">${data.icon}</div>
           <div class="asset-info">
-            <div class="asset-name">${data.name}</div>
+            <div class="asset-name">${data.displayName}</div>
             <div class="asset-meta">${data.isText ? "text" : "binary"} • ${data.size}</div>
           </div>
         </div>
@@ -267,22 +267,24 @@ class AIWebEngineEditor {
       scriptsList.innerHTML = "";
 
       scripts.forEach((script) => {
-        this.scriptSecurityProfiles[script.name] = {
+        const scriptUri = script.uri || script.name;
+        this.scriptSecurityProfiles[scriptUri] = {
           privileged: !!script.privileged,
           defaultPrivileged: !!script.defaultPrivileged,
         };
         const scriptElement = document.createElement("div");
         scriptElement.innerHTML = this.templates["script-item"]({
-          name: script.name,
+          uri: scriptUri,
+          displayName: script.displayName || scriptUri,
           size: script.size || 0,
-          active: script.name === this.currentScript,
+          active: scriptUri === this.currentScript,
           privileged: !!script.privileged,
         });
 
         scriptElement
           .querySelector(".script-item")
           .addEventListener("click", () => {
-            this.loadScript(script.name);
+            this.loadScript(scriptUri);
           });
 
         scriptsList.appendChild(scriptElement.firstElementChild);
@@ -519,21 +521,22 @@ function init(context) {
 
       data.assets.forEach((asset) => {
         const assetElement = document.createElement("div");
-        const isText = this.isTextAsset(asset.path);
+        const assetUri = asset.uri || asset.path;
+        const isText = this.isTextAsset(assetUri);
 
         assetElement.innerHTML = this.templates["asset-item"]({
-          path: asset.path,
-          name: asset.name,
+          uri: assetUri,
+          displayName: asset.displayName || assetUri,
           size: this.formatBytes(asset.size),
           type: asset.type,
           isText: isText,
           icon: this.getFileIcon(asset.type, isText),
-          active: this.currentAsset === asset.path,
+          active: this.currentAsset === assetUri,
         });
 
         // Add click listener to select asset
         const item = assetElement.firstElementChild;
-        item.addEventListener("click", () => this.selectAsset(asset.path));
+        item.addEventListener("click", () => this.selectAsset(assetUri));
 
         assetsList.appendChild(item);
       });

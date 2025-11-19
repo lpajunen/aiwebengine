@@ -320,7 +320,8 @@ function apiListScripts(context) {
         : false;
 
     const scriptDetails = scriptMetadata.map((meta) => ({
-      name: meta.uri,
+      uri: meta.uri,
+      displayName: meta.name || meta.uri,
       size: meta.size || 0,
       lastModified: new Date(meta.updatedAt || Date.now()).toISOString(),
       privileged: !!meta.privileged,
@@ -757,10 +758,11 @@ function apiGetAssets(context) {
     );
 
     const assetDetails = assetMetadata.map((meta) => ({
-      path: meta.name,
-      name: meta.name.split("/").pop(),
+      uri: meta.uri,
+      displayName: meta.name || meta.uri,
+      path: meta.uri,
       size: meta.size || 0,
-      type: meta.mimetype || getMimeTypeFromPath(meta.name),
+      type: meta.mimetype || getMimeTypeFromPath(meta.uri),
       createdAt: new Date(meta.createdAt || Date.now()).toISOString(),
       updatedAt: new Date(meta.updatedAt || Date.now()).toISOString(),
     }));
