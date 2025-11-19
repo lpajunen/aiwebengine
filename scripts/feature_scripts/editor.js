@@ -934,7 +934,7 @@ function apiSaveAsset(context) {
       typeof assetStorage !== "undefined" &&
       typeof assetStorage.upsertAsset === "function"
     ) {
-      assetStorage.upsertAsset(assetName, content, mimetype);
+      assetStorage.upsertAsset(assetName, content, mimetype, null);
       return {
         status: 200,
         body: JSON.stringify({ message: "Asset saved successfully" }),

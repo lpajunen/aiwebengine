@@ -249,7 +249,7 @@ fn get_db_pool() -> Option<std::sync::Arc<crate::database::Database>> {
 }
 
 /// Database-backed upsert script
-async fn db_upsert_script(pool: &PgPool, uri: &str, code: &str) -> Result<(), RepositoryError> {
+async fn db_upsert_script(pool: &PgPool, uri: &str, content: &str) -> Result<(), RepositoryError> {
     let now = chrono::Utc::now();
 
     // Extract name from URI (last segment after /)
@@ -259,11 +259,11 @@ async fn db_upsert_script(pool: &PgPool, uri: &str, code: &str) -> Result<(), Re
     let update_result = sqlx::query(
         r#"
         UPDATE scripts
-        SET code = $1, updated_at = $2, name = COALESCE(name, $4)
+        SET content = $1, updated_at = $2, name = COALESCE(name, $4)
         WHERE uri = $3
         "#,
     )
-    .bind(code)
+    .bind(content)
     .bind(now)
     .bind(uri)
     .bind(name)
@@ -282,12 +282,12 @@ async fn db_upsert_script(pool: &PgPool, uri: &str, code: &str) -> Result<(), Re
     // Script doesn't exist, create new one
     sqlx::query(
         r#"
-        INSERT INTO scripts (uri, code, name, created_at, updated_at)
+        INSERT INTO scripts (uri, content, name, created_at, updated_at)
         VALUES ($1, $2, $3, $4, $4)
         "#,
     )
     .bind(uri)
-    .bind(code)
+    .bind(content)
     .bind(name)
     .bind(now)
     .execute(pool)

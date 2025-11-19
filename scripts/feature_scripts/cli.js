@@ -42,8 +42,9 @@ function asset_handler(context) {
         if (body.publicPath && body.mimetype && body.content) {
           assetStorage.upsertAsset(
             body.publicPath,
-            body.mimetype,
             body.content,
+            body.mimetype,
+            null,
           );
           return {
             status: 201,
