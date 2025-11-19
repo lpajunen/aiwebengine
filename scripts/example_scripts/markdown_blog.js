@@ -1275,7 +1275,7 @@ function updatePost(context) {
       }
 
       // Delete old post
-      sharedStorage.setItem("blog:" + originalSlug, null);
+      sharedStorage.setItem("blog:" + originalSlug, "");
     }
 
     // Store the updated markdown
@@ -1357,7 +1357,7 @@ function deletePost(context) {
     }
 
     // Delete the post
-    sharedStorage.setItem("blog:" + slug, null);
+    sharedStorage.setItem("blog:" + slug, "");
 
     // Update the index
     sharedStorage.setItem("blog:index", JSON.stringify(postSlugs));
