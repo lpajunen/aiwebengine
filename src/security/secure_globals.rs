@@ -125,6 +125,9 @@ impl SecureGlobalContext {
         // Setup database functions
         self.setup_database_functions(ctx, script_uri)?;
 
+        // Setup conversion functions (always enabled)
+        self.setup_conversion_functions(ctx, script_uri)?;
+
         // Setup script storage functions
         self.setup_shared_storage_functions(ctx, script_uri)?;
 
@@ -2386,6 +2389,40 @@ impl SecureGlobalContext {
 
         global.set("checkDatabaseHealth", check_db_health)?;
         debug!("checkDatabaseHealth() function initialized");
+
+        Ok(())
+    }
+
+    /// Setup conversion functions (markdown to HTML, etc.)
+    fn setup_conversion_functions(
+        &self,
+        ctx: &rquickjs::Ctx<'_>,
+        _script_uri: &str,
+    ) -> JsResult<()> {
+        let global = ctx.globals();
+
+        // Create the convert namespace object
+        let convert_obj = rquickjs::Object::new(ctx.clone())?;
+
+        // convert.markdown_to_html(markdown) - Convert markdown string to HTML
+        let markdown_to_html = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, markdown: String| -> JsResult<String> {
+                // Call the conversion function
+                match crate::conversion::convert_markdown_to_html(&markdown) {
+                    Ok(html) => Ok(html),
+                    Err(e) => {
+                        // Return error as string (following pattern of other APIs)
+                        Ok(format!("Error: {}", e))
+                    }
+                }
+            },
+        )?;
+
+        convert_obj.set("markdown_to_html", markdown_to_html)?;
+        global.set("convert", convert_obj)?;
+
+        debug!("convert.markdown_to_html() function initialized");
 
         Ok(())
     }

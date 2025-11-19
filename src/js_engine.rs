@@ -2101,4 +2101,295 @@ mod tests {
         let response = result.unwrap();
         assert_eq!(response.content_type, Some("application/json".to_string()));
     }
+
+    #[test]
+    fn test_convert_markdown_to_html_simple() {
+        use crate::security::UserContext;
+
+        let script_content = r#"
+            function testConvert(context) {
+                const markdown = `# Hello World
+
+This is **bold** text.`;
+                const html = convert.markdown_to_html(markdown);
+                return {
+                    status: 200,
+                    body: html,
+                    contentType: "text/html"
+                };
+            }
+        "#;
+
+        let _ = repository::upsert_script("test-convert-simple", script_content);
+        let params = RequestExecutionParams {
+            script_uri: "test-convert-simple".to_string(),
+            handler_name: "testConvert".to_string(),
+            path: "/test".to_string(),
+            method: "GET".to_string(),
+            query_params: None,
+            form_data: None,
+            raw_body: None,
+            headers: HashMap::new(),
+            user_context: UserContext::admin("test".to_string()),
+            auth_context: None,
+        };
+        let result = execute_script_for_request_secure(params);
+
+        assert!(result.is_ok(), "Request should execute successfully");
+        let response = result.unwrap();
+        let body = String::from_utf8(response.body).unwrap();
+
+        assert!(
+            body.contains("<h1>Hello World</h1>"),
+            "Should contain heading"
+        );
+        assert!(
+            body.contains("<strong>bold</strong>"),
+            "Should contain bold text"
+        );
+    }
+
+    #[test]
+    fn test_convert_markdown_to_html_code_block() {
+        use crate::security::UserContext;
+
+        let script_content = r#"
+            function testConvertCode(context) {
+                const markdown = '```javascript\nconst x = 42;\n```';
+                const html = convert.markdown_to_html(markdown);
+                return {
+                    status: 200,
+                    body: html,
+                    contentType: "text/html"
+                };
+            }
+        "#;
+
+        let _ = repository::upsert_script("test-convert-code", script_content);
+        let params = RequestExecutionParams {
+            script_uri: "test-convert-code".to_string(),
+            handler_name: "testConvertCode".to_string(),
+            path: "/test".to_string(),
+            method: "GET".to_string(),
+            query_params: None,
+            form_data: None,
+            raw_body: None,
+            headers: HashMap::new(),
+            user_context: UserContext::admin("test".to_string()),
+            auth_context: None,
+        };
+        let result = execute_script_for_request_secure(params);
+
+        assert!(result.is_ok(), "Request should execute successfully");
+        let response = result.unwrap();
+        let body = String::from_utf8(response.body).unwrap();
+
+        assert!(body.contains("<pre><code"), "Should contain code block");
+        assert!(
+            body.contains("const x = 42;"),
+            "Should contain code content"
+        );
+    }
+
+    #[test]
+    fn test_convert_markdown_to_html_list() {
+        use crate::security::UserContext;
+
+        let script_content = r#"
+            function testConvertList(context) {
+                const markdown = '- Item 1\n- Item 2\n- Item 3';
+                const html = convert.markdown_to_html(markdown);
+                return {
+                    status: 200,
+                    body: html,
+                    contentType: "text/html"
+                };
+            }
+        "#;
+
+        let _ = repository::upsert_script("test-convert-list", script_content);
+        let params = RequestExecutionParams {
+            script_uri: "test-convert-list".to_string(),
+            handler_name: "testConvertList".to_string(),
+            path: "/test".to_string(),
+            method: "GET".to_string(),
+            query_params: None,
+            form_data: None,
+            raw_body: None,
+            headers: HashMap::new(),
+            user_context: UserContext::admin("test".to_string()),
+            auth_context: None,
+        };
+        let result = execute_script_for_request_secure(params);
+
+        assert!(result.is_ok(), "Request should execute successfully");
+        let response = result.unwrap();
+        let body = String::from_utf8(response.body).unwrap();
+
+        assert!(body.contains("<ul>"), "Should contain unordered list");
+        assert!(
+            body.contains("<li>Item 1</li>"),
+            "Should contain list items"
+        );
+    }
+
+    #[test]
+    fn test_convert_markdown_to_html_table() {
+        use crate::security::UserContext;
+
+        let script_content = r#"
+            function testConvertTable(context) {
+                const markdown = '| Header 1 | Header 2 |\n|----------|----------|\n| Cell 1   | Cell 2   |';
+                const html = convert.markdown_to_html(markdown);
+                return {
+                    status: 200,
+                    body: html,
+                    contentType: "text/html"
+                };
+            }
+        "#;
+
+        let _ = repository::upsert_script("test-convert-table", script_content);
+        let params = RequestExecutionParams {
+            script_uri: "test-convert-table".to_string(),
+            handler_name: "testConvertTable".to_string(),
+            path: "/test".to_string(),
+            method: "GET".to_string(),
+            query_params: None,
+            form_data: None,
+            raw_body: None,
+            headers: HashMap::new(),
+            user_context: UserContext::admin("test".to_string()),
+            auth_context: None,
+        };
+        let result = execute_script_for_request_secure(params);
+
+        assert!(result.is_ok(), "Request should execute successfully");
+        let response = result.unwrap();
+        let body = String::from_utf8(response.body).unwrap();
+
+        assert!(body.contains("<table>"), "Should contain table");
+        assert!(
+            body.contains("<th>Header 1</th>"),
+            "Should contain table headers"
+        );
+        assert!(
+            body.contains("<td>Cell 1</td>"),
+            "Should contain table cells"
+        );
+    }
+
+    #[test]
+    fn test_convert_markdown_to_html_empty_input() {
+        use crate::security::UserContext;
+
+        let script_content = r#"
+            function testConvertEmpty(context) {
+                const markdown = '';
+                const html = convert.markdown_to_html(markdown);
+                return {
+                    status: 200,
+                    body: html,
+                    contentType: "text/html"
+                };
+            }
+        "#;
+
+        let _ = repository::upsert_script("test-convert-empty", script_content);
+        let params = RequestExecutionParams {
+            script_uri: "test-convert-empty".to_string(),
+            handler_name: "testConvertEmpty".to_string(),
+            path: "/test".to_string(),
+            method: "GET".to_string(),
+            query_params: None,
+            form_data: None,
+            raw_body: None,
+            headers: HashMap::new(),
+            user_context: UserContext::admin("test".to_string()),
+            auth_context: None,
+        };
+        let result = execute_script_for_request_secure(params);
+
+        assert!(result.is_ok(), "Request should execute successfully");
+        let response = result.unwrap();
+        let body = String::from_utf8(response.body).unwrap();
+
+        assert!(
+            body.contains("Error:"),
+            "Should return error message for empty input"
+        );
+    }
+
+    #[test]
+    fn test_convert_markdown_to_html_complex() {
+        use crate::security::UserContext;
+
+        let script_content = r#"
+            function testConvertComplex(context) {
+                const markdown = `# My Blog Post
+
+This is a **blog post** with *italic* text.
+
+## Features
+
+- Markdown support
+- Code highlighting
+- Tables
+
+### Code Example
+
+\`\`\`javascript
+function hello() {
+    return "world";
+}
+\`\`\`
+
+[Link to example](https://example.com)
+`;
+                const html = convert.markdown_to_html(markdown);
+                return {
+                    status: 200,
+                    body: html,
+                    contentType: "text/html"
+                };
+            }
+        "#;
+
+        let _ = repository::upsert_script("test-convert-complex", script_content);
+        let params = RequestExecutionParams {
+            script_uri: "test-convert-complex".to_string(),
+            handler_name: "testConvertComplex".to_string(),
+            path: "/test".to_string(),
+            method: "GET".to_string(),
+            query_params: None,
+            form_data: None,
+            raw_body: None,
+            headers: HashMap::new(),
+            user_context: UserContext::admin("test".to_string()),
+            auth_context: None,
+        };
+        let result = execute_script_for_request_secure(params);
+
+        assert!(result.is_ok(), "Request should execute successfully");
+        let response = result.unwrap();
+        let body = String::from_utf8(response.body).unwrap();
+
+        assert!(body.contains("<h1>My Blog Post</h1>"), "Should contain h1");
+        assert!(body.contains("<h2>Features</h2>"), "Should contain h2");
+        assert!(
+            body.contains("<strong>blog post</strong>"),
+            "Should contain bold"
+        );
+        assert!(body.contains("<em>italic</em>"), "Should contain italic");
+        assert!(body.contains("<ul>"), "Should contain list");
+        assert!(body.contains("<pre><code"), "Should contain code block");
+        assert!(
+            body.contains("function hello()"),
+            "Should contain code content"
+        );
+        assert!(
+            body.contains("<a href=\"https://example.com\">Link to example</a>"),
+            "Should contain link"
+        );
+    }
 }

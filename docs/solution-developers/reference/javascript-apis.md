@@ -1400,6 +1400,66 @@ Common MIME types for `contentType`:
 - `"image/jpeg"`, `"image/png"` - Images
 - `"application/pdf"` - PDF files
 
+## Conversion Functions
+
+The `convert` object provides content conversion utilities.
+
+### convert.markdown_to_html(markdown)
+
+Converts a markdown string to HTML.
+
+**Parameters:**
+
+- `markdown` (string): Markdown content to convert (max 1MB)
+
+**Returns:** String containing HTML output or error message (starting with "Error:")
+
+**Example:**
+
+```javascript
+function renderBlogPost(context) {
+  const req = context.request;
+
+  const markdown = `# My Blog Post
+
+This is **bold** and *italic* text.
+
+\`\`\`javascript
+const hello = "world";
+\`\`\`
+`;
+
+  const html = convert.markdown_to_html(markdown);
+
+  if (html.startsWith("Error:")) {
+    return { status: 500, body: html };
+  }
+
+  return {
+    status: 200,
+    body: `<!DOCTYPE html>
+<html>
+<head><title>Blog</title></head>
+<body>${html}</body>
+</html>`,
+    contentType: "text/html; charset=UTF-8",
+  };
+}
+```
+
+**Supported Features:**
+
+- Headings, bold, italic, strikethrough
+- Code blocks and inline code
+- Lists (ordered and unordered)
+- Tables with alignment
+- Links and images
+- Blockquotes
+- Task lists
+- Footnotes
+
+**See Also:** [Conversion API Reference](conversion-api.md) for detailed documentation, examples, and best practices.
+
 ## Error Handling
 
 Scripts run in a sandboxed environment. If a script throws an error:

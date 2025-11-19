@@ -1,20 +1,12 @@
 use axum::response::Html;
-use pulldown_cmark::{Options, Parser, html};
 use std::fs;
 use std::path::Path;
 
 /// Convert Markdown content to HTML with basic styling
 pub fn markdown_to_html(markdown: &str, title: &str) -> String {
-    let mut options = Options::empty();
-    options.insert(Options::ENABLE_TABLES);
-    options.insert(Options::ENABLE_FOOTNOTES);
-    options.insert(Options::ENABLE_STRIKETHROUGH);
-    options.insert(Options::ENABLE_TASKLISTS);
-    options.insert(Options::ENABLE_HEADING_ATTRIBUTES);
-
-    let parser = Parser::new_ext(markdown, options);
-    let mut html_output = String::new();
-    html::push_html(&mut html_output, parser);
+    // Use shared conversion logic to get HTML body
+    let html_output = crate::conversion::convert_markdown_to_html(markdown)
+        .unwrap_or_else(|e| format!("<p>Error converting markdown: {}</p>", e));
 
     format!(
         r#"<!DOCTYPE html>

@@ -11,6 +11,7 @@ use tracing::{debug, error, info, warn};
 
 pub mod asset_registry;
 pub mod config;
+pub mod conversion;
 pub mod database;
 pub mod error;
 pub mod graphql;

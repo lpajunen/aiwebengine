@@ -1183,13 +1183,21 @@ AVAILABLE JAVASCRIPT APIs:
    - Use {{secret:identifier}} syntax in fetch() headers to inject secret values
    - identifier: string (secret name)
 
-5. fetch(url, options) - Make HTTP requests to external APIs
+5. convert - Markdown to HTML conversion functions
+   - convert.markdown_to_html(markdown) - Convert markdown string to HTML
+   - markdown: string (markdown content, max 1MB)
+   - Returns: string (HTML output or error message starting with "Error:")
+   - Supports: headings, lists, code blocks, tables, bold, italic, links, strikethrough
+   - Use for: rendering blog posts, documentation, user content in HTML responses
+   - Example: const html = convert.markdown_to_html('# Hello\\n\\nThis is **bold**');
+
+6. fetch(url, options) - Make HTTP requests to external APIs
    - url: string
    - options: JSON string with {method, headers, body, timeout_ms}
    - Supports {{secret:identifier}} in headers for secure API keys
    - Returns: JSON string with {status, ok, headers, body}
 
-6. graphQLRegistry - Object containing all GraphQL-related functions:
+7. graphQLRegistry - Object containing all GraphQL-related functions:
    
    graphQLRegistry.registerQuery(name, schema, resolverName) - Register GraphQL query
    - name: string (query name)
