@@ -19,7 +19,7 @@ CREATE INDEX IF NOT EXISTS idx_scripts_name ON scripts(name);
 -- Add name field to assets table
 ALTER TABLE assets ADD COLUMN IF NOT EXISTS name TEXT;
 
--- Auto-populate asset names from asset_name
+-- Auto-populate asset names from asset_name (will be renamed to uri in next migration)
 -- Users can later update these to more descriptive labels
 UPDATE assets 
 SET name = asset_name

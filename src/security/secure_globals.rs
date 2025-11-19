@@ -816,7 +816,7 @@ impl SecureGlobalContext {
                     .values()
                     .map(|asset| {
                         serde_json::json!({
-                            "assetName": asset.asset_name,
+                            "uri": asset.uri,
                             "name": asset.name,
                             "size": asset.content.len(),
                             "mimetype": asset.mimetype,
@@ -847,7 +847,7 @@ impl SecureGlobalContext {
         let user_ctx_fetch = user_context.clone();
         let fetch_asset = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, asset_name: String| -> JsResult<String> {
+            move |_ctx: rquickjs::Ctx<'_>, uri: String| -> JsResult<String> {
                 // Check capability
                 if let Err(e) =
                     user_ctx_fetch.require_capability(&crate::security::Capability::ReadAssets)
@@ -857,16 +857,16 @@ impl SecureGlobalContext {
 
                 debug!(
                     user_id = ?user_ctx_fetch.user_id,
-                    asset_name = %asset_name,
+                    uri = %uri,
                     "Secure fetchAsset called"
                 );
 
-                match repository::fetch_asset(&asset_name) {
+                match repository::fetch_asset(&uri) {
                     Some(asset) => {
                         // Convert bytes to base64 for safe JavaScript transfer
                         Ok(base64::engine::general_purpose::STANDARD.encode(asset.content))
                     }
-                    None => Ok(format!("Asset '{}' not found", asset_name)),
+                    None => Ok(format!("Asset '{}' not found", uri)),
                 }
             },
         )?;
@@ -880,7 +880,7 @@ impl SecureGlobalContext {
         let upsert_asset = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>,
-                  asset_name: String,
+                  uri: String,
                   content_b64: String,
                   mimetype: String,
                   name: Option<String>|
@@ -898,12 +898,12 @@ impl SecureGlobalContext {
                     return Ok(format!("Access denied: {}", e));
                 }
 
-                // Validate asset name (inline validation since we can't call async)
-                if asset_name.is_empty() || asset_name.len() > 255 {
-                    return Ok("Invalid asset name: must be 1-255 characters".to_string());
+                // Validate asset URI (inline validation since we can't call async)
+                if uri.is_empty() || uri.len() > 255 {
+                    return Ok("Invalid asset URI: must be 1-255 characters".to_string());
                 }
-                if asset_name.contains("..") || asset_name.contains('\\') {
-                    return Ok("Invalid asset name: path traversal not allowed".to_string());
+                if uri.contains("..") || uri.contains('\\') {
+                    return Ok("Invalid asset URI: path traversal not allowed".to_string());
                 }
 
                 // Validate content size (10MB limit)
@@ -914,7 +914,7 @@ impl SecureGlobalContext {
                 // Log the operation attempt using spawn to avoid runtime conflicts
                 let auditor_clone = auditor_asset.clone();
                 let user_id = user_ctx_upsert_asset.user_id.clone();
-                let asset_name_clone = asset_name.clone();
+                let uri_clone = uri.clone();
                 let script_uri_clone = script_uri_asset.clone();
                 let content_len = content.len();
                 let mimetype_clone = mimetype.clone();
@@ -928,7 +928,7 @@ impl SecureGlobalContext {
                             )
                             .with_resource("asset".to_string())
                             .with_action("upsert".to_string())
-                            .with_detail("asset_name", &asset_name_clone)
+                            .with_detail("uri", &uri_clone)
                             .with_detail("script_uri", &script_uri_clone)
                             .with_detail("content_size", content_len.to_string())
                             .with_detail("mimetype", &mimetype_clone),
@@ -939,15 +939,15 @@ impl SecureGlobalContext {
                 // Call repository directly (sync operation)
                 let now = std::time::SystemTime::now();
                 let asset = repository::Asset {
-                    asset_name: asset_name.clone(),
-                    name: name.or_else(|| Some(asset_name.clone())),
+                    uri: uri.clone(),
+                    name: name.or_else(|| Some(uri.clone())),
                     mimetype,
                     content,
                     created_at: now,
                     updated_at: now,
                 };
                 match repository::upsert_asset(asset) {
-                    Ok(_) => Ok(format!("Asset '{}' upserted successfully", asset_name)),
+                    Ok(_) => Ok(format!("Asset '{}' upserted successfully", uri)),
                     Err(e) => Ok(format!("Error upserting asset: {}", e)),
                 }
             },
@@ -959,7 +959,7 @@ impl SecureGlobalContext {
         let auditor_delete_asset = auditor.clone();
         let delete_asset = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, asset_name: String| -> JsResult<String> {
+            move |_ctx: rquickjs::Ctx<'_>, uri: String| -> JsResult<String> {
                 // Check capability
                 if let Err(e) = user_ctx_delete_asset
                     .require_capability(&crate::security::Capability::DeleteAssets)
@@ -983,7 +983,7 @@ impl SecureGlobalContext {
                 // Log the operation attempt using spawn to avoid runtime conflicts
                 let auditor_clone = auditor_delete_asset.clone();
                 let user_id = user_ctx_delete_asset.user_id.clone();
-                let asset_name_clone = asset_name.clone();
+                let uri_clone = uri.clone();
                 tokio::task::spawn(async move {
                     let _ = auditor_clone
                         .log_event(
@@ -994,20 +994,20 @@ impl SecureGlobalContext {
                             )
                             .with_resource("asset".to_string())
                             .with_action("delete".to_string())
-                            .with_detail("asset_name", &asset_name_clone),
+                            .with_detail("uri", &uri_clone),
                         )
                         .await;
                 });
 
                 debug!(
                     user_id = ?user_ctx_delete_asset.user_id,
-                    asset_name = %asset_name,
+                    uri = %uri,
                     "Secure deleteAsset called"
                 );
 
-                match repository::delete_asset(&asset_name) {
-                    true => Ok(format!("Asset '{}' deleted successfully", asset_name)),
-                    false => Ok(format!("Asset '{}' not found", asset_name)),
+                match repository::delete_asset(&uri) {
+                    true => Ok(format!("Asset '{}' deleted successfully", uri)),
+                    false => Ok(format!("Asset '{}' not found", uri)),
                 }
             },
         )?;

@@ -128,7 +128,7 @@ fn test_asset_management() {
     let asset = repository::fetch_asset("logo.svg");
     assert!(asset.is_some());
     let asset = asset.unwrap();
-    assert_eq!(asset.asset_name, "logo.svg");
+    assert_eq!(asset.uri, "logo.svg");
     assert_eq!(asset.mimetype, "image/svg+xml");
     assert!(!asset.content.is_empty());
 
@@ -140,7 +140,7 @@ fn test_asset_management() {
     let test_content = b"test content".to_vec();
     let now = std::time::SystemTime::now();
     let test_asset = repository::Asset {
-        asset_name: "test.txt".to_string(),
+        uri: "test.txt".to_string(),
         name: Some("Test File".to_string()),
         mimetype: "text/plain".to_string(),
         content: test_content.clone(),
@@ -152,7 +152,7 @@ fn test_asset_management() {
     let fetched = repository::fetch_asset("test.txt");
     assert!(fetched.is_some());
     let fetched = fetched.unwrap();
-    assert_eq!(fetched.asset_name, "test.txt");
+    assert_eq!(fetched.uri, "test.txt");
     assert_eq!(fetched.mimetype, "text/plain");
     assert_eq!(fetched.content, test_content);
 
