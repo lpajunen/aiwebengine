@@ -699,17 +699,17 @@ function hello() {
         .replace(/^## (.*$)/gim, '<h2>$1</h2>')
         .replace(/^# (.*$)/gim, '<h1>$1</h1>')
         // Bold
-        .replace(/\\*\\*(.*?)\\*\\*/g, '<strong>$1</strong>')
+        .replace(new RegExp('\\*\\*(.*?)\\*\\*', 'g'), '<strong>$1</strong>')
         // Italic
-        .replace(/\\*(.*?)\\*/g, '<em>$1</em>')
+        .replace(new RegExp('\\*(.*?)\\*', 'g'), '<em>$1</em>')
         // Lists
-        .replace(/^\\* (.*$)/gim, '<li>$1</li>')
-        .replace(/^\\d+\\. (.*$)/gim, '<li>$1</li>')
+        .replace(new RegExp('^\\* (.*)$', 'gim'), '<li>$1</li>')
+        .replace(new RegExp('^\\d+\\. (.*)$', 'gim'), '<li>$1</li>')
         // Line breaks
-        .replace(/\\n/g, '<br>');
+        .replace(new RegExp('\\n', 'g'), '<br>');
 
       // Wrap lists
-      html = html.replace(/(<li>.*<\/li>(\\s*<li>.*<\/li>)*)/g, '<ul>$1</ul>');
+      html = html.replace(new RegExp('(<li>.*</li>(\\s*<li>.*</li>)*)', 'g'), '<ul>$1</ul>');
 
       previewContent.innerHTML = html;
     }
@@ -1047,17 +1047,17 @@ function editPostForm(context, slug) {
         .replace(/^## (.*$)/gim, '<h2>$1</h2>')
         .replace(/^# (.*$)/gim, '<h1>$1</h1>')
         // Bold
-        .replace(/\\*\\*(.*?)\\*\\*/g, '<strong>$1</strong>')
+        .replace(new RegExp('\\*\\*(.*?)\\*\\*', 'g'), '<strong>$1</strong>')
         // Italic
-        .replace(/\\*(.*?)\\*/g, '<em>$1</em>')
+        .replace(new RegExp('\\*(.*?)\\*', 'g'), '<em>$1</em>')
         // Lists
-        .replace(/^\\* (.*$)/gim, '<li>$1</li>')
-        .replace(/^\\d+\\. (.*$)/gim, '<li>$1</li>')
+        .replace(new RegExp('^\\* (.*)$', 'gim'), '<li>$1</li>')
+        .replace(new RegExp('^\\d+\\. (.*)$', 'gim'), '<li>$1</li>')
         // Line breaks
-        .replace(/\\n/g, '<br>');
+        .replace(new RegExp('\\n', 'g'), '<br>');
 
       // Wrap lists
-      html = html.replace(/(<li>.*<\/li>(\\s*<li>.*<\/li>)*)/g, '<ul>$1</ul>');
+      html = html.replace(new RegExp('(<li>.*</li>(\\s*<li>.*</li>)*)', 'g'), '<ul>$1</ul>');
 
       previewContent.innerHTML = html;
     }
@@ -1198,7 +1198,7 @@ function createPost(context) {
   return {
     status: 201,
     body: html,
-    contentType: "application/json",
+    contentType: "text/html; charset=UTF-8",
   };
 }
 
