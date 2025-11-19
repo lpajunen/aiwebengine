@@ -64,7 +64,7 @@ impl LogEntry {
 pub struct ScriptMetadata {
     pub uri: String,
     pub name: Option<String>,
-    pub code: String,
+    pub content: String,
     pub created_at: SystemTime,
     pub updated_at: SystemTime,
     pub initialized: bool,
@@ -77,14 +77,14 @@ pub struct ScriptMetadata {
 
 impl ScriptMetadata {
     /// Create a new script metadata instance
-    pub fn new(uri: String, code: String) -> Self {
+    pub fn new(uri: String, content: String) -> Self {
         let now = SystemTime::now();
         // Extract name from URI (last segment after /)
         let name = uri.rsplit('/').next().map(String::from);
         Self {
             uri,
             name,
-            code,
+            content,
             created_at: now,
             updated_at: now,
             initialized: false,
@@ -117,14 +117,14 @@ impl ScriptMetadata {
         self.last_init_time = Some(SystemTime::now());
     }
 
-    /// Update script code
-    pub fn update_code(&mut self, new_code: String) {
-        self.code = new_code;
+    /// Update script content
+    pub fn update_content(&mut self, new_content: String) {
+        self.content = new_content;
         self.updated_at = SystemTime::now();
-        // Reset initialization status when code changes
+        // Reset initialization status when content changes
         self.initialized = false;
         self.init_error = None;
-        // Clear cached registrations when code changes
+        // Clear cached registrations when content changes
         self.registrations.clear();
     }
 }
@@ -305,7 +305,7 @@ async fn db_upsert_script(pool: &PgPool, uri: &str, code: &str) -> Result<(), Re
 async fn db_get_script(pool: &PgPool, uri: &str) -> Result<Option<String>, RepositoryError> {
     let row = sqlx::query(
         r#"
-        SELECT code FROM scripts WHERE uri = $1
+        SELECT content FROM scripts WHERE uri = $1
         "#,
     )
     .bind(uri)
@@ -317,11 +317,11 @@ async fn db_get_script(pool: &PgPool, uri: &str) -> Result<Option<String>, Repos
     })?;
 
     if let Some(row) = row {
-        let code: String = row.try_get("code").map_err(|e| {
-            error!("Database error getting code: {}", e);
+        let content: String = row.try_get("content").map_err(|e| {
+            error!("Database error getting content: {}", e);
             RepositoryError::InvalidData(format!("Database error: {}", e))
         })?;
-        Ok(Some(code))
+        Ok(Some(content))
     } else {
         Ok(None)
     }
@@ -331,7 +331,7 @@ async fn db_get_script(pool: &PgPool, uri: &str) -> Result<Option<String>, Repos
 async fn db_list_scripts(pool: &PgPool) -> Result<HashMap<String, String>, RepositoryError> {
     let rows = sqlx::query(
         r#"
-        SELECT uri, code FROM scripts ORDER BY uri
+        SELECT uri, content FROM scripts ORDER BY uri
         "#,
     )
     .fetch_all(pool)
@@ -347,11 +347,11 @@ async fn db_list_scripts(pool: &PgPool) -> Result<HashMap<String, String>, Repos
             error!("Database error getting uri: {}", e);
             RepositoryError::InvalidData(format!("Database error: {}", e))
         })?;
-        let code: String = row.try_get("code").map_err(|e| {
-            error!("Database error getting code: {}", e);
+        let content: String = row.try_get("content").map_err(|e| {
+            error!("Database error getting content: {}", e);
             RepositoryError::InvalidData(format!("Database error: {}", e))
         })?;
-        scripts.insert(uri, code);
+        scripts.insert(uri, content);
     }
 
     Ok(scripts)
@@ -972,7 +972,7 @@ pub fn fetch_scripts() -> HashMap<String, String> {
     match safe_lock_scripts() {
         Ok(guard) => {
             for (k, metadata) in guard.iter() {
-                m.insert(k.to_string(), metadata.code.to_string());
+                m.insert(k.to_string(), metadata.content.to_string());
             }
         }
         Err(e) => {
@@ -1019,7 +1019,7 @@ pub fn fetch_script(uri: &str) -> Option<String> {
 
     // Then check dynamic scripts
     match safe_lock_scripts() {
-        Ok(guard) => guard.get(uri).map(|metadata| metadata.code.clone()),
+        Ok(guard) => guard.get(uri).map(|metadata| metadata.content.clone()),
         Err(e) => {
             error!("Failed to access dynamic scripts for URI {}: {}", uri, e);
             None
@@ -1478,7 +1478,7 @@ fn upsert_script_in_memory(uri: &str, content: &str) -> Result<(), RepositoryErr
     // Check if script already exists
     if let Some(existing) = guard.get_mut(uri) {
         // Update existing script
-        existing.update_code(content.to_string());
+        existing.update_content(content.to_string());
         debug!(
             "Updated script in memory: {} ({} bytes)",
             uri,

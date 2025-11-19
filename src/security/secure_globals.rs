@@ -450,7 +450,7 @@ impl SecureGlobalContext {
                         serde_json::json!({
                             "uri": meta.uri,
                             "name": meta.name,
-                            "size": meta.code.len(),
+                            "size": meta.content.len(),
                             "updatedAt": meta.updated_at
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .unwrap_or_default()

@@ -53,8 +53,10 @@ async fn test_editor_api_endpoints() {
     // Test GET /api/scripts/{name} - get specific script
     if !scripts.is_empty() {
         let first_script = &scripts[0];
-        let script_name = first_script["name"].as_str().unwrap_or("core");
-        println!("Trying to get script: {}", script_name);
+        let script_uri = first_script["uri"]
+            .as_str()
+            .unwrap_or("https://example.com/core");
+        println!("Trying to get script: {}", script_uri);
 
         // Try with just the short name first
         let short_name = "core";
@@ -263,15 +265,15 @@ async fn test_editor_functionality() {
         .clone();
 
     // Verify that test_editor and test_editor_api scripts are loaded
-    let script_names: Vec<String> = scripts
+    let script_uris: Vec<String> = scripts
         .iter()
-        .filter_map(|s| s["name"].as_str())
+        .filter_map(|s| s["uri"].as_str())
         .map(|s| s.to_string())
         .collect();
 
-    println!("Loaded scripts: {:?}", script_names);
-    assert!(script_names.contains(&"https://example.com/test_editor".to_string()));
-    assert!(script_names.contains(&"https://example.com/test_editor_api".to_string()));
+    println!("Loaded scripts: {:?}", script_uris);
+    assert!(script_uris.contains(&"https://example.com/test_editor".to_string()));
+    assert!(script_uris.contains(&"https://example.com/test_editor_api".to_string()));
 
     // Test retrieving the test_editor script content
     let test_editor_response = client

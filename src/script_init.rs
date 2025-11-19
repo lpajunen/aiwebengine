@@ -112,7 +112,7 @@ impl ScriptInitializer {
             tokio::task::spawn_blocking(move || {
                 crate::js_engine::call_init_if_exists(
                     &script_uri_clone,
-                    &metadata_clone.code,
+                    &metadata_clone.content,
                     context,
                 )
             }),
