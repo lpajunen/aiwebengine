@@ -449,6 +449,7 @@ impl SecureGlobalContext {
                     .map(|meta| {
                         serde_json::json!({
                             "uri": meta.uri,
+                            "name": meta.name,
                             "size": meta.code.len(),
                             "updatedAt": meta.updated_at
                                 .duration_since(std::time::UNIX_EPOCH)
@@ -815,7 +816,8 @@ impl SecureGlobalContext {
                     .values()
                     .map(|asset| {
                         serde_json::json!({
-                            "name": asset.asset_name,
+                            "assetName": asset.asset_name,
+                            "name": asset.name,
                             "size": asset.content.len(),
                             "mimetype": asset.mimetype,
                             "createdAt": asset.created_at
@@ -880,7 +882,8 @@ impl SecureGlobalContext {
             move |_ctx: rquickjs::Ctx<'_>,
                   asset_name: String,
                   content_b64: String,
-                  mimetype: String|
+                  mimetype: String,
+                  name: Option<String>|
                   -> JsResult<String> {
                 // Decode base64 content
                 let content = match base64::engine::general_purpose::STANDARD.decode(&content_b64) {
@@ -937,6 +940,7 @@ impl SecureGlobalContext {
                 let now = std::time::SystemTime::now();
                 let asset = repository::Asset {
                     asset_name: asset_name.clone(),
+                    name: name.or_else(|| Some(asset_name.clone())),
                     mimetype,
                     content,
                     created_at: now,

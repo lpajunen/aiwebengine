@@ -141,6 +141,7 @@ fn test_asset_management() {
     let now = std::time::SystemTime::now();
     let test_asset = repository::Asset {
         asset_name: "test.txt".to_string(),
+        name: Some("Test File".to_string()),
         mimetype: "text/plain".to_string(),
         content: test_content.clone(),
         created_at: now,

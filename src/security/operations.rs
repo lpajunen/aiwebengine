@@ -139,6 +139,7 @@ impl SecureOperations {
         let now = std::time::SystemTime::now();
         let asset = crate::repository::Asset {
             asset_name: filename.clone(),
+            name: Some(filename.clone()),
             mimetype: mimetype.to_string(),
             content,
             created_at: now,

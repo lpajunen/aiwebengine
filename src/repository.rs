@@ -63,6 +63,7 @@ impl LogEntry {
 #[derive(Debug, Clone)]
 pub struct ScriptMetadata {
     pub uri: String,
+    pub name: Option<String>,
     pub code: String,
     pub created_at: SystemTime,
     pub updated_at: SystemTime,
@@ -78,8 +79,11 @@ impl ScriptMetadata {
     /// Create a new script metadata instance
     pub fn new(uri: String, code: String) -> Self {
         let now = SystemTime::now();
+        // Extract name from URI (last segment after /)
+        let name = uri.rsplit('/').next().map(String::from);
         Self {
             uri,
+            name,
             code,
             created_at: now,
             updated_at: now,
@@ -138,6 +142,7 @@ pub struct ScriptSecurityProfile {
 #[derive(Debug, Clone)]
 pub struct Asset {
     pub asset_name: String,
+    pub name: Option<String>,
     pub mimetype: String,
     pub content: Vec<u8>,
     pub created_at: std::time::SystemTime,
@@ -247,17 +252,21 @@ fn get_db_pool() -> Option<std::sync::Arc<crate::database::Database>> {
 async fn db_upsert_script(pool: &PgPool, uri: &str, code: &str) -> Result<(), RepositoryError> {
     let now = chrono::Utc::now();
 
+    // Extract name from URI (last segment after /)
+    let name = uri.rsplit('/').next().unwrap_or(uri);
+
     // Try to update existing script
     let update_result = sqlx::query(
         r#"
         UPDATE scripts
-        SET code = $1, updated_at = $2
+        SET code = $1, updated_at = $2, name = COALESCE(name, $4)
         WHERE uri = $3
         "#,
     )
     .bind(code)
     .bind(now)
     .bind(uri)
+    .bind(name)
     .execute(pool)
     .await
     .map_err(|e| {
@@ -273,12 +282,13 @@ async fn db_upsert_script(pool: &PgPool, uri: &str, code: &str) -> Result<(), Re
     // Script doesn't exist, create new one
     sqlx::query(
         r#"
-        INSERT INTO scripts (uri, code, created_at, updated_at)
-        VALUES ($1, $2, $3, $3)
+        INSERT INTO scripts (uri, code, name, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $4)
         "#,
     )
     .bind(uri)
     .bind(code)
+    .bind(name)
     .bind(now)
     .execute(pool)
     .await
@@ -758,13 +768,14 @@ async fn db_upsert_asset(pool: &PgPool, asset: &Asset) -> Result<(), RepositoryE
     // Asset doesn't exist, create new one
     sqlx::query(
         r#"
-        INSERT INTO assets (asset_name, mimetype, content, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $4)
+        INSERT INTO assets (asset_name, mimetype, content, name, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $5)
         "#,
     )
     .bind(&asset.asset_name)
     .bind(&asset.mimetype)
     .bind(&asset.content)
+    .bind(&asset.name)
     .bind(now)
     .execute(pool)
     .await
@@ -781,7 +792,7 @@ async fn db_upsert_asset(pool: &PgPool, asset: &Asset) -> Result<(), RepositoryE
 async fn db_get_asset(pool: &PgPool, asset_name: &str) -> Result<Option<Asset>, RepositoryError> {
     let row = sqlx::query(
         r#"
-        SELECT asset_name, mimetype, content, created_at, updated_at FROM assets WHERE asset_name = $1
+        SELECT asset_name, mimetype, content, name, created_at, updated_at FROM assets WHERE asset_name = $1
         "#,
     )
     .bind(asset_name)
@@ -813,8 +824,10 @@ async fn db_get_asset(pool: &PgPool, asset_name: &str) -> Result<Option<Asset>, 
             error!("Database error getting updated_at: {}", e);
             RepositoryError::InvalidData(format!("Database error: {}", e))
         })?;
+        let name: Option<String> = row.try_get("name").ok();
         Ok(Some(Asset {
             asset_name,
+            name,
             mimetype,
             content,
             created_at: created_at.into(),
@@ -829,7 +842,7 @@ async fn db_get_asset(pool: &PgPool, asset_name: &str) -> Result<Option<Asset>, 
 async fn db_list_assets(pool: &PgPool) -> Result<HashMap<String, Asset>, RepositoryError> {
     let rows = sqlx::query(
         r#"
-        SELECT asset_name, mimetype, content, created_at, updated_at FROM assets ORDER BY asset_name
+        SELECT asset_name, mimetype, content, name, created_at, updated_at FROM assets ORDER BY asset_name
         "#,
     )
     .fetch_all(pool)
@@ -861,10 +874,12 @@ async fn db_list_assets(pool: &PgPool) -> Result<HashMap<String, Asset>, Reposit
             error!("Database error getting updated_at: {}", e);
             RepositoryError::InvalidData(format!("Database error: {}", e))
         })?;
+        let name: Option<String> = row.try_get("name").ok();
         assets.insert(
             asset_name.clone(),
             Asset {
                 asset_name,
+                name,
                 mimetype,
                 content,
                 created_at: created_at.into(),
@@ -1672,6 +1687,7 @@ fn get_static_assets() -> HashMap<String, Asset> {
     let logo_content = include_bytes!("../assets/logo.svg").to_vec();
     let logo = Asset {
         asset_name: "logo.svg".to_string(),
+        name: Some("Logo".to_string()),
         mimetype: "image/svg+xml".to_string(),
         content: logo_content,
         created_at: now,
@@ -1687,6 +1703,7 @@ fn get_static_assets() -> HashMap<String, Asset> {
     let editor_css_content = include_bytes!("../assets/editor.css").to_vec();
     let editor_css = Asset {
         asset_name: "editor.css".to_string(),
+        name: Some("Editor Styles".to_string()),
         mimetype: "text/css".to_string(),
         content: editor_css_content,
         created_at: now,
@@ -1697,6 +1714,7 @@ fn get_static_assets() -> HashMap<String, Asset> {
     let engine_css_content = include_bytes!("../assets/engine.css").to_vec();
     let engine_css = Asset {
         asset_name: "engine.css".to_string(),
+        name: Some("Engine Styles".to_string()),
         mimetype: "text/css".to_string(),
         content: engine_css_content,
         created_at: now,
@@ -1707,6 +1725,7 @@ fn get_static_assets() -> HashMap<String, Asset> {
     let editor_js_content = include_bytes!("../assets/editor.js").to_vec();
     let editor_js = Asset {
         asset_name: "editor.js".to_string(),
+        name: Some("Editor Script".to_string()),
         mimetype: "application/javascript".to_string(),
         content: editor_js_content,
         created_at: now,
@@ -1717,6 +1736,7 @@ fn get_static_assets() -> HashMap<String, Asset> {
     let favicon_content = include_bytes!("../assets/favicon.ico").to_vec();
     let favicon = Asset {
         asset_name: "favicon.ico".to_string(),
+        name: Some("Favicon".to_string()),
         mimetype: "image/x-icon".to_string(),
         content: favicon_content,
         created_at: now,
