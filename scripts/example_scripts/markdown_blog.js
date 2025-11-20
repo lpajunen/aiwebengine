@@ -1,216 +1,9 @@
 // Markdown Blog Example
 // Demonstrates using convert.markdown_to_html() to render blog posts
 
-function init(context) {
-  // Register routes for the blog
-  routeRegistry.registerRoute("/blog", "blogRouter", "GET");
-  routeRegistry.registerRoute("/blog/*", "blogRouter", "GET");
-  routeRegistry.registerRoute("/blog/admin/create", "createPost", "POST");
-  routeRegistry.registerRoute("/blog/admin/update", "updatePost", "POST");
-  routeRegistry.registerRoute("/blog/admin/delete", "deletePost", "POST");
-  routeRegistry.registerRoute("/blog/new", "newPostForm", "GET");
-
-  // Check if there are already blog posts
-  const existingIndexJson = sharedStorage.getItem("blog:index");
-  if (existingIndexJson) {
-    try {
-      const existingSlugs = JSON.parse(existingIndexJson);
-      if (existingSlugs.length > 0) {
-        // There are already posts, skip adding bootstrap posts
-        console.log("Blog already has posts, skipping bootstrap initialization");
-        return;
-      }
-    } catch (error) {
-      console.log("Error parsing existing blog index: " + error);
-    }
-  }
-
-  // No existing posts, add bootstrap example posts
-  const examplePosts = {
-    welcome: `# Welcome to My Blog
-
-This is my **first blog post** using the new markdown conversion feature!
-
-## Features
-
-- Easy to write in markdown
-- Automatically converted to HTML
-- Supports code blocks
-- Tables and more!
-
-### Code Example
-
-\`\`\`javascript
-function hello() {
-  return "Hello from markdown!";
-}
-\`\`\`
-
-[Learn more about markdown](https://www.markdownguide.org/)`,
-
-    "markdown-guide": `# Markdown Guide
-
-Learn how to use markdown in your blog posts.
-
-## Basic Formatting
-
-- **Bold text**: Use \`**bold**\` or \`__bold__\`
-- *Italic text*: Use \`*italic*\` or \`_italic_\`
-- ~~Strikethrough~~: Use \`~~text~~\`
-
-## Lists
-
-### Unordered Lists
-
-- Item 1
-- Item 2
-  - Nested item
-  - Another nested item
-- Item 3
-
-### Ordered Lists
-
-1. First item
-2. Second item
-3. Third item
-
-## Code
-
-Inline code: \`const x = 42;\`
-
-Block code:
-
-\`\`\`javascript
-function fibonacci(n) {
-  if (n <= 1) return n;
-  return fibonacci(n - 1) + fibonacci(n - 2);
-}
-\`\`\`
-
-## Tables
-
-| Feature | Supported | Notes |
-|---------|-----------|-------|
-| Headers | ✓ | H1-H6 |
-| Lists | ✓ | Ordered and unordered |
-| Code | ✓ | Inline and blocks |
-| Tables | ✓ | With alignment |
-
-## Links and Images
-
-[Link text](https://example.com)
-
-![Alt text](https://via.placeholder.com/150)
-
-## Blockquotes
-
-> This is a blockquote
-> It can span multiple lines`,
-  };
-
-  // Store example posts and initialize index
-  const postSlugs = [];
-  for (const slug in examplePosts) {
-    sharedStorage.setItem("blog:" + slug, examplePosts[slug]);
-    postSlugs.push(slug);
-  }
-
-  // Store the index of all post slugs
-  sharedStorage.setItem("blog:index", JSON.stringify(postSlugs));
-
-  console.log("Blog initialized with example posts");
-}
-
-function blogRouter(context) {
-  const req = context.request;
-
-  // Check if this is the blog list page or a specific post
-  // Path will be exactly "/blog" for list, or "/blog/something" for a post
-  const pathParts = req.path.split("/").filter((p) => p !== "");
-
-  // If path is just "/blog", show the list
-  if (pathParts.length === 1 && pathParts[0] === "blog") {
-    return listPosts(context);
-  }
-
-  // If path is "/blog/new", show the create post form
-  if (
-    pathParts.length === 2 &&
-    pathParts[0] === "blog" &&
-    pathParts[1] === "new"
-  ) {
-    return newPostForm(context);
-  }
-
-  // If path is "/blog/slug/edit", show the edit post form
-  if (
-    pathParts.length === 3 &&
-    pathParts[0] === "blog" &&
-    pathParts[2] === "edit"
-  ) {
-    return editPostForm(context, pathParts[1]);
-  }
-
-  // If path is "/blog/slug", show the specific post
-  if (pathParts.length === 2 && pathParts[0] === "blog") {
-    return showPost(context, pathParts[1]);
-  }
-
-  // Unknown path
-  return {
-    status: 404,
-    body: "Not found",
-    contentType: "text/plain; charset=UTF-8",
-  };
-}
-
-function listPosts(context) {
-  const req = context.request;
-
-  // Get all blog posts from storage using the index
-  const posts = [];
-
-  try {
-    // Get the index of all post slugs
-    const indexJson = sharedStorage.getItem("blog:index");
-    let postSlugs = [];
-
-    if (indexJson) {
-      postSlugs = JSON.parse(indexJson);
-    }
-
-    // Get all posts from the index
-    postSlugs.forEach((slug) => {
-      const content = sharedStorage.getItem("blog:" + slug);
-      if (content) {
-        // Extract title from first header
-        const titleMatch = content.match(/^# (.+)$/m);
-        const title = titleMatch ? titleMatch[1] : slug;
-        posts.push({ slug: slug, title: title });
-      }
-    });
-  } catch (error) {
-    console.log("Error loading posts: " + error);
-  }
-
-  // Generate HTML for posts list
-  let postsHtml = "";
-  if (posts.length === 0) {
-    postsHtml =
-      '<p>No blog posts yet. <a href="/blog/new">Create your first post</a></p>';
-  } else {
-    postsHtml = posts
-      .map(
-        (post) =>
-          `<li class="post-item">
-        <a href="/blog/${post.slug}" class="post-link">${post.title}</a>
-        <a href="/blog/${post.slug}/edit" class="edit-btn" title="Edit post">✏️</a>
-      </li>`,
-      )
-      .join("");
-  }
-
-  const html = `<!DOCTYPE html>
+// Template definitions
+const templates = {
+  list: `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -269,60 +62,24 @@ function listPosts(context) {
       <a href="/blog/new" class="create-post-btn">+ New Post</a>
     </div>
     <ul class="post-list">
-      ${postsHtml}
+      {{#each posts}}
+      <li class="post-item">
+        <a href="/blog/{{slug}}" class="post-link">{{title}}</a>
+        <a href="/blog/{{slug}}/edit" class="edit-btn" title="Edit post">✏️</a>
+      </li>
+      {{else}}
+      <li><p>No blog posts yet. <a href="/blog/new">Create your first post</a></p></li>
+      {{/each}}
     </ul>
   </div>
 </body>
-</html>`;
-
-  return {
-    status: 200,
-    body: html,
-    contentType: "text/html; charset=UTF-8",
-  };
-}
-
-function showPost(context, slug) {
-  const req = context.request;
-
-  // Load markdown from storage
-  const markdown = sharedStorage.getItem(`blog:${slug}`);
-
-  if (!markdown) {
-    return {
-      status: 404,
-      body: `<!DOCTYPE html>
-<html>
-<head><title>Not Found</title></head>
-<body>
-  <h1>Blog post not found</h1>
-  <p>The post "${slug}" does not exist.</p>
-  <a href="/blog">← Back to blog</a>
-</body>
 </html>`,
-      contentType: "text/html; charset=UTF-8",
-    };
-  }
-
-  // Convert markdown to HTML
-  const content = convert.markdown_to_html(markdown);
-
-  if (content.startsWith("Error:")) {
-    console.error(`Failed to convert blog post ${slug}: ${content}`);
-    return {
-      status: 500,
-      body: `Error rendering blog post: ${content}`,
-      contentType: "text/plain; charset=UTF-8",
-    };
-  }
-
-  // Wrap in blog template
-  const html = `<!DOCTYPE html>
+  post: `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Blog - ${slug}</title>
+  <title>Blog - {{title}}</title>
   <link rel="stylesheet" href="/engine.css">
   <style>
     .blog-container {
@@ -414,26 +171,15 @@ function showPost(context, slug) {
       <div class="nav-left">
         <a href="/blog">← Back to all posts</a>
       </div>
-      <a href="/blog/${slug}/edit" class="edit-btn">Edit Post</a>
+      <a href="/blog/{{slug}}/edit" class="edit-btn">Edit Post</a>
     </div>
     <div class="blog-content">
-      ${content}
+      {{{content}}}
     </div>
   </div>
 </body>
-</html>`;
-
-  return {
-    status: 200,
-    body: html,
-    contentType: "text/html; charset=UTF-8",
-  };
-}
-
-function newPostForm(context) {
-  const req = context.request;
-
-  const html = `<!DOCTYPE html>
+</html>`,
+  newForm: `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -755,38 +501,8 @@ function hello() {
     });
   </script>
 </body>
-</html>`;
-
-  return {
-    status: 200,
-    body: html,
-    contentType: "text/html; charset=UTF-8",
-  };
-}
-
-function editPostForm(context, slug) {
-  const req = context.request;
-
-  // Load existing post content
-  const existingContent = sharedStorage.getItem("blog:" + slug);
-
-  if (!existingContent) {
-    return {
-      status: 404,
-      body: `<!DOCTYPE html>
-<html>
-<head><title>Not Found</title></head>
-<body>
-  <h1>Blog post not found</h1>
-  <p>The post "${slug}" does not exist.</p>
-  <a href="/blog">← Back to blog</a>
-</body>
 </html>`,
-      contentType: "text/html; charset=UTF-8",
-    };
-  }
-
-  const html = `<!DOCTYPE html>
+  editForm: `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -937,19 +653,19 @@ function editPostForm(context, slug) {
     <div class="form-header">
       <h1>Edit Blog Post</h1>
       <div>
-        <a href="/blog/${slug}" class="back-link">View Post</a>
+        <a href="/blog/{{slug}}" class="back-link">View Post</a>
         <span style="margin: 0 0.5rem;">|</span>
         <a href="/blog" class="back-link">Back to Blog</a>
       </div>
     </div>
 
     <form id="blog-form" action="/blog/admin/update" method="POST">
-      <input type="hidden" name="originalSlug" value="${slug}">
+      <input type="hidden" name="originalSlug" value="{{slug}}">
       
       <div class="form-group">
         <label for="slug">Post Slug (URL identifier)</label>
         <input type="text" id="slug" name="slug" required
-               value="${slug}"
+               value="{{slug}}"
                pattern="[a-z0-9-]+"
                title="Only lowercase letters, numbers, and hyphens allowed">
         <div class="help-text">This will be part of the URL: /blog/your-slug-here</div>
@@ -957,7 +673,7 @@ function editPostForm(context, slug) {
 
       <div class="form-group">
         <label for="content">Content (Markdown)</label>
-        <textarea id="content" name="content" required>${existingContent.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;")}</textarea>
+        <textarea id="content" name="content" required>{{{content}}}</textarea>
       </div>
 
       <div class="markdown-help">
@@ -1009,7 +725,7 @@ function editPostForm(context, slug) {
 
       <div class="form-actions">
         <button type="submit" class="btn btn-primary">Update Post</button>
-        <a href="/blog/${slug}" class="btn btn-secondary">Cancel</a>
+        <a href="/blog/{{slug}}" class="btn btn-secondary">Cancel</a>
         <button type="button" id="delete-btn" class="btn btn-danger">Delete Post</button>
       </div>
     </form>
@@ -1112,7 +828,7 @@ function editPostForm(context, slug) {
         const slugInput = document.createElement('input');
         slugInput.type = 'hidden';
         slugInput.name = 'slug';
-        slugInput.value = '${slug}';
+        slugInput.value = '{{slug}}';
         form.appendChild(slugInput);
         
         document.body.appendChild(form);
@@ -1121,7 +837,441 @@ function editPostForm(context, slug) {
     });
   </script>
 </body>
-</html>`;
+</html>`,
+  notFound: `<!DOCTYPE html>
+<html>
+<head><title>Not Found</title></head>
+<body>
+  <h1>{{message}}</h1>
+  <p>{{details}}</p>
+  <a href="/blog">← Back to blog</a>
+</body>
+</html>`,
+  success: `<!DOCTYPE html>
+<html>
+<head>
+  <meta http-equiv="refresh" content="2;url={{redirectUrl}}">
+  <title>{{title}}</title>
+  <style>
+    body { font-family: Arial, sans-serif; text-align: center; padding: 2rem; }
+    .success { color: #28a745; font-size: 1.2rem; }
+  </style>
+</head>
+<body>
+  <h1 class="success">✓ {{message}}</h1>
+  <p>Redirecting...</p>
+  <p><a href="{{redirectUrl}}">Click here if not redirected</a></p>
+</body>
+</html>`,
+  error: `<!DOCTYPE html>
+<html>
+<head>
+  <title>{{title}}</title>
+  <style>
+    body { font-family: Arial, sans-serif; text-align: center; padding: 2rem; }
+    .error { color: #dc3545; font-size: 1.2rem; }
+  </style>
+</head>
+<body>
+  <h1 class="error">✗ {{message}}</h1>
+  <p>{{details}}</p>
+  <a href="/blog">← Back to blog</a>
+</body>
+</html>`
+};
+
+function init(context) {
+  // Register routes for the blog
+  routeRegistry.registerRoute("/blog", "blogRouter", "GET");
+  routeRegistry.registerRoute("/blog/*", "blogRouter", "GET");
+  routeRegistry.registerRoute("/blog/admin/create", "createPost", "POST");
+  routeRegistry.registerRoute("/blog/admin/update", "updatePost", "POST");
+  routeRegistry.registerRoute("/blog/admin/delete", "deletePost", "POST");
+  routeRegistry.registerRoute("/blog/new", "newPostForm", "GET");
+
+  // Store templates in sharedStorage
+  for (const [key, template] of Object.entries(templates)) {
+    sharedStorage.setItem("blog:template:" + key, template);
+  }
+
+  // Check if there are already blog posts
+  const existingIndexJson = sharedStorage.getItem("blog:index");
+  if (existingIndexJson) {
+    try {
+      const existingSlugs = JSON.parse(existingIndexJson);
+      if (existingSlugs.length > 0) {
+        // There are already posts, skip adding bootstrap posts
+        console.log("Blog already has posts, skipping bootstrap initialization");
+        return;
+      }
+    } catch (error) {
+      console.log("Error parsing existing blog index: " + error);
+    }
+  }
+
+  // No existing posts, add bootstrap example posts
+  const examplePosts = {
+    welcome: `# Welcome to My Blog
+
+This is my **first blog post** using the new markdown conversion feature!
+
+## Features
+
+- Easy to write in markdown
+- Automatically converted to HTML
+- Supports code blocks
+- Tables and more!
+
+### Code Example
+
+\`\`\`javascript
+function hello() {
+  return "Hello from markdown!";
+}
+\`\`\`
+
+[Learn more about markdown](https://www.markdownguide.org/)`,
+
+    "markdown-guide": `# Markdown Guide
+
+Learn how to use markdown in your blog posts.
+
+## Basic Formatting
+
+- **Bold text**: Use \`**bold**\` or \`__bold__\`
+- *Italic text*: Use \`*italic*\` or \`_italic_\`
+- ~~Strikethrough~~: Use \`~~text~~\`
+
+## Lists
+
+### Unordered Lists
+
+- Item 1
+- Item 2
+  - Nested item
+  - Another nested item
+- Item 3
+
+### Ordered Lists
+
+1. First item
+2. Second item
+3. Third item
+
+## Code
+
+Inline code: \`const x = 42;\`
+
+Block code:
+
+\`\`\`javascript
+function fibonacci(n) {
+  if (n <= 1) return n;
+  return fibonacci(n - 1) + fibonacci(n - 2);
+}
+\`\`\`
+
+## Tables
+
+| Feature | Supported | Notes |
+|---------|-----------|-------|
+| Headers | ✓ | H1-H6 |
+| Lists | ✓ | Ordered and unordered |
+| Code | ✓ | Inline and blocks |
+| Tables | ✓ | With alignment |
+
+## Links and Images
+
+[Link text](https://example.com)
+
+![Alt text](https://via.placeholder.com/150)
+
+## Blockquotes
+
+> This is a blockquote
+> It can span multiple lines`,
+  };
+
+  // Store example posts and initialize index
+  const postSlugs = [];
+  for (const slug in examplePosts) {
+    sharedStorage.setItem("blog:" + slug, examplePosts[slug]);
+    postSlugs.push(slug);
+  }
+
+  // Store the index of all post slugs
+  sharedStorage.setItem("blog:index", JSON.stringify(postSlugs));
+
+  console.log("Blog initialized with example posts");
+}
+
+function blogRouter(context) {
+  const req = context.request;
+
+  // Check if this is the blog list page or a specific post
+  // Path will be exactly "/blog" for list, or "/blog/something" for a post
+  const pathParts = req.path.split("/").filter((p) => p !== "");
+
+  // If path is just "/blog", show the list
+  if (pathParts.length === 1 && pathParts[0] === "blog") {
+    return listPosts(context);
+  }
+
+  // If path is "/blog/new", show the create post form
+  if (
+    pathParts.length === 2 &&
+    pathParts[0] === "blog" &&
+    pathParts[1] === "new"
+  ) {
+    return newPostForm(context);
+  }
+
+  // If path is "/blog/slug/edit", show the edit post form
+  if (
+    pathParts.length === 3 &&
+    pathParts[0] === "blog" &&
+    pathParts[2] === "edit"
+  ) {
+    return editPostForm(context, pathParts[1]);
+  }
+
+  // If path is "/blog/slug", show the specific post
+  if (pathParts.length === 2 && pathParts[0] === "blog") {
+    return showPost(context, pathParts[1]);
+  }
+
+  // Unknown path
+  return {
+    status: 404,
+    body: "Not found",
+    contentType: "text/plain; charset=UTF-8",
+  };
+}
+
+function listPosts(context) {
+  const req = context.request;
+
+  // Get all blog posts from storage using the index
+  const posts = [];
+
+  try {
+    // Get the index of all post slugs
+    const indexJson = sharedStorage.getItem("blog:index");
+    let postSlugs = [];
+
+    if (indexJson) {
+      postSlugs = JSON.parse(indexJson);
+    }
+
+    // Get all posts from the index
+    postSlugs.forEach((slug) => {
+      const content = sharedStorage.getItem("blog:" + slug);
+      if (content) {
+        // Extract title from first header
+        const titleMatch = content.match(/^# (.+)$/m);
+        const title = titleMatch ? titleMatch[1] : slug;
+        posts.push({ slug: slug, title: title });
+      }
+    });
+  } catch (error) {
+    console.log("Error loading posts: " + error);
+  }
+
+  // Load template and render
+  const template = sharedStorage.getItem("blog:template:list");
+  if (!template) {
+    return {
+      status: 500,
+      body: "Template not found",
+      contentType: "text/plain; charset=UTF-8",
+    };
+  }
+
+  const data = { posts: posts };
+  const html = convert.render_handlebars_template(template, JSON.stringify(data));
+
+  if (html.startsWith("Error:")) {
+    console.error(`Template rendering failed: ${html}`);
+    return {
+      status: 500,
+      body: "Template error",
+      contentType: "text/plain; charset=UTF-8",
+    };
+  }
+
+  return {
+    status: 200,
+    body: html,
+    contentType: "text/html; charset=UTF-8",
+  };
+}
+
+function showPost(context, slug) {
+  const req = context.request;
+
+  // Load markdown from storage
+  const markdown = sharedStorage.getItem(`blog:${slug}`);
+
+  if (!markdown) {
+    const template = sharedStorage.getItem("blog:template:notFound");
+    if (!template) {
+      return {
+        status: 500,
+        body: "Template not found",
+        contentType: "text/plain; charset=UTF-8",
+      };
+    }
+    const data = {
+      message: "Blog post not found",
+      details: `The post "${slug}" does not exist.`
+    };
+    const html = convert.render_handlebars_template(template, JSON.stringify(data));
+    return {
+      status: 404,
+      body: html.startsWith("Error:") ? "Template error" : html,
+      contentType: "text/html; charset=UTF-8",
+    };
+  }
+
+  // Extract title from first header
+  const titleMatch = markdown.match(/^# (.+)$/m);
+  const title = titleMatch ? titleMatch[1] : slug;
+
+  // Convert markdown to HTML
+  const content = convert.markdown_to_html(markdown);
+
+  if (content.startsWith("Error:")) {
+    console.error(`Failed to convert blog post ${slug}: ${content}`);
+    const template = sharedStorage.getItem("blog:template:error");
+    if (!template) {
+      return {
+        status: 500,
+        body: "Template not found",
+        contentType: "text/plain; charset=UTF-8",
+      };
+    }
+    const data = {
+      title: "Render Error",
+      message: "Error rendering blog post",
+      details: content
+    };
+    const html = convert.render_handlebars_template(template, JSON.stringify(data));
+    return {
+      status: 500,
+      body: html.startsWith("Error:") ? "Template error" : html,
+      contentType: "text/html; charset=UTF-8",
+    };
+  }
+
+  // Load template and render
+  const template = sharedStorage.getItem("blog:template:post");
+  if (!template) {
+    return {
+      status: 500,
+      body: "Template not found",
+      contentType: "text/plain; charset=UTF-8",
+    };
+  }
+
+  const data = { slug, title, content };
+  const html = convert.render_handlebars_template(template, JSON.stringify(data));
+
+  if (html.startsWith("Error:")) {
+    console.error(`Template rendering failed: ${html}`);
+    return {
+      status: 500,
+      body: "Template error",
+      contentType: "text/plain; charset=UTF-8",
+    };
+  }
+
+  return {
+    status: 200,
+    body: html,
+    contentType: "text/html; charset=UTF-8",
+  };
+}
+
+function newPostForm(context) {
+  const req = context.request;
+
+  // Load template and render
+  const template = sharedStorage.getItem("blog:template:newForm");
+  if (!template) {
+    return {
+      status: 500,
+      body: "Template not found",
+      contentType: "text/plain; charset=UTF-8",
+    };
+  }
+
+  const data = {};
+  const html = convert.render_handlebars_template(template, JSON.stringify(data));
+
+  if (html.startsWith("Error:")) {
+    console.error(`Template rendering failed: ${html}`);
+    return {
+      status: 500,
+      body: "Template error",
+      contentType: "text/plain; charset=UTF-8",
+    };
+  }
+
+  return {
+    status: 200,
+    body: html,
+    contentType: "text/html; charset=UTF-8",
+  };
+}
+
+function editPostForm(context, slug) {
+  const req = context.request;
+
+  // Load existing post content
+  const existingContent = sharedStorage.getItem("blog:" + slug);
+
+  if (!existingContent) {
+    const template = sharedStorage.getItem("blog:template:notFound");
+    if (!template) {
+      return {
+        status: 500,
+        body: "Template not found",
+        contentType: "text/plain; charset=UTF-8",
+      };
+    }
+    const data = {
+      message: "Blog post not found",
+      details: `The post "${slug}" does not exist.`
+    };
+    const html = convert.render_handlebars_template(template, JSON.stringify(data));
+    return {
+      status: 404,
+      body: html.startsWith("Error:") ? "Template error" : html,
+      contentType: "text/html; charset=UTF-8",
+    };
+  }
+
+  // Load template and render
+  const template = sharedStorage.getItem("blog:template:editForm");
+  if (!template) {
+    return {
+      status: 500,
+      body: "Template not found",
+      contentType: "text/plain; charset=UTF-8",
+    };
+  }
+
+  const data = { slug, content: existingContent };
+  const html = convert.render_handlebars_template(template, JSON.stringify(data));
+
+  if (html.startsWith("Error:")) {
+    console.error(`Template rendering failed: ${html}`);
+    return {
+      status: 500,
+      body: "Template error",
+      contentType: "text/plain; charset=UTF-8",
+    };
+  }
 
   return {
     status: 200,
@@ -1137,38 +1287,94 @@ function createPost(context) {
   const markdown = req.form.content || "";
 
   if (!slug || !markdown) {
+    const template = sharedStorage.getItem("blog:template:error");
+    if (!template) {
+      return {
+        status: 500,
+        body: "Template not found",
+        contentType: "text/plain; charset=UTF-8",
+      };
+    }
+    const data = {
+      title: "Validation Error",
+      message: "Missing required fields",
+      details: "Both slug and content are required."
+    };
+    const html = convert.render_handlebars_template(template, JSON.stringify(data));
     return {
       status: 400,
-      body: "Missing slug or content",
-      contentType: "text/plain; charset=UTF-8",
+      body: html.startsWith("Error:") ? "Template error" : html,
+      contentType: "text/html; charset=UTF-8",
     };
   }
 
   // Validate slug format
   if (!/^[a-z0-9-]+$/.test(slug)) {
+    const template = sharedStorage.getItem("blog:template:error");
+    if (!template) {
+      return {
+        status: 500,
+        body: "Template not found",
+        contentType: "text/plain; charset=UTF-8",
+      };
+    }
+    const data = {
+      title: "Validation Error",
+      message: "Invalid slug format",
+      details: "Only lowercase letters, numbers, and hyphens allowed."
+    };
+    const html = convert.render_handlebars_template(template, JSON.stringify(data));
     return {
       status: 400,
-      body: "Invalid slug format. Only lowercase letters, numbers, and hyphens allowed.",
-      contentType: "text/plain; charset=UTF-8",
+      body: html.startsWith("Error:") ? "Template error" : html,
+      contentType: "text/html; charset=UTF-8",
     };
   }
 
   // Validate markdown size (10KB limit for this example)
   if (markdown.length > 10000) {
+    const template = sharedStorage.getItem("blog:template:error");
+    if (!template) {
+      return {
+        status: 500,
+        body: "Template not found",
+        contentType: "text/plain; charset=UTF-8",
+      };
+    }
+    const data = {
+      title: "Validation Error",
+      message: "Blog post too long",
+      details: "Maximum size is 10KB."
+    };
+    const html = convert.render_handlebars_template(template, JSON.stringify(data));
     return {
       status: 400,
-      body: "Blog post too long (max 10KB)",
-      contentType: "text/plain; charset=UTF-8",
+      body: html.startsWith("Error:") ? "Template error" : html,
+      contentType: "text/html; charset=UTF-8",
     };
   }
 
   // Test conversion before storing
   const testHtml = convert.markdown_to_html(markdown);
   if (testHtml.startsWith("Error:")) {
+    const template = sharedStorage.getItem("blog:template:error");
+    if (!template) {
+      return {
+        status: 500,
+        body: "Template not found",
+        contentType: "text/plain; charset=UTF-8",
+      };
+    }
+    const data = {
+      title: "Validation Error",
+      message: "Invalid markdown",
+      details: testHtml
+    };
+    const html = convert.render_handlebars_template(template, JSON.stringify(data));
     return {
       status: 400,
-      body: "Invalid markdown: " + testHtml,
-      contentType: "text/plain; charset=UTF-8",
+      body: html.startsWith("Error:") ? "Template error" : html,
+      contentType: "text/html; charset=UTF-8",
     };
   }
 
@@ -1192,27 +1398,24 @@ function createPost(context) {
 
   console.log("Blog post created: " + slug);
 
-  // Redirect back to the blog list with success message
-  const html = `<!DOCTYPE html>
-<html>
-<head>
-  <meta http-equiv="refresh" content="2;url=/blog">
-  <title>Post Created</title>
-  <style>
-    body { font-family: Arial, sans-serif; text-align: center; padding: 2rem; }
-    .success { color: #28a745; font-size: 1.2rem; }
-  </style>
-</head>
-<body>
-  <h1 class="success">✓ Blog post created successfully!</h1>
-  <p>Redirecting to blog list...</p>
-  <p><a href="/blog">Click here if not redirected</a></p>
-</body>
-</html>`;
-
+  // Success response
+  const template = sharedStorage.getItem("blog:template:success");
+  if (!template) {
+    return {
+      status: 500,
+      body: "Template not found",
+      contentType: "text/plain; charset=UTF-8",
+    };
+  }
+  const data = {
+    title: "Post Created",
+    message: "Blog post created successfully!",
+    redirectUrl: "/blog"
+  };
+  const html = convert.render_handlebars_template(template, JSON.stringify(data));
   return {
     status: 201,
-    body: html,
+    body: html.startsWith("Error:") ? "Template error" : html,
     contentType: "text/html; charset=UTF-8",
   };
 }
@@ -1225,48 +1428,117 @@ function updatePost(context) {
   const markdown = req.form.content || "";
 
   if (!originalSlug || !newSlug || !markdown) {
+    const template = sharedStorage.getItem("blog:template:error");
+    if (!template) {
+      return {
+        status: 500,
+        body: "Template not found",
+        contentType: "text/plain; charset=UTF-8",
+      };
+    }
+    const data = {
+      title: "Validation Error",
+      message: "Missing required fields",
+      details: "Original slug, new slug, and content are required."
+    };
+    const html = convert.render_handlebars_template(template, JSON.stringify(data));
     return {
       status: 400,
-      body: "Missing originalSlug, slug, or content",
-      contentType: "text/plain; charset=UTF-8",
+      body: html.startsWith("Error:") ? "Template error" : html,
+      contentType: "text/html; charset=UTF-8",
     };
   }
 
   // Validate slug format
   if (!/^[a-z0-9-]+$/.test(newSlug)) {
+    const template = sharedStorage.getItem("blog:template:error");
+    if (!template) {
+      return {
+        status: 500,
+        body: "Template not found",
+        contentType: "text/plain; charset=UTF-8",
+      };
+    }
+    const data = {
+      title: "Validation Error",
+      message: "Invalid slug format",
+      details: "Only lowercase letters, numbers, and hyphens allowed."
+    };
+    const html = convert.render_handlebars_template(template, JSON.stringify(data));
     return {
       status: 400,
-      body: "Invalid slug format. Only lowercase letters, numbers, and hyphens allowed.",
-      contentType: "text/plain; charset=UTF-8",
+      body: html.startsWith("Error:") ? "Template error" : html,
+      contentType: "text/html; charset=UTF-8",
     };
   }
 
   // Check if original post exists
   const existingContent = sharedStorage.getItem("blog:" + originalSlug);
   if (!existingContent) {
+    const template = sharedStorage.getItem("blog:template:notFound");
+    if (!template) {
+      return {
+        status: 500,
+        body: "Template not found",
+        contentType: "text/plain; charset=UTF-8",
+      };
+    }
+    const data = {
+      message: "Original post not found",
+      details: `The post "${originalSlug}" does not exist.`
+    };
+    const html = convert.render_handlebars_template(template, JSON.stringify(data));
     return {
       status: 404,
-      body: "Original post not found",
-      contentType: "text/plain; charset=UTF-8",
+      body: html.startsWith("Error:") ? "Template error" : html,
+      contentType: "text/html; charset=UTF-8",
     };
   }
 
   // Validate markdown size (10KB limit for this example)
   if (markdown.length > 10000) {
+    const template = sharedStorage.getItem("blog:template:error");
+    if (!template) {
+      return {
+        status: 500,
+        body: "Template not found",
+        contentType: "text/plain; charset=UTF-8",
+      };
+    }
+    const data = {
+      title: "Validation Error",
+      message: "Blog post too long",
+      details: "Maximum size is 10KB."
+    };
+    const html = convert.render_handlebars_template(template, JSON.stringify(data));
     return {
       status: 400,
-      body: "Blog post too long (max 10KB)",
-      contentType: "text/plain; charset=UTF-8",
+      body: html.startsWith("Error:") ? "Template error" : html,
+      contentType: "text/html; charset=UTF-8",
     };
   }
 
   // Test conversion before storing
   const testHtml = convert.markdown_to_html(markdown);
   if (testHtml.startsWith("Error:")) {
+    const template = sharedStorage.getItem("blog:template:error");
+    if (!template) {
+      return {
+        status: 500,
+        body: "Template not found",
+        contentType: "text/plain; charset=UTF-8",
+      };
+    }
+    const data = {
+      title: "Validation Error",
+      message: "Invalid markdown",
+      details: testHtml
+    };
+    const html = convert.render_handlebars_template(template, JSON.stringify(data));
     return {
       status: 400,
-      body: "Invalid markdown: " + testHtml,
-      contentType: "text/plain; charset=UTF-8",
+      body: html.startsWith("Error:") ? "Template error" : html,
+      contentType: "text/html; charset=UTF-8",
     };
   }
 
@@ -1301,35 +1573,46 @@ function updatePost(context) {
 
     console.log("Blog post updated: " + originalSlug + " -> " + newSlug);
 
-    // Redirect back to the updated post
-    const html = `<!DOCTYPE html>
-<html>
-<head>
-  <meta http-equiv="refresh" content="2;url=/blog/${newSlug}">
-  <title>Post Updated</title>
-  <style>
-    body { font-family: Arial, sans-serif; text-align: center; padding: 2rem; }
-    .success { color: #28a745; font-size: 1.2rem; }
-  </style>
-</head>
-<body>
-  <h1 class="success">✓ Blog post updated successfully!</h1>
-  <p>Redirecting to updated post...</p>
-  <p><a href="/blog/${newSlug}">Click here if not redirected</a></p>
-</body>
-</html>`;
-
+    // Success response
+    const template = sharedStorage.getItem("blog:template:success");
+    if (!template) {
+      return {
+        status: 500,
+        body: "Template not found",
+        contentType: "text/plain; charset=UTF-8",
+      };
+    }
+    const data = {
+      title: "Post Updated",
+      message: "Blog post updated successfully!",
+      redirectUrl: "/blog/" + newSlug
+    };
+    const html = convert.render_handlebars_template(template, JSON.stringify(data));
     return {
       status: 200,
-      body: html,
+      body: html.startsWith("Error:") ? "Template error" : html,
       contentType: "text/html; charset=UTF-8",
     };
   } catch (error) {
     console.log("Error updating post: " + error);
+    const template = sharedStorage.getItem("blog:template:error");
+    if (!template) {
+      return {
+        status: 500,
+        body: "Template not found",
+        contentType: "text/plain; charset=UTF-8",
+      };
+    }
+    const data = {
+      title: "Update Error",
+      message: "Error updating post",
+      details: error
+    };
+    const html = convert.render_handlebars_template(template, JSON.stringify(data));
     return {
       status: 500,
-      body: "Error updating post: " + error,
-      contentType: "text/plain; charset=UTF-8",
+      body: html.startsWith("Error:") ? "Template error" : html,
+      contentType: "text/html; charset=UTF-8",
     };
   }
 }
@@ -1340,20 +1623,47 @@ function deletePost(context) {
   const slug = req.form.slug || "";
 
   if (!slug) {
+    const template = sharedStorage.getItem("blog:template:error");
+    if (!template) {
+      return {
+        status: 500,
+        body: "Template not found",
+        contentType: "text/plain; charset=UTF-8",
+      };
+    }
+    const data = {
+      title: "Validation Error",
+      message: "Missing slug",
+      details: "Slug is required for deletion."
+    };
+    const html = convert.render_handlebars_template(template, JSON.stringify(data));
     return {
       status: 400,
-      body: "Missing slug",
-      contentType: "text/plain; charset=UTF-8",
+      body: html.startsWith("Error:") ? "Template error" : html,
+      contentType: "text/html; charset=UTF-8",
     };
   }
 
   // Check if post exists
   const existingContent = sharedStorage.getItem("blog:" + slug);
   if (!existingContent) {
+    const template = sharedStorage.getItem("blog:template:notFound");
+    if (!template) {
+      return {
+        status: 500,
+        body: "Template not found",
+        contentType: "text/plain; charset=UTF-8",
+      };
+    }
+    const data = {
+      message: "Post not found",
+      details: `The post "${slug}" does not exist.`
+    };
+    const html = convert.render_handlebars_template(template, JSON.stringify(data));
     return {
       status: 404,
-      body: "Post not found",
-      contentType: "text/plain; charset=UTF-8",
+      body: html.startsWith("Error:") ? "Template error" : html,
+      contentType: "text/html; charset=UTF-8",
     };
   }
 
@@ -1379,35 +1689,46 @@ function deletePost(context) {
 
     console.log("Blog post deleted: " + slug);
 
-    // Redirect back to the blog list
-    const html = `<!DOCTYPE html>
-<html>
-<head>
-  <meta http-equiv="refresh" content="2;url=/blog">
-  <title>Post Deleted</title>
-  <style>
-    body { font-family: Arial, sans-serif; text-align: center; padding: 2rem; }
-    .success { color: #dc3545; font-size: 1.2rem; }
-  </style>
-</head>
-<body>
-  <h1 class="success">✓ Blog post deleted successfully!</h1>
-  <p>Redirecting to blog list...</p>
-  <p><a href="/blog">Click here if not redirected</a></p>
-</body>
-</html>`;
-
+    // Success response
+    const template = sharedStorage.getItem("blog:template:success");
+    if (!template) {
+      return {
+        status: 500,
+        body: "Template not found",
+        contentType: "text/plain; charset=UTF-8",
+      };
+    }
+    const data = {
+      title: "Post Deleted",
+      message: "Blog post deleted successfully!",
+      redirectUrl: "/blog"
+    };
+    const html = convert.render_handlebars_template(template, JSON.stringify(data));
     return {
       status: 200,
-      body: html,
+      body: html.startsWith("Error:") ? "Template error" : html,
       contentType: "text/html; charset=UTF-8",
     };
   } catch (error) {
     console.log("Error deleting post: " + error);
+    const template = sharedStorage.getItem("blog:template:error");
+    if (!template) {
+      return {
+        status: 500,
+        body: "Template not found",
+        contentType: "text/plain; charset=UTF-8",
+      };
+    }
+    const data = {
+      title: "Delete Error",
+      message: "Error deleting post",
+      details: error
+    };
+    const html = convert.render_handlebars_template(template, JSON.stringify(data));
     return {
       status: 500,
-      body: "Error deleting post: " + error,
-      contentType: "text/plain; charset=UTF-8",
+      body: html.startsWith("Error:") ? "Template error" : html,
+      contentType: "text/html; charset=UTF-8",
     };
   }
 }
