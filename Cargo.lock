@@ -75,6 +75,7 @@ dependencies = [
  "config",
  "figment",
  "futures",
+ "futures-util",
  "handlebars 6.3.2",
  "html-escape",
  "indexmap 2.12.0",

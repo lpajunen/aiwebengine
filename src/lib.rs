@@ -15,6 +15,7 @@ pub mod conversion;
 pub mod database;
 pub mod error;
 pub mod graphql;
+pub mod graphql_ws;
 pub mod http_client;
 pub mod js_engine;
 pub mod middleware;
@@ -752,7 +753,7 @@ pub async fn start_server_with_config(
 
         let graphiql_html = async_graphql::http::GraphiQLSource::build()
             .endpoint("/graphql")
-            .subscription_endpoint("/graphql/sse")
+            .subscription_endpoint("/graphql/ws")
             .title("aiwebengine GraphQL Editor")
             .finish();
 
@@ -933,6 +934,17 @@ document.addEventListener('DOMContentLoaded', function() {
 
         let response = schema.execute(request.data(js_auth_context)).await;
         axum::response::Json(serde_json::to_value(response).unwrap_or(serde_json::Value::Null))
+    }
+
+    // GraphQL WebSocket handler - handles subscriptions over WebSocket using graphql-transport-ws protocol
+    async fn graphql_ws(
+        ws: axum::extract::ws::WebSocketUpgrade,
+        req: axum::http::Request<axum::body::Body>,
+    ) -> impl IntoResponse {
+        // Extract authentication context before upgrade
+        let auth_user = req.extensions().get::<auth::AuthUser>().cloned();
+
+        ws.on_upgrade(move |socket| graphql_ws::handle_websocket_connection(socket, auth_user))
     }
 
     // GraphQL SSE handler - handles subscriptions over Server-Sent Events using execute_stream
@@ -1379,6 +1391,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // GraphQL API endpoints (queries, mutations, subscriptions) - NO authentication required
         let graphql_api_router = Router::new()
             .route("/graphql", axum::routing::post(graphql_post))
+            .route("/graphql/ws", axum::routing::get(graphql_ws))
             .route("/graphql/sse", axum::routing::post(graphql_sse));
 
         app = app.merge(graphql_api_router);
@@ -1394,6 +1407,7 @@ document.addEventListener('DOMContentLoaded', function() {
             .route("/engine/graphql", axum::routing::get(graphql_get_handler))
             .route("/engine/swagger", axum::routing::get(swagger_ui_handler))
             .route("/graphql", axum::routing::post(graphql_post))
+            .route("/graphql/ws", axum::routing::get(graphql_ws))
             .route("/graphql/sse", axum::routing::post(graphql_sse));
     }
 

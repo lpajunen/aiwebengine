@@ -16,7 +16,8 @@ Or upload via the built-in editor at http://localhost:3000/editor
 
 - **blog.js** - Sample blog with modern styling
 - **feedback.js** - Interactive feedback form with GET/POST handling
-- **graphql_subscription_demo.js** - GraphQL subscription example
+- **graphql_subscription_demo.js** - GraphQL subscription example using Server-Sent Events (SSE)
+- **graphql_ws_demo.js** - GraphQL subscription example using WebSocket (graphql-transport-ws protocol)
 - **script_updates_demo.js** - Script update demonstration
 
 ## Documentation

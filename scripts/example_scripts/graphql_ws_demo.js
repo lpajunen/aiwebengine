@@ -1,5 +1,5 @@
-// GraphQL Subscription Example with Streaming
-// This script shows how to create GraphQL subscriptions that work with Server-Sent Events
+// GraphQL WebSocket Subscription Example
+// This script demonstrates GraphQL subscriptions using WebSocket (graphql-transport-ws protocol)
 
 function broadcastLiveMessage(text, type) {
   const payload = {
@@ -60,9 +60,6 @@ function sendMessageResolver(context) {
   return `Message sent: ${message}`;
 }
 
-// Optional: You can also use the lower-level API
-// routeRegistry.sendStreamMessage("/graphql/subscription/liveMessages", JSON.stringify(messageData));
-
 function triggerMessageHandler(context) {
   const req = context.request || {};
   const messageBody = req.body;
@@ -80,7 +77,7 @@ function triggerMessageHandler(context) {
   };
 }
 
-function subscriptionDemoPage(context) {
+function wsSubscriptionDemoPage(context) {
   return {
     status: 200,
     body: `
@@ -89,11 +86,10 @@ function subscriptionDemoPage(context) {
         <head>
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>GraphQL Subscription Demo - aiwebengine</title>
+            <title>GraphQL WebSocket Demo - aiwebengine</title>
             <link rel="stylesheet" href="/engine.css">
             <link rel="icon" type="image/x-icon" href="/favicon.ico">
             <style>
-                /* Subscription demo specific overrides */
                 body {
                     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
                     min-height: 100vh;
@@ -209,6 +205,11 @@ function subscriptionDemoPage(context) {
                     color: var(--error-color);
                 }
 
+                .status-connecting {
+                    background: var(--warning-bg);
+                    color: var(--warning-color);
+                }
+
                 .instructions {
                     background: var(--info-bg);
                     border: 1px solid var(--info-border);
@@ -222,7 +223,7 @@ function subscriptionDemoPage(context) {
                     margin-top: 0;
                 }
 
-                .instructions ol {
+                .instructions ol, .instructions ul {
                     margin: 1rem 0 0 0;
                     padding-left: 1.5rem;
                 }
@@ -230,6 +231,13 @@ function subscriptionDemoPage(context) {
                 .instructions li {
                     margin-bottom: 0.5rem;
                     color: var(--text-muted);
+                }
+
+                code {
+                    background: rgba(0, 0, 0, 0.1);
+                    padding: 0.2rem 0.4rem;
+                    border-radius: 3px;
+                    font-family: 'Courier New', monospace;
                 }
 
                 @media (max-width: 768px) {
@@ -252,8 +260,8 @@ function subscriptionDemoPage(context) {
             <div class="demo-container">
                 <div class="demo-content">
                     <div class="demo-header">
-                        <h1>📡 GraphQL Subscription Demo</h1>
-                        <p>This demonstrates GraphQL subscriptions using Server-Sent Events</p>
+                        <h1>🔌 GraphQL WebSocket Demo</h1>
+                        <p>This demonstrates GraphQL subscriptions using WebSocket (graphql-transport-ws protocol)</p>
                     </div>
 
                     <div class="demo-section">
@@ -273,85 +281,138 @@ function subscriptionDemoPage(context) {
                     </div>
 
                     <div class="demo-section">
-                        <h3>Live Messages (GraphQL Subscription via SSE)</h3>
-                        <div id="status" class="status-indicator status-connected">Connecting to subscription...</div>
+                        <h3>Live Messages (GraphQL Subscription via WebSocket)</h3>
+                        <div id="status" class="status-indicator status-connecting">Connecting to WebSocket...</div>
                         <div class="messages-container" id="messages"></div>
                     </div>
 
                     <div class="instructions">
-                        <h3>📋 Instructions</h3>
+                        <h3>📋 About This Demo</h3>
                         <ol>
-                            <li>The page automatically subscribes to the GraphQL subscription using SSE</li>
-                            <li>Use either button to send messages</li>
-                            <li>Messages will appear in real-time via the subscription</li>
+                            <li>This page uses the <strong>graphql-transport-ws</strong> protocol over WebSocket</li>
+                            <li>WebSocket connections support multiple concurrent subscriptions per connection</li>
+                            <li>The connection includes automatic ping/pong keep-alive (30 second interval)</li>
+                            <li>Messages sent by either method will appear in real-time via the subscription</li>
                             <li>Open multiple browser tabs to see multi-client broadcasting</li>
                         </ol>
+
+                        <h3>🔧 Technical Details</h3>
+                        <ul>
+                            <li><strong>Endpoint:</strong> <code>ws://localhost:3000/graphql/ws</code></li>
+                            <li><strong>Protocol:</strong> graphql-transport-ws</li>
+                            <li><strong>Max Subscriptions:</strong> 20 per connection</li>
+                            <li><strong>Keep-Alive:</strong> 30 second ping interval</li>
+                            <li><strong>Authentication:</strong> Supported via connection_init payload</li>
+                        </ul>
+
+                        <h3>🌐 Also Available</h3>
+                        <p>For SSE-based subscriptions, visit <a href="/subscription-demo">/subscription-demo</a></p>
                     </div>
                 </div>
             </div>
 
             <script>
+                let ws = null;
+                let subscriptionId = null;
                 let messageCount = 0;
 
-                // Subscribe to GraphQL subscription via SSE
-                function subscribeToMessages() {
-                    const subscriptionQuery = {
-                        query: \`subscription { liveMessages }\`
+                // Simple implementation of graphql-transport-ws protocol
+                function connectWebSocket() {
+                    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                    const wsUrl = \`\${protocol}//\${window.location.host}/graphql/ws\`;
+                    
+                    updateStatus('Connecting to WebSocket...', 'connecting');
+                    
+                    ws = new WebSocket(wsUrl, 'graphql-transport-ws');
+
+                    ws.onopen = () => {
+                        console.log('WebSocket connected');
+                        
+                        // Send connection_init message
+                        ws.send(JSON.stringify({
+                            type: 'connection_init',
+                            payload: {}
+                        }));
                     };
 
-                    fetch('/graphql/sse', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify(subscriptionQuery)
-                    })
-                    .then(response => {
-                        if (!response.ok) {
-                            throw new Error('Failed to start subscription');
-                        }
+                    ws.onmessage = (event) => {
+                        const message = JSON.parse(event.data);
+                        console.log('Received:', message);
 
-                        const reader = response.body.getReader();
-                        const decoder = new TextDecoder();
+                        switch (message.type) {
+                            case 'connection_ack':
+                                console.log('Connection acknowledged');
+                                updateStatus('Connected to WebSocket ✓', 'connected');
+                                subscribeToMessages();
+                                break;
 
-                        document.getElementById('status').textContent = 'Connected to subscription ✓';
-                        document.getElementById('status').className = 'status-indicator status-connected';
-
-                        function readStream() {
-                            reader.read().then(({ done, value }) => {
-                                if (done) {
-                                    document.getElementById('status').textContent = 'Subscription ended';
-                                    document.getElementById('status').className = 'status-indicator status-error';
-                                    return;
+                            case 'next':
+                                if (message.id === subscriptionId && message.payload?.data?.liveMessages) {
+                                    displayMessage(message.payload.data.liveMessages);
                                 }
+                                break;
 
-                                const chunk = decoder.decode(value);
-                                const lines = chunk.split('\\n');
+                            case 'error':
+                                console.error('Subscription error:', message.payload);
+                                updateStatus('Subscription error: ' + JSON.stringify(message.payload), 'error');
+                                break;
 
-                                lines.forEach(line => {
-                                    if (line.startsWith('data: ')) {
-                                        try {
-                                            const data = JSON.parse(line.slice(6));
-                                            if (data.data && data.data.liveMessages) {
-                                                displayMessage(data.data.liveMessages);
-                                            }
-                                        } catch (e) {
-                                            console.log('Non-JSON data:', line);
-                                        }
-                                    }
-                                });
+                            case 'complete':
+                                console.log('Subscription completed:', message.id);
+                                if (message.id === subscriptionId) {
+                                    updateStatus('Subscription completed', 'error');
+                                }
+                                break;
 
-                                readStream();
-                            });
+                            case 'ping':
+                                // Respond to server ping with pong
+                                ws.send(JSON.stringify({ type: 'pong' }));
+                                break;
+
+                            case 'pong':
+                                console.log('Received pong');
+                                break;
                         }
+                    };
 
-                        readStream();
-                    })
-                    .catch(error => {
-                        document.getElementById('status').textContent = 'Connection failed: ' + error.message;
-                        document.getElementById('status').className = 'status-indicator status-error';
-                        console.error('Subscription error:', error);
-                    });
+                    ws.onerror = (error) => {
+                        console.error('WebSocket error:', error);
+                        updateStatus('WebSocket error', 'error');
+                    };
+
+                    ws.onclose = () => {
+                        console.log('WebSocket closed');
+                        updateStatus('WebSocket disconnected', 'error');
+                        
+                        // Attempt to reconnect after 3 seconds
+                        setTimeout(() => {
+                            if (ws.readyState === WebSocket.CLOSED) {
+                                console.log('Attempting to reconnect...');
+                                connectWebSocket();
+                            }
+                        }, 3000);
+                    };
+                }
+
+                function subscribeToMessages() {
+                    subscriptionId = 'sub-' + Math.random().toString(36).substr(2, 9);
+                    
+                    const subscribeMessage = {
+                        id: subscriptionId,
+                        type: 'subscribe',
+                        payload: {
+                            query: 'subscription { liveMessages }'
+                        }
+                    };
+
+                    ws.send(JSON.stringify(subscribeMessage));
+                    console.log('Sent subscribe message:', subscribeMessage);
+                }
+
+                function updateStatus(text, state) {
+                    const statusEl = document.getElementById('status');
+                    statusEl.textContent = text;
+                    statusEl.className = 'status-indicator status-' + state;
                 }
 
                 function displayMessage(message) {
@@ -361,7 +422,6 @@ function subscriptionDemoPage(context) {
 
                     let messageData;
                     try {
-                        // Handle both JSON string and already-parsed object
                         if (typeof message === 'string') {
                             messageData = JSON.parse(message);
                         } else if (typeof message === 'object' && message !== null) {
@@ -371,13 +431,11 @@ function subscriptionDemoPage(context) {
                         }
                         
                         if (messageData.type === 'join') {
-                            // Special styling for join messages
                             messageEl.className = 'message join-message';
                             messageEl.innerHTML = \`
                                 <em>[\${messageData.timestamp}] \${messageData.text}</em>
                             \`;
                         } else {
-                            // Regular message styling
                             messageEl.innerHTML = \`
                                 <strong>#\${messageData.id}</strong> [\${messageData.timestamp}]<br>
                                 \${messageData.text}
@@ -424,7 +482,7 @@ function subscriptionDemoPage(context) {
                     const message = input.value.trim();
                     if (!message) return;
 
-                    fetch('/trigger-message', {
+                    fetch('/trigger-message-ws', {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'text/plain',
@@ -451,8 +509,8 @@ function subscriptionDemoPage(context) {
                     if (e.key === 'Enter') sendHttpMessage();
                 });
 
-                // Start the subscription when page loads
-                subscribeToMessages();
+                // Connect WebSocket when page loads
+                connectWebSocket();
             </script>
         </body>
         </html>`,
@@ -464,11 +522,10 @@ function subscriptionDemoPage(context) {
 function init(context) {
   try {
     console.log(
-      `Initializing graphql_subscription_demo.js script at ${new Date().toISOString()}`,
+      `Initializing graphql_ws_demo.js script at ${new Date().toISOString()}`,
     );
-    console.log(`Init context: ${JSON.stringify(context)}`);
 
-    // Register a GraphQL subscription
+    // Register a GraphQL subscription (reuses the same subscription from SSE demo)
     graphQLRegistry.registerSubscription(
       "liveMessages",
       "type Subscription { liveMessages: String }",
@@ -484,29 +541,25 @@ function init(context) {
 
     // Register HTTP endpoints for testing
     routeRegistry.registerRoute(
-      "/trigger-message",
+      "/trigger-message-ws",
       "triggerMessageHandler",
       "POST",
     );
 
-    // Test page to demonstrate subscription usage
-    routeRegistry.registerRoute(
-      "/subscription-demo",
-      "subscriptionDemoPage",
-      "GET",
-    );
+    // WebSocket demo page
+    routeRegistry.registerRoute("/ws-demo", "wsSubscriptionDemoPage", "GET");
 
-    console.log("GraphQL subscription example script initialized successfully");
+    console.log("GraphQL WebSocket example script initialized successfully");
 
     return {
       success: true,
-      message: "GraphQL subscription example script initialized successfully",
+      message: "GraphQL WebSocket example script initialized successfully",
       registeredEndpoints: 2,
       registeredGraphQLOperations: 2,
     };
   } catch (error) {
     console.error(
-      `GraphQL subscription example script initialization failed: ${error.message}`,
+      `GraphQL WebSocket example script initialization failed: ${error.message}`,
     );
     throw error;
   }
