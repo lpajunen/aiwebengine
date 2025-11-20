@@ -10,7 +10,22 @@ function init(context) {
   routeRegistry.registerRoute("/blog/admin/delete", "deletePost", "POST");
   routeRegistry.registerRoute("/blog/new", "newPostForm", "GET");
 
-  // Store some example blog posts in markdown
+  // Check if there are already blog posts
+  const existingIndexJson = sharedStorage.getItem("blog:index");
+  if (existingIndexJson) {
+    try {
+      const existingSlugs = JSON.parse(existingIndexJson);
+      if (existingSlugs.length > 0) {
+        // There are already posts, skip adding bootstrap posts
+        console.log("Blog already has posts, skipping bootstrap initialization");
+        return;
+      }
+    } catch (error) {
+      console.log("Error parsing existing blog index: " + error);
+    }
+  }
+
+  // No existing posts, add bootstrap example posts
   const examplePosts = {
     welcome: `# Welcome to My Blog
 
