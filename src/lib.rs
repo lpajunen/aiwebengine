@@ -774,8 +774,14 @@ document.addEventListener('DOMContentLoaded', function() {
         docsLink.textContent = 'Docs';
         docsLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
         
+        const swaggerLink = document.createElement('a');
+        swaggerLink.href = '/engine/swagger';
+        swaggerLink.textContent = 'API Docs';
+        swaggerLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
+        
         nav.appendChild(editorLink);
         nav.appendChild(docsLink);
+        nav.appendChild(swaggerLink);
         document.body.appendChild(nav);
         
         // Add hover effects
@@ -790,6 +796,91 @@ document.addEventListener('DOMContentLoaded', function() {
         full_html.push_str(navigation_script);
 
         axum::response::Html(full_html).into_response()
+    };
+
+    // Swagger UI GET handler - serves Swagger UI for OpenAPI spec
+    let swagger_ui_handler = move |req: axum::http::Request<axum::body::Body>| async move {
+        // Check for authentication when auth is enabled
+        if auth_enabled && req.extensions().get::<auth::AuthUser>().is_none() {
+            return axum::response::Response::builder()
+                .status(StatusCode::UNAUTHORIZED)
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(
+                    serde_json::json!({"error": "Authentication required"}).to_string(),
+                ))
+                .unwrap_or_else(|err| {
+                    error!("Failed to build unauthorized response: {}", err);
+                    axum::response::Response::new(axum::body::Body::from("Unauthorized"))
+                })
+                .into_response();
+        }
+
+        let swagger_html = r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>aiwebengine API Documentation</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css" />
+    <style>
+        body { margin: 0; padding: 0; }
+        #swagger-ui { max-width: 1460px; margin: 0 auto; }
+    </style>
+</head>
+<body>
+    <div id="swagger-ui"></div>
+    <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-standalone-preset.js"></script>
+    <script>
+        window.onload = function() {
+            SwaggerUIBundle({
+                url: '/engine/openapi.json',
+                dom_id: '#swagger-ui',
+                deepLinking: true,
+                presets: [
+                    SwaggerUIBundle.presets.apis,
+                    SwaggerUIStandalonePreset
+                ],
+                layout: "StandaloneLayout"
+            });
+
+            // Add navigation after Swagger UI loads
+            setTimeout(function() {
+                const nav = document.createElement('div');
+                nav.id = 'aiwebengine-nav';
+                nav.style.cssText = 'position: fixed; top: 10px; right: 10px; z-index: 1000; display: flex; gap: 8px;';
+                
+                const editorLink = document.createElement('a');
+                editorLink.href = '/engine/editor';
+                editorLink.textContent = 'Editor';
+                editorLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
+                
+                const graphqlLink = document.createElement('a');
+                graphqlLink.href = '/engine/graphql';
+                graphqlLink.textContent = 'GraphQL';
+                graphqlLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
+                
+                const docsLink = document.createElement('a');
+                docsLink.href = '/engine/docs';
+                docsLink.textContent = 'Docs';
+                docsLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
+                
+                nav.appendChild(editorLink);
+                nav.appendChild(graphqlLink);
+                nav.appendChild(docsLink);
+                document.body.appendChild(nav);
+                
+                // Add hover effects
+                const style = document.createElement('style');
+                style.textContent = '#aiwebengine-nav a:hover { background: #e5e7eb !important; border-color: #9ca3af !important; }';
+                document.head.appendChild(style);
+            }, 1000);
+        };
+    </script>
+</body>
+</html>"#;
+
+        axum::response::Html(swagger_html).into_response()
     };
 
     // GraphQL POST handler - executes queries
@@ -1277,6 +1368,7 @@ document.addEventListener('DOMContentLoaded', function() {
         let auth_mgr_for_graphql = Arc::clone(auth_mgr);
         let graphql_router = Router::new()
             .route("/engine/graphql", axum::routing::get(graphql_get_handler))
+            .route("/engine/swagger", axum::routing::get(swagger_ui_handler))
             .layer(axum::middleware::from_fn_with_state(
                 auth_mgr_for_graphql,
                 auth::require_editor_or_admin_middleware,
@@ -1300,6 +1392,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // GraphQL endpoints without authentication
         app = app
             .route("/engine/graphql", axum::routing::get(graphql_get_handler))
+            .route("/engine/swagger", axum::routing::get(swagger_ui_handler))
             .route("/graphql", axum::routing::post(graphql_post))
             .route("/graphql/sse", axum::routing::post(graphql_sse));
     }
