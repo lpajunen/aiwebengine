@@ -2419,10 +2419,28 @@ impl SecureGlobalContext {
             },
         )?;
 
+        // convert.render_handlebars_template(template, data) - Render Handlebars template
+        let render_handlebars_template = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, template: String, data: String| -> JsResult<String> {
+                // Call the conversion function
+                match crate::conversion::render_handlebars_template(&template, &data) {
+                    Ok(rendered) => Ok(rendered),
+                    Err(e) => {
+                        // Return error as string (following pattern of other APIs)
+                        Ok(format!("Error: {}", e))
+                    }
+                }
+            },
+        )?;
+
         convert_obj.set("markdown_to_html", markdown_to_html)?;
+        convert_obj.set("render_handlebars_template", render_handlebars_template)?;
         global.set("convert", convert_obj)?;
 
-        debug!("convert.markdown_to_html() function initialized");
+        debug!(
+            "convert.markdown_to_html() and convert.render_handlebars_template() functions initialized"
+        );
 
         Ok(())
     }

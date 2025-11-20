@@ -1,7 +1,11 @@
+use handlebars::Handlebars;
 use pulldown_cmark::{Options, Parser, html};
 
 /// Maximum size for markdown input (1MB)
 const MAX_MARKDOWN_SIZE: usize = 1_000_000;
+
+/// Maximum size for Handlebars template input (1MB)
+const MAX_TEMPLATE_SIZE: usize = 1_000_000;
 
 /// Convert markdown string to HTML
 ///
@@ -47,6 +51,58 @@ pub fn convert_markdown_to_html(markdown: &str) -> Result<String, String> {
     html::push_html(&mut html_output, parser);
 
     Ok(html_output)
+}
+
+/// Render Handlebars template with data
+///
+/// This function compiles and renders a Handlebars template with the provided data object.
+/// The data should be a JSON-serializable object that will be used to populate template variables.
+///
+/// # Arguments
+/// * `template` - The Handlebars template string
+/// * `data` - JSON string representing the data object to render with
+///
+/// # Returns
+/// * `Ok(String)` - The rendered template output
+/// * `Err(String)` - Error message if rendering fails
+///
+/// # Errors
+/// * Returns error if template is empty
+/// * Returns error if template exceeds 1MB size limit
+/// * Returns error if data is not valid JSON
+/// * Returns error if template compilation or rendering fails
+pub fn render_handlebars_template(template: &str, data: &str) -> Result<String, String> {
+    // Validate template input
+    if template.is_empty() {
+        return Err("Template input cannot be empty".to_string());
+    }
+
+    if template.len() > MAX_TEMPLATE_SIZE {
+        return Err(format!(
+            "Template input too large: {} bytes (max: {} bytes / 1MB)",
+            template.len(),
+            MAX_TEMPLATE_SIZE
+        ));
+    }
+
+    // Parse data as JSON
+    let data_value: serde_json::Value =
+        serde_json::from_str(data).map_err(|e| format!("Invalid JSON data: {}", e))?;
+
+    // Create a new Handlebars instance
+    let mut handlebars = Handlebars::new();
+
+    // Register the template (using a temporary name)
+    handlebars
+        .register_template_string("template", template)
+        .map_err(|e| format!("Template compilation error: {}", e))?;
+
+    // Render the template with the data
+    let result = handlebars
+        .render("template", &data_value)
+        .map_err(|e| format!("Template rendering error: {}", e))?;
+
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -156,5 +212,53 @@ mod tests {
         assert!(result.is_ok());
         let html = result.unwrap();
         assert!(html.contains("<a href=\"https://example.com\">Example</a>"));
+    }
+
+    #[test]
+    fn test_render_handlebars_simple() {
+        let template = "Hello {{name}}!";
+        let data = r#"{"name": "World"}"#;
+        let result = render_handlebars_template(template, data);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "Hello World!");
+    }
+
+    #[test]
+    fn test_render_handlebars_complex() {
+        let template = "<h1>{{title}}</h1><p>{{content}}</p><ul>{{#each items}}<li>{{this}}</li>{{/each}}</ul>";
+        let data = r#"{"title": "Test Page", "content": "This is a test", "items": ["Item 1", "Item 2", "Item 3"]}"#;
+        let result = render_handlebars_template(template, data);
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert!(output.contains("<h1>Test Page</h1>"));
+        assert!(output.contains("<p>This is a test</p>"));
+        assert!(output.contains("<li>Item 1</li>"));
+        assert!(output.contains("<li>Item 2</li>"));
+        assert!(output.contains("<li>Item 3</li>"));
+    }
+
+    #[test]
+    fn test_render_handlebars_empty_template() {
+        let result = render_handlebars_template("", r#"{"name": "test"}"#);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Template input cannot be empty");
+    }
+
+    #[test]
+    fn test_render_handlebars_invalid_json() {
+        let template = "Hello {{name}}!";
+        let data = r#"{"name": "invalid json"#; // Missing closing brace
+        let result = render_handlebars_template(template, data);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid JSON data"));
+    }
+
+    #[test]
+    fn test_render_handlebars_template_error() {
+        let template = "Hello {{#if}}{{/if"; // Malformed template
+        let data = r#"{"name": "World"}"#;
+        let result = render_handlebars_template(template, data);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Template compilation error"));
     }
 }

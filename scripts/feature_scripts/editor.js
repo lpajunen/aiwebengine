@@ -1196,6 +1196,14 @@ AVAILABLE JAVASCRIPT APIs:
    - Use for: rendering blog posts, documentation, user content in HTML responses
    - Example: const html = convert.markdown_to_html('# Hello\\n\\nThis is **bold**');
 
+   - convert.render_handlebars_template(template, data) - Render Handlebars template with data
+   - template: string (Handlebars template content, max 1MB)
+   - data: string (JSON string representing data object to populate template variables)
+   - Returns: string (rendered template output or error message starting with "Error:")
+   - Supports: variables {{variable}}, loops {{#each items}}, conditionals {{#if condition}}
+   - Use for: dynamic HTML generation, email templates, configuration files
+   - Example: const html = convert.render_handlebars_template('<h1>{{title}}</h1><p>{{content}}</p>', '{"title": "Hello", "content": "World"}');
+
 6. fetch(url, options) - Make HTTP requests to external APIs
    - url: string
    - options: JSON string with {method, headers, body, timeout_ms}
