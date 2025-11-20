@@ -877,7 +877,7 @@ function hello() {
   <p>{{details}}</p>
   <a href="/blog">← Back to blog</a>
 </body>
-</html>`
+</html>`,
 };
 
 function init(context) {
@@ -901,7 +901,9 @@ function init(context) {
       const existingSlugs = JSON.parse(existingIndexJson);
       if (existingSlugs.length > 0) {
         // There are already posts, skip adding bootstrap posts
-        console.log("Blog already has posts, skipping bootstrap initialization");
+        console.log(
+          "Blog already has posts, skipping bootstrap initialization",
+        );
         return;
       }
     } catch (error) {
@@ -1088,7 +1090,10 @@ function listPosts(context) {
   }
 
   const data = { posts: posts };
-  const html = convert.render_handlebars_template(template, JSON.stringify(data));
+  const html = convert.render_handlebars_template(
+    template,
+    JSON.stringify(data),
+  );
 
   if (html.startsWith("Error:")) {
     console.error(`Template rendering failed: ${html}`);
@@ -1123,9 +1128,12 @@ function showPost(context, slug) {
     }
     const data = {
       message: "Blog post not found",
-      details: `The post "${slug}" does not exist.`
+      details: `The post "${slug}" does not exist.`,
     };
-    const html = convert.render_handlebars_template(template, JSON.stringify(data));
+    const html = convert.render_handlebars_template(
+      template,
+      JSON.stringify(data),
+    );
     return {
       status: 404,
       body: html.startsWith("Error:") ? "Template error" : html,
@@ -1153,9 +1161,12 @@ function showPost(context, slug) {
     const data = {
       title: "Render Error",
       message: "Error rendering blog post",
-      details: content
+      details: content,
     };
-    const html = convert.render_handlebars_template(template, JSON.stringify(data));
+    const html = convert.render_handlebars_template(
+      template,
+      JSON.stringify(data),
+    );
     return {
       status: 500,
       body: html.startsWith("Error:") ? "Template error" : html,
@@ -1174,7 +1185,10 @@ function showPost(context, slug) {
   }
 
   const data = { slug, title, content };
-  const html = convert.render_handlebars_template(template, JSON.stringify(data));
+  const html = convert.render_handlebars_template(
+    template,
+    JSON.stringify(data),
+  );
 
   if (html.startsWith("Error:")) {
     console.error(`Template rendering failed: ${html}`);
@@ -1206,7 +1220,10 @@ function newPostForm(context) {
   }
 
   const data = {};
-  const html = convert.render_handlebars_template(template, JSON.stringify(data));
+  const html = convert.render_handlebars_template(
+    template,
+    JSON.stringify(data),
+  );
 
   if (html.startsWith("Error:")) {
     console.error(`Template rendering failed: ${html}`);
@@ -1241,9 +1258,12 @@ function editPostForm(context, slug) {
     }
     const data = {
       message: "Blog post not found",
-      details: `The post "${slug}" does not exist.`
+      details: `The post "${slug}" does not exist.`,
     };
-    const html = convert.render_handlebars_template(template, JSON.stringify(data));
+    const html = convert.render_handlebars_template(
+      template,
+      JSON.stringify(data),
+    );
     return {
       status: 404,
       body: html.startsWith("Error:") ? "Template error" : html,
@@ -1262,7 +1282,10 @@ function editPostForm(context, slug) {
   }
 
   const data = { slug, content: existingContent };
-  const html = convert.render_handlebars_template(template, JSON.stringify(data));
+  const html = convert.render_handlebars_template(
+    template,
+    JSON.stringify(data),
+  );
 
   if (html.startsWith("Error:")) {
     console.error(`Template rendering failed: ${html}`);
@@ -1298,9 +1321,12 @@ function createPost(context) {
     const data = {
       title: "Validation Error",
       message: "Missing required fields",
-      details: "Both slug and content are required."
+      details: "Both slug and content are required.",
     };
-    const html = convert.render_handlebars_template(template, JSON.stringify(data));
+    const html = convert.render_handlebars_template(
+      template,
+      JSON.stringify(data),
+    );
     return {
       status: 400,
       body: html.startsWith("Error:") ? "Template error" : html,
@@ -1321,9 +1347,12 @@ function createPost(context) {
     const data = {
       title: "Validation Error",
       message: "Invalid slug format",
-      details: "Only lowercase letters, numbers, and hyphens allowed."
+      details: "Only lowercase letters, numbers, and hyphens allowed.",
     };
-    const html = convert.render_handlebars_template(template, JSON.stringify(data));
+    const html = convert.render_handlebars_template(
+      template,
+      JSON.stringify(data),
+    );
     return {
       status: 400,
       body: html.startsWith("Error:") ? "Template error" : html,
@@ -1344,9 +1373,12 @@ function createPost(context) {
     const data = {
       title: "Validation Error",
       message: "Blog post too long",
-      details: "Maximum size is 10KB."
+      details: "Maximum size is 10KB.",
     };
-    const html = convert.render_handlebars_template(template, JSON.stringify(data));
+    const html = convert.render_handlebars_template(
+      template,
+      JSON.stringify(data),
+    );
     return {
       status: 400,
       body: html.startsWith("Error:") ? "Template error" : html,
@@ -1368,9 +1400,12 @@ function createPost(context) {
     const data = {
       title: "Validation Error",
       message: "Invalid markdown",
-      details: testHtml
+      details: testHtml,
     };
-    const html = convert.render_handlebars_template(template, JSON.stringify(data));
+    const html = convert.render_handlebars_template(
+      template,
+      JSON.stringify(data),
+    );
     return {
       status: 400,
       body: html.startsWith("Error:") ? "Template error" : html,
@@ -1410,9 +1445,12 @@ function createPost(context) {
   const data = {
     title: "Post Created",
     message: "Blog post created successfully!",
-    redirectUrl: "/blog"
+    redirectUrl: "/blog",
   };
-  const html = convert.render_handlebars_template(template, JSON.stringify(data));
+  const html = convert.render_handlebars_template(
+    template,
+    JSON.stringify(data),
+  );
   return {
     status: 201,
     body: html.startsWith("Error:") ? "Template error" : html,
@@ -1439,9 +1477,12 @@ function updatePost(context) {
     const data = {
       title: "Validation Error",
       message: "Missing required fields",
-      details: "Original slug, new slug, and content are required."
+      details: "Original slug, new slug, and content are required.",
     };
-    const html = convert.render_handlebars_template(template, JSON.stringify(data));
+    const html = convert.render_handlebars_template(
+      template,
+      JSON.stringify(data),
+    );
     return {
       status: 400,
       body: html.startsWith("Error:") ? "Template error" : html,
@@ -1462,9 +1503,12 @@ function updatePost(context) {
     const data = {
       title: "Validation Error",
       message: "Invalid slug format",
-      details: "Only lowercase letters, numbers, and hyphens allowed."
+      details: "Only lowercase letters, numbers, and hyphens allowed.",
     };
-    const html = convert.render_handlebars_template(template, JSON.stringify(data));
+    const html = convert.render_handlebars_template(
+      template,
+      JSON.stringify(data),
+    );
     return {
       status: 400,
       body: html.startsWith("Error:") ? "Template error" : html,
@@ -1485,9 +1529,12 @@ function updatePost(context) {
     }
     const data = {
       message: "Original post not found",
-      details: `The post "${originalSlug}" does not exist.`
+      details: `The post "${originalSlug}" does not exist.`,
     };
-    const html = convert.render_handlebars_template(template, JSON.stringify(data));
+    const html = convert.render_handlebars_template(
+      template,
+      JSON.stringify(data),
+    );
     return {
       status: 404,
       body: html.startsWith("Error:") ? "Template error" : html,
@@ -1508,9 +1555,12 @@ function updatePost(context) {
     const data = {
       title: "Validation Error",
       message: "Blog post too long",
-      details: "Maximum size is 10KB."
+      details: "Maximum size is 10KB.",
     };
-    const html = convert.render_handlebars_template(template, JSON.stringify(data));
+    const html = convert.render_handlebars_template(
+      template,
+      JSON.stringify(data),
+    );
     return {
       status: 400,
       body: html.startsWith("Error:") ? "Template error" : html,
@@ -1532,9 +1582,12 @@ function updatePost(context) {
     const data = {
       title: "Validation Error",
       message: "Invalid markdown",
-      details: testHtml
+      details: testHtml,
     };
-    const html = convert.render_handlebars_template(template, JSON.stringify(data));
+    const html = convert.render_handlebars_template(
+      template,
+      JSON.stringify(data),
+    );
     return {
       status: 400,
       body: html.startsWith("Error:") ? "Template error" : html,
@@ -1585,9 +1638,12 @@ function updatePost(context) {
     const data = {
       title: "Post Updated",
       message: "Blog post updated successfully!",
-      redirectUrl: "/blog/" + newSlug
+      redirectUrl: "/blog/" + newSlug,
     };
-    const html = convert.render_handlebars_template(template, JSON.stringify(data));
+    const html = convert.render_handlebars_template(
+      template,
+      JSON.stringify(data),
+    );
     return {
       status: 200,
       body: html.startsWith("Error:") ? "Template error" : html,
@@ -1606,9 +1662,12 @@ function updatePost(context) {
     const data = {
       title: "Update Error",
       message: "Error updating post",
-      details: error
+      details: error,
     };
-    const html = convert.render_handlebars_template(template, JSON.stringify(data));
+    const html = convert.render_handlebars_template(
+      template,
+      JSON.stringify(data),
+    );
     return {
       status: 500,
       body: html.startsWith("Error:") ? "Template error" : html,
@@ -1634,9 +1693,12 @@ function deletePost(context) {
     const data = {
       title: "Validation Error",
       message: "Missing slug",
-      details: "Slug is required for deletion."
+      details: "Slug is required for deletion.",
     };
-    const html = convert.render_handlebars_template(template, JSON.stringify(data));
+    const html = convert.render_handlebars_template(
+      template,
+      JSON.stringify(data),
+    );
     return {
       status: 400,
       body: html.startsWith("Error:") ? "Template error" : html,
@@ -1657,9 +1719,12 @@ function deletePost(context) {
     }
     const data = {
       message: "Post not found",
-      details: `The post "${slug}" does not exist.`
+      details: `The post "${slug}" does not exist.`,
     };
-    const html = convert.render_handlebars_template(template, JSON.stringify(data));
+    const html = convert.render_handlebars_template(
+      template,
+      JSON.stringify(data),
+    );
     return {
       status: 404,
       body: html.startsWith("Error:") ? "Template error" : html,
@@ -1701,9 +1766,12 @@ function deletePost(context) {
     const data = {
       title: "Post Deleted",
       message: "Blog post deleted successfully!",
-      redirectUrl: "/blog"
+      redirectUrl: "/blog",
     };
-    const html = convert.render_handlebars_template(template, JSON.stringify(data));
+    const html = convert.render_handlebars_template(
+      template,
+      JSON.stringify(data),
+    );
     return {
       status: 200,
       body: html.startsWith("Error:") ? "Template error" : html,
@@ -1722,9 +1790,12 @@ function deletePost(context) {
     const data = {
       title: "Delete Error",
       message: "Error deleting post",
-      details: error
+      details: error,
     };
-    const html = convert.render_handlebars_template(template, JSON.stringify(data));
+    const html = convert.render_handlebars_template(
+      template,
+      JSON.stringify(data),
+    );
     return {
       status: 500,
       body: html.startsWith("Error:") ? "Template error" : html,

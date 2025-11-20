@@ -633,6 +633,27 @@ function deleteScriptMutation(context) {
   }
 }
 
+// OpenAPI specification endpoint
+function openapiSpec(context) {
+  try {
+    const spec = routeRegistry.generateOpenApi();
+    return {
+      status: 200,
+      body: spec,
+      contentType: "application/json",
+    };
+  } catch (error) {
+    console.error("Error generating OpenAPI spec: " + error.message);
+    return {
+      status: 500,
+      body: JSON.stringify({
+        error: "Failed to generate OpenAPI specification",
+      }),
+      contentType: "application/json",
+    };
+  }
+}
+
 // GraphQL resolvers are now handled in a separate script
 
 // Initialization function - called when script is loaded or updated
@@ -648,22 +669,55 @@ function init(context) {
     routeRegistry.registerAssetRoute("/editor.js", "editor.js");
     routeRegistry.registerAssetRoute("/engine.css", "engine.css");
 
-    // Register HTTP endpoints
-    routeRegistry.registerRoute("/", "core_root", "GET");
+    // Register HTTP endpoints with OpenAPI metadata
+    routeRegistry.registerRoute("/", "core_root", "GET", {
+      summary: "Root endpoint",
+      description: "Core handler that returns OK status",
+      tags: ["Core"],
+    });
     routeRegistry.registerRoute("/", "core_root", "POST");
-    routeRegistry.registerRoute("/health", "health_check", "GET");
+    routeRegistry.registerRoute("/health", "health_check", "GET", {
+      summary: "Health check",
+      description:
+        "Returns system health status including database connectivity",
+      tags: ["Monitoring"],
+    });
     routeRegistry.registerRoute(
       "/upsert_script",
       "upsert_script_handler",
       "POST",
+      {
+        summary: "Create or update script",
+        description: "Upsert a script by URI",
+        tags: ["Scripts"],
+      },
     );
     routeRegistry.registerRoute(
       "/delete_script",
       "delete_script_handler",
       "POST",
+      {
+        summary: "Delete script",
+        description: "Delete a script by URI",
+        tags: ["Scripts"],
+      },
     );
-    routeRegistry.registerRoute("/read_script", "read_script_handler", "GET");
-    routeRegistry.registerRoute("/script_logs", "script_logs_handler", "GET");
+    routeRegistry.registerRoute("/read_script", "read_script_handler", "GET", {
+      summary: "Read script",
+      description: "Retrieve script content by URI",
+      tags: ["Scripts"],
+    });
+    routeRegistry.registerRoute("/script_logs", "script_logs_handler", "GET", {
+      summary: "Script logs",
+      description: "Get logs for a specific script",
+      tags: ["Logging"],
+    });
+    routeRegistry.registerRoute("/engine/openapi.json", "openapiSpec", "GET", {
+      summary: "OpenAPI Specification",
+      description:
+        "Returns the OpenAPI 3.0 specification for all registered routes",
+      tags: ["Engine"],
+    });
 
     // Register WebSocket stream endpoint with customization function
     // NEW API: registerStreamRoute(path, customizationFunction)
@@ -719,7 +773,7 @@ function init(context) {
     return {
       success: true,
       message: "Core script initialized successfully",
-      registeredEndpoints: 7,
+      registeredEndpoints: 8,
       registeredAssets: 5,
       registeredGraphQLOperations: 8,
     };

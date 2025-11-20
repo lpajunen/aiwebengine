@@ -13,7 +13,7 @@ use crate::security::UserContext;
 use crate::security::secure_globals::{GlobalSecurityConfig, SecureGlobalContext};
 
 // Type alias for route registrations map
-type RouteRegistrations = HashMap<(String, String), String>;
+type RouteRegistrations = repository::RouteRegistrations;
 
 /// Extract detailed error information from a rquickjs::Error
 ///
@@ -399,7 +399,8 @@ fn validate_script(content: &str, limits: &ExecutionLimits) -> Result<(), String
 }
 
 /// Function type for registering functions in different execution contexts
-type RegisterFunctionType = Box<dyn Fn(&str, &str, Option<&str>) -> Result<(), rquickjs::Error>>;
+type RegisterFunctionType =
+    Box<dyn Fn(&str, &repository::RouteMetadata, Option<&str>) -> Result<(), rquickjs::Error>>;
 
 /// Sets up secure global functions with proper capability validation
 ///
@@ -440,7 +441,7 @@ fn setup_secure_global_functions(
 #[derive(Debug, Clone)]
 pub struct ScriptExecutionResult {
     /// The registrations made by the script via routeRegistry.registerRoute() calls
-    pub registrations: HashMap<(String, String), String>,
+    pub registrations: repository::RouteRegistrations,
     /// Whether the script executed successfully
     pub success: bool,
     /// Error message if execution failed
@@ -461,7 +462,7 @@ impl ScriptExecutionResult {
     }
 
     /// Create a successful execution result
-    fn success(registrations: HashMap<(String, String), String>, execution_time_ms: u64) -> Self {
+    fn success(registrations: repository::RouteRegistrations, execution_time_ms: u64) -> Self {
         Self {
             registrations,
             success: true,
@@ -519,18 +520,18 @@ pub fn execute_script_secure(
                     let uri_clone = uri_owned.clone();
                     let register_impl = Box::new(
                         move |path: &str,
-                              handler: &str,
+                              route_metadata: &repository::RouteMetadata,
                               method: Option<&str>|
                               -> Result<(), rquickjs::Error> {
                             let method = method.unwrap_or("GET");
                             debug!(
                                 "Securely registering route {} {} -> {} for script {}",
-                                method, path, handler, uri_clone
+                                method, path, route_metadata.handler_name, uri_clone
                             );
                             if let Ok(mut regs) = regs_clone.try_borrow_mut() {
                                 regs.insert(
                                     (path.to_string(), method.to_string()),
-                                    handler.to_string(),
+                                    route_metadata.clone(),
                                 );
                             }
                             Ok(())
@@ -629,18 +630,18 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                             let uri_clone = uri_owned.clone();
                             let register_impl = Box::new(
                         move |path: &str,
-                              handler: &str,
+                              route_metadata: &repository::RouteMetadata,
                               method: Option<&str>|
                               -> Result<(), rquickjs::Error> {
                             let method = method.unwrap_or("GET");
                             tracing::info!(
                                 "Registering route {} {} -> {} for script {}",
-                                method, path, handler, uri_clone
+                                method, path, route_metadata.handler_name, uri_clone
                             );
                             if let Ok(mut regs) = regs_clone.try_borrow_mut() {
                                 regs.insert(
                                     (path.to_string(), method.to_string()),
-                                    handler.to_string(),
+                                    route_metadata.clone(),
                                 );
                             }
                             Ok(())
@@ -1305,16 +1306,19 @@ pub fn call_init_if_exists(
             let uri_clone = uri_owned.clone();
             let register_impl = Box::new(
                 move |path: &str,
-                      handler: &str,
+                      route_metadata: &repository::RouteMetadata,
                       method: Option<&str>|
                       -> Result<(), rquickjs::Error> {
                     let method = method.unwrap_or("GET");
                     debug!(
                         "Registering route {} {} -> {} for script {} during init()",
-                        method, path, handler, uri_clone
+                        method, path, route_metadata.handler_name, uri_clone
                     );
                     if let Ok(mut regs) = regs_clone.try_borrow_mut() {
-                        regs.insert((path.to_string(), method.to_string()), handler.to_string());
+                        regs.insert(
+                            (path.to_string(), method.to_string()),
+                            route_metadata.clone(),
+                        );
                     }
                     Ok(())
                 },
@@ -1453,12 +1457,11 @@ mod tests {
         assert!(result.success, "Script execution should succeed");
         assert!(result.error.is_none(), "Should not have error");
         assert_eq!(result.registrations.len(), 1);
-        assert_eq!(
-            result
-                .registrations
-                .get(&("/test".to_string(), "GET".to_string())),
-            Some(&"handler_function".to_string())
-        );
+        let route_meta = result
+            .registrations
+            .get(&("/test".to_string(), "GET".to_string()));
+        assert!(route_meta.is_some());
+        assert_eq!(route_meta.unwrap().handler_name, "handler_function");
     }
 
     #[test]
@@ -1506,12 +1509,11 @@ mod tests {
             "Script execution failed: {:?}",
             result.error
         );
-        assert_eq!(
-            result
-                .registrations
-                .get(&("/default-method".to_string(), "GET".to_string())),
-            Some(&"handler".to_string())
-        );
+        let route_meta = result
+            .registrations
+            .get(&("/default-method".to_string(), "GET".to_string()));
+        assert!(route_meta.is_some());
+        assert_eq!(route_meta.unwrap().handler_name, "handler");
     }
 
     #[test]
@@ -1758,7 +1760,7 @@ mod tests {
         let mut registrations = HashMap::new();
         registrations.insert(
             ("/test".to_string(), "GET".to_string()),
-            "handler".to_string(),
+            repository::RouteMetadata::simple("handler".to_string()),
         );
 
         let result = ScriptExecutionResult {
@@ -1779,7 +1781,7 @@ mod tests {
         let mut registrations = HashMap::new();
         registrations.insert(
             ("/api".to_string(), "POST".to_string()),
-            "handler".to_string(),
+            repository::RouteMetadata::simple("handler".to_string()),
         );
 
         let original = ScriptExecutionResult {

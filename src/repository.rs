@@ -38,8 +38,31 @@ pub enum RepositoryError {
     InvalidData(String),
 }
 
-/// Route registration: (path, method) -> handler_name
-pub type RouteRegistrations = HashMap<(String, String), String>;
+/// OpenAPI metadata for a registered route
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RouteMetadata {
+    pub handler_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+impl RouteMetadata {
+    pub fn simple(handler_name: String) -> Self {
+        Self {
+            handler_name,
+            summary: None,
+            description: None,
+            tags: Vec::new(),
+        }
+    }
+}
+
+/// Route registration: (path, method) -> RouteMetadata
+pub type RouteRegistrations = HashMap<(String, String), RouteMetadata>;
 
 /// Log entry with timestamp information
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

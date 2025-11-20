@@ -11,7 +11,8 @@ use crate::security::{
 };
 
 // Type alias for route registration callback function
-type RouteRegisterFn = Box<dyn Fn(&str, &str, Option<&str>) -> Result<(), rquickjs::Error>>;
+type RouteRegisterFn =
+    Box<dyn Fn(&str, &repository::RouteMetadata, Option<&str>) -> Result<(), rquickjs::Error>>;
 
 /// Secure wrapper for JavaScript global functions that enforces Rust-level validation
 pub struct SecureGlobalContext {
@@ -1755,10 +1756,11 @@ impl SecureGlobalContext {
             let user_ctx_route = user_context.clone();
             let register_route = Function::new(
                 ctx.clone(),
-                move |_c: rquickjs::Ctx<'_>,
+                move |_ctx: rquickjs::Ctx<'_>,
                       path: String,
                       handler: String,
-                      method: Option<String>|
+                      method: Option<String>,
+                      metadata: Opt<rquickjs::Object>|
                       -> Result<(), rquickjs::Error> {
                     // Check if script is privileged OR user has admin privileges
                     let script_privileged =
@@ -1791,8 +1793,32 @@ impl SecureGlobalContext {
                         ));
                     }
 
+                    // Build RouteMetadata from parameters
+                    let mut route_meta = repository::RouteMetadata::simple(handler.clone());
+
+                    if let Some(meta_obj) = metadata.0 {
+                        // Extract summary
+                        if let Ok(summary) = meta_obj.get::<_, Option<String>>("summary") {
+                            route_meta.summary = summary;
+                        }
+                        // Extract description
+                        if let Ok(description) = meta_obj.get::<_, Option<String>>("description") {
+                            route_meta.description = description;
+                        }
+                        // Extract tags
+                        if let Ok(tags_arr) = meta_obj.get::<_, rquickjs::Array>("tags") {
+                            let mut tags = Vec::new();
+                            for i in 0..tags_arr.len() {
+                                if let Ok(tag) = tags_arr.get::<String>(i) {
+                                    tags.push(tag);
+                                }
+                            }
+                            route_meta.tags = tags;
+                        }
+                    }
+
                     let method_ref = method.as_deref();
-                    register_impl(&path, &handler, method_ref)
+                    register_impl(&path, &route_meta, method_ref)
                 },
             )?;
             route_registry.set("registerRoute", register_route)?;
@@ -1803,7 +1829,8 @@ impl SecureGlobalContext {
                 |_c: rquickjs::Ctx<'_>,
                  _p: String,
                  _h: String,
-                 _m: Option<String>|
+                 _m: Option<String>,
+                 _meta: Opt<rquickjs::Object>|
                  -> Result<(), rquickjs::Error> { Ok(()) },
             )?;
             route_registry.set("registerRoute", reg_noop)?;
@@ -2227,12 +2254,15 @@ impl SecureGlobalContext {
                         let mut all_routes = Vec::new();
                         for metadata in metadata_list {
                             if metadata.initialized && !metadata.registrations.is_empty() {
-                                for ((path, method), handler) in metadata.registrations {
+                                for ((path, method), route_meta) in metadata.registrations {
                                     all_routes.push(serde_json::json!({
                                         "path": path,
                                         "method": method,
-                                        "handler": handler,
+                                        "handler": route_meta.handler_name,
                                         "script_uri": metadata.uri,
+                                        "summary": route_meta.summary,
+                                        "description": route_meta.description,
+                                        "tags": route_meta.tags,
                                     }));
                                 }
                             }
@@ -2247,6 +2277,120 @@ impl SecureGlobalContext {
             },
         )?;
         route_registry.set("listRoutes", list_routes)?;
+
+        // 6b. generateOpenApi function
+        let user_ctx_openapi = user_context.clone();
+        let generate_openapi = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
+                // Check capability
+                if let Err(_e) =
+                    user_ctx_openapi.require_capability(&crate::security::Capability::ReadScripts)
+                {
+                    return Ok("{\"error\": \"Insufficient permissions\"}".to_string());
+                }
+
+                // Get all script metadata
+                match repository::get_all_script_metadata() {
+                    Ok(metadata_list) => {
+                        let mut paths = serde_json::Map::new();
+
+                        for metadata in metadata_list {
+                            if metadata.initialized && !metadata.registrations.is_empty() {
+                                for ((path, method), route_meta) in metadata.registrations {
+                                    // Get or create path item
+                                    let path_item = paths
+                                        .entry(path.clone())
+                                        .or_insert_with(|| serde_json::json!({}));
+
+                                    let path_obj = path_item.as_object_mut().unwrap();
+
+                                    // Create operation object
+                                    let mut operation = serde_json::Map::new();
+                                    operation.insert(
+                                        "summary".to_string(),
+                                        serde_json::json!(
+                                            route_meta
+                                                .summary
+                                                .unwrap_or_else(|| format!("{} {}", method, path))
+                                        ),
+                                    );
+
+                                    if let Some(desc) = route_meta.description {
+                                        operation.insert(
+                                            "description".to_string(),
+                                            serde_json::json!(desc),
+                                        );
+                                    }
+
+                                    if !route_meta.tags.is_empty() {
+                                        operation.insert(
+                                            "tags".to_string(),
+                                            serde_json::json!(route_meta.tags),
+                                        );
+                                    } else {
+                                        operation
+                                            .insert("tags".to_string(), serde_json::json!(["API"]));
+                                    }
+
+                                    // Default response
+                                    operation.insert(
+                                        "responses".to_string(),
+                                        serde_json::json!({
+                                            "200": {
+                                                "description": "Success"
+                                            }
+                                        }),
+                                    );
+
+                                    // Add operation metadata
+                                    operation.insert(
+                                        "x-handler".to_string(),
+                                        serde_json::json!(route_meta.handler_name),
+                                    );
+                                    operation.insert(
+                                        "x-script-uri".to_string(),
+                                        serde_json::json!(metadata.uri),
+                                    );
+
+                                    path_obj.insert(
+                                        method.to_lowercase(),
+                                        serde_json::json!(operation),
+                                    );
+                                }
+                            }
+                        }
+
+                        // Build complete OpenAPI spec
+                        let spec = serde_json::json!({
+                            "openapi": "3.0.0",
+                            "info": {
+                                "title": "aiwebengine API",
+                                "version": "1.0.0",
+                                "description": "Auto-generated API documentation from script route registrations"
+                            },
+                            "servers": [
+                                {
+                                    "url": "/",
+                                    "description": "Current server"
+                                }
+                            ],
+                            "paths": paths
+                        });
+
+                        match serde_json::to_string_pretty(&spec) {
+                            Ok(json) => Ok(json),
+                            Err(e) => Ok(format!(
+                                "{{\"error\": \"Failed to serialize OpenAPI spec: {}\"}}",
+                                e
+                            )),
+                        }
+                    }
+                    Err(e) => Ok(format!("{{\"error\": \"Failed to fetch routes: {}\"}}", e)),
+                }
+            },
+        )?;
+        route_registry.set("generateOpenApi", generate_openapi)?;
 
         // 7. listStreams function
         let user_ctx_list_streams = user_context.clone();

@@ -267,19 +267,19 @@ fn find_route_handler(path: &str, method: &str) -> Option<(String, String)> {
         // Use cached registrations from init() function
         if metadata.initialized && !metadata.registrations.is_empty() {
             // Check for exact match
-            if let Some(handler) = metadata
+            if let Some(route_meta) = metadata
                 .registrations
                 .get(&(path.to_string(), method.to_string()))
             {
-                return Some((metadata.uri.clone(), handler.clone()));
+                return Some((metadata.uri.clone(), route_meta.handler_name.clone()));
             }
 
             // Check for wildcard matches
-            for ((pattern, reg_method), handler) in &metadata.registrations {
+            for ((pattern, reg_method), route_meta) in &metadata.registrations {
                 if reg_method == method && pattern.ends_with("/*") {
                     let prefix = &pattern[..pattern.len() - 1]; // Remove the *
                     if path.starts_with(prefix) {
-                        return Some((metadata.uri.clone(), handler.clone()));
+                        return Some((metadata.uri.clone(), route_meta.handler_name.clone()));
                     }
                 }
             }
