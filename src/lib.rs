@@ -19,6 +19,7 @@ pub mod graphql_ws;
 pub mod http_client;
 pub mod js_engine;
 pub mod middleware;
+pub mod parsers;
 pub mod repository;
 pub mod safe_helpers;
 pub mod script_init;
@@ -38,56 +39,18 @@ use security::UserContext;
 
 /// Parses a query string into a HashMap of key-value pairs
 fn parse_query_string(query: &str) -> HashMap<String, String> {
-    let mut params = HashMap::new();
-    if query.is_empty() {
-        return params;
-    }
-
-    for pair in query.split('&') {
-        let mut parts = pair.splitn(2, '=');
-        let key = parts.next().unwrap_or("");
-        let value = parts.next().unwrap_or("");
-
-        // URL decode the key and value
-        let decoded_key = urlencoding::decode(key).unwrap_or(std::borrow::Cow::Borrowed(key));
-        let decoded_value = urlencoding::decode(value).unwrap_or(std::borrow::Cow::Borrowed(value));
-
-        // Convert + to spaces (though urlencoding should handle this, being explicit)
-        let final_key = decoded_key.replace('+', " ");
-        let final_value = decoded_value.replace('+', " ");
-
-        params.insert(final_key, final_value);
-    }
-
-    params
+    // Use url::form_urlencoded to handle percent-encoding and plus->space semantics.
+    url::form_urlencoded::parse(query.as_bytes())
+        .into_owned()
+        .fold(HashMap::new(), |mut acc, (k, v)| {
+            // Insert will overwrite duplicates so last wins (same behavior as previous impl)
+            acc.insert(k, v);
+            acc
+        })
 }
 
 /// Parses form data from request body based on content type
-async fn parse_form_data(
-    content_type: Option<&str>,
-    body: Body,
-) -> Option<HashMap<String, String>> {
-    if let Some(ct) = content_type {
-        if ct.starts_with("application/x-www-form-urlencoded") {
-            // Convert body to bytes and parse as URL-encoded form data
-            let bytes = match to_bytes(body, usize::MAX).await {
-                Ok(b) => b,
-                Err(_) => return None,
-            };
-            let body_str = String::from_utf8(bytes.to_vec()).ok()?;
-            Some(serde_urlencoded::from_str(&body_str).unwrap_or_default())
-        } else if ct.starts_with("multipart/form-data") {
-            // For multipart, we'd need to parse the boundary from content-type
-            // This is more complex and would require additional implementation
-            // For now, return empty map
-            Some(HashMap::new())
-        } else {
-            None
-        }
-    } else {
-        None
-    }
-}
+use crate::parsers::parse_form_data;
 
 /// Handle Server-Sent Events stream requests
 async fn handle_stream_request(req: Request<Body>) -> Response {
@@ -738,17 +701,10 @@ pub async fn start_server_with_config(
     let graphql_get_handler = move |req: axum::http::Request<axum::body::Body>| async move {
         // Check for authentication when auth is enabled
         if auth_enabled && req.extensions().get::<auth::AuthUser>().is_none() {
-            return axum::response::Response::builder()
-                .status(StatusCode::UNAUTHORIZED)
-                .header("content-type", "application/json")
-                .body(axum::body::Body::from(
-                    serde_json::json!({"error": "Authentication required"}).to_string(),
-                ))
-                .unwrap_or_else(|err| {
-                    error!("Failed to build unauthorized response: {}", err);
-                    axum::response::Response::new(axum::body::Body::from("Unauthorized"))
-                })
-                .into_response();
+            return safe_helpers::json_response(
+                StatusCode::UNAUTHORIZED,
+                &serde_json::json!({"error": "Authentication required"}),
+            );
         }
 
         let graphiql_html = async_graphql::http::GraphiQLSource::build()
@@ -803,17 +759,10 @@ document.addEventListener('DOMContentLoaded', function() {
     let swagger_ui_handler = move |req: axum::http::Request<axum::body::Body>| async move {
         // Check for authentication when auth is enabled
         if auth_enabled && req.extensions().get::<auth::AuthUser>().is_none() {
-            return axum::response::Response::builder()
-                .status(StatusCode::UNAUTHORIZED)
-                .header("content-type", "application/json")
-                .body(axum::body::Body::from(
-                    serde_json::json!({"error": "Authentication required"}).to_string(),
-                ))
-                .unwrap_or_else(|err| {
-                    error!("Failed to build unauthorized response: {}", err);
-                    axum::response::Response::new(axum::body::Body::from("Unauthorized"))
-                })
-                .into_response();
+            return safe_helpers::json_response(
+                StatusCode::UNAUTHORIZED,
+                &serde_json::json!({"error": "Authentication required"}),
+            );
         }
 
         let swagger_html = r#"<!DOCTYPE html>

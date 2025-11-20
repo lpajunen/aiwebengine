@@ -34,6 +34,31 @@ pub fn create_safe_error_response(error_response: ErrorResponse) -> (StatusCode,
     (status, json)
 }
 
+/// Build a JSON response safely from a serializable value. Returns a Response with
+/// `application/json` content-type and the provided status.
+pub fn json_response<T: serde::Serialize>(
+    status: StatusCode,
+    payload: &T,
+) -> axum::response::Response {
+    match serde_json::to_string(payload) {
+        Ok(body) => axum::response::Response::builder()
+            .status(status)
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(body))
+            .unwrap_or_else(|_| axum::response::Response::new(axum::body::Body::from("{}"))),
+        Err(e) => {
+            error!("Failed to serialize JSON response: {}", e);
+            axum::response::Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(
+                    r#"{"error":"Serialization failed"}"#,
+                ))
+                .unwrap_or_else(|_| axum::response::Response::new(axum::body::Body::from("{}")))
+        }
+    }
+}
+
 /// Helper macro for handling JavaScript execution results safely
 #[macro_export]
 macro_rules! handle_js_result {
