@@ -37,6 +37,9 @@ pub mod docs;
 
 use security::UserContext;
 
+// Re-export the unified error type
+pub use error::{AppError, AppResult};
+
 /// Parses a query string into a HashMap of key-value pairs
 fn parse_query_string(query: &str) -> HashMap<String, String> {
     // Use url::form_urlencoded to handle percent-encoding and plus->space semantics.
@@ -433,7 +436,7 @@ async fn initialize_auth_manager(
 /// 1. Sets up the Axum router with dynamic route handling
 /// 2. Starts the server on the configured address
 /// 3. Listens for shutdown signal
-pub async fn start_server(shutdown_rx: tokio::sync::oneshot::Receiver<()>) -> anyhow::Result<u16> {
+pub async fn start_server(shutdown_rx: tokio::sync::oneshot::Receiver<()>) -> AppResult<u16> {
     start_server_with_config(config::Config::from_env(), shutdown_rx).await
 }
 
@@ -441,7 +444,7 @@ pub async fn start_server(shutdown_rx: tokio::sync::oneshot::Receiver<()>) -> an
 pub async fn start_server_with_config(
     config: config::Config,
     mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
-) -> anyhow::Result<u16> {
+) -> AppResult<u16> {
     // Initialize secrets manager
     info!("Initializing secrets manager...");
     let secrets_manager = secrets::SecretsManager::new();
@@ -528,10 +531,13 @@ pub async fn start_server_with_config(
         Err(e) => {
             // Only fail if we're trying to use PostgreSQL storage
             if config.repository.storage_type == "postgresql" {
-                return Err(anyhow::anyhow!(
-                    "Database initialization failed: {}. Cannot continue with PostgreSQL storage.",
-                    e
-                ));
+                return Err(AppError::Database {
+                    message: format!(
+                        "Database initialization failed: {}. Cannot continue with PostgreSQL storage.",
+                        e
+                    ),
+                    source: None,
+                });
             } else {
                 warn!(
                     "Database initialization failed: {}. Continuing without database (using {} storage).",
@@ -624,19 +630,23 @@ pub async fn start_server_with_config(
 
                 // Fail startup if configured and any script failed
                 if config.javascript.fail_startup_on_init_error && failed > 0 {
-                    anyhow::bail!(
-                        "Server startup aborted: {} script(s) failed initialization",
-                        failed
-                    );
+                    return Err(AppError::JsExecution {
+                        message: format!(
+                            "Server startup aborted: {} script(s) failed initialization",
+                            failed
+                        ),
+                    });
                 }
             }
             Err(e) => {
                 error!("Failed to initialize scripts: {}", e);
                 if config.javascript.fail_startup_on_init_error {
-                    anyhow::bail!(
-                        "Server startup aborted: script initialization failed: {}",
-                        e
-                    );
+                    return Err(AppError::JsExecution {
+                        message: format!(
+                            "Server startup aborted: script initialization failed: {}",
+                            e
+                        ),
+                    });
                 }
             }
         }
@@ -1412,7 +1422,7 @@ document.addEventListener('DOMContentLoaded', function() {
     let addr: std::net::SocketAddr = config
         .server_addr()
         .parse()
-        .map_err(|e| anyhow::anyhow!("Invalid server address: {}", e))?;
+        .map_err(|e| AppError::config(format!("Invalid server address: {}", e)))?;
 
     // Try to find an available port starting from the configured port
     let mut current_port = config.port();
@@ -1430,7 +1440,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     // Get the actual port assigned by the OS
                     let actual_port = listener
                         .local_addr()
-                        .map_err(|e| anyhow::anyhow!("Failed to get local address: {}", e))?
+                        .map_err(|e| {
+                            AppError::internal(format!("Failed to get local address: {}", e))
+                        })?
                         .port();
                     drop(listener);
 
@@ -1469,10 +1481,10 @@ document.addEventListener('DOMContentLoaded', function() {
                     return Ok(actual_port);
                 }
                 Err(e) => {
-                    return Err(anyhow::anyhow!(
+                    return Err(AppError::internal(format!(
                         "Failed to bind to auto-assigned port: {}",
                         e
-                    ));
+                    )));
                 }
             }
         }
@@ -1531,18 +1543,18 @@ document.addEventListener('DOMContentLoaded', function() {
                 {
                     attempts += 1;
                     if attempts >= MAX_PORT_ATTEMPTS {
-                        return Err(anyhow::anyhow!(
+                        return Err(AppError::internal(format!(
                             "Could not find an available port after trying {} ports starting from {}",
                             MAX_PORT_ATTEMPTS,
                             config.port()
-                        ));
+                        )));
                     }
 
                     // Try the next port
                     current_port += 1;
                     actual_addr = format!("{}:{}", config.host(), current_port)
                         .parse()
-                        .map_err(|e| anyhow::anyhow!("Invalid server address: {}", e))?;
+                        .map_err(|e| AppError::config(format!("Invalid server address: {}", e)))?;
 
                     debug!(
                         "Port {} in use, trying port {}",
@@ -1551,18 +1563,17 @@ document.addEventListener('DOMContentLoaded', function() {
                     );
                 } else {
                     // Some other error, return it
-                    return Err(anyhow::anyhow!(
+                    return Err(AppError::internal(format!(
                         "Failed to bind to address {}: {}",
-                        actual_addr,
-                        e
-                    ));
+                        actual_addr, e
+                    )));
                 }
             }
         }
     }
 }
 
-pub async fn start_server_without_shutdown() -> anyhow::Result<u16> {
+pub async fn start_server_without_shutdown() -> AppResult<u16> {
     let mut config = config::Config::from_env();
     config.server.port = 0; // Use port 0 for automatic port assignment
     // Create a channel that will never receive a shutdown signal
@@ -1572,9 +1583,7 @@ pub async fn start_server_without_shutdown() -> anyhow::Result<u16> {
     start_server_with_config(config, rx).await
 }
 
-pub async fn start_server_without_shutdown_with_config(
-    config: config::Config,
-) -> anyhow::Result<u16> {
+pub async fn start_server_without_shutdown_with_config(config: config::Config) -> AppResult<u16> {
     let (_tx, rx) = tokio::sync::oneshot::channel::<()>();
     start_server_with_config(config, rx).await
 }

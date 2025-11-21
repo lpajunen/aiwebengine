@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
@@ -186,8 +186,7 @@ static USERS: OnceLock<Mutex<HashMap<String, User>>> = OnceLock::new();
 static USER_PROVIDER_INDEX: OnceLock<Mutex<HashMap<ProviderKey, String>>> = OnceLock::new();
 
 /// Safe mutex access with recovery from poisoned state
-fn safe_lock_users()
--> Result<std::sync::MutexGuard<'static, HashMap<String, User>>, UserRepositoryError> {
+fn safe_lock_users() -> AppResult<std::sync::MutexGuard<'static, HashMap<String, User>>> {
     let store = USERS.get_or_init(|| Mutex::new(HashMap::new()));
 
     match store.lock() {
@@ -196,14 +195,16 @@ fn safe_lock_users()
             warn!("Users mutex was poisoned, recovering with new data");
             store.lock().map_err(|e| {
                 error!("Failed to recover from poisoned mutex: {}", e);
-                UserRepositoryError::LockError(format!("Unrecoverable mutex poisoning: {}", e))
+                AppError::Internal {
+                    message: format!("Unrecoverable mutex poisoning: {}", e),
+                }
             })
         }
     }
 }
 
 fn safe_lock_provider_index()
--> Result<std::sync::MutexGuard<'static, HashMap<ProviderKey, String>>, UserRepositoryError> {
+-> AppResult<std::sync::MutexGuard<'static, HashMap<ProviderKey, String>>> {
     let store = USER_PROVIDER_INDEX.get_or_init(|| Mutex::new(HashMap::new()));
 
     match store.lock() {
@@ -215,7 +216,9 @@ fn safe_lock_provider_index()
                     "Failed to recover from poisoned provider index mutex: {}",
                     e
                 );
-                UserRepositoryError::LockError(format!("Unrecoverable mutex poisoning: {}", e))
+                AppError::Internal {
+                    message: format!("Unrecoverable mutex poisoning: {}", e),
+                }
             })
         }
     }
@@ -240,7 +243,7 @@ async fn db_upsert_user(
     provider_user_id: &str,
     is_admin: bool,
     is_editor: bool,
-) -> Result<String, UserRepositoryError> {
+) -> AppResult<String> {
     let now = chrono::Utc::now();
 
     // Try to update existing user first (preserve existing roles)
@@ -261,13 +264,19 @@ async fn db_upsert_user(
     .await
     .map_err(|e| {
         error!("Database error updating user: {}", e);
-        UserRepositoryError::InvalidData(format!("Database error: {}", e))
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
     })?;
 
     if let Some(row) = update_result {
         let user_id: String = row.try_get("user_id").map_err(|e| {
             error!("Database error getting user_id: {}", e);
-            UserRepositoryError::InvalidData(format!("Database error: {}", e))
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
         })?;
         debug!("Updated existing user in database: {}", user_id);
         return Ok(user_id);
@@ -294,7 +303,7 @@ async fn db_upsert_user(
     .await
     .map_err(|e| {
         error!("Database error creating user: {}", e);
-        UserRepositoryError::InvalidData(format!("Database error: {}", e))
+        AppError::Database { message: format!("Database error: {}", e), source: None }
     })?;
 
     debug!("Created new user in database: {}", user_id);
@@ -302,7 +311,7 @@ async fn db_upsert_user(
 }
 
 /// Database-backed get user
-async fn db_get_user(pool: &PgPool, user_id: &str) -> Result<User, UserRepositoryError> {
+async fn db_get_user(pool: &PgPool, user_id: &str) -> AppResult<User> {
     let row = sqlx::query(
         r#"
         SELECT user_id, email, name, provider, provider_user_id, is_admin, is_editor, created_at, updated_at
@@ -315,37 +324,50 @@ async fn db_get_user(pool: &PgPool, user_id: &str) -> Result<User, UserRepositor
     .await
     .map_err(|e| {
         error!("Database error getting user: {}", e);
-        UserRepositoryError::InvalidData(format!("Database error: {}", e))
+        AppError::Database { message: format!("Database error: {}", e), source: None }
     })?
-    .ok_or_else(|| UserRepositoryError::UserNotFound(user_id.to_string()))?;
+    .ok_or_else(|| AppError::Validation { field: "user_id".to_string(), reason: format!("User not found: {}", user_id) })?;
 
-    let db_user_id: String = row
-        .try_get("user_id")
-        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
-    let email: String = row
-        .try_get("email")
-        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
-    let name: Option<String> = row
-        .try_get("name")
-        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
-    let provider: String = row
-        .try_get("provider")
-        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
-    let provider_user_id: String = row
-        .try_get("provider_user_id")
-        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
-    let is_admin: bool = row
-        .try_get("is_admin")
-        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
-    let is_editor: bool = row
-        .try_get("is_editor")
-        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
-    let created_at: chrono::DateTime<chrono::Utc> = row
-        .try_get("created_at")
-        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
-    let updated_at: chrono::DateTime<chrono::Utc> = row
-        .try_get("updated_at")
-        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+    let db_user_id: String = row.try_get("user_id").map_err(|e| AppError::Database {
+        message: e.to_string(),
+        source: None,
+    })?;
+    let email: String = row.try_get("email").map_err(|e| AppError::Database {
+        message: e.to_string(),
+        source: None,
+    })?;
+    let name: Option<String> = row.try_get("name").map_err(|e| AppError::Database {
+        message: e.to_string(),
+        source: None,
+    })?;
+    let provider: String = row.try_get("provider").map_err(|e| AppError::Database {
+        message: e.to_string(),
+        source: None,
+    })?;
+    let provider_user_id: String =
+        row.try_get("provider_user_id")
+            .map_err(|e| AppError::Database {
+                message: e.to_string(),
+                source: None,
+            })?;
+    let is_admin: bool = row.try_get("is_admin").map_err(|e| AppError::Database {
+        message: e.to_string(),
+        source: None,
+    })?;
+    let is_editor: bool = row.try_get("is_editor").map_err(|e| AppError::Database {
+        message: e.to_string(),
+        source: None,
+    })?;
+    let created_at: chrono::DateTime<chrono::Utc> =
+        row.try_get("created_at").map_err(|e| AppError::Database {
+            message: e.to_string(),
+            source: None,
+        })?;
+    let updated_at: chrono::DateTime<chrono::Utc> =
+        row.try_get("updated_at").map_err(|e| AppError::Database {
+            message: e.to_string(),
+            source: None,
+        })?;
 
     let mut roles = vec![UserRole::Authenticated];
     if is_editor {
@@ -378,7 +400,7 @@ async fn db_find_user_by_provider(
     pool: &PgPool,
     provider_name: &str,
     provider_user_id: &str,
-) -> Result<Option<User>, UserRepositoryError> {
+) -> AppResult<Option<User>> {
     let row = sqlx::query(
         r#"
         SELECT user_id, email, name, provider, provider_user_id, is_admin, is_editor, created_at, updated_at
@@ -392,37 +414,50 @@ async fn db_find_user_by_provider(
     .await
     .map_err(|e| {
         error!("Database error finding user by provider: {}", e);
-        UserRepositoryError::InvalidData(format!("Database error: {}", e))
+        AppError::Database { message: format!("Database error: {}", e), source: None }
     })?;
 
     if let Some(row) = row {
-        let db_user_id: String = row
-            .try_get("user_id")
-            .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
-        let email: String = row
-            .try_get("email")
-            .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
-        let name: Option<String> = row
-            .try_get("name")
-            .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
-        let provider: String = row
-            .try_get("provider")
-            .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
-        let provider_user_id: String = row
-            .try_get("provider_user_id")
-            .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
-        let is_admin: bool = row
-            .try_get("is_admin")
-            .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
-        let is_editor: bool = row
-            .try_get("is_editor")
-            .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
-        let created_at: chrono::DateTime<chrono::Utc> = row
-            .try_get("created_at")
-            .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
-        let updated_at: chrono::DateTime<chrono::Utc> = row
-            .try_get("updated_at")
-            .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+        let db_user_id: String = row.try_get("user_id").map_err(|e| AppError::Database {
+            message: e.to_string(),
+            source: None,
+        })?;
+        let email: String = row.try_get("email").map_err(|e| AppError::Database {
+            message: e.to_string(),
+            source: None,
+        })?;
+        let name: Option<String> = row.try_get("name").map_err(|e| AppError::Database {
+            message: e.to_string(),
+            source: None,
+        })?;
+        let provider: String = row.try_get("provider").map_err(|e| AppError::Database {
+            message: e.to_string(),
+            source: None,
+        })?;
+        let provider_user_id: String =
+            row.try_get("provider_user_id")
+                .map_err(|e| AppError::Database {
+                    message: e.to_string(),
+                    source: None,
+                })?;
+        let is_admin: bool = row.try_get("is_admin").map_err(|e| AppError::Database {
+            message: e.to_string(),
+            source: None,
+        })?;
+        let is_editor: bool = row.try_get("is_editor").map_err(|e| AppError::Database {
+            message: e.to_string(),
+            source: None,
+        })?;
+        let created_at: chrono::DateTime<chrono::Utc> =
+            row.try_get("created_at").map_err(|e| AppError::Database {
+                message: e.to_string(),
+                source: None,
+            })?;
+        let updated_at: chrono::DateTime<chrono::Utc> =
+            row.try_get("updated_at").map_err(|e| AppError::Database {
+                message: e.to_string(),
+                source: None,
+            })?;
 
         let mut roles = vec![UserRole::Authenticated];
         if is_editor {
@@ -471,7 +506,7 @@ pub fn upsert_user(
     name: Option<String>,
     provider_name: String,
     provider_user_id: String,
-) -> Result<String, UserRepositoryError> {
+) -> AppResult<String> {
     let bootstrap_admins = get_bootstrap_admins();
     upsert_user_with_bootstrap(
         email,
@@ -503,24 +538,27 @@ pub fn upsert_user_with_bootstrap(
     provider_name: String,
     provider_user_id: String,
     bootstrap_admins: &[String],
-) -> Result<String, UserRepositoryError> {
+) -> AppResult<String> {
     // Validate inputs
     if email.trim().is_empty() {
-        return Err(UserRepositoryError::InvalidData(
-            "Email cannot be empty".to_string(),
-        ));
+        return Err(AppError::Validation {
+            field: "email".to_string(),
+            reason: "Email cannot be empty".to_string(),
+        });
     }
 
     if provider_name.trim().is_empty() {
-        return Err(UserRepositoryError::InvalidData(
-            "Provider name cannot be empty".to_string(),
-        ));
+        return Err(AppError::Validation {
+            field: "provider_name".to_string(),
+            reason: "Provider name cannot be empty".to_string(),
+        });
     }
 
     if provider_user_id.trim().is_empty() {
-        return Err(UserRepositoryError::InvalidData(
-            "Provider user ID cannot be empty".to_string(),
-        ));
+        return Err(AppError::Validation {
+            field: "provider_user_id".to_string(),
+            reason: "Provider user ID cannot be empty".to_string(),
+        });
     }
 
     // Check if this email is in the bootstrap admins list
@@ -593,7 +631,7 @@ fn upsert_user_in_memory(
     provider_name: String,
     provider_user_id: String,
     bootstrap_admins: &[String],
-) -> Result<String, UserRepositoryError> {
+) -> AppResult<String> {
     let provider_key = ProviderKey {
         provider_name: provider_name.clone(),
         provider_user_id: provider_user_id.clone(),
@@ -645,7 +683,7 @@ fn upsert_user_in_memory(
 }
 
 /// Get a user by their internal ID
-pub fn get_user(user_id: &str) -> Result<User, UserRepositoryError> {
+pub fn get_user(user_id: &str) -> AppResult<User> {
     // Try database first
     if let Some(db) = get_db_pool() {
         let result = tokio::task::block_in_place(|| {
@@ -655,7 +693,9 @@ pub fn get_user(user_id: &str) -> Result<User, UserRepositoryError> {
 
         match result {
             Ok(user) => return Ok(user),
-            Err(UserRepositoryError::UserNotFound(_)) => {
+            Err(AppError::Validation { field, reason })
+                if field == "user_id" && reason.contains("User not found") =>
+            {
                 // User not found in database, fall back to in-memory
             }
             Err(e) => {
@@ -669,14 +709,17 @@ pub fn get_user(user_id: &str) -> Result<User, UserRepositoryError> {
     users
         .get(user_id)
         .cloned()
-        .ok_or_else(|| UserRepositoryError::UserNotFound(user_id.to_string()))
+        .ok_or_else(|| AppError::Validation {
+            field: "user_id".to_string(),
+            reason: format!("User not found: {}", user_id),
+        })
 }
 
 /// Find a user by provider credentials
 pub fn find_user_by_provider(
     provider_name: &str,
     provider_user_id: &str,
-) -> Result<Option<User>, UserRepositoryError> {
+) -> AppResult<Option<User>> {
     // Try database first
     if let Some(db) = get_db_pool() {
         let result = tokio::task::block_in_place(|| {
@@ -718,7 +761,7 @@ async fn db_update_user_roles(
     user_id: &str,
     is_admin: bool,
     is_editor: bool,
-) -> Result<(), UserRepositoryError> {
+) -> AppResult<()> {
     let now = chrono::Utc::now();
 
     sqlx::query(
@@ -736,7 +779,10 @@ async fn db_update_user_roles(
     .await
     .map_err(|e| {
         error!("Database error updating user roles: {}", e);
-        UserRepositoryError::InvalidData(format!("Database error: {}", e))
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
     })?;
 
     debug!(
@@ -750,7 +796,7 @@ async fn db_update_user_roles(
 ///
 /// Completely replaces the user's role set with the provided roles.
 /// Always ensures at least Authenticated role is present.
-pub fn update_user_roles(user_id: &str, roles: Vec<UserRole>) -> Result<(), UserRepositoryError> {
+pub fn update_user_roles(user_id: &str, roles: Vec<UserRole>) -> AppResult<()> {
     // Calculate boolean flags from roles
     let is_admin = roles.iter().any(|r| matches!(r, UserRole::Administrator));
     let is_editor = roles.iter().any(|r| matches!(r, UserRole::Editor));
@@ -800,9 +846,10 @@ pub fn update_user_roles(user_id: &str, roles: Vec<UserRole>) -> Result<(), User
     // Fall back to in-memory only
     let mut users = safe_lock_users()?;
 
-    let user = users
-        .get_mut(user_id)
-        .ok_or_else(|| UserRepositoryError::UserNotFound(user_id.to_string()))?;
+    let user = users.get_mut(user_id).ok_or_else(|| AppError::Validation {
+        field: "user_id".to_string(),
+        reason: format!("User not found: {}", user_id),
+    })?;
 
     // Ensure Authenticated role is always present
     let mut new_roles = roles;
@@ -821,7 +868,7 @@ pub fn update_user_roles(user_id: &str, roles: Vec<UserRole>) -> Result<(), User
 }
 
 /// Add a role to a user
-pub fn add_user_role(user_id: &str, role: UserRole) -> Result<(), UserRepositoryError> {
+pub fn add_user_role(user_id: &str, role: UserRole) -> AppResult<()> {
     // Get current user to determine new role flags
     let current_user = get_user(user_id)?;
     let mut new_roles = current_user.roles.clone();
@@ -836,12 +883,13 @@ pub fn add_user_role(user_id: &str, role: UserRole) -> Result<(), UserRepository
 }
 
 /// Remove a role from a user
-pub fn remove_user_role(user_id: &str, role: &UserRole) -> Result<(), UserRepositoryError> {
+pub fn remove_user_role(user_id: &str, role: &UserRole) -> AppResult<()> {
     // Don't allow removing Authenticated role
     if matches!(role, UserRole::Authenticated) {
-        return Err(UserRepositoryError::InvalidData(
-            "Cannot remove Authenticated role".to_string(),
-        ));
+        return Err(AppError::Validation {
+            field: "role".to_string(),
+            reason: "Cannot remove Authenticated role".to_string(),
+        });
     }
 
     // Get current user to determine new role flags
@@ -854,10 +902,10 @@ pub fn remove_user_role(user_id: &str, role: &UserRole) -> Result<(), UserReposi
 }
 
 /// List all users (for admin purposes)
-pub fn list_users() -> Result<Vec<User>, UserRepositoryError> {
+pub fn list_users() -> AppResult<Vec<User>> {
     // Try database first
     if let Some(db) = get_db_pool() {
-        let result: Result<Vec<User>, UserRepositoryError> = tokio::task::block_in_place(|| {
+        let result: AppResult<Vec<User>> = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 let pool = db.pool();
                 let rows = sqlx::query(
@@ -871,38 +919,38 @@ pub fn list_users() -> Result<Vec<User>, UserRepositoryError> {
                 .await
                 .map_err(|e| {
                     error!("Database error listing users: {}", e);
-                    UserRepositoryError::InvalidData(format!("Database error: {}", e))
+                    AppError::Database { message: format!("Database error: {}", e), source: None }
                 })?;
 
                 let mut users = Vec::new();
                 for row in rows {
                     let db_user_id: String = row
                         .try_get("user_id")
-                        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+                        .map_err(|e| AppError::Database { message: e.to_string(), source: None })?;
                     let email: String = row
                         .try_get("email")
-                        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+                        .map_err(|e| AppError::Database { message: e.to_string(), source: None })?;
                     let name: Option<String> = row
                         .try_get("name")
-                        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+                        .map_err(|e| AppError::Database { message: e.to_string(), source: None })?;
                     let provider: String = row
                         .try_get("provider")
-                        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+                        .map_err(|e| AppError::Database { message: e.to_string(), source: None })?;
                     let provider_user_id: String = row
                         .try_get("provider_user_id")
-                        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+                        .map_err(|e| AppError::Database { message: e.to_string(), source: None })?;
                     let is_admin: bool = row
                         .try_get("is_admin")
-                        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+                        .map_err(|e| AppError::Database { message: e.to_string(), source: None })?;
                     let is_editor: bool = row
                         .try_get("is_editor")
-                        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+                        .map_err(|e| AppError::Database { message: e.to_string(), source: None })?;
                     let created_at: chrono::DateTime<chrono::Utc> = row
                         .try_get("created_at")
-                        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+                        .map_err(|e| AppError::Database { message: e.to_string(), source: None })?;
                     let updated_at: chrono::DateTime<chrono::Utc> = row
                         .try_get("updated_at")
-                        .map_err(|e| UserRepositoryError::InvalidData(e.to_string()))?;
+                        .map_err(|e| AppError::Database { message: e.to_string(), source: None })?;
 
                     let mut roles = vec![UserRole::Authenticated];
                     if is_editor {
@@ -965,13 +1013,13 @@ pub fn list_users() -> Result<Vec<User>, UserRepositoryError> {
 }
 
 /// Get user count
-pub fn get_user_count() -> Result<usize, UserRepositoryError> {
+pub fn get_user_count() -> AppResult<usize> {
     let users = safe_lock_users()?;
     Ok(users.len())
 }
 
 /// Delete a user (for testing/admin purposes)
-pub fn delete_user(user_id: &str) -> Result<bool, UserRepositoryError> {
+pub fn delete_user(user_id: &str) -> AppResult<bool> {
     let mut users = safe_lock_users()?;
     let mut provider_index = safe_lock_provider_index()?;
 

@@ -192,6 +192,19 @@ pub mod errors {
     }
 }
 
+// Consolidated application error type
+pub mod app_error;
+
+// Re-export the unified error type for convenience
+pub use app_error::{AppError, AppResult};
+
+/// Convert AppError to ErrorResponse for HTTP responses
+impl From<crate::error::AppError> for ErrorResponse {
+    fn from(err: crate::error::AppError) -> Self {
+        err.to_error_response("/", "GET", "unknown")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

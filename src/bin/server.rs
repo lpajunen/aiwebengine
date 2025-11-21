@@ -1,10 +1,10 @@
-use aiwebengine::{config::AppConfig, start_server_with_config};
+use aiwebengine::{AppResult, config::AppConfig, start_server_with_config};
 use clap::{Arg, Command};
 use tokio::sync::oneshot;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> AppResult<()> {
     // Parse command line arguments
     let matches = Command::new("aiwebengine-server")
         .version("0.1.0")
@@ -27,16 +27,13 @@ async fn main() -> anyhow::Result<()> {
 
     // Load configuration first to get logging preferences
     let config = if let Some(config_path) = matches.get_one::<String>("config") {
-        AppConfig::load_from_file(config_path)?
+        AppConfig::load_from_file(config_path).map_err(|e| {
+            aiwebengine::AppError::config(format!("Failed to load configuration from file: {}", e))
+        })?
     } else {
-        AppConfig::load().unwrap_or_else(|e| {
-            eprintln!(
-                "Warning: Failed to load configuration: {}. Using defaults.",
-                e
-            );
-            eprintln!("Error details: {:?}", e);
-            AppConfig::default()
-        })
+        AppConfig::load().map_err(|e| {
+            aiwebengine::AppError::config(format!("Failed to load configuration: {}", e))
+        })?
     };
 
     // Initialize logging based on configuration, but allow RUST_LOG to override
@@ -124,7 +121,10 @@ async fn main() -> anyhow::Result<()> {
     // Validate configuration during startup
     if let Err(e) = config.validate() {
         eprintln!("Configuration error: {}", e);
-        std::process::exit(1);
+        return Err(aiwebengine::AppError::ConfigValidation {
+            field: "configuration".to_string(),
+            reason: e.to_string(),
+        });
     }
 
     tracing::debug!("Configuration validation completed successfully");

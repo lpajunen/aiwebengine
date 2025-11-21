@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::error::{AppError, AppResult};
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
@@ -180,8 +180,8 @@ static DYNAMIC_SHARED_STORAGE: OnceLock<Mutex<HashMap<String, HashMap<String, St
 static SCRIPT_PRIVILEGE_OVERRIDES: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
 
 /// Safe mutex access with recovery from poisoned state
-fn safe_lock_scripts()
--> Result<std::sync::MutexGuard<'static, HashMap<String, ScriptMetadata>>, RepositoryError> {
+fn safe_lock_scripts() -> AppResult<std::sync::MutexGuard<'static, HashMap<String, ScriptMetadata>>>
+{
     let store = DYNAMIC_SCRIPTS.get_or_init(|| Mutex::new(HashMap::new()));
 
     match store.lock() {
@@ -192,14 +192,15 @@ fn safe_lock_scripts()
             // In production, you might want to restart the component or use more sophisticated recovery
             store.lock().map_err(|e| {
                 error!("Failed to recover from poisoned mutex: {}", e);
-                RepositoryError::LockError(format!("Unrecoverable mutex poisoning: {}", e))
+                AppError::Internal {
+                    message: format!("Unrecoverable mutex poisoning: {}", e),
+                }
             })
         }
     }
 }
 
-fn safe_lock_logs()
--> Result<std::sync::MutexGuard<'static, HashMap<String, Vec<String>>>, RepositoryError> {
+fn safe_lock_logs() -> AppResult<std::sync::MutexGuard<'static, HashMap<String, Vec<String>>>> {
     let store = DYNAMIC_LOGS.get_or_init(|| Mutex::new(HashMap::new()));
 
     match store.lock() {
@@ -208,14 +209,15 @@ fn safe_lock_logs()
             warn!("Logs mutex was poisoned, recovering with new data");
             store.lock().map_err(|e| {
                 error!("Failed to recover from poisoned logs mutex: {}", e);
-                RepositoryError::LockError(format!("Unrecoverable mutex poisoning: {}", e))
+                AppError::Internal {
+                    message: format!("Unrecoverable mutex poisoning: {}", e),
+                }
             })
         }
     }
 }
 
-fn safe_lock_assets()
--> Result<std::sync::MutexGuard<'static, HashMap<String, Asset>>, RepositoryError> {
+fn safe_lock_assets() -> AppResult<std::sync::MutexGuard<'static, HashMap<String, Asset>>> {
     let store = DYNAMIC_ASSETS.get_or_init(|| Mutex::new(HashMap::new()));
 
     match store.lock() {
@@ -224,7 +226,9 @@ fn safe_lock_assets()
             warn!("Assets mutex was poisoned, recovering with new data");
             store.lock().map_err(|e| {
                 error!("Failed to recover from poisoned assets mutex: {}", e);
-                RepositoryError::LockError(format!("Unrecoverable mutex poisoning: {}", e))
+                AppError::Internal {
+                    message: format!("Unrecoverable mutex poisoning: {}", e),
+                }
             })
         }
     }
@@ -232,7 +236,7 @@ fn safe_lock_assets()
 
 type SharedStorageGuard<'a> = std::sync::MutexGuard<'a, HashMap<String, HashMap<String, String>>>;
 
-fn safe_lock_shared_storage() -> Result<SharedStorageGuard<'static>, RepositoryError> {
+fn safe_lock_shared_storage() -> AppResult<SharedStorageGuard<'static>> {
     let store = DYNAMIC_SHARED_STORAGE.get_or_init(|| Mutex::new(HashMap::new()));
 
     match store.lock() {
@@ -244,14 +248,16 @@ fn safe_lock_shared_storage() -> Result<SharedStorageGuard<'static>, RepositoryE
                     "Failed to recover from poisoned shared storage mutex: {}",
                     e
                 );
-                RepositoryError::LockError(format!("Unrecoverable mutex poisoning: {}", e))
+                AppError::Internal {
+                    message: format!("Unrecoverable mutex poisoning: {}", e),
+                }
             })
         }
     }
 }
 
 fn safe_lock_privilege_overrides()
--> Result<std::sync::MutexGuard<'static, HashMap<String, bool>>, RepositoryError> {
+-> AppResult<std::sync::MutexGuard<'static, HashMap<String, bool>>> {
     let store = SCRIPT_PRIVILEGE_OVERRIDES.get_or_init(|| Mutex::new(HashMap::new()));
 
     match store.lock() {
@@ -260,7 +266,9 @@ fn safe_lock_privilege_overrides()
             warn!("Privilege override mutex was poisoned, recovering with new data");
             store.lock().map_err(|e| {
                 error!("Failed to recover from poisoned privilege mutex: {}", e);
-                RepositoryError::LockError(format!("Unrecoverable mutex poisoning: {}", e))
+                AppError::Internal {
+                    message: format!("Unrecoverable mutex poisoning: {}", e),
+                }
             })
         }
     }
@@ -272,7 +280,7 @@ fn get_db_pool() -> Option<std::sync::Arc<crate::database::Database>> {
 }
 
 /// Database-backed upsert script
-async fn db_upsert_script(pool: &PgPool, uri: &str, content: &str) -> Result<(), RepositoryError> {
+async fn db_upsert_script(pool: &PgPool, uri: &str, content: &str) -> AppResult<()> {
     let now = chrono::Utc::now();
 
     // Extract name from URI (last segment after /)
@@ -294,7 +302,10 @@ async fn db_upsert_script(pool: &PgPool, uri: &str, content: &str) -> Result<(),
     .await
     .map_err(|e| {
         error!("Database error updating script: {}", e);
-        RepositoryError::InvalidData(format!("Database error: {}", e))
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
     })?;
 
     if update_result.rows_affected() > 0 {
@@ -317,7 +328,10 @@ async fn db_upsert_script(pool: &PgPool, uri: &str, content: &str) -> Result<(),
     .await
     .map_err(|e| {
         error!("Database error creating script: {}", e);
-        RepositoryError::InvalidData(format!("Database error: {}", e))
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
     })?;
 
     debug!("Created new script in database: {}", uri);
@@ -325,7 +339,7 @@ async fn db_upsert_script(pool: &PgPool, uri: &str, content: &str) -> Result<(),
 }
 
 /// Database-backed get script
-async fn db_get_script(pool: &PgPool, uri: &str) -> Result<Option<String>, RepositoryError> {
+async fn db_get_script(pool: &PgPool, uri: &str) -> AppResult<Option<String>> {
     let row = sqlx::query(
         r#"
         SELECT content FROM scripts WHERE uri = $1
@@ -336,13 +350,19 @@ async fn db_get_script(pool: &PgPool, uri: &str) -> Result<Option<String>, Repos
     .await
     .map_err(|e| {
         error!("Database error getting script: {}", e);
-        RepositoryError::InvalidData(format!("Database error: {}", e))
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
     })?;
 
     if let Some(row) = row {
         let content: String = row.try_get("content").map_err(|e| {
             error!("Database error getting content: {}", e);
-            RepositoryError::InvalidData(format!("Database error: {}", e))
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
         })?;
         Ok(Some(content))
     } else {
@@ -351,7 +371,7 @@ async fn db_get_script(pool: &PgPool, uri: &str) -> Result<Option<String>, Repos
 }
 
 /// Database-backed list all scripts
-async fn db_list_scripts(pool: &PgPool) -> Result<HashMap<String, String>, RepositoryError> {
+async fn db_list_scripts(pool: &PgPool) -> AppResult<HashMap<String, String>> {
     let rows = sqlx::query(
         r#"
         SELECT uri, content FROM scripts ORDER BY uri
@@ -361,18 +381,27 @@ async fn db_list_scripts(pool: &PgPool) -> Result<HashMap<String, String>, Repos
     .await
     .map_err(|e| {
         error!("Database error listing scripts: {}", e);
-        RepositoryError::InvalidData(format!("Database error: {}", e))
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
     })?;
 
     let mut scripts = HashMap::new();
     for row in rows {
         let uri: String = row.try_get("uri").map_err(|e| {
             error!("Database error getting uri: {}", e);
-            RepositoryError::InvalidData(format!("Database error: {}", e))
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
         })?;
         let content: String = row.try_get("content").map_err(|e| {
             error!("Database error getting content: {}", e);
-            RepositoryError::InvalidData(format!("Database error: {}", e))
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
         })?;
         scripts.insert(uri, content);
     }
@@ -381,7 +410,7 @@ async fn db_list_scripts(pool: &PgPool) -> Result<HashMap<String, String>, Repos
 }
 
 /// Database-backed delete script
-async fn db_delete_script(pool: &PgPool, uri: &str) -> Result<bool, RepositoryError> {
+async fn db_delete_script(pool: &PgPool, uri: &str) -> AppResult<bool> {
     let result = sqlx::query(
         r#"
         DELETE FROM scripts WHERE uri = $1
@@ -392,7 +421,10 @@ async fn db_delete_script(pool: &PgPool, uri: &str) -> Result<bool, RepositoryEr
     .await
     .map_err(|e| {
         error!("Database error deleting script: {}", e);
-        RepositoryError::InvalidData(format!("Database error: {}", e))
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
     })?;
 
     let existed = result.rows_affected() > 0;
@@ -406,10 +438,7 @@ async fn db_delete_script(pool: &PgPool, uri: &str) -> Result<bool, RepositoryEr
 }
 
 /// Database-backed getter for script privilege flag
-async fn db_get_script_privileged(
-    pool: &PgPool,
-    uri: &str,
-) -> Result<Option<bool>, RepositoryError> {
+async fn db_get_script_privileged(pool: &PgPool, uri: &str) -> AppResult<Option<bool>> {
     let row = sqlx::query(
         r#"
         SELECT privileged FROM scripts WHERE uri = $1
@@ -420,13 +449,19 @@ async fn db_get_script_privileged(
     .await
     .map_err(|e| {
         error!("Database error getting script privilege: {}", e);
-        RepositoryError::InvalidData(format!("Database error: {}", e))
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
     })?;
 
     if let Some(row) = row {
         let privileged: bool = row.try_get("privileged").map_err(|e| {
             error!("Database error parsing privilege flag: {}", e);
-            RepositoryError::InvalidData(format!("Database error: {}", e))
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
         })?;
         Ok(Some(privileged))
     } else {
@@ -435,11 +470,7 @@ async fn db_get_script_privileged(
 }
 
 /// Database-backed setter for script privilege flag
-async fn db_set_script_privileged(
-    pool: &PgPool,
-    uri: &str,
-    privileged: bool,
-) -> Result<(), RepositoryError> {
+async fn db_set_script_privileged(pool: &PgPool, uri: &str, privileged: bool) -> AppResult<()> {
     sqlx::query(
         r#"
         UPDATE scripts SET privileged = $1, updated_at = $2 WHERE uri = $3
@@ -452,7 +483,10 @@ async fn db_set_script_privileged(
     .await
     .map_err(|e| {
         error!("Database error updating script privilege: {}", e);
-        RepositoryError::InvalidData(format!("Database error: {}", e))
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
     })?;
 
     Ok(())
@@ -464,7 +498,7 @@ async fn db_set_shared_storage_item(
     script_uri: &str,
     key: &str,
     value: &str,
-) -> Result<(), RepositoryError> {
+) -> AppResult<()> {
     let now = chrono::Utc::now();
 
     // Try to update existing item
@@ -483,7 +517,10 @@ async fn db_set_shared_storage_item(
     .await
     .map_err(|e| {
         error!("Database error updating shared storage: {}", e);
-        RepositoryError::InvalidData(format!("Database error: {}", e))
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
     })?;
 
     if update_result.rows_affected() > 0 {
@@ -509,7 +546,10 @@ async fn db_set_shared_storage_item(
     .await
     .map_err(|e| {
         error!("Database error creating shared storage item: {}", e);
-        RepositoryError::InvalidData(format!("Database error: {}", e))
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
     })?;
 
     debug!(
@@ -524,7 +564,7 @@ async fn db_get_shared_storage_item(
     pool: &PgPool,
     script_uri: &str,
     key: &str,
-) -> Result<Option<String>, RepositoryError> {
+) -> AppResult<Option<String>> {
     let row = sqlx::query(
         r#"
         SELECT value FROM shared_storage WHERE script_uri = $1 AND key = $2
@@ -536,13 +576,19 @@ async fn db_get_shared_storage_item(
     .await
     .map_err(|e| {
         error!("Database error getting shared storage item: {}", e);
-        RepositoryError::InvalidData(format!("Database error: {}", e))
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
     })?;
 
     if let Some(row) = row {
         let value: String = row.try_get("value").map_err(|e| {
             error!("Database error getting value: {}", e);
-            RepositoryError::InvalidData(format!("Database error: {}", e))
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
         })?;
         Ok(Some(value))
     } else {
@@ -555,7 +601,7 @@ async fn db_remove_shared_storage_item(
     pool: &PgPool,
     script_uri: &str,
     key: &str,
-) -> Result<bool, RepositoryError> {
+) -> AppResult<bool> {
     let result = sqlx::query(
         r#"
         DELETE FROM shared_storage WHERE script_uri = $1 AND key = $2
@@ -567,7 +613,10 @@ async fn db_remove_shared_storage_item(
     .await
     .map_err(|e| {
         error!("Database error removing shared storage item: {}", e);
-        RepositoryError::InvalidData(format!("Database error: {}", e))
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
     })?;
 
     let existed = result.rows_affected() > 0;
@@ -587,7 +636,7 @@ async fn db_remove_shared_storage_item(
 }
 
 /// Database-backed clear all shared storage for a script
-async fn db_clear_shared_storage(pool: &PgPool, script_uri: &str) -> Result<(), RepositoryError> {
+async fn db_clear_shared_storage(pool: &PgPool, script_uri: &str) -> AppResult<()> {
     sqlx::query(
         r#"
         DELETE FROM shared_storage WHERE script_uri = $1
@@ -598,7 +647,10 @@ async fn db_clear_shared_storage(pool: &PgPool, script_uri: &str) -> Result<(), 
     .await
     .map_err(|e| {
         error!("Database error clearing shared storage: {}", e);
-        RepositoryError::InvalidData(format!("Database error: {}", e))
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
     })?;
 
     debug!(
@@ -614,7 +666,7 @@ async fn db_insert_log_message(
     script_uri: &str,
     message: &str,
     log_level: &str,
-) -> Result<(), RepositoryError> {
+) -> AppResult<()> {
     sqlx::query(
         r#"
         INSERT INTO logs (script_uri, message, log_level, created_at)
@@ -628,7 +680,10 @@ async fn db_insert_log_message(
     .await
     .map_err(|e| {
         error!("Database error inserting log message: {}", e);
-        RepositoryError::InvalidData(format!("Database error: {}", e))
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
     })?;
 
     debug!(
@@ -639,10 +694,7 @@ async fn db_insert_log_message(
 }
 
 /// Database-backed fetch log messages for a script
-async fn db_fetch_log_messages(
-    pool: &PgPool,
-    script_uri: &str,
-) -> Result<Vec<LogEntry>, RepositoryError> {
+async fn db_fetch_log_messages(pool: &PgPool, script_uri: &str) -> AppResult<Vec<LogEntry>> {
     let rows = sqlx::query(
         r#"
         SELECT message, log_level, created_at FROM logs
@@ -655,7 +707,10 @@ async fn db_fetch_log_messages(
     .await
     .map_err(|e| {
         error!("Database error fetching log messages: {}", e);
-        RepositoryError::InvalidData(format!("Database error: {}", e))
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
     })?;
 
     let messages = rows
@@ -671,14 +726,17 @@ async fn db_fetch_log_messages(
         .collect::<Result<Vec<LogEntry>, sqlx::Error>>()
         .map_err(|e| {
             error!("Database error getting message/level/timestamp: {}", e);
-            RepositoryError::InvalidData(format!("Database error: {}", e))
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
         })?;
 
     Ok(messages)
 }
 
 /// Database-backed fetch all log messages
-async fn db_fetch_all_log_messages(pool: &PgPool) -> Result<Vec<LogEntry>, RepositoryError> {
+async fn db_fetch_all_log_messages(pool: &PgPool) -> AppResult<Vec<LogEntry>> {
     let rows = sqlx::query(
         r#"
         SELECT message, log_level, created_at FROM logs
@@ -689,7 +747,10 @@ async fn db_fetch_all_log_messages(pool: &PgPool) -> Result<Vec<LogEntry>, Repos
     .await
     .map_err(|e| {
         error!("Database error fetching all log messages: {}", e);
-        RepositoryError::InvalidData(format!("Database error: {}", e))
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
     })?;
 
     let messages = rows
@@ -705,14 +766,17 @@ async fn db_fetch_all_log_messages(pool: &PgPool) -> Result<Vec<LogEntry>, Repos
         .collect::<Result<Vec<LogEntry>, sqlx::Error>>()
         .map_err(|e| {
             error!("Database error getting message/level/timestamp: {}", e);
-            RepositoryError::InvalidData(format!("Database error: {}", e))
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
         })?;
 
     Ok(messages)
 }
 
 /// Database-backed clear log messages for a script
-async fn db_clear_log_messages(pool: &PgPool, script_uri: &str) -> Result<(), RepositoryError> {
+async fn db_clear_log_messages(pool: &PgPool, script_uri: &str) -> AppResult<()> {
     sqlx::query(
         r#"
         DELETE FROM logs WHERE script_uri = $1
@@ -723,7 +787,10 @@ async fn db_clear_log_messages(pool: &PgPool, script_uri: &str) -> Result<(), Re
     .await
     .map_err(|e| {
         error!("Database error clearing log messages: {}", e);
-        RepositoryError::InvalidData(format!("Database error: {}", e))
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
     })?;
 
     debug!(
@@ -734,7 +801,7 @@ async fn db_clear_log_messages(pool: &PgPool, script_uri: &str) -> Result<(), Re
 }
 
 /// Database-backed prune log messages (keep only latest 20 per script)
-async fn db_prune_log_messages(pool: &PgPool) -> Result<(), RepositoryError> {
+async fn db_prune_log_messages(pool: &PgPool) -> AppResult<()> {
     // For each script_uri, keep only the 20 most recent messages
     sqlx::query(
         r#"
@@ -753,7 +820,10 @@ async fn db_prune_log_messages(pool: &PgPool) -> Result<(), RepositoryError> {
     .await
     .map_err(|e| {
         error!("Database error pruning log messages: {}", e);
-        RepositoryError::InvalidData(format!("Database error: {}", e))
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
     })?;
 
     debug!("Pruned log messages in database, keeping 20 entries per script");
@@ -761,7 +831,7 @@ async fn db_prune_log_messages(pool: &PgPool) -> Result<(), RepositoryError> {
 }
 
 /// Database-backed upsert asset
-async fn db_upsert_asset(pool: &PgPool, asset: &Asset) -> Result<(), RepositoryError> {
+async fn db_upsert_asset(pool: &PgPool, asset: &Asset) -> AppResult<()> {
     let now = chrono::Utc::now();
 
     // Try to update existing asset
@@ -780,7 +850,10 @@ async fn db_upsert_asset(pool: &PgPool, asset: &Asset) -> Result<(), RepositoryE
     .await
     .map_err(|e| {
         error!("Database error updating asset: {}", e);
-        RepositoryError::InvalidData(format!("Database error: {}", e))
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
     })?;
 
     if update_result.rows_affected() > 0 {
@@ -804,7 +877,10 @@ async fn db_upsert_asset(pool: &PgPool, asset: &Asset) -> Result<(), RepositoryE
     .await
     .map_err(|e| {
         error!("Database error creating asset: {}", e);
-        RepositoryError::InvalidData(format!("Database error: {}", e))
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
     })?;
 
     debug!("Created new asset in database: {}", asset.uri);
@@ -812,7 +888,7 @@ async fn db_upsert_asset(pool: &PgPool, asset: &Asset) -> Result<(), RepositoryE
 }
 
 /// Database-backed get asset by URI
-async fn db_get_asset(pool: &PgPool, uri: &str) -> Result<Option<Asset>, RepositoryError> {
+async fn db_get_asset(pool: &PgPool, uri: &str) -> AppResult<Option<Asset>> {
     let row = sqlx::query(
         r#"
         SELECT uri, mimetype, content, name, created_at, updated_at FROM assets WHERE uri = $1
@@ -823,29 +899,47 @@ async fn db_get_asset(pool: &PgPool, uri: &str) -> Result<Option<Asset>, Reposit
     .await
     .map_err(|e| {
         error!("Database error getting asset: {}", e);
-        RepositoryError::InvalidData(format!("Database error: {}", e))
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
     })?;
 
     if let Some(row) = row {
         let uri: String = row.try_get("uri").map_err(|e| {
             error!("Database error getting uri: {}", e);
-            RepositoryError::InvalidData(format!("Database error: {}", e))
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
         })?;
         let mimetype: String = row.try_get("mimetype").map_err(|e| {
             error!("Database error getting mimetype: {}", e);
-            RepositoryError::InvalidData(format!("Database error: {}", e))
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
         })?;
         let content: Vec<u8> = row.try_get("content").map_err(|e| {
             error!("Database error getting content: {}", e);
-            RepositoryError::InvalidData(format!("Database error: {}", e))
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
         })?;
         let created_at: chrono::DateTime<chrono::Utc> = row.try_get("created_at").map_err(|e| {
             error!("Database error getting created_at: {}", e);
-            RepositoryError::InvalidData(format!("Database error: {}", e))
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
         })?;
         let updated_at: chrono::DateTime<chrono::Utc> = row.try_get("updated_at").map_err(|e| {
             error!("Database error getting updated_at: {}", e);
-            RepositoryError::InvalidData(format!("Database error: {}", e))
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
         })?;
         let name: Option<String> = row.try_get("name").ok();
         Ok(Some(Asset {
@@ -862,7 +956,7 @@ async fn db_get_asset(pool: &PgPool, uri: &str) -> Result<Option<Asset>, Reposit
 }
 
 /// Database-backed list all assets
-async fn db_list_assets(pool: &PgPool) -> Result<HashMap<String, Asset>, RepositoryError> {
+async fn db_list_assets(pool: &PgPool) -> AppResult<HashMap<String, Asset>> {
     let rows = sqlx::query(
         r#"
         SELECT uri, mimetype, content, name, created_at, updated_at FROM assets ORDER BY uri
@@ -872,30 +966,48 @@ async fn db_list_assets(pool: &PgPool) -> Result<HashMap<String, Asset>, Reposit
     .await
     .map_err(|e| {
         error!("Database error listing assets: {}", e);
-        RepositoryError::InvalidData(format!("Database error: {}", e))
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
     })?;
 
     let mut assets = HashMap::new();
     for row in rows {
         let uri: String = row.try_get("uri").map_err(|e| {
             error!("Database error getting uri: {}", e);
-            RepositoryError::InvalidData(format!("Database error: {}", e))
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
         })?;
         let mimetype: String = row.try_get("mimetype").map_err(|e| {
             error!("Database error getting mimetype: {}", e);
-            RepositoryError::InvalidData(format!("Database error: {}", e))
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
         })?;
         let content: Vec<u8> = row.try_get("content").map_err(|e| {
             error!("Database error getting content: {}", e);
-            RepositoryError::InvalidData(format!("Database error: {}", e))
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
         })?;
         let created_at: chrono::DateTime<chrono::Utc> = row.try_get("created_at").map_err(|e| {
             error!("Database error getting created_at: {}", e);
-            RepositoryError::InvalidData(format!("Database error: {}", e))
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
         })?;
         let updated_at: chrono::DateTime<chrono::Utc> = row.try_get("updated_at").map_err(|e| {
             error!("Database error getting updated_at: {}", e);
-            RepositoryError::InvalidData(format!("Database error: {}", e))
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
         })?;
         let name: Option<String> = row.try_get("name").ok();
         assets.insert(
@@ -915,7 +1027,7 @@ async fn db_list_assets(pool: &PgPool) -> Result<HashMap<String, Asset>, Reposit
 }
 
 /// Database-backed delete asset
-async fn db_delete_asset(pool: &PgPool, uri: &str) -> Result<bool, RepositoryError> {
+async fn db_delete_asset(pool: &PgPool, uri: &str) -> AppResult<bool> {
     let result = sqlx::query(
         r#"
         DELETE FROM assets WHERE uri = $1
@@ -926,7 +1038,10 @@ async fn db_delete_asset(pool: &PgPool, uri: &str) -> Result<bool, RepositoryErr
     .await
     .map_err(|e| {
         error!("Database error deleting asset: {}", e);
-        RepositoryError::InvalidData(format!("Database error: {}", e))
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
     })?;
 
     let existed = result.rows_affected() > 0;
@@ -1051,7 +1166,7 @@ pub fn fetch_script(uri: &str) -> Option<String> {
 }
 
 /// Determine current privilege state for a script
-pub fn get_script_security_profile(uri: &str) -> Result<ScriptSecurityProfile, RepositoryError> {
+pub fn get_script_security_profile(uri: &str) -> AppResult<ScriptSecurityProfile> {
     let default_privileged = default_privileged_for(uri);
 
     // Prefer database when configured
@@ -1111,15 +1226,15 @@ pub fn get_script_security_profile(uri: &str) -> Result<ScriptSecurityProfile, R
 }
 
 /// Helper used by security enforcement
-pub fn is_script_privileged(uri: &str) -> Result<bool, RepositoryError> {
+pub fn is_script_privileged(uri: &str) -> AppResult<bool> {
     Ok(get_script_security_profile(uri)?.privileged)
 }
 
 /// Update the privilege flag for a script
-pub fn set_script_privileged(uri: &str, privileged: bool) -> Result<(), RepositoryError> {
+pub fn set_script_privileged(uri: &str, privileged: bool) -> AppResult<()> {
     // Ensure script exists before toggling
     if fetch_script(uri).is_none() {
-        return Err(RepositoryError::ScriptNotFound(uri.to_string()));
+        return Err(RepositoryError::ScriptNotFound(uri.to_string()).into());
     }
 
     // Update database when available
@@ -1311,7 +1426,7 @@ pub fn fetch_all_log_messages() -> Vec<LogEntry> {
 }
 
 /// Clear log messages for a script
-pub fn clear_log_messages(script_uri: &str) -> Result<(), RepositoryError> {
+pub fn clear_log_messages(script_uri: &str) -> AppResult<()> {
     // Try database first if configured
     if let Some(db) = get_db_pool() {
         let result = tokio::task::block_in_place(|| {
@@ -1345,7 +1460,7 @@ pub fn clear_log_messages(script_uri: &str) -> Result<(), RepositoryError> {
 }
 
 /// Keep only the latest `limit` log messages (default 20) for each script URI and remove older ones
-pub fn prune_log_messages() -> Result<(), RepositoryError> {
+pub fn prune_log_messages() -> AppResult<()> {
     // Try database first if configured
     if let Some(db) = get_db_pool() {
         let result = tokio::task::block_in_place(|| {
@@ -1384,16 +1499,16 @@ pub fn prune_log_messages() -> Result<(), RepositoryError> {
 }
 
 /// Get script metadata for a specific URI
-pub fn get_script_metadata(uri: &str) -> Result<ScriptMetadata, RepositoryError> {
+pub fn get_script_metadata(uri: &str) -> AppResult<ScriptMetadata> {
     let guard = safe_lock_scripts()?;
     guard
         .get(uri)
         .cloned()
-        .ok_or_else(|| RepositoryError::ScriptNotFound(uri.to_string()))
+        .ok_or_else(|| RepositoryError::ScriptNotFound(uri.to_string()).into())
 }
 
 /// Get all script metadata
-pub fn get_all_script_metadata() -> Result<Vec<ScriptMetadata>, RepositoryError> {
+pub fn get_all_script_metadata() -> AppResult<Vec<ScriptMetadata>> {
     let guard = safe_lock_scripts()?;
     let mut metadata_list: Vec<ScriptMetadata> = guard.values().cloned().collect();
     drop(guard); // Release lock before calling get_script_security_profile
@@ -1409,7 +1524,7 @@ pub fn get_all_script_metadata() -> Result<Vec<ScriptMetadata>, RepositoryError>
 }
 
 /// Mark a script as initialized successfully
-pub fn mark_script_initialized(uri: &str) -> Result<(), RepositoryError> {
+pub fn mark_script_initialized(uri: &str) -> AppResult<()> {
     let mut guard = safe_lock_scripts()?;
 
     if let Some(metadata) = guard.get_mut(uri) {
@@ -1417,7 +1532,7 @@ pub fn mark_script_initialized(uri: &str) -> Result<(), RepositoryError> {
         debug!("Marked script as initialized: {}", uri);
         Ok(())
     } else {
-        Err(RepositoryError::ScriptNotFound(uri.to_string()))
+        Err(RepositoryError::ScriptNotFound(uri.to_string()).into())
     }
 }
 
@@ -1425,7 +1540,7 @@ pub fn mark_script_initialized(uri: &str) -> Result<(), RepositoryError> {
 pub fn mark_script_initialized_with_registrations(
     uri: &str,
     registrations: RouteRegistrations,
-) -> Result<(), RepositoryError> {
+) -> AppResult<()> {
     let mut guard = safe_lock_scripts()?;
 
     if let Some(metadata) = guard.get_mut(uri) {
@@ -1433,12 +1548,12 @@ pub fn mark_script_initialized_with_registrations(
         debug!("Marked script as initialized with registrations: {}", uri);
         Ok(())
     } else {
-        Err(RepositoryError::ScriptNotFound(uri.to_string()))
+        Err(RepositoryError::ScriptNotFound(uri.to_string()).into())
     }
 }
 
 /// Mark a script initialization as failed
-pub fn mark_script_init_failed(uri: &str, error: String) -> Result<(), RepositoryError> {
+pub fn mark_script_init_failed(uri: &str, error: String) -> AppResult<()> {
     let mut guard = safe_lock_scripts()?;
 
     if let Some(metadata) = guard.get_mut(uri) {
@@ -1446,23 +1561,21 @@ pub fn mark_script_init_failed(uri: &str, error: String) -> Result<(), Repositor
         debug!("Marked script init as failed: {} - {}", uri, error);
         Ok(())
     } else {
-        Err(RepositoryError::ScriptNotFound(uri.to_string()))
+        Err(RepositoryError::ScriptNotFound(uri.to_string()).into())
     }
 }
 
 /// Upsert script with error handling
-pub fn upsert_script(uri: &str, content: &str) -> Result<(), RepositoryError> {
+pub fn upsert_script(uri: &str, content: &str) -> AppResult<()> {
     if uri.trim().is_empty() {
-        return Err(RepositoryError::InvalidData(
-            "URI cannot be empty".to_string(),
-        ));
+        return Err(RepositoryError::InvalidData("URI cannot be empty".to_string()).into());
     }
 
     if content.len() > 1_000_000 {
         // 1MB limit
-        return Err(RepositoryError::InvalidData(
-            "Script content too large (>1MB)".to_string(),
-        ));
+        return Err(
+            RepositoryError::InvalidData("Script content too large (>1MB)".to_string()).into(),
+        );
     }
 
     // Try database first
@@ -1495,7 +1608,7 @@ pub fn upsert_script(uri: &str, content: &str) -> Result<(), RepositoryError> {
 }
 
 /// In-memory implementation of upsert script (existing logic)
-fn upsert_script_in_memory(uri: &str, content: &str) -> Result<(), RepositoryError> {
+fn upsert_script_in_memory(uri: &str, content: &str) -> AppResult<()> {
     let mut guard = safe_lock_scripts()?;
 
     // Check if script already exists
@@ -1522,7 +1635,7 @@ fn upsert_script_in_memory(uri: &str, content: &str) -> Result<(), RepositoryErr
 }
 
 /// Bootstrap hardcoded scripts into database on startup
-pub fn bootstrap_scripts() -> Result<(), RepositoryError> {
+pub fn bootstrap_scripts() -> AppResult<()> {
     if let Some(db) = get_db_pool() {
         let pool = db.pool();
 
@@ -1606,7 +1719,7 @@ pub fn bootstrap_scripts() -> Result<(), RepositoryError> {
 }
 
 /// Bootstrap hardcoded assets into database on startup
-pub fn bootstrap_assets() -> Result<(), RepositoryError> {
+pub fn bootstrap_assets() -> AppResult<()> {
     if let Some(db) = get_db_pool() {
         let pool = db.pool();
 
@@ -1854,24 +1967,20 @@ pub fn fetch_asset(uri: &str) -> Option<Asset> {
 }
 
 /// Upsert asset with validation and error handling
-pub fn upsert_asset(asset: Asset) -> Result<(), RepositoryError> {
+pub fn upsert_asset(asset: Asset) -> AppResult<()> {
     if asset.uri.trim().is_empty() {
-        return Err(RepositoryError::InvalidData(
-            "Asset URI cannot be empty".to_string(),
-        ));
+        return Err(RepositoryError::InvalidData("Asset URI cannot be empty".to_string()).into());
     }
 
     if asset.content.len() > 10_000_000 {
         // 10MB limit for assets
-        return Err(RepositoryError::InvalidData(
-            "Asset content too large (>10MB)".to_string(),
-        ));
+        return Err(
+            RepositoryError::InvalidData("Asset content too large (>10MB)".to_string()).into(),
+        );
     }
 
     if asset.mimetype.trim().is_empty() {
-        return Err(RepositoryError::InvalidData(
-            "MIME type cannot be empty".to_string(),
-        ));
+        return Err(RepositoryError::InvalidData("MIME type cannot be empty".to_string()).into());
     }
 
     // Try database first
@@ -1904,7 +2013,7 @@ pub fn upsert_asset(asset: Asset) -> Result<(), RepositoryError> {
 }
 
 /// In-memory implementation of upsert asset (existing logic)
-fn upsert_asset_in_memory(asset: &Asset) -> Result<(), RepositoryError> {
+fn upsert_asset_in_memory(asset: &Asset) -> AppResult<()> {
     let mut guard = safe_lock_assets()?;
 
     let uri = asset.uri.clone();
@@ -2014,28 +2123,18 @@ pub fn get_repository_stats() -> HashMap<String, usize> {
 }
 
 /// Set a shared storage item (key-value pair for a specific script)
-pub fn set_shared_storage_item(
-    script_uri: &str,
-    key: &str,
-    value: &str,
-) -> Result<(), RepositoryError> {
+pub fn set_shared_storage_item(script_uri: &str, key: &str, value: &str) -> AppResult<()> {
     if script_uri.trim().is_empty() {
-        return Err(RepositoryError::InvalidData(
-            "Script URI cannot be empty".to_string(),
-        ));
+        return Err(RepositoryError::InvalidData("Script URI cannot be empty".to_string()).into());
     }
 
     if key.trim().is_empty() {
-        return Err(RepositoryError::InvalidData(
-            "Key cannot be empty".to_string(),
-        ));
+        return Err(RepositoryError::InvalidData("Key cannot be empty".to_string()).into());
     }
 
     if value.len() > 1_000_000 {
         // 1MB limit per value
-        return Err(RepositoryError::InvalidData(
-            "Value too large (>1MB)".to_string(),
-        ));
+        return Err(RepositoryError::InvalidData("Value too large (>1MB)".to_string()).into());
     }
 
     // Try database first
@@ -2185,7 +2284,7 @@ pub fn remove_shared_storage_item(script_uri: &str, key: &str) -> bool {
 }
 
 /// Clear all shared storage items for a specific script
-pub fn clear_shared_storage(script_uri: &str) -> Result<(), RepositoryError> {
+pub fn clear_shared_storage(script_uri: &str) -> AppResult<()> {
     // Try database first
     if let Some(db) = get_db_pool() {
         let result = tokio::task::block_in_place(|| {
@@ -2233,11 +2332,7 @@ pub fn clear_shared_storage(script_uri: &str) -> Result<(), RepositoryError> {
 }
 
 /// In-memory implementation of set script storage item
-fn set_shared_storage_item_in_memory(
-    script_uri: &str,
-    key: &str,
-    value: &str,
-) -> Result<(), RepositoryError> {
+fn set_shared_storage_item_in_memory(script_uri: &str, key: &str, value: &str) -> AppResult<()> {
     let mut guard = safe_lock_shared_storage()?;
 
     let script_map = guard

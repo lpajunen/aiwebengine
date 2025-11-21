@@ -1,7 +1,6 @@
+use crate::error::AppResult;
 use crate::repository;
-use crate::repository::{
-    RepositoryError, get_all_script_metadata, get_script_metadata, mark_script_init_failed,
-};
+use crate::repository::{get_all_script_metadata, get_script_metadata, mark_script_init_failed};
 use std::time::{Duration, SystemTime};
 use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
@@ -193,7 +192,7 @@ impl ScriptInitializer {
     }
 
     /// Initialize all registered scripts (typically called on server startup)
-    pub async fn initialize_all_scripts(&self) -> Result<Vec<InitResult>, RepositoryError> {
+    pub async fn initialize_all_scripts(&self) -> AppResult<Vec<InitResult>> {
         info!("Initializing all registered scripts...");
         let start_time = std::time::Instant::now();
 
