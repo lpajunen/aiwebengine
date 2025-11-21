@@ -590,20 +590,10 @@ async fn initialize_auth_manager(
     Ok(Arc::new(auth_manager))
 }
 
-/// Starts the web server with the given shutdown receiver.
-///
-/// This function:
-/// 1. Sets up the Axum router with dynamic route handling
-/// 2. Starts the server on the configured address
-/// 3. Listens for shutdown signal
-pub async fn start_server(shutdown_rx: tokio::sync::oneshot::Receiver<()>) -> AppResult<u16> {
-    start_server_with_config(config::Config::from_env(), shutdown_rx).await
-}
-
 /// Starts the web server with custom configuration
 pub async fn start_server_with_config(
     config: config::Config,
-    mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+    shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) -> AppResult<u16> {
     // Initialize secrets manager
     let _secrets_manager = initialize_secrets(&config);
@@ -1453,151 +1443,120 @@ document.addEventListener('DOMContentLoaded', function() {
 
     app = app.layer(axum::middleware::from_fn(middleware::request_id_middleware));
 
-    let addr: std::net::SocketAddr = config
+    let (actual_port, actual_addr) = find_available_port(&config)?;
+
+    // Record startup in logs so tests can observe server start
+    repository::insert_log_message("server", "server started", "INFO");
+    debug!(
+        "Server configuration - host: {}, requested port: {}, actual port: {}",
+        config.server.host, config.server.port, actual_port
+    );
+
+    start_server_instance(app, actual_addr, shutdown_rx);
+
+    Ok(actual_port)
+}
+
+/// Finds an available port starting from the given port.
+/// Returns the available port and the socket address.
+fn find_available_port(config: &config::Config) -> AppResult<(u16, std::net::SocketAddr)> {
+    let base_addr: std::net::SocketAddr = config
         .server_address()
         .map_err(|e| AppError::config(format!("Invalid server address: {}", e)))?;
 
+    // Handle automatic port assignment (port 0)
+    if config.server.port == 0 {
+        let listener = std::net::TcpListener::bind(base_addr).map_err(|e| {
+            AppError::internal(format!("Failed to bind to auto-assigned port: {}", e))
+        })?;
+
+        let actual_port = listener
+            .local_addr()
+            .map_err(|e| AppError::internal(format!("Failed to get local address: {}", e)))?
+            .port();
+
+        let actual_addr = format!("{}:{}", config.server.host, actual_port)
+            .parse()
+            .map_err(|e| AppError::config(format!("Invalid server address: {}", e)))?;
+
+        info!("Auto-assigned port: {}", actual_port);
+        return Ok((actual_port, actual_addr));
+    }
+
     // Try to find an available port starting from the configured port
     let mut current_port = config.server.port;
-    let mut actual_addr = addr;
-    let mut attempts = 0;
-    const MAX_PORT_ATTEMPTS: u16 = 100; // Try up to 100 ports
+    const MAX_PORT_ATTEMPTS: u16 = 100;
 
-    loop {
-        // Handle automatic port assignment (port 0)
-        if config.server.port == 0 {
-            // Bind to port 0 to let OS assign a free port
-            let test_bind = std::net::TcpListener::bind(actual_addr);
-            match test_bind {
-                Ok(listener) => {
-                    // Get the actual port assigned by the OS
-                    let actual_port = listener
-                        .local_addr()
-                        .map_err(|e| {
-                            AppError::internal(format!("Failed to get local address: {}", e))
-                        })?
-                        .port();
-                    drop(listener);
+    for _attempt in 0..MAX_PORT_ATTEMPTS {
+        let addr = format!("{}:{}", config.server.host, current_port)
+            .parse()
+            .map_err(|e| AppError::config(format!("Invalid server address: {}", e)))?;
 
-                    let actual_addr = format!("{}:{}", config.server.host, actual_port)
-                        .parse()
-                        .map_err(|e| anyhow::anyhow!("Invalid server address: {}", e))?;
-
-                    info!("Auto-assigned port: {}", actual_port);
-
-                    // record startup in logs so tests can observe server start
-                    repository::insert_log_message("server", "server started", "INFO");
-                    debug!(
-                        "Server configuration - host: {}, requested port: {}, actual port: {}",
-                        config.server.host, config.server.port, actual_port
-                    );
-
-                    let svc = app.into_make_service();
-                    let server = Server::bind(actual_addr).serve(svc);
-
-                    // Spawn the server in a background task so we can return immediately
-                    tokio::spawn(async move {
-                        tokio::select! {
-                            res = server => {
-                                if let Err(e) = res {
-                                    eprintln!("Server error: {:?}", e);
-                                }
-                            },
-                            _ = &mut shutdown_rx => {
-                                /* graceful shutdown: stop accepting new connections */
-                            }
-                        }
-                    });
-
-                    return Ok(actual_port);
-                }
-                Err(e) => {
-                    return Err(AppError::internal(format!(
-                        "Failed to bind to auto-assigned port: {}",
-                        e
-                    )));
-                }
-            }
-        }
-
-        // First check if the port is available using TcpListener
-        let test_bind = std::net::TcpListener::bind(actual_addr);
-        match test_bind {
+        match std::net::TcpListener::bind(addr) {
             Ok(_) => {
-                // Port is available, close the test listener and proceed with axum-server
-                drop(test_bind);
-
-                // Successfully found an available port
                 if current_port != config.server.port {
                     info!(
                         "Requested port {} was in use, using port {} instead",
                         config.server.port, current_port
                     );
                 } else {
-                    info!("listening on {}", actual_addr);
+                    info!("listening on {}", addr);
                 }
-
-                // record startup in logs so tests can observe server start
-                repository::insert_log_message("server", "server started", "INFO");
+                return Ok((current_port, addr));
+            }
+            Err(e) if is_address_in_use(&e) => {
                 debug!(
-                    "Server configuration - host: {}, requested port: {}, actual port: {}",
-                    config.server.host, config.server.port, current_port
+                    "Port {} in use, trying port {}",
+                    current_port,
+                    current_port + 1
                 );
-
-                let svc = app.into_make_service();
-                let server = Server::bind(actual_addr).serve(svc);
-
-                // Spawn the server in a background task so we can return immediately
-                tokio::spawn(async move {
-                    tokio::select! {
-                        res = server => {
-                            if let Err(e) = res {
-                                eprintln!("Server error: {:?}", e);
-                            }
-                        },
-                        _ = &mut shutdown_rx => { /* graceful shutdown: stop accepting new connections */ }
-                    }
-                });
-
-                return Ok(current_port);
+                current_port += 1;
             }
             Err(e) => {
-                // Check if it's an "Address already in use" error
-                let error_msg = e.to_string().to_lowercase();
-                if error_msg.contains("address already in use")
-                    || error_msg.contains("address in use")
-                    || error_msg.contains("eaddrinuse")
-                    || e.kind() == std::io::ErrorKind::AddrInUse
-                {
-                    attempts += 1;
-                    if attempts >= MAX_PORT_ATTEMPTS {
-                        return Err(AppError::internal(format!(
-                            "Could not find an available port after trying {} ports starting from {}",
-                            MAX_PORT_ATTEMPTS, config.server.port
-                        )));
-                    }
-
-                    // Try the next port
-                    current_port += 1;
-                    actual_addr = format!("{}:{}", config.server.host, current_port)
-                        .parse()
-                        .map_err(|e| AppError::config(format!("Invalid server address: {}", e)))?;
-
-                    debug!(
-                        "Port {} in use, trying port {}",
-                        current_port - 1,
-                        current_port
-                    );
-                } else {
-                    // Some other error, return it
-                    return Err(AppError::internal(format!(
-                        "Failed to bind to address {}: {}",
-                        actual_addr, e
-                    )));
-                }
+                return Err(AppError::internal(format!(
+                    "Failed to bind to address {}: {}",
+                    addr, e
+                )));
             }
         }
     }
+
+    Err(AppError::internal(format!(
+        "Could not find an available port after trying {} ports starting from {}",
+        MAX_PORT_ATTEMPTS, config.server.port
+    )))
+}
+
+/// Checks if the error indicates the address is already in use.
+fn is_address_in_use(error: &std::io::Error) -> bool {
+    let error_msg = error.to_string().to_lowercase();
+    error_msg.contains("address already in use")
+        || error_msg.contains("address in use")
+        || error_msg.contains("eaddrinuse")
+        || error.kind() == std::io::ErrorKind::AddrInUse
+}
+
+/// Starts the server with the given app and address, handling shutdown.
+fn start_server_instance(
+    app: Router,
+    addr: std::net::SocketAddr,
+    mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+) {
+    let svc = app.into_make_service();
+    let server = Server::bind(addr).serve(svc);
+
+    tokio::spawn(async move {
+        tokio::select! {
+            res = server => {
+                if let Err(e) = res {
+                    eprintln!("Server error: {:?}", e);
+                }
+            },
+            _ = &mut shutdown_rx => {
+                /* graceful shutdown: stop accepting new connections */
+            }
+        }
+    });
 }
 
 pub async fn start_server_without_shutdown() -> AppResult<u16> {
