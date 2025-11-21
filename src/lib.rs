@@ -849,44 +849,8 @@ async fn setup_routes(
                 .title("aiwebengine GraphQL Editor")
                 .finish();
 
-            // Create a custom HTML response with navigation
-            let navigation_script = r#"<script>
-document.addEventListener('DOMContentLoaded', function() {
-    setTimeout(function() {
-        const nav = document.createElement('div');
-        nav.id = 'aiwebengine-nav';
-        nav.style.cssText = 'position: absolute; top: 10px; right: 10px; z-index: 1000; display: flex; gap: 8px;';
-        
-        const editorLink = document.createElement('a');
-        editorLink.href = '/engine/editor';
-        editorLink.textContent = 'Editor';
-        editorLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
-        
-        const docsLink = document.createElement('a');
-        docsLink.href = '/engine/docs';
-        docsLink.textContent = 'Docs';
-        docsLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
-        
-        const swaggerLink = document.createElement('a');
-        swaggerLink.href = '/engine/swagger';
-        swaggerLink.textContent = 'API Docs';
-        swaggerLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
-        
-        nav.appendChild(editorLink);
-        nav.appendChild(docsLink);
-        nav.appendChild(swaggerLink);
-        document.body.appendChild(nav);
-        
-        // Add hover effects
-        const style = document.createElement('style');
-        style.textContent = '#aiwebengine-nav a:hover { background: #e5e7eb !important; border-color: #9ca3af !important; }';
-        document.head.appendChild(style);
-    }, 2000);
-});
-</script>"#;
-
             let mut full_html = graphiql_html;
-            full_html.push_str(navigation_script);
+            full_html.push_str(graphiql_navigation_script());
 
             axum::response::Html(full_html).into_response()
         }
@@ -903,72 +867,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 );
             }
 
-            let swagger_html = r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>aiwebengine API Documentation</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css" />
-    <style>
-        body { margin: 0; padding: 0; }
-        #swagger-ui { max-width: 1460px; margin: 0 auto; }
-    </style>
-</head>
-<body>
-    <div id="swagger-ui"></div>
-    <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-standalone-preset.js"></script>
-    <script>
-        window.onload = function() {
-            SwaggerUIBundle({
-                url: '/engine/openapi.json',
-                dom_id: '#swagger-ui',
-                deepLinking: true,
-                presets: [
-                    SwaggerUIBundle.presets.apis,
-                    SwaggerUIStandalonePreset
-                ],
-                layout: "StandaloneLayout"
-            });
-
-            // Add navigation after Swagger UI loads
-            setTimeout(function() {
-                const nav = document.createElement('div');
-                nav.id = 'aiwebengine-nav';
-                nav.style.cssText = 'position: fixed; top: 10px; right: 10px; z-index: 1000; display: flex; gap: 8px;';
-                
-                const editorLink = document.createElement('a');
-                editorLink.href = '/engine/editor';
-                editorLink.textContent = 'Editor';
-                editorLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
-                
-                const graphqlLink = document.createElement('a');
-                graphqlLink.href = '/engine/graphql';
-                graphqlLink.textContent = 'GraphQL';
-                graphqlLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
-                
-                const docsLink = document.createElement('a');
-                docsLink.href = '/engine/docs';
-                docsLink.textContent = 'Docs';
-                docsLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
-                
-                nav.appendChild(editorLink);
-                nav.appendChild(graphqlLink);
-                nav.appendChild(docsLink);
-                document.body.appendChild(nav);
-                
-                // Add hover effects
-                const style = document.createElement('style');
-                style.textContent = '#aiwebengine-nav a:hover { background: #e5e7eb !important; border-color: #9ca3af !important; }';
-                document.head.appendChild(style);
-            }, 1000);
-        };
-    </script>
-</body>
-</html>"#;
-
-            axum::response::Html(swagger_html).into_response()
+            axum::response::Html(swagger_ui_base_html()).into_response()
         }
     };
 
@@ -1233,39 +1132,12 @@ async fn handle_dynamic_request(
     let request_method = req.method().to_string();
 
     // Check for registered asset paths first if it's a GET request
-    if request_method == "GET" {
-        // Check if this path is registered in the asset registry
-        if let Some(asset_name) = asset_registry::get_global_registry().get_asset_name(&path) {
-            // Fetch the asset by name from the repository
-            if let Some(asset) = repository::fetch_asset(&asset_name) {
-                let mut response = asset.content.into_response();
-                response.headers_mut().insert(
-                    axum::http::header::CONTENT_TYPE,
-                    axum::http::HeaderValue::from_str(&asset.mimetype).unwrap_or(
-                        axum::http::HeaderValue::from_static("application/octet-stream"),
-                    ),
-                );
-                return response;
-            } else {
-                warn!(
-                    "Asset '{}' registered for path '{}' but not found in repository",
-                    asset_name, path
-                );
-                // Fall through to route handling
-            }
-        }
+    if let Some(asset_response) = try_serve_asset(&path, &request_method) {
+        return asset_response;
     }
 
     // Check if this is a request to a registered stream path
-    let is_get = request_method == "GET";
-    let is_stream_registered = stream_registry::GLOBAL_STREAM_REGISTRY.is_stream_registered(&path);
-    info!(
-        "Stream check - method: {}, is_get: {}, path: '{}', is_registered: {}",
-        request_method, is_get, path, is_stream_registered
-    );
-
-    if is_get && is_stream_registered {
-        info!("Routing to stream handler for path: {}", path);
+    if should_route_to_stream(&path, &request_method) {
         return handle_stream_request(req).await;
     }
 
@@ -1449,32 +1321,7 @@ async fn handle_dynamic_request(
                 js_response.body.len(),
                 js_response.headers.len()
             );
-            let mut response = (
-                StatusCode::from_u16(js_response.status)
-                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-                js_response.body,
-            )
-                .into_response();
-
-            // Add content type if specified
-            if let Some(ct) = js_response.content_type {
-                response.headers_mut().insert(
-                    axum::http::header::CONTENT_TYPE,
-                    axum::http::HeaderValue::from_str(&ct)
-                        .unwrap_or_else(|_| axum::http::HeaderValue::from_static("text/plain")),
-                );
-            }
-
-            // Add custom headers from JavaScript response
-            for (name, value) in js_response.headers {
-                if let Ok(header_name) = axum::http::HeaderName::from_bytes(name.as_bytes())
-                    && let Ok(header_value) = axum::http::HeaderValue::from_str(&value)
-                {
-                    response.headers_mut().insert(header_name, header_value);
-                }
-            }
-
-            response
+            build_http_response_from_js(js_response)
         }
         Ok(Err(e)) => {
             error!(
@@ -1619,6 +1466,177 @@ pub async fn start_server_without_shutdown() -> AppResult<u16> {
 pub async fn start_server_without_shutdown_with_config(config: config::Config) -> AppResult<u16> {
     let (_tx, rx) = tokio::sync::oneshot::channel::<()>();
     start_server_with_config(config, rx).await
+}
+
+// ============================================================================
+// Helper Functions for Refactored Route Setup and Request Handling
+// ============================================================================
+
+/// Returns the navigation script HTML for GraphiQL
+fn graphiql_navigation_script() -> &'static str {
+    r#"<script>
+document.addEventListener('DOMContentLoaded', function() {
+    setTimeout(function() {
+        const nav = document.createElement('div');
+        nav.id = 'aiwebengine-nav';
+        nav.style.cssText = 'position: absolute; top: 10px; right: 10px; z-index: 1000; display: flex; gap: 8px;';
+        
+        const editorLink = document.createElement('a');
+        editorLink.href = '/engine/editor';
+        editorLink.textContent = 'Editor';
+        editorLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
+        
+        const docsLink = document.createElement('a');
+        docsLink.href = '/engine/docs';
+        docsLink.textContent = 'Docs';
+        docsLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
+        
+        const swaggerLink = document.createElement('a');
+        swaggerLink.href = '/engine/swagger';
+        swaggerLink.textContent = 'API Docs';
+        swaggerLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
+        
+        nav.appendChild(editorLink);
+        nav.appendChild(docsLink);
+        nav.appendChild(swaggerLink);
+        document.body.appendChild(nav);
+        
+        const style = document.createElement('style');
+        style.textContent = '#aiwebengine-nav a:hover { background: #e5e7eb !important; border-color: #9ca3af !important; }';
+        document.head.appendChild(style);
+    }, 2000);
+});
+</script>"#
+}
+
+/// Returns the base Swagger UI HTML (navigation added separately)
+fn swagger_ui_base_html() -> &'static str {
+    r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>aiwebengine API Documentation</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css" />
+    <style>
+        body { margin: 0; padding: 0; }
+        #swagger-ui { max-width: 1460px; margin: 0 auto; }
+    </style>
+</head>
+<body>
+    <div id="swagger-ui"></div>
+    <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-standalone-preset.js"></script>
+    <script>
+        window.onload = function() {
+            SwaggerUIBundle({
+                url: '/engine/openapi.json',
+                dom_id: '#swagger-ui',
+                deepLinking: true,
+                presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],
+                layout: "StandaloneLayout"
+            });
+            setTimeout(function() {
+                const nav = document.createElement('div');
+                nav.id = 'aiwebengine-nav';
+                nav.style.cssText = 'position: fixed; top: 10px; right: 10px; z-index: 1000; display: flex; gap: 8px;';
+                const editorLink = document.createElement('a');
+                editorLink.href = '/engine/editor';
+                editorLink.textContent = 'Editor';
+                editorLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
+                const graphqlLink = document.createElement('a');
+                graphqlLink.href = '/engine/graphql';
+                graphqlLink.textContent = 'GraphQL';
+                graphqlLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
+                const docsLink = document.createElement('a');
+                docsLink.href = '/engine/docs';
+                docsLink.textContent = 'Docs';
+                docsLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
+                nav.appendChild(editorLink);
+                nav.appendChild(graphqlLink);
+                nav.appendChild(docsLink);
+                document.body.appendChild(nav);
+                const style = document.createElement('style');
+                style.textContent = '#aiwebengine-nav a:hover { background: #e5e7eb !important; border-color: #9ca3af !important; }';
+                document.head.appendChild(style);
+            }, 1000);
+        };
+    </script>
+</body>
+</html>"#
+}
+
+/// Try to serve an asset if the path matches a registered asset
+fn try_serve_asset(path: &str, method: &str) -> Option<Response> {
+    if method != "GET" {
+        return None;
+    }
+
+    let asset_name = asset_registry::get_global_registry().get_asset_name(path)?;
+
+    if let Some(asset) = repository::fetch_asset(&asset_name) {
+        let mut response = asset.content.into_response();
+        response.headers_mut().insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_str(&asset.mimetype).unwrap_or(
+                axum::http::HeaderValue::from_static("application/octet-stream"),
+            ),
+        );
+        return Some(response);
+    }
+
+    warn!(
+        "Asset '{}' registered for path '{}' but not found in repository",
+        asset_name, path
+    );
+    None
+}
+
+/// Check if request should be routed to a stream handler
+fn should_route_to_stream(path: &str, method: &str) -> bool {
+    let is_get = method == "GET";
+    let is_stream_registered = stream_registry::GLOBAL_STREAM_REGISTRY.is_stream_registered(path);
+
+    info!(
+        "Stream check - method: {}, is_get: {}, path: '{}', is_registered: {}",
+        method, is_get, path, is_stream_registered
+    );
+
+    if is_get && is_stream_registered {
+        info!("Routing to stream handler for path: {}", path);
+        return true;
+    }
+
+    false
+}
+
+/// Build an HTTP response from a JavaScript response object
+fn build_http_response_from_js(js_response: js_engine::JsHttpResponse) -> Response {
+    let mut response = (
+        StatusCode::from_u16(js_response.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+        js_response.body,
+    )
+        .into_response();
+
+    // Add content type if specified
+    if let Some(ct) = js_response.content_type {
+        response.headers_mut().insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_str(&ct)
+                .unwrap_or_else(|_| axum::http::HeaderValue::from_static("text/plain")),
+        );
+    }
+
+    // Add custom headers from JavaScript response
+    for (name, value) in js_response.headers {
+        if let Ok(header_name) = axum::http::HeaderName::from_bytes(name.as_bytes())
+            && let Ok(header_value) = axum::http::HeaderValue::from_str(&value)
+        {
+            response.headers_mut().insert(header_name, header_value);
+        }
+    }
+
+    response
 }
 
 #[cfg(test)]
