@@ -169,10 +169,8 @@ fn test_asset_management() {
 // GraphQL Subscription Schema Tests
 // ============================================================================
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_subscription_schema_configured() {
-    let _ = tracing_subscriber::fmt::try_init();
-
     let context = TestContext::new();
 
     // Start the server

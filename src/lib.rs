@@ -35,6 +35,7 @@ pub mod auth;
 // Documentation module
 pub mod docs;
 
+use repository::Repository;
 use security::UserContext;
 
 // Re-export the unified error type
@@ -543,10 +544,18 @@ pub async fn start_server_with_config(
     {
         Ok(db) => {
             let db_arc = std::sync::Arc::new(db);
-            if database::initialize_global_database(db_arc) {
+            if database::initialize_global_database(db_arc.clone()) {
                 info!("Global database initialized successfully");
             } else {
                 warn!("Global database was already initialized");
+            }
+
+            // Initialize UnifiedRepository with Postgres
+            let repo = repository::UnifiedRepository::new_postgres(db_arc.pool().clone());
+            if repository::initialize_repository(repo) {
+                info!("Global repository initialized with Postgres");
+            } else {
+                warn!("Global repository was already initialized");
             }
         }
         Err(e) => {
@@ -565,12 +574,20 @@ pub async fn start_server_with_config(
                     e, config.repository.storage_type
                 );
                 warn!("Health checks will report database as unavailable");
+
+                // Initialize UnifiedRepository with Memory
+                let repo = repository::UnifiedRepository::new_memory();
+                if repository::initialize_repository(repo) {
+                    info!("Global repository initialized with Memory");
+                } else {
+                    warn!("Global repository was already initialized");
+                }
             }
         }
     }
 
     // Clone the timeout value to avoid borrow checker issues in async closures
-    let script_timeout_ms = config.script_timeout_ms();
+    let script_timeout_ms = config.javascript.execution_timeout_ms;
 
     // Bootstrap hardcoded scripts into database if configured
     info!("Bootstrapping hardcoded scripts into database...");
@@ -583,7 +600,7 @@ pub async fn start_server_with_config(
 
     // Bootstrap hardcoded assets into database if configured
     info!("Bootstrapping hardcoded assets into database...");
-    if let Err(e) = repository::bootstrap_assets() {
+    if let Err(e) = repository::bootstrap_assets_async().await {
         warn!(
             "Failed to bootstrap assets: {}. Continuing with static assets.",
             e
@@ -592,7 +609,11 @@ pub async fn start_server_with_config(
 
     // Execute all scripts at startup to populate GraphQL registry
     info!("Executing all scripts at startup to populate GraphQL registry...");
-    let scripts = repository::fetch_scripts();
+    let scripts = repository::get_repository()
+        .list_scripts()
+        .await
+        .unwrap_or_default();
+    info!("Found {} scripts to execute", scripts.len());
     for (uri, content) in scripts.iter() {
         info!("Executing script: {}", uri);
         // Use secure execution with admin user context for startup script execution
@@ -609,7 +630,12 @@ pub async fn start_server_with_config(
                 .as_ref()
                 .map(|e| format!("Script execution failed: {}", e))
                 .unwrap_or_else(|| "Script execution failed".to_string());
-            repository::insert_log_message(uri, &error_msg, "FATAL");
+            if let Err(e) = repository::get_repository()
+                .insert_log(uri, &error_msg, "FATAL")
+                .await
+            {
+                warn!("Failed to log error to database: {}", e);
+            }
         } else {
             info!("Successfully executed script: {}", uri);
         }
@@ -623,8 +649,10 @@ pub async fn start_server_with_config(
             .init_timeout_ms
             .unwrap_or(config.javascript.execution_timeout_ms);
         let initializer = script_init::ScriptInitializer::new(init_timeout);
+        info!("Calling initialize_all_scripts...");
         match initializer.initialize_all_scripts().await {
             Ok(results) => {
+                info!("initialize_all_scripts returned");
                 let successful = results.iter().filter(|r| r.success).count();
                 let failed = results
                     .iter()
@@ -1401,19 +1429,18 @@ document.addEventListener('DOMContentLoaded', function() {
     app = app.layer(axum::middleware::from_fn(middleware::request_id_middleware));
 
     let addr: std::net::SocketAddr = config
-        .server_addr()
-        .parse()
+        .server_address()
         .map_err(|e| AppError::config(format!("Invalid server address: {}", e)))?;
 
     // Try to find an available port starting from the configured port
-    let mut current_port = config.port();
+    let mut current_port = config.server.port;
     let mut actual_addr = addr;
     let mut attempts = 0;
     const MAX_PORT_ATTEMPTS: u16 = 100; // Try up to 100 ports
 
     loop {
         // Handle automatic port assignment (port 0)
-        if config.port() == 0 {
+        if config.server.port == 0 {
             // Bind to port 0 to let OS assign a free port
             let test_bind = std::net::TcpListener::bind(actual_addr);
             match test_bind {
@@ -1427,7 +1454,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         .port();
                     drop(listener);
 
-                    let actual_addr = format!("{}:{}", config.host(), actual_port)
+                    let actual_addr = format!("{}:{}", config.server.host, actual_port)
                         .parse()
                         .map_err(|e| anyhow::anyhow!("Invalid server address: {}", e))?;
 
@@ -1437,9 +1464,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     repository::insert_log_message("server", "server started", "INFO");
                     debug!(
                         "Server configuration - host: {}, requested port: {}, actual port: {}",
-                        config.host(),
-                        config.port(),
-                        actual_port
+                        config.server.host, config.server.port, actual_port
                     );
 
                     let svc = app.into_make_service();
@@ -1478,11 +1503,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 drop(test_bind);
 
                 // Successfully found an available port
-                if current_port != config.port() {
+                if current_port != config.server.port {
                     info!(
                         "Requested port {} was in use, using port {} instead",
-                        config.port(),
-                        current_port
+                        config.server.port, current_port
                     );
                 } else {
                     info!("listening on {}", actual_addr);
@@ -1492,9 +1516,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 repository::insert_log_message("server", "server started", "INFO");
                 debug!(
                     "Server configuration - host: {}, requested port: {}, actual port: {}",
-                    config.host(),
-                    config.port(),
-                    current_port
+                    config.server.host, config.server.port, current_port
                 );
 
                 let svc = app.into_make_service();
@@ -1526,14 +1548,13 @@ document.addEventListener('DOMContentLoaded', function() {
                     if attempts >= MAX_PORT_ATTEMPTS {
                         return Err(AppError::internal(format!(
                             "Could not find an available port after trying {} ports starting from {}",
-                            MAX_PORT_ATTEMPTS,
-                            config.port()
+                            MAX_PORT_ATTEMPTS, config.server.port
                         )));
                     }
 
                     // Try the next port
                     current_port += 1;
-                    actual_addr = format!("{}:{}", config.host(), current_port)
+                    actual_addr = format!("{}:{}", config.server.host, current_port)
                         .parse()
                         .map_err(|e| AppError::config(format!("Invalid server address: {}", e)))?;
 

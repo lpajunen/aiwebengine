@@ -11,13 +11,12 @@ mod common;
 
 use aiwebengine::repository;
 use common::{TestContext, wait_for_server};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 // ============================================================================
 // Health Endpoint Tests
 // ============================================================================
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_health_endpoint() {
     let context = TestContext::new();
 
@@ -65,7 +64,7 @@ async fn test_health_endpoint() {
     context.cleanup().await.expect("Failed to cleanup");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_health_endpoint_content_type() {
     let context = TestContext::new();
 
@@ -104,7 +103,7 @@ async fn test_health_endpoint_content_type() {
     context.cleanup().await.expect("Failed to cleanup");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_script_logs_endpoint() {
     let context = TestContext::new();
 
@@ -142,7 +141,7 @@ async fn test_script_logs_endpoint() {
 // HTTP Methods Tests
 // ============================================================================
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_different_http_methods() {
     let context = TestContext::new();
 
@@ -255,7 +254,7 @@ async fn test_different_http_methods() {
 // Query Parameters Tests
 // ============================================================================
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_query_parameters() {
     let context = TestContext::new();
 
@@ -339,14 +338,8 @@ async fn test_query_parameters() {
 // Form Data Tests
 // ============================================================================
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_form_data() {
-    // Initialize tracing for test logging
-    let _ = tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::from_default_env())
-        .with(tracing_subscriber::fmt::layer().compact())
-        .try_init();
-
     let context = TestContext::new();
 
     // Dynamically load the form test script
@@ -454,7 +447,7 @@ async fn test_form_data() {
 // GraphQL Endpoint Tests
 // ============================================================================
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_graphql_endpoints() {
     let context = TestContext::new();
 
@@ -664,7 +657,7 @@ async fn test_graphql_endpoints() {
     context.cleanup().await.expect("Failed to cleanup");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_graphql_script_mutations() {
     let context = TestContext::new();
 
@@ -831,7 +824,7 @@ async fn test_graphql_script_mutations() {
     context.cleanup().await.expect("Failed to cleanup");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_graphql_registration_clearing() {
     use aiwebengine::graphql::{
         GRAPHQL_REGISTRY, GraphQLOperation, clear_script_graphql_registrations,

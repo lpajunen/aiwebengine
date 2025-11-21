@@ -15,6 +15,29 @@ pub const PRIVILEGED_BOOTSTRAP_SCRIPTS: &[&str] = &[
     "https://example.com/auth",
 ];
 
+/// Helper to run async code in a blocking context, handling different runtime scenarios
+fn run_blocking<F, R>(future: F) -> R
+where
+    F: std::future::Future<Output = R>,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            // We are in a runtime. Use block_in_place to avoid blocking the reactor.
+            // Note: This requires a multi-threaded runtime. If called from a single-threaded
+            // runtime (like default #[tokio::test]), this will panic.
+            tokio::task::block_in_place(move || handle.block_on(future))
+        }
+        Err(_) => {
+            // No runtime available. Create a temporary single-threaded runtime.
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to create temporary runtime")
+                .block_on(future)
+        }
+    }
+}
+
 fn is_bootstrap_script(uri: &str) -> bool {
     PRIVILEGED_BOOTSTRAP_SCRIPTS
         .iter()
@@ -1056,158 +1079,97 @@ async fn db_delete_asset(pool: &PgPool, uri: &str) -> AppResult<bool> {
 
 /// Fetch scripts from repository with proper error handling
 pub fn fetch_scripts() -> HashMap<String, String> {
-    let mut m = HashMap::new();
+    let repo = get_repository();
 
-    // Try database first if configured
-    if let Some(db) = get_db_pool() {
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async { db_list_scripts(db.pool()).await })
-        });
+    // Use run_blocking to call async repository method
+    let result = run_blocking(async { repo.list_scripts().await });
 
-        match result {
-            Ok(db_scripts) => {
-                m.extend(db_scripts);
-                debug!("Loaded {} scripts from database", m.len());
-            }
-            Err(e) => {
-                warn!(
-                    "Database script fetch failed, falling back to static scripts: {}",
-                    e
-                );
-                // Fall through to static scripts
-            }
-        }
-    }
-
-    // Always include core functionality scripts (fallback or when no database)
-    if m.is_empty() {
-        let core = include_str!("../scripts/feature_scripts/core.js");
-        let cli = include_str!("../scripts/feature_scripts/cli.js");
-        let editor = include_str!("../scripts/feature_scripts/editor.js");
-        let admin = include_str!("../scripts/feature_scripts/admin.js");
-        let auth = include_str!("../scripts/feature_scripts/auth.js");
-
-        m.insert("https://example.com/core".to_string(), core.to_string());
-        m.insert("https://example.com/cli".to_string(), cli.to_string());
-        m.insert("https://example.com/editor".to_string(), editor.to_string());
-        m.insert("https://example.com/admin".to_string(), admin.to_string());
-        m.insert("https://example.com/auth".to_string(), auth.to_string());
-
-        // Include test scripts when appropriate
-        let include_test_scripts =
-            std::env::var("AIWEBENGINE_INCLUDE_TEST_SCRIPTS").is_ok() || cfg!(test);
-
-        if include_test_scripts {
-            let graphql_test = include_str!("../scripts/test_scripts/graphql_test.js");
-            m.insert(
-                "https://example.com/graphql_test".to_string(),
-                graphql_test.to_string(),
-            );
-        }
-    }
-
-    // Safely merge in any dynamically upserted scripts
-    match safe_lock_scripts() {
-        Ok(guard) => {
-            for (k, metadata) in guard.iter() {
-                m.insert(k.to_string(), metadata.content.to_string());
-            }
+    match result {
+        Ok(scripts) => {
+            debug!("Loaded {} scripts from repository", scripts.len());
+            scripts
         }
         Err(e) => {
-            error!(
-                "Failed to access dynamic scripts: {}. Continuing with static scripts only.",
-                e
-            );
-            // Continue with just the static scripts rather than crashing
+            error!("Failed to fetch scripts: {}", e);
+            HashMap::new()
         }
     }
-
-    m
 }
 
 /// Fetch a single script by URI with proper error handling
 pub fn fetch_script(uri: &str) -> Option<String> {
-    // Try database first if configured
-    if let Some(db) = get_db_pool() {
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async { db_get_script(db.pool(), uri).await })
-        });
+    let repo = get_repository();
 
-        match result {
-            Ok(Some(script)) => {
-                debug!("Loaded script from database: {}", uri);
-                return Some(script);
-            }
-            Ok(None) => {
-                // Script not in database, continue to check static/dynamic
-            }
-            Err(e) => {
-                warn!("Database script fetch failed for {}: {}", uri, e);
-                // Fall through to static/dynamic scripts
-            }
+    let result = run_blocking(async { repo.get_script(uri).await });
+
+    match result {
+        Ok(Some(script)) => {
+            debug!("Loaded script from repository: {}", uri);
+            Some(script)
         }
-    }
-
-    // First check static scripts
-    let static_scripts = fetch_scripts();
-    if let Some(script) = static_scripts.get(uri) {
-        return Some(script.clone());
-    }
-
-    // Then check dynamic scripts
-    match safe_lock_scripts() {
-        Ok(guard) => guard.get(uri).map(|metadata| metadata.content.clone()),
+        Ok(None) => None,
         Err(e) => {
-            error!("Failed to access dynamic scripts for URI {}: {}", uri, e);
+            warn!("Failed to fetch script {}: {}", uri, e);
             None
         }
     }
 }
 
+/// Get metadata for a script
+pub fn get_script_metadata(uri: &str) -> AppResult<ScriptMetadata> {
+    let repo = get_repository();
+    run_blocking(async { repo.get_script_metadata(uri).await })
+}
+
+/// Get metadata for all scripts
+pub fn get_all_script_metadata() -> AppResult<Vec<ScriptMetadata>> {
+    let repo = get_repository();
+    run_blocking(async { repo.get_all_script_metadata().await })
+}
+
+pub fn mark_script_init_failed(uri: &str, error: String) -> AppResult<()> {
+    let repo = get_repository();
+    run_blocking(async {
+        repo.update_script_init_status(uri, false, Some(error), None)
+            .await
+    })
+}
+
+pub fn mark_script_initialized(uri: &str) -> AppResult<()> {
+    let repo = get_repository();
+    run_blocking(async { repo.update_script_init_status(uri, true, None, None).await })
+}
+
+pub fn mark_script_initialized_with_registrations(
+    uri: &str,
+    registrations: RouteRegistrations,
+) -> AppResult<()> {
+    let repo = get_repository();
+    run_blocking(async {
+        repo.update_script_init_status(uri, true, None, Some(registrations))
+            .await
+    })
+}
+
 /// Determine current privilege state for a script
 pub fn get_script_security_profile(uri: &str) -> AppResult<ScriptSecurityProfile> {
     let default_privileged = default_privileged_for(uri);
+    let repo = get_repository();
 
-    // Prefer database when configured
-    if let Some(db) = get_db_pool() {
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async { db_get_script_privileged(db.pool(), uri).await })
-        });
+    // Try repository first
+    let result = run_blocking(async { repo.get_script_privileged(uri).await });
 
-        match result {
-            Ok(Some(value)) => {
-                return Ok(ScriptSecurityProfile {
-                    uri: uri.to_string(),
-                    privileged: value,
-                    default_privileged,
-                });
-            }
-            Ok(None) => {
-                // Not persisted, fall through to in-memory/static defaults
-            }
-            Err(e) => {
-                warn!(
-                    "Database privilege lookup failed for {}: {}. Falling back to cache",
-                    uri, e
-                );
-            }
-        }
-    }
-
-    // Dynamic scripts stored in memory
-    if let Ok(guard) = safe_lock_scripts()
-        && let Some(metadata) = guard.get(uri)
-    {
+    if let Ok(Some(privileged)) = result {
         return Ok(ScriptSecurityProfile {
             uri: uri.to_string(),
-            privileged: metadata.privileged,
+            privileged,
             default_privileged,
         });
     }
 
-    // Local overrides for static scripts when no database is configured
+    // If repository didn't have it (or failed), check overrides explicitly
+    // This handles the case where we are in Postgres mode but the script is static/local
+    // and has a local override.
     if let Ok(guard) = safe_lock_privilege_overrides()
         && let Some(value) = guard.get(uri)
     {
@@ -1237,135 +1199,56 @@ pub fn set_script_privileged(uri: &str, privileged: bool) -> AppResult<()> {
         return Err(RepositoryError::ScriptNotFound(uri.to_string()).into());
     }
 
-    // Update database when available
-    if let Some(db) = get_db_pool() {
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async { db_set_script_privileged(db.pool(), uri, privileged).await })
-        });
+    let repo = get_repository();
 
-        if let Err(e) = result {
-            warn!(
-                "Failed to persist privileged flag for {} in database: {}. Falling back to in-memory override",
-                uri, e
-            );
-        }
+    // 1. Try to update repository (DB or Memory)
+    let result = run_blocking(async { repo.set_script_privileged(uri, privileged).await });
+
+    if let Err(e) = result {
+        warn!("Repository set privileged failed for {}: {}", uri, e);
     }
+
+    // 2. Also update in-memory structures to ensure static scripts or fallbacks work
 
     // Update dynamic metadata cache if present
     if let Ok(mut guard) = safe_lock_scripts()
         && let Some(metadata) = guard.get_mut(uri)
     {
         metadata.privileged = privileged;
-        debug!(
-            script = %uri,
-            privileged,
-            "Updated in-memory script privilege"
-        );
+        debug!(script = %uri, privileged, "Updated in-memory script privilege");
         return Ok(());
     }
 
     // Persist override for static scripts or when metadata not present
     let mut guard = safe_lock_privilege_overrides()?;
     guard.insert(uri.to_string(), privileged);
-    debug!(
-        script = %uri,
-        privileged,
-        "Stored privilege override in memory"
-    );
+    debug!(script = %uri, privileged, "Stored privilege override in memory");
+
     Ok(())
 }
 
 /// Insert log message with error handling
 pub fn insert_log_message(script_uri: &str, message: &str, log_level: &str) {
-    // Try database first if configured
-    if let Some(db) = get_db_pool() {
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                db_insert_log_message(db.pool(), script_uri, message, log_level).await
-            })
-        });
+    let repo = get_repository();
+    let result = run_blocking(async { repo.insert_log(script_uri, message, log_level).await });
 
-        match result {
-            Ok(()) => {
-                debug!(
-                    "Inserted log message to database for script: {}",
-                    script_uri
-                );
-                return;
-            }
-            Err(e) => {
-                warn!(
-                    "Database log insert failed, falling back to in-memory: {}",
-                    e
-                );
-                // Fall through to in-memory implementation
-            }
-        }
-    }
-
-    // Fall back to in-memory implementation
-    match safe_lock_logs() {
-        Ok(mut guard) => {
-            guard
-                .entry(script_uri.to_string())
-                .or_insert_with(Vec::new)
-                .push(message.to_string());
-            debug!("Logged message for script {}: {}", script_uri, message);
-        }
-        Err(e) => {
-            error!(
-                "Failed to insert log message for {}: {}. Message: {}",
-                script_uri, e, message
-            );
-            // Log to system instead as fallback
-            error!("FALLBACK LOG [{}]: {}", script_uri, message);
-        }
+    if let Err(e) = result {
+        error!(
+            "Failed to insert log message for {}: {}. Message: {}",
+            script_uri, e, message
+        );
+        // Log to system instead as fallback
+        error!("FALLBACK LOG [{}]: {}", script_uri, message);
     }
 }
 
 /// Fetch log messages with error handling
 pub fn fetch_log_messages(script_uri: &str) -> Vec<LogEntry> {
-    // Try database first if configured
-    if let Some(db) = get_db_pool() {
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async { db_fetch_log_messages(db.pool(), script_uri).await })
-        });
+    let repo = get_repository();
+    let result = run_blocking(async { repo.fetch_logs(script_uri).await });
 
-        match result {
-            Ok(messages) => {
-                debug!(
-                    "Fetched {} log messages from database for script: {}",
-                    messages.len(),
-                    script_uri
-                );
-                return messages;
-            }
-            Err(e) => {
-                warn!(
-                    "Database log fetch failed, falling back to in-memory: {}",
-                    e
-                );
-                // Fall through to in-memory implementation
-            }
-        }
-    }
-
-    // Fall back to in-memory implementation
-    match safe_lock_logs() {
-        Ok(guard) => {
-            let now = SystemTime::now();
-            guard
-                .get(script_uri)
-                .map(|messages| {
-                    messages
-                        .iter()
-                        .map(|msg| LogEntry::new(msg.clone(), "INFO".to_string(), now))
-                        .collect()
-                })
-                .unwrap_or_default()
-        }
+    match result {
+        Ok(messages) => messages,
         Err(e) => {
             error!("Failed to fetch log messages for {}: {}", script_uri, e);
             let now = SystemTime::now();
@@ -1381,39 +1264,11 @@ pub fn fetch_log_messages(script_uri: &str) -> Vec<LogEntry> {
 /// Fetch ALL log messages from all script URIs
 pub fn fetch_all_log_messages() -> Vec<LogEntry> {
     // Try database first if configured
-    if let Some(db) = get_db_pool() {
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async { db_fetch_all_log_messages(db.pool()).await })
-        });
+    let repo = get_repository();
+    let result = run_blocking(async { repo.fetch_all_logs().await });
 
-        match result {
-            Ok(messages) => {
-                debug!("Fetched {} log messages from database", messages.len());
-                return messages;
-            }
-            Err(e) => {
-                warn!(
-                    "Database all logs fetch failed, falling back to in-memory: {}",
-                    e
-                );
-                // Fall through to in-memory implementation
-            }
-        }
-    }
-
-    // Fall back to in-memory implementation
-    match safe_lock_logs() {
-        Ok(guard) => {
-            let mut all_logs = Vec::new();
-            let now = SystemTime::now();
-            for logs in guard.values() {
-                for message in logs {
-                    all_logs.push(LogEntry::new(message.clone(), "INFO".to_string(), now));
-                }
-            }
-            all_logs
-        }
+    match result {
+        Ok(messages) => messages,
         Err(e) => {
             error!("Failed to fetch all log messages: {}", e);
             vec![LogEntry::new(
@@ -1427,142 +1282,14 @@ pub fn fetch_all_log_messages() -> Vec<LogEntry> {
 
 /// Clear log messages for a script
 pub fn clear_log_messages(script_uri: &str) -> AppResult<()> {
-    // Try database first if configured
-    if let Some(db) = get_db_pool() {
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async { db_clear_log_messages(db.pool(), script_uri).await })
-        });
-
-        match result {
-            Ok(()) => {
-                debug!(
-                    "Cleared log messages from database for script: {}",
-                    script_uri
-                );
-                return Ok(());
-            }
-            Err(e) => {
-                warn!(
-                    "Database log clear failed, falling back to in-memory: {}",
-                    e
-                );
-                // Fall through to in-memory implementation
-            }
-        }
-    }
-
-    // Fall back to in-memory implementation
-    let mut guard = safe_lock_logs()?;
-    guard.remove(script_uri);
-    debug!("Cleared log messages for script: {}", script_uri);
-    Ok(())
+    let repo = get_repository();
+    run_blocking(async { repo.clear_logs(script_uri).await })
 }
 
 /// Keep only the latest `limit` log messages (default 20) for each script URI and remove older ones
 pub fn prune_log_messages() -> AppResult<()> {
-    // Try database first if configured
-    if let Some(db) = get_db_pool() {
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async { db_prune_log_messages(db.pool()).await })
-        });
-
-        match result {
-            Ok(()) => {
-                debug!("Pruned log messages in database");
-                return Ok(());
-            }
-            Err(e) => {
-                warn!(
-                    "Database log prune failed, falling back to in-memory: {}",
-                    e
-                );
-                // Fall through to in-memory implementation
-            }
-        }
-    }
-
-    // Fall back to in-memory implementation
-    const LIMIT: usize = 20;
-    let mut guard = safe_lock_logs()?;
-
-    for logs in guard.values_mut() {
-        if logs.len() > LIMIT {
-            let remove = logs.len() - LIMIT;
-            // remove older entries from the front
-            logs.drain(0..remove);
-        }
-    }
-    debug!("Pruned log messages, keeping {} entries per script", LIMIT);
-    Ok(())
-}
-
-/// Get script metadata for a specific URI
-pub fn get_script_metadata(uri: &str) -> AppResult<ScriptMetadata> {
-    let guard = safe_lock_scripts()?;
-    guard
-        .get(uri)
-        .cloned()
-        .ok_or_else(|| RepositoryError::ScriptNotFound(uri.to_string()).into())
-}
-
-/// Get all script metadata
-pub fn get_all_script_metadata() -> AppResult<Vec<ScriptMetadata>> {
-    let guard = safe_lock_scripts()?;
-    let mut metadata_list: Vec<ScriptMetadata> = guard.values().cloned().collect();
-    drop(guard); // Release lock before calling get_script_security_profile
-
-    // Update privileged status for each script
-    for metadata in &mut metadata_list {
-        if let Ok(profile) = get_script_security_profile(&metadata.uri) {
-            metadata.privileged = profile.privileged;
-        }
-    }
-
-    Ok(metadata_list)
-}
-
-/// Mark a script as initialized successfully
-pub fn mark_script_initialized(uri: &str) -> AppResult<()> {
-    let mut guard = safe_lock_scripts()?;
-
-    if let Some(metadata) = guard.get_mut(uri) {
-        metadata.mark_initialized();
-        debug!("Marked script as initialized: {}", uri);
-        Ok(())
-    } else {
-        Err(RepositoryError::ScriptNotFound(uri.to_string()).into())
-    }
-}
-
-/// Mark a script as initialized with registrations from init()
-pub fn mark_script_initialized_with_registrations(
-    uri: &str,
-    registrations: RouteRegistrations,
-) -> AppResult<()> {
-    let mut guard = safe_lock_scripts()?;
-
-    if let Some(metadata) = guard.get_mut(uri) {
-        metadata.mark_initialized_with_registrations(registrations);
-        debug!("Marked script as initialized with registrations: {}", uri);
-        Ok(())
-    } else {
-        Err(RepositoryError::ScriptNotFound(uri.to_string()).into())
-    }
-}
-
-/// Mark a script initialization as failed
-pub fn mark_script_init_failed(uri: &str, error: String) -> AppResult<()> {
-    let mut guard = safe_lock_scripts()?;
-
-    if let Some(metadata) = guard.get_mut(uri) {
-        metadata.mark_init_failed(error.clone());
-        debug!("Marked script init as failed: {} - {}", uri, error);
-        Ok(())
-    } else {
-        Err(RepositoryError::ScriptNotFound(uri.to_string()).into())
-    }
+    let repo = get_repository();
+    run_blocking(async { repo.prune_logs().await })
 }
 
 /// Upsert script with error handling
@@ -1578,33 +1305,9 @@ pub fn upsert_script(uri: &str, content: &str) -> AppResult<()> {
         );
     }
 
-    // Try database first
-    if let Some(db) = get_db_pool() {
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async { db_upsert_script(db.pool(), uri, content).await })
-        });
+    let repo = get_repository();
 
-        match result {
-            Ok(()) => {
-                // Also update in-memory cache for consistency
-                let _ = upsert_script_in_memory(uri, content);
-                debug!(
-                    "Upserted script to database: {} ({} bytes)",
-                    uri,
-                    content.len()
-                );
-                return Ok(());
-            }
-            Err(e) => {
-                warn!("Database upsert failed, falling back to in-memory: {}", e);
-                // Fall through to in-memory implementation
-            }
-        }
-    }
-
-    // Fall back to in-memory implementation
-    upsert_script_in_memory(uri, content)
+    run_blocking(async { repo.upsert_script(uri, content).await })
 }
 
 /// In-memory implementation of upsert script (existing logic)
@@ -1631,6 +1334,14 @@ fn upsert_script_in_memory(uri: &str, content: &str) -> AppResult<()> {
         );
     }
 
+    Ok(())
+}
+
+/// In-memory implementation of upsert asset
+fn upsert_asset_in_memory(asset: &Asset) -> AppResult<()> {
+    let mut guard = safe_lock_assets()?;
+    guard.insert(asset.uri.clone(), asset.clone());
+    debug!("Upserted asset in memory: {}", asset.uri);
     Ok(())
 }
 
@@ -1675,31 +1386,29 @@ pub fn bootstrap_scripts() -> AppResult<()> {
             ));
         }
 
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                for (uri, code) in all_scripts {
-                    // Check if script already exists
-                    if let Ok(Some(_)) = db_get_script(pool, uri).await {
-                        debug!("Script already exists in database: {}", uri);
-                        continue;
-                    }
+        let result = run_blocking(async {
+            for (uri, code) in all_scripts {
+                // Check if script already exists
+                if let Ok(Some(_)) = db_get_script(pool, uri).await {
+                    debug!("Script already exists in database: {}", uri);
+                    continue;
+                }
 
-                    // Insert the script
-                    if let Err(e) = db_upsert_script(pool, uri, code).await {
-                        error!("Failed to bootstrap script {}: {}", uri, e);
-                        return Err(e);
-                    } else {
-                        info!("Bootstrapped script into database: {}", uri);
-                        if let Err(e) = db_set_script_privileged(pool, uri, true).await {
-                            warn!(
-                                "Failed to flag bootstrapped script {} as privileged: {}",
-                                uri, e
-                            );
-                        }
+                // Insert the script
+                if let Err(e) = db_upsert_script(pool, uri, code).await {
+                    error!("Failed to bootstrap script {}: {}", uri, e);
+                    return Err(e);
+                } else {
+                    info!("Bootstrapped script into database: {}", uri);
+                    if let Err(e) = db_set_script_privileged(pool, uri, true).await {
+                        warn!(
+                            "Failed to flag bootstrapped script {} as privileged: {}",
+                            uri, e
+                        );
                     }
                 }
-                Ok(())
-            })
+            }
+            Ok(())
         });
 
         match result {
@@ -1720,90 +1429,38 @@ pub fn bootstrap_scripts() -> AppResult<()> {
 
 /// Bootstrap hardcoded assets into database on startup
 pub fn bootstrap_assets() -> AppResult<()> {
-    if let Some(db) = get_db_pool() {
-        let pool = db.pool();
+    run_blocking(async { bootstrap_assets_async().await })
+}
 
-        // Get all static assets
-        let static_assets = get_static_assets();
+/// Async version of bootstrap_assets
+pub async fn bootstrap_assets_async() -> AppResult<()> {
+    let repo = get_repository();
+    let assets = get_static_assets();
+    info!("Bootstrapping {} assets...", assets.len());
 
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                for (asset_name, asset) in static_assets {
-                    // Check if asset already exists
-                    if let Ok(Some(_)) = db_get_asset(pool, &asset_name).await {
-                        debug!("Asset already exists in database: {}", asset_name);
-                        continue;
-                    }
-
-                    // Insert the asset
-                    if let Err(e) = db_upsert_asset(pool, &asset).await {
-                        error!("Failed to bootstrap asset {}: {}", asset_name, e);
-                        return Err(e);
-                    } else {
-                        info!("Bootstrapped asset into database: {}", asset_name);
-                    }
-                }
-                Ok(())
-            })
-        });
-
-        match result {
-            Ok(()) => {
-                info!("Successfully bootstrapped assets into database");
-                Ok(())
-            }
-            Err(e) => {
-                error!("Failed to bootstrap assets: {}", e);
-                Err(e)
-            }
+    for (uri, asset) in assets {
+        debug!("Bootstrapping asset: {}", uri);
+        if let Err(e) = repo.upsert_asset(asset).await {
+            error!("Failed to bootstrap asset {}: {}", uri, e);
+            return Err(e);
         }
-    } else {
-        debug!("Database not configured, skipping asset bootstrap");
-        Ok(())
     }
+
+    Ok(())
 }
 
 /// Delete script with error handling
 pub fn delete_script(uri: &str) -> bool {
-    // Try database first if configured
-    if let Some(db) = get_db_pool() {
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async { db_delete_script(db.pool(), uri).await })
-        });
+    let repo = get_repository();
 
-        match result {
-            Ok(existed) => {
-                // Also remove from in-memory cache for consistency
-                let _ = safe_lock_scripts()
-                    .map(|mut guard| guard.remove(uri))
-                    .map_err(|e| warn!("Failed to remove script from memory cache: {}", e));
+    let result = run_blocking(async { repo.delete_script(uri).await });
 
-                if existed {
-                    debug!("Deleted script from database: {}", uri);
-                } else {
-                    debug!("Script not found in database for deletion: {}", uri);
-                }
-                return existed;
-            }
-            Err(e) => {
-                warn!("Database delete failed, falling back to in-memory: {}", e);
-                // Fall through to in-memory implementation
-            }
-        }
-    }
-
-    // Fall back to in-memory implementation
-    match safe_lock_scripts() {
-        Ok(mut guard) => {
-            let existed = guard.remove(uri).is_some();
+    match result {
+        Ok(existed) => {
             if existed {
-                debug!("Deleted script from memory: {}", uri);
+                debug!("Deleted script from repository: {}", uri);
             } else {
-                debug!(
-                    "Attempted to delete non-existent script from memory: {}",
-                    uri
-                );
+                debug!("Script not found in repository for deletion: {}", uri);
             }
             existed
         }
@@ -1883,83 +1540,78 @@ fn get_static_assets() -> HashMap<String, Asset> {
     m
 }
 
-/// Fetch assets with error handling (static + dynamic)
-pub fn fetch_assets() -> HashMap<String, Asset> {
+/// Helper function to get static scripts embedded at compile time
+fn get_static_scripts() -> HashMap<String, String> {
     let mut m = HashMap::new();
 
-    // Try database first if configured
-    if let Some(db) = get_db_pool() {
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async { db_list_assets(db.pool()).await })
-        });
+    let core = include_str!("../scripts/feature_scripts/core.js");
+    let cli = include_str!("../scripts/feature_scripts/cli.js");
+    let editor = include_str!("../scripts/feature_scripts/editor.js");
+    let admin = include_str!("../scripts/feature_scripts/admin.js");
+    let auth = include_str!("../scripts/feature_scripts/auth.js");
 
-        match result {
-            Ok(db_assets) => {
-                m.extend(db_assets);
-                debug!("Loaded {} assets from database", m.len());
-            }
-            Err(e) => {
-                warn!(
-                    "Database asset fetch failed, falling back to static assets: {}",
-                    e
-                );
-                // Fall through to static assets
-            }
-        }
-    }
+    m.insert("https://example.com/core".to_string(), core.to_string());
+    m.insert("https://example.com/cli".to_string(), cli.to_string());
+    m.insert("https://example.com/editor".to_string(), editor.to_string());
+    m.insert("https://example.com/admin".to_string(), admin.to_string());
+    m.insert("https://example.com/auth".to_string(), auth.to_string());
 
-    // Always include static assets (fallback or when no database)
-    if m.is_empty() {
-        m = get_static_assets();
+    // Include test scripts when appropriate
+    let include_test_scripts =
+        std::env::var("AIWEBENGINE_INCLUDE_TEST_SCRIPTS").is_ok() || cfg!(test);
 
-        // Merge in any dynamically upserted assets when using in-memory mode
-        match safe_lock_assets() {
-            Ok(guard) => {
-                for (k, v) in guard.iter() {
-                    m.insert(k.clone(), v.clone());
-                }
-            }
-            Err(e) => {
-                error!("Failed to fetch dynamic assets: {}", e);
-            }
-        }
+    if include_test_scripts {
+        let graphql_test = include_str!("../scripts/test_scripts/graphql_test.js");
+        m.insert(
+            "https://example.com/graphql_test".to_string(),
+            graphql_test.to_string(),
+        );
     }
 
     m
 }
 
+/// Fetch assets with error handling (static + dynamic)
+pub fn fetch_assets() -> HashMap<String, Asset> {
+    let repo = get_repository();
+
+    let result = run_blocking(async { repo.list_assets().await });
+
+    match result {
+        Ok(assets) => {
+            debug!("Loaded {} assets from repository", assets.len());
+            assets
+        }
+        Err(e) => {
+            error!("Failed to fetch assets: {}", e);
+            HashMap::new()
+        }
+    }
+}
+
 /// Fetch single asset by URI with error handling (dynamic first, then static)
 pub fn fetch_asset(uri: &str) -> Option<Asset> {
-    // Try database first if configured
-    if let Some(db) = get_db_pool() {
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async { db_get_asset(db.pool(), uri).await })
-        });
+    let repo = get_repository();
 
-        match result {
-            Ok(Some(asset)) => {
-                debug!("Loaded asset from database: {}", uri);
-                return Some(asset);
-            }
-            Ok(None) => {
-                // Asset not in database, continue to check static/dynamic
-            }
-            Err(e) => {
-                warn!("Database asset fetch failed for {}: {}", uri, e);
-                // Fall through to static/dynamic assets
-            }
+    // Try repository first (DB or Memory)
+    let result = run_blocking(async { repo.get_asset(uri).await });
+
+    match result {
+        Ok(Some(asset)) => {
+            debug!("Loaded asset from repository: {}", uri);
+            return Some(asset);
+        }
+        Ok(None) => {
+            // Not in repository, check static assets
+        }
+        Err(e) => {
+            warn!("Repository asset fetch failed for {}: {}", uri, e);
+            // Fall through to static assets
         }
     }
 
-    // Check static assets first
+    // Check static assets
     if let Some(asset) = get_static_assets().get(uri) {
-        return Some(asset.clone());
-    }
-
-    // Then check dynamic assets
-    if let Ok(guard) = safe_lock_assets()
-        && let Some(asset) = guard.get(uri)
-    {
         return Some(asset.clone());
     }
 
@@ -1983,89 +1635,17 @@ pub fn upsert_asset(asset: Asset) -> AppResult<()> {
         return Err(RepositoryError::InvalidData("MIME type cannot be empty".to_string()).into());
     }
 
-    // Try database first
-    if let Some(db) = get_db_pool() {
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async { db_upsert_asset(db.pool(), &asset).await })
-        });
-
-        match result {
-            Ok(()) => {
-                // Also update in-memory cache for consistency
-                let _ = upsert_asset_in_memory(&asset);
-                debug!(
-                    "Upserted asset to database: {} ({} bytes)",
-                    asset.uri,
-                    asset.content.len()
-                );
-                return Ok(());
-            }
-            Err(e) => {
-                warn!("Database upsert failed, falling back to in-memory: {}", e);
-                // Fall through to in-memory implementation
-            }
-        }
-    }
-
-    // Fall back to in-memory implementation
-    upsert_asset_in_memory(&asset)
-}
-
-/// In-memory implementation of upsert asset (existing logic)
-fn upsert_asset_in_memory(asset: &Asset) -> AppResult<()> {
-    let mut guard = safe_lock_assets()?;
-
-    let uri = asset.uri.clone();
-    guard.insert(uri.clone(), asset.clone());
-    debug!("Upserted asset in memory: {}", uri);
-    Ok(())
+    let repo = get_repository();
+    run_blocking(async { repo.upsert_asset(asset).await })
 }
 
 /// Delete asset with error handling  
 pub fn delete_asset(uri: &str) -> bool {
-    // Try database first if configured
-    if let Some(db) = get_db_pool() {
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async { db_delete_asset(db.pool(), uri).await })
-        });
+    let repo = get_repository();
+    let result = run_blocking(async { repo.delete_asset(uri).await });
 
-        match result {
-            Ok(existed) => {
-                // Also remove from in-memory cache for consistency
-                let _ = safe_lock_assets()
-                    .map(|mut guard| guard.remove(uri))
-                    .map_err(|e| warn!("Failed to remove asset from memory cache: {}", e));
-
-                if existed {
-                    debug!("Deleted asset from database: {}", uri);
-                } else {
-                    debug!("Asset not found in database for deletion: {}", uri);
-                }
-                return existed;
-            }
-            Err(e) => {
-                warn!("Database delete failed, falling back to in-memory: {}", e);
-                // Fall through to in-memory implementation
-            }
-        }
-    }
-
-    // Fall back to in-memory implementation
-    match safe_lock_assets() {
-        Ok(mut guard) => {
-            let existed = guard.remove(uri).is_some();
-            if existed {
-                debug!("Deleted asset from memory: {}", uri);
-            } else {
-                debug!(
-                    "Attempted to delete non-existent asset from memory: {}",
-                    uri
-                );
-            }
-            existed
-        }
+    match result {
+        Ok(existed) => existed,
         Err(e) => {
             error!("Failed to delete asset {}: {}", uri, e);
             false
@@ -2137,73 +1717,20 @@ pub fn set_shared_storage_item(script_uri: &str, key: &str, value: &str) -> AppR
         return Err(RepositoryError::InvalidData("Value too large (>1MB)".to_string()).into());
     }
 
-    // Try database first
-    if let Some(db) = get_db_pool() {
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                db_set_shared_storage_item(db.pool(), script_uri, key, value).await
-            })
-        });
-
-        match result {
-            Ok(()) => {
-                // Also update in-memory cache for consistency
-                let _ = set_shared_storage_item_in_memory(script_uri, key, value);
-                debug!(
-                    "Set shared storage item to database: {}:{} = {} bytes",
-                    script_uri,
-                    key,
-                    value.len()
-                );
-                return Ok(());
-            }
-            Err(e) => {
-                warn!("Database set failed, falling back to in-memory: {}", e);
-                // Fall through to in-memory implementation
-            }
-        }
-    }
-
-    // Fall back to in-memory implementation
-    set_shared_storage_item_in_memory(script_uri, key, value)
+    let repo = get_repository();
+    run_blocking(async { repo.set_shared_storage(script_uri, key, value).await })
 }
 
 /// Get a shared storage item
 pub fn get_shared_storage_item(script_uri: &str, key: &str) -> Option<String> {
-    // Try database first
-    if let Some(db) = get_db_pool() {
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async { db_get_shared_storage_item(db.pool(), script_uri, key).await })
-        });
+    let repo = get_repository();
+    let result = run_blocking(async { repo.get_shared_storage(script_uri, key).await });
 
-        match result {
-            Ok(Some(value)) => {
-                debug!(
-                    "Got script storage item from database: {}:{}",
-                    script_uri, key
-                );
-                return Some(value);
-            }
-            Ok(None) => {
-                // Item not in database, continue to check in-memory
-            }
-            Err(e) => {
-                warn!("Database get failed, falling back to in-memory: {}", e);
-                // Fall through to in-memory implementation
-            }
-        }
-    }
-
-    // Check in-memory storage
-    match safe_lock_shared_storage() {
-        Ok(guard) => guard
-            .get(script_uri)
-            .and_then(|script_map| script_map.get(key))
-            .cloned(),
+    match result {
+        Ok(value) => value,
         Err(e) => {
             error!(
-                "Failed to access shared storage for get {}:{}: {}",
+                "Failed to get shared storage item {}:{}: {}",
                 script_uri, key, e
             );
             None
@@ -2213,69 +1740,14 @@ pub fn get_shared_storage_item(script_uri: &str, key: &str) -> Option<String> {
 
 /// Remove a shared storage item
 pub fn remove_shared_storage_item(script_uri: &str, key: &str) -> bool {
-    // Try database first
-    if let Some(db) = get_db_pool() {
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async { db_remove_shared_storage_item(db.pool(), script_uri, key).await })
-        });
+    let repo = get_repository();
+    let result = run_blocking(async { repo.remove_shared_storage(script_uri, key).await });
 
-        match result {
-            Ok(existed) => {
-                // Also remove from in-memory cache for consistency
-                let _ = safe_lock_shared_storage()
-                    .map(|mut guard| {
-                        if let Some(script_map) = guard.get_mut(script_uri) {
-                            script_map.remove(key);
-                        }
-                    })
-                    .map_err(|e| warn!("Failed to remove from memory cache: {}", e));
-
-                if existed {
-                    debug!(
-                        "Removed script storage item from database: {}:{}",
-                        script_uri, key
-                    );
-                } else {
-                    debug!(
-                        "Script storage item not found in database for removal: {}:{}",
-                        script_uri, key
-                    );
-                }
-                return existed;
-            }
-            Err(e) => {
-                warn!("Database remove failed, falling back to in-memory: {}", e);
-                // Fall through to in-memory implementation
-            }
-        }
-    }
-
-    // Fall back to in-memory implementation
-    match safe_lock_shared_storage() {
-        Ok(mut guard) => {
-            let existed = if let Some(script_map) = guard.get_mut(script_uri) {
-                script_map.remove(key).is_some()
-            } else {
-                false
-            };
-
-            if existed {
-                debug!(
-                    "Removed shared storage item from memory: {}:{}",
-                    script_uri, key
-                );
-            } else {
-                debug!(
-                    "Shared storage item not found in memory for removal: {}:{}",
-                    script_uri, key
-                );
-            }
-            existed
-        }
+    match result {
+        Ok(existed) => existed,
         Err(e) => {
             error!(
-                "Failed to remove script storage item {}:{}: {}",
+                "Failed to remove shared storage item {}:{}: {}",
                 script_uri, key, e
             );
             false
@@ -2285,68 +1757,745 @@ pub fn remove_shared_storage_item(script_uri: &str, key: &str) -> bool {
 
 /// Clear all shared storage items for a specific script
 pub fn clear_shared_storage(script_uri: &str) -> AppResult<()> {
-    // Try database first
-    if let Some(db) = get_db_pool() {
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async { db_clear_shared_storage(db.pool(), script_uri).await })
-        });
+    let repo = get_repository();
+    run_blocking(async { repo.clear_shared_storage(script_uri).await })
+}
 
-        match result {
-            Ok(()) => {
-                // Also clear from in-memory cache for consistency
-                let _ = safe_lock_shared_storage()
-                    .map(|mut guard| {
-                        guard.remove(script_uri);
-                    })
-                    .map_err(|e| warn!("Failed to clear from memory cache: {}", e));
+use async_trait::async_trait;
 
-                debug!(
-                    "Cleared all shared storage items from database for script: {}",
-                    script_uri
-                );
-                return Ok(());
+/// Abstract repository interface
+#[async_trait]
+pub trait Repository: Send + Sync {
+    // Script operations
+    async fn get_script(&self, uri: &str) -> AppResult<Option<String>>;
+    async fn list_scripts(&self) -> AppResult<HashMap<String, String>>;
+    async fn upsert_script(&self, uri: &str, content: &str) -> AppResult<()>;
+    async fn delete_script(&self, uri: &str) -> AppResult<bool>;
+    async fn get_script_metadata(&self, uri: &str) -> AppResult<ScriptMetadata>;
+    async fn get_all_script_metadata(&self) -> AppResult<Vec<ScriptMetadata>>;
+    async fn update_script_init_status(
+        &self,
+        uri: &str,
+        initialized: bool,
+        init_error: Option<String>,
+        registrations: Option<RouteRegistrations>,
+    ) -> AppResult<()>;
+
+    // Asset operations
+    async fn get_asset(&self, uri: &str) -> AppResult<Option<Asset>>;
+    async fn list_assets(&self) -> AppResult<HashMap<String, Asset>>;
+    async fn upsert_asset(&self, asset: Asset) -> AppResult<()>;
+    async fn delete_asset(&self, uri: &str) -> AppResult<bool>;
+
+    // Log operations
+    async fn insert_log(&self, script_uri: &str, message: &str, level: &str) -> AppResult<()>;
+    async fn fetch_logs(&self, script_uri: &str) -> AppResult<Vec<LogEntry>>;
+    async fn fetch_all_logs(&self) -> AppResult<Vec<LogEntry>>;
+    async fn clear_logs(&self, script_uri: &str) -> AppResult<()>;
+    async fn prune_logs(&self) -> AppResult<()>;
+
+    // Shared storage operations
+    async fn get_shared_storage(&self, script_uri: &str, key: &str) -> AppResult<Option<String>>;
+    async fn set_shared_storage(&self, script_uri: &str, key: &str, value: &str) -> AppResult<()>;
+    async fn remove_shared_storage(&self, script_uri: &str, key: &str) -> AppResult<bool>;
+    async fn clear_shared_storage(&self, script_uri: &str) -> AppResult<()>;
+
+    // Security operations
+    async fn get_script_privileged(&self, uri: &str) -> AppResult<Option<bool>>;
+    async fn set_script_privileged(&self, uri: &str, privileged: bool) -> AppResult<()>;
+}
+
+/// PostgreSQL implementation of the Repository trait
+pub struct PostgresRepository {
+    pool: PgPool,
+}
+
+impl PostgresRepository {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl Repository for PostgresRepository {
+    async fn get_script(&self, uri: &str) -> AppResult<Option<String>> {
+        db_get_script(&self.pool, uri).await
+    }
+
+    async fn list_scripts(&self) -> AppResult<HashMap<String, String>> {
+        db_list_scripts(&self.pool).await
+    }
+
+    async fn upsert_script(&self, uri: &str, content: &str) -> AppResult<()> {
+        db_upsert_script(&self.pool, uri, content).await?;
+        // Invalidate cache
+        if let Ok(mut guard) = safe_lock_scripts() {
+            guard.remove(uri);
+        }
+        Ok(())
+    }
+
+    async fn delete_script(&self, uri: &str) -> AppResult<bool> {
+        let result = db_delete_script(&self.pool, uri).await?;
+        if result && let Ok(mut guard) = safe_lock_scripts() {
+            guard.remove(uri);
+        }
+        Ok(result)
+    }
+
+    async fn get_script_metadata(&self, uri: &str) -> AppResult<ScriptMetadata> {
+        // Check cache first
+        if let Ok(guard) = safe_lock_scripts()
+            && let Some(metadata) = guard.get(uri)
+        {
+            return Ok(metadata.clone());
+        }
+
+        // Fetch from DB
+        let content = self
+            .get_script(uri)
+            .await?
+            .ok_or_else(|| RepositoryError::ScriptNotFound(uri.to_string()))?;
+
+        let privileged = self
+            .get_script_privileged(uri)
+            .await?
+            .unwrap_or(default_privileged_for(uri));
+
+        let mut metadata = ScriptMetadata::new(uri.to_string(), content);
+        metadata.privileged = privileged;
+
+        // Cache it
+        if let Ok(mut guard) = safe_lock_scripts() {
+            guard.insert(uri.to_string(), metadata.clone());
+        }
+
+        Ok(metadata)
+    }
+
+    async fn get_all_script_metadata(&self) -> AppResult<Vec<ScriptMetadata>> {
+        let mut all_scripts = get_static_scripts();
+
+        // Fetch scripts from database and merge (DB overrides static)
+        let db_scripts = self.list_scripts().await?;
+        for (uri, content) in db_scripts {
+            all_scripts.insert(uri, content);
+        }
+
+        let mut metadata_list = Vec::new();
+
+        // Scope for mutex lock
+        {
+            let mut guard = safe_lock_scripts()?;
+            for (uri, content) in all_scripts {
+                if let Some(cached) = guard.get(&uri) {
+                    // Use cached version to preserve runtime state
+                    metadata_list.push(cached.clone());
+                } else {
+                    // Create new metadata and cache it
+                    let metadata = ScriptMetadata::new(uri.clone(), content);
+                    guard.insert(uri.clone(), metadata.clone());
+                    metadata_list.push(metadata);
+                }
             }
-            Err(e) => {
-                warn!("Database clear failed, falling back to in-memory: {}", e);
-                // Fall through to in-memory implementation
+        }
+
+        // Apply privilege overrides
+        if let Ok(overrides) = safe_lock_privilege_overrides() {
+            for metadata in &mut metadata_list {
+                if let Some(privileged) = overrides.get(&metadata.uri) {
+                    metadata.privileged = *privileged;
+                }
+            }
+        }
+
+        // Apply default privileges
+        for metadata in &mut metadata_list {
+            let profile = get_script_security_profile(&metadata.uri)?;
+            if profile.privileged != metadata.privileged {
+                metadata.privileged = profile.privileged;
+            }
+        }
+
+        Ok(metadata_list)
+    }
+
+    async fn update_script_init_status(
+        &self,
+        uri: &str,
+        initialized: bool,
+        init_error: Option<String>,
+        registrations: Option<RouteRegistrations>,
+    ) -> AppResult<()> {
+        let mut guard = safe_lock_scripts()?;
+        if let Some(metadata) = guard.get_mut(uri) {
+            metadata.initialized = initialized;
+            metadata.init_error = init_error;
+            if let Some(regs) = registrations {
+                metadata.registrations = regs;
+            }
+            if initialized {
+                metadata.last_init_time = Some(SystemTime::now());
+            }
+        } else {
+            // If it's a static script, it might not be in dynamic scripts map yet
+            if let Some(content) = get_static_scripts().get(uri) {
+                let mut metadata = ScriptMetadata::new(uri.to_string(), content.clone());
+                metadata.initialized = initialized;
+                metadata.init_error = init_error;
+                if let Some(regs) = registrations {
+                    metadata.registrations = regs;
+                }
+                if initialized {
+                    metadata.last_init_time = Some(SystemTime::now());
+                }
+                guard.insert(uri.to_string(), metadata);
+            } else {
+                return Err(RepositoryError::ScriptNotFound(uri.to_string()).into());
+            }
+        }
+        Ok(())
+    }
+
+    async fn get_asset(&self, uri: &str) -> AppResult<Option<Asset>> {
+        db_get_asset(&self.pool, uri).await
+    }
+
+    async fn list_assets(&self) -> AppResult<HashMap<String, Asset>> {
+        db_list_assets(&self.pool).await
+    }
+
+    async fn upsert_asset(&self, asset: Asset) -> AppResult<()> {
+        db_upsert_asset(&self.pool, &asset).await
+    }
+
+    async fn delete_asset(&self, uri: &str) -> AppResult<bool> {
+        db_delete_asset(&self.pool, uri).await
+    }
+
+    async fn insert_log(&self, script_uri: &str, message: &str, level: &str) -> AppResult<()> {
+        db_insert_log_message(&self.pool, script_uri, message, level).await
+    }
+
+    async fn fetch_logs(&self, script_uri: &str) -> AppResult<Vec<LogEntry>> {
+        db_fetch_log_messages(&self.pool, script_uri).await
+    }
+
+    async fn fetch_all_logs(&self) -> AppResult<Vec<LogEntry>> {
+        db_fetch_all_log_messages(&self.pool).await
+    }
+
+    async fn clear_logs(&self, script_uri: &str) -> AppResult<()> {
+        db_clear_log_messages(&self.pool, script_uri).await
+    }
+
+    async fn prune_logs(&self) -> AppResult<()> {
+        db_prune_log_messages(&self.pool).await
+    }
+
+    async fn get_shared_storage(&self, script_uri: &str, key: &str) -> AppResult<Option<String>> {
+        db_get_shared_storage_item(&self.pool, script_uri, key).await
+    }
+
+    async fn set_shared_storage(&self, script_uri: &str, key: &str, value: &str) -> AppResult<()> {
+        db_set_shared_storage_item(&self.pool, script_uri, key, value).await
+    }
+
+    async fn remove_shared_storage(&self, script_uri: &str, key: &str) -> AppResult<bool> {
+        db_remove_shared_storage_item(&self.pool, script_uri, key).await
+    }
+
+    async fn clear_shared_storage(&self, script_uri: &str) -> AppResult<()> {
+        db_clear_shared_storage(&self.pool, script_uri).await
+    }
+
+    async fn get_script_privileged(&self, uri: &str) -> AppResult<Option<bool>> {
+        db_get_script_privileged(&self.pool, uri).await
+    }
+
+    async fn set_script_privileged(&self, uri: &str, privileged: bool) -> AppResult<()> {
+        db_set_script_privileged(&self.pool, uri, privileged).await
+    }
+}
+
+/// In-memory implementation of the Repository trait
+pub struct MemoryRepository;
+
+impl MemoryRepository {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for MemoryRepository {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Repository for MemoryRepository {
+    async fn get_script(&self, uri: &str) -> AppResult<Option<String>> {
+        // Check static scripts first
+        if let Some(script) = get_static_scripts().get(uri) {
+            return Ok(Some(script.clone()));
+        }
+
+        // Then check dynamic scripts
+        let guard = safe_lock_scripts()?;
+        Ok(guard.get(uri).map(|m| m.content.clone()))
+    }
+
+    async fn list_scripts(&self) -> AppResult<HashMap<String, String>> {
+        // Start with static scripts
+        let mut scripts = get_static_scripts();
+
+        // Merge dynamic scripts
+        let guard = safe_lock_scripts()?;
+        for (uri, metadata) in guard.iter() {
+            scripts.insert(uri.clone(), metadata.content.clone());
+        }
+
+        Ok(scripts)
+    }
+
+    async fn upsert_script(&self, uri: &str, content: &str) -> AppResult<()> {
+        upsert_script_in_memory(uri, content)
+    }
+
+    async fn delete_script(&self, uri: &str) -> AppResult<bool> {
+        let mut guard = safe_lock_scripts()?;
+        Ok(guard.remove(uri).is_some())
+    }
+
+    async fn get_script_metadata(&self, uri: &str) -> AppResult<ScriptMetadata> {
+        let guard = safe_lock_scripts()?;
+        guard
+            .get(uri)
+            .cloned()
+            .ok_or_else(|| RepositoryError::ScriptNotFound(uri.to_string()).into())
+    }
+
+    async fn get_all_script_metadata(&self) -> AppResult<Vec<ScriptMetadata>> {
+        let mut metadata_list = Vec::new();
+
+        // Get static scripts
+        for (uri, content) in get_static_scripts() {
+            metadata_list.push(ScriptMetadata::new(uri, content));
+        }
+
+        // Merge dynamic scripts (overwriting static if same URI)
+        {
+            let guard = safe_lock_scripts()?;
+            for (uri, metadata) in guard.iter() {
+                if let Some(existing) = metadata_list.iter_mut().find(|m| m.uri == *uri) {
+                    *existing = metadata.clone();
+                } else {
+                    metadata_list.push(metadata.clone());
+                }
+            }
+        }
+
+        // Apply privilege overrides
+        if let Ok(overrides) = safe_lock_privilege_overrides() {
+            for metadata in &mut metadata_list {
+                if let Some(privileged) = overrides.get(&metadata.uri) {
+                    metadata.privileged = *privileged;
+                }
+            }
+        }
+
+        // Apply default privileges
+        for metadata in &mut metadata_list {
+            let profile = get_script_security_profile(&metadata.uri)?;
+            if profile.privileged != metadata.privileged {
+                metadata.privileged = profile.privileged;
+            }
+        }
+
+        Ok(metadata_list)
+    }
+
+    async fn update_script_init_status(
+        &self,
+        uri: &str,
+        initialized: bool,
+        init_error: Option<String>,
+        registrations: Option<RouteRegistrations>,
+    ) -> AppResult<()> {
+        let mut guard = safe_lock_scripts()?;
+        if let Some(metadata) = guard.get_mut(uri) {
+            metadata.initialized = initialized;
+            metadata.init_error = init_error;
+            if let Some(regs) = registrations {
+                metadata.registrations = regs;
+            }
+            if initialized {
+                metadata.last_init_time = Some(SystemTime::now());
+            }
+        } else {
+            // If it's a static script, it might not be in dynamic scripts map yet
+            if let Some(content) = get_static_scripts().get(uri) {
+                let mut metadata = ScriptMetadata::new(uri.to_string(), content.clone());
+                metadata.initialized = initialized;
+                metadata.init_error = init_error;
+                if let Some(regs) = registrations {
+                    metadata.registrations = regs;
+                }
+                if initialized {
+                    metadata.last_init_time = Some(SystemTime::now());
+                }
+                guard.insert(uri.to_string(), metadata);
+            } else {
+                return Err(RepositoryError::ScriptNotFound(uri.to_string()).into());
+            }
+        }
+        Ok(())
+    }
+
+    async fn get_asset(&self, uri: &str) -> AppResult<Option<Asset>> {
+        // Check static assets first
+        if let Some(asset) = get_static_assets().get(uri) {
+            return Ok(Some(asset.clone()));
+        }
+
+        // Then check dynamic assets
+        let guard = safe_lock_assets()?;
+        Ok(guard.get(uri).cloned())
+    }
+
+    async fn list_assets(&self) -> AppResult<HashMap<String, Asset>> {
+        let mut assets = get_static_assets();
+
+        let guard = safe_lock_assets()?;
+        for (uri, asset) in guard.iter() {
+            assets.insert(uri.clone(), asset.clone());
+        }
+
+        Ok(assets)
+    }
+
+    async fn upsert_asset(&self, asset: Asset) -> AppResult<()> {
+        upsert_asset_in_memory(&asset)
+    }
+
+    async fn delete_asset(&self, uri: &str) -> AppResult<bool> {
+        let mut guard = safe_lock_assets()?;
+        Ok(guard.remove(uri).is_some())
+    }
+
+    async fn insert_log(&self, script_uri: &str, message: &str, _level: &str) -> AppResult<()> {
+        let mut guard = safe_lock_logs()?;
+        guard
+            .entry(script_uri.to_string())
+            .or_insert_with(Vec::new)
+            .push(message.to_string());
+        Ok(())
+    }
+
+    async fn fetch_logs(&self, script_uri: &str) -> AppResult<Vec<LogEntry>> {
+        let guard = safe_lock_logs()?;
+        let now = SystemTime::now();
+        Ok(guard
+            .get(script_uri)
+            .map(|messages| {
+                messages
+                    .iter()
+                    .map(|msg| LogEntry::new(msg.clone(), "INFO".to_string(), now))
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    async fn fetch_all_logs(&self) -> AppResult<Vec<LogEntry>> {
+        let guard = safe_lock_logs()?;
+        let mut all_logs = Vec::new();
+        let now = SystemTime::now();
+        for logs in guard.values() {
+            for message in logs {
+                all_logs.push(LogEntry::new(message.clone(), "INFO".to_string(), now));
+            }
+        }
+        Ok(all_logs)
+    }
+
+    async fn clear_logs(&self, script_uri: &str) -> AppResult<()> {
+        let mut guard = safe_lock_logs()?;
+        guard.remove(script_uri);
+        Ok(())
+    }
+
+    async fn prune_logs(&self) -> AppResult<()> {
+        const LIMIT: usize = 20;
+        let mut guard = safe_lock_logs()?;
+
+        for logs in guard.values_mut() {
+            if logs.len() > LIMIT {
+                let remove = logs.len() - LIMIT;
+                logs.drain(0..remove);
+            }
+        }
+        Ok(())
+    }
+
+    async fn get_shared_storage(&self, script_uri: &str, key: &str) -> AppResult<Option<String>> {
+        let guard = safe_lock_shared_storage()?;
+        Ok(guard.get(script_uri).and_then(|map| map.get(key)).cloned())
+    }
+
+    async fn set_shared_storage(&self, script_uri: &str, key: &str, value: &str) -> AppResult<()> {
+        let mut guard = safe_lock_shared_storage()?;
+        guard
+            .entry(script_uri.to_string())
+            .or_insert_with(HashMap::new)
+            .insert(key.to_string(), value.to_string());
+        Ok(())
+    }
+
+    async fn remove_shared_storage(&self, script_uri: &str, key: &str) -> AppResult<bool> {
+        let mut guard = safe_lock_shared_storage()?;
+        if let Some(map) = guard.get_mut(script_uri) {
+            Ok(map.remove(key).is_some())
+        } else {
+            Ok(false)
+        }
+    }
+
+    async fn clear_shared_storage(&self, script_uri: &str) -> AppResult<()> {
+        let mut guard = safe_lock_shared_storage()?;
+        guard.remove(script_uri);
+        Ok(())
+    }
+
+    async fn get_script_privileged(&self, uri: &str) -> AppResult<Option<bool>> {
+        // Check overrides
+        if let Ok(guard) = safe_lock_privilege_overrides()
+            && let Some(value) = guard.get(uri)
+        {
+            return Ok(Some(*value));
+        }
+
+        // Check metadata
+        if let Ok(guard) = safe_lock_scripts()
+            && let Some(metadata) = guard.get(uri)
+        {
+            return Ok(Some(metadata.privileged));
+        }
+
+        Ok(None)
+    }
+
+    async fn set_script_privileged(&self, uri: &str, privileged: bool) -> AppResult<()> {
+        // Update metadata if exists
+        if let Ok(mut guard) = safe_lock_scripts()
+            && let Some(metadata) = guard.get_mut(uri)
+        {
+            metadata.privileged = privileged;
+        }
+
+        // Update override
+        let mut guard = safe_lock_privilege_overrides()?;
+        guard.insert(uri.to_string(), privileged);
+        Ok(())
+    }
+}
+
+/// Unified repository that delegates to either Postgres or Memory implementation
+pub enum UnifiedRepository {
+    Postgres(PostgresRepository),
+    Memory(MemoryRepository),
+}
+
+impl UnifiedRepository {
+    pub fn new_postgres(pool: PgPool) -> Self {
+        Self::Postgres(PostgresRepository::new(pool))
+    }
+
+    pub fn new_memory() -> Self {
+        Self::Memory(MemoryRepository::new())
+    }
+}
+
+#[async_trait]
+impl Repository for UnifiedRepository {
+    async fn get_script(&self, uri: &str) -> AppResult<Option<String>> {
+        match self {
+            Self::Postgres(repo) => repo.get_script(uri).await,
+            Self::Memory(repo) => repo.get_script(uri).await,
+        }
+    }
+
+    async fn list_scripts(&self) -> AppResult<HashMap<String, String>> {
+        match self {
+            Self::Postgres(repo) => repo.list_scripts().await,
+            Self::Memory(repo) => repo.list_scripts().await,
+        }
+    }
+
+    async fn upsert_script(&self, uri: &str, content: &str) -> AppResult<()> {
+        match self {
+            Self::Postgres(repo) => repo.upsert_script(uri, content).await,
+            Self::Memory(repo) => repo.upsert_script(uri, content).await,
+        }
+    }
+
+    async fn delete_script(&self, uri: &str) -> AppResult<bool> {
+        match self {
+            Self::Postgres(repo) => repo.delete_script(uri).await,
+            Self::Memory(repo) => repo.delete_script(uri).await,
+        }
+    }
+
+    async fn get_script_metadata(&self, uri: &str) -> AppResult<ScriptMetadata> {
+        match self {
+            Self::Postgres(repo) => repo.get_script_metadata(uri).await,
+            Self::Memory(repo) => repo.get_script_metadata(uri).await,
+        }
+    }
+
+    async fn get_all_script_metadata(&self) -> AppResult<Vec<ScriptMetadata>> {
+        match self {
+            Self::Postgres(repo) => repo.get_all_script_metadata().await,
+            Self::Memory(repo) => repo.get_all_script_metadata().await,
+        }
+    }
+
+    async fn update_script_init_status(
+        &self,
+        uri: &str,
+        initialized: bool,
+        init_error: Option<String>,
+        registrations: Option<RouteRegistrations>,
+    ) -> AppResult<()> {
+        match self {
+            Self::Postgres(repo) => {
+                repo.update_script_init_status(uri, initialized, init_error, registrations)
+                    .await
+            }
+            Self::Memory(repo) => {
+                repo.update_script_init_status(uri, initialized, init_error, registrations)
+                    .await
             }
         }
     }
 
-    // Fall back to in-memory implementation
-    match safe_lock_shared_storage() {
-        Ok(mut guard) => {
-            guard.remove(script_uri);
-            debug!(
-                "Cleared all shared storage items from memory for script: {}",
-                script_uri
-            );
-            Ok(())
+    async fn get_asset(&self, uri: &str) -> AppResult<Option<Asset>> {
+        match self {
+            Self::Postgres(repo) => repo.get_asset(uri).await,
+            Self::Memory(repo) => repo.get_asset(uri).await,
         }
-        Err(e) => {
-            error!("Failed to clear shared storage for {}: {}", script_uri, e);
-            Err(e)
+    }
+
+    async fn list_assets(&self) -> AppResult<HashMap<String, Asset>> {
+        match self {
+            Self::Postgres(repo) => repo.list_assets().await,
+            Self::Memory(repo) => repo.list_assets().await,
+        }
+    }
+
+    async fn upsert_asset(&self, asset: Asset) -> AppResult<()> {
+        match self {
+            Self::Postgres(repo) => repo.upsert_asset(asset).await,
+            Self::Memory(repo) => repo.upsert_asset(asset).await,
+        }
+    }
+
+    async fn delete_asset(&self, uri: &str) -> AppResult<bool> {
+        match self {
+            Self::Postgres(repo) => repo.delete_asset(uri).await,
+            Self::Memory(repo) => repo.delete_asset(uri).await,
+        }
+    }
+
+    async fn insert_log(&self, script_uri: &str, message: &str, level: &str) -> AppResult<()> {
+        match self {
+            Self::Postgres(repo) => repo.insert_log(script_uri, message, level).await,
+            Self::Memory(repo) => repo.insert_log(script_uri, message, level).await,
+        }
+    }
+
+    async fn fetch_logs(&self, script_uri: &str) -> AppResult<Vec<LogEntry>> {
+        match self {
+            Self::Postgres(repo) => repo.fetch_logs(script_uri).await,
+            Self::Memory(repo) => repo.fetch_logs(script_uri).await,
+        }
+    }
+
+    async fn fetch_all_logs(&self) -> AppResult<Vec<LogEntry>> {
+        match self {
+            Self::Postgres(repo) => repo.fetch_all_logs().await,
+            Self::Memory(repo) => repo.fetch_all_logs().await,
+        }
+    }
+
+    async fn clear_logs(&self, script_uri: &str) -> AppResult<()> {
+        match self {
+            Self::Postgres(repo) => repo.clear_logs(script_uri).await,
+            Self::Memory(repo) => repo.clear_logs(script_uri).await,
+        }
+    }
+
+    async fn prune_logs(&self) -> AppResult<()> {
+        match self {
+            Self::Postgres(repo) => repo.prune_logs().await,
+            Self::Memory(repo) => repo.prune_logs().await,
+        }
+    }
+
+    async fn get_shared_storage(&self, script_uri: &str, key: &str) -> AppResult<Option<String>> {
+        match self {
+            Self::Postgres(repo) => repo.get_shared_storage(script_uri, key).await,
+            Self::Memory(repo) => repo.get_shared_storage(script_uri, key).await,
+        }
+    }
+
+    async fn set_shared_storage(&self, script_uri: &str, key: &str, value: &str) -> AppResult<()> {
+        match self {
+            Self::Postgres(repo) => repo.set_shared_storage(script_uri, key, value).await,
+            Self::Memory(repo) => repo.set_shared_storage(script_uri, key, value).await,
+        }
+    }
+
+    async fn remove_shared_storage(&self, script_uri: &str, key: &str) -> AppResult<bool> {
+        match self {
+            Self::Postgres(repo) => repo.remove_shared_storage(script_uri, key).await,
+            Self::Memory(repo) => repo.remove_shared_storage(script_uri, key).await,
+        }
+    }
+
+    async fn clear_shared_storage(&self, script_uri: &str) -> AppResult<()> {
+        match self {
+            Self::Postgres(repo) => repo.clear_shared_storage(script_uri).await,
+            Self::Memory(repo) => repo.clear_shared_storage(script_uri).await,
+        }
+    }
+
+    async fn get_script_privileged(&self, uri: &str) -> AppResult<Option<bool>> {
+        match self {
+            Self::Postgres(repo) => repo.get_script_privileged(uri).await,
+            Self::Memory(repo) => repo.get_script_privileged(uri).await,
+        }
+    }
+
+    async fn set_script_privileged(&self, uri: &str, privileged: bool) -> AppResult<()> {
+        match self {
+            Self::Postgres(repo) => repo.set_script_privileged(uri, privileged).await,
+            Self::Memory(repo) => repo.set_script_privileged(uri, privileged).await,
         }
     }
 }
 
-/// In-memory implementation of set script storage item
-fn set_shared_storage_item_in_memory(script_uri: &str, key: &str, value: &str) -> AppResult<()> {
-    let mut guard = safe_lock_shared_storage()?;
+/// Global repository instance
+static GLOBAL_REPOSITORY: OnceLock<UnifiedRepository> = OnceLock::new();
 
-    let script_map = guard
-        .entry(script_uri.to_string())
-        .or_insert_with(HashMap::new);
-    script_map.insert(key.to_string(), value.to_string());
+/// Initialize the global repository
+pub fn initialize_repository(repo: UnifiedRepository) -> bool {
+    GLOBAL_REPOSITORY.set(repo).is_ok()
+}
 
-    debug!(
-        "Set shared storage item in memory: {}:{} = {} bytes",
-        script_uri,
-        key,
-        value.len()
-    );
-    Ok(())
+/// Get the global repository
+pub fn get_repository() -> &'static UnifiedRepository {
+    GLOBAL_REPOSITORY.get_or_init(UnifiedRepository::new_memory)
 }
 
 #[cfg(test)]

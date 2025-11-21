@@ -34,7 +34,7 @@ fn create_user_with_capabilities(user_id: &str, caps: Vec<Capability>) -> UserCo
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_capability_enforcement_blocks_unauthorized_script_write() {
     // User with read-only capabilities should NOT be able to write scripts
     let user = create_user_with_capabilities(
@@ -59,7 +59,7 @@ async fn test_capability_enforcement_blocks_unauthorized_script_write() {
     assert!(op_result.error.as_ref().unwrap().contains("Access denied"));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_capability_enforcement_allows_authorized_script_write() {
     // User with write capabilities SHOULD be able to write scripts
     let user = create_user_with_capabilities("admin_user", vec![Capability::WriteScripts]);
@@ -80,7 +80,7 @@ async fn test_capability_enforcement_allows_authorized_script_write() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_validation_prevents_eval_injection() {
     let validator = InputValidator::new();
 
@@ -108,7 +108,7 @@ async fn test_validation_prevents_eval_injection() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_validation_prevents_prototype_pollution() {
     let validator = InputValidator::new();
 
@@ -128,7 +128,7 @@ async fn test_validation_prevents_prototype_pollution() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_validation_prevents_path_traversal() {
     let validator = InputValidator::new();
 
@@ -155,7 +155,7 @@ async fn test_validation_prevents_path_traversal() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_validation_prevents_xss_in_scripts() {
     let validator = InputValidator::new();
 
@@ -183,7 +183,7 @@ async fn test_validation_prevents_xss_in_scripts() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_validation_allows_safe_scripts() {
     let validator = InputValidator::new();
 
@@ -200,7 +200,7 @@ async fn test_validation_allows_safe_scripts() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_validation_enforces_script_size_limits() {
     let user = create_user_with_capabilities("test_user", vec![Capability::WriteScripts]);
     let ops = SecureOperations::new();
@@ -229,7 +229,7 @@ async fn test_validation_enforces_script_size_limits() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_asset_upload_enforces_size_limits() {
     let user = create_user_with_capabilities("test_user", vec![Capability::WriteAssets]);
     let ops = SecureOperations::new();
@@ -250,7 +250,7 @@ async fn test_asset_upload_enforces_size_limits() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_rate_limiting_blocks_excessive_requests() {
     let limiter = RateLimiter::new();
     let key = RateLimitKey::IpAddress("test_client".to_string());
@@ -274,7 +274,7 @@ async fn test_rate_limiting_blocks_excessive_requests() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_rate_limiting_resets_after_window() {
     let limiter = RateLimiter::new();
     let key = RateLimitKey::IpAddress("test_client_reset".to_string());
@@ -297,7 +297,7 @@ async fn test_rate_limiting_resets_after_window() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_anonymous_user_has_minimal_capabilities() {
     // Set production mode to test strict anonymous user capabilities
     unsafe {
@@ -334,7 +334,7 @@ async fn test_anonymous_user_has_minimal_capabilities() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_authenticated_user_gets_default_capabilities() {
     let auth_user = UserContext::authenticated("user123".to_string());
 
@@ -358,7 +358,7 @@ async fn test_authenticated_user_gets_default_capabilities() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_url_validation_blocks_javascript_protocol() {
     let validator = InputValidator::new();
 
@@ -375,7 +375,7 @@ async fn test_url_validation_blocks_javascript_protocol() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_url_validation_allows_safe_protocols() {
     let validator = InputValidator::new();
 
@@ -391,7 +391,7 @@ async fn test_url_validation_allows_safe_protocols() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_graphql_schema_validation() {
     let validator = InputValidator::new();
 
@@ -415,7 +415,7 @@ async fn test_graphql_schema_validation() {
     assert!(result.is_ok(), "Basic schema should be valid");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_stream_name_validation() {
     let validator = InputValidator::new();
 
@@ -439,7 +439,7 @@ async fn test_stream_name_validation() {
     assert!(validator.validate_stream_name("name with spaces").is_err());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_header_injection_prevention() {
     let validator = InputValidator::new();
 
@@ -459,7 +459,7 @@ async fn test_header_injection_prevention() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_security_operations_repository_integration() {
     // This test verifies that SecureOperations actually calls the repository
     let user = create_user_with_capabilities("test_user", vec![Capability::WriteScripts]);
@@ -485,7 +485,7 @@ async fn test_security_operations_repository_integration() {
     aiwebengine::repository::delete_script("integration_test.js");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_asset_upload_repository_integration() {
     let user = create_user_with_capabilities("test_user", vec![Capability::WriteAssets]);
     let ops = SecureOperations::new();
@@ -518,7 +518,7 @@ use aiwebengine::js_engine::{
     RequestExecutionParams, execute_script_for_request_secure, execute_script_secure,
 };
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_secure_script_execution_authenticated() {
     // Test with admin user (needs route registration capability)
     let user_context = UserContext::admin("test_admin".to_string());
@@ -554,7 +554,7 @@ async fn test_secure_script_execution_authenticated() {
     // );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_secure_script_execution_anonymous() {
     // Test with anonymous user (limited capabilities)
     let user_context = UserContext::anonymous();
@@ -575,7 +575,7 @@ async fn test_secure_script_execution_anonymous() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_secure_request_execution() {
     // First, set up a script with authenticated user
     let user_context = UserContext::authenticated("test_user".to_string());
@@ -626,7 +626,7 @@ async fn test_secure_request_execution() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_secure_script_validation() {
     let user_context = UserContext::authenticated("test_user".to_string());
 
@@ -645,7 +645,7 @@ async fn test_secure_script_validation() {
     assert!(result.success, "Script with warnings should still execute");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_capability_enforcement() {
     let user_context = UserContext::anonymous(); // No DeleteScripts capability
 

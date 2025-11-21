@@ -15,7 +15,7 @@ use common::{TestContext, wait_for_server};
 // Editor API Endpoint Tests
 // ============================================================================
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_editor_api_endpoints() {
     let context = TestContext::new();
 
@@ -152,7 +152,7 @@ async fn test_editor_api_endpoints() {
 // Test Editor API Tests
 // ============================================================================
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_editor_test_api_endpoints() {
     let context = TestContext::new();
 
@@ -220,7 +220,7 @@ async fn test_editor_test_api_endpoints() {
     context.cleanup().await.expect("Failed to cleanup");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_editor_functionality() {
     let context = TestContext::new();
 
@@ -298,7 +298,7 @@ async fn test_editor_functionality() {
     context.cleanup().await.expect("Failed to cleanup");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_prune_logs_endpoint() {
     let context = common::TestContext::new();
 

@@ -1,7 +1,16 @@
 use aiwebengine::{config, start_server_with_config};
 use std::sync::Arc;
+use std::sync::Once;
 use std::time::Duration;
 use tokio::sync::{Mutex, oneshot};
+
+static INIT: Once = Once::new();
+
+pub fn init_tracing() {
+    INIT.call_once(|| {
+        tracing_subscriber::fmt().with_env_filter("debug").init();
+    });
+}
 
 /// Improved test server with proper shutdown support
 pub struct TestServer {
@@ -60,6 +69,7 @@ pub struct TestContext {
 
 impl TestContext {
     pub fn new() -> Self {
+        init_tracing();
         Self {
             servers: Arc::new(Mutex::new(Vec::new())),
         }

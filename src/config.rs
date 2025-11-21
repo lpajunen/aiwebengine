@@ -585,28 +585,6 @@ impl AppConfig {
             }
         }
     }
-
-    /// Backward compatibility method for server address
-    pub fn server_addr(&self) -> String {
-        format!("{}:{}", self.server.host, self.server.port)
-    }
-
-    /// Backward compatibility getters
-    pub fn port(&self) -> u16 {
-        self.server.port
-    }
-
-    pub fn host(&self) -> &str {
-        &self.server.host
-    }
-
-    pub fn script_timeout_ms(&self) -> u64 {
-        self.javascript.execution_timeout_ms
-    }
-
-    pub fn max_concurrent_requests(&self) -> usize {
-        self.javascript.max_concurrent_executions
-    }
 }
 
 #[cfg(test)]
@@ -694,11 +672,14 @@ mod tests {
         let config = AppConfig::default();
 
         // Test backward compatibility methods
-        assert_eq!(config.port(), 8080);
-        assert_eq!(config.host(), "127.0.0.1");
-        assert_eq!(config.script_timeout_ms(), 5000);
-        assert_eq!(config.max_concurrent_requests(), 100); // Correct default value
-        assert_eq!(config.server_addr(), "127.0.0.1:8080");
+        assert_eq!(config.server.port, 8080);
+        assert_eq!(config.server.host, "127.0.0.1");
+        assert_eq!(config.javascript.execution_timeout_ms, 5000);
+        assert_eq!(config.javascript.max_concurrent_executions, 100); // Correct default value
+        assert_eq!(
+            config.server_address().unwrap().to_string(),
+            "127.0.0.1:8080"
+        );
     }
 
     #[test]

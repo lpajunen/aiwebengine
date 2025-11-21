@@ -102,7 +102,10 @@ async fn main() -> AppResult<()> {
         match config.validate() {
             Ok(()) => {
                 println!("✓ Configuration is valid");
-                println!("Server would start on: {}", config.server_addr());
+                println!(
+                    "Server would start on: {}",
+                    config.server_address().expect("Invalid server address")
+                );
                 println!("Log level: {}", config.logging.level);
                 println!(
                     "JavaScript timeout: {}ms",
@@ -131,7 +134,10 @@ async fn main() -> AppResult<()> {
 
     tracing::info!("Starting AIWebEngine Server");
     tracing::info!("Configuration loaded successfully");
-    tracing::info!("Server address: {}", config.server_addr());
+    tracing::info!(
+        "Server address: {}",
+        config.server_address().expect("Invalid server address")
+    );
     tracing::info!(
         "JavaScript timeout: {}ms",
         config.javascript.execution_timeout_ms

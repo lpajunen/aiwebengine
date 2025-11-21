@@ -21,7 +21,7 @@ use tokio::time::timeout;
 // QuickJS Integration Tests
 // ============================================================================
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_js_registered_route_returns_expected() {
     let context = TestContext::new();
     let port = context
@@ -78,7 +78,7 @@ async fn test_js_registered_route_returns_expected() {
     context.cleanup().await.expect("Failed to cleanup");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_core_js_registers_root_path() {
     // Ensure core.js contains a registration for '/'
     let core = repository::fetch_script("https://example.com/core").expect("core script missing");
@@ -93,7 +93,7 @@ async fn test_core_js_registers_root_path() {
 // Core Script Initialization Tests
 // ============================================================================
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_core_script_init_called() {
     let context = TestContext::new();
 
@@ -139,7 +139,7 @@ async fn test_core_script_init_called() {
 // JavaScript Logging Tests
 // ============================================================================
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn js_write_log_and_listlogs() {
     // upsert the js_log_test script so it registers its routes
     let _ = repository::upsert_script(
@@ -258,7 +258,7 @@ async fn js_write_log_and_listlogs() {
     context.cleanup().await.expect("Failed to cleanup");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn js_list_logs_for_uri() {
     // Insert some test log messages for different URIs
     repository::insert_log_message(
@@ -372,7 +372,7 @@ async fn js_list_logs_for_uri() {
 // Script Management API Tests
 // ============================================================================
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn js_script_mgmt_functions_work() {
     // upsert the management test script so it registers /js-mgmt-check and the upsert logic
     let _ = repository::upsert_script(
@@ -462,7 +462,7 @@ async fn js_script_mgmt_functions_work() {
     context.cleanup().await.expect("Failed to cleanup");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_upsert_script_endpoint() {
     // Use the new TestContext pattern for proper server lifecycle management
     let context = common::TestContext::new();
@@ -565,7 +565,7 @@ function init(context) {
     context.cleanup().await.expect("Failed to cleanup");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_delete_script_endpoint() {
     // Use the new TestContext pattern for proper server lifecycle management
     let context = common::TestContext::new();
@@ -731,7 +731,7 @@ function init(context) {
     context.cleanup().await.expect("Failed to cleanup");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_script_lifecycle_via_http_api() {
     // Use the new TestContext pattern for proper server lifecycle management
     let context = common::TestContext::new();
@@ -856,7 +856,7 @@ function init(context) {
     context.cleanup().await.expect("Failed to cleanup");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_read_script_endpoint() {
     // Use the new TestContext pattern for proper server lifecycle management
     let context = common::TestContext::new();
@@ -1018,7 +1018,7 @@ function init(context) {
 // Script Init Function Tests
 // ============================================================================
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_init_function_called_successfully() {
     let script_uri = "test://init-success";
     let script_content = r#"
@@ -1053,7 +1053,7 @@ async fn test_init_function_called_successfully() {
     // Note: call_init_if_exists doesn't update metadata - that's done by ScriptInitializer
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_script_initializer_updates_metadata() {
     let script_uri = "test://init-metadata";
     let script_content = r#"
@@ -1086,7 +1086,7 @@ async fn test_script_initializer_updates_metadata() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_script_without_init_function() {
     let script_uri = "test://no-init";
     let script_content = r#"
@@ -1107,7 +1107,7 @@ async fn test_script_without_init_function() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_init_function_with_error() {
     let script_uri = "test://init-error";
     let script_content = r#"
@@ -1147,7 +1147,7 @@ async fn test_init_function_with_error() {
     assert!(metadata.init_error.is_some(), "Should have init error");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_script_initializer_single_script() {
     let script_uri = "test://initializer-test";
     let script_content = r#"
@@ -1169,7 +1169,7 @@ async fn test_script_initializer_single_script() {
     assert!(result.duration_ms > 0, "Should have measurable duration");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_script_initializer_all_scripts() {
     // Create multiple test scripts
     let scripts = vec![
@@ -1202,7 +1202,7 @@ async fn test_script_initializer_all_scripts() {
     assert!(successful >= 3, "At least 3 scripts should succeed");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_init_context_properties() {
     let script_uri = "test://context-test";
     let script_content = r#"

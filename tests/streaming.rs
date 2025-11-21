@@ -23,7 +23,7 @@ use tracing::info;
 // Core Script Streaming Tests
 // ============================================================================
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_core_js_script_streaming() {
     // Test the real core.js script with streaming functionality
 
@@ -183,7 +183,7 @@ async fn test_core_js_script_streaming() {
     info!("Core.js script streaming test completed successfully!");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_script_stream_health_and_stats() {
     // Test that we can get health and stats for the script update stream
 
@@ -232,7 +232,7 @@ async fn test_script_stream_health_and_stats() {
 // Debug Streaming Tests
 // ============================================================================
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_basic_streaming_functionality() {
     // Test basic streaming functionality with a minimal script
 
@@ -324,7 +324,7 @@ async fn test_basic_streaming_functionality() {
     info!("Basic streaming test completed successfully");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_direct_stream_message() {
     // Test direct stream message sending without using request handlers
 
@@ -422,7 +422,7 @@ async fn test_direct_stream_message() {
 // Script Update Streaming Integration Tests
 // ============================================================================
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_script_update_streaming_integration() {
     // This test verifies that script update streaming works via the HTTP API
     // It tests the /script_updates stream endpoint and broadcasts
@@ -516,7 +516,7 @@ async fn test_script_update_streaming_integration() {
     context.cleanup().await.expect("Failed to cleanup");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_script_update_message_format() {
     // Test that the script update message format is correct via HTTP API
     // This test verifies the core.js script properly formats broadcast messages
@@ -623,7 +623,7 @@ async fn test_script_update_message_format() {
 // ============================================================================
 
 use reqwest::Client;
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_stream_endpoints() {
     let context = TestContext::new();
 
@@ -732,7 +732,7 @@ async fn test_stream_endpoints() {
     context.cleanup().await.expect("Failed to cleanup");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_stream_messaging() {
     let context = TestContext::new();
 
@@ -867,7 +867,7 @@ async fn test_stream_messaging() {
 // Stream Error Handling Tests
 // ============================================================================
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_broadcast_result_structure() {
     // Test BroadcastResult utility methods
     let full_success = BroadcastResult {
@@ -902,7 +902,7 @@ async fn test_broadcast_result_structure() {
     assert_eq!(complete_failure.failure_rate(), 1.0); // 3/3 = 1.0
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_automatic_failed_connection_cleanup() {
     let registry = StreamRegistry::new();
 
@@ -942,7 +942,7 @@ async fn test_automatic_failed_connection_cleanup() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_global_registry_error_handling() {
     // Test error handling with the global registry
 
@@ -981,7 +981,7 @@ async fn test_global_registry_error_handling() {
         .unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_stream_registry_health_status() {
     let registry = StreamRegistry::new();
 
@@ -1013,7 +1013,7 @@ async fn test_stream_registry_health_status() {
     assert_eq!(streams.len(), 2);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_graceful_shutdown() {
     let registry = StreamRegistry::new();
 
@@ -1050,7 +1050,7 @@ async fn test_graceful_shutdown() {
     assert_eq!(count, 0);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_stale_connection_cleanup() {
     let registry = StreamRegistry::new();
 

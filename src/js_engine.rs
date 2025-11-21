@@ -1798,7 +1798,7 @@ mod tests {
         assert_eq!(original.registrations.len(), cloned.registrations.len());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_register_web_stream_function() {
         use crate::security::UserContext;
         use std::sync::Once;
@@ -1873,7 +1873,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_send_stream_message_function() {
         use crate::security::UserContext;
 
@@ -1919,7 +1919,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_send_stream_message_json_object() {
         use crate::security::UserContext;
 

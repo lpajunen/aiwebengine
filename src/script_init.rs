@@ -1,6 +1,6 @@
 use crate::error::AppResult;
 use crate::repository;
-use crate::repository::{get_all_script_metadata, get_script_metadata, mark_script_init_failed};
+use crate::repository::Repository;
 use std::time::{Duration, SystemTime};
 use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
@@ -82,9 +82,13 @@ impl ScriptInitializer {
         is_startup: bool,
     ) -> Result<InitResult, String> {
         let start_time = std::time::Instant::now();
+        debug!("initialize_script: getting metadata for {}", script_uri);
 
         // Get script metadata
-        let metadata = match get_script_metadata(script_uri) {
+        let metadata = match repository::get_repository()
+            .get_script_metadata(script_uri)
+            .await
+        {
             Ok(m) => m,
             Err(e) => {
                 let duration_ms = start_time.elapsed().as_millis() as u64;
@@ -106,9 +110,11 @@ impl ScriptInitializer {
         let script_uri_clone = script_uri.to_string();
         let metadata_clone = metadata.clone();
 
+        debug!("Spawning blocking task for {}", script_uri);
         let result = timeout(
             timeout_duration,
             tokio::task::spawn_blocking(move || {
+                debug!("Inside spawn_blocking for {}", script_uri_clone);
                 crate::js_engine::call_init_if_exists(
                     &script_uri_clone,
                     &metadata_clone.content,
@@ -117,6 +123,7 @@ impl ScriptInitializer {
             }),
         )
         .await;
+        debug!("Blocking task finished for {}", script_uri);
 
         let duration_ms = start_time.elapsed().as_millis() as u64;
 
@@ -124,10 +131,10 @@ impl ScriptInitializer {
             Ok(Ok(init_result)) => match init_result {
                 Ok(Some(registrations)) => {
                     // Init function was called successfully and returned registrations
-                    if let Err(e) = repository::mark_script_initialized_with_registrations(
-                        script_uri,
-                        registrations,
-                    ) {
+                    if let Err(e) = repository::get_repository()
+                        .update_script_init_status(script_uri, true, None, Some(registrations))
+                        .await
+                    {
                         warn!(
                             "Failed to mark script as initialized with registrations: {}",
                             e
@@ -146,11 +153,19 @@ impl ScriptInitializer {
                 }
                 Err(e) => {
                     // Init function threw an error (already formatted by call_init_if_exists)
-                    if let Err(err) = mark_script_init_failed(script_uri, e.clone()) {
+                    if let Err(err) = repository::get_repository()
+                        .update_script_init_status(script_uri, false, Some(e.clone()), None)
+                        .await
+                    {
                         warn!("Failed to mark script init as failed: {}", err);
                     }
                     // Log FATAL error to database
-                    repository::insert_log_message(script_uri, &e, "FATAL");
+                    if let Err(err) = repository::get_repository()
+                        .insert_log(script_uri, &e, "FATAL")
+                        .await
+                    {
+                        warn!("Failed to log error to database: {}", err);
+                    }
                     warn!("✗ Script '{}' init failed: {}", script_uri, e);
                     Ok(InitResult::failed(script_uri.to_string(), e, duration_ms))
                 }
@@ -158,11 +173,19 @@ impl ScriptInitializer {
             Ok(Err(join_error)) => {
                 // Task panicked or was cancelled
                 let error_msg = format!("Init task failed: {}", join_error);
-                if let Err(e) = mark_script_init_failed(script_uri, error_msg.clone()) {
+                if let Err(e) = repository::get_repository()
+                    .update_script_init_status(script_uri, false, Some(error_msg.clone()), None)
+                    .await
+                {
                     warn!("Failed to mark script init as failed: {}", e);
                 }
                 // Log FATAL error to database
-                repository::insert_log_message(script_uri, &error_msg, "FATAL");
+                if let Err(err) = repository::get_repository()
+                    .insert_log(script_uri, &error_msg, "FATAL")
+                    .await
+                {
+                    warn!("Failed to log error to database: {}", err);
+                }
                 error!("✗ Script '{}' init task failed: {}", script_uri, join_error);
                 Ok(InitResult::failed(
                     script_uri.to_string(),
@@ -173,11 +196,19 @@ impl ScriptInitializer {
             Err(_timeout_error) => {
                 // Timeout occurred
                 let error_msg = format!("Init timeout ({}ms)", self.timeout_ms);
-                if let Err(e) = mark_script_init_failed(script_uri, error_msg.clone()) {
+                if let Err(e) = repository::get_repository()
+                    .update_script_init_status(script_uri, false, Some(error_msg.clone()), None)
+                    .await
+                {
                     warn!("Failed to mark script init as failed: {}", e);
                 }
                 // Log FATAL error to database
-                repository::insert_log_message(script_uri, &error_msg, "FATAL");
+                if let Err(err) = repository::get_repository()
+                    .insert_log(script_uri, &error_msg, "FATAL")
+                    .await
+                {
+                    warn!("Failed to log error to database: {}", err);
+                }
                 error!(
                     "✗ Script '{}' init timeout after {}ms",
                     script_uri, self.timeout_ms
@@ -197,7 +228,7 @@ impl ScriptInitializer {
         let start_time = std::time::Instant::now();
 
         // Get all script metadata
-        let all_metadata = match get_all_script_metadata() {
+        let all_metadata = match repository::get_repository().get_all_script_metadata().await {
             Ok(metadata) => metadata,
             Err(e) => {
                 error!("Failed to get script metadata: {}", e);
