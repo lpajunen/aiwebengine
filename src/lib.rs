@@ -55,6 +55,45 @@ fn parse_query_string(query: &str) -> HashMap<String, String> {
 /// Parses form data from request body based on content type
 use crate::parsers::parse_form_data;
 
+/// Helper: Sanitize connection string for logging (hide password)
+fn sanitize_connection_string(conn_str: &str) -> String {
+    if let Some(at_pos) = conn_str.find('@') {
+        let before_at = &conn_str[..at_pos];
+        let after_at = &conn_str[at_pos..];
+        if let Some(colon_pos) = before_at.rfind(':') {
+            format!("{}:****{}", &before_at[..colon_pos], after_at)
+        } else {
+            conn_str.to_string()
+        }
+    } else {
+        conn_str.to_string()
+    }
+}
+
+/// Helper: Create JsAuthContext from optional AuthUser
+fn create_js_auth_context(auth_user: Option<&auth::AuthUser>) -> auth::JsAuthContext {
+    match auth_user {
+        Some(user) => auth::JsAuthContext::authenticated(
+            user.user_id.clone(),
+            user.email.clone(),
+            user.name.clone(),
+            user.provider.clone(),
+            user.is_admin,
+            user.is_editor,
+        ),
+        None => auth::JsAuthContext::anonymous(),
+    }
+}
+
+/// Helper: Convert ErrorResponse to HTTP response
+fn error_to_response(error_response: error::ErrorResponse) -> Response {
+    let status =
+        StatusCode::from_u16(error_response.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let body = serde_json::to_string(&error_response)
+        .unwrap_or_else(|_| r#"{"error":"Serialization failed"}"#.to_string());
+    (status, body).into_response()
+}
+
 /// Handle Server-Sent Events stream requests
 async fn handle_stream_request(req: Request<Body>) -> Response {
     let path = req.uri().path().to_string();
@@ -75,16 +114,9 @@ async fn handle_stream_request(req: Request<Body>) -> Response {
     let client_metadata = if let Some((script_uri, customization_function)) = stream_info {
         if let Some(func_name) = customization_function {
             // Execute customization function to get filter criteria
-            let auth_context = auth_user.as_ref().map(|user| {
-                auth::JsAuthContext::authenticated(
-                    user.user_id.clone(),
-                    user.email.clone(),
-                    user.name.clone(),
-                    user.provider.clone(),
-                    user.is_admin,
-                    user.is_editor,
-                )
-            });
+            let auth_context = auth_user
+                .as_ref()
+                .map(|user| create_js_auth_context(Some(user)));
 
             match js_engine::execute_stream_customization_function(
                 &script_uri,
@@ -497,18 +529,7 @@ pub async fn start_server_with_config(
         config.repository.storage_type
     );
     if let Some(ref conn_str) = config.repository.connection_string {
-        // Log sanitized connection string (hide password)
-        let safe_conn_str = if let Some(at_pos) = conn_str.find('@') {
-            let before_at = &conn_str[..at_pos];
-            let after_at = &conn_str[at_pos..];
-            if let Some(colon_pos) = before_at.rfind(':') {
-                format!("{}:****{}", &before_at[..colon_pos], after_at)
-            } else {
-                conn_str.clone()
-            }
-        } else {
-            conn_str.clone()
-        };
+        let safe_conn_str = sanitize_connection_string(conn_str);
         info!("Repository config - connection_string: {}", safe_conn_str);
     } else {
         warn!("Repository config - connection_string: None (not set!)");
@@ -878,18 +899,7 @@ document.addEventListener('DOMContentLoaded', function() {
         };
 
         // Create authentication context for GraphQL execution
-        let js_auth_context = if let Some(ref auth_user) = auth_user {
-            auth::JsAuthContext::authenticated(
-                auth_user.user_id.clone(),
-                auth_user.email.clone(),
-                auth_user.name.clone(),
-                auth_user.provider.clone(),
-                auth_user.is_admin,
-                auth_user.is_editor,
-            )
-        } else {
-            auth::JsAuthContext::anonymous()
-        };
+        let js_auth_context = create_js_auth_context(auth_user.as_ref());
 
         let response = schema.execute(request.data(js_auth_context)).await;
         axum::response::Json(serde_json::to_value(response).unwrap_or(serde_json::Value::Null))
@@ -963,18 +973,7 @@ document.addEventListener('DOMContentLoaded', function() {
         };
 
         // Create authentication context for GraphQL execution
-        let js_auth_context = if let Some(ref auth_user) = auth_user {
-            auth::JsAuthContext::authenticated(
-                auth_user.user_id.clone(),
-                auth_user.email.clone(),
-                auth_user.name.clone(),
-                auth_user.provider.clone(),
-                auth_user.is_admin,
-                auth_user.is_editor,
-            )
-        } else {
-            auth::JsAuthContext::anonymous()
-        };
+        let js_auth_context = create_js_auth_context(auth_user.as_ref());
 
         // Check if this is a subscription operation
         let is_subscription = request.query.trim_start().starts_with("subscription");
@@ -1093,24 +1092,17 @@ document.addEventListener('DOMContentLoaded', function() {
                         "[{}] ⚠️  Method not allowed: {} {} (path exists but method not registered)",
                         request_id, request_method, path
                     );
-                    let error_response =
-                        error::errors::method_not_allowed(&path, &request_method, &request_id);
-                    let status = StatusCode::from_u16(error_response.status)
-                        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-                    let body = serde_json::to_string(&error_response)
-                        .unwrap_or_else(|_| r#"{"error":"Serialization failed"}"#.to_string());
-                    return (status, body).into_response();
+                    return error_to_response(error::errors::method_not_allowed(
+                        &path,
+                        &request_method,
+                        &request_id,
+                    ));
                 } else {
                     warn!(
                         "[{}] ⚠️  Route not found: {} {} (no handler registered for this path)",
                         request_id, request_method, path
                     );
-                    let error_response = error::errors::not_found(&path, &request_id);
-                    let status = StatusCode::from_u16(error_response.status)
-                        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-                    let body = serde_json::to_string(&error_response)
-                        .unwrap_or_else(|_| r#"{"error":"Serialization failed"}"#.to_string());
-                    return (status, body).into_response();
+                    return error_to_response(error::errors::not_found(&path, &request_id));
                 }
             }
         };
@@ -1248,12 +1240,7 @@ document.addEventListener('DOMContentLoaded', function() {
             {
                 Ok(r) => r,
                 Err(_) => {
-                    let error_response = error::errors::script_timeout(&path, &request_id);
-                    let status = StatusCode::from_u16(error_response.status)
-                        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-                    let body = serde_json::to_string(&error_response)
-                        .unwrap_or_else(|_| r#"{"error":"Serialization failed"}"#.to_string());
-                    return (status, body).into_response();
+                    return error_to_response(error::errors::script_timeout(&path, &request_id));
                 }
             };
 
@@ -1306,24 +1293,18 @@ document.addEventListener('DOMContentLoaded', function() {
                 );
                 repository::insert_log_message(&owner_uri, &error_msg, "FATAL");
 
-                let error_response = error::errors::script_execution_failed(&path, &e, &request_id);
-                let status = StatusCode::from_u16(error_response.status)
-                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-                let body = serde_json::to_string(&error_response)
-                    .unwrap_or_else(|_| r#"{"error":"Serialization failed"}"#.to_string());
-                (status, body).into_response()
+                error_to_response(error::errors::script_execution_failed(
+                    &path,
+                    &e,
+                    &request_id,
+                ))
             }
             Err(e) => {
                 error!(
                     "[{}] ❌ Task/runtime error for {} {}: {} (handler: {}, script: {})",
                     request_id, method_log, path_log, e, handler_name, owner_uri
                 );
-                let error_response = error::errors::internal_server_error(&path, &e, &request_id);
-                let status = StatusCode::from_u16(error_response.status)
-                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-                let body = serde_json::to_string(&error_response)
-                    .unwrap_or_else(|_| r#"{"error":"Serialization failed"}"#.to_string());
-                (status, body).into_response()
+                error_to_response(error::errors::internal_server_error(&path, &e, &request_id))
             }
         }
     }
