@@ -323,7 +323,7 @@ function wsSubscriptionDemoPage(context) {
                     
                     updateStatus('Connecting to WebSocket...', 'connecting');
                     
-                    ws = new WebSocket(wsUrl, 'graphql-transport-ws');
+                    ws = new WebSocket(wsUrl);
 
                     ws.onopen = () => {
                         console.log('WebSocket connected');
