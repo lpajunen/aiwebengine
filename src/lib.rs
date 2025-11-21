@@ -590,19 +590,13 @@ async fn initialize_auth_manager(
     Ok(Arc::new(auth_manager))
 }
 
-/// Starts the web server with custom configuration
-pub async fn start_server_with_config(
-    config: config::Config,
-    shutdown_rx: tokio::sync::oneshot::Receiver<()>,
-) -> AppResult<u16> {
+/// Initialize all core components (secrets, database, scripts, assets)
+async fn initialize_components(config: &config::Config) -> AppResult<()> {
     // Initialize secrets manager
-    let _secrets_manager = initialize_secrets(&config);
+    let _secrets_manager = initialize_secrets(config);
 
     // Initialize database connection and repository
-    initialize_database_and_repository(&config).await?;
-
-    // Clone the timeout value to avoid borrow checker issues in async closures
-    let script_timeout_ms = config.javascript.execution_timeout_ms;
+    initialize_database_and_repository(config).await?;
 
     // Bootstrap hardcoded scripts into database if configured
     info!("Bootstrapping hardcoded scripts into database...");
@@ -623,12 +617,33 @@ pub async fn start_server_with_config(
     }
 
     // Execute all scripts at startup to populate GraphQL registry
+    execute_startup_scripts().await?;
+
+    // Initialize all scripts by calling their init() functions if they exist
+    if config.javascript.enable_init_functions {
+        initialize_script_functions(config).await?;
+    } else {
+        info!("Script init() functions are disabled in configuration");
+    }
+
+    // Initialize GraphQL schema (will be rebuilt dynamically as needed)
+    if let Err(e) = graphql::rebuild_schema() {
+        error!("Failed to initialize GraphQL schema: {:?}", e);
+        // Don't fail startup, just log the error
+    }
+
+    Ok(())
+}
+
+/// Execute all scripts at startup to populate GraphQL registry
+async fn execute_startup_scripts() -> AppResult<()> {
     info!("Executing all scripts at startup to populate GraphQL registry...");
     let scripts = repository::get_repository()
         .list_scripts()
         .await
         .unwrap_or_default();
     info!("Found {} scripts to execute", scripts.len());
+
     for (uri, content) in scripts.iter() {
         info!("Executing script: {}", uri);
         // Use secure execution with admin user context for startup script execution
@@ -637,6 +652,7 @@ pub async fn start_server_with_config(
             content,
             UserContext::admin("system".to_string()),
         );
+
         if !result.success {
             error!("Failed to execute script {}: {:?}", uri, result.error);
             // Log FATAL error to database
@@ -656,77 +672,117 @@ pub async fn start_server_with_config(
         }
     }
 
-    // Initialize all scripts by calling their init() functions if they exist
-    if config.javascript.enable_init_functions {
-        info!("Initializing all scripts...");
-        let init_timeout = config
-            .javascript
-            .init_timeout_ms
-            .unwrap_or(config.javascript.execution_timeout_ms);
-        let initializer = script_init::ScriptInitializer::new(init_timeout);
-        info!("Calling initialize_all_scripts...");
-        match initializer.initialize_all_scripts().await {
-            Ok(results) => {
-                info!("initialize_all_scripts returned");
-                let successful = results.iter().filter(|r| r.success).count();
-                let failed = results
-                    .iter()
-                    .filter(|r| !r.success && r.error.is_some())
-                    .count();
-                let skipped = results
-                    .iter()
-                    .filter(|r| r.success && r.duration_ms == 0)
-                    .count();
-                info!(
-                    "Script initialization complete: {} successful, {} failed, {} skipped (no init function)",
-                    successful, failed, skipped
-                );
+    Ok(())
+}
 
-                // Log any failures for visibility
-                for result in results.iter().filter(|r| !r.success) {
-                    if let Some(ref error) = result.error {
-                        warn!(
-                            "Script '{}' initialization failed: {}",
-                            result.script_uri, error
-                        );
-                    }
-                }
+/// Initialize script functions by calling their init() functions
+async fn initialize_script_functions(config: &config::Config) -> AppResult<()> {
+    info!("Initializing all scripts...");
+    let init_timeout = config
+        .javascript
+        .init_timeout_ms
+        .unwrap_or(config.javascript.execution_timeout_ms);
 
-                // Fail startup if configured and any script failed
-                if config.javascript.fail_startup_on_init_error && failed > 0 {
-                    return Err(AppError::JsExecution {
-                        message: format!(
-                            "Server startup aborted: {} script(s) failed initialization",
-                            failed
-                        ),
-                    });
+    let initializer = script_init::ScriptInitializer::new(init_timeout);
+    info!("Calling initialize_all_scripts...");
+
+    match initializer.initialize_all_scripts().await {
+        Ok(results) => {
+            info!("initialize_all_scripts returned");
+            let successful = results.iter().filter(|r| r.success).count();
+            let failed = results
+                .iter()
+                .filter(|r| !r.success && r.error.is_some())
+                .count();
+            let skipped = results
+                .iter()
+                .filter(|r| r.success && r.duration_ms == 0)
+                .count();
+
+            info!(
+                "Script initialization complete: {} successful, {} failed, {} skipped (no init function)",
+                successful, failed, skipped
+            );
+
+            // Log any failures for visibility
+            for result in results.iter().filter(|r| !r.success) {
+                if let Some(ref error) = result.error {
+                    warn!(
+                        "Script '{}' initialization failed: {}",
+                        result.script_uri, error
+                    );
                 }
             }
-            Err(e) => {
-                error!("Failed to initialize scripts: {}", e);
-                if config.javascript.fail_startup_on_init_error {
-                    return Err(AppError::JsExecution {
-                        message: format!(
-                            "Server startup aborted: script initialization failed: {}",
-                            e
-                        ),
-                    });
-                }
+
+            // Fail startup if configured and any script failed
+            if config.javascript.fail_startup_on_init_error && failed > 0 {
+                return Err(AppError::JsExecution {
+                    message: format!(
+                        "Server startup aborted: {} script(s) failed initialization",
+                        failed
+                    ),
+                });
             }
         }
-    } else {
-        info!("Script init() functions are disabled in configuration");
+        Err(e) => {
+            error!("Failed to initialize scripts: {}", e);
+            if config.javascript.fail_startup_on_init_error {
+                return Err(AppError::JsExecution {
+                    message: format!(
+                        "Server startup aborted: script initialization failed: {}",
+                        e
+                    ),
+                });
+            }
+        }
     }
 
-    // Initialize GraphQL schema (will be rebuilt dynamically as needed)
-    if let Err(e) = graphql::rebuild_schema() {
-        error!("Failed to initialize GraphQL schema: {:?}", e);
-        // Don't fail startup, just log the error
-    }
+    Ok(())
+}
+
+/// Starts the web server with custom configuration
+pub async fn start_server_with_config(
+    config: config::Config,
+    shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+) -> AppResult<u16> {
+    // Initialize all core components
+    initialize_components(&config).await?;
+
+    // Clone the timeout value to avoid borrow checker issues in async closures
+    let script_timeout_ms = config.javascript.execution_timeout_ms;
 
     // Initialize authentication if configured and enabled
-    let auth_manager: Option<Arc<auth::AuthManager>> = if let Some(auth_config) =
-        config.auth.clone()
+    let auth_manager = initialize_auth_if_enabled(&config).await;
+
+    // Determine if auth is enabled
+    let auth_enabled = auth_manager.is_some();
+
+    // Build the router with all routes and middleware
+    let app = setup_routes(
+        &config,
+        script_timeout_ms,
+        auth_enabled,
+        auth_manager.as_ref(),
+    )
+    .await;
+
+    let (actual_port, actual_addr) = find_available_port(&config)?;
+
+    // Record startup in logs so tests can observe server start
+    repository::insert_log_message("server", "server started", "INFO");
+    debug!(
+        "Server configuration - host: {}, requested port: {}, actual port: {}",
+        config.server.host, config.server.port, actual_port
+    );
+
+    start_server_instance(app, actual_addr, shutdown_rx);
+
+    Ok(actual_port)
+}
+
+/// Initialize authentication manager if configured and enabled
+async fn initialize_auth_if_enabled(config: &config::Config) -> Option<Arc<auth::AuthManager>> {
+    if let Some(auth_config) = config.auth.clone()
         && auth_config.enabled
     {
         info!("Authentication is enabled, initializing AuthManager...");
@@ -766,29 +822,35 @@ pub async fn start_server_with_config(
             config.auth.as_ref().map(|c| c.enabled).unwrap_or(false)
         );
         None
-    };
+    }
+}
 
-    // Determine if auth is enabled
-    let auth_enabled = auth_manager.is_some();
-
+/// Setup all routes and middleware for the application
+async fn setup_routes(
+    _config: &config::Config,
+    script_timeout_ms: u64,
+    auth_enabled: bool,
+    auth_manager: Option<&Arc<auth::AuthManager>>,
+) -> Router {
     // GraphQL GET handler - serves GraphiQL (requires authentication when auth is enabled)
-    let graphql_get_handler = move |req: axum::http::Request<axum::body::Body>| async move {
-        // Check for authentication when auth is enabled
-        if auth_enabled && req.extensions().get::<auth::AuthUser>().is_none() {
-            return safe_helpers::json_response(
-                StatusCode::UNAUTHORIZED,
-                &serde_json::json!({"error": "Authentication required"}),
-            );
-        }
+    let graphql_get_handler = move |req: axum::http::Request<axum::body::Body>| {
+        async move {
+            // Check for authentication when auth is enabled
+            if auth_enabled && req.extensions().get::<auth::AuthUser>().is_none() {
+                return safe_helpers::json_response(
+                    StatusCode::UNAUTHORIZED,
+                    &serde_json::json!({"error": "Authentication required"}),
+                );
+            }
 
-        let graphiql_html = async_graphql::http::GraphiQLSource::build()
-            .endpoint("/graphql")
-            .subscription_endpoint("/graphql/ws")
-            .title("aiwebengine GraphQL Editor")
-            .finish();
+            let graphiql_html = async_graphql::http::GraphiQLSource::build()
+                .endpoint("/graphql")
+                .subscription_endpoint("/graphql/ws")
+                .title("aiwebengine GraphQL Editor")
+                .finish();
 
-        // Create a custom HTML response with navigation
-        let navigation_script = r#"<script>
+            // Create a custom HTML response with navigation
+            let navigation_script = r#"<script>
 document.addEventListener('DOMContentLoaded', function() {
     setTimeout(function() {
         const nav = document.createElement('div');
@@ -823,23 +885,25 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 </script>"#;
 
-        let mut full_html = graphiql_html;
-        full_html.push_str(navigation_script);
+            let mut full_html = graphiql_html;
+            full_html.push_str(navigation_script);
 
-        axum::response::Html(full_html).into_response()
+            axum::response::Html(full_html).into_response()
+        }
     };
 
     // Swagger UI GET handler - serves Swagger UI for OpenAPI spec
-    let swagger_ui_handler = move |req: axum::http::Request<axum::body::Body>| async move {
-        // Check for authentication when auth is enabled
-        if auth_enabled && req.extensions().get::<auth::AuthUser>().is_none() {
-            return safe_helpers::json_response(
-                StatusCode::UNAUTHORIZED,
-                &serde_json::json!({"error": "Authentication required"}),
-            );
-        }
+    let swagger_ui_handler = move |req: axum::http::Request<axum::body::Body>| {
+        async move {
+            // Check for authentication when auth is enabled
+            if auth_enabled && req.extensions().get::<auth::AuthUser>().is_none() {
+                return safe_helpers::json_response(
+                    StatusCode::UNAUTHORIZED,
+                    &serde_json::json!({"error": "Authentication required"}),
+                );
+            }
 
-        let swagger_html = r#"<!DOCTYPE html>
+            let swagger_html = r#"<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -904,11 +968,12 @@ document.addEventListener('DOMContentLoaded', function() {
 </body>
 </html>"#;
 
-        axum::response::Html(swagger_html).into_response()
+            axum::response::Html(swagger_html).into_response()
+        }
     };
 
     // GraphQL POST handler - executes queries
-    async fn graphql_post(req: axum::http::Request<axum::body::Body>) -> impl IntoResponse {
+    let graphql_post_handler = |req: axum::http::Request<axum::body::Body>| async move {
         // Extract authentication context before consuming the request
         let auth_user = req.extensions().get::<auth::AuthUser>().cloned();
 
@@ -946,21 +1011,19 @@ document.addEventListener('DOMContentLoaded', function() {
 
         let response = schema.execute(request.data(js_auth_context)).await;
         axum::response::Json(serde_json::to_value(response).unwrap_or(serde_json::Value::Null))
-    }
+    };
 
     // GraphQL WebSocket handler - handles subscriptions over WebSocket using graphql-transport-ws protocol
-    async fn graphql_ws(
-        ws: axum::extract::ws::WebSocketUpgrade,
-        req: axum::http::Request<axum::body::Body>,
-    ) -> impl IntoResponse {
-        // Extract authentication context before upgrade
-        let auth_user = req.extensions().get::<auth::AuthUser>().cloned();
+    let graphql_ws_handler =
+        |ws: axum::extract::ws::WebSocketUpgrade, req: axum::http::Request<axum::body::Body>| async move {
+            // Extract authentication context before upgrade
+            let auth_user = req.extensions().get::<auth::AuthUser>().cloned();
 
-        ws.on_upgrade(move |socket| graphql_ws::handle_websocket_connection(socket, auth_user))
-    }
+            ws.on_upgrade(move |socket| graphql_ws::handle_websocket_connection(socket, auth_user))
+        };
 
     // GraphQL SSE handler - handles subscriptions over Server-Sent Events using execute_stream
-    async fn graphql_sse(req: axum::http::Request<axum::body::Body>) -> impl IntoResponse {
+    let graphql_sse_handler = |req: axum::http::Request<axum::body::Body>| async move {
         // Extract authentication context before consuming the request
         let auth_user = req.extensions().get::<auth::AuthUser>().cloned();
 
@@ -1064,299 +1127,13 @@ document.addEventListener('DOMContentLoaded', function() {
                     axum::response::Response::new(axum::body::Body::from("Internal Server Error"))
                 })
         }
-    }
-
-    // Clone schema for handlers
-    // (No longer needed - handlers get schema dynamically)
-
-    // Shared request handler function for both / and /{*path} routes
-    async fn handle_dynamic_request(
-        req: Request<Body>,
-        script_timeout_ms: u64,
-        _auth_enabled: bool,
-    ) -> impl IntoResponse {
-        let path = req.uri().path().to_string();
-        let request_method = req.method().to_string();
-
-        // Check for registered asset paths first if it's a GET request
-        if request_method == "GET" {
-            // Check if this path is registered in the asset registry
-            if let Some(asset_name) = asset_registry::get_global_registry().get_asset_name(&path) {
-                // Fetch the asset by name from the repository
-                if let Some(asset) = repository::fetch_asset(&asset_name) {
-                    let mut response = asset.content.into_response();
-                    response.headers_mut().insert(
-                        axum::http::header::CONTENT_TYPE,
-                        axum::http::HeaderValue::from_str(&asset.mimetype).unwrap_or(
-                            axum::http::HeaderValue::from_static("application/octet-stream"),
-                        ),
-                    );
-                    return response;
-                } else {
-                    warn!(
-                        "Asset '{}' registered for path '{}' but not found in repository",
-                        asset_name, path
-                    );
-                    // Fall through to route handling
-                }
-            }
-        }
-
-        // Check if this is a request to a registered stream path
-        let is_get = request_method == "GET";
-        let is_stream_registered =
-            stream_registry::GLOBAL_STREAM_REGISTRY.is_stream_registered(&path);
-        info!(
-            "Stream check - method: {}, is_get: {}, path: '{}', is_registered: {}",
-            request_method, is_get, path, is_stream_registered
-        );
-
-        if is_get && is_stream_registered {
-            info!("Routing to stream handler for path: {}", path);
-            return handle_stream_request(req).await;
-        }
-
-        // Check if any route exists for this path (including wildcards)
-        let path_exists = path_has_any_route(&path);
-
-        let reg = find_route_handler(&path, &request_method);
-        let (owner_uri, handler_name) = match reg {
-            Some(t) => t,
-            None => {
-                // Extract request ID from extensions
-                let request_id = req
-                    .extensions()
-                    .get::<middleware::RequestId>()
-                    .map(|rid| rid.0.clone())
-                    .unwrap_or_else(|| "unknown".to_string());
-
-                if path_exists {
-                    warn!(
-                        "[{}] ⚠️  Method not allowed: {} {} (path exists but method not registered)",
-                        request_id, request_method, path
-                    );
-                    return error_to_response(error::errors::method_not_allowed(
-                        &path,
-                        &request_method,
-                        &request_id,
-                    ));
-                } else {
-                    warn!(
-                        "[{}] ⚠️  Route not found: {} {} (no handler registered for this path)",
-                        request_id, request_method, path
-                    );
-                    return error_to_response(error::errors::not_found(&path, &request_id));
-                }
-            }
-        };
-        let owner_uri_cl = owner_uri.clone();
-        let handler_cl = handler_name.clone();
-        let path_log = path.to_string();
-        let method_log = request_method.clone();
-        let query_string = req.uri().query().map(|s| s.to_string()).unwrap_or_default();
-        let query_params = parse_query_string(&query_string);
-
-        // Extract request ID from extensions before consuming the request
-        let request_id = req
-            .extensions()
-            .get::<middleware::RequestId>()
-            .map(|rid| rid.0.clone())
-            .unwrap_or_else(|| "unknown".to_string());
-
-        // Extract authentication context from middleware
-        let auth_user = req.extensions().get::<auth::AuthUser>().cloned();
-
-        if let Some(ref user) = auth_user {
-            info!(
-                "[{}] Authentication context found: user_id={}, provider={}",
-                request_id, user.user_id, user.provider
-            );
-        } else {
-            info!("[{}] No authentication context in request", request_id);
-        }
-
-        info!(
-            "[{}] Executing handler '{}' from script '{}' for {} {} (authenticated: {})",
-            request_id,
-            handler_name,
-            owner_uri,
-            request_method,
-            path,
-            auth_user.is_some()
-        );
-
-        // Snapshot headers before consuming the request body
-        let mut header_map = HashMap::new();
-        for (name, value) in req.headers().iter() {
-            if let Ok(value_str) = value.to_str() {
-                header_map.insert(name.as_str().to_string(), value_str.to_string());
-            }
-        }
-
-        // Extract content type before consuming the request
-        let content_type = req
-            .headers()
-            .get(axum::http::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
-        let body = req.into_body();
-
-        // Always read the body as bytes first
-        let body_bytes = match to_bytes(body, usize::MAX).await {
-            Ok(bytes) => bytes,
-            Err(_) => axum::body::Bytes::new(),
-        };
-
-        // Make raw body available for all POST/PUT/PATCH requests
-        let raw_body = if !body_bytes.is_empty()
-            && (request_method == "POST" || request_method == "PUT" || request_method == "PATCH")
-        {
-            Some(String::from_utf8(body_bytes.to_vec()).unwrap_or_default())
-        } else {
-            None
-        };
-
-        // Parse form data if content type indicates form submission
-        let is_form_data = content_type
-            .as_ref()
-            .map(|ct| {
-                ct.contains("application/x-www-form-urlencoded")
-                    || ct.contains("multipart/form-data")
-            })
-            .unwrap_or(false);
-
-        let form_data = if is_form_data {
-            // Parse form data from the bytes
-            let body = Body::from(body_bytes.clone());
-            if let Some(ct) = content_type.as_ref() {
-                parse_form_data(Some(ct), body).await.unwrap_or_default()
-            } else {
-                parse_form_data(None, body).await.unwrap_or_default()
-            }
-        } else {
-            HashMap::new()
-        };
-
-        let path_clone = path.clone();
-        let headers_for_worker = header_map;
-        let worker = move || -> Result<js_engine::JsHttpResponse, String> {
-            // Create authentication context for JavaScript
-            let auth_context = if let Some(ref auth_user) = auth_user {
-                auth::JsAuthContext::authenticated(
-                    auth_user.user_id.clone(),
-                    auth_user.email.clone(),
-                    auth_user.name.clone(),
-                    auth_user.provider.clone(),
-                    auth_user.is_admin,
-                    auth_user.is_editor,
-                )
-            } else {
-                auth::JsAuthContext::anonymous()
-            };
-
-            // Use the secure execution path with authentication context
-            let params = js_engine::RequestExecutionParams {
-                script_uri: owner_uri_cl.clone(),
-                handler_name: handler_cl.clone(),
-                path: path_clone.clone(),
-                method: request_method.clone(),
-                query_params: Some(query_params.clone()),
-                form_data: Some(form_data.clone()),
-                raw_body: raw_body.clone(),
-                headers: headers_for_worker.clone(),
-                user_context: security::UserContext::anonymous(), // TODO: Extract from auth
-                auth_context: Some(auth_context),
-            };
-
-            js_engine::execute_script_for_request_secure(params)
-        };
-
-        let join = tokio::task::spawn_blocking(worker)
-            .await
-            .map_err(|e| format!("join error: {}", e));
-
-        let timed =
-            match tokio::time::timeout(std::time::Duration::from_millis(script_timeout_ms), async {
-                join
-            })
-            .await
-            {
-                Ok(r) => r,
-                Err(_) => {
-                    return error_to_response(error::errors::script_timeout(&path, &request_id));
-                }
-            };
-
-        match timed {
-            Ok(Ok(js_response)) => {
-                info!(
-                    "[{}] ✅ Successfully executed handler '{}' - status: {}, body_length: {} bytes, headers: {}",
-                    request_id,
-                    handler_name,
-                    js_response.status,
-                    js_response.body.len(),
-                    js_response.headers.len()
-                );
-                let mut response = (
-                    StatusCode::from_u16(js_response.status)
-                        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-                    js_response.body,
-                )
-                    .into_response();
-
-                // Add content type if specified
-                if let Some(ct) = js_response.content_type {
-                    response.headers_mut().insert(
-                        axum::http::header::CONTENT_TYPE,
-                        axum::http::HeaderValue::from_str(&ct)
-                            .unwrap_or_else(|_| axum::http::HeaderValue::from_static("text/plain")),
-                    );
-                }
-
-                // Add custom headers from JavaScript response
-                for (name, value) in js_response.headers {
-                    if let Ok(header_name) = axum::http::HeaderName::from_bytes(name.as_bytes())
-                        && let Ok(header_value) = axum::http::HeaderValue::from_str(&value)
-                    {
-                        response.headers_mut().insert(header_name, header_value);
-                    }
-                }
-
-                response
-            }
-            Ok(Err(e)) => {
-                error!(
-                    "[{}] ❌ Script execution error for {} {}: {} (handler: {}, script: {})",
-                    request_id, method_log, path_log, e, handler_name, owner_uri
-                );
-                // Log FATAL error to database
-                let error_msg = format!(
-                    "Script execution failed for handler '{}': {}",
-                    handler_name, e
-                );
-                repository::insert_log_message(&owner_uri, &error_msg, "FATAL");
-
-                error_to_response(error::errors::script_execution_failed(
-                    &path,
-                    &e,
-                    &request_id,
-                ))
-            }
-            Err(e) => {
-                error!(
-                    "[{}] ❌ Task/runtime error for {} {}: {} (handler: {}, script: {})",
-                    request_id, method_log, path_log, e, handler_name, owner_uri
-                );
-                error_to_response(error::errors::internal_server_error(&path, &e, &request_id))
-            }
-        }
-    }
+    };
 
     // Build the router
     let mut app = Router::new();
 
     // Add GraphQL and editor routes with authentication requirement if auth is enabled
-    if let Some(ref auth_mgr) = auth_manager {
+    if let Some(auth_mgr) = auth_manager {
         info!("✅ Authentication ENABLED - mounting auth routes and middleware");
 
         // GraphQL endpoints with require_editor_or_admin_middleware
@@ -1373,9 +1150,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // GraphQL API endpoints (queries, mutations, subscriptions) - NO authentication required
         let graphql_api_router = Router::new()
-            .route("/graphql", axum::routing::post(graphql_post))
-            .route("/graphql/ws", axum::routing::get(graphql_ws))
-            .route("/graphql/sse", axum::routing::post(graphql_sse));
+            .route("/graphql", axum::routing::post(graphql_post_handler))
+            .route("/graphql/ws", axum::routing::get(graphql_ws_handler))
+            .route("/graphql/sse", axum::routing::post(graphql_sse_handler));
 
         app = app.merge(graphql_api_router);
 
@@ -1389,9 +1166,9 @@ document.addEventListener('DOMContentLoaded', function() {
         app = app
             .route("/engine/graphql", axum::routing::get(graphql_get_handler))
             .route("/engine/swagger", axum::routing::get(swagger_ui_handler))
-            .route("/graphql", axum::routing::post(graphql_post))
-            .route("/graphql/ws", axum::routing::get(graphql_ws))
-            .route("/graphql/sse", axum::routing::post(graphql_sse));
+            .route("/graphql", axum::routing::post(graphql_post_handler))
+            .route("/graphql/ws", axum::routing::get(graphql_ws_handler))
+            .route("/graphql/sse", axum::routing::post(graphql_sse_handler));
     }
 
     // Add documentation routes
@@ -1432,7 +1209,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Add middleware layers (applied in reverse order to how they're added)
     // So request_id runs first, then auth middleware
-    if let Some(ref auth_mgr) = auth_manager {
+    if let Some(auth_mgr) = auth_manager {
         let auth_mgr_for_middleware = Arc::clone(auth_mgr);
         info!("✅ Adding optional_auth_middleware layer to all routes");
         app = app.layer(axum::middleware::from_fn_with_state(
@@ -1443,18 +1220,288 @@ document.addEventListener('DOMContentLoaded', function() {
 
     app = app.layer(axum::middleware::from_fn(middleware::request_id_middleware));
 
-    let (actual_port, actual_addr) = find_available_port(&config)?;
+    app
+}
 
-    // Record startup in logs so tests can observe server start
-    repository::insert_log_message("server", "server started", "INFO");
-    debug!(
-        "Server configuration - host: {}, requested port: {}, actual port: {}",
-        config.server.host, config.server.port, actual_port
+/// Handle dynamic requests by routing to registered JavaScript handlers
+async fn handle_dynamic_request(
+    req: Request<Body>,
+    script_timeout_ms: u64,
+    _auth_enabled: bool,
+) -> impl IntoResponse {
+    let path = req.uri().path().to_string();
+    let request_method = req.method().to_string();
+
+    // Check for registered asset paths first if it's a GET request
+    if request_method == "GET" {
+        // Check if this path is registered in the asset registry
+        if let Some(asset_name) = asset_registry::get_global_registry().get_asset_name(&path) {
+            // Fetch the asset by name from the repository
+            if let Some(asset) = repository::fetch_asset(&asset_name) {
+                let mut response = asset.content.into_response();
+                response.headers_mut().insert(
+                    axum::http::header::CONTENT_TYPE,
+                    axum::http::HeaderValue::from_str(&asset.mimetype).unwrap_or(
+                        axum::http::HeaderValue::from_static("application/octet-stream"),
+                    ),
+                );
+                return response;
+            } else {
+                warn!(
+                    "Asset '{}' registered for path '{}' but not found in repository",
+                    asset_name, path
+                );
+                // Fall through to route handling
+            }
+        }
+    }
+
+    // Check if this is a request to a registered stream path
+    let is_get = request_method == "GET";
+    let is_stream_registered = stream_registry::GLOBAL_STREAM_REGISTRY.is_stream_registered(&path);
+    info!(
+        "Stream check - method: {}, is_get: {}, path: '{}', is_registered: {}",
+        request_method, is_get, path, is_stream_registered
     );
 
-    start_server_instance(app, actual_addr, shutdown_rx);
+    if is_get && is_stream_registered {
+        info!("Routing to stream handler for path: {}", path);
+        return handle_stream_request(req).await;
+    }
 
-    Ok(actual_port)
+    // Check if any route exists for this path (including wildcards)
+    let path_exists = path_has_any_route(&path);
+
+    let reg = find_route_handler(&path, &request_method);
+    let (owner_uri, handler_name) = match reg {
+        Some(t) => t,
+        None => {
+            // Extract request ID from extensions
+            let request_id = req
+                .extensions()
+                .get::<middleware::RequestId>()
+                .map(|rid| rid.0.clone())
+                .unwrap_or_else(|| "unknown".to_string());
+
+            if path_exists {
+                warn!(
+                    "[{}] ⚠️  Method not allowed: {} {} (path exists but method not registered)",
+                    request_id, request_method, path
+                );
+                return error_to_response(error::errors::method_not_allowed(
+                    &path,
+                    &request_method,
+                    &request_id,
+                ));
+            } else {
+                warn!(
+                    "[{}] ⚠️  Route not found: {} {} (no handler registered for this path)",
+                    request_id, request_method, path
+                );
+                return error_to_response(error::errors::not_found(&path, &request_id));
+            }
+        }
+    };
+    let owner_uri_cl = owner_uri.clone();
+    let handler_cl = handler_name.clone();
+    let path_log = path.to_string();
+    let method_log = request_method.clone();
+    let query_string = req.uri().query().map(|s| s.to_string()).unwrap_or_default();
+    let query_params = parse_query_string(&query_string);
+
+    // Extract request ID from extensions before consuming the request
+    let request_id = req
+        .extensions()
+        .get::<middleware::RequestId>()
+        .map(|rid| rid.0.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    // Extract authentication context from middleware
+    let auth_user = req.extensions().get::<auth::AuthUser>().cloned();
+
+    if let Some(ref user) = auth_user {
+        info!(
+            "[{}] Authentication context found: user_id={}, provider={}",
+            request_id, user.user_id, user.provider
+        );
+    } else {
+        info!("[{}] No authentication context in request", request_id);
+    }
+
+    info!(
+        "[{}] Executing handler '{}' from script '{}' for {} {} (authenticated: {})",
+        request_id,
+        handler_name,
+        owner_uri,
+        request_method,
+        path,
+        auth_user.is_some()
+    );
+
+    // Snapshot headers before consuming the request body
+    let mut header_map = HashMap::new();
+    for (name, value) in req.headers().iter() {
+        if let Ok(value_str) = value.to_str() {
+            header_map.insert(name.as_str().to_string(), value_str.to_string());
+        }
+    }
+
+    // Extract content type before consuming the request
+    let content_type = req
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    let body = req.into_body();
+
+    // Always read the body as bytes first
+    let body_bytes = match to_bytes(body, usize::MAX).await {
+        Ok(bytes) => bytes,
+        Err(_) => axum::body::Bytes::new(),
+    };
+
+    // Make raw body available for all POST/PUT/PATCH requests
+    let raw_body = if !body_bytes.is_empty()
+        && (request_method == "POST" || request_method == "PUT" || request_method == "PATCH")
+    {
+        Some(String::from_utf8(body_bytes.to_vec()).unwrap_or_default())
+    } else {
+        None
+    };
+
+    // Parse form data if content type indicates form submission
+    let is_form_data = content_type
+        .as_ref()
+        .map(|ct| {
+            ct.contains("application/x-www-form-urlencoded") || ct.contains("multipart/form-data")
+        })
+        .unwrap_or(false);
+
+    let form_data = if is_form_data {
+        // Parse form data from the bytes
+        let body = Body::from(body_bytes.clone());
+        if let Some(ct) = content_type.as_ref() {
+            parse_form_data(Some(ct), body).await.unwrap_or_default()
+        } else {
+            parse_form_data(None, body).await.unwrap_or_default()
+        }
+    } else {
+        HashMap::new()
+    };
+
+    let path_clone = path.clone();
+    let headers_for_worker = header_map;
+    let worker = move || -> Result<js_engine::JsHttpResponse, String> {
+        // Create authentication context for JavaScript
+        let auth_context = if let Some(ref auth_user) = auth_user {
+            auth::JsAuthContext::authenticated(
+                auth_user.user_id.clone(),
+                auth_user.email.clone(),
+                auth_user.name.clone(),
+                auth_user.provider.clone(),
+                auth_user.is_admin,
+                auth_user.is_editor,
+            )
+        } else {
+            auth::JsAuthContext::anonymous()
+        };
+
+        // Use the secure execution path with authentication context
+        let params = js_engine::RequestExecutionParams {
+            script_uri: owner_uri_cl.clone(),
+            handler_name: handler_cl.clone(),
+            path: path_clone.clone(),
+            method: request_method.clone(),
+            query_params: Some(query_params.clone()),
+            form_data: Some(form_data.clone()),
+            raw_body: raw_body.clone(),
+            headers: headers_for_worker.clone(),
+            user_context: security::UserContext::anonymous(), // TODO: Extract from auth
+            auth_context: Some(auth_context),
+        };
+
+        js_engine::execute_script_for_request_secure(params)
+    };
+
+    let join = tokio::task::spawn_blocking(worker)
+        .await
+        .map_err(|e| format!("join error: {}", e));
+
+    let timed =
+        match tokio::time::timeout(std::time::Duration::from_millis(script_timeout_ms), async {
+            join
+        })
+        .await
+        {
+            Ok(r) => r,
+            Err(_) => {
+                return error_to_response(error::errors::script_timeout(&path, &request_id));
+            }
+        };
+
+    match timed {
+        Ok(Ok(js_response)) => {
+            info!(
+                "[{}] ✅ Successfully executed handler '{}' - status: {}, body_length: {} bytes, headers: {}",
+                request_id,
+                handler_name,
+                js_response.status,
+                js_response.body.len(),
+                js_response.headers.len()
+            );
+            let mut response = (
+                StatusCode::from_u16(js_response.status)
+                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                js_response.body,
+            )
+                .into_response();
+
+            // Add content type if specified
+            if let Some(ct) = js_response.content_type {
+                response.headers_mut().insert(
+                    axum::http::header::CONTENT_TYPE,
+                    axum::http::HeaderValue::from_str(&ct)
+                        .unwrap_or_else(|_| axum::http::HeaderValue::from_static("text/plain")),
+                );
+            }
+
+            // Add custom headers from JavaScript response
+            for (name, value) in js_response.headers {
+                if let Ok(header_name) = axum::http::HeaderName::from_bytes(name.as_bytes())
+                    && let Ok(header_value) = axum::http::HeaderValue::from_str(&value)
+                {
+                    response.headers_mut().insert(header_name, header_value);
+                }
+            }
+
+            response
+        }
+        Ok(Err(e)) => {
+            error!(
+                "[{}] ❌ Script execution error for {} {}: {} (handler: {}, script: {})",
+                request_id, method_log, path_log, e, handler_name, owner_uri
+            );
+            // Log FATAL error to database
+            let error_msg = format!(
+                "Script execution failed for handler '{}': {}",
+                handler_name, e
+            );
+            repository::insert_log_message(&owner_uri, &error_msg, "FATAL");
+
+            error_to_response(error::errors::script_execution_failed(
+                &path,
+                &e,
+                &request_id,
+            ))
+        }
+        Err(e) => {
+            error!(
+                "[{}] ❌ Task/runtime error for {} {}: {} (handler: {}, script: {})",
+                request_id, method_log, path_log, e, handler_name, owner_uri
+            );
+            error_to_response(error::errors::internal_server_error(&path, &e, &request_id))
+        }
+    }
 }
 
 /// Finds an available port starting from the given port.
