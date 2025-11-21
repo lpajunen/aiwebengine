@@ -1,5 +1,6 @@
 use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
+use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock, PoisonError};
@@ -924,70 +925,10 @@ pub fn list_users() -> AppResult<Vec<User>> {
 
                 let mut users = Vec::new();
                 for row in rows {
-                    let db_user_id: String = row
-                        .try_get("user_id")
-                        .map_err(|e| AppError::Database { message: e.to_string(), source: None })?;
-                    let email: String = row
-                        .try_get("email")
-                        .map_err(|e| AppError::Database { message: e.to_string(), source: None })?;
-                    let name: Option<String> = row
-                        .try_get("name")
-                        .map_err(|e| AppError::Database { message: e.to_string(), source: None })?;
-                    let provider: String = row
-                        .try_get("provider")
-                        .map_err(|e| AppError::Database { message: e.to_string(), source: None })?;
-                    let provider_user_id: String = row
-                        .try_get("provider_user_id")
-                        .map_err(|e| AppError::Database { message: e.to_string(), source: None })?;
-                    let is_admin: bool = row
-                        .try_get("is_admin")
-                        .map_err(|e| AppError::Database { message: e.to_string(), source: None })?;
-                    let is_editor: bool = row
-                        .try_get("is_editor")
-                        .map_err(|e| AppError::Database { message: e.to_string(), source: None })?;
-                    let created_at: chrono::DateTime<chrono::Utc> = row
-                        .try_get("created_at")
-                        .map_err(|e| AppError::Database { message: e.to_string(), source: None })?;
-                    let updated_at: chrono::DateTime<chrono::Utc> = row
-                        .try_get("updated_at")
-                        .map_err(|e| AppError::Database { message: e.to_string(), source: None })?;
-
-                    let mut roles = vec![UserRole::Authenticated];
-                    if is_editor {
-                        roles.push(UserRole::Editor);
-                    }
-                    if is_admin {
-                        roles.push(UserRole::Administrator);
-                    }
-
-                    let providers = vec![ProviderInfo {
-                        provider_name: provider,
-                        provider_user_id,
-                        first_auth_at: datetime_to_system_time(created_at),
-                        last_auth_at: datetime_to_system_time(updated_at),
-                    }];
-
-                    let user = User {
-                        id: db_user_id.clone(),
-                        email,
-                        name,
-                        roles,
-                        created_at: datetime_to_system_time(created_at),
-                        updated_at: datetime_to_system_time(updated_at),
-                        providers,
-                    };
+                    let user = convert_row_to_user(&row)?;
 
                     // Also update in-memory cache for consistency
-                    let mut users_cache = safe_lock_users()?;
-                    let mut provider_index = safe_lock_provider_index()?;
-                    users_cache.insert(db_user_id, user.clone());
-                    provider_index.insert(
-                        ProviderKey {
-                            provider_name: user.providers[0].provider_name.clone(),
-                            provider_user_id: user.providers[0].provider_user_id.clone(),
-                        },
-                        user.id.clone(),
-                    );
+                    update_caches_with_user(&user)?;
 
                     users.push(user);
                 }
@@ -1010,6 +951,91 @@ pub fn list_users() -> AppResult<Vec<User>> {
     // Fall back to in-memory
     let users = safe_lock_users()?;
     Ok(users.values().cloned().collect())
+}
+
+/// Convert a database row into a User object.
+fn convert_row_to_user(row: &PgRow) -> AppResult<User> {
+    let db_user_id: String = row.try_get("user_id").map_err(|e| AppError::Database {
+        message: e.to_string(),
+        source: None,
+    })?;
+    let email: String = row.try_get("email").map_err(|e| AppError::Database {
+        message: e.to_string(),
+        source: None,
+    })?;
+    let name: Option<String> = row.try_get("name").map_err(|e| AppError::Database {
+        message: e.to_string(),
+        source: None,
+    })?;
+    let provider: String = row.try_get("provider").map_err(|e| AppError::Database {
+        message: e.to_string(),
+        source: None,
+    })?;
+    let provider_user_id: String =
+        row.try_get("provider_user_id")
+            .map_err(|e| AppError::Database {
+                message: e.to_string(),
+                source: None,
+            })?;
+    let is_admin: bool = row.try_get("is_admin").map_err(|e| AppError::Database {
+        message: e.to_string(),
+        source: None,
+    })?;
+    let is_editor: bool = row.try_get("is_editor").map_err(|e| AppError::Database {
+        message: e.to_string(),
+        source: None,
+    })?;
+    let created_at: chrono::DateTime<chrono::Utc> =
+        row.try_get("created_at").map_err(|e| AppError::Database {
+            message: e.to_string(),
+            source: None,
+        })?;
+    let updated_at: chrono::DateTime<chrono::Utc> =
+        row.try_get("updated_at").map_err(|e| AppError::Database {
+            message: e.to_string(),
+            source: None,
+        })?;
+
+    let mut roles = vec![UserRole::Authenticated];
+    if is_editor {
+        roles.push(UserRole::Editor);
+    }
+    if is_admin {
+        roles.push(UserRole::Administrator);
+    }
+
+    let providers = vec![ProviderInfo {
+        provider_name: provider,
+        provider_user_id,
+        first_auth_at: datetime_to_system_time(created_at),
+        last_auth_at: datetime_to_system_time(updated_at),
+    }];
+
+    Ok(User {
+        id: db_user_id.clone(),
+        email,
+        name,
+        roles,
+        created_at: datetime_to_system_time(created_at),
+        updated_at: datetime_to_system_time(updated_at),
+        providers,
+    })
+}
+
+/// Update the in-memory caches (users and provider index) with a new User value.
+fn update_caches_with_user(user: &User) -> AppResult<()> {
+    let mut users_cache = safe_lock_users()?;
+    let mut provider_index = safe_lock_provider_index()?;
+    users_cache.insert(user.id.clone(), user.clone());
+    provider_index.insert(
+        ProviderKey {
+            provider_name: user.providers[0].provider_name.clone(),
+            provider_user_id: user.providers[0].provider_user_id.clone(),
+        },
+        user.id.clone(),
+    );
+
+    Ok(())
 }
 
 /// Get user count
