@@ -646,7 +646,7 @@ fn upsert_user_in_memory(
         if let Some(user) = users.get_mut(user_id) {
             user.update_from_auth(email, name, provider_name, provider_user_id);
             debug!("Updated existing user: {}", user_id);
-            return Ok(user_id.clone());
+            return Ok(user_id.to_owned());
         } else {
             // Index is out of sync - clean it up
             warn!("Provider index out of sync, removing stale entry");
@@ -871,7 +871,7 @@ pub fn update_user_roles(user_id: &str, roles: Vec<UserRole>) -> AppResult<()> {
 pub fn add_user_role(user_id: &str, role: UserRole) -> AppResult<()> {
     // Get current user to determine new role flags
     let current_user = get_user(user_id)?;
-    let mut new_roles = current_user.roles.clone();
+    let mut new_roles = current_user.roles;
     new_roles.push(role);
 
     // Remove duplicates
@@ -894,7 +894,7 @@ pub fn remove_user_role(user_id: &str, role: &UserRole) -> AppResult<()> {
 
     // Get current user to determine new role flags
     let current_user = get_user(user_id)?;
-    let mut new_roles = current_user.roles.clone();
+    let mut new_roles = current_user.roles;
     new_roles.retain(|r| r != role);
 
     // Update with new roles

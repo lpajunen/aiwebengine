@@ -176,58 +176,93 @@ impl AppError {
         use crate::error::{ErrorCode, ErrorResponseBuilder};
 
         let (code, message) = match self {
-            AppError::AuthenticationRequired => (
-                ErrorCode::Unauthorized,
-                "Authentication required".to_string(),
-            ),
+            AppError::AuthenticationRequired => {
+                (ErrorCode::Unauthorized, "Authentication required")
+            }
             AppError::AuthenticationFailed { message } => {
-                (ErrorCode::Unauthorized, message.clone())
+                (ErrorCode::Unauthorized, message.as_str())
             }
-            AppError::AuthorizationFailed { message } => (ErrorCode::Forbidden, message.clone()),
+            AppError::AuthorizationFailed { message } => (ErrorCode::Forbidden, message.as_str()),
             AppError::Validation { field, reason } => {
-                (ErrorCode::ValidationError, format!("{}: {}", field, reason))
+                return ErrorResponseBuilder::new(
+                    ErrorCode::ValidationError,
+                    format!("{}: {}", field, reason),
+                )
+                .path(path)
+                .method(method)
+                .request_id(request_id)
+                .build();
             }
-            AppError::RateLimitExceeded => (
-                ErrorCode::TooManyRequests,
-                "Rate limit exceeded".to_string(),
-            ),
-            AppError::ScriptNotFound { uri } => (
-                ErrorCode::ScriptNotFound,
-                format!("Script not found: {}", uri),
-            ),
+            AppError::RateLimitExceeded => (ErrorCode::TooManyRequests, "Rate limit exceeded"),
+            AppError::ScriptNotFound { uri } => {
+                return ErrorResponseBuilder::new(
+                    ErrorCode::ScriptNotFound,
+                    format!("Script not found: {}", uri),
+                )
+                .path(path)
+                .method(method)
+                .request_id(request_id)
+                .build();
+            }
             AppError::AssetNotFound { name } => {
-                (ErrorCode::NotFound, format!("Asset not found: {}", name))
+                return ErrorResponseBuilder::new(
+                    ErrorCode::NotFound,
+                    format!("Asset not found: {}", name),
+                )
+                .path(path)
+                .method(method)
+                .request_id(request_id)
+                .build();
             }
-            AppError::JsTimeout { timeout_ms } => (
-                ErrorCode::ScriptTimeout,
-                format!("Script timeout after {}ms", timeout_ms),
-            ),
+            AppError::JsTimeout { timeout_ms } => {
+                return ErrorResponseBuilder::new(
+                    ErrorCode::ScriptTimeout,
+                    format!("Script timeout after {}ms", timeout_ms),
+                )
+                .path(path)
+                .method(method)
+                .request_id(request_id)
+                .build();
+            }
             AppError::JsExecution { message } => {
-                (ErrorCode::ScriptExecutionFailed, message.clone())
+                (ErrorCode::ScriptExecutionFailed, message.as_str())
             }
             AppError::JsCompilation { message } => {
-                (ErrorCode::ScriptExecutionFailed, message.clone())
+                (ErrorCode::ScriptExecutionFailed, message.as_str())
             }
-            AppError::Config { message, .. } => (ErrorCode::ConfigurationError, message.clone()),
-            AppError::ConfigValidation { field, reason } => (
-                ErrorCode::ConfigurationError,
-                format!("{}: {}", field, reason),
-            ),
-            AppError::Database { message, .. } => (ErrorCode::DatabaseError, message.clone()),
-            AppError::Security { message } => (ErrorCode::Forbidden, message.clone()),
-            AppError::Http { message } => (ErrorCode::BadGateway, message.clone()),
-            AppError::Timeout => (ErrorCode::GatewayTimeout, "Request timeout".to_string()),
-            AppError::Graphql { message } => (ErrorCode::InternalServerError, message.clone()),
-            AppError::Stream { message } => (ErrorCode::InternalServerError, message.clone()),
-            AppError::FileSystem { message } => (ErrorCode::InternalServerError, message.clone()),
-            AppError::Internal { message } => (ErrorCode::InternalServerError, message.clone()),
+            AppError::Config { message, .. } => (ErrorCode::ConfigurationError, message.as_str()),
+            AppError::ConfigValidation { field, reason } => {
+                return ErrorResponseBuilder::new(
+                    ErrorCode::ConfigurationError,
+                    format!("{}: {}", field, reason),
+                )
+                .path(path)
+                .method(method)
+                .request_id(request_id)
+                .build();
+            }
+            AppError::Database { message, .. } => (ErrorCode::DatabaseError, message.as_str()),
+            AppError::Security { message } => (ErrorCode::Forbidden, message.as_str()),
+            AppError::Http { message } => (ErrorCode::BadGateway, message.as_str()),
+            AppError::Timeout => (ErrorCode::GatewayTimeout, "Request timeout"),
+            AppError::Graphql { message } => (ErrorCode::InternalServerError, message.as_str()),
+            AppError::Stream { message } => (ErrorCode::InternalServerError, message.as_str()),
+            AppError::FileSystem { message } => (ErrorCode::InternalServerError, message.as_str()),
+            AppError::Internal { message } => (ErrorCode::InternalServerError, message.as_str()),
             AppError::ExternalService { service, message } => {
-                (ErrorCode::BadGateway, format!("{}: {}", service, message))
+                return ErrorResponseBuilder::new(
+                    ErrorCode::BadGateway,
+                    format!("{}: {}", service, message),
+                )
+                .path(path)
+                .method(method)
+                .request_id(request_id)
+                .build();
             }
-            AppError::Session { message } => (ErrorCode::Unauthorized, message.clone()),
+            AppError::Session { message } => (ErrorCode::Unauthorized, message.as_str()),
         };
 
-        ErrorResponseBuilder::new(code, &message)
+        ErrorResponseBuilder::new(code, message)
             .path(path)
             .method(method)
             .request_id(request_id)

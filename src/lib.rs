@@ -86,6 +86,161 @@ fn create_js_auth_context(auth_user: Option<&auth::AuthUser>) -> auth::JsAuthCon
     }
 }
 
+/// OAuth provider registration configuration
+struct OAuthProviderConfig {
+    client_id: String,
+    client_secret: String,
+    redirect_uri: String,
+    scopes: Vec<String>,
+    default_scopes: Vec<&'static str>,
+    extra_params: HashMap<String, String>,
+}
+
+/// Helper: Register an OAuth2 provider with common configuration pattern
+fn register_oauth_provider(
+    auth_manager: &mut auth::AuthManager,
+    provider_name: &str,
+    config: OAuthProviderConfig,
+) -> Result<(), auth::AuthError> {
+    info!("Registering {} OAuth2 provider", provider_name);
+    let oauth_config = auth::OAuth2ProviderConfig {
+        client_id: config.client_id,
+        client_secret: config.client_secret,
+        redirect_uri: config.redirect_uri,
+        scopes: if config.scopes.is_empty() {
+            config
+                .default_scopes
+                .iter()
+                .map(|s| s.to_string())
+                .collect()
+        } else {
+            config.scopes
+        },
+        auth_url: None,
+        token_url: None,
+        userinfo_url: None,
+        extra_params: config.extra_params,
+    };
+    auth_manager.register_provider(provider_name, oauth_config)
+}
+
+/// Helper: Initialize secrets manager from environment and config
+fn initialize_secrets(config: &config::Config) -> Arc<secrets::SecretsManager> {
+    info!("Initializing secrets manager...");
+    let secrets_manager = secrets::SecretsManager::new();
+
+    // Load secrets from environment variables (SECRET_* prefix)
+    secrets_manager.load_from_env();
+    let env_secrets_count = secrets_manager.list_identifiers().len();
+    if env_secrets_count > 0 {
+        info!(
+            "Loaded {} secret(s) from environment variables",
+            env_secrets_count
+        );
+        debug!(
+            "Available secrets: {:?}",
+            secrets_manager.list_identifiers()
+        );
+    } else {
+        info!("No secrets loaded from environment variables");
+    }
+
+    // Load secrets from configuration file if available
+    if !config.secrets.values.is_empty() {
+        secrets_manager.load_from_map(config.secrets.values.clone());
+        let total_secrets = secrets_manager.list_identifiers().len();
+        let config_secrets = total_secrets - env_secrets_count;
+        if config_secrets > 0 {
+            info!(
+                "Loaded {} additional secret(s) from configuration file",
+                config_secrets
+            );
+        }
+        info!("Total secrets configured: {}", total_secrets);
+    } else if env_secrets_count == 0 {
+        debug!("No secrets configured from environment or config file");
+    }
+
+    let secrets_manager = Arc::new(secrets_manager);
+
+    // Set as global secrets manager for access from js_engine
+    if secrets::initialize_global_secrets_manager(secrets_manager.clone()) {
+        info!("Global secrets manager initialized successfully");
+    } else {
+        warn!("Global secrets manager was already initialized");
+    }
+
+    secrets_manager
+}
+
+/// Helper: Initialize database and repository
+async fn initialize_database_and_repository(config: &config::Config) -> AppResult<()> {
+    info!("Initializing database connection...");
+    info!(
+        "Repository config - storage_type: {}",
+        config.repository.storage_type
+    );
+
+    if let Some(ref conn_str) = config.repository.connection_string {
+        let safe_conn_str = sanitize_connection_string(conn_str);
+        info!("Repository config - connection_string: {}", safe_conn_str);
+    } else {
+        warn!("Repository config - connection_string: None (not set!)");
+    }
+
+    match database::init_database(
+        &config.repository,
+        config.repository.storage_type == "postgresql",
+    )
+    .await
+    {
+        Ok(db) => {
+            let db_arc = Arc::new(db);
+            if database::initialize_global_database(db_arc.clone()) {
+                info!("Global database initialized successfully");
+            } else {
+                warn!("Global database was already initialized");
+            }
+
+            // Initialize UnifiedRepository with Postgres
+            let repo = repository::UnifiedRepository::new_postgres(db_arc.pool().clone());
+            if repository::initialize_repository(repo) {
+                info!("Global repository initialized with Postgres");
+            } else {
+                warn!("Global repository was already initialized");
+            }
+        }
+        Err(e) => {
+            // Only fail if we're trying to use PostgreSQL storage
+            if config.repository.storage_type == "postgresql" {
+                return Err(AppError::Database {
+                    message: format!(
+                        "Database initialization failed: {}. Cannot continue with PostgreSQL storage.",
+                        e
+                    ),
+                    source: None,
+                });
+            } else {
+                warn!(
+                    "Database initialization failed: {}. Continuing without database (using {} storage).",
+                    e, config.repository.storage_type
+                );
+                warn!("Health checks will report database as unavailable");
+
+                // Initialize UnifiedRepository with Memory
+                let repo = repository::UnifiedRepository::new_memory();
+                if repository::initialize_repository(repo) {
+                    info!("Global repository initialized with Memory");
+                } else {
+                    warn!("Global repository was already initialized");
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Helper: Convert ErrorResponse to HTTP response
 fn error_to_response(error_response: error::ErrorResponse) -> Response {
     let status =
@@ -93,6 +248,57 @@ fn error_to_response(error_response: error::ErrorResponse) -> Response {
     let body = serde_json::to_string(&error_response)
         .unwrap_or_else(|_| r#"{"error":"Serialization failed"}"#.to_string());
     (status, body).into_response()
+}
+
+/// Helper: Get client metadata for stream connection from customization function or query params
+fn get_stream_client_metadata(
+    path: &str,
+    query_params: &HashMap<String, String>,
+    auth_user: Option<&auth::AuthUser>,
+) -> Result<Option<HashMap<String, String>>, String> {
+    let stream_info = stream_registry::GLOBAL_STREAM_REGISTRY.get_stream_info(path);
+
+    if let Some((script_uri, Some(func_name))) = stream_info {
+        // Execute customization function to get filter criteria
+        let auth_context = auth_user.map(|user| create_js_auth_context(Some(user)));
+
+        let filter_criteria = js_engine::execute_stream_customization_function(
+            &script_uri,
+            &func_name,
+            path,
+            query_params,
+            auth_context,
+        )?;
+
+        info!(
+            "Customization function '{}' returned filter criteria: {:?}",
+            func_name, filter_criteria
+        );
+        return Ok(if filter_criteria.is_empty() {
+            None
+        } else {
+            Some(filter_criteria)
+        });
+    }
+
+    // No customization function, use query params as fallback
+    Ok(if query_params.is_empty() {
+        None
+    } else {
+        Some(query_params.clone())
+    })
+}
+
+/// Helper: Build error response for stream errors
+fn build_stream_error_response(message: &str) -> Response {
+    Response::builder()
+        .status(StatusCode::INTERNAL_SERVER_ERROR)
+        .header("content-type", "text/plain")
+        .body(Body::from(message.to_string()))
+        .unwrap_or_else(|err| {
+            error!("Failed to build error response: {}", err);
+            Response::new(Body::from("Internal Server Error"))
+        })
 }
 
 /// Handle Server-Sent Events stream requests
@@ -109,68 +315,16 @@ async fn handle_stream_request(req: Request<Body>) -> Response {
         path, query_params
     );
 
-    // Get stream info to check for customization function
-    let stream_info = stream_registry::GLOBAL_STREAM_REGISTRY.get_stream_info(&path);
-
-    let client_metadata = if let Some((script_uri, customization_function)) = stream_info {
-        if let Some(func_name) = customization_function {
-            // Execute customization function to get filter criteria
-            let auth_context = auth_user
-                .as_ref()
-                .map(|user| create_js_auth_context(Some(user)));
-
-            match js_engine::execute_stream_customization_function(
-                &script_uri,
-                &func_name,
-                &path,
-                &query_params,
-                auth_context,
-            ) {
-                Ok(filter_criteria) => {
-                    info!(
-                        "Customization function '{}' returned filter criteria: {:?}",
-                        func_name, filter_criteria
-                    );
-                    if filter_criteria.is_empty() {
-                        None
-                    } else {
-                        Some(filter_criteria)
-                    }
-                }
-                Err(e) => {
-                    error!(
-                        "Customization function '{}' failed for stream '{}': {}",
-                        func_name, path, e
-                    );
-                    // Log error and return HTTP 500
-                    return Response::builder()
-                        .status(StatusCode::INTERNAL_SERVER_ERROR)
-                        .header("content-type", "text/plain")
-                        .body(Body::from(format!(
-                            "Stream customization function failed: {}",
-                            e
-                        )))
-                        .unwrap_or_else(|err| {
-                            error!("Failed to build error response: {}", err);
-                            Response::new(Body::from("Internal Server Error"))
-                        });
-                }
-            }
-        } else {
-            // No customization function, use query params as fallback
-            if query_params.is_empty() {
-                None
-            } else {
-                Some(query_params)
-            }
-        }
-    } else {
-        // Stream not registered or error getting stream info
-        // Use query params as fallback
-        if query_params.is_empty() {
-            None
-        } else {
-            Some(query_params)
+    // Get client metadata from customization function or query params
+    let client_metadata = match get_stream_client_metadata(&path, &query_params, auth_user.as_ref())
+    {
+        Ok(metadata) => metadata,
+        Err(e) => {
+            error!("Customization function failed for stream '{}': {}", path, e);
+            return build_stream_error_response(&format!(
+                "Stream customization function failed: {}",
+                e
+            ));
         }
     };
 
@@ -182,17 +336,10 @@ async fn handle_stream_request(req: Request<Body>) -> Response {
         Ok(conn) => conn,
         Err(e) => {
             error!("Failed to create stream connection for '{}': {}", path, e);
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .header("content-type", "text/plain")
-                .body(Body::from(format!(
-                    "Failed to create stream connection: {}",
-                    e
-                )))
-                .unwrap_or_else(|err| {
-                    error!("Failed to build error response: {}", err);
-                    Response::new(Body::from("Internal Server Error"))
-                });
+            return build_stream_error_response(&format!(
+                "Failed to create stream connection: {}",
+                e
+            ));
         }
     };
 
@@ -382,57 +529,40 @@ async fn initialize_auth_manager(
 
     // Register OAuth2 providers if configured
     if let Some(google_config) = auth_config.providers.google {
-        info!("Registering Google OAuth2 provider");
-        let oauth_config = auth::OAuth2ProviderConfig {
-            client_id: google_config.client_id,
-            client_secret: google_config.client_secret,
-            redirect_uri: google_config.redirect_uri,
-            scopes: if !google_config.scopes.is_empty() {
-                google_config.scopes
-            } else {
-                vec![
-                    "openid".to_string(),
-                    "profile".to_string(),
-                    "email".to_string(),
-                ]
+        register_oauth_provider(
+            &mut auth_manager,
+            "google",
+            OAuthProviderConfig {
+                client_id: google_config.client_id,
+                client_secret: google_config.client_secret,
+                redirect_uri: google_config.redirect_uri,
+                scopes: google_config.scopes,
+                default_scopes: vec!["openid", "profile", "email"],
+                extra_params: HashMap::new(),
             },
-            auth_url: None, // Use default Google URLs
-            token_url: None,
-            userinfo_url: None,
-            extra_params: HashMap::new(),
-        };
-        auth_manager.register_provider("google", oauth_config)?;
+        )?;
     }
 
     if let Some(microsoft_config) = auth_config.providers.microsoft {
-        info!("Registering Microsoft OAuth2 provider");
         let mut extra_params = HashMap::new();
         if let Some(tenant_id) = microsoft_config.tenant_id {
             extra_params.insert("tenant_id".to_string(), tenant_id);
         }
-        let oauth_config = auth::OAuth2ProviderConfig {
-            client_id: microsoft_config.client_id,
-            client_secret: microsoft_config.client_secret,
-            redirect_uri: microsoft_config.redirect_uri,
-            scopes: if !microsoft_config.scopes.is_empty() {
-                microsoft_config.scopes
-            } else {
-                vec![
-                    "openid".to_string(),
-                    "profile".to_string(),
-                    "email".to_string(),
-                ]
+        register_oauth_provider(
+            &mut auth_manager,
+            "microsoft",
+            OAuthProviderConfig {
+                client_id: microsoft_config.client_id,
+                client_secret: microsoft_config.client_secret,
+                redirect_uri: microsoft_config.redirect_uri,
+                scopes: microsoft_config.scopes,
+                default_scopes: vec!["openid", "profile", "email"],
+                extra_params,
             },
-            auth_url: None, // Use default Microsoft URLs
-            token_url: None,
-            userinfo_url: None,
-            extra_params,
-        };
-        auth_manager.register_provider("microsoft", oauth_config)?;
+        )?;
     }
 
     if let Some(apple_config) = auth_config.providers.apple {
-        info!("Registering Apple OAuth2 provider");
         let mut extra_params = HashMap::new();
         if let Some(team_id) = apple_config.team_id {
             extra_params.insert("team_id".to_string(), team_id);
@@ -443,21 +573,18 @@ async fn initialize_auth_manager(
         if let Some(private_key) = apple_config.private_key {
             extra_params.insert("private_key".to_string(), private_key);
         }
-        let oauth_config = auth::OAuth2ProviderConfig {
-            client_id: apple_config.client_id,
-            client_secret: apple_config.client_secret,
-            redirect_uri: apple_config.redirect_uri,
-            scopes: if !apple_config.scopes.is_empty() {
-                apple_config.scopes
-            } else {
-                vec!["name".to_string(), "email".to_string()]
+        register_oauth_provider(
+            &mut auth_manager,
+            "apple",
+            OAuthProviderConfig {
+                client_id: apple_config.client_id,
+                client_secret: apple_config.client_secret,
+                redirect_uri: apple_config.redirect_uri,
+                scopes: apple_config.scopes,
+                default_scopes: vec!["name", "email"],
+                extra_params,
             },
-            auth_url: None, // Use default Apple URLs
-            token_url: None,
-            userinfo_url: None,
-            extra_params,
-        };
-        auth_manager.register_provider("apple", oauth_config)?;
+        )?;
     }
 
     Ok(Arc::new(auth_manager))
@@ -479,112 +606,10 @@ pub async fn start_server_with_config(
     mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) -> AppResult<u16> {
     // Initialize secrets manager
-    info!("Initializing secrets manager...");
-    let secrets_manager = secrets::SecretsManager::new();
+    let _secrets_manager = initialize_secrets(&config);
 
-    // Load secrets from environment variables (SECRET_* prefix)
-    secrets_manager.load_from_env();
-    let env_secrets_count = secrets_manager.list_identifiers().len();
-    if env_secrets_count > 0 {
-        info!(
-            "Loaded {} secret(s) from environment variables",
-            env_secrets_count
-        );
-        debug!(
-            "Available secrets: {:?}",
-            secrets_manager.list_identifiers()
-        );
-    } else {
-        info!("No secrets loaded from environment variables");
-    }
-
-    // Load secrets from configuration file if available
-    if !config.secrets.values.is_empty() {
-        secrets_manager.load_from_map(config.secrets.values.clone());
-        let total_secrets = secrets_manager.list_identifiers().len();
-        let config_secrets = total_secrets - env_secrets_count;
-        if config_secrets > 0 {
-            info!(
-                "Loaded {} additional secret(s) from configuration file",
-                config_secrets
-            );
-        }
-        info!("Total secrets configured: {}", total_secrets);
-    } else if env_secrets_count == 0 {
-        debug!("No secrets configured from environment or config file");
-    }
-
-    let secrets_manager = std::sync::Arc::new(secrets_manager);
-
-    // Set as global secrets manager for access from js_engine
-    if secrets::initialize_global_secrets_manager(secrets_manager.clone()) {
-        info!("Global secrets manager initialized successfully");
-    } else {
-        warn!("Global secrets manager was already initialized");
-    }
-
-    // Initialize database connection
-    info!("Initializing database connection...");
-    info!(
-        "Repository config - storage_type: {}",
-        config.repository.storage_type
-    );
-    if let Some(ref conn_str) = config.repository.connection_string {
-        let safe_conn_str = sanitize_connection_string(conn_str);
-        info!("Repository config - connection_string: {}", safe_conn_str);
-    } else {
-        warn!("Repository config - connection_string: None (not set!)");
-    }
-
-    match database::init_database(
-        &config.repository,
-        config.repository.storage_type == "postgresql",
-    )
-    .await
-    {
-        Ok(db) => {
-            let db_arc = std::sync::Arc::new(db);
-            if database::initialize_global_database(db_arc.clone()) {
-                info!("Global database initialized successfully");
-            } else {
-                warn!("Global database was already initialized");
-            }
-
-            // Initialize UnifiedRepository with Postgres
-            let repo = repository::UnifiedRepository::new_postgres(db_arc.pool().clone());
-            if repository::initialize_repository(repo) {
-                info!("Global repository initialized with Postgres");
-            } else {
-                warn!("Global repository was already initialized");
-            }
-        }
-        Err(e) => {
-            // Only fail if we're trying to use PostgreSQL storage
-            if config.repository.storage_type == "postgresql" {
-                return Err(AppError::Database {
-                    message: format!(
-                        "Database initialization failed: {}. Cannot continue with PostgreSQL storage.",
-                        e
-                    ),
-                    source: None,
-                });
-            } else {
-                warn!(
-                    "Database initialization failed: {}. Continuing without database (using {} storage).",
-                    e, config.repository.storage_type
-                );
-                warn!("Health checks will report database as unavailable");
-
-                // Initialize UnifiedRepository with Memory
-                let repo = repository::UnifiedRepository::new_memory();
-                if repository::initialize_repository(repo) {
-                    info!("Global repository initialized with Memory");
-                } else {
-                    warn!("Global repository was already initialized");
-                }
-            }
-        }
-    }
+    // Initialize database connection and repository
+    initialize_database_and_repository(&config).await?;
 
     // Clone the timeout value to avoid borrow checker issues in async closures
     let script_timeout_ms = config.javascript.execution_timeout_ms;
