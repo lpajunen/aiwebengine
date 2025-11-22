@@ -1,6 +1,6 @@
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
-use axum::response::{IntoResponse, Response, Sse, sse::Event};
+use axum::response::{IntoResponse, Redirect, Response, Sse, sse::Event};
 use axum::{Router, routing::any};
 use axum_server::Server;
 use futures::StreamExt as FuturesStreamExt;
@@ -1181,6 +1181,12 @@ async fn handle_dynamic_request(
                     &request_method,
                     &request_id,
                 ));
+            } else if path == "/" && request_method == "GET" {
+                info!(
+                    "[{}] 🔄 Redirecting root path to /engine/docs for bootstrapping",
+                    request_id
+                );
+                return Redirect::temporary("/engine/docs").into_response();
             } else {
                 warn!(
                     "[{}] ⚠️  Route not found: {} {} (no handler registered for this path)",
@@ -1190,6 +1196,7 @@ async fn handle_dynamic_request(
             }
         }
     };
+
     let owner_uri_cl = owner_uri.clone();
     let handler_cl = handler_name.clone();
     let path_log = path.to_string();

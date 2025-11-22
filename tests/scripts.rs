@@ -34,6 +34,7 @@ async fn test_js_registered_route_returns_expected() {
         .expect("Server not ready");
 
     let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none()) // Don't follow redirects
         .timeout(Duration::from_secs(5))
         .build()
         .expect("Failed to create HTTP client");
@@ -51,7 +52,7 @@ async fn test_js_registered_route_returns_expected() {
         "Health endpoint should be OK"
     );
 
-    // Test the root endpoint registered by core.js
+    // Test the root endpoint - should redirect to /engine/docs
     let res = client
         .get(format!("http://127.0.0.1:{}/", port))
         .send()
@@ -59,33 +60,42 @@ async fn test_js_registered_route_returns_expected() {
         .expect("Request to / failed");
 
     let status = res.status();
-    let body = res.text().await.expect("Failed to read response body");
 
     assert_eq!(
         status,
-        reqwest::StatusCode::OK,
-        "Expected 200 OK status for /, got {} with body: {}",
+        reqwest::StatusCode::TEMPORARY_REDIRECT,
+        "Expected 307 Temporary Redirect status for /, got {} with body: {}",
         status,
-        body
+        res.text().await.unwrap_or_default()
     );
 
-    assert!(
-        body.contains("Core handler: OK"),
-        "Expected 'Core handler: OK' in response, got: {}",
-        body
+    // Check the Location header
+    let location = res
+        .headers()
+        .get("location")
+        .and_then(|v| v.to_str().ok())
+        .expect("Location header should be present");
+
+    assert_eq!(
+        location, "/engine/docs",
+        "Expected redirect to /engine/docs, got: {}",
+        location
     );
 
     context.cleanup().await.expect("Failed to cleanup");
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_core_js_registers_root_path() {
-    // Ensure core.js contains a registration for '/'
+async fn test_core_js_does_not_register_root_path() {
+    // Ensure core.js does NOT register '/' path (it's handled by Rust redirect)
     let core = repository::fetch_script("https://example.com/core").expect("core script missing");
     assert!(
-        core.contains("routeRegistry.registerRoute('/")
-            || core.contains("routeRegistry.registerRoute(\"/\""),
-        "core.js must register '/' path with routeRegistry"
+        !core.contains("routeRegistry.registerRoute('/"),
+        "core.js should NOT register '/' path with routeRegistry (handled by Rust redirect)"
+    );
+    assert!(
+        !core.contains("routeRegistry.registerRoute(\"/\""),
+        "core.js should NOT register '/' path with routeRegistry (handled by Rust redirect)"
     );
 }
 

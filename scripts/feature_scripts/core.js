@@ -14,23 +14,6 @@ function logServerStillRunning() {
   console.log("server still running");
 }
 
-// core script: registers root handler
-function core_root(context) {
-  const req = getRequest(context);
-  console.log("core-root-called");
-  console.log("req: " + JSON.stringify(req));
-  if (req.auth.isAuthenticated) {
-    console.log("User is logged in");
-  } else {
-    console.log("Anonymous user");
-  }
-  return {
-    status: 200,
-    body: "Core handler: OK",
-    contentType: "text/plain; charset=UTF-8",
-  };
-}
-
 // Health check endpoint
 function health_check(context) {
   const req = getRequest(context);
@@ -678,12 +661,6 @@ function init(context) {
     routeRegistry.registerAssetRoute("/engine.css", "engine.css");
 
     // Register HTTP endpoints with OpenAPI metadata
-    routeRegistry.registerRoute("/", "core_root", "GET", {
-      summary: "Root endpoint",
-      description: "Core handler that returns OK status",
-      tags: ["Core"],
-    });
-    routeRegistry.registerRoute("/", "core_root", "POST");
     routeRegistry.registerRoute("/health", "health_check", "GET", {
       summary: "Health check",
       description:

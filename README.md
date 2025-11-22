@@ -2,7 +2,7 @@
 
 ## Overview
 
-**aiwebengine** (AI Web Engine) is an open-source project designed to facilitate the development of web-based solutions using JavaScript. Therefore, it is an application engine for software written in the AI era. The engine implements core protocols and features needed for building websites, GraphQL APIs, web applications, and AI tools with minimal overhead. The solution developers can focus on writing JavaScript scripts to implement their business logic, while the engine handles the underlying infrastructure and common functionalities.
+**aiwebengine** (AI Web Engine) is an open-source project designed to facilitate the development of web-based solutions using JavaScript by providing a secure sandbox for executing untrusted code. It is an application engine for software written in the AI era. The engine implements core protocols and features needed for building websites, GraphQL APIs, web applications, and AI tools with minimal overhead. The solution developers can focus on writing JavaScript scripts to implement their business logic, while the engine handles the underlying infrastructure and common functionalities.
 
 In addition to being a web application engine, aiwebengine provides an editorial environment for creating, testing, and deploying JavaScript and related web resource based solutions.
 
