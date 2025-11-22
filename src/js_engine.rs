@@ -7,6 +7,7 @@ use std::time::Instant;
 use tracing::{debug, error, info, warn};
 
 use crate::repository;
+use crate::scheduler::ScheduledInvocation;
 use crate::security::UserContext;
 
 // Use the enhanced secure globals implementation
@@ -127,6 +128,7 @@ pub enum HandlerInvocationKind {
     GraphqlSubscription,
     StreamCustomization,
     Init,
+    Scheduled,
 }
 
 impl HandlerInvocationKind {
@@ -138,6 +140,7 @@ impl HandlerInvocationKind {
             HandlerInvocationKind::GraphqlSubscription => "graphqlSubscription",
             HandlerInvocationKind::StreamCustomization => "streamCustomization",
             HandlerInvocationKind::Init => "init",
+            HandlerInvocationKind::Scheduled => "scheduled",
         }
     }
 }
@@ -1017,6 +1020,80 @@ pub fn execute_script_for_request(
 
     // Ensure clean shutdown: drop Context before Runtime
     ensure_clean_shutdown(ctx, Ok((status, body, content_type)))
+}
+
+/// Executes a JavaScript handler for scheduler jobs
+pub fn execute_scheduled_handler(
+    script_uri: &str,
+    handler_name: &str,
+    invocation: &ScheduledInvocation,
+) -> Result<(), String> {
+    let rt = Runtime::new().map_err(|e| format!("runtime new: {}", e))?;
+    let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
+    let script_uri_owned = script_uri.to_string();
+
+    ctx.with(|ctx| -> Result<(), rquickjs::Error> {
+        let security_config = GlobalSecurityConfig {
+            enable_graphql_registration: false,
+            enable_audit_logging: false,
+            ..Default::default()
+        };
+
+        setup_secure_global_functions(
+            &ctx,
+            &script_uri_owned,
+            UserContext::admin("scheduler".to_string()),
+            &security_config,
+            None,
+            None,
+            None,
+        )
+    })
+    .map_err(|e| format!("install scheduler globals: {}", e))?;
+
+    let owner_script = repository::fetch_script(script_uri)
+        .ok_or_else(|| format!("no script for uri {}", script_uri))?;
+
+    ctx.with(|ctx| {
+        ctx.eval::<(), _>(owner_script.as_str()).map_err(|e| {
+            let details = extract_error_details(&ctx, &e);
+            format!("script eval: {}", details)
+        })
+    })?;
+
+    let handler_result = ctx.with(|ctx| -> Result<(), String> {
+        let global = ctx.globals();
+        let func: Function = global
+            .get::<_, Function>(handler_name)
+            .map_err(|e| format!("no handler {}: {}", handler_name, e))?;
+
+        let schedule_meta = serde_json::json!({
+            "jobId": invocation.job_id.to_string(),
+            "name": invocation.key,
+            "type": invocation.kind.as_str(),
+            "scheduledFor": invocation.scheduled_for.to_rfc3339(),
+            "intervalSeconds": invocation.interval_seconds,
+        });
+
+        let handler_context = JsHandlerContextBuilder::new(HandlerInvocationKind::Scheduled)
+            .with_script_metadata(script_uri, handler_name)
+            .with_metadata_value("schedule", schedule_meta)
+            .build(&ctx)
+            .map_err(|e| format!("build context: {}", e))?;
+
+        func.call::<_, Value>((handler_context,)).map_err(|e| {
+            let details = extract_error_details(&ctx, &e);
+            format!("call handler: {}", details)
+        })?;
+
+        Ok(())
+    });
+
+    // Ensure clean shutdown
+    drop(ctx);
+
+    handler_result?;
+    Ok(())
 }
 
 /// Executes a JavaScript GraphQL resolver function and returns the result as a string.

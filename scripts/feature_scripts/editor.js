@@ -1243,6 +1243,23 @@ AVAILABLE JAVASCRIPT APIs:
    - filterJson: string (optional JSON string with metadata filter criteria, empty "{}" matches all)
    - Returns: string describing broadcast result with success/failure counts
 
+8. schedulerService - Background job scheduler
+
+  schedulerService.registerOnce({ handler, runAt, name? }) - Schedule a single execution
+  - handler: string (function name)
+  - runAt: string (UTC ISO-8601 timestamp ending with Z)
+  - name: string (optional identifier used to overwrite existing jobs)
+
+  schedulerService.registerRecurring({ handler, intervalMinutes, startAt?, name? }) - Schedule recurring execution
+  - handler: string
+  - intervalMinutes: integer >= 1
+  - startAt: string (optional UTC timestamp for first run)
+  - name: string (optional identifier)
+
+  schedulerService.clearAll() - Remove every scheduled job for the current script
+
+  Scheduled handlers run with admin privileges and receive context.meta.schedule containing jobId, name, type (one-off/recurring), scheduledFor (UTC timestamp), and intervalSeconds (null for one-off jobs).
+
 RESPONSE FORMAT - YOU MUST RESPOND WITH ONLY THIS JSON STRUCTURE:
 
 For scripts:

@@ -1,10 +1,12 @@
 use base64::Engine;
+use chrono::Duration as ChronoDuration;
 use rquickjs::{Function, Result as JsResult, function::Opt};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, error, warn};
 
 use crate::repository;
+use crate::scheduler;
 use crate::secrets::SecretsManager;
 use crate::security::{
     SecureOperations, SecurityAuditor, SecurityEventType, SecuritySeverity, UserContext,
@@ -29,6 +31,7 @@ pub struct GlobalSecurityConfig {
     pub enable_asset_management: bool,
     pub enable_streams: bool,
     pub enable_script_management: bool,
+    pub enable_scheduler: bool,
     pub enable_logging: bool,
     pub enable_secrets: bool,
     pub enforce_strict_validation: bool,
@@ -42,6 +45,7 @@ impl Default for GlobalSecurityConfig {
             enable_graphql_registration: true,
             enable_asset_management: true,
             enable_script_management: true,
+            enable_scheduler: true,
             enable_logging: true,
             enable_secrets: true,
             enforce_strict_validation: true,
@@ -137,6 +141,9 @@ impl SecureGlobalContext {
 
         // Setup user management functions (admin-only)
         self.setup_user_management_functions(ctx, script_uri)?;
+
+        // Setup scheduler service bindings
+        self.setup_scheduler_functions(ctx, script_uri)?;
 
         Ok(())
     }
@@ -2687,6 +2694,167 @@ impl SecureGlobalContext {
         Ok(())
     }
 
+    fn setup_scheduler_functions(&self, ctx: &rquickjs::Ctx<'_>, script_uri: &str) -> JsResult<()> {
+        if !self.config.enable_scheduler {
+            return Ok(());
+        }
+
+        let global = ctx.globals();
+        let scheduler_obj = rquickjs::Object::new(ctx.clone())?;
+        let scheduler_handle = scheduler::get_scheduler();
+
+        let register_once_handle = scheduler_handle.clone();
+        let script_uri_once = script_uri.to_string();
+        let register_once =
+            Function::new(
+                ctx.clone(),
+                move |_ctx: rquickjs::Ctx<'_>, options: rquickjs::Object| -> JsResult<String> {
+                    if let Err(msg) = ensure_scheduler_privileged(&script_uri_once) {
+                        return Ok(msg);
+                    }
+
+                    let handler: String = match options.get("handler") {
+                        Ok(value) => value,
+                        Err(_) => {
+                            return Ok("schedulerService.registerOnce requires options.handler"
+                                .to_string());
+                        }
+                    };
+                    let handler_name = handler.trim();
+                    if handler_name.is_empty() {
+                        return Ok(
+                            "schedulerService.registerOnce requires a non-empty handler name"
+                                .to_string(),
+                        );
+                    }
+
+                    let run_at_value: String = match options.get("runAt") {
+                        Ok(value) => value,
+                        Err(_) => return Ok(
+                            "schedulerService.registerOnce requires options.runAt (UTC ISO string)"
+                                .to_string(),
+                        ),
+                    };
+                    let run_at = match scheduler::parse_utc_timestamp(&run_at_value) {
+                        Ok(ts) => ts,
+                        Err(err) => return Ok(format!("Scheduler error: {}", err)),
+                    };
+
+                    let name = options.get::<_, String>("name").ok();
+
+                    match register_once_handle.register_one_off(
+                        &script_uri_once,
+                        handler_name,
+                        name,
+                        run_at,
+                    ) {
+                        Ok(job) => Ok(format!(
+                            "Scheduled one-time job '{}' for {} (id {})",
+                            job.key,
+                            job.schedule.next_run().to_rfc3339(),
+                            job.id
+                        )),
+                        Err(err) => Ok(format!("Scheduler error: {}", err)),
+                    }
+                },
+            )?;
+
+        let register_recurring_handle = scheduler_handle.clone();
+        let script_uri_recurring = script_uri.to_string();
+        let register_recurring = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, options: rquickjs::Object| -> JsResult<String> {
+                if let Err(msg) = ensure_scheduler_privileged(&script_uri_recurring) {
+                    return Ok(msg);
+                }
+
+                let handler: String = match options.get("handler") {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return Ok(
+                            "schedulerService.registerRecurring requires options.handler"
+                                .to_string(),
+                        );
+                    }
+                };
+                let handler_name = handler.trim();
+                if handler_name.is_empty() {
+                    return Ok(
+                        "schedulerService.registerRecurring requires a non-empty handler name"
+                            .to_string(),
+                    );
+                }
+
+                let interval_value: f64 =
+                    match options.get("intervalMinutes") {
+                        Ok(value) => value,
+                        Err(_) => return Ok(
+                            "schedulerService.registerRecurring requires options.intervalMinutes"
+                                .to_string(),
+                        ),
+                    };
+                if !interval_value.is_finite() || interval_value < 1.0 {
+                    return Ok(
+                        "schedulerService.registerRecurring requires intervalMinutes >= 1"
+                            .to_string(),
+                    );
+                }
+                let interval_minutes = interval_value.floor() as i64;
+                let interval = ChronoDuration::minutes(interval_minutes);
+
+                let name = options.get::<_, String>("name").ok();
+                let first_run = if let Ok(start_at) = options.get::<_, String>("startAt") {
+                    match scheduler::parse_utc_timestamp(&start_at) {
+                        Ok(ts) => Some(ts),
+                        Err(err) => return Ok(format!("Scheduler error: {}", err)),
+                    }
+                } else {
+                    None
+                };
+
+                match register_recurring_handle.register_recurring(
+                    &script_uri_recurring,
+                    handler_name,
+                    name,
+                    interval,
+                    first_run,
+                ) {
+                    Ok(job) => Ok(format!(
+                        "Scheduled recurring job '{}' every {} minute(s); next run {} (id {})",
+                        job.key,
+                        interval_minutes,
+                        job.schedule.next_run().to_rfc3339(),
+                        job.id
+                    )),
+                    Err(err) => Ok(format!("Scheduler error: {}", err)),
+                }
+            },
+        )?;
+
+        let script_uri_clear = script_uri.to_string();
+        let clear_all = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
+                if let Err(msg) = ensure_scheduler_privileged(&script_uri_clear) {
+                    return Ok(msg);
+                }
+
+                let removed = scheduler::clear_script_jobs(&script_uri_clear);
+                Ok(format!(
+                    "Cleared {} scheduled job(s) for {}",
+                    removed, script_uri_clear
+                ))
+            },
+        )?;
+
+        scheduler_obj.set("registerOnce", register_once)?;
+        scheduler_obj.set("registerRecurring", register_recurring)?;
+        scheduler_obj.set("clearAll", clear_all)?;
+        global.set("schedulerService", scheduler_obj)?;
+
+        Ok(())
+    }
+
     /// Setup user management functions (admin-only)
     fn setup_user_management_functions(
         &self,
@@ -2878,5 +3046,19 @@ impl SecureGlobalContext {
 
         debug!("User management functions initialized (admin-only)");
         Ok(())
+    }
+}
+
+fn ensure_scheduler_privileged(script_uri: &str) -> Result<(), String> {
+    match repository::is_script_privileged(script_uri) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(format!(
+            "schedulerService is restricted to privileged scripts ({}).",
+            script_uri
+        )),
+        Err(e) => Err(format!(
+            "Unable to verify scheduler privileges for '{}': {}",
+            script_uri, e
+        )),
     }
 }

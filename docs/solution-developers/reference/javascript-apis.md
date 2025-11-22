@@ -1460,6 +1460,106 @@ const hello = "world";
 
 **See Also:** [Conversion API Reference](conversion-api.md) for detailed documentation, examples, and best practices.
 
+## Scheduler Service
+
+Privileged scripts can use `schedulerService` to register background jobs that run even when no HTTP requests are active. Jobs live entirely in memory and are cleared automatically whenever the script is reinitialized or deleted.
+
+> **Requirements:**
+>
+> - Only privileged scripts may call these methods.
+> - All timestamps must be expressed in UTC (ISO-8601 strings ending with `Z`).
+> - Scheduled handlers run with admin privileges scoped to the script.
+
+### schedulerService.registerOnce(options)
+
+Schedule a single execution at an exact UTC timestamp.
+
+**Options:**
+
+- `handler` (string, required): Name of the handler function to invoke.
+- `runAt` (string, required): ISO-8601 timestamp in UTC, e.g. `"2025-03-01T12:00:00Z"`.
+- `name` (string, optional): Friendly identifier used for logging/overwriting. Defaults to the handler name.
+
+**Returns:** String describing the scheduled execution time and job id.
+
+### schedulerService.registerRecurring(options)
+
+Register a handler that executes on a fixed interval.
+
+**Options:**
+
+- `handler` (string, required)
+- `intervalMinutes` (number, required, `>= 1`): Interval length in minutes.
+- `startAt` (string, optional): UTC timestamp for the first execution. When omitted the first run happens one interval from now.
+- `name` (string, optional): Friendly identifier used for logging/overwriting.
+
+**Returns:** String indicating the cadence, next run, and job id.
+
+### schedulerService.clearAll()
+
+Removes every scheduled job for the current script. This runs automatically before each `init()` execution but can be called manually if your script rebuilds schedules dynamically.
+
+### Scheduled Handler Context
+
+Scheduled invocations receive the unified `context` object with extra metadata:
+
+```javascript
+function sendReport(context) {
+  const schedule = context.meta?.schedule;
+  console.log(
+    `Running job ${schedule.name} (${schedule.jobId}) at ${schedule.scheduledFor}`,
+  );
+  // ... generate report ...
+  return { status: 200, body: "OK" };
+}
+```
+
+`context.meta.schedule` contains:
+
+- `jobId`: UUID assigned by the scheduler
+- `name`: Job name (defaults to handler name)
+- `type`: `"one-off"` or `"recurring"`
+- `scheduledFor`: Current execution time in UTC
+- `intervalSeconds`: Interval length for recurring jobs (or `null`)
+
+### Complete Example
+
+```javascript
+function sendDailyDigest(context) {
+  const info = context.meta?.schedule || {};
+  console.log(`Digest job ${info.name} running @ ${info.scheduledFor}`);
+  // Build and send email, push notification, etc.
+  return { status: 200, body: "sent" };
+}
+
+function init(context) {
+  // Clear any stale definitions from previous deploys
+  schedulerService.clearAll();
+
+  // Run once at a fixed time tomorrow
+  schedulerService.registerOnce({
+    handler: "sendDailyDigest",
+    runAt: "2025-01-01T09:00:00Z",
+    name: "digest-onboarding",
+  });
+
+  // Run every 30 minutes starting immediately
+  schedulerService.registerRecurring({
+    handler: "sendDailyDigest",
+    intervalMinutes: 30,
+    name: "digest-heartbeat",
+  });
+
+  return { success: true };
+}
+```
+
+Tips:
+
+1. Pick deterministic `name` values so re-registration overwrites the previous job instead of creating duplicates.
+2. Keep scheduled handlers idempotent—if the engine restarts, missed jobs resume on the next interval.
+3. Log meaningful progress or failures. The engine also records `FATAL` log entries when a scheduled handler throws.
+
 ## Error Handling
 
 Scripts run in a sandboxed environment. If a script throws an error:

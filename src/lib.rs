@@ -22,6 +22,7 @@ pub mod middleware;
 pub mod parsers;
 pub mod repository;
 pub mod safe_helpers;
+pub mod scheduler;
 pub mod script_init;
 pub mod secrets;
 pub mod security;
@@ -598,6 +599,9 @@ async fn initialize_components(config: &config::Config) -> AppResult<()> {
     // Initialize database connection and repository
     initialize_database_and_repository(config).await?;
 
+    // Ensure scheduler state exists before scripts start registering jobs
+    scheduler::initialize_global_scheduler();
+
     // Bootstrap hardcoded scripts into database if configured
     info!("Bootstrapping hardcoded scripts into database...");
     if let Err(e) = repository::bootstrap_scripts() {
@@ -748,6 +752,18 @@ pub async fn start_server_with_config(
     // Initialize all core components
     initialize_components(&config).await?;
 
+    // Fan out shutdown notifications so both the HTTP server and scheduler worker can stop cleanly
+    let (server_shutdown_tx, server_shutdown_rx) = tokio::sync::oneshot::channel();
+    let (scheduler_shutdown_tx, scheduler_shutdown_rx) = tokio::sync::oneshot::channel();
+
+    scheduler::spawn_worker(scheduler_shutdown_rx);
+
+    tokio::spawn(async move {
+        let _ = shutdown_rx.await;
+        let _ = scheduler_shutdown_tx.send(());
+        let _ = server_shutdown_tx.send(());
+    });
+
     // Clone the timeout value to avoid borrow checker issues in async closures
     let script_timeout_ms = config.javascript.execution_timeout_ms;
 
@@ -775,7 +791,7 @@ pub async fn start_server_with_config(
         config.server.host, config.server.port, actual_port
     );
 
-    start_server_instance(app, actual_addr, shutdown_rx);
+    start_server_instance(app, actual_addr, server_shutdown_rx);
 
     Ok(actual_port)
 }

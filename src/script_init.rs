@@ -1,6 +1,7 @@
 use crate::error::AppResult;
 use crate::repository;
 use crate::repository::Repository;
+use crate::scheduler;
 use std::time::{Duration, SystemTime};
 use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
@@ -99,6 +100,9 @@ impl ScriptInitializer {
                 ));
             }
         };
+
+        // Prevent stale scheduled work from previous deployments
+        scheduler::clear_script_jobs(script_uri);
 
         debug!("Initializing script: {}", script_uri);
 

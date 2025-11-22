@@ -1,4 +1,5 @@
 use crate::error::{AppError, AppResult};
+use crate::scheduler;
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
@@ -1458,6 +1459,7 @@ pub fn delete_script(uri: &str) -> bool {
     match result {
         Ok(existed) => {
             if existed {
+                scheduler::clear_script_jobs(uri);
                 debug!("Deleted script from repository: {}", uri);
             } else {
                 debug!("Script not found in repository for deletion: {}", uri);
