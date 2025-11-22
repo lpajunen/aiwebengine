@@ -12,7 +12,8 @@ help:
 	@echo "  make dev-local - Run development server with localhost OAuth (http://localhost:3000)"
 	@echo "  make test      - Run all tests with cargo-nextest"
 	@echo "  make test-simple - Run all tests with cargo test"
-	@echo "  make lint      - Run clippy linter"
+	@echo "  make perf-test   - Run performance/load test against production server"
+	@echo "  make lint        - Run clippy linter"
 	@echo "  make format    - Format code with rustfmt"
 	@echo "  make format-check - Check code formatting without modifying"
 	@echo "  make coverage  - Generate test coverage report"
@@ -65,6 +66,13 @@ test:
 # Run tests with standard cargo test
 test-simple:
 	cargo test --all-features
+
+# Run performance/load tests against production
+perf-test:
+	@echo "Running performance test against production server..."
+	@echo "This will test https://softagen.com with up to 100 concurrent users"
+	@echo "Test duration: 6 minutes"
+	docker run --rm -v $(PWD)/scripts/perf_tests:/scripts grafana/k6 run /scripts/load_test.js
 
 # Run clippy linter with warnings as errors
 lint:
