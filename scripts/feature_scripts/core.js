@@ -6,6 +6,14 @@ function getArgs(context) {
   return (context && context.args) || {};
 }
 
+function logServerStarted() {
+  console.log("server started");
+}
+
+function logServerStillRunning() {
+  console.log("server still running");
+}
+
 // core script: registers root handler
 function core_root(context) {
   const req = getRequest(context);
@@ -767,6 +775,23 @@ function init(context) {
       "type DeleteScriptResponse { message: String!, uri: String!, success: Boolean! } type Mutation { deleteScript(uri: String!): DeleteScriptResponse! }",
       "deleteScriptMutation",
     );
+
+    if (typeof schedulerService !== "undefined") {
+      const oneMinuteFromNow = new Date(Date.now() + 60 * 1000).toISOString();
+      schedulerService.clearAll();
+      schedulerService.registerOnce({
+        handler: "logServerStarted",
+        runAt: oneMinuteFromNow,
+        name: "core-server-started",
+      });
+      schedulerService.registerRecurring({
+        handler: "logServerStillRunning",
+        intervalMinutes: 2,
+        name: "core-server-heartbeat",
+      });
+    } else {
+      console.warn("schedulerService unavailable; skipping background jobs");
+    }
 
     console.log("Core script initialized successfully");
 
