@@ -201,6 +201,11 @@ static DYNAMIC_LOGS: OnceLock<Mutex<HashMap<String, Vec<String>>>> = OnceLock::n
 static DYNAMIC_ASSETS: OnceLock<Mutex<HashMap<String, Asset>>> = OnceLock::new();
 static DYNAMIC_SHARED_STORAGE: OnceLock<Mutex<HashMap<String, HashMap<String, String>>>> =
     OnceLock::new();
+
+// Type alias for personal storage: script_uri -> user_id -> key -> value
+type PersonalStorageMap = HashMap<String, HashMap<String, HashMap<String, String>>>;
+
+static DYNAMIC_PERSONAL_STORAGE: OnceLock<Mutex<PersonalStorageMap>> = OnceLock::new();
 static SCRIPT_PRIVILEGE_OVERRIDES: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
 
 /// Safe mutex access with recovery from poisoned state
@@ -270,6 +275,29 @@ fn safe_lock_shared_storage() -> AppResult<SharedStorageGuard<'static>> {
             store.lock().map_err(|e| {
                 error!(
                     "Failed to recover from poisoned shared storage mutex: {}",
+                    e
+                );
+                AppError::Internal {
+                    message: format!("Unrecoverable mutex poisoning: {}", e),
+                }
+            })
+        }
+    }
+}
+
+type PersonalStorageGuard<'a> =
+    std::sync::MutexGuard<'a, HashMap<String, HashMap<String, HashMap<String, String>>>>;
+
+fn safe_lock_personal_storage() -> AppResult<PersonalStorageGuard<'static>> {
+    let store = DYNAMIC_PERSONAL_STORAGE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    match store.lock() {
+        Ok(guard) => Ok(guard),
+        Err(PoisonError { .. }) => {
+            warn!("Personal storage mutex was poisoned, recovering with new data");
+            store.lock().map_err(|e| {
+                error!(
+                    "Failed to recover from poisoned personal storage mutex: {}",
                     e
                 );
                 AppError::Internal {
@@ -680,6 +708,186 @@ async fn db_clear_shared_storage(pool: &PgPool, script_uri: &str) -> AppResult<(
     debug!(
         "Cleared all script storage items from database for script: {}",
         script_uri
+    );
+    Ok(())
+}
+
+/// Database-backed set personal storage item
+async fn db_set_personal_storage_item(
+    pool: &PgPool,
+    script_uri: &str,
+    user_id: &str,
+    key: &str,
+    value: &str,
+) -> AppResult<()> {
+    let now = chrono::Utc::now();
+
+    // Try to update existing item
+    let update_result = sqlx::query(
+        r#"
+        UPDATE personal_storage
+        SET value = $1, updated_at = $2
+        WHERE script_uri = $3 AND user_id = $4 AND key = $5
+        "#,
+    )
+    .bind(value)
+    .bind(now)
+    .bind(script_uri)
+    .bind(user_id)
+    .bind(key)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error updating personal storage: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    if update_result.rows_affected() > 0 {
+        debug!(
+            "Updated personal storage item in database: {}:{}:{}",
+            script_uri, user_id, key
+        );
+        return Ok(());
+    }
+
+    // Item doesn't exist, create new one
+    sqlx::query(
+        r#"
+        INSERT INTO personal_storage (script_uri, user_id, key, value, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $5)
+        "#,
+    )
+    .bind(script_uri)
+    .bind(user_id)
+    .bind(key)
+    .bind(value)
+    .bind(now)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error inserting personal storage item: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    debug!(
+        "Inserted personal storage item to database: {}:{}:{}",
+        script_uri, user_id, key
+    );
+    Ok(())
+}
+
+/// Database-backed get personal storage item
+async fn db_get_personal_storage_item(
+    pool: &PgPool,
+    script_uri: &str,
+    user_id: &str,
+    key: &str,
+) -> AppResult<Option<String>> {
+    let row = sqlx::query(
+        r#"
+        SELECT value FROM personal_storage WHERE script_uri = $1 AND user_id = $2 AND key = $3
+        "#,
+    )
+    .bind(script_uri)
+    .bind(user_id)
+    .bind(key)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error getting personal storage item: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    if let Some(row) = row {
+        let value: String = row.try_get("value").map_err(|e| {
+            error!("Database error getting value: {}", e);
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
+        })?;
+        Ok(Some(value))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Database-backed remove personal storage item
+async fn db_remove_personal_storage_item(
+    pool: &PgPool,
+    script_uri: &str,
+    user_id: &str,
+    key: &str,
+) -> AppResult<bool> {
+    let result = sqlx::query(
+        r#"
+        DELETE FROM personal_storage WHERE script_uri = $1 AND user_id = $2 AND key = $3
+        "#,
+    )
+    .bind(script_uri)
+    .bind(user_id)
+    .bind(key)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error removing personal storage item: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    let existed = result.rows_affected() > 0;
+    if existed {
+        debug!(
+            "Removed personal storage item from database: {}:{}:{}",
+            script_uri, user_id, key
+        );
+    } else {
+        debug!(
+            "Personal storage item not found in database for removal: {}:{}:{}",
+            script_uri, user_id, key
+        );
+    }
+
+    Ok(existed)
+}
+
+/// Database-backed clear all personal storage for a script and user
+async fn db_clear_personal_storage(
+    pool: &PgPool,
+    script_uri: &str,
+    user_id: &str,
+) -> AppResult<()> {
+    sqlx::query(
+        r#"
+        DELETE FROM personal_storage WHERE script_uri = $1 AND user_id = $2
+        "#,
+    )
+    .bind(script_uri)
+    .bind(user_id)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error clearing personal storage: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    debug!(
+        "Cleared all personal storage items from database for script {} and user {}",
+        script_uri, user_id
     );
     Ok(())
 }
@@ -1763,6 +1971,78 @@ pub fn clear_shared_storage(script_uri: &str) -> AppResult<()> {
     run_blocking(async { repo.clear_shared_storage(script_uri).await })
 }
 
+/// Set a personal storage item (key-value pair for a specific script and user)
+pub fn set_personal_storage_item(
+    script_uri: &str,
+    user_id: &str,
+    key: &str,
+    value: &str,
+) -> AppResult<()> {
+    if script_uri.trim().is_empty() {
+        return Err(RepositoryError::InvalidData("Script URI cannot be empty".to_string()).into());
+    }
+
+    if user_id.trim().is_empty() {
+        return Err(RepositoryError::InvalidData("User ID cannot be empty".to_string()).into());
+    }
+
+    if key.trim().is_empty() {
+        return Err(RepositoryError::InvalidData("Key cannot be empty".to_string()).into());
+    }
+
+    if value.len() > 1_000_000 {
+        // 1MB limit per value
+        return Err(RepositoryError::InvalidData("Value too large (>1MB)".to_string()).into());
+    }
+
+    let repo = get_repository();
+    run_blocking(async {
+        repo.set_personal_storage(script_uri, user_id, key, value)
+            .await
+    })
+}
+
+/// Get a personal storage item
+pub fn get_personal_storage_item(script_uri: &str, user_id: &str, key: &str) -> Option<String> {
+    let repo = get_repository();
+    let result = run_blocking(async { repo.get_personal_storage(script_uri, user_id, key).await });
+
+    match result {
+        Ok(value) => value,
+        Err(e) => {
+            error!(
+                "Failed to get personal storage item {}:{}:{}: {}",
+                script_uri, user_id, key, e
+            );
+            None
+        }
+    }
+}
+
+/// Remove a personal storage item
+pub fn remove_personal_storage_item(script_uri: &str, user_id: &str, key: &str) -> bool {
+    let repo = get_repository();
+    let result =
+        run_blocking(async { repo.remove_personal_storage(script_uri, user_id, key).await });
+
+    match result {
+        Ok(existed) => existed,
+        Err(e) => {
+            error!(
+                "Failed to remove personal storage item {}:{}:{}: {}",
+                script_uri, user_id, key, e
+            );
+            false
+        }
+    }
+}
+
+/// Clear all personal storage items for a specific script and user
+pub fn clear_personal_storage(script_uri: &str, user_id: &str) -> AppResult<()> {
+    let repo = get_repository();
+    run_blocking(async { repo.clear_personal_storage(script_uri, user_id).await })
+}
+
 use async_trait::async_trait;
 
 /// Abstract repository interface
@@ -1801,6 +2081,28 @@ pub trait Repository: Send + Sync {
     async fn set_shared_storage(&self, script_uri: &str, key: &str, value: &str) -> AppResult<()>;
     async fn remove_shared_storage(&self, script_uri: &str, key: &str) -> AppResult<bool>;
     async fn clear_shared_storage(&self, script_uri: &str) -> AppResult<()>;
+
+    // Personal storage operations
+    async fn get_personal_storage(
+        &self,
+        script_uri: &str,
+        user_id: &str,
+        key: &str,
+    ) -> AppResult<Option<String>>;
+    async fn set_personal_storage(
+        &self,
+        script_uri: &str,
+        user_id: &str,
+        key: &str,
+        value: &str,
+    ) -> AppResult<()>;
+    async fn remove_personal_storage(
+        &self,
+        script_uri: &str,
+        user_id: &str,
+        key: &str,
+    ) -> AppResult<bool>;
+    async fn clear_personal_storage(&self, script_uri: &str, user_id: &str) -> AppResult<()>;
 
     // Security operations
     async fn get_script_privileged(&self, uri: &str) -> AppResult<Option<bool>>;
@@ -2009,6 +2311,38 @@ impl Repository for PostgresRepository {
 
     async fn clear_shared_storage(&self, script_uri: &str) -> AppResult<()> {
         db_clear_shared_storage(&self.pool, script_uri).await
+    }
+
+    async fn get_personal_storage(
+        &self,
+        script_uri: &str,
+        user_id: &str,
+        key: &str,
+    ) -> AppResult<Option<String>> {
+        db_get_personal_storage_item(&self.pool, script_uri, user_id, key).await
+    }
+
+    async fn set_personal_storage(
+        &self,
+        script_uri: &str,
+        user_id: &str,
+        key: &str,
+        value: &str,
+    ) -> AppResult<()> {
+        db_set_personal_storage_item(&self.pool, script_uri, user_id, key, value).await
+    }
+
+    async fn remove_personal_storage(
+        &self,
+        script_uri: &str,
+        user_id: &str,
+        key: &str,
+    ) -> AppResult<bool> {
+        db_remove_personal_storage_item(&self.pool, script_uri, user_id, key).await
+    }
+
+    async fn clear_personal_storage(&self, script_uri: &str, user_id: &str) -> AppResult<()> {
+        db_clear_personal_storage(&self.pool, script_uri, user_id).await
     }
 
     async fn get_script_privileged(&self, uri: &str) -> AppResult<Option<bool>> {
@@ -2269,6 +2603,61 @@ impl Repository for MemoryRepository {
         Ok(())
     }
 
+    async fn get_personal_storage(
+        &self,
+        script_uri: &str,
+        user_id: &str,
+        key: &str,
+    ) -> AppResult<Option<String>> {
+        let guard = safe_lock_personal_storage()?;
+        Ok(guard
+            .get(script_uri)
+            .and_then(|user_map| user_map.get(user_id))
+            .and_then(|key_map| key_map.get(key))
+            .cloned())
+    }
+
+    async fn set_personal_storage(
+        &self,
+        script_uri: &str,
+        user_id: &str,
+        key: &str,
+        value: &str,
+    ) -> AppResult<()> {
+        let mut guard = safe_lock_personal_storage()?;
+        guard
+            .entry(script_uri.to_string())
+            .or_insert_with(HashMap::new)
+            .entry(user_id.to_string())
+            .or_insert_with(HashMap::new)
+            .insert(key.to_string(), value.to_string());
+        Ok(())
+    }
+
+    async fn remove_personal_storage(
+        &self,
+        script_uri: &str,
+        user_id: &str,
+        key: &str,
+    ) -> AppResult<bool> {
+        let mut guard = safe_lock_personal_storage()?;
+        if let Some(user_map) = guard.get_mut(script_uri)
+            && let Some(key_map) = user_map.get_mut(user_id)
+        {
+            Ok(key_map.remove(key).is_some())
+        } else {
+            Ok(false)
+        }
+    }
+
+    async fn clear_personal_storage(&self, script_uri: &str, user_id: &str) -> AppResult<()> {
+        let mut guard = safe_lock_personal_storage()?;
+        if let Some(user_map) = guard.get_mut(script_uri) {
+            user_map.remove(user_id);
+        }
+        Ok(())
+    }
+
     async fn get_script_privileged(&self, uri: &str) -> AppResult<Option<bool>> {
         // Check overrides
         if let Ok(guard) = safe_lock_privilege_overrides()
@@ -2472,6 +2861,56 @@ impl Repository for UnifiedRepository {
         }
     }
 
+    async fn get_personal_storage(
+        &self,
+        script_uri: &str,
+        user_id: &str,
+        key: &str,
+    ) -> AppResult<Option<String>> {
+        match self {
+            Self::Postgres(repo) => repo.get_personal_storage(script_uri, user_id, key).await,
+            Self::Memory(repo) => repo.get_personal_storage(script_uri, user_id, key).await,
+        }
+    }
+
+    async fn set_personal_storage(
+        &self,
+        script_uri: &str,
+        user_id: &str,
+        key: &str,
+        value: &str,
+    ) -> AppResult<()> {
+        match self {
+            Self::Postgres(repo) => {
+                repo.set_personal_storage(script_uri, user_id, key, value)
+                    .await
+            }
+            Self::Memory(repo) => {
+                repo.set_personal_storage(script_uri, user_id, key, value)
+                    .await
+            }
+        }
+    }
+
+    async fn remove_personal_storage(
+        &self,
+        script_uri: &str,
+        user_id: &str,
+        key: &str,
+    ) -> AppResult<bool> {
+        match self {
+            Self::Postgres(repo) => repo.remove_personal_storage(script_uri, user_id, key).await,
+            Self::Memory(repo) => repo.remove_personal_storage(script_uri, user_id, key).await,
+        }
+    }
+
+    async fn clear_personal_storage(&self, script_uri: &str, user_id: &str) -> AppResult<()> {
+        match self {
+            Self::Postgres(repo) => repo.clear_personal_storage(script_uri, user_id).await,
+            Self::Memory(repo) => repo.clear_personal_storage(script_uri, user_id).await,
+        }
+    }
+
     async fn get_script_privileged(&self, uri: &str) -> AppResult<Option<bool>> {
         match self {
             Self::Postgres(repo) => repo.get_script_privileged(uri).await,
@@ -2583,6 +3022,115 @@ mod tests {
         // Test oversized value (simulate by creating a large string)
         let large_value = "x".repeat(1_000_001); // Just over 1MB
         assert!(set_shared_storage_item("test://script", "key", &large_value).is_err());
+    }
+
+    #[test]
+    fn test_personal_storage_operations() {
+        let script_uri = "test://personal-storage-script";
+        let user_id_1 = "user123";
+        let user_id_2 = "user456";
+        let key = "test_key";
+        let value1 = "test_value_1";
+        let value2 = "test_value_2";
+
+        // Test set item for user 1
+        assert!(set_personal_storage_item(script_uri, user_id_1, key, value1).is_ok());
+
+        // Test get item for user 1
+        let retrieved1 = get_personal_storage_item(script_uri, user_id_1, key);
+        assert_eq!(retrieved1, Some(value1.to_string()));
+
+        // Test set item for user 2 (same script, same key, different user)
+        assert!(set_personal_storage_item(script_uri, user_id_2, key, value2).is_ok());
+
+        // Test get item for user 2
+        let retrieved2 = get_personal_storage_item(script_uri, user_id_2, key);
+        assert_eq!(retrieved2, Some(value2.to_string()));
+
+        // Verify user 1's data is still separate
+        let still_user1 = get_personal_storage_item(script_uri, user_id_1, key);
+        assert_eq!(still_user1, Some(value1.to_string()));
+
+        // Test remove item for user 1
+        assert!(remove_personal_storage_item(script_uri, user_id_1, key));
+
+        // Verify item is gone for user 1
+        let retrieved_after_remove = get_personal_storage_item(script_uri, user_id_1, key);
+        assert_eq!(retrieved_after_remove, None);
+
+        // Verify user 2's data is still there
+        let user2_still_there = get_personal_storage_item(script_uri, user_id_2, key);
+        assert_eq!(user2_still_there, Some(value2.to_string()));
+
+        // Test clear storage for user 2
+        assert!(set_personal_storage_item(script_uri, user_id_2, "key1", "value1").is_ok());
+        assert!(set_personal_storage_item(script_uri, user_id_2, "key2", "value2").is_ok());
+
+        assert!(clear_personal_storage(script_uri, user_id_2).is_ok());
+
+        // Verify all items are gone for user 2
+        assert_eq!(get_personal_storage_item(script_uri, user_id_2, key), None);
+        assert_eq!(
+            get_personal_storage_item(script_uri, user_id_2, "key1"),
+            None
+        );
+        assert_eq!(
+            get_personal_storage_item(script_uri, user_id_2, "key2"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_personal_storage_validation() {
+        let script_uri = "test://script";
+        let user_id = "user123";
+
+        // Test empty script URI
+        assert!(set_personal_storage_item("", user_id, "key", "value").is_err());
+
+        // Test empty user ID
+        assert!(set_personal_storage_item(script_uri, "", "key", "value").is_err());
+
+        // Test empty key
+        assert!(set_personal_storage_item(script_uri, user_id, "", "value").is_err());
+
+        // Test oversized value (simulate by creating a large string)
+        let large_value = "x".repeat(1_000_001); // Just over 1MB
+        assert!(set_personal_storage_item(script_uri, user_id, "key", &large_value).is_err());
+    }
+
+    #[test]
+    fn test_personal_storage_user_isolation() {
+        let script_uri = "test://isolation-test";
+        let user1 = "alice";
+        let user2 = "bob";
+
+        // Both users set the same key in the same script
+        assert!(set_personal_storage_item(script_uri, user1, "pref", "dark").is_ok());
+        assert!(set_personal_storage_item(script_uri, user2, "pref", "light").is_ok());
+
+        // Each user should see only their own value
+        assert_eq!(
+            get_personal_storage_item(script_uri, user1, "pref"),
+            Some("dark".to_string())
+        );
+        assert_eq!(
+            get_personal_storage_item(script_uri, user2, "pref"),
+            Some("light".to_string())
+        );
+
+        // Removing user1's data shouldn't affect user2
+        assert!(remove_personal_storage_item(script_uri, user1, "pref"));
+        assert_eq!(get_personal_storage_item(script_uri, user1, "pref"), None);
+        assert_eq!(
+            get_personal_storage_item(script_uri, user2, "pref"),
+            Some("light".to_string())
+        );
+
+        // Clearing user2's data shouldn't affect anything (since user1 already removed)
+        assert!(clear_personal_storage(script_uri, user2).is_ok());
+        assert_eq!(get_personal_storage_item(script_uri, user2, "pref"), None);
+        assert_eq!(get_personal_storage_item(script_uri, user1, "pref"), None);
     }
 
     #[test]

@@ -571,6 +571,244 @@ function myHandler(req) {
 }
 ```
 
+## Storage APIs
+
+### sharedStorage
+
+Provides persistent key-value storage that is shared across all requests for a specific script. Data is script-scoped but accessible to all users.
+
+#### sharedStorage.getItem(key)
+
+Retrieves a value from shared storage.
+
+**Parameters:**
+
+- `key` (string): Storage key
+
+**Returns:** String value or `null` if key doesn't exist
+
+**Example:**
+
+```javascript
+function getCounter(context) {
+  const count = sharedStorage.getItem("counter") || "0";
+  return {
+    status: 200,
+    body: `Counter: ${count}`,
+    contentType: "text/plain; charset=UTF-8",
+  };
+}
+```
+
+#### sharedStorage.setItem(key, value)
+
+Stores a key-value pair in shared storage.
+
+**Parameters:**
+
+- `key` (string): Storage key (cannot be empty)
+- `value` (string): Value to store (max 1MB)
+
+**Returns:** Success message or error string
+
+**Example:**
+
+```javascript
+function incrementCounter(context) {
+  const count = parseInt(sharedStorage.getItem("counter") || "0");
+  const newCount = count + 1;
+  sharedStorage.setItem("counter", newCount.toString());
+  return {
+    status: 200,
+    body: `New count: ${newCount}`,
+    contentType: "text/plain; charset=UTF-8",
+  };
+}
+```
+
+#### sharedStorage.removeItem(key)
+
+Removes a key-value pair from shared storage.
+
+**Parameters:**
+
+- `key` (string): Storage key to remove
+
+**Returns:** Boolean - `true` if item was removed, `false` if it didn't exist
+
+**Example:**
+
+```javascript
+function resetCounter(context) {
+  const removed = sharedStorage.removeItem("counter");
+  return {
+    status: 200,
+    body: removed ? "Counter reset" : "Counter didn't exist",
+    contentType: "text/plain; charset=UTF-8",
+  };
+}
+```
+
+#### sharedStorage.clear()
+
+Removes all data for the current script from shared storage.
+
+**Returns:** Success message or error string
+
+**Example:**
+
+```javascript
+function clearAllData(context) {
+  sharedStorage.clear();
+  return {
+    status: 200,
+    body: "All shared storage cleared",
+    contentType: "text/plain; charset=UTF-8",
+  };
+}
+```
+
+### personalStorage
+
+Provides persistent key-value storage that is isolated per user. Each authenticated user has their own private storage namespace within each script. **Requires authentication** - all methods return errors or null when user is not logged in.
+
+#### personalStorage.getItem(key)
+
+Retrieves a value from the current user's personal storage.
+
+**Parameters:**
+
+- `key` (string): Storage key
+
+**Returns:** String value or `null` if key doesn't exist or user is not authenticated
+
+**Example:**
+
+```javascript
+function getUserPreference(context) {
+  const req = context.request;
+  const theme = personalStorage.getItem("theme") || "light";
+  return {
+    status: 200,
+    body: JSON.stringify({ theme }),
+    contentType: "application/json",
+  };
+}
+```
+
+#### personalStorage.setItem(key, value)
+
+Stores a key-value pair in the current user's personal storage.
+
+**Parameters:**
+
+- `key` (string): Storage key (cannot be empty)
+- `value` (string): Value to store (max 1MB)
+
+**Returns:** Success message or error string (error if not authenticated)
+
+**Example:**
+
+```javascript
+function saveUserPreference(context) {
+  const req = context.request;
+
+  // Requires authentication
+  if (!req.auth.isAuthenticated) {
+    return {
+      status: 401,
+      body: "Authentication required",
+      contentType: "text/plain; charset=UTF-8",
+    };
+  }
+
+  const theme = req.form.theme || "light";
+  const result = personalStorage.setItem("theme", theme);
+
+  if (result.startsWith("Error:")) {
+    return {
+      status: 500,
+      body: result,
+      contentType: "text/plain; charset=UTF-8",
+    };
+  }
+
+  return {
+    status: 200,
+    body: "Preference saved",
+    contentType: "text/plain; charset=UTF-8",
+  };
+}
+```
+
+#### personalStorage.removeItem(key)
+
+Removes a key-value pair from the current user's personal storage.
+
+**Parameters:**
+
+- `key` (string): Storage key to remove
+
+**Returns:** Boolean - `true` if item was removed, `false` if it didn't exist or user is not authenticated
+
+**Example:**
+
+```javascript
+function clearUserPreference(context) {
+  const removed = personalStorage.removeItem("theme");
+  return {
+    status: 200,
+    body: removed ? "Preference cleared" : "No preference found",
+    contentType: "text/plain; charset=UTF-8",
+  };
+}
+```
+
+#### personalStorage.clear()
+
+Removes all data for the current user in the current script from personal storage.
+
+**Returns:** Success message or error string (error if not authenticated)
+
+**Example:**
+
+```javascript
+function clearAllUserData(context) {
+  const req = context.request;
+
+  if (!req.auth.isAuthenticated) {
+    return {
+      status: 401,
+      body: "Authentication required",
+      contentType: "text/plain; charset=UTF-8",
+    };
+  }
+
+  personalStorage.clear();
+  return {
+    status: 200,
+    body: "All personal data cleared",
+    contentType: "text/plain; charset=UTF-8",
+  };
+}
+```
+
+**Use Cases for personalStorage:**
+
+- User preferences (theme, language, display settings)
+- Shopping cart contents
+- Form draft data
+- User-specific cache
+- Per-user feature flags
+- Personalized recommendations data
+
+**Security Notes:**
+
+- User ID is handled transparently by the engine - scripts never see user IDs directly
+- Each user can only access their own data
+- Data persists across sessions when PostgreSQL is configured
+- Unauthenticated requests cannot access personal storage
+
 ## HTTP Fetch
 
 ### fetch(url, options)

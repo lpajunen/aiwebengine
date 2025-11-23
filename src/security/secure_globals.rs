@@ -136,6 +136,9 @@ impl SecureGlobalContext {
         // Setup script storage functions
         self.setup_shared_storage_functions(ctx, script_uri)?;
 
+        // Setup personal storage functions
+        self.setup_personal_storage_functions(ctx, script_uri)?;
+
         // Always setup GraphQL functions, but they will be no-ops if disabled
         self.setup_graphql_functions(ctx, script_uri)?;
 
@@ -2688,6 +2691,279 @@ impl SecureGlobalContext {
 
         debug!(
             "sharedStorage JavaScript API initialized for script: {}",
+            script_uri
+        );
+
+        Ok(())
+    }
+
+    fn setup_personal_storage_functions(
+        &self,
+        ctx: &rquickjs::Ctx<'_>,
+        script_uri: &str,
+    ) -> JsResult<()> {
+        let global = ctx.globals();
+        let script_uri_owned = script_uri.to_string();
+
+        // Create the personalStorage namespace object
+        let personal_storage_obj = rquickjs::Object::new(ctx.clone())?;
+
+        // personalStorage.getItem(key) - Get a storage item for current user
+        let script_uri_get = script_uri_owned.clone();
+        let get_item = Function::new(
+            ctx.clone(),
+            move |ctx: rquickjs::Ctx<'_>, key: String| -> JsResult<Option<String>> {
+                debug!(
+                    "personalStorage.getItem called for script {} with key: {}",
+                    script_uri_get, key
+                );
+
+                // Try to get current request auth from context
+                let globals = ctx.globals();
+                let context_obj: rquickjs::Object = match globals.get("context") {
+                    Ok(v) => v,
+                    Err(_) => {
+                        warn!("personalStorage.getItem: no context available");
+                        return Ok(None);
+                    }
+                };
+
+                let request_obj: rquickjs::Object = match context_obj.get("request") {
+                    Ok(v) => v,
+                    Err(_) => {
+                        warn!("personalStorage.getItem: no request in context");
+                        return Ok(None);
+                    }
+                };
+
+                let auth_obj: rquickjs::Object = match request_obj.get("auth") {
+                    Ok(v) => v,
+                    Err(_) => {
+                        warn!("personalStorage.getItem: no auth in request");
+                        return Ok(None);
+                    }
+                };
+
+                let is_authenticated: bool = auth_obj.get("isAuthenticated").unwrap_or_default();
+
+                if !is_authenticated {
+                    return Ok(None);
+                }
+
+                let user_id: String = match auth_obj.get("userId") {
+                    Ok(Some(v)) => v,
+                    _ => return Ok(None),
+                };
+
+                Ok(crate::repository::get_personal_storage_item(
+                    &script_uri_get,
+                    &user_id,
+                    &key,
+                ))
+            },
+        )?;
+        personal_storage_obj.set("getItem", get_item)?;
+
+        // personalStorage.setItem(key, value) - Set a storage item for current user
+        let script_uri_set = script_uri_owned.clone();
+        let set_item =
+            Function::new(
+                ctx.clone(),
+                move |ctx: rquickjs::Ctx<'_>, key: String, value: String| -> JsResult<String> {
+                    debug!(
+                        "personalStorage.setItem called for script {} with key: {}",
+                        script_uri_set, key
+                    );
+
+                    // Try to get current request auth from context
+                    let globals = ctx.globals();
+                    let context_obj: rquickjs::Object =
+                        match globals.get("context") {
+                            Ok(v) => v,
+                            Err(_) => return Ok(
+                                "Error: Personal storage requires authentication. Please log in."
+                                    .to_string(),
+                            ),
+                        };
+
+                    let request_obj: rquickjs::Object =
+                        match context_obj.get("request") {
+                            Ok(v) => v,
+                            Err(_) => return Ok(
+                                "Error: Personal storage requires authentication. Please log in."
+                                    .to_string(),
+                            ),
+                        };
+
+                    let auth_obj: rquickjs::Object =
+                        match request_obj.get("auth") {
+                            Ok(v) => v,
+                            Err(_) => return Ok(
+                                "Error: Personal storage requires authentication. Please log in."
+                                    .to_string(),
+                            ),
+                        };
+
+                    let is_authenticated: bool =
+                        auth_obj.get("isAuthenticated").unwrap_or_default();
+
+                    if !is_authenticated {
+                        return Ok(
+                            "Error: Personal storage requires authentication. Please log in."
+                                .to_string(),
+                        );
+                    }
+
+                    let user_id: String =
+                        match auth_obj.get("userId") {
+                            Ok(Some(v)) => v,
+                            _ => return Ok(
+                                "Error: Personal storage requires authentication. Please log in."
+                                    .to_string(),
+                            ),
+                        };
+
+                    // Validate inputs
+                    if key.trim().is_empty() {
+                        return Ok("Error: Key cannot be empty".to_string());
+                    }
+
+                    if value.len() > 1_000_000 {
+                        return Ok("Error: Value too large (>1MB)".to_string());
+                    }
+
+                    match crate::repository::set_personal_storage_item(
+                        &script_uri_set,
+                        &user_id,
+                        &key,
+                        &value,
+                    ) {
+                        Ok(()) => Ok("Item set successfully".to_string()),
+                        Err(e) => Ok(format!("Error setting item: {}", e)),
+                    }
+                },
+            )?;
+        personal_storage_obj.set("setItem", set_item)?;
+
+        // personalStorage.removeItem(key) - Remove a storage item for current user
+        let script_uri_remove = script_uri_owned.clone();
+        let remove_item = Function::new(
+            ctx.clone(),
+            move |ctx: rquickjs::Ctx<'_>, key: String| -> JsResult<bool> {
+                debug!(
+                    "personalStorage.removeItem called for script {} with key: {}",
+                    script_uri_remove, key
+                );
+
+                // Try to get current request auth from context
+                let globals = ctx.globals();
+                let context_obj: rquickjs::Object = match globals.get("context") {
+                    Ok(v) => v,
+                    Err(_) => return Ok(false),
+                };
+
+                let request_obj: rquickjs::Object = match context_obj.get("request") {
+                    Ok(v) => v,
+                    Err(_) => return Ok(false),
+                };
+
+                let auth_obj: rquickjs::Object = match request_obj.get("auth") {
+                    Ok(v) => v,
+                    Err(_) => return Ok(false),
+                };
+
+                let is_authenticated: bool = auth_obj.get("isAuthenticated").unwrap_or_default();
+
+                if !is_authenticated {
+                    return Ok(false);
+                }
+
+                let user_id: String = match auth_obj.get("userId") {
+                    Ok(Some(v)) => v,
+                    _ => return Ok(false),
+                };
+
+                Ok(crate::repository::remove_personal_storage_item(
+                    &script_uri_remove,
+                    &user_id,
+                    &key,
+                ))
+            },
+        )?;
+        personal_storage_obj.set("removeItem", remove_item)?;
+
+        // personalStorage.clear() - Clear all items for current user
+        let script_uri_clear = script_uri_owned.clone();
+        let clear_storage =
+            Function::new(
+                ctx.clone(),
+                move |ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
+                    debug!(
+                        "personalStorage.clear called for script {}",
+                        script_uri_clear
+                    );
+
+                    // Try to get current request auth from context
+                    let globals = ctx.globals();
+                    let context_obj: rquickjs::Object =
+                        match globals.get("context") {
+                            Ok(v) => v,
+                            Err(_) => return Ok(
+                                "Error: Personal storage requires authentication. Please log in."
+                                    .to_string(),
+                            ),
+                        };
+
+                    let request_obj: rquickjs::Object =
+                        match context_obj.get("request") {
+                            Ok(v) => v,
+                            Err(_) => return Ok(
+                                "Error: Personal storage requires authentication. Please log in."
+                                    .to_string(),
+                            ),
+                        };
+
+                    let auth_obj: rquickjs::Object =
+                        match request_obj.get("auth") {
+                            Ok(v) => v,
+                            Err(_) => return Ok(
+                                "Error: Personal storage requires authentication. Please log in."
+                                    .to_string(),
+                            ),
+                        };
+
+                    let is_authenticated: bool =
+                        auth_obj.get("isAuthenticated").unwrap_or_default();
+
+                    if !is_authenticated {
+                        return Ok(
+                            "Error: Personal storage requires authentication. Please log in."
+                                .to_string(),
+                        );
+                    }
+
+                    let user_id: String =
+                        match auth_obj.get("userId") {
+                            Ok(Some(v)) => v,
+                            _ => return Ok(
+                                "Error: Personal storage requires authentication. Please log in."
+                                    .to_string(),
+                            ),
+                        };
+
+                    match crate::repository::clear_personal_storage(&script_uri_clear, &user_id) {
+                        Ok(()) => Ok("Storage cleared successfully".to_string()),
+                        Err(e) => Ok(format!("Error clearing storage: {}", e)),
+                    }
+                },
+            )?;
+        personal_storage_obj.set("clear", clear_storage)?;
+
+        // Set the personalStorage object on the global scope
+        global.set("personalStorage", personal_storage_obj)?;
+
+        debug!(
+            "personalStorage JavaScript API initialized for script: {}",
             script_uri
         );
 

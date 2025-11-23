@@ -1181,14 +1181,25 @@ AVAILABLE JAVASCRIPT APIs:
    - Each script has its own isolated storage namespace
    - Data persists across requests and server restarts (when PostgreSQL configured)
 
-4. secretStorage - Read-only access to check secret availability
+4. personalStorage - Persistent key-value storage per script per user
+   - personalStorage.getItem(key) - Get stored value for current user (returns string or null)
+   - personalStorage.setItem(key, value) - Store key-value pair for current user (returns success message)
+   - personalStorage.removeItem(key) - Delete key-value pair for current user (returns boolean)
+   - personalStorage.clear() - Remove all data for current user in this script (returns success message)
+   - Each authenticated user has their own isolated storage namespace within each script
+   - REQUIRES AUTHENTICATION: All methods return errors/null when user is not logged in
+   - User ID is handled transparently by the engine - scripts never see user IDs directly
+   - Data persists across requests and server restarts (when PostgreSQL configured)
+   - Use for: user preferences, shopping carts, personalized settings, per-user state
+
+5. secretStorage - Read-only access to check secret availability
    - secretStorage.exists(identifier) - Check if a secret exists (returns boolean)
    - secretStorage.list() - List all secret identifiers (returns array of strings)
    - SECURITY: Secret values are NEVER exposed to JavaScript
    - Use {{secret:identifier}} syntax in fetch() headers to inject secret values
    - identifier: string (secret name)
 
-5. convert - Markdown to HTML conversion functions
+6. convert - Markdown to HTML conversion functions
    - convert.markdown_to_html(markdown) - Convert markdown string to HTML
    - markdown: string (markdown content, max 1MB)
    - Returns: string (HTML output or error message starting with "Error:")
@@ -1204,13 +1215,13 @@ AVAILABLE JAVASCRIPT APIs:
    - Use for: dynamic HTML generation, email templates, configuration files
    - Example: const html = convert.render_handlebars_template('<h1>{{title}}</h1><p>{{content}}</p>', '{"title": "Hello", "content": "World"}');
 
-6. fetch(url, options) - Make HTTP requests to external APIs
+7. fetch(url, options) - Make HTTP requests to external APIs
    - url: string
    - options: JSON string with {method, headers, body, timeout_ms}
    - Supports {{secret:identifier}} in headers for secure API keys
    - Returns: JSON string with {status, ok, headers, body}
 
-7. graphQLRegistry - Object containing all GraphQL-related functions:
+8. graphQLRegistry - Object containing all GraphQL-related functions:
    
    graphQLRegistry.registerQuery(name, schema, resolverName) - Register GraphQL query
    - name: string (query name)
