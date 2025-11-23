@@ -2187,20 +2187,14 @@ impl Repository for PostgresRepository {
     }
 
     async fn get_all_script_metadata(&self) -> AppResult<Vec<ScriptMetadata>> {
-        let mut all_scripts = get_static_scripts();
-
-        // Fetch scripts from database and merge (DB overrides static)
+        // Fetch scripts from database only (no static scripts for Postgres)
         let db_scripts = self.list_scripts().await?;
-        for (uri, content) in db_scripts {
-            all_scripts.insert(uri, content);
-        }
-
         let mut metadata_list = Vec::new();
 
         // Scope for mutex lock
         {
             let mut guard = safe_lock_scripts()?;
-            for (uri, content) in all_scripts {
+            for (uri, content) in db_scripts {
                 if let Some(cached) = guard.get(&uri) {
                     // Use cached version to preserve runtime state
                     metadata_list.push(cached.clone());
