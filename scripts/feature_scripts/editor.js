@@ -1271,6 +1271,18 @@ AVAILABLE JAVASCRIPT APIs:
 
   Scheduled handlers run with admin privileges and receive context.meta.schedule containing jobId, name, type (one-off/recurring), scheduledFor (UTC timestamp), and intervalSeconds (null for one-off jobs).
 
+9. dispatcher - Inter-script message passing for event-driven communication
+
+  dispatcher.registerListener(messageType, handlerName) - Register handler for message type
+  - messageType: string (event identifier like 'user:created', 'order:completed')
+  - handlerName: string (name of handler function in this script)
+  
+  dispatcher.sendMessage(messageType, messageData) - Broadcast message to all registered listeners
+  - messageType: string (event identifier)
+  - messageData: string (JSON string with event data)
+  
+  Message handlers receive context.messageType and context.messageData. Use dispatcher for event-driven coordination between scripts without tight coupling. Example: user-service.js sends 'user:created' message, email-notifications.js and analytics.js both listen and react independently.
+
 RESPONSE FORMAT - YOU MUST RESPOND WITH ONLY THIS JSON STRUCTURE:
 
 For scripts:

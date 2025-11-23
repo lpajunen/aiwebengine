@@ -1593,6 +1593,10 @@ pub fn bootstrap_scripts() -> AppResult<()> {
                 "https://example.com/graphql_test",
                 include_str!("../scripts/test_scripts/graphql_test.js"),
             ));
+            all_scripts.push((
+                "https://example.com/dispatcher_test",
+                include_str!("../scripts/test_scripts/dispatcher_test.js"),
+            ));
         }
 
         let result = run_blocking(async {
@@ -1775,6 +1779,11 @@ fn get_static_scripts() -> HashMap<String, String> {
         m.insert(
             "https://example.com/graphql_test".to_string(),
             graphql_test.to_string(),
+        );
+        let dispatcher_test = include_str!("../scripts/test_scripts/dispatcher_test.js");
+        m.insert(
+            "https://example.com/dispatcher_test".to_string(),
+            dispatcher_test.to_string(),
         );
     }
 

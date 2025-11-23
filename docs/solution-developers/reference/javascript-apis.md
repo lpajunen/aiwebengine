@@ -1798,6 +1798,263 @@ Tips:
 2. Keep scheduled handlers idempotent—if the engine restarts, missed jobs resume on the next interval.
 3. Log meaningful progress or failures. The engine also records `FATAL` log entries when a scheduled handler throws.
 
+## Message Dispatcher
+
+The `dispatcher` object enables internal communication between scripts through a publish-subscribe pattern. This allows scripts to coordinate actions, share events, and decouple their logic without making HTTP requests or using external systems.
+
+### Why Use the Dispatcher?
+
+- **Decouple scripts**: Scripts can notify others of events without knowing who's listening
+- **Event-driven architecture**: Build reactive systems where scripts respond to domain events
+- **Performance**: In-process messaging is faster than HTTP calls between scripts
+- **Flexibility**: Add new listeners without modifying event publishers
+
+### Use Cases
+
+- User management script notifies presence tracker when users join/leave
+- Content creation script broadcasts new post events to notification scripts
+- Asset processing script signals completion to dependent workflows
+- Chat group script informs search indexer about new messages
+
+### dispatcher.registerListener(messageType, handlerName)
+
+Registers a handler function to receive messages of a specific type.
+
+**Parameters:**
+
+- `messageType` (string, required): The type of message to listen for (e.g., `"user.created"`, `"message.sent"`)
+- `handlerName` (string, required): Name of the handler function that will process messages
+
+**Returns:** String describing registration result
+
+**Handler Signature:**
+
+Message handlers receive a `context` object with:
+
+- `context.messageType`: The message type string
+- `context.messageData`: The message data object (already parsed from JSON)
+
+**Example:**
+
+```javascript
+function handleUserCreated(context) {
+  const userData = context.messageData;
+  console.log(`New user created: ${userData.username} (${userData.email})`);
+
+  // Perform actions in response to the event
+  // e.g., send welcome email, update analytics, etc.
+}
+
+function init(context) {
+  // Register listener during script initialization
+  dispatcher.registerListener("user.created", "handleUserCreated");
+
+  return { success: true };
+}
+```
+
+**Notes:**
+
+- Multiple scripts can register listeners for the same message type
+- A single script can register multiple handlers for the same message type
+- Listeners are scoped to the script that registered them
+- Registration typically happens in the `init()` function
+
+### dispatcher.sendMessage(messageType, messageData)
+
+Sends a message to all registered listeners for a specific message type.
+
+**Parameters:**
+
+- `messageType` (string, required): The type of message to send
+- `messageData` (string, optional): JSON string containing message data. Defaults to `"{}"`
+
+**Returns:** String with dispatch statistics (successful/failed handler invocations)
+
+**Example:**
+
+```javascript
+function createUserHandler(context) {
+  const req = context.request;
+  const { username, email } = req.form;
+
+  // Create the user (database operation, etc.)
+  const userId = saveUserToDatabase(username, email);
+
+  // Notify other scripts about the new user
+  const messageData = JSON.stringify({
+    userId: userId,
+    username: username,
+    email: email,
+    createdAt: new Date().toISOString(),
+  });
+
+  const result = dispatcher.sendMessage("user.created", messageData);
+  console.log(`User creation event: ${result}`);
+
+  return {
+    status: 200,
+    body: JSON.stringify({ success: true, userId: userId }),
+    contentType: "application/json",
+  };
+}
+
+routeRegistry.registerRoute("/users", "createUserHandler", "POST");
+```
+
+**Message Delivery:**
+
+- Messages are delivered synchronously to all registered handlers
+- Handlers execute in separate contexts to prevent interference
+- If a handler throws an error, other handlers still execute
+- Failed handler invocations are logged but don't fail the `sendMessage()` call
+- Returns a summary of successful/failed deliveries
+
+### Complete Example: User Activity System
+
+```javascript
+/**
+ * User Service Script - Manages user accounts
+ */
+
+function createUser(context) {
+  const req = context.request;
+  const { username, email } = req.form;
+
+  // Store user in database
+  const userId = sharedStorage.get("nextUserId") || "1";
+  sharedStorage.set("user:" + userId, JSON.stringify({ username, email }));
+  sharedStorage.set("nextUserId", String(parseInt(userId) + 1));
+
+  // Broadcast user creation event
+  dispatcher.sendMessage(
+    "user.created",
+    JSON.stringify({
+      userId: userId,
+      username: username,
+      email: email,
+      timestamp: new Date().toISOString(),
+    }),
+  );
+
+  return {
+    status: 201,
+    body: JSON.stringify({ success: true, userId: userId }),
+    contentType: "application/json",
+  };
+}
+
+function init(context) {
+  routeRegistry.registerRoute("/users", "createUser", "POST");
+  return { success: true };
+}
+```
+
+```javascript
+/**
+ * Analytics Script - Tracks user activity
+ */
+
+function onUserCreated(context) {
+  const userData = context.messageData;
+  console.log(
+    `Analytics: New user ${userData.username} created at ${userData.timestamp}`,
+  );
+
+  // Update metrics
+  const totalUsers = parseInt(sharedStorage.get("metrics:totalUsers") || "0");
+  sharedStorage.set("metrics:totalUsers", String(totalUsers + 1));
+}
+
+function init(context) {
+  // Listen for user creation events
+  dispatcher.registerListener("user.created", "onUserCreated");
+  return { success: true };
+}
+```
+
+```javascript
+/**
+ * Notification Script - Sends welcome messages
+ */
+
+function onUserCreated(context) {
+  const userData = context.messageData;
+
+  // Send welcome notification
+  routeRegistry.sendStreamMessage("/notifications", {
+    type: "welcome",
+    userId: userData.userId,
+    message: `Welcome ${userData.username}!`,
+    timestamp: new Date().toISOString(),
+  });
+
+  console.log(`Sent welcome notification to user ${userData.username}`);
+}
+
+function init(context) {
+  // Register stream and listener
+  routeRegistry.registerStreamRoute("/notifications");
+  dispatcher.registerListener("user.created", "onUserCreated");
+  return { success: true };
+}
+```
+
+### Dispatcher Best Practices
+
+1. **Use descriptive message types**: Follow a naming convention like `"domain.action"` (e.g., `"user.created"`, `"message.sent"`, `"order.completed"`)
+
+2. **JSON-serialize message data**: Always pass message data as a JSON string:
+
+   ```javascript
+   dispatcher.sendMessage("event.name", JSON.stringify({ key: "value" }));
+   ```
+
+3. **Register in init()**: Set up listeners in your script's `init()` function so they're established at startup
+
+4. **Handle errors**: Message handlers should catch and log errors to prevent disrupting the dispatcher:
+
+   ```javascript
+   function handleMessage(context) {
+     try {
+       // Process message
+     } catch (error) {
+       console.log(`Error handling message: ${error.message}`);
+     }
+   }
+   ```
+
+5. **Keep handlers lightweight**: Handlers run synchronously, so avoid long-running operations
+
+6. **Document your events**: Maintain a list of message types your scripts publish and consume
+
+### Dispatcher vs. Other Communication Methods
+
+**Use dispatcher when:**
+
+- Scripts need to react to domain events
+- You want loose coupling between scripts
+- Events should fan out to multiple listeners
+- Communication is within the same server instance
+
+**Use HTTP routes when:**
+
+- External clients need to trigger actions
+- You need request/response semantics
+- Operations are user-initiated or require authentication
+
+**Use streams when:**
+
+- Pushing real-time updates to external clients
+- Broadcasting to web browsers or other HTTP consumers
+- Need Server-Sent Events (SSE) functionality
+
+**Use shared storage when:**
+
+- Scripts need to persist data
+- Coordinating state across requests
+- Caching computed values
+
 ## Error Handling
 
 Scripts run in a sandboxed environment. If a script throws an error:

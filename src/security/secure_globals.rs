@@ -148,6 +148,9 @@ impl SecureGlobalContext {
         // Setup scheduler service bindings
         self.setup_scheduler_functions(ctx, script_uri)?;
 
+        // Setup message dispatcher bindings
+        self.setup_dispatcher_functions(ctx, script_uri)?;
+
         Ok(())
     }
 
@@ -3323,6 +3326,239 @@ impl SecureGlobalContext {
         debug!("User management functions initialized (admin-only)");
         Ok(())
     }
+
+    /// Setup message dispatcher functions for inter-script communication
+    fn setup_dispatcher_functions(
+        &self,
+        ctx: &rquickjs::Ctx<'_>,
+        script_uri: &str,
+    ) -> JsResult<()> {
+        let global = ctx.globals();
+        let dispatcher_obj = rquickjs::Object::new(ctx.clone())?;
+
+        // registerListener(messageType, handlerName)
+        let script_uri_register = script_uri.to_string();
+        let register_listener = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  message_type: String,
+                  handler_name: String|
+                  -> JsResult<String> {
+                // Validate inputs
+                if message_type.is_empty() {
+                    return Ok(
+                        "dispatcher.registerListener: message type cannot be empty".to_string()
+                    );
+                }
+                if handler_name.is_empty() {
+                    return Ok(
+                        "dispatcher.registerListener: handler name cannot be empty".to_string()
+                    );
+                }
+
+                // Register the listener
+                match crate::dispatcher::GLOBAL_DISPATCHER.register_listener(
+                    message_type.clone(),
+                    script_uri_register.clone(),
+                    handler_name.clone(),
+                ) {
+                    Ok(()) => {
+                        debug!(
+                            "Registered listener for message type '{}' in script '{}': handler={}",
+                            message_type, script_uri_register, handler_name
+                        );
+                        Ok(format!(
+                            "Registered listener for message type '{}': handler '{}'",
+                            message_type, handler_name
+                        ))
+                    }
+                    Err(e) => {
+                        error!(
+                            "Failed to register listener for message type '{}' in script '{}': {}",
+                            message_type, script_uri_register, e
+                        );
+                        Ok(format!("Failed to register listener: {}", e))
+                    }
+                }
+            },
+        )?;
+
+        // sendMessage(messageType, messageData)
+        // Note: messageData should be a JSON string or will be converted to empty object
+        let send_message = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  message_type: String,
+                  message_data_json: Opt<String>|
+                  -> JsResult<String> {
+                // Validate message type
+                if message_type.is_empty() {
+                    return Ok("dispatcher.sendMessage: message type cannot be empty".to_string());
+                }
+
+                // Get message data as JSON string
+                let message_data_json = message_data_json.0.unwrap_or_else(|| "{}".to_string());
+
+                // Get listeners for this message type
+                let listeners =
+                    match crate::dispatcher::GLOBAL_DISPATCHER.get_listeners(&message_type) {
+                        Ok(listeners) => listeners,
+                        Err(e) => {
+                            error!(
+                                "Failed to get listeners for message type '{}': {}",
+                                message_type, e
+                            );
+                            return Ok(format!("Failed to get listeners: {}", e));
+                        }
+                    };
+
+                if listeners.is_empty() {
+                    debug!(
+                        "No listeners registered for message type '{}'",
+                        message_type
+                    );
+                    return Ok(format!("No listeners for message type '{}'", message_type));
+                }
+
+                debug!(
+                    "Dispatching message type '{}' to {} listener(s)",
+                    message_type,
+                    listeners.len()
+                );
+
+                // Invoke each listener handler
+                let mut successful = 0;
+                let mut failed = 0;
+
+                for listener in listeners.iter() {
+                    debug!(
+                        "Invoking handler '{}' in script '{}' for message type '{}'",
+                        listener.handler_name, listener.script_uri, message_type
+                    );
+
+                    // Load the script content
+                    let script_content = match repository::fetch_script(&listener.script_uri) {
+                        Some(content) => content,
+                        None => {
+                            warn!(
+                                "Script '{}' not found for handler '{}'",
+                                listener.script_uri, listener.handler_name
+                            );
+                            failed += 1;
+                            continue;
+                        }
+                    };
+
+                    // Execute the handler in a new context
+                    match execute_message_handler(
+                        &listener.script_uri,
+                        &script_content,
+                        &listener.handler_name,
+                        &message_type,
+                        &message_data_json,
+                    ) {
+                        Ok(_) => {
+                            debug!(
+                                "Successfully invoked handler '{}' in script '{}'",
+                                listener.handler_name, listener.script_uri
+                            );
+                            successful += 1;
+                        }
+                        Err(e) => {
+                            error!(
+                                "Failed to invoke handler '{}' in script '{}': {}",
+                                listener.handler_name, listener.script_uri, e
+                            );
+                            failed += 1;
+                        }
+                    }
+                }
+
+                Ok(format!(
+                    "Dispatched message type '{}': {} successful, {} failed",
+                    message_type, successful, failed
+                ))
+            },
+        )?;
+
+        dispatcher_obj.set("registerListener", register_listener)?;
+        dispatcher_obj.set("sendMessage", send_message)?;
+        global.set("dispatcher", dispatcher_obj)?;
+
+        debug!("Dispatcher functions initialized");
+        Ok(())
+    }
+}
+
+/// Execute a message handler function in a script
+fn execute_message_handler(
+    script_uri: &str,
+    script_content: &str,
+    handler_name: &str,
+    message_type: &str,
+    message_data_json: &str,
+) -> Result<(), String> {
+    use rquickjs::{Context, Runtime};
+
+    // Create a new runtime and context for handler execution
+    let rt = Runtime::new().map_err(|e| format!("Failed to create runtime: {}", e))?;
+    let ctx = Context::full(&rt).map_err(|e| format!("Failed to create context: {}", e))?;
+
+    ctx.with(|ctx| -> Result<(), String> {
+        // Set up minimal secure global functions for handler execution
+        let user_context = UserContext::admin("dispatcher".to_string());
+        let security_config = GlobalSecurityConfig {
+            enable_graphql_registration: false,
+            enable_asset_management: false,
+            enable_streams: false,
+            enable_script_management: false,
+            enable_scheduler: false,
+            enable_logging: true,
+            enable_secrets: false,
+            enforce_strict_validation: false,
+            enable_audit_logging: false,
+        };
+
+        let secure_context = SecureGlobalContext::new_with_config(user_context, security_config);
+        secure_context
+            .setup_secure_functions(&ctx, script_uri, None)
+            .map_err(|e| format!("Failed to setup secure functions: {}", e))?;
+
+        // Evaluate the script
+        ctx.eval::<(), _>(script_content)
+            .map_err(|e| format!("Script evaluation failed: {}", e))?;
+
+        // Parse message data back to JavaScript value
+        let message_data_value: rquickjs::Value = ctx
+            .json_parse(message_data_json)
+            .map_err(|e| format!("Failed to parse message data: {}", e))?;
+
+        // Create context object with message data
+        let context_obj = rquickjs::Object::new(ctx.clone())
+            .map_err(|e| format!("Failed to create context object: {}", e))?;
+        context_obj
+            .set("messageType", message_type)
+            .map_err(|e| format!("Failed to set messageType: {}", e))?;
+        context_obj
+            .set("messageData", message_data_value)
+            .map_err(|e| format!("Failed to set messageData: {}", e))?;
+
+        // Get the handler function
+        let global = ctx.globals();
+        let handler: rquickjs::Function = global
+            .get(handler_name)
+            .map_err(|e| format!("Handler function '{}' not found: {}", handler_name, e))?;
+
+        // Call the handler with the context
+        handler
+            .call::<_, ()>((context_obj,))
+            .map_err(|e| format!("Handler execution failed: {}", e))?;
+
+        Ok(())
+    })
+    .map_err(|e| format!("Context execution failed: {}", e))?;
+
+    Ok(())
 }
 
 fn ensure_scheduler_privileged(script_uri: &str) -> Result<(), String> {
