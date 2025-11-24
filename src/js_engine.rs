@@ -846,6 +846,9 @@ pub fn execute_script_for_request_secure(
             .build(&ctx)
             .map_err(|e| format!("build context: {}", e))?;
 
+        // Set context as a global variable so personalStorage and other APIs can access it
+        global.set("context", handler_context.clone()).map_err(|e| format!("set context global: {}", e))?;
+
         // Call the handler function
         let result: Value = func.call::<_, Value>((handler_context,)).map_err(|e| {
             let details = extract_error_details(&ctx, &e);
@@ -1012,6 +1015,12 @@ pub fn execute_script_for_request(
                 .build(&ctx)
                 .map_err(|e| format!("build context: {}", e))?;
 
+            // Set context as a global variable so personalStorage and other APIs can access it
+            let global = ctx.globals();
+            global
+                .set("context", handler_context.clone())
+                .map_err(|e| format!("set context global: {}", e))?;
+
             let val = func
                 .call::<_, Value>((handler_context,))
                 .map_err(|e| format!("call error: {}", e))?;
@@ -1096,6 +1105,11 @@ pub fn execute_scheduled_handler(
             .with_metadata_value("schedule", schedule_meta)
             .build(&ctx)
             .map_err(|e| format!("build context: {}", e))?;
+
+        // Set context as a global variable so personalStorage and other APIs can access it
+        global
+            .set("context", handler_context.clone())
+            .map_err(|e| format!("set context global: {}", e))?;
 
         func.call::<_, Value>((handler_context,)).map_err(|e| {
             let details = extract_error_details(&ctx, &e);
@@ -1191,6 +1205,10 @@ pub fn execute_graphql_resolver(params: GraphqlResolverExecutionParams) -> Resul
         }
 
         let handler_context = context_builder.build(&ctx)?;
+
+        // Set context as a global variable so personalStorage and other APIs can access it
+        let global = ctx.globals();
+        global.set("context", handler_context.clone())?;
 
         let result_value = resolver_func.call::<_, rquickjs::Value>((handler_context,))?;
 
@@ -1306,9 +1324,13 @@ pub fn execute_stream_customization_function(
 
             let handler_context = context_builder.build(&ctx)?;
 
+            // Set context as a global variable so personalStorage and other APIs can access it
+            let global = ctx.globals();
+            global.set("context", handler_context.clone())?;
+
             // Get the customization function
             let customization_func: rquickjs::Function =
-                ctx.globals().get(&function_name_owned).map_err(|_| {
+                global.get(&function_name_owned).map_err(|_| {
                     let msg = format!("'{}' not found", function_name_owned);
                     rquickjs::Error::new_from_js("Function", msg.leak())
                 })?;
