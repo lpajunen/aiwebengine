@@ -611,6 +611,7 @@ async fn test_secure_request_execution() {
         raw_body: None,
         headers: HashMap::new(),
         user_context,
+        route_params: None,
         auth_context: None,
     };
     let request_result = execute_script_for_request_secure(request_params);

@@ -117,6 +117,8 @@ pub struct RequestExecutionParams {
     pub user_context: UserContext,
     /// Optional OAuth authentication context for JavaScript auth API
     pub auth_context: Option<crate::auth::JsAuthContext>,
+    /// Route parameters extracted from path patterns like /users/:id
+    pub route_params: Option<HashMap<String, String>>,
 }
 
 /// Kinds of handler invocations supported by the runtime.
@@ -154,6 +156,8 @@ pub struct JsRequestContext {
     pub query_params: HashMap<String, String>,
     pub form_data: HashMap<String, String>,
     pub body: Option<String>,
+    /// Route parameters extracted from path patterns like /users/:id
+    pub route_params: HashMap<String, String>,
 }
 
 /// Builder that assembles the single context object passed to all handlers.
@@ -259,8 +263,18 @@ impl JsHandlerContextBuilder {
         }
         request_obj.set("form", form_obj)?;
 
+        // Route params
+        let route_obj = rquickjs::Object::new(ctx.clone())?;
+        for (key, value) in &request.route_params {
+            route_obj.set(key.as_str(), value.as_str())?;
+        }
+        request_obj.set("params", route_obj)?;
+
+        // Body
         if let Some(body) = &request.body {
-            request_obj.set("body", body)?;
+            request_obj.set("body", body.as_str())?;
+        } else {
+            request_obj.set("body", rquickjs::Value::new_null(ctx.clone()))?;
         }
 
         if let Some(auth_ctx) = auth_context {
@@ -817,6 +831,7 @@ pub fn execute_script_for_request_secure(
             query_params: params.query_params.clone().unwrap_or_default(),
             form_data: params.form_data.clone().unwrap_or_default(),
             body: params.raw_body.clone(),
+            route_params: params.route_params.clone().unwrap_or_default(),
         };
 
         let mut context_builder = JsHandlerContextBuilder::new(HandlerInvocationKind::HttpRoute)
@@ -983,6 +998,7 @@ pub fn execute_script_for_request(
                 query_params: query_params.cloned().unwrap_or_default(),
                 form_data: form_data.cloned().unwrap_or_default(),
                 body: raw_body.clone(),
+                route_params: HashMap::new(),
             };
 
             let mut context_builder =
@@ -1151,6 +1167,7 @@ pub fn execute_graphql_resolver(params: GraphqlResolverExecutionParams) -> Resul
             query_params: HashMap::new(),
             form_data: HashMap::new(),
             body: None,
+            route_params: HashMap::new(),
         };
 
         let mut context_builder =
@@ -1264,6 +1281,7 @@ pub fn execute_stream_customization_function(
                 query_params: query_params_owned.clone(),
                 form_data: HashMap::new(),
                 body: None,
+                route_params: HashMap::new(),
             };
 
             let mut context_builder =
@@ -2107,6 +2125,7 @@ mod tests {
             raw_body: None,
             headers: HashMap::new(),
             user_context: UserContext::admin("test".to_string()),
+            route_params: None,
             auth_context: None,
         };
         let result = execute_script_for_request_secure(params);
@@ -2139,6 +2158,7 @@ mod tests {
             raw_body: None,
             headers: HashMap::new(),
             user_context: UserContext::admin("test".to_string()),
+            route_params: None,
             auth_context: None,
         };
         let result = execute_script_for_request_secure(params);
@@ -2172,6 +2192,7 @@ mod tests {
             raw_body: None,
             headers: HashMap::new(),
             user_context: UserContext::admin("test".to_string()),
+            route_params: None,
             auth_context: None,
         };
         let result = execute_script_for_request_secure(params);
@@ -2210,6 +2231,7 @@ This is **bold** text.`;
             raw_body: None,
             headers: HashMap::new(),
             user_context: UserContext::admin("test".to_string()),
+            route_params: None,
             auth_context: None,
         };
         let result = execute_script_for_request_secure(params);
@@ -2255,6 +2277,7 @@ This is **bold** text.`;
             raw_body: None,
             headers: HashMap::new(),
             user_context: UserContext::admin("test".to_string()),
+            route_params: None,
             auth_context: None,
         };
         let result = execute_script_for_request_secure(params);
@@ -2297,6 +2320,7 @@ This is **bold** text.`;
             raw_body: None,
             headers: HashMap::new(),
             user_context: UserContext::admin("test".to_string()),
+            route_params: None,
             auth_context: None,
         };
         let result = execute_script_for_request_secure(params);
@@ -2339,6 +2363,7 @@ This is **bold** text.`;
             raw_body: None,
             headers: HashMap::new(),
             user_context: UserContext::admin("test".to_string()),
+            route_params: None,
             auth_context: None,
         };
         let result = execute_script_for_request_secure(params);
@@ -2385,6 +2410,7 @@ This is **bold** text.`;
             raw_body: None,
             headers: HashMap::new(),
             user_context: UserContext::admin("test".to_string()),
+            route_params: None,
             auth_context: None,
         };
         let result = execute_script_for_request_secure(params);
@@ -2445,6 +2471,7 @@ function hello() {
             raw_body: None,
             headers: HashMap::new(),
             user_context: UserContext::admin("test".to_string()),
+            route_params: None,
             auth_context: None,
         };
         let result = execute_script_for_request_secure(params);

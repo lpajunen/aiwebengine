@@ -401,8 +401,36 @@ async fn handle_stream_request(req: Request<Body>) -> Response {
     sse.into_response()
 }
 
+/// Match a route pattern with parameters against a path
+/// Returns extracted parameters if the pattern matches
+fn match_route_pattern(pattern: &str, path: &str) -> Option<HashMap<String, String>> {
+    let pattern_parts: Vec<&str> = pattern.split('/').filter(|s| !s.is_empty()).collect();
+    let path_parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+
+    if pattern_parts.len() != path_parts.len() {
+        return None;
+    }
+
+    let mut params = HashMap::new();
+
+    for (pattern_part, path_part) in pattern_parts.iter().zip(path_parts.iter()) {
+        if let Some(param_name) = pattern_part.strip_prefix(':') {
+            // This is a parameter
+            params.insert(param_name.to_string(), path_part.to_string());
+        } else if *pattern_part != *path_part {
+            // Literal parts must match exactly
+            return None;
+        }
+    }
+
+    Some(params)
+}
+
 /// Dynamically find a route handler by checking cached registrations from init()
-fn find_route_handler(path: &str, method: &str) -> Option<(String, String)> {
+fn find_route_handler(
+    path: &str,
+    method: &str,
+) -> Option<(String, String, HashMap<String, String>)> {
     // Fetch all script metadata which includes cached registrations from init()
     let all_metadata = match repository::get_all_script_metadata() {
         Ok(metadata) => metadata,
@@ -420,7 +448,24 @@ fn find_route_handler(path: &str, method: &str) -> Option<(String, String)> {
                 .registrations
                 .get(&(path.to_string(), method.to_string()))
             {
-                return Some((metadata.uri.clone(), route_meta.handler_name.clone()));
+                return Some((
+                    metadata.uri.clone(),
+                    route_meta.handler_name.clone(),
+                    HashMap::new(),
+                ));
+            }
+
+            // Check for parameterized matches (:variable)
+            for ((pattern, reg_method), route_meta) in &metadata.registrations {
+                if reg_method == method
+                    && let Some(params) = match_route_pattern(pattern, path)
+                {
+                    return Some((
+                        metadata.uri.clone(),
+                        route_meta.handler_name.clone(),
+                        params,
+                    ));
+                }
             }
 
             // Check for wildcard matches
@@ -428,7 +473,11 @@ fn find_route_handler(path: &str, method: &str) -> Option<(String, String)> {
                 if reg_method == method && pattern.ends_with("/*") {
                     let prefix = &pattern[..pattern.len() - 1]; // Remove the *
                     if path.starts_with(prefix) {
-                        return Some((metadata.uri.clone(), route_meta.handler_name.clone()));
+                        return Some((
+                            metadata.uri.clone(),
+                            route_meta.handler_name.clone(),
+                            HashMap::new(),
+                        ));
                     }
                 }
             }
@@ -450,6 +499,13 @@ fn path_has_any_route(path: &str) -> bool {
             // Check for exact match
             if metadata.registrations.keys().any(|(p, _)| p == path) {
                 return true;
+            }
+
+            // Check for parameterized matches
+            for (pattern, _) in metadata.registrations.keys() {
+                if match_route_pattern(pattern, path).is_some() {
+                    return true;
+                }
             }
 
             // Check for wildcard matches
@@ -1162,7 +1218,7 @@ async fn handle_dynamic_request(
     let path_exists = path_has_any_route(&path);
 
     let reg = find_route_handler(&path, &request_method);
-    let (owner_uri, handler_name) = match reg {
+    let (owner_uri, handler_name, route_params) = match reg {
         Some(t) => t,
         None => {
             // Extract request ID from extensions
@@ -1314,6 +1370,7 @@ async fn handle_dynamic_request(
             headers: headers_for_worker.clone(),
             user_context: security::UserContext::anonymous(), // TODO: Extract from auth
             auth_context: Some(auth_context),
+            route_params: Some(route_params.clone()),
         };
 
         js_engine::execute_script_for_request_secure(params)
