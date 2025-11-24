@@ -132,10 +132,9 @@ function init() {
   routeRegistry.registerRoute("/api/users/:id", "getUserByIdHandler", "GET");
 }
 
-function getUserByIdHandler(request) {
-  // Extract ID from URL
-  const urlParts = request.url.split("/");
-  const id = urlParts[urlParts.length - 1].split("?")[0];
+function getUserByIdHandler(context) {
+  const req = context.request;
+  const id = req.params.id; // Access path parameter directly
 
   console.log("info", "Fetching user by ID", { id });
 
@@ -273,15 +272,14 @@ function init() {
   routeRegistry.registerRoute("/api/users/:id", "updateUserHandler", "PUT");
 }
 
-function updateUserHandler(request) {
-  // Extract ID
-  const urlParts = request.url.split("/");
-  const id = urlParts[urlParts.length - 1].split("?")[0];
+function updateUserHandler(context) {
+  const req = context.request;
+  const id = req.params.id; // Access path parameter directly
 
   // Parse body
   let userData;
   try {
-    userData = JSON.parse(request.body || "{}");
+    userData = JSON.parse(req.body || "{}");
   } catch (e) {
     return {
       status: 400,
@@ -312,7 +310,7 @@ function updateUserHandler(request) {
     updatedAt: new Date().toISOString(),
   };
 
-  console.log("User updated", users[index]);
+  console.log("User updated", updatedUser);
 
   return {
     status: 200,
@@ -344,10 +342,9 @@ function init() {
   routeRegistry.registerRoute("/api/users/:id", "deleteUserHandler", "DELETE");
 }
 
-function deleteUserHandler(request) {
-  // Extract ID
-  const urlParts = request.url.split("/");
-  const id = urlParts[urlParts.length - 1].split("?")[0];
+function deleteUserHandler(context) {
+  const req = context.request;
+  const id = req.params.id; // Access path parameter directly
 
   console.log("info", "Deleting user", { id });
 
@@ -408,8 +405,9 @@ function init() {
 }
 
 // LIST - Get all users
-function listUsers(request) {
-  const params = parseQueryParams(request.url);
+function listUsers(context) {
+  const req = context.request;
+  const params = parseQueryParams(req.url);
   const role = params.role;
 
   let filtered = users;
@@ -424,9 +422,10 @@ function listUsers(request) {
 }
 
 // GET - Get single user
-function getUser(request) {
-  const id = parseInt(extractId(request.url));
-  const user = users.find((u) => u.id === id);
+function getUser(context) {
+  const req = context.request;
+  const id = req.params.id; // Access path parameter directly
+  const user = users.find((u) => u.id === parseInt(id));
 
   if (!user) {
     return jsonResponse(404, { error: "User not found" });
@@ -436,8 +435,9 @@ function getUser(request) {
 }
 
 // CREATE - Create new user
-function createUser(request) {
-  const userData = parseBody(request.body);
+function createUser(context) {
+  const req = context.request;
+  const userData = parseBody(req.body);
   if (userData.error) {
     return jsonResponse(400, userData);
   }
@@ -465,15 +465,16 @@ function createUser(request) {
 }
 
 // UPDATE - Update user
-function updateUser(request) {
-  const id = parseInt(extractId(request.url));
-  const index = users.findIndex((u) => u.id === id);
+function updateUser(context) {
+  const req = context.request;
+  const id = req.params.id; // Access path parameter directly
+  const index = users.findIndex((u) => u.id === parseInt(id));
 
   if (index === -1) {
     return jsonResponse(404, { error: "User not found" });
   }
 
-  const userData = parseBody(request.body);
+  const userData = parseBody(req.body);
   if (userData.error) {
     return jsonResponse(400, userData);
   }
@@ -500,9 +501,10 @@ function updateUser(request) {
 }
 
 // DELETE - Delete user
-function deleteUser(request) {
-  const id = parseInt(extractId(request.url));
-  const index = users.findIndex((u) => u.id === id);
+function deleteUser(context) {
+  const req = context.request;
+  const id = req.params.id; // Access path parameter directly
+  const index = users.findIndex((u) => u.id === parseInt(id));
 
   if (index === -1) {
     return jsonResponse(404, { error: "User not found" });
@@ -537,11 +539,6 @@ function validateUser(user) {
     errors.push("email must be valid");
   }
   return errors;
-}
-
-function extractId(url) {
-  const parts = url.split("/");
-  return parts[parts.length - 1].split("?")[0];
 }
 
 function parseQueryParams(url) {
@@ -599,16 +596,16 @@ curl "http://localhost:8080/api/users?role=admin"
 Always handle errors gracefully:
 
 ```javascript
-function safeHandler(request) {
+function safeHandler(context) {
   try {
     // Your logic here
-    const data = processRequest(request);
+    const data = processRequest(context.request);
 
     return jsonResponse(200, { data });
   } catch (error) {
     console.log("error", "Request failed", {
       error: error.message,
-      url: request.url,
+      url: context.request.url,
     });
 
     return jsonResponse(500, {

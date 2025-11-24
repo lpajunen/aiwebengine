@@ -310,16 +310,27 @@ function init() {
 }
 ```
 
-Note: Path parameters like `:id` are not currently extracted automatically. Use query parameters instead:
+Note: Path parameters like `:id` are now automatically extracted and available via `req.params`. You can also use query parameters for additional filtering:
 
 ```javascript
-// Current approach
-routeRegistry.registerRoute("/api/users/get", "getUser", "GET");
+// New approach - access path parameters directly
+routeRegistry.registerRoute("/api/users/:id", "getUser", "GET");
 
 function getUser(context) {
   const req = context.request;
-  const id = req.query.id; // Access via ?id=123
-  // ...
+  const id = req.params.id; // Access path parameter directly
+  // ... use id to fetch user
+}
+
+// Query parameters still work for additional filtering
+routeRegistry.registerRoute("/api/users/:id/posts", "getUserPosts", "GET");
+
+function getUserPosts(context) {
+  const req = context.request;
+  const userId = req.params.id; // Path parameter
+  const page = req.query.page || "1"; // Query parameter
+  const limit = req.query.limit || "10"; // Query parameter
+  // ... fetch posts for user with pagination
 }
 ```
 
