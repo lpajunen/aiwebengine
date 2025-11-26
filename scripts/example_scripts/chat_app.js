@@ -708,14 +708,12 @@ function chatInterfaceHandler(context) {
               variables: { channelId },
             };
             
-            fetch('/graphql/sse', {
-                method: 'POST',
+            fetch('/graphql/sse?query=' + encodeURIComponent(subscriptionQuery.query) + '&variables=' + encodeURIComponent(JSON.stringify(subscriptionQuery.variables)), {
+                method: 'GET',
                 headers: { 
-                    'Content-Type': 'application/json',
                     'Accept': 'text/event-stream',
                     'Cache-Control': 'no-cache'
                 },
-                body: JSON.stringify(subscriptionQuery),
                 signal: currentSubscriptionController.signal,
                 // Safari compatibility: disable keepalive
                 keepalive: false

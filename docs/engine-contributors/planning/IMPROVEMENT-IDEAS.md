@@ -284,25 +284,25 @@ Add to docs/solution-developers/:
 
 ### Endpoint
 
-`POST /graphql/sse`
+`GET /graphql/sse`
 
 ### Client Implementation
 
 ```javascript
-// Pass variables as URL query parameters
+// Pass query and variables as URL query parameters
 const channelId = "channel_123";
-const url = `/graphql/sse?channelId=${encodeURIComponent(channelId)}`;
+const query =
+  "subscription ($channelId: String!) { chatUpdates(channelId: $channelId) }";
+const variables = JSON.stringify({ channelId });
 
-// POST with subscription query in body
+const url = `/graphql/sse?query=${encodeURIComponent(query)}&variables=${encodeURIComponent(variables)}`;
+
+// GET request with query parameters
 fetch(url, {
-  method: "POST",
+  method: "GET",
   headers: {
-    "Content-Type": "application/json",
     Accept: "text/event-stream",
   },
-  body: JSON.stringify({
-    query: "subscription { chatUpdates }",
-  }),
 }).then((response) => {
   const reader = response.body.getReader();
   // Process SSE stream...
@@ -318,15 +318,15 @@ fetch(url, {
 if query_contains_subscription(&query) {
     return error_response(
         "Subscriptions must use the /graphql/sse endpoint.
-         Example: POST /graphql/sse?var1=value1 with subscription query in body"
+         Example: GET /graphql/sse?query=subscription+{+chatUpdates+}&variables={}"
     );
 }
 
-// When GET /graphql/sse is used
-if method == "GET" {
+// When POST /graphql/sse is used
+if method == "POST" {
     return error_response(
-        "Subscription endpoint requires POST method.
-         Send subscription query in request body with variables as query params."
+        "Subscription endpoint requires GET method.
+         Send subscription query as query parameter: /graphql/sse?query=..."
     );
 }
 ````

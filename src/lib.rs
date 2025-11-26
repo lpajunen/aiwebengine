@@ -944,12 +944,14 @@ async fn setup_routes(
         }
     };
 
-    // GraphQL POST handler - executes queries
+    // GraphQL handler - executes queries (supports GET and POST)
     let graphql_post_handler = |req: axum::http::Request<axum::body::Body>| async move {
         // Extract authentication context before consuming the request
         let auth_user = req.extensions().get::<auth::AuthUser>().cloned();
 
-        let (_parts, body) = req.into_parts();
+        let (parts, body) = req.into_parts();
+        let method = parts.method.clone();
+
         let body_bytes = match axum::body::to_bytes(body, usize::MAX).await {
             Ok(bytes) => bytes,
             Err(_) => {
@@ -959,12 +961,52 @@ async fn setup_routes(
             }
         };
 
-        let request: async_graphql::Request = match serde_json::from_slice(&body_bytes) {
-            Ok(req) => req,
-            Err(e) => {
+        let request: async_graphql::Request = if method == axum::http::Method::GET {
+            // Parse from query params
+            let query_string = parts.uri.query().unwrap_or("");
+            let query_params = url::form_urlencoded::parse(query_string.as_bytes());
+
+            let mut query = None;
+            let mut variables = None;
+            let mut operation_name = None;
+
+            for (key, value) in query_params {
+                match key.as_ref() {
+                    "query" => query = Some(value.into_owned()),
+                    "variables" => {
+                        if !value.is_empty()
+                            && let Ok(vars) = serde_json::from_str(&value)
+                        {
+                            variables = Some(vars);
+                        }
+                    }
+                    "operationName" => operation_name = Some(value.into_owned()),
+                    _ => {}
+                }
+            }
+
+            if query.is_none() {
                 return axum::response::Json(
-                    serde_json::json!({"error": format!("Invalid JSON: {}", e)}),
+                    serde_json::json!({"error": "Missing query parameter"}),
                 );
+            }
+
+            let mut req = async_graphql::Request::new(query.unwrap());
+            if let Some(vars) = variables {
+                req = req.variables(vars);
+            }
+            if let Some(op) = operation_name {
+                req = req.operation_name(op);
+            }
+            req
+        } else {
+            match serde_json::from_slice(&body_bytes) {
+                Ok(req) => req,
+                Err(e) => {
+                    return axum::response::Json(
+                        serde_json::json!({"error": format!("Invalid JSON: {}", e)}),
+                    );
+                }
             }
         };
 
@@ -1017,18 +1059,65 @@ async fn setup_routes(
             }
         };
 
-        let request: async_graphql::Request = match serde_json::from_slice(&body_bytes) {
-            Ok(req) => req,
-            Err(e) => {
-                error!("GraphQL SSE: Invalid JSON in request body: {}", e);
+        let method = parts.method.clone();
+        let request: async_graphql::Request = if method == axum::http::Method::GET {
+            // Parse from query params
+            let query_string = parts.uri.query().unwrap_or("");
+            let query_params = url::form_urlencoded::parse(query_string.as_bytes());
+
+            let mut query = None;
+            let mut variables = None;
+            let mut operation_name = None;
+
+            for (key, value) in query_params {
+                match key.as_ref() {
+                    "query" => query = Some(value.into_owned()),
+                    "variables" => {
+                        if !value.is_empty()
+                            && let Ok(vars) = serde_json::from_str(&value)
+                        {
+                            variables = Some(vars);
+                        }
+                    }
+                    "operationName" => operation_name = Some(value.into_owned()),
+                    _ => {}
+                }
+            }
+
+            if query.is_none() {
+                error!("GraphQL SSE: Missing query parameter");
                 return axum::response::Response::builder()
                     .status(400)
                     .header("content-type", "text/plain")
-                    .body(axum::body::Body::from(format!("Invalid JSON: {}", e)))
+                    .body(axum::body::Body::from("Missing query parameter"))
                     .unwrap_or_else(|err| {
                         error!("Failed to build error response: {}", err);
                         axum::response::Response::new(axum::body::Body::from("Bad Request"))
                     });
+            }
+
+            let mut req = async_graphql::Request::new(query.unwrap());
+            if let Some(vars) = variables {
+                req = req.variables(vars);
+            }
+            if let Some(op) = operation_name {
+                req = req.operation_name(op);
+            }
+            req
+        } else {
+            match serde_json::from_slice(&body_bytes) {
+                Ok(req) => req,
+                Err(e) => {
+                    error!("GraphQL SSE: Invalid JSON in request body: {}", e);
+                    return axum::response::Response::builder()
+                        .status(400)
+                        .header("content-type", "text/plain")
+                        .body(axum::body::Body::from(format!("Invalid JSON: {}", e)))
+                        .unwrap_or_else(|err| {
+                            error!("Failed to build error response: {}", err);
+                            axum::response::Response::new(axum::body::Body::from("Bad Request"))
+                        });
+                }
             }
         };
 
@@ -1122,9 +1211,12 @@ async fn setup_routes(
 
         // GraphQL API endpoints (queries, mutations, subscriptions) - NO authentication required
         let graphql_api_router = Router::new()
-            .route("/graphql", axum::routing::post(graphql_post_handler))
+            .route(
+                "/graphql",
+                axum::routing::get(graphql_post_handler).post(graphql_post_handler),
+            )
             .route("/graphql/ws", axum::routing::get(graphql_ws_handler))
-            .route("/graphql/sse", axum::routing::post(graphql_sse_handler));
+            .route("/graphql/sse", axum::routing::get(graphql_sse_handler));
 
         app = app.merge(graphql_api_router);
 
@@ -1138,9 +1230,12 @@ async fn setup_routes(
         app = app
             .route("/engine/graphql", axum::routing::get(graphql_get_handler))
             .route("/engine/swagger", axum::routing::get(swagger_ui_handler))
-            .route("/graphql", axum::routing::post(graphql_post_handler))
+            .route(
+                "/graphql",
+                axum::routing::get(graphql_post_handler).post(graphql_post_handler),
+            )
             .route("/graphql/ws", axum::routing::get(graphql_ws_handler))
-            .route("/graphql/sse", axum::routing::post(graphql_sse_handler));
+            .route("/graphql/sse", axum::routing::get(graphql_sse_handler));
     }
 
     // Add documentation routes

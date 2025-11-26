@@ -637,9 +637,10 @@ async fn test_graphql_endpoints() {
 
     // Test GraphQL SSE endpoint (basic connectivity test)
     let sse_response = client
-        .post(format!("http://127.0.0.1:{}/graphql/sse", port))
-        .header("Content-Type", "application/json")
-        .body(r#"{"query": "subscription { userUpdates }"}"#)
+        .get(format!(
+            "http://127.0.0.1:{}/graphql/sse?query=subscription {{ userUpdates }}",
+            port
+        ))
         .send()
         .await
         .expect("GraphQL SSE request failed");

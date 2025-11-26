@@ -240,12 +240,11 @@ function scriptUpdatesDemoPage(context) {
 				query: \`subscription { scriptUpdates }\`
 			};
 			
-			fetch('/graphql/sse', {
-				method: 'POST',
+			fetch('/graphql/sse?query=' + encodeURIComponent(subscriptionQuery.query), {
+				method: 'GET',
 				headers: {
-					'Content-Type': 'application/json',
-				},
-				body: JSON.stringify(subscriptionQuery)
+					'Accept': 'text/event-stream',
+				}
 			})
 			.then(response => {
 				if (!response.ok) {
