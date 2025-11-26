@@ -234,64 +234,39 @@ function scriptUpdatesDemoPage(context) {
 	<script>
 		let updateCount = 0;
 		
-		// Subscribe to GraphQL scriptUpdates subscription
+		// Subscribe to GraphQL scriptUpdates subscription using EventSource
 		function subscribeToScriptUpdates() {
 			const subscriptionQuery = {
 				query: \`subscription { scriptUpdates }\`
 			};
-			
-			fetch('/graphql/sse?query=' + encodeURIComponent(subscriptionQuery.query), {
-				method: 'GET',
-				headers: {
-					'Accept': 'text/event-stream',
-				}
-			})
-			.then(response => {
-				if (!response.ok) {
-					throw new Error('Failed to start subscription');
-				}
-				
-				const reader = response.body.getReader();
-				const decoder = new TextDecoder();
-				
+
+			const eventSource = new EventSource('/graphql/sse?query=' + encodeURIComponent(subscriptionQuery.query));
+
+			eventSource.onopen = function(event) {
 				document.getElementById('status').className = 'status-indicator status-connected';
 				document.getElementById('status').textContent = 'Connected to scriptUpdates subscription ✓';
-				
-				function readStream() {
-					reader.read().then(({ done, value }) => {
-						if (done) {
-							document.getElementById('status').className = 'status-indicator status-error';
-							document.getElementById('status').textContent = 'Subscription ended';
-							return;
-						}
-						
-						const chunk = decoder.decode(value);
-						const lines = chunk.split('\\n');
-						
-						lines.forEach(line => {
-							if (line.startsWith('data: ')) {
-								try {
-									const data = JSON.parse(line.slice(6));
-									if (data.data && data.data.scriptUpdates) {
-										displayUpdate(data.data.scriptUpdates);
-									}
-								} catch (e) {
-									console.log('Non-JSON data:', line);
-								}
-							}
-						});
-						
-						readStream();
-					});
+				console.log('SSE connection opened');
+			};
+
+			eventSource.onmessage = function(event) {
+				try {
+					const data = JSON.parse(event.data);
+					if (data.data && data.data.scriptUpdates) {
+						displayUpdate(data.data.scriptUpdates);
+					}
+				} catch (e) {
+					console.log('Non-JSON data:', event.data);
 				}
-				
-				readStream();
-			})
-			.catch(error => {
+			};
+
+			eventSource.onerror = function(event) {
 				document.getElementById('status').className = 'status-indicator status-error';
-				document.getElementById('status').textContent = 'Connection failed: ' + error.message;
-				console.error('Subscription error:', error);
-			});
+				document.getElementById('status').textContent = 'Connection failed or lost';
+				console.error('SSE connection error:', event);
+			};
+
+			// Store the EventSource instance for potential cleanup
+			window.scriptUpdatesEventSource = eventSource;
 		}
 		
 		function displayUpdate(updateStr) {

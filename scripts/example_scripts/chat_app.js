@@ -698,144 +698,67 @@ function chatInterfaceHandler(context) {
             
             updateStatus('Connecting to ' + currentChannel.name + '...');
             
-            // Create abort controller for this subscription
+            // Create abort controller for this subscription (for compatibility)
             currentSubscriptionController = new AbortController();
-            
-            // Subscribe via GraphQL SSE endpoint using explicit GraphQL args
+
+            // Subscribe via GraphQL SSE endpoint using EventSource
             const subscriptionQuery = {
               query:
                 "subscription ($channelId: String!) { chatUpdates(channelId: $channelId) { id sender text timestamp type } }",
               variables: { channelId },
             };
-            
-            fetch('/graphql/sse?query=' + encodeURIComponent(subscriptionQuery.query) + '&variables=' + encodeURIComponent(JSON.stringify(subscriptionQuery.variables)), {
-                method: 'GET',
-                headers: { 
-                    'Accept': 'text/event-stream',
-                    'Cache-Control': 'no-cache'
-                },
-                signal: currentSubscriptionController.signal,
-                // Safari compatibility: disable keepalive
-                keepalive: false
-            })
-            .then(response => {
-                if (!response.ok) {
-                    console.error('Subscription failed with status:', response.status, response.statusText);
-                    return response.text().then(text => {
-                        console.error('Response body:', text);
-                        throw new Error('Subscription failed: ' + response.status + ' ' + response.statusText);
-                    });
-                }
-                
+
+            const eventSource = new EventSource('/graphql/sse?query=' + encodeURIComponent(subscriptionQuery.query) + '&variables=' + encodeURIComponent(JSON.stringify(subscriptionQuery.variables)));
+
+            eventSource.onopen = function(event) {
                 updateStatus('Connected to ' + currentChannel.name);
-                
-                // Safari compatibility check
-                if (!response.body || !response.body.getReader) {
-                    console.error('Browser does not support ReadableStream');
-                    throw new Error('Browser does not support streaming responses');
-                }
-                
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = '';
-                
-                function readStream() {
-                    reader.read().then(({ done, value }) => {
-                        if (done) {
-                            console.log('Subscription stream ended normally');
-                            updateStatus('Disconnected from ' + currentChannel.name, true);
-                            
-                            // Only reconnect if still on same channel and not manually cancelled
-                            setTimeout(() => {
-                                if (currentChannel && currentChannel.id === channelId && currentSubscriptionController) {
-                                    console.log('Auto-reconnecting to', currentChannel.name);
-                                    subscribeToChannel(channelId);
-                                }
-                            }, 2000);
-                            return;
+                console.log('SSE connection opened for channel:', currentChannel.name);
+            };
+
+            eventSource.onmessage = function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+
+                    // Handle GraphQL response format
+                    if (data.data && data.data.chatUpdates) {
+                        // chatUpdates might be a JSON string or an object
+                        let message = data.data.chatUpdates;
+
+                        // If it's a string, parse it
+                        if (typeof message === 'string') {
+                            message = JSON.parse(message);
                         }
-                        
-                        // Append to buffer and process complete lines
-                        buffer += decoder.decode(value, { stream: true });
-                        const lines = buffer.split('\\n');
-                        
-                        // Keep the last incomplete line in buffer
-                        buffer = lines.pop() || '';
-                        
-                        lines.forEach(line => {
-                            if (line.startsWith('data: ')) {
-                                try {
-                                    const data = JSON.parse(line.substring(6));
-                                    
-                                    // Handle GraphQL response format
-                                    if (data.data && data.data.chatUpdates) {
-                                        // chatUpdates might be a JSON string or an object
-                                        let message = data.data.chatUpdates;
-                                        
-                                        // If it's a string, parse it
-                                        if (typeof message === 'string') {
-                                            message = JSON.parse(message);
-                                        }
-                                        
-                                        // Only add message if it has content (not empty object)
-                                        if (message && message.id) {
-                                            addMessage(message);
-                                        }
-                                    } else if (data.errors && data.errors.length > 0) {
-                                        console.error('GraphQL subscription error:', JSON.stringify(data.errors, null, 2));
-                                    } else if (data.data) {
-                                        // Subscription connected successfully (initial response may have null data)
-                                        console.log('Subscription response:', data);
-                                    }
-                                } catch (error) {
-                                    console.error('Error parsing SSE message:', error, 'Line:', line);
-                                }
-                            }
-                        });
-                        
-                        readStream();
-                    }).catch(error => {
-                        // Ignore AbortError - this is expected when we cancel subscriptions
-                        if (error.name === 'AbortError') {
-                            console.log('Subscription cancelled');
-                            return;
+
+                        // Only add message if it has content (not empty object)
+                        if (message && message.id) {
+                            addMessage(message);
                         }
-                        
-                        console.error('Stream read error:', error);
-                        console.error('Browser:', navigator.userAgent);
-                        updateStatus('Connection interrupted', true);
-                        
-                        // Only reconnect if still on same channel
-                        setTimeout(() => {
-                            if (currentChannel && currentChannel.id === channelId) {
-                                console.log('Reconnecting after error...');
-                                subscribeToChannel(channelId);
-                            }
-                        }, 2000);
-                    });
+                    } else if (data.errors && data.errors.length > 0) {
+                        console.error('GraphQL subscription error:', JSON.stringify(data.errors, null, 2));
+                    } else if (data.data) {
+                        // Subscription connected successfully (initial response may have null data)
+                        console.log('Subscription response:', data);
+                    }
+                } catch (error) {
+                    console.error('Error parsing SSE message:', error, 'Data:', event.data);
                 }
-                
-                readStream();
-            })
-            .catch(error => {
-                // Ignore AbortError - this is expected when we cancel subscriptions
-                if (error.name === 'AbortError') {
-                    console.log('Subscription fetch cancelled');
-                    return;
-                }
-                
-                console.error('Subscription error:', error);
-                console.error('Browser:', navigator.userAgent);
-                updateStatus('Failed to connect to ' + currentChannel.name, true);
-                
+            };
+
+            eventSource.onerror = function(event) {
+                console.error('SSE connection error for channel:', currentChannel.name, event);
+                updateStatus('Connection interrupted', true);
+
                 // Only reconnect if still on same channel
                 setTimeout(() => {
                     if (currentChannel && currentChannel.id === channelId) {
-                        console.log('Reconnecting after connection failure...');
+                        console.log('Reconnecting after error...');
                         subscribeToChannel(channelId);
                     }
                 }, 2000);
-            });
+            };
+
+            // Store the EventSource instance for potential cleanup
+            window.chatEventSource = eventSource;
         }
         
         function addMessage(message) {

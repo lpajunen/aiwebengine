@@ -288,7 +288,7 @@ Add to docs/solution-developers/:
 
 ### Client Implementation
 
-```javascript
+````javascript
 // Pass query and variables as URL query parameters
 const channelId = "channel_123";
 const query =
@@ -298,16 +298,18 @@ const variables = JSON.stringify({ channelId });
 const url = `/graphql/sse?query=${encodeURIComponent(query)}&variables=${encodeURIComponent(variables)}`;
 
 // GET request with query parameters
-fetch(url, {
-  method: "GET",
+```javascript
+const eventSource = new EventSource(url + '?query=' + encodeURIComponent(query), {
   headers: {
     Accept: "text/event-stream",
   },
-}).then((response) => {
-  const reader = response.body.getReader();
-  // Process SSE stream...
 });
-```
+
+eventSource.onmessage = function(event) {
+  const data = JSON.parse(event.data);
+  // Process SSE data...
+};
+````
 ````
 
 ````

@@ -63,44 +63,31 @@ const subscriptionQuery = {
     query: `subscription { mySubscription }`
 };
 
-fetch('/graphql/sse', {
-    method: 'POST',
-    headers: {
-        'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(subscriptionQuery)
-})
-.then(response => {
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
+const eventSource = new EventSource('/graphql/sse?query=' + encodeURIComponent(subscriptionQuery.query));
 
-    function readStream() {
-        reader.read().then(({ done, value }) => {
-            if (done) return;
+eventSource.onopen = function(event) {
+    console.log('Connected to subscription');
+};
 
-            const chunk = decoder.decode(value);
-            const lines = chunk.split('\\n');
-
-            lines.forEach(line => {
-                if (line.startsWith('data: ')) {
-                    const data = JSON.parse(line.slice(6));
-                    if (data.data && data.data.mySubscription) {
-                        console.log('Received:', data.data.mySubscription);
-                    }
-                }
-            });
-
-            readStream();
-        });
+eventSource.onmessage = function(event) {
+    try {
+        const data = JSON.parse(event.data);
+        if (data.data && data.data.mySubscription) {
+            console.log('Received:', data.data.mySubscription);
+        }
+    } catch (e) {
+        console.log('Non-JSON data:', event.data);
     }
+};
 
-    readStream();
-});
+eventSource.onerror = function(event) {
+    console.error('Subscription connection error:', event);
+};
 ````
 
-### Using EventSource (Alternative)
+### Using fetch + StreamReader (Alternative)
 
-You can also connect directly to the auto-registered stream path:
+If you need more control or EventSource is not available, you can use the lower-level fetch API:
 
 ```javascript
 const eventSource = new EventSource("/graphql/subscription/mySubscription");
@@ -200,41 +187,26 @@ function triggerNotificationHandler(req) {
           query: \`subscription { liveNotifications }\`
       };
 
-      fetch('/graphql/sse', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(subscriptionQuery)
-      })
-      .then(response => {
-          const reader = response.body.getReader();
-          const decoder = new TextDecoder();
+      const eventSource = new EventSource('/graphql/sse?query=' + encodeURIComponent(subscriptionQuery.query));
 
-          function readStream() {
-              reader.read().then(({ done, value }) => {
-                  if (done) return;
+      eventSource.onopen = function(event) {
+          console.log('Connected to notifications subscription');
+      };
 
-                  const chunk = decoder.decode(value);
-                  const lines = chunk.split('\\n');
-
-                  lines.forEach(line => {
-                      if (line.startsWith('data: ')) {
-                          try {
-                              const data = JSON.parse(line.slice(6));
-                              if (data.data && data.data.liveNotifications) {
-                                  displayNotification(data.data.liveNotifications);
-                              }
-                          } catch (e) {
-                              console.log('Non-JSON data:', line);
-                          }
-                      }
-                  });
-
-                  readStream();
-              });
+      eventSource.onmessage = function(event) {
+          try {
+              const data = JSON.parse(event.data);
+              if (data.data && data.data.liveNotifications) {
+                  displayNotification(data.data.liveNotifications);
+              }
+          } catch (e) {
+              console.log('Non-JSON data:', event.data);
           }
+      };
 
-          readStream();
-      });
+      eventSource.onerror = function(event) {
+          console.error('Subscription connection error:', event);
+      };
 
       function displayNotification(notification) {
           const div = document.getElementById('notifications');
