@@ -6,6 +6,14 @@
 
 In addition to being a web application engine, aiwebengine provides an editorial environment for creating, testing, and deploying JavaScript and related web resource based solutions.
 
+AI Web Engine consists of the following main components:
+
+- **Engine Core Runtime**: The core of the engine, implemented in Rust, which provides the main functionality for handling HTTP requests, managing scripts, and executing JavaScript code securely.
+- **JavaScript Runtime**: An embedded QuickJS JavaScript engine that allows the execution of JavaScript code within the Rust application.
+- **Server Script and Asset Repository**: A module for managing and storing JavaScript scripts and related web assets, allowing dynamic loading and updating of scripts without restarting the engine.
+- **Logging System**: A built-in logging mechanism for monitoring and debugging purposes.
+- **Editorial Environment**: A web-based interface for solution developers to create, test, and deploy their JavaScript-based solutions.
+
 **aiwebengine** is a lightweight web application engine built in Rust that enables developers to create secure solutions using JavaScript scripts. The project leverages the QuickJS JavaScript runtime to provide a simple yet powerful platform for building websites, GraphQL APIs, web applications, and AI tools with minimal overhead.
 
 ## User Roles

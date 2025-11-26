@@ -73,4 +73,4 @@ lto = "thin"
 # Test-only dependencies
 [dev-dependencies]
 tokio-test = "0.4"
-mockall = "0.13.1"
+mockall = "0.14.0"
