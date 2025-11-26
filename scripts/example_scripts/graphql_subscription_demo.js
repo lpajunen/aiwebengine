@@ -293,64 +293,39 @@ function subscriptionDemoPage(context) {
             <script>
                 let messageCount = 0;
 
-                // Subscribe to GraphQL subscription via SSE
+                // Subscribe to GraphQL subscription via SSE using EventSource
                 function subscribeToMessages() {
                     const subscriptionQuery = {
                         query: \`subscription { liveMessages }\`
                     };
 
-                    fetch('/graphql/sse?query=' + encodeURIComponent(subscriptionQuery.query), {
-                        method: 'GET',
-                        headers: {
-                            'Accept': 'text/event-stream',
-                        }
-                    })
-                    .then(response => {
-                        if (!response.ok) {
-                            throw new Error('Failed to start subscription');
-                        }
+                    const eventSource = new EventSource('/graphql/sse?query=' + encodeURIComponent(subscriptionQuery.query));
 
-                        const reader = response.body.getReader();
-                        const decoder = new TextDecoder();
-
+                    eventSource.onopen = function(event) {
                         document.getElementById('status').textContent = 'Connected to subscription ✓';
                         document.getElementById('status').className = 'status-indicator status-connected';
+                        console.log('SSE connection opened');
+                    };
 
-                        function readStream() {
-                            reader.read().then(({ done, value }) => {
-                                if (done) {
-                                    document.getElementById('status').textContent = 'Subscription ended';
-                                    document.getElementById('status').className = 'status-indicator status-error';
-                                    return;
-                                }
-
-                                const chunk = decoder.decode(value);
-                                const lines = chunk.split('\\n');
-
-                                lines.forEach(line => {
-                                    if (line.startsWith('data: ')) {
-                                        try {
-                                            const data = JSON.parse(line.slice(6));
-                                            if (data.data && data.data.liveMessages) {
-                                                displayMessage(data.data.liveMessages);
-                                            }
-                                        } catch (e) {
-                                            console.log('Non-JSON data:', line);
-                                        }
-                                    }
-                                });
-
-                                readStream();
-                            });
+                    eventSource.onmessage = function(event) {
+                        try {
+                            const data = JSON.parse(event.data);
+                            if (data.data && data.data.liveMessages) {
+                                displayMessage(data.data.liveMessages);
+                            }
+                        } catch (e) {
+                            console.log('Non-JSON data:', event.data);
                         }
+                    };
 
-                        readStream();
-                    })
-                    .catch(error => {
-                        document.getElementById('status').textContent = 'Connection failed: ' + error.message;
+                    eventSource.onerror = function(event) {
+                        document.getElementById('status').textContent = 'Connection failed or lost';
                         document.getElementById('status').className = 'status-indicator status-error';
-                        console.error('Subscription error:', error);
-                    });
+                        console.error('SSE connection error:', event);
+                    };
+
+                    // Store the EventSource instance for potential cleanup
+                    window.subscriptionEventSource = eventSource;
                 }
 
                 function displayMessage(message) {
