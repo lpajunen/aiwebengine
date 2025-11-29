@@ -1453,6 +1453,17 @@ async fn handle_dynamic_request(
             auth::JsAuthContext::anonymous()
         };
 
+        // Create UserContext for secure globals based on authenticated user
+        let user_context = if let Some(ref auth_user) = auth_user {
+            if auth_user.is_admin {
+                security::UserContext::admin(auth_user.user_id.clone())
+            } else {
+                security::UserContext::authenticated(auth_user.user_id.clone())
+            }
+        } else {
+            security::UserContext::anonymous()
+        };
+
         // Use the secure execution path with authentication context
         let params = js_engine::RequestExecutionParams {
             script_uri: owner_uri_cl.clone(),
@@ -1463,7 +1474,7 @@ async fn handle_dynamic_request(
             form_data: Some(form_data.clone()),
             raw_body: raw_body.clone(),
             headers: headers_for_worker.clone(),
-            user_context: security::UserContext::anonymous(), // TODO: Extract from auth
+            user_context, // Use the properly constructed user_context
             auth_context: Some(auth_context),
             route_params: Some(route_params.clone()),
         };

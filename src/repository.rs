@@ -1726,6 +1726,13 @@ pub fn upsert_script_with_owner(
     content: &str,
     owner_user_id: Option<&str>,
 ) -> AppResult<()> {
+    debug!(
+        "upsert_script_with_owner called: uri={}, owner_user_id={:?}, content_len={}",
+        uri,
+        owner_user_id,
+        content.len()
+    );
+
     if uri.trim().is_empty() {
         return Err(RepositoryError::InvalidData("URI cannot be empty".to_string()).into());
     }
@@ -1739,19 +1746,62 @@ pub fn upsert_script_with_owner(
 
     // Check if script already exists
     let script_exists = fetch_script(uri).is_some();
+    debug!(
+        "Script existence check: uri={}, exists={}",
+        uri, script_exists
+    );
 
     // Upsert the script
     let repo = get_repository();
     run_blocking(async { repo.upsert_script(uri, content).await })?;
 
-    // If it's a new script (not an update) and we have an owner, add ownership
-    // Skip ownership for bootstrap scripts
-    if !script_exists
-        && !is_bootstrap_script(uri)
-        && let Some(user_id) = owner_user_id
-    {
-        run_blocking(async { repo.add_script_owner(uri, user_id).await })?;
-        debug!("Set initial owner {} for new script {}", user_id, uri);
+    // Assign ownership if needed:
+    // - For NEW scripts: set the creator as owner
+    // - For EXISTING scripts: set owner if they don't have any owners yet (backfill)
+    // - Skip bootstrap scripts (they remain ownerless)
+    let is_bootstrap = is_bootstrap_script(uri);
+    debug!(
+        "Bootstrap check: uri={}, is_bootstrap={}",
+        uri, is_bootstrap
+    );
+
+    if !is_bootstrap && let Some(user_id) = owner_user_id {
+        // Check if script has any owners
+        let owner_count = run_blocking(async { repo.count_script_owners(uri).await }).unwrap_or(0);
+        let has_owners = owner_count > 0;
+        debug!(
+            "Owner count check: uri={}, count={}, has_owners={}",
+            uri, owner_count, has_owners
+        );
+
+        // If script has no owners, assign this user as the first owner
+        if !has_owners {
+            debug!("Attempting to add owner: uri={}, user_id={}", uri, user_id);
+            run_blocking(async { repo.add_script_owner(uri, user_id).await })?;
+            if script_exists {
+                debug!(
+                    "✓ Backfilled owner {} for existing script {} (had no owners)",
+                    user_id, uri
+                );
+            } else {
+                debug!("✓ Set initial owner {} for new script {}", user_id, uri);
+            }
+        } else {
+            debug!(
+                "Skipping ownership assignment - script already has {} owner(s): uri={}",
+                owner_count, uri
+            );
+        }
+    } else if is_bootstrap {
+        debug!(
+            "Skipping ownership assignment - bootstrap script: uri={}",
+            uri
+        );
+    } else {
+        debug!(
+            "Skipping ownership assignment - no user_id provided: uri={}",
+            uri
+        );
     }
 
     Ok(())
@@ -3557,5 +3607,175 @@ mod tests {
         let updated_profile =
             get_script_security_profile(custom_uri).expect("updated profile available");
         assert!(updated_profile.privileged, "Flag update must persist");
+    }
+
+    #[test]
+    fn test_script_ownership_assignment() {
+        // Test that new scripts get assigned an owner
+        let script_uri = "test://owned-script";
+        let owner_user_id = "test-user-123";
+        let script_code = "console.log('owned script');";
+
+        // Create a new script with an owner
+        let result = upsert_script_with_owner(script_uri, script_code, Some(owner_user_id));
+        assert!(
+            result.is_ok(),
+            "Should successfully create script with owner"
+        );
+
+        // Verify the script was created
+        let fetched = fetch_script(script_uri);
+        assert_eq!(
+            fetched,
+            Some(script_code.to_string()),
+            "Script should exist"
+        );
+
+        // Verify the owner was assigned
+        let owners = get_script_owners(script_uri).expect("Should get owners");
+        assert_eq!(owners.len(), 1, "Script should have exactly one owner");
+        assert_eq!(
+            owners[0], owner_user_id,
+            "Owner should be the specified user"
+        );
+
+        // Verify user_owns_script returns true
+        let owns = user_owns_script(script_uri, owner_user_id).expect("Should check ownership");
+        assert!(owns, "User should own the script");
+
+        // Verify count_script_owners returns 1
+        let count = count_script_owners(script_uri).expect("Should count owners");
+        assert_eq!(count, 1, "Should have exactly 1 owner");
+    }
+
+    #[test]
+    fn test_script_ownership_backfill() {
+        // Test that existing scripts without owners get backfilled
+        let script_uri = "test://backfill-script";
+        let script_code = "console.log('backfill test');";
+
+        // First, create script without owner (simulate old script)
+        let result = upsert_script(script_uri, script_code);
+        assert!(result.is_ok(), "Should create script");
+
+        // Verify it has no owners
+        let owners_before = get_script_owners(script_uri).expect("Should get owners");
+        assert_eq!(
+            owners_before.len(),
+            0,
+            "Script should have no owners initially"
+        );
+
+        // Now update the script with a user (simulating editing in the editor)
+        let editor_user_id = "editor-user-456";
+        let updated_code = "console.log('backfill test - updated');";
+        let result = upsert_script_with_owner(script_uri, updated_code, Some(editor_user_id));
+        assert!(result.is_ok(), "Should update script with owner backfill");
+
+        // Verify the owner was backfilled
+        let owners_after = get_script_owners(script_uri).expect("Should get owners");
+        assert_eq!(owners_after.len(), 1, "Script should now have one owner");
+        assert_eq!(
+            owners_after[0], editor_user_id,
+            "Owner should be the editor"
+        );
+    }
+
+    #[test]
+    fn test_script_ownership_no_duplicate() {
+        // Test that scripts with existing owners don't get duplicates
+        let script_uri = "test://no-duplicate-script";
+        let owner_user_id = "original-owner";
+        let script_code = "console.log('original');";
+
+        // Create script with owner
+        let result = upsert_script_with_owner(script_uri, script_code, Some(owner_user_id));
+        assert!(result.is_ok(), "Should create script with owner");
+
+        // Update script with same user
+        let updated_code = "console.log('updated');";
+        let result = upsert_script_with_owner(script_uri, updated_code, Some(owner_user_id));
+        assert!(result.is_ok(), "Should update script");
+
+        // Verify still only one owner
+        let owners = get_script_owners(script_uri).expect("Should get owners");
+        assert_eq!(owners.len(), 1, "Should still have exactly one owner");
+        assert_eq!(owners[0], owner_user_id, "Owner should be unchanged");
+    }
+
+    #[test]
+    fn test_script_ownership_bootstrap_scripts_remain_ownerless() {
+        // Test that bootstrap scripts never get owners assigned
+        let bootstrap_uri = "https://example.com/core"; // This is a bootstrap script
+        let user_id = "admin-user";
+        let script_code = "console.log('bootstrap script');";
+
+        // Try to create/update a bootstrap script with an owner
+        let result = upsert_script_with_owner(bootstrap_uri, script_code, Some(user_id));
+        assert!(result.is_ok(), "Should succeed");
+
+        // Verify it has no owners (bootstrap scripts are ownerless)
+        let owners = get_script_owners(bootstrap_uri).expect("Should get owners");
+        assert_eq!(owners.len(), 0, "Bootstrap script should have no owners");
+    }
+
+    #[test]
+    fn test_script_ownership_add_remove() {
+        // Test adding and removing owners
+        let script_uri = "test://multi-owner-script";
+        let owner1 = "owner-one";
+        let owner2 = "owner-two";
+        let script_code = "console.log('multi-owner');";
+
+        // Create script with first owner
+        upsert_script_with_owner(script_uri, script_code, Some(owner1))
+            .expect("Should create script");
+
+        // Add second owner
+        let result = add_script_owner(script_uri, owner2);
+        assert!(result.is_ok(), "Should add second owner");
+
+        // Verify both owners exist
+        let owners = get_script_owners(script_uri).expect("Should get owners");
+        assert_eq!(owners.len(), 2, "Should have two owners");
+        assert!(
+            owners.contains(&owner1.to_string()),
+            "Should contain owner1"
+        );
+        assert!(
+            owners.contains(&owner2.to_string()),
+            "Should contain owner2"
+        );
+
+        // Remove first owner
+        let result = remove_script_owner(script_uri, owner1);
+        assert!(result.is_ok(), "Should remove first owner");
+
+        // Verify only second owner remains
+        let owners_after = get_script_owners(script_uri).expect("Should get owners");
+        assert_eq!(owners_after.len(), 1, "Should have one owner");
+        assert_eq!(owners_after[0], owner2, "Only owner2 should remain");
+    }
+
+    #[test]
+    fn test_script_ownership_without_user() {
+        // Test that scripts created without a user_id don't crash
+        let script_uri = "test://no-user-script";
+        let script_code = "console.log('no user');";
+
+        // Create script without owner (None user_id)
+        let result = upsert_script_with_owner(script_uri, script_code, None);
+        assert!(result.is_ok(), "Should create script even without user_id");
+
+        // Verify script exists but has no owners
+        let fetched = fetch_script(script_uri);
+        assert_eq!(
+            fetched,
+            Some(script_code.to_string()),
+            "Script should exist"
+        );
+
+        let owners = get_script_owners(script_uri).expect("Should get owners");
+        assert_eq!(owners.len(), 0, "Script should have no owners");
     }
 }
