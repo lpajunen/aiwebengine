@@ -658,7 +658,7 @@ function init(context) {
       btn.addEventListener("click", () => modal.remove());
     });
 
-    modal.querySelector(".modal-overlay").addEventListener("click", (e) => {
+    modal.addEventListener("click", (e) => {
       if (e.target === modal) modal.remove();
     });
 

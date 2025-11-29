@@ -728,6 +728,164 @@ function apiUpdateScriptPrivilege(context) {
   }
 }
 
+// API: Add script owner
+function apiAddScriptOwner(context) {
+  const req = getRequest(context);
+  try {
+    if (
+      typeof scriptStorage === "undefined" ||
+      typeof scriptStorage.addScriptOwner !== "function"
+    ) {
+      return {
+        status: 500,
+        body: JSON.stringify({ error: "Owner API unavailable" }),
+        contentType: "application/json",
+      };
+    }
+
+    // Extract script name from path /api/scripts/<script>/owners
+    let scriptName = req.path.replace("/api/scripts/", "").replace("/owners", "");
+    scriptName = decodeURIComponent(scriptName);
+
+    let fullUri;
+    if (scriptName.startsWith("https://")) {
+      fullUri = scriptName;
+    } else {
+      fullUri = "https://example.com/" + scriptName;
+    }
+
+    let payload = {};
+    if (req.body) {
+      try {
+        payload = JSON.parse(req.body);
+      } catch (err) {
+        return {
+          status: 400,
+          body: JSON.stringify({ error: "Invalid JSON payload" }),
+          contentType: "application/json",
+        };
+      }
+    }
+
+    if (!payload.ownerId || typeof payload.ownerId !== "string") {
+      return {
+        status: 400,
+        body: JSON.stringify({ error: "ownerId is required and must be a string" }),
+        contentType: "application/json",
+      };
+    }
+
+    try {
+      const result = scriptStorage.addScriptOwner(fullUri, payload.ownerId);
+      if (typeof result === "string" && result.startsWith("Error:")) {
+        const forbidden = result.includes("Permission denied");
+        return {
+          status: forbidden ? 403 : 500,
+          body: JSON.stringify({ error: result }),
+          contentType: "application/json",
+        };
+      }
+    } catch (error) {
+      const message = error && error.message ? error.message : String(error);
+      const forbidden = message.includes("Permission denied");
+      return {
+        status: forbidden ? 403 : 500,
+        body: JSON.stringify({ error: message }),
+        contentType: "application/json",
+      };
+    }
+
+    return {
+      status: 200,
+      body: JSON.stringify({
+        message: "Owner added successfully",
+        ownerId: payload.ownerId,
+        uri: fullUri,
+      }),
+      contentType: "application/json",
+    };
+  } catch (error) {
+    return {
+      status: 500,
+      body: JSON.stringify({ error: error.message }),
+      contentType: "application/json",
+    };
+  }
+}
+
+// API: Remove script owner
+function apiRemoveScriptOwner(context) {
+  const req = getRequest(context);
+  try {
+    if (
+      typeof scriptStorage === "undefined" ||
+      typeof scriptStorage.removeScriptOwner !== "function"
+    ) {
+      return {
+        status: 500,
+        body: JSON.stringify({ error: "Owner API unavailable" }),
+        contentType: "application/json",
+      };
+    }
+
+    // Extract script name and owner from path /api/scripts/<script>/owners/<ownerId>
+    let pathParts = req.path.replace("/api/scripts/", "").split("/owners/");
+    if (pathParts.length !== 2) {
+      return {
+        status: 400,
+        body: JSON.stringify({ error: "Invalid path format" }),
+        contentType: "application/json",
+      };
+    }
+
+    let scriptName = decodeURIComponent(pathParts[0]);
+    let ownerId = decodeURIComponent(pathParts[1]);
+
+    let fullUri;
+    if (scriptName.startsWith("https://")) {
+      fullUri = scriptName;
+    } else {
+      fullUri = "https://example.com/" + scriptName;
+    }
+
+    try {
+      const result = scriptStorage.removeScriptOwner(fullUri, ownerId);
+      if (typeof result === "string" && result.startsWith("Error:")) {
+        const forbidden = result.includes("Permission denied") || result.includes("Cannot remove");
+        return {
+          status: forbidden ? 403 : 500,
+          body: JSON.stringify({ error: result }),
+          contentType: "application/json",
+        };
+      }
+    } catch (error) {
+      const message = error && error.message ? error.message : String(error);
+      const forbidden = message.includes("Permission denied") || message.includes("Cannot remove");
+      return {
+        status: forbidden ? 403 : 500,
+        body: JSON.stringify({ error: message }),
+        contentType: "application/json",
+      };
+    }
+
+    return {
+      status: 200,
+      body: JSON.stringify({
+        message: "Owner removed successfully",
+        ownerId: ownerId,
+        uri: fullUri,
+      }),
+      contentType: "application/json",
+    };
+  } catch (error) {
+    return {
+      status: 500,
+      body: JSON.stringify({ error: error.message }),
+      contentType: "application/json",
+    };
+  }
+}
+
 // API: Get logs
 function apiGetLogs(context) {
   const req = getRequest(context);
@@ -1667,6 +1825,8 @@ function init(context) {
     "apiUpdateScriptPrivilege",
     "POST",
   );
+  routeRegistry.registerRoute("/api/scripts/*/owners", "apiAddScriptOwner", "POST");
+  routeRegistry.registerRoute("/api/scripts/*/owners/*", "apiRemoveScriptOwner", "DELETE");
   routeRegistry.registerRoute("/api/logs", "apiGetLogs", "GET");
   routeRegistry.registerRoute("/api/logs", "apiPruneLogs", "DELETE");
   routeRegistry.registerRoute("/api/assets", "apiGetAssets", "GET");
