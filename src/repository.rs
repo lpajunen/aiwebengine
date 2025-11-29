@@ -120,6 +120,7 @@ pub struct ScriptMetadata {
     /// Cached route registrations from init() function
     pub registrations: RouteRegistrations,
     pub privileged: bool,
+    pub owners: Vec<String>,
 }
 
 impl ScriptMetadata {
@@ -139,6 +140,7 @@ impl ScriptMetadata {
             last_init_time: None,
             registrations: HashMap::new(),
             privileged: false,
+            owners: Vec::new(),
         }
     }
 
@@ -542,6 +544,255 @@ async fn db_set_script_privileged(pool: &PgPool, uri: &str, privileged: bool) ->
     })?;
 
     Ok(())
+}
+
+/// Database-backed get script ID by URI
+async fn db_get_script_id(pool: &PgPool, uri: &str) -> AppResult<Option<String>> {
+    let row = sqlx::query(
+        r#"
+        SELECT id::text FROM scripts WHERE uri = $1
+        "#,
+    )
+    .bind(uri)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error getting script ID: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    if let Some(row) = row {
+        let id: String = row.try_get("id").map_err(|e| {
+            error!("Database error parsing script ID: {}", e);
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
+        })?;
+        Ok(Some(id))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Database-backed add script owner
+async fn db_add_script_owner(pool: &PgPool, uri: &str, user_id: &str) -> AppResult<()> {
+    // First get the script ID
+    let script_id = db_get_script_id(pool, uri)
+        .await?
+        .ok_or_else(|| AppError::ScriptNotFound {
+            uri: uri.to_string(),
+        })?;
+
+    // Insert ownership record (ignore if already exists)
+    sqlx::query(
+        r#"
+        INSERT INTO script_owners (script_id, user_id, created_at)
+        VALUES ($1::uuid, $2, NOW())
+        ON CONFLICT (script_id, user_id) DO NOTHING
+        "#,
+    )
+    .bind(&script_id)
+    .bind(user_id)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error adding script owner: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    debug!("Added owner {} to script {}", user_id, uri);
+    Ok(())
+}
+
+/// Database-backed remove script owner
+async fn db_remove_script_owner(pool: &PgPool, uri: &str, user_id: &str) -> AppResult<bool> {
+    // First get the script ID
+    let script_id = db_get_script_id(pool, uri)
+        .await?
+        .ok_or_else(|| AppError::ScriptNotFound {
+            uri: uri.to_string(),
+        })?;
+
+    let result = sqlx::query(
+        r#"
+        DELETE FROM script_owners WHERE script_id = $1::uuid AND user_id = $2
+        "#,
+    )
+    .bind(&script_id)
+    .bind(user_id)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error removing script owner: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    let existed = result.rows_affected() > 0;
+    if existed {
+        debug!("Removed owner {} from script {}", user_id, uri);
+    } else {
+        debug!("Owner {} was not found for script {}", user_id, uri);
+    }
+
+    Ok(existed)
+}
+
+/// Database-backed get script owners
+async fn db_get_script_owners(pool: &PgPool, uri: &str) -> AppResult<Vec<String>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT so.user_id
+        FROM script_owners so
+        JOIN scripts s ON s.id = so.script_id
+        WHERE s.uri = $1
+        ORDER BY so.created_at ASC
+        "#,
+    )
+    .bind(uri)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error getting script owners: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    let owners = rows
+        .into_iter()
+        .map(|row| {
+            row.try_get("user_id").map_err(|e| {
+                error!("Database error parsing user_id: {}", e);
+                AppError::Database {
+                    message: format!("Database error: {}", e),
+                    source: None,
+                }
+            })
+        })
+        .collect::<Result<Vec<String>, AppError>>()?;
+
+    Ok(owners)
+}
+
+/// Database-backed check if user owns script
+async fn db_user_owns_script(pool: &PgPool, uri: &str, user_id: &str) -> AppResult<bool> {
+    let row = sqlx::query(
+        r#"
+        SELECT EXISTS(
+            SELECT 1
+            FROM script_owners so
+            JOIN scripts s ON s.id = so.script_id
+            WHERE s.uri = $1 AND so.user_id = $2
+        ) as owns
+        "#,
+    )
+    .bind(uri)
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error checking script ownership: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    let owns: bool = row.try_get("owns").map_err(|e| {
+        error!("Database error parsing ownership check: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    Ok(owns)
+}
+
+/// Database-backed count script owners
+async fn db_count_script_owners(pool: &PgPool, uri: &str) -> AppResult<i64> {
+    let row = sqlx::query(
+        r#"
+        SELECT COUNT(*) as count
+        FROM script_owners so
+        JOIN scripts s ON s.id = so.script_id
+        WHERE s.uri = $1
+        "#,
+    )
+    .bind(uri)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error counting script owners: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    let count: i64 = row.try_get("count").map_err(|e| {
+        error!("Database error parsing owner count: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    Ok(count)
+}
+
+/// Database-backed get all script owners (returns HashMap of uri -> owners)
+async fn db_get_all_script_owners(pool: &PgPool) -> AppResult<HashMap<String, Vec<String>>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT s.uri, so.user_id
+        FROM script_owners so
+        JOIN scripts s ON s.id = so.script_id
+        ORDER BY s.uri, so.created_at ASC
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error getting all script owners: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    let mut owners_map: HashMap<String, Vec<String>> = HashMap::new();
+    for row in rows {
+        let uri: String = row.try_get("uri").map_err(|e| {
+            error!("Database error parsing uri: {}", e);
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
+        })?;
+        let user_id: String = row.try_get("user_id").map_err(|e| {
+            error!("Database error parsing user_id: {}", e);
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
+        })?;
+
+        owners_map.entry(uri).or_default().push(user_id);
+    }
+
+    Ok(owners_map)
 }
 
 /// Database-backed set shared storage item
@@ -1519,6 +1770,43 @@ pub fn upsert_script(uri: &str, content: &str) -> AppResult<()> {
     run_blocking(async { repo.upsert_script(uri, content).await })
 }
 
+/// Upsert script and set owner if it's a new script
+pub fn upsert_script_with_owner(
+    uri: &str,
+    content: &str,
+    owner_user_id: Option<&str>,
+) -> AppResult<()> {
+    if uri.trim().is_empty() {
+        return Err(RepositoryError::InvalidData("URI cannot be empty".to_string()).into());
+    }
+
+    if content.len() > 1_000_000 {
+        // 1MB limit
+        return Err(
+            RepositoryError::InvalidData("Script content too large (>1MB)".to_string()).into(),
+        );
+    }
+
+    // Check if script already exists
+    let script_exists = fetch_script(uri).is_some();
+
+    // Upsert the script
+    let repo = get_repository();
+    run_blocking(async { repo.upsert_script(uri, content).await })?;
+
+    // If it's a new script (not an update) and we have an owner, add ownership
+    // Skip ownership for bootstrap scripts
+    if !script_exists
+        && !is_bootstrap_script(uri)
+        && let Some(user_id) = owner_user_id
+    {
+        run_blocking(async { repo.add_script_owner(uri, user_id).await })?;
+        debug!("Set initial owner {} for new script {}", user_id, uri);
+    }
+
+    Ok(())
+}
+
 /// In-memory implementation of upsert script (existing logic)
 fn upsert_script_in_memory(uri: &str, content: &str) -> AppResult<()> {
     let mut guard = safe_lock_scripts()?;
@@ -1683,6 +1971,36 @@ pub fn delete_script(uri: &str) -> bool {
             false
         }
     }
+}
+
+/// Add an owner to a script
+pub fn add_script_owner(uri: &str, user_id: &str) -> AppResult<()> {
+    let repo = get_repository();
+    run_blocking(async { repo.add_script_owner(uri, user_id).await })
+}
+
+/// Remove an owner from a script
+pub fn remove_script_owner(uri: &str, user_id: &str) -> AppResult<bool> {
+    let repo = get_repository();
+    run_blocking(async { repo.remove_script_owner(uri, user_id).await })
+}
+
+/// Get all owners of a script
+pub fn get_script_owners(uri: &str) -> AppResult<Vec<String>> {
+    let repo = get_repository();
+    run_blocking(async { repo.get_script_owners(uri).await })
+}
+
+/// Check if a user owns a script
+pub fn user_owns_script(uri: &str, user_id: &str) -> AppResult<bool> {
+    let repo = get_repository();
+    run_blocking(async { repo.user_owns_script(uri, user_id).await })
+}
+
+/// Count the number of owners for a script
+pub fn count_script_owners(uri: &str) -> AppResult<i64> {
+    let repo = get_repository();
+    run_blocking(async { repo.count_script_owners(uri).await })
 }
 
 /// Helper function to get static assets embedded at compile time
@@ -2116,6 +2434,13 @@ pub trait Repository: Send + Sync {
     // Security operations
     async fn get_script_privileged(&self, uri: &str) -> AppResult<Option<bool>>;
     async fn set_script_privileged(&self, uri: &str, privileged: bool) -> AppResult<()>;
+
+    // Ownership operations
+    async fn add_script_owner(&self, uri: &str, user_id: &str) -> AppResult<()>;
+    async fn remove_script_owner(&self, uri: &str, user_id: &str) -> AppResult<bool>;
+    async fn get_script_owners(&self, uri: &str) -> AppResult<Vec<String>>;
+    async fn user_owns_script(&self, uri: &str, user_id: &str) -> AppResult<bool>;
+    async fn count_script_owners(&self, uri: &str) -> AppResult<i64>;
 }
 
 /// PostgreSQL implementation of the Repository trait
@@ -2175,8 +2500,11 @@ impl Repository for PostgresRepository {
             .await?
             .unwrap_or(default_privileged_for(uri));
 
+        let owners = db_get_script_owners(&self.pool, uri).await?;
+
         let mut metadata = ScriptMetadata::new(uri.to_string(), content);
         metadata.privileged = privileged;
+        metadata.owners = owners;
 
         // Cache it
         if let Ok(mut guard) = safe_lock_scripts() {
@@ -2189,6 +2517,10 @@ impl Repository for PostgresRepository {
     async fn get_all_script_metadata(&self) -> AppResult<Vec<ScriptMetadata>> {
         // Fetch scripts from database only (no static scripts for Postgres)
         let db_scripts = self.list_scripts().await?;
+
+        // Fetch all owners in one query
+        let all_owners = db_get_all_script_owners(&self.pool).await?;
+
         let mut metadata_list = Vec::new();
 
         // Scope for mutex lock
@@ -2200,7 +2532,11 @@ impl Repository for PostgresRepository {
                     metadata_list.push(cached.clone());
                 } else {
                     // Create new metadata and cache it
-                    let metadata = ScriptMetadata::new(uri.clone(), content);
+                    let mut metadata = ScriptMetadata::new(uri.clone(), content);
+                    // Set owners from bulk query
+                    if let Some(owners) = all_owners.get(&uri) {
+                        metadata.owners = owners.clone();
+                    }
                     guard.insert(uri.clone(), metadata.clone());
                     metadata_list.push(metadata);
                 }
@@ -2354,6 +2690,26 @@ impl Repository for PostgresRepository {
 
     async fn set_script_privileged(&self, uri: &str, privileged: bool) -> AppResult<()> {
         db_set_script_privileged(&self.pool, uri, privileged).await
+    }
+
+    async fn add_script_owner(&self, uri: &str, user_id: &str) -> AppResult<()> {
+        db_add_script_owner(&self.pool, uri, user_id).await
+    }
+
+    async fn remove_script_owner(&self, uri: &str, user_id: &str) -> AppResult<bool> {
+        db_remove_script_owner(&self.pool, uri, user_id).await
+    }
+
+    async fn get_script_owners(&self, uri: &str) -> AppResult<Vec<String>> {
+        db_get_script_owners(&self.pool, uri).await
+    }
+
+    async fn user_owns_script(&self, uri: &str, user_id: &str) -> AppResult<bool> {
+        db_user_owns_script(&self.pool, uri, user_id).await
+    }
+
+    async fn count_script_owners(&self, uri: &str) -> AppResult<i64> {
+        db_count_script_owners(&self.pool, uri).await
     }
 }
 
@@ -2692,6 +3048,60 @@ impl Repository for MemoryRepository {
         guard.insert(uri.to_string(), privileged);
         Ok(())
     }
+
+    async fn add_script_owner(&self, uri: &str, user_id: &str) -> AppResult<()> {
+        // In memory mode, update the metadata directly
+        let mut guard = safe_lock_scripts()?;
+        if let Some(metadata) = guard.get_mut(uri) {
+            if !metadata.owners.contains(&user_id.to_string()) {
+                metadata.owners.push(user_id.to_string());
+            }
+            Ok(())
+        } else {
+            Err(RepositoryError::ScriptNotFound(uri.to_string()).into())
+        }
+    }
+
+    async fn remove_script_owner(&self, uri: &str, user_id: &str) -> AppResult<bool> {
+        let mut guard = safe_lock_scripts()?;
+        if let Some(metadata) = guard.get_mut(uri) {
+            if let Some(pos) = metadata.owners.iter().position(|id| id == user_id) {
+                metadata.owners.remove(pos);
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        } else {
+            Ok(false)
+        }
+    }
+
+    async fn get_script_owners(&self, uri: &str) -> AppResult<Vec<String>> {
+        let guard = safe_lock_scripts()?;
+        if let Some(metadata) = guard.get(uri) {
+            Ok(metadata.owners.clone())
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
+    async fn user_owns_script(&self, uri: &str, user_id: &str) -> AppResult<bool> {
+        let guard = safe_lock_scripts()?;
+        if let Some(metadata) = guard.get(uri) {
+            Ok(metadata.owners.contains(&user_id.to_string()))
+        } else {
+            Ok(false)
+        }
+    }
+
+    async fn count_script_owners(&self, uri: &str) -> AppResult<i64> {
+        let guard = safe_lock_scripts()?;
+        if let Some(metadata) = guard.get(uri) {
+            Ok(metadata.owners.len() as i64)
+        } else {
+            Ok(0)
+        }
+    }
 }
 
 /// Unified repository that delegates to either Postgres or Memory implementation
@@ -2925,6 +3335,41 @@ impl Repository for UnifiedRepository {
         match self {
             Self::Postgres(repo) => repo.set_script_privileged(uri, privileged).await,
             Self::Memory(repo) => repo.set_script_privileged(uri, privileged).await,
+        }
+    }
+
+    async fn add_script_owner(&self, uri: &str, user_id: &str) -> AppResult<()> {
+        match self {
+            Self::Postgres(repo) => repo.add_script_owner(uri, user_id).await,
+            Self::Memory(repo) => repo.add_script_owner(uri, user_id).await,
+        }
+    }
+
+    async fn remove_script_owner(&self, uri: &str, user_id: &str) -> AppResult<bool> {
+        match self {
+            Self::Postgres(repo) => repo.remove_script_owner(uri, user_id).await,
+            Self::Memory(repo) => repo.remove_script_owner(uri, user_id).await,
+        }
+    }
+
+    async fn get_script_owners(&self, uri: &str) -> AppResult<Vec<String>> {
+        match self {
+            Self::Postgres(repo) => repo.get_script_owners(uri).await,
+            Self::Memory(repo) => repo.get_script_owners(uri).await,
+        }
+    }
+
+    async fn user_owns_script(&self, uri: &str, user_id: &str) -> AppResult<bool> {
+        match self {
+            Self::Postgres(repo) => repo.user_owns_script(uri, user_id).await,
+            Self::Memory(repo) => repo.user_owns_script(uri, user_id).await,
+        }
+    }
+
+    async fn count_script_owners(&self, uri: &str) -> AppResult<i64> {
+        match self {
+            Self::Postgres(repo) => repo.count_script_owners(uri).await,
+            Self::Memory(repo) => repo.count_script_owners(uri).await,
         }
     }
 }

@@ -429,10 +429,29 @@ function scriptsQuery(context) {
 
     const scriptMetadata = JSON.parse(scriptsJson);
 
-    const scriptArray = scriptMetadata.map((meta) => ({
-      uri: meta.uri,
-      chars: meta.size || 0,
-    }));
+    const scriptArray = scriptMetadata.map((meta) => {
+      // Get owners for this script
+      let owners = [];
+      try {
+        if (
+          typeof scriptStorage !== "undefined" &&
+          typeof scriptStorage.getScriptOwners === "function"
+        ) {
+          const ownersJson = scriptStorage.getScriptOwners(meta.uri);
+          owners = JSON.parse(ownersJson);
+        }
+      } catch (e) {
+        console.warn(
+          `Failed to get owners for script ${meta.uri}: ${e.message}`,
+        );
+      }
+
+      return {
+        uri: meta.uri,
+        chars: meta.size || 0,
+        owners: owners,
+      };
+    });
 
     return JSON.stringify(scriptArray);
   } catch (error) {
@@ -453,6 +472,20 @@ function scriptQuery(context) {
     const logsJson = console.listLogsForUri(args.uri);
     const logs = JSON.parse(logsJson);
 
+    // Get owners for this script
+    let owners = [];
+    try {
+      if (
+        typeof scriptStorage !== "undefined" &&
+        typeof scriptStorage.getScriptOwners === "function"
+      ) {
+        const ownersJson = scriptStorage.getScriptOwners(args.uri);
+        owners = JSON.parse(ownersJson);
+      }
+    } catch (e) {
+      console.warn(`Failed to get owners for script ${args.uri}: ${e.message}`);
+    }
+
     // getScript returns null if script not found
     if (content !== null && content !== undefined) {
       return JSON.stringify({
@@ -460,6 +493,7 @@ function scriptQuery(context) {
         content: content,
         contentLength: content.length,
         logs: logs,
+        owners: owners,
       });
     } else {
       // Return null if script doesn't exist
@@ -468,6 +502,7 @@ function scriptQuery(context) {
         content: null,
         contentLength: 0,
         logs: logs,
+        owners: owners,
       });
     }
   } catch (error) {
@@ -477,6 +512,7 @@ function scriptQuery(context) {
       content: null,
       contentLength: 0,
       logs: [],
+      owners: [],
     });
   }
 }
@@ -624,6 +660,92 @@ function deleteScriptMutation(context) {
   }
 }
 
+function addScriptOwnerMutation(context) {
+  const req = getRequest(context);
+  const args = getArgs(context);
+  try {
+    const result =
+      typeof scriptStorage !== "undefined" &&
+      typeof scriptStorage.addScriptOwner === "function"
+        ? scriptStorage.addScriptOwner(args.uri, args.userId)
+        : "Error: scriptStorage.addScriptOwner not available";
+
+    // Check if result indicates an error
+    if (typeof result === "string" && result.startsWith("Error:")) {
+      console.error(`Add script owner mutation failed: ${result}`);
+      return JSON.stringify({
+        message: result,
+        uri: args.uri,
+        userId: args.userId,
+        success: false,
+      });
+    }
+
+    console.log(
+      `Owner added via GraphQL: ${args.userId} to script ${args.uri}`,
+    );
+    return JSON.stringify({
+      message:
+        result ||
+        `Successfully added owner ${args.userId} to script ${args.uri}`,
+      uri: args.uri,
+      userId: args.userId,
+      success: true,
+    });
+  } catch (error) {
+    console.error(`Add script owner mutation failed: ${error.message}`);
+    return JSON.stringify({
+      message: `Error: Failed to add owner: ${error.message}`,
+      uri: args.uri,
+      userId: args.userId,
+      success: false,
+    });
+  }
+}
+
+function removeScriptOwnerMutation(context) {
+  const req = getRequest(context);
+  const args = getArgs(context);
+  try {
+    const result =
+      typeof scriptStorage !== "undefined" &&
+      typeof scriptStorage.removeScriptOwner === "function"
+        ? scriptStorage.removeScriptOwner(args.uri, args.userId)
+        : "Error: scriptStorage.removeScriptOwner not available";
+
+    // Check if result indicates an error
+    if (typeof result === "string" && result.startsWith("Error:")) {
+      console.error(`Remove script owner mutation failed: ${result}`);
+      return JSON.stringify({
+        message: result,
+        uri: args.uri,
+        userId: args.userId,
+        success: false,
+      });
+    }
+
+    console.log(
+      `Owner removed via GraphQL: ${args.userId} from script ${args.uri}`,
+    );
+    return JSON.stringify({
+      message:
+        result ||
+        `Successfully removed owner ${args.userId} from script ${args.uri}`,
+      uri: args.uri,
+      userId: args.userId,
+      success: true,
+    });
+  } catch (error) {
+    console.error(`Remove script owner mutation failed: ${error.message}`);
+    return JSON.stringify({
+      message: `Error: Failed to remove owner: ${error.message}`,
+      uri: args.uri,
+      userId: args.userId,
+      success: false,
+    });
+  }
+}
+
 // OpenAPI specification endpoint
 function openapiSpec(context) {
   try {
@@ -722,12 +844,12 @@ function init(context) {
     // Register GraphQL queries
     graphQLRegistry.registerQuery(
       "scripts",
-      "type ScriptInfo { uri: String!, chars: Int! } type Query { scripts: [ScriptInfo!]! }",
+      "type ScriptInfo { uri: String!, chars: Int!, owners: [String!]! } type Query { scripts: [ScriptInfo!]! }",
       "scriptsQuery",
     );
     graphQLRegistry.registerQuery(
       "script",
-      "type ScriptDetail { uri: String!, content: String!, contentLength: Int!, logs: [String!]! } type Query { script(uri: String!): ScriptDetail }",
+      "type ScriptDetail { uri: String!, content: String!, contentLength: Int!, logs: [String!]!, owners: [String!]! } type Query { script(uri: String!): ScriptDetail }",
       "scriptQuery",
     );
     graphQLRegistry.registerQuery(
@@ -751,6 +873,16 @@ function init(context) {
       "deleteScript",
       "type DeleteScriptResponse { message: String!, uri: String!, success: Boolean! } type Mutation { deleteScript(uri: String!): DeleteScriptResponse! }",
       "deleteScriptMutation",
+    );
+    graphQLRegistry.registerMutation(
+      "addScriptOwner",
+      "type OwnershipResponse { message: String!, uri: String!, userId: String!, success: Boolean! } type Mutation { addScriptOwner(uri: String!, userId: String!): OwnershipResponse! }",
+      "addScriptOwnerMutation",
+    );
+    graphQLRegistry.registerMutation(
+      "removeScriptOwner",
+      "type OwnershipResponse { message: String!, uri: String!, userId: String!, success: Boolean! } type Mutation { removeScriptOwner(uri: String!, userId: String!): OwnershipResponse! }",
+      "removeScriptOwnerMutation",
     );
 
     if (typeof schedulerService !== "undefined") {

@@ -279,7 +279,7 @@ fetch("/graphql/sse?channelId=123", {
 **1. Documentation**
 Add to docs/solution-developers/:
 
-````markdown
+`````markdown
 ## GraphQL Subscriptions
 
 ### Endpoint
@@ -310,11 +310,14 @@ eventSource.onmessage = function(event) {
   // Process SSE data...
 };
 ````
-````
+`````
 
-````
+```
+
+```
 
 **2. Better Error Messages**
+
 ```rust
 // When POST /graphql receives subscription query
 if query_contains_subscription(&query) {
@@ -331,7 +334,7 @@ if method == "POST" {
          Send subscription query as query parameter: /graphql/sse?query=..."
     );
 }
-````
+```
 
 **3. Example Scripts**
 Add to `scripts/example_scripts/`:

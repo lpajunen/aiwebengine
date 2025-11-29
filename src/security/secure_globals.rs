@@ -642,6 +642,114 @@ impl SecureGlobalContext {
         )?;
         script_storage.set("canManageScriptPrivileges", can_manage_privileges)?;
 
+        // Secure getScriptOwners function
+        let _user_ctx_get_owners = user_context.clone();
+        let get_script_owners = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, script_name: String| -> JsResult<String> {
+                // Anyone can view owners (for transparency)
+                match repository::get_script_owners(&script_name) {
+                    Ok(owners) => {
+                        // Return as JSON array
+                        match serde_json::to_string(&owners) {
+                            Ok(json) => Ok(json),
+                            Err(e) => Ok(format!("Error serializing owners: {}", e)),
+                        }
+                    }
+                    Err(e) => Ok(format!("Error getting owners: {}", e)),
+                }
+            },
+        )?;
+        script_storage.set("getScriptOwners", get_script_owners)?;
+
+        // Secure addScriptOwner function (admin or current owner only)
+        let user_ctx_add_owner = user_context.clone();
+        let add_script_owner = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  script_name: String,
+                  new_owner_id: String|
+                  -> JsResult<String> {
+                // Check if user is admin or owns the script
+                let is_admin =
+                    user_ctx_add_owner.has_capability(&crate::security::Capability::DeleteScripts);
+                let user_owns = if let Some(user_id) = &user_ctx_add_owner.user_id {
+                    repository::user_owns_script(&script_name, user_id).unwrap_or(false)
+                } else {
+                    false
+                };
+
+                if !is_admin && !user_owns {
+                    return Ok("Error: Permission denied. You must be an administrator or owner to add owners".to_string());
+                }
+
+                // Add the new owner
+                match repository::add_script_owner(&script_name, &new_owner_id) {
+                    Ok(_) => Ok(format!(
+                        "Successfully added owner '{}' to script '{}'",
+                        new_owner_id, script_name
+                    )),
+                    Err(e) => Ok(format!("Error adding owner: {}", e)),
+                }
+            },
+        )?;
+        script_storage.set("addScriptOwner", add_script_owner)?;
+
+        // Secure removeScriptOwner function (admin or current owner only, prevents removing last owner)
+        let user_ctx_remove_owner = user_context.clone();
+        let remove_script_owner = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  script_name: String,
+                  owner_id_to_remove: String|
+                  -> JsResult<String> {
+                // Check if user is admin or owns the script
+                let is_admin = user_ctx_remove_owner
+                    .has_capability(&crate::security::Capability::DeleteScripts);
+                let user_owns = if let Some(user_id) = &user_ctx_remove_owner.user_id {
+                    repository::user_owns_script(&script_name, user_id).unwrap_or(false)
+                } else {
+                    false
+                };
+
+                if !is_admin && !user_owns {
+                    return Ok("Error: Permission denied. You must be an administrator or owner to remove owners".to_string());
+                }
+
+                // Non-admins cannot remove the last owner
+                if !is_admin {
+                    match repository::count_script_owners(&script_name) {
+                        Ok(count) if count <= 1 => {
+                            return Ok("Error: Cannot remove the last owner. Transfer ownership to another user first, or contact an administrator.".to_string());
+                        }
+                        Err(e) => {
+                            return Ok(format!("Error checking owner count: {}", e));
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Remove the owner
+                match repository::remove_script_owner(&script_name, &owner_id_to_remove) {
+                    Ok(existed) => {
+                        if existed {
+                            Ok(format!(
+                                "Successfully removed owner '{}' from script '{}'",
+                                owner_id_to_remove, script_name
+                            ))
+                        } else {
+                            Ok(format!(
+                                "Owner '{}' was not found for script '{}'",
+                                owner_id_to_remove, script_name
+                            ))
+                        }
+                    }
+                    Err(e) => Ok(format!("Error removing owner: {}", e)),
+                }
+            },
+        )?;
+        script_storage.set("removeScriptOwner", remove_script_owner)?;
+
         // Secure upsertScript function
         let user_ctx_upsert = user_context.clone();
         let _config_upsert = self.config.clone();
@@ -663,8 +771,30 @@ impl SecureGlobalContext {
                     return Ok("Error: Script name and content cannot be empty".to_string());
                 }
 
-                // Store the script using repository
-                if let Err(e) = repository::upsert_script(&script_name, &js_script) {
+                // Check ownership permission for existing scripts
+                if let Some(_existing_script) = repository::fetch_script(&script_name) {
+                    // Script exists - check if user is admin or owns it
+                    let is_admin =
+                        user_ctx_upsert.has_capability(&crate::security::Capability::DeleteScripts);
+                    let user_owns = if let Some(user_id) = &user_ctx_upsert.user_id {
+                        repository::user_owns_script(&script_name, user_id).unwrap_or(false)
+                    } else {
+                        false
+                    };
+
+                    if !is_admin && !user_owns {
+                        return Ok(format!(
+                            "Error: Permission denied. You must be an administrator or owner to modify script '{}'",
+                            script_name
+                        ));
+                    }
+                }
+
+                // Store the script using repository with owner
+                let owner_user_id = user_ctx_upsert.user_id.as_deref();
+                if let Err(e) =
+                    repository::upsert_script_with_owner(&script_name, &js_script, owner_user_id)
+                {
                     return Ok(format!("Error storing script: {}", e));
                 }
 
@@ -753,6 +883,24 @@ impl SecureGlobalContext {
                         script_name = %script_name,
                         error = %e,
                         "deleteScript capability check failed"
+                    );
+                    return Ok(false);
+                }
+
+                // Check ownership permission - admins can delete any script, others only owned scripts
+                let is_admin =
+                    user_ctx_delete.has_capability(&crate::security::Capability::DeleteScripts);
+                let user_owns = if let Some(user_id) = &user_ctx_delete.user_id {
+                    repository::user_owns_script(&script_name, user_id).unwrap_or(false)
+                } else {
+                    false
+                };
+
+                if !is_admin && !user_owns {
+                    warn!(
+                        user_id = ?user_ctx_delete.user_id,
+                        script_name = %script_name,
+                        "deleteScript ownership check failed - user is not admin and does not own script"
                     );
                     return Ok(false);
                 }
