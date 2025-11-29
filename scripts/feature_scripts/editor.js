@@ -135,6 +135,14 @@ function serveEditor(context) {
                             <h3>Scripts</h3>
                             <button id="new-script-btn" class="btn btn-primary btn-small">+ New</button>
                         </div>
+                        <div class="scripts-filter">
+                            <select id="scripts-filter-select" class="filter-select">
+                                <option value="all">All Scripts</option>
+                                <option value="mine">My Scripts</option>
+                                <option value="system">System Scripts</option>
+                                <option value="unowned">Unowned Scripts</option>
+                            </select>
+                        </div>
                         <div id="scripts-list" class="scripts-list">
                             <!-- Scripts will be loaded here -->
                         </div>
@@ -150,6 +158,15 @@ function serveEditor(context) {
                         <div class="script-security-panel">
                           <span id="script-privileged-badge" class="privileged-badge neutral">No script selected</span>
                           <button id="toggle-privileged-btn" class="btn btn-secondary btn-small" disabled>Toggle Privileged</button>
+                        </div>
+                        <div class="script-ownership-panel">
+                          <div class="ownership-info">
+                            <span class="ownership-label">Owners:</span>
+                            <span id="script-owners-list" class="owners-list">-</span>
+                          </div>
+                          <div class="ownership-actions">
+                            <button id="manage-owners-btn" class="btn btn-secondary btn-small" disabled>Manage Owners</button>
+                          </div>
                         </div>
                         <div id="monaco-editor" class="monaco-container"></div>
                     </div>
@@ -299,6 +316,7 @@ function serveEditor(context) {
 
 // API: List all scripts
 function apiListScripts(context) {
+  const req = getRequest(context);
   try {
     const scriptsJson =
       typeof scriptStorage !== "undefined" &&
@@ -307,6 +325,9 @@ function apiListScripts(context) {
         : "[]";
 
     const scriptMetadata = JSON.parse(scriptsJson);
+
+    // Get current user ID from request
+    const currentUserId = req.auth && req.auth.userId ? req.auth.userId : null;
 
     // Sort scripts alphabetically (case-insensitive)
     scriptMetadata.sort((a, b) =>
@@ -319,14 +340,37 @@ function apiListScripts(context) {
         ? !!scriptStorage.canManageScriptPrivileges()
         : false;
 
-    const scriptDetails = scriptMetadata.map((meta) => ({
-      uri: meta.uri,
-      displayName: meta.name || meta.uri,
-      size: meta.size || 0,
-      lastModified: new Date(meta.updatedAt || Date.now()).toISOString(),
-      privileged: !!meta.privileged,
-      defaultPrivileged: getSecurityField(meta.uri, "default_privileged"),
-    }));
+    const scriptDetails = scriptMetadata.map((meta) => {
+      // Get owners for this script
+      let owners = [];
+      let isOwner = false;
+      if (
+        typeof scriptStorage !== "undefined" &&
+        typeof scriptStorage.getScriptOwners === "function"
+      ) {
+        try {
+          const ownersJson = scriptStorage.getScriptOwners(meta.uri);
+          owners = JSON.parse(ownersJson || "[]");
+          isOwner = currentUserId && owners.includes(currentUserId);
+        } catch (e) {
+          console.log(
+            "Error getting owners for " + meta.uri + ": " + e.message,
+          );
+        }
+      }
+
+      return {
+        uri: meta.uri,
+        displayName: meta.name || meta.uri,
+        size: meta.size || 0,
+        lastModified: new Date(meta.updatedAt || Date.now()).toISOString(),
+        privileged: !!meta.privileged,
+        defaultPrivileged: getSecurityField(meta.uri, "default_privileged"),
+        owners: owners,
+        isOwner: isOwner,
+        ownerCount: owners.length,
+      };
+    });
 
     return {
       status: 200,

@@ -8,6 +8,9 @@ class AIWebEngineEditor {
     this.templates = {};
     this.scriptSecurityProfiles = {};
     this.permissions = { canTogglePrivileged: false };
+    this.currentFilter = "all";
+    this.scriptsData = [];
+    this.currentUserId = null;
     this.init();
   }
 
@@ -30,20 +33,40 @@ class AIWebEngineEditor {
   compileTemplates() {
     // Using plain JavaScript template functions instead of Handlebars
     this.templates = {
-      "script-item": (data) => `
-        <div class="script-item ${data.active ? "active" : ""}" data-script="${data.uri}" title="${data.uri}">
-          <div class="script-icon">📄</div>
-          <div class="script-info">
-            <div class="script-name">${data.displayName}</div>
-            <div class="script-meta">
-              <span class="script-size">${data.size} bytes</span>
-              <span class="privileged-pill ${data.privileged ? "privileged" : "restricted"}">
-                ${data.privileged ? "Privileged" : "Restricted"}
-              </span>
+      "script-item": (data) => {
+        const ownerClass =
+          data.ownerCount === 0
+            ? "system-script"
+            : data.isOwner
+              ? "owned"
+              : "unowned";
+        const ownerBadge =
+          data.ownerCount === 0
+            ? '<span class="owner-badge system">SYSTEM</span>'
+            : data.isOwner
+              ? '<span class="owner-badge">MINE</span>'
+              : "";
+        return `
+          <div class="script-item ${data.active ? "active" : ""} ${ownerClass}" data-script="${data.uri}" data-owner-count="${data.ownerCount}" data-is-owner="${data.isOwner}" title="${data.uri}">
+            <div class="script-icon">📄</div>
+            <div class="script-info">
+              <div class="script-item-header">
+                <div class="script-item-name">${data.displayName}</div>
+                <div class="script-item-badges">
+                  ${ownerBadge}
+                  <span class="privileged-pill ${data.privileged ? "privileged" : "restricted"}">
+                    ${data.privileged ? "P" : "R"}
+                  </span>
+                </div>
+              </div>
+              <div class="script-meta">
+                <span class="script-size">${data.size} bytes</span>
+                ${data.ownerCount > 0 ? `<span class="script-owners">👥 ${data.ownerCount}</span>` : ""}
+              </div>
             </div>
           </div>
-        </div>
-      `,
+        `;
+      },
       "asset-item": (data) => `
         <div class="asset-item ${data.active ? "active" : ""}" data-path="${data.uri}" title="${data.uri}">
           <div class="asset-icon">${data.icon}</div>
@@ -95,6 +118,12 @@ class AIWebEngineEditor {
     document
       .getElementById("toggle-privileged-btn")
       .addEventListener("click", () => this.togglePrivilegedFlag());
+    document
+      .getElementById("manage-owners-btn")
+      .addEventListener("click", () => this.showManageOwnersModal());
+    document
+      .getElementById("scripts-filter-select")
+      .addEventListener("change", (e) => this.filterScripts(e.target.value));
 
     // Asset management
     document
@@ -261,39 +290,74 @@ class AIWebEngineEditor {
         canTogglePrivileged: !!permissions.canTogglePrivileged,
       };
       this.scriptSecurityProfiles = {};
+      this.scriptsData = scripts;
       console.log("[Editor] Loaded scripts:", scripts);
-
-      const scriptsList = document.getElementById("scripts-list");
-      scriptsList.innerHTML = "";
 
       scripts.forEach((script) => {
         const scriptUri = script.uri || script.name;
         this.scriptSecurityProfiles[scriptUri] = {
           privileged: !!script.privileged,
           defaultPrivileged: !!script.defaultPrivileged,
+          owners: script.owners || [],
+          isOwner: !!script.isOwner,
+          ownerCount: script.ownerCount || 0,
         };
-        const scriptElement = document.createElement("div");
-        scriptElement.innerHTML = this.templates["script-item"]({
-          uri: scriptUri,
-          displayName: script.displayName || scriptUri,
-          size: script.size || 0,
-          active: scriptUri === this.currentScript,
-          privileged: !!script.privileged,
-        });
-
-        scriptElement
-          .querySelector(".script-item")
-          .addEventListener("click", () => {
-            this.loadScript(scriptUri);
-          });
-
-        scriptsList.appendChild(scriptElement.firstElementChild);
       });
 
+      this.renderScripts();
       this.renderScriptSecurity(this.currentScript);
     } catch (error) {
       this.showStatus("Error loading scripts: " + error.message, "error");
     }
+  }
+
+  renderScripts() {
+    const scriptsList = document.getElementById("scripts-list");
+    scriptsList.innerHTML = "";
+
+    const filteredScripts = this.getFilteredScripts();
+
+    filteredScripts.forEach((script) => {
+      const scriptUri = script.uri || script.name;
+      const scriptElement = document.createElement("div");
+      scriptElement.innerHTML = this.templates["script-item"]({
+        uri: scriptUri,
+        displayName: script.displayName || scriptUri,
+        size: script.size || 0,
+        active: scriptUri === this.currentScript,
+        privileged: !!script.privileged,
+        owners: script.owners || [],
+        isOwner: !!script.isOwner,
+        ownerCount: script.ownerCount || 0,
+      });
+
+      scriptElement
+        .querySelector(".script-item")
+        .addEventListener("click", () => {
+          this.loadScript(scriptUri);
+        });
+
+      scriptsList.appendChild(scriptElement.firstElementChild);
+    });
+  }
+
+  getFilteredScripts() {
+    switch (this.currentFilter) {
+      case "mine":
+        return this.scriptsData.filter((s) => s.isOwner);
+      case "system":
+        return this.scriptsData.filter((s) => s.ownerCount === 0);
+      case "unowned":
+        return this.scriptsData.filter((s) => s.ownerCount === 0);
+      case "all":
+      default:
+        return this.scriptsData;
+    }
+  }
+
+  filterScripts(filter) {
+    this.currentFilter = filter;
+    this.renderScripts();
   }
 
   async loadScript(scriptName) {
@@ -324,6 +388,7 @@ class AIWebEngineEditor {
       document.getElementById("delete-script-btn").disabled = false;
 
       this.renderScriptSecurity(scriptName);
+      this.renderScriptOwnership(scriptName);
     } catch (error) {
       this.showStatus("Error loading script: " + error.message, "error");
     }
@@ -507,6 +572,169 @@ function init(context) {
       this.loadScripts();
     } catch (error) {
       this.showStatus("Error updating privilege: " + error.message, "error");
+    }
+  }
+
+  renderScriptOwnership(scriptName) {
+    const ownersList = document.getElementById("script-owners-list");
+    const manageBtn = document.getElementById("manage-owners-btn");
+
+    if (!ownersList || !manageBtn) {
+      return;
+    }
+
+    if (!scriptName || !this.scriptSecurityProfiles[scriptName]) {
+      ownersList.textContent = "-";
+      manageBtn.disabled = true;
+      return;
+    }
+
+    const profile = this.scriptSecurityProfiles[scriptName];
+    const owners = profile.owners || [];
+
+    if (owners.length === 0) {
+      ownersList.textContent = "System (no owners)";
+      manageBtn.disabled = true;
+    } else {
+      ownersList.textContent = owners.join(", ");
+      // Enable manage button if user is owner or admin
+      manageBtn.disabled =
+        !profile.isOwner && !this.permissions.canTogglePrivileged;
+    }
+  }
+
+  async showManageOwnersModal() {
+    if (!this.currentScript) return;
+
+    const profile = this.scriptSecurityProfiles[this.currentScript];
+    const owners = profile.owners || [];
+
+    // Create modal
+    const modal = document.createElement("div");
+    modal.className = "modal-overlay";
+    modal.innerHTML = `
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 class="modal-title">Manage Script Owners</h3>
+          <button class="modal-close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p><strong>Script:</strong> ${this.currentScript}</p>
+          <h4>Current Owners</h4>
+          <ul class="owner-list" id="owner-list">
+            ${
+              owners.length === 0
+                ? "<li>No owners (system script)</li>"
+                : owners
+                    .map(
+                      (owner) => `
+              <li class="owner-item">
+                <span class="owner-name">${owner}</span>
+                <button class="owner-remove-btn" data-owner="${owner}" ${owners.length === 1 ? 'disabled title="Cannot remove last owner"' : ""}>Remove</button>
+              </li>
+            `,
+                    )
+                    .join("")
+            }
+          </ul>
+          <div class="add-owner-section">
+            <h4>Add Owner</h4>
+            <div class="add-owner-form">
+              <input type="text" class="add-owner-input" id="new-owner-input" placeholder="Enter user ID">
+              <button class="add-owner-btn" id="add-owner-btn">Add</button>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary modal-close-btn">Close</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    // Event listeners
+    modal.querySelectorAll(".modal-close, .modal-close-btn").forEach((btn) => {
+      btn.addEventListener("click", () => modal.remove());
+    });
+
+    modal.querySelector(".modal-overlay").addEventListener("click", (e) => {
+      if (e.target === modal) modal.remove();
+    });
+
+    // Remove owner buttons
+    modal.querySelectorAll(".owner-remove-btn").forEach((btn) => {
+      btn.addEventListener("click", async (e) => {
+        const owner = e.target.dataset.owner;
+        await this.removeScriptOwner(owner);
+        modal.remove();
+        await this.loadScripts();
+        this.renderScriptOwnership(this.currentScript);
+      });
+    });
+
+    // Add owner button
+    modal
+      .querySelector("#add-owner-btn")
+      .addEventListener("click", async () => {
+        const newOwner = modal.querySelector("#new-owner-input").value.trim();
+        if (newOwner) {
+          await this.addScriptOwner(newOwner);
+          modal.remove();
+          await this.loadScripts();
+          this.renderScriptOwnership(this.currentScript);
+        }
+      });
+  }
+
+  async addScriptOwner(ownerId) {
+    if (!this.currentScript) return;
+
+    try {
+      const encodedScript = encodeURIComponent(this.currentScript);
+      const response = await fetch(`/api/scripts/${encodedScript}/owners`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ownerId }),
+      });
+
+      if (response.ok) {
+        this.showStatus(`Added owner: ${ownerId}`, "success");
+      } else {
+        const error = await response.json();
+        this.showStatus(
+          `Error: ${error.error || "Failed to add owner"}`,
+          "error",
+        );
+      }
+    } catch (error) {
+      this.showStatus("Error adding owner: " + error.message, "error");
+    }
+  }
+
+  async removeScriptOwner(ownerId) {
+    if (!this.currentScript) return;
+
+    try {
+      const encodedScript = encodeURIComponent(this.currentScript);
+      const response = await fetch(
+        `/api/scripts/${encodedScript}/owners/${encodeURIComponent(ownerId)}`,
+        {
+          method: "DELETE",
+        },
+      );
+
+      if (response.ok) {
+        this.showStatus(`Removed owner: ${ownerId}`, "success");
+      } else {
+        const error = await response.json();
+        this.showStatus(
+          `Error: ${error.error || "Failed to remove owner"}`,
+          "error",
+        );
+      }
+    } catch (error) {
+      this.showStatus("Error removing owner: " + error.message, "error");
     }
   }
 

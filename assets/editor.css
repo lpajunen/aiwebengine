@@ -1108,3 +1108,285 @@ body {
 .mb-20 {
   margin-bottom: 20px;
 }
+
+/* Ownership Styles */
+.scripts-filter {
+  padding: 10px 15px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.filter-select {
+  width: 100%;
+  padding: 6px 10px;
+  background-color: var(--light-bg);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  font-size: 13px;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.filter-select:hover {
+  border-color: var(--primary-color);
+}
+
+.filter-select:focus {
+  outline: none;
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px rgba(0, 122, 204, 0.2);
+}
+
+.script-ownership-panel {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 15px;
+  background-color: var(--darker-bg);
+  border-bottom: 1px solid var(--border-color);
+  gap: 10px;
+}
+
+.ownership-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.ownership-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.owners-list {
+  font-size: 12px;
+  color: var(--text-color);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ownership-actions {
+  display: flex;
+  gap: 5px;
+}
+
+.owner-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  margin-left: 6px;
+  background-color: var(--primary-color);
+  color: white;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.owner-badge.system {
+  background-color: var(--warning-color);
+  color: var(--dark-bg);
+}
+
+.owner-badge.unowned {
+  background-color: var(--text-muted);
+  color: white;
+}
+
+.script-item.owned {
+  border-left: 3px solid var(--primary-color);
+  padding-left: 12px;
+}
+
+.script-item.system-script {
+  border-left: 3px solid var(--warning-color);
+  padding-left: 12px;
+}
+
+.script-item.unowned {
+  opacity: 0.7;
+}
+
+.script-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+.script-item-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.script-item-badges {
+  display: flex;
+  gap: 4px;
+  margin-left: 8px;
+  flex-shrink: 0;
+}
+
+/* Owner Management Modal */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+}
+
+.modal-content {
+  background-color: var(--darker-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  padding: 20px;
+  min-width: 400px;
+  max-width: 600px;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.modal-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 24px;
+  cursor: pointer;
+  padding: 0;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--border-radius);
+  transition: var(--transition);
+}
+
+.modal-close:hover {
+  background-color: var(--hover-bg);
+  color: var(--text-color);
+}
+
+.modal-body {
+  margin-bottom: 20px;
+}
+
+.owner-list {
+  list-style: none;
+  padding: 0;
+  margin: 15px 0;
+}
+
+.owner-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px;
+  background-color: var(--light-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  margin-bottom: 8px;
+}
+
+.owner-name {
+  font-size: 13px;
+  color: var(--text-color);
+}
+
+.owner-remove-btn {
+  background-color: var(--danger-color);
+  color: white;
+  border: none;
+  padding: 4px 10px;
+  border-radius: var(--border-radius);
+  font-size: 11px;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.owner-remove-btn:hover {
+  background-color: #c82333;
+}
+
+.owner-remove-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.add-owner-section {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border-color);
+}
+
+.add-owner-form {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.add-owner-input {
+  flex: 1;
+  padding: 8px 12px;
+  background-color: var(--light-bg);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  font-size: 13px;
+}
+
+.add-owner-input:focus {
+  outline: none;
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px rgba(0, 122, 204, 0.2);
+}
+
+.add-owner-btn {
+  background-color: var(--primary-color);
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: var(--border-radius);
+  font-size: 13px;
+  cursor: pointer;
+  transition: var(--transition);
+  white-space: nowrap;
+}
+
+.add-owner-btn:hover {
+  background-color: #006bb3;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 15px;
+  border-top: 1px solid var(--border-color);
+}
