@@ -546,56 +546,17 @@ async fn db_set_script_privileged(pool: &PgPool, uri: &str, privileged: bool) ->
     Ok(())
 }
 
-/// Database-backed get script ID by URI
-async fn db_get_script_id(pool: &PgPool, uri: &str) -> AppResult<Option<String>> {
-    let row = sqlx::query(
-        r#"
-        SELECT id::text FROM scripts WHERE uri = $1
-        "#,
-    )
-    .bind(uri)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| {
-        error!("Database error getting script ID: {}", e);
-        AppError::Database {
-            message: format!("Database error: {}", e),
-            source: None,
-        }
-    })?;
-
-    if let Some(row) = row {
-        let id: String = row.try_get("id").map_err(|e| {
-            error!("Database error parsing script ID: {}", e);
-            AppError::Database {
-                message: format!("Database error: {}", e),
-                source: None,
-            }
-        })?;
-        Ok(Some(id))
-    } else {
-        Ok(None)
-    }
-}
-
 /// Database-backed add script owner
 async fn db_add_script_owner(pool: &PgPool, uri: &str, user_id: &str) -> AppResult<()> {
-    // First get the script ID
-    let script_id = db_get_script_id(pool, uri)
-        .await?
-        .ok_or_else(|| AppError::ScriptNotFound {
-            uri: uri.to_string(),
-        })?;
-
     // Insert ownership record (ignore if already exists)
     sqlx::query(
         r#"
-        INSERT INTO script_owners (script_id, user_id, created_at)
-        VALUES ($1::uuid, $2, NOW())
-        ON CONFLICT (script_id, user_id) DO NOTHING
+        INSERT INTO script_owners (script_uri, user_id, created_at)
+        VALUES ($1, $2, NOW())
+        ON CONFLICT (script_uri, user_id) DO NOTHING
         "#,
     )
-    .bind(&script_id)
+    .bind(uri)
     .bind(user_id)
     .execute(pool)
     .await
@@ -613,19 +574,12 @@ async fn db_add_script_owner(pool: &PgPool, uri: &str, user_id: &str) -> AppResu
 
 /// Database-backed remove script owner
 async fn db_remove_script_owner(pool: &PgPool, uri: &str, user_id: &str) -> AppResult<bool> {
-    // First get the script ID
-    let script_id = db_get_script_id(pool, uri)
-        .await?
-        .ok_or_else(|| AppError::ScriptNotFound {
-            uri: uri.to_string(),
-        })?;
-
     let result = sqlx::query(
         r#"
-        DELETE FROM script_owners WHERE script_id = $1::uuid AND user_id = $2
+        DELETE FROM script_owners WHERE script_uri = $1 AND user_id = $2
         "#,
     )
-    .bind(&script_id)
+    .bind(uri)
     .bind(user_id)
     .execute(pool)
     .await
@@ -651,11 +605,10 @@ async fn db_remove_script_owner(pool: &PgPool, uri: &str, user_id: &str) -> AppR
 async fn db_get_script_owners(pool: &PgPool, uri: &str) -> AppResult<Vec<String>> {
     let rows = sqlx::query(
         r#"
-        SELECT so.user_id
-        FROM script_owners so
-        JOIN scripts s ON s.id = so.script_id
-        WHERE s.uri = $1
-        ORDER BY so.created_at ASC
+        SELECT user_id
+        FROM script_owners
+        WHERE script_uri = $1
+        ORDER BY created_at ASC
         "#,
     )
     .bind(uri)
@@ -691,9 +644,8 @@ async fn db_user_owns_script(pool: &PgPool, uri: &str, user_id: &str) -> AppResu
         r#"
         SELECT EXISTS(
             SELECT 1
-            FROM script_owners so
-            JOIN scripts s ON s.id = so.script_id
-            WHERE s.uri = $1 AND so.user_id = $2
+            FROM script_owners
+            WHERE script_uri = $1 AND user_id = $2
         ) as owns
         "#,
     )
@@ -725,9 +677,8 @@ async fn db_count_script_owners(pool: &PgPool, uri: &str) -> AppResult<i64> {
     let row = sqlx::query(
         r#"
         SELECT COUNT(*) as count
-        FROM script_owners so
-        JOIN scripts s ON s.id = so.script_id
-        WHERE s.uri = $1
+        FROM script_owners
+        WHERE script_uri = $1
         "#,
     )
     .bind(uri)
@@ -756,10 +707,9 @@ async fn db_count_script_owners(pool: &PgPool, uri: &str) -> AppResult<i64> {
 async fn db_get_all_script_owners(pool: &PgPool) -> AppResult<HashMap<String, Vec<String>>> {
     let rows = sqlx::query(
         r#"
-        SELECT s.uri, so.user_id
-        FROM script_owners so
-        JOIN scripts s ON s.id = so.script_id
-        ORDER BY s.uri, so.created_at ASC
+        SELECT script_uri, user_id
+        FROM script_owners
+        ORDER BY script_uri, created_at ASC
         "#,
     )
     .fetch_all(pool)
@@ -774,8 +724,8 @@ async fn db_get_all_script_owners(pool: &PgPool) -> AppResult<HashMap<String, Ve
 
     let mut owners_map: HashMap<String, Vec<String>> = HashMap::new();
     for row in rows {
-        let uri: String = row.try_get("uri").map_err(|e| {
-            error!("Database error parsing uri: {}", e);
+        let uri: String = row.try_get("script_uri").map_err(|e| {
+            error!("Database error parsing script_uri: {}", e);
             AppError::Database {
                 message: format!("Database error: {}", e),
                 source: None,
