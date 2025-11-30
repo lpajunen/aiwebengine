@@ -743,8 +743,8 @@ function apiAddScriptOwner(context) {
       };
     }
 
-    // Extract script name from path /api/scripts/<script>/owners
-    let scriptName = req.path.replace("/api/scripts/", "").replace("/owners", "");
+    // Extract script name from path /api/script-owners/<script>
+    let scriptName = req.path.replace("/api/script-owners/", "");
     scriptName = decodeURIComponent(scriptName);
 
     let fullUri;
@@ -828,8 +828,8 @@ function apiRemoveScriptOwner(context) {
       };
     }
 
-    // Extract script name and owner from path /api/scripts/<script>/owners/<ownerId>
-    let pathParts = req.path.replace("/api/scripts/", "").split("/owners/");
+    // Extract script name and owner from path /api/script-owners/<script>/remove/<ownerId>
+    let pathParts = req.path.replace("/api/script-owners/", "").split("/remove/");
     if (pathParts.length !== 2) {
       return {
         status: 400,
@@ -1825,8 +1825,9 @@ function init(context) {
     "apiUpdateScriptPrivilege",
     "POST",
   );
-  routeRegistry.registerRoute("/api/scripts/*/owners", "apiAddScriptOwner", "POST");
-  routeRegistry.registerRoute("/api/scripts/*/owners/*", "apiRemoveScriptOwner", "DELETE");
+  // Owner management uses separate path to avoid wildcard conflicts
+  routeRegistry.registerRoute("/api/script-owners/*", "apiAddScriptOwner", "POST");
+  routeRegistry.registerRoute("/api/script-owners/*/remove/*", "apiRemoveScriptOwner", "DELETE");
   routeRegistry.registerRoute("/api/logs", "apiGetLogs", "GET");
   routeRegistry.registerRoute("/api/logs", "apiPruneLogs", "DELETE");
   routeRegistry.registerRoute("/api/assets", "apiGetAssets", "GET");

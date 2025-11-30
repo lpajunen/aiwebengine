@@ -692,7 +692,7 @@ function init(context) {
 
     try {
       const encodedScript = encodeURIComponent(this.currentScript);
-      const response = await fetch(`/api/scripts/${encodedScript}/owners`, {
+      const response = await fetch(`/api/script-owners/${encodedScript}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ownerId }),
@@ -718,7 +718,7 @@ function init(context) {
     try {
       const encodedScript = encodeURIComponent(this.currentScript);
       const response = await fetch(
-        `/api/scripts/${encodedScript}/owners/${encodeURIComponent(ownerId)}`,
+        `/api/script-owners/${encodedScript}/remove/${encodeURIComponent(ownerId)}`,
         {
           method: "DELETE",
         },
