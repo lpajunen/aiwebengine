@@ -770,7 +770,9 @@ function apiAddScriptOwner(context) {
     if (!payload.ownerId || typeof payload.ownerId !== "string") {
       return {
         status: 400,
-        body: JSON.stringify({ error: "ownerId is required and must be a string" }),
+        body: JSON.stringify({
+          error: "ownerId is required and must be a string",
+        }),
         contentType: "application/json",
       };
     }
@@ -828,18 +830,24 @@ function apiRemoveScriptOwner(context) {
       };
     }
 
-    // Extract script name and owner from path /api/script-owners/<script>/remove/<ownerId>
-    let pathParts = req.path.replace("/api/script-owners/", "").split("/remove/");
-    if (pathParts.length !== 2) {
+    // Extract script name from path /api/script-owners/<script>
+    let scriptName = req.path.replace("/api/script-owners/", "");
+    scriptName = decodeURIComponent(scriptName);
+
+    // Get ownerId from query parameter (DELETE requests often don't support body)
+    const ownerId = req.query && req.query.ownerId ? req.query.ownerId : null;
+
+    if (!ownerId || typeof ownerId !== "string") {
+      console.log(
+        "apiRemoveScriptOwner: ownerId not found in query, query=" +
+          JSON.stringify(req.query),
+      );
       return {
         status: 400,
-        body: JSON.stringify({ error: "Invalid path format" }),
+        body: JSON.stringify({ error: "ownerId query parameter is required" }),
         contentType: "application/json",
       };
     }
-
-    let scriptName = decodeURIComponent(pathParts[0]);
-    let ownerId = decodeURIComponent(pathParts[1]);
 
     let fullUri;
     if (scriptName.startsWith("https://")) {
@@ -851,7 +859,9 @@ function apiRemoveScriptOwner(context) {
     try {
       const result = scriptStorage.removeScriptOwner(fullUri, ownerId);
       if (typeof result === "string" && result.startsWith("Error:")) {
-        const forbidden = result.includes("Permission denied") || result.includes("Cannot remove");
+        const forbidden =
+          result.includes("Permission denied") ||
+          result.includes("Cannot remove");
         return {
           status: forbidden ? 403 : 500,
           body: JSON.stringify({ error: result }),
@@ -860,7 +870,9 @@ function apiRemoveScriptOwner(context) {
       }
     } catch (error) {
       const message = error && error.message ? error.message : String(error);
-      const forbidden = message.includes("Permission denied") || message.includes("Cannot remove");
+      const forbidden =
+        message.includes("Permission denied") ||
+        message.includes("Cannot remove");
       return {
         status: forbidden ? 403 : 500,
         body: JSON.stringify({ error: message }),
@@ -1826,8 +1838,16 @@ function init(context) {
     "POST",
   );
   // Owner management uses separate path to avoid wildcard conflicts
-  routeRegistry.registerRoute("/api/script-owners/*", "apiAddScriptOwner", "POST");
-  routeRegistry.registerRoute("/api/script-owners/*/remove/*", "apiRemoveScriptOwner", "DELETE");
+  routeRegistry.registerRoute(
+    "/api/script-owners/*",
+    "apiAddScriptOwner",
+    "POST",
+  );
+  routeRegistry.registerRoute(
+    "/api/script-owners/*",
+    "apiRemoveScriptOwner",
+    "DELETE",
+  );
   routeRegistry.registerRoute("/api/logs", "apiGetLogs", "GET");
   routeRegistry.registerRoute("/api/logs", "apiPruneLogs", "DELETE");
   routeRegistry.registerRoute("/api/assets", "apiGetAssets", "GET");

@@ -717,8 +717,9 @@ function init(context) {
 
     try {
       const encodedScript = encodeURIComponent(this.currentScript);
+      const encodedOwnerId = encodeURIComponent(ownerId);
       const response = await fetch(
-        `/api/script-owners/${encodedScript}/remove/${encodeURIComponent(ownerId)}`,
+        `/api/script-owners/${encodedScript}?ownerId=${encodedOwnerId}`,
         {
           method: "DELETE",
         },
