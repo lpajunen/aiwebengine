@@ -1407,10 +1407,11 @@ async fn handle_dynamic_request(
         Err(_) => axum::body::Bytes::new(),
     };
 
-    // Make raw body available for all POST/PUT/PATCH requests
-    let raw_body = if !body_bytes.is_empty()
-        && (request_method == "POST" || request_method == "PUT" || request_method == "PATCH")
-    {
+    // Make raw body available for all requests that might have a body
+    // Note: While RFC 7231 doesn't explicitly forbid request bodies for DELETE,
+    // some HTTP clients and proxies may not support it. However, we support it
+    // for maximum flexibility in API design.
+    let raw_body = if !body_bytes.is_empty() {
         Some(String::from_utf8(body_bytes.to_vec()).unwrap_or_default())
     } else {
         None

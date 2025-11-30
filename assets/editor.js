@@ -717,13 +717,11 @@ function init(context) {
 
     try {
       const encodedScript = encodeURIComponent(this.currentScript);
-      const encodedOwnerId = encodeURIComponent(ownerId);
-      const response = await fetch(
-        `/api/script-owners/${encodedScript}?ownerId=${encodedOwnerId}`,
-        {
-          method: "DELETE",
-        },
-      );
+      const response = await fetch(`/api/script-owners/${encodedScript}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ownerId }),
+      });
 
       if (response.ok) {
         this.showStatus(`Removed owner: ${ownerId}`, "success");

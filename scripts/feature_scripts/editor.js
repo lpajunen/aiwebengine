@@ -834,20 +834,29 @@ function apiRemoveScriptOwner(context) {
     let scriptName = req.path.replace("/api/script-owners/", "");
     scriptName = decodeURIComponent(scriptName);
 
-    // Get ownerId from query parameter (DELETE requests often don't support body)
-    const ownerId = req.query && req.query.ownerId ? req.query.ownerId : null;
+    // Get ownerId from request body (now properly supported for DELETE)
+    let payload = {};
+    if (req.body) {
+      try {
+        payload = JSON.parse(req.body);
+      } catch (err) {
+        return {
+          status: 400,
+          body: JSON.stringify({ error: "Invalid JSON payload" }),
+          contentType: "application/json",
+        };
+      }
+    }
 
-    if (!ownerId || typeof ownerId !== "string") {
-      console.log(
-        "apiRemoveScriptOwner: ownerId not found in query, query=" +
-          JSON.stringify(req.query),
-      );
+    if (!payload.ownerId || typeof payload.ownerId !== "string") {
       return {
         status: 400,
-        body: JSON.stringify({ error: "ownerId query parameter is required" }),
+        body: JSON.stringify({ error: "ownerId is required in request body" }),
         contentType: "application/json",
       };
     }
+
+    const ownerId = payload.ownerId;
 
     let fullUri;
     if (scriptName.startsWith("https://")) {
