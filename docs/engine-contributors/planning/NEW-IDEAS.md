@@ -2,9 +2,9 @@
 
 This document contains ideas for improving the aiwebengine architecture to make implementing features simpler and more efficient. These ideas emerged from implementing the script ownership feature.
 
-## 1. Route Pattern Matching with Priority/Specificity
+## 1. Route Pattern Matching with Priority/Specificity ✅ IMPLEMENTED
 
-**Current Issue**: Wildcard routes (`/api/scripts/*`) match too greedily, requiring workarounds like separate base paths (`/api/script-owners/*`) or path validation in handlers.
+**Previous Issue**: Wildcard routes (`/api/scripts/*`) match too greedily, requiring workarounds like separate base paths (`/api/script-owners/*`) or path validation in handlers.
 
 **Problem Example**:
 
@@ -12,26 +12,45 @@ This document contains ideas for improving the aiwebengine architecture to make 
 - More specific routes like `/api/scripts/*/owners` don't get priority
 - Forces awkward workarounds (separate base paths, manual path validation)
 
-**Proposed Solution**: Implement route matching with specificity ordering:
+**Solution Implemented** (November 2025):
 
-- Exact matches should take priority over patterns
-- More specific patterns (with more path segments) should match before less specific ones
-- Example: `/api/scripts/*/owners` should match before `/api/scripts/*`
+Implemented route matching with specificity ordering in `src/lib.rs`:
 
-**Implementation Approach**:
+1. **Specificity Scoring**: Each route pattern gets a score based on:
+   - Exact segments × 1000 (e.g., `/api/users`)
+   - Parameter segments × 100 (e.g., `:id`)
+   - Wildcard depth × -10 (e.g., `/*`)
 
-1. Sort routes by specificity score (exact > specific pattern > general pattern)
-2. Score = (exact segments × 1000) + (pattern segments × 100) + (wildcard depth)
-3. Match against routes in priority order
+2. **Route Selection**: When multiple routes match a path, the route with the highest specificity score is selected
 
-**Benefits**:
+3. **Priority Order**: Exact matches > Parameterized matches > Wildcard matches
 
-- More intuitive REST API design
-- No need for separate base paths or validation hacks
-- Standard RESTful patterns work as expected
-- Consistent with Express.js, Flask, Axum routing behavior
+**Example Behavior**:
 
-**Priority**: HIGH - Would have saved significant development time on ownership feature
+```javascript
+// These routes now work as expected:
+routeRegistry.registerRoute("/api/scripts/*/owners", "manageOwners", "GET"); // Score: 2990
+routeRegistry.registerRoute("/api/scripts/*", "getScript", "GET"); // Score: 1990
+
+// Request to /api/scripts/foo/owners → manageOwners (more specific)
+// Request to /api/scripts/foo → getScript (only match)
+```
+
+**Implementation Details**:
+
+- `calculate_route_specificity()` - Computes specificity score
+- `find_route_handler()` - Collects all matching routes, sorts by specificity
+- Comprehensive unit tests verify correct behavior
+
+**Benefits Achieved**:
+
+- ✅ More intuitive REST API design
+- ✅ No need for separate base paths or validation hacks
+- ✅ Standard RESTful patterns work as expected
+- ✅ Consistent with Express.js, Flask, Axum routing behavior
+- ✅ Script ownership feature can now use natural `/api/scripts/*/owners` paths
+
+**Status**: COMPLETE - Ownership feature can be refactored to use natural paths
 
 ---
 
@@ -492,24 +511,24 @@ await db.transaction(async (tx) => {
 
 ### High Priority (Would save significant time on future features)
 
-1. **Route pattern matching with specificity** - Most impactful for REST API design
-2. **Path parameter extraction** - Reduces boilerplate and prevents bugs
+1. **Path parameter extraction** - Reduces boilerplate and prevents bugs
 
 ### Medium Priority (Reduces boilerplate, improves code quality)
 
-3. **Response builder helpers** - Makes handlers more readable
-4. **Query parameter parsing** - Reduces null checking everywhere
-5. **Structured error responses** - Consistent error handling
-6. **Better context propagation** - Prevents auth bugs
+2. **Response builder helpers** - Makes handlers more readable
+3. **Query parameter parsing** - Reduces null checking everywhere
+4. **Structured error responses** - Consistent error handling
+5. **Better context propagation** - Prevents auth bugs
 
 ### Low Priority (Architectural improvements for future)
 
-7. **Middleware support** - Better code organization
-8. **Database transactions** - Important but complex to implement
-9. **Method-specific routing** - Nice to have, not critical
+6. **Middleware support** - Better code organization
+7. **Database transactions** - Important but complex to implement
+8. **Method-specific routing** - Nice to have, not critical
 
 ### Completed ✅
 
+- **Route pattern matching with specificity** - Implemented November 2025
 - **Request body handling for DELETE** - Implemented November 2025
 
 ---

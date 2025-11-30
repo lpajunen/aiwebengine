@@ -401,6 +401,28 @@ async fn handle_stream_request(req: Request<Body>) -> Response {
     sse.into_response()
 }
 
+/// Calculate specificity score for a route pattern
+/// Higher score = more specific route
+/// Score = (exact segments × 1000) + (param segments × 100) - (wildcard depth × 10)
+fn calculate_route_specificity(pattern: &str) -> i32 {
+    let parts: Vec<&str> = pattern.split('/').filter(|s| !s.is_empty()).collect();
+    let mut exact_count = 0i32;
+    let mut param_count = 0i32;
+    let mut wildcard_depth = 0i32;
+
+    for (depth, part) in parts.iter().enumerate() {
+        if part.starts_with(':') {
+            param_count += 1;
+        } else if *part == "*" {
+            wildcard_depth = (parts.len() - depth) as i32;
+        } else {
+            exact_count += 1;
+        }
+    }
+
+    (exact_count * 1000) + (param_count * 100) - (wildcard_depth * 10)
+}
+
 /// Match a route pattern with parameters against a path
 /// Returns extracted parameters if the pattern matches
 fn match_route_pattern(pattern: &str, path: &str) -> Option<HashMap<String, String>> {
@@ -427,6 +449,7 @@ fn match_route_pattern(pattern: &str, path: &str) -> Option<HashMap<String, Stri
 }
 
 /// Dynamically find a route handler by checking cached registrations from init()
+/// Routes are matched by specificity: exact > params > wildcards
 fn find_route_handler(
     path: &str,
     method: &str,
@@ -440,6 +463,9 @@ fn find_route_handler(
         }
     };
 
+    // Collect all matching routes with their specificity scores
+    let mut candidates: Vec<(i32, String, String, HashMap<String, String>)> = Vec::new();
+
     for metadata in all_metadata {
         // Use cached registrations from init() function
         if metadata.initialized && !metadata.registrations.is_empty() {
@@ -448,7 +474,9 @@ fn find_route_handler(
                 .registrations
                 .get(&(path.to_string(), method.to_string()))
             {
-                return Some((
+                let specificity = calculate_route_specificity(path);
+                candidates.push((
+                    specificity,
                     metadata.uri.clone(),
                     route_meta.handler_name.clone(),
                     HashMap::new(),
@@ -460,7 +488,9 @@ fn find_route_handler(
                 if reg_method == method
                     && let Some(params) = match_route_pattern(pattern, path)
                 {
-                    return Some((
+                    let specificity = calculate_route_specificity(pattern);
+                    candidates.push((
+                        specificity,
                         metadata.uri.clone(),
                         route_meta.handler_name.clone(),
                         params,
@@ -473,7 +503,9 @@ fn find_route_handler(
                 if reg_method == method && pattern.ends_with("/*") {
                     let prefix = &pattern[..pattern.len() - 1]; // Remove the *
                     if path.starts_with(prefix) {
-                        return Some((
+                        let specificity = calculate_route_specificity(pattern);
+                        candidates.push((
+                            specificity,
                             metadata.uri.clone(),
                             route_meta.handler_name.clone(),
                             HashMap::new(),
@@ -482,6 +514,13 @@ fn find_route_handler(
                 }
             }
         }
+    }
+
+    // Sort by specificity (highest first) and return the most specific match
+    if !candidates.is_empty() {
+        candidates.sort_by(|a, b| b.0.cmp(&a.0)); // Descending order
+        let (_, uri, handler, params) = candidates.into_iter().next().unwrap();
+        return Some((uri, handler, params));
     }
 
     None
@@ -1953,5 +1992,75 @@ mod tests {
             Some(test_content.to_string()),
             "Script should be retrievable after upsert"
         );
+    }
+
+    #[test]
+    fn test_route_specificity_calculation() {
+        // Test exact path (highest specificity)
+        assert_eq!(
+            calculate_route_specificity("/api/users/profile"),
+            3000, // 3 exact segments × 1000
+            "Exact path should have highest specificity"
+        );
+
+        // Test path with parameters
+        assert_eq!(
+            calculate_route_specificity("/api/users/:id"),
+            2100, // 2 exact × 1000 + 1 param × 100
+            "Path with param should have medium specificity"
+        );
+
+        // Test wildcard path (lowest specificity)
+        assert_eq!(
+            calculate_route_specificity("/api/users/*"),
+            2000 - 10, // 2 exact × 1000 - 1 wildcard depth × 10
+            "Wildcard path should have lower specificity"
+        );
+
+        // Test that more specific wildcards rank higher
+        assert!(
+            calculate_route_specificity("/api/scripts/*/owners")
+                > calculate_route_specificity("/api/scripts/*"),
+            "More specific wildcard should rank higher"
+        );
+
+        // Verify exact > param > wildcard ordering
+        let exact = calculate_route_specificity("/api/users/123");
+        let param = calculate_route_specificity("/api/users/:id");
+        let wildcard = calculate_route_specificity("/api/users/*");
+        assert!(
+            exact > param && param > wildcard,
+            "Specificity should be: exact > param > wildcard"
+        );
+    }
+
+    #[test]
+    fn test_route_pattern_matching() {
+        // Test exact match
+        let params = match_route_pattern("/api/users", "/api/users");
+        assert!(params.is_some(), "Exact paths should match");
+        assert!(params.unwrap().is_empty(), "No params for exact match");
+
+        // Test parameter extraction
+        let params = match_route_pattern("/api/users/:id", "/api/users/123");
+        assert!(params.is_some(), "Parameterized path should match");
+        let extracted = params.unwrap();
+        assert_eq!(extracted.get("id"), Some(&"123".to_string()));
+
+        // Test multiple parameters
+        let params =
+            match_route_pattern("/api/users/:userId/posts/:postId", "/api/users/42/posts/99");
+        assert!(params.is_some(), "Multiple params should match");
+        let extracted = params.unwrap();
+        assert_eq!(extracted.get("userId"), Some(&"42".to_string()));
+        assert_eq!(extracted.get("postId"), Some(&"99".to_string()));
+
+        // Test non-match due to different segment count
+        let params = match_route_pattern("/api/users/:id", "/api/users/123/extra");
+        assert!(params.is_none(), "Different segment counts shouldn't match");
+
+        // Test non-match due to different literal segments
+        let params = match_route_pattern("/api/users/:id", "/api/posts/123");
+        assert!(params.is_none(), "Different literals shouldn't match");
     }
 }

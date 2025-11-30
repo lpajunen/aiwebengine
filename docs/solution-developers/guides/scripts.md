@@ -278,6 +278,50 @@ routeRegistry.registerRoute(path, handlerName, method);
 - `handlerName` (string) - Name of the handler function
 - `method` (string) - HTTP method: `"GET"`, `"POST"`, `"PUT"`, `"DELETE"`, `"PATCH"`
 
+### Route Specificity and Matching
+
+When multiple routes could match the same request path, the engine selects the **most specific** route:
+
+**Priority Order:**
+
+1. **Exact matches** - Highest priority
+2. **Parameterized routes** (`:param`) - Medium priority
+3. **Wildcard routes** (`/*`) - Lowest priority
+
+**Specificity Scoring:**
+
+Routes are scored based on their pattern:
+
+- Each exact path segment: +1000 points
+- Each parameter segment (`:param`): +100 points
+- Wildcard depth: -10 points per level
+
+**Example:**
+
+```javascript
+function init() {
+  // Register multiple overlapping routes
+  routeRegistry.registerRoute("/api/scripts/*", "getScript", "GET"); // Score: 1990
+  routeRegistry.registerRoute("/api/scripts/*/owners", "manageOwners", "GET"); // Score: 2990
+  routeRegistry.registerRoute("/api/scripts/:name", "getByName", "GET"); // Score: 2100
+  routeRegistry.registerRoute("/api/scripts/search", "search", "GET"); // Score: 3000
+}
+
+// Request routing:
+// GET /api/scripts/search        → search (exact match, highest score)
+// GET /api/scripts/my-script     → getByName (param match)
+// GET /api/scripts/foo/owners    → manageOwners (specific wildcard)
+// GET /api/scripts/foo/bar       → getScript (general wildcard)
+```
+
+**Best Practices:**
+
+- ✅ Register specific routes before general ones (order doesn't matter, specificity wins)
+- ✅ Use exact paths for well-known endpoints (`/api/scripts/search`)
+- ✅ Use parameters for dynamic segments (`/api/scripts/:name`)
+- ✅ Use wildcards sparingly for catch-all handlers
+- ❌ Avoid overlapping wildcards that could cause confusion
+
 ### Registration Examples
 
 **Basic route:**
