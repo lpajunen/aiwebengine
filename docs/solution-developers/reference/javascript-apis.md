@@ -1548,29 +1548,296 @@ return {
 };
 ```
 
-## Built-in JavaScript Objects
+## Response Builders
 
-### JSON
+Convenient helper functions for creating common HTTP responses. These functions return properly formatted response objects that can be returned directly from handlers.
 
-Standard JavaScript JSON object for parsing and stringifying JSON data.
+### Response.json(data, status)
 
-**Methods:**
+Creates a JSON response with automatic content-type header.
 
-- `JSON.stringify(obj)`: Convert object to JSON string
-- `JSON.parse(str)`: Parse JSON string to object
+**Parameters:**
+
+- `data` (any): Data to serialize as JSON
+- `status` (number, optional): HTTP status code (default: 200)
+
+**Returns:** Response object
 
 **Example:**
 
 ```javascript
-function apiHandler(req) {
+function apiHandler(context) {
   const data = { users: ["Alice", "Bob"], count: 2 };
-  return {
-    status: 200,
-    body: JSON.stringify(data),
-    contentType: "application/json",
-  };
+  return Response.json(data);
+}
+
+function errorHandler(context) {
+  return Response.json({ error: "Not found" }, 404);
 }
 ```
+
+### Response.text(text, status)
+
+Creates a plain text response.
+
+**Parameters:**
+
+- `text` (string): Text content
+- `status` (number, optional): HTTP status code (default: 200)
+
+**Returns:** Response object
+
+**Example:**
+
+```javascript
+function helloHandler(context) {
+  return Response.text("Hello, World!");
+}
+```
+
+### Response.html(html, status)
+
+Creates an HTML response.
+
+**Parameters:**
+
+- `html` (string): HTML content
+- `status` (number, optional): HTTP status code (default: 200)
+
+**Returns:** Response object
+
+**Example:**
+
+```javascript
+function pageHandler(context) {
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <body>
+      <h1>Welcome</h1>
+      <p>This is a dynamic page.</p>
+    </body>
+    </html>
+  `;
+  return Response.html(html);
+}
+```
+
+### Response.error(status, message)
+
+Creates a JSON error response.
+
+**Parameters:**
+
+- `status` (number): HTTP status code
+- `message` (string): Error message
+
+**Returns:** Response object
+
+**Example:**
+
+```javascript
+function notFoundHandler(context) {
+  return Response.error(404, "Resource not found");
+}
+```
+
+### Response.noContent()
+
+Creates a 204 No Content response.
+
+**Returns:** Response object
+
+**Example:**
+
+```javascript
+function deleteHandler(context) {
+  // Delete resource
+  deleteResource(context.request.params.id);
+  return Response.noContent();
+}
+```
+
+### Response.redirect(url, status)
+
+Creates a redirect response.
+
+**Parameters:**
+
+- `url` (string): Redirect URL
+- `status` (number, optional): HTTP status code (default: 302)
+
+**Returns:** Response object
+
+**Example:**
+
+```javascript
+function redirectHandler(context) {
+  return Response.redirect("/new-location", 301);
+}
+```
+
+## Validation Helpers
+
+Functions for validating request parameters and input data. These helpers throw errors when validation fails, making it easy to handle invalid input.
+
+### requireQueryParam(paramName)
+
+Requires a query parameter to be present and non-empty.
+
+**Parameters:**
+
+- `paramName` (string): Name of the required query parameter
+
+**Returns:** String value of the parameter
+
+**Throws:** Error if parameter is missing or empty
+
+**Example:**
+
+```javascript
+function searchHandler(context) {
+  try {
+    const query = requireQueryParam("q");
+    const results = search(query);
+    return Response.json({ results });
+  } catch (error) {
+    return Response.error(400, error.message);
+  }
+}
+```
+
+### requirePathParam(paramName)
+
+Requires a path parameter to be present and non-empty.
+
+**Parameters:**
+
+- `paramName` (string): Name of the required path parameter
+
+**Returns:** String value of the parameter
+
+**Throws:** Error if parameter is missing or empty
+
+**Example:**
+
+```javascript
+function userHandler(context) {
+  try {
+    const userId = requirePathParam("id");
+    const user = getUser(userId);
+    return Response.json({ user });
+  } catch (error) {
+    return Response.error(400, error.message);
+  }
+}
+
+// Register with path parameter
+routeRegistry.registerRoute("/users/:id", "userHandler", "GET");
+```
+
+### validateString(value, minLength, maxLength)
+
+Validates a string's length constraints.
+
+**Parameters:**
+
+- `value` (string): String to validate
+- `minLength` (number, optional): Minimum length (default: 0)
+- `maxLength` (number, optional): Maximum length (default: Infinity)
+
+**Returns:** The validated string
+
+**Throws:** Error if validation fails
+
+**Example:**
+
+```javascript
+function createUserHandler(context) {
+  const req = context.request;
+
+  try {
+    const name = validateString(req.form.name, 1, 100);
+    const email = validateString(req.form.email, 5, 255);
+
+    const user = createUser(name, email);
+    return Response.json({ user }, 201);
+  } catch (error) {
+    return Response.error(400, error.message);
+  }
+}
+```
+
+### validateNumber(value, min, max)
+
+Validates a number's range constraints.
+
+**Parameters:**
+
+- `value` (any): Value to parse and validate as number
+- `min` (number, optional): Minimum value
+- `max` (number, optional): Maximum value
+
+**Returns:** The validated number
+
+**Throws:** Error if validation fails
+
+**Example:**
+
+```javascript
+function updateScoreHandler(context) {
+  const req = context.request;
+
+  try {
+    const score = validateNumber(req.form.score, 0, 100);
+    updateScore(req.params.userId, score);
+    return Response.json({ success: true });
+  } catch (error) {
+    return Response.error(400, error.message);
+  }
+}
+```
+
+### optionalQueryParam(paramName, defaultValue)
+
+Gets an optional query parameter with a fallback value.
+
+**Parameters:**
+
+- `paramName` (string): Name of the query parameter
+- `defaultValue` (any): Default value if parameter is missing
+
+**Returns:** Parameter value or default value
+
+**Example:**
+
+```javascript
+function listHandler(context) {
+  const page = optionalQueryParam("page", "1");
+  const limit = optionalQueryParam("limit", "10");
+
+  const results = getItems(parseInt(page), parseInt(limit));
+  return Response.json({ results });
+}
+```
+
+## Validation Object
+
+The `validate` object provides the same validation functions with a more structured API:
+
+```javascript
+// Object-style API
+const userId = validate.requirePathParam(context, "userId");
+const name = validate.validateString(req.form.name, { minLength: 1, maxLength: 100 });
+const age = validate.validateNumber(req.form.age, { min: 0, max: 150 });
+```
+
+**Available methods:**
+
+- `validate.requireQueryParam(context, paramName)`
+- `validate.requirePathParam(context, paramName)`
+- `validate.validateString(value, options)` - options: `{ minLength, maxLength, pattern }`
+- `validate.validateNumber(value, options)` - options: `{ min, max }`
 
 ### Console
 

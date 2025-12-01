@@ -11,36 +11,32 @@ function init(context) {
 
 // Example 1: Simple GET request
 function fetchExample(context) {
-  console.log("Fetching data from httpbin.org");
+  const req = context.request;
+
+  // Validate query parameters using new validation helpers
+  const url = validate.requireQueryParam(req, "url", "URL parameter is required");
+  if (!url.valid) {
+    return Response.error(400, url.error);
+  }
+
+  console.log("Fetching data from: " + url.value);
 
   try {
-    const responseJson = fetch("https://httpbin.org/get");
+    const responseJson = fetch(url.value);
     const response = JSON.parse(responseJson);
 
     if (response.ok) {
       console.log("Fetch successful! Status: " + response.status);
-      return {
-        status: 200,
-        body: JSON.stringify({
-          message: "Fetch successful",
-          data: JSON.parse(response.body),
-        }),
-        contentType: "application/json",
-      };
+      return Response.json({
+        message: "Fetch successful",
+        data: JSON.parse(response.body),
+      });
     } else {
-      return {
-        status: response.status,
-        body: JSON.stringify({ error: "Request failed" }),
-        contentType: "application/json",
-      };
+      return Response.error(response.status, "Request failed");
     }
   } catch (error) {
     console.error("Fetch error: " + error);
-    return {
-      status: 500,
-      body: JSON.stringify({ error: "Internal error: " + error }),
-      contentType: "application/json",
-    };
+    return Response.error(500, "Internal error: " + error);
   }
 }
 
@@ -50,14 +46,7 @@ function fetchWithSecret(context) {
 
   // Check if the secret exists
   if (!secretStorage.exists("example_api_key")) {
-    return {
-      status: 503,
-      body: JSON.stringify({
-        error: "API key not configured",
-        message: "Please set 'example_api_key' in secrets configuration",
-      }),
-      contentType: "application/json",
-    };
+    return Response.error(503, "API key not configured. Please set 'example_api_key' in secrets configuration");
   }
 
   try {
@@ -77,40 +66,39 @@ function fetchWithSecret(context) {
 
     if (response.ok) {
       const data = JSON.parse(response.body);
-      return {
-        status: 200,
-        body: JSON.stringify({
-          message: "Request with secret successful",
-          headers: data.headers,
-        }),
-        contentType: "application/json",
-      };
+      return Response.json({
+        message: "Request with secret successful",
+        headers: data.headers,
+      });
     } else {
-      return {
-        status: response.status,
-        body: JSON.stringify({ error: "Request failed" }),
-        contentType: "application/json",
-      };
+      return Response.error(response.status, "Request failed");
     }
   } catch (error) {
     console.error("Fetch error: " + error);
-    return {
-      status: 500,
-      body: JSON.stringify({ error: "Internal error: " + error }),
-      contentType: "application/json",
-    };
+    return Response.error(500, "Internal error: " + error);
   }
 }
 
 // Example 3: POST request with JSON body
 function fetchPost(context) {
-  const req = context.request || {};
+  const req = context.request;
   console.log("Making POST request");
+
+  // Validate required form parameters
+  const name = validate.requireQueryParam(req, "name", "Name parameter is required");
+  if (!name.valid) {
+    return Response.error(400, name.error);
+  }
+
+  const email = validate.requireQueryParam(req, "email", "Email parameter is required");
+  if (!email.valid) {
+    return Response.error(400, email.error);
+  }
 
   try {
     const requestData = {
-      name: req.form.name || "Test User",
-      email: req.form.email || "test@example.com",
+      name: name.value,
+      email: email.value,
       timestamp: new Date().toISOString(),
     };
 
@@ -128,28 +116,16 @@ function fetchPost(context) {
 
     if (response.ok) {
       const data = JSON.parse(response.body);
-      return {
-        status: 200,
-        body: JSON.stringify({
-          message: "POST successful",
-          sentData: requestData,
-          echo: data.json,
-        }),
-        contentType: "application/json",
-      };
+      return Response.json({
+        message: "POST successful",
+        sentData: requestData,
+        echo: data.json,
+      });
     } else {
-      return {
-        status: response.status,
-        body: JSON.stringify({ error: "POST failed" }),
-        contentType: "application/json",
-      };
+      return Response.error(response.status, "POST failed");
     }
   } catch (error) {
     console.error("POST error: " + error);
-    return {
-      status: 500,
-      body: JSON.stringify({ error: "Internal error: " + error }),
-      contentType: "application/json",
-    };
+    return Response.error(500, "Internal error: " + error);
   }
 }

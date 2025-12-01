@@ -199,11 +199,7 @@ routeRegistry.registerRoute('/hello', 'hello_handler', 'GET');
 </body>
 </html>`;
 
-  return {
-    status: 200,
-    body: html,
-    contentType: "text/html",
-  };
+  return Response.html(html);
 }
 
 // Initialization function - called when script is loaded or updated

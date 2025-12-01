@@ -196,29 +196,39 @@ function feedback_form_handler(context) {
 </body>
 </html>`;
 
-  return {
-    status: 200,
-    body: html,
-    contentType: "text/html",
-  };
+  return Response.html(html);
 }
 
 function feedback_submit_handler(context) {
-  const req = context.request || {};
-  // Extract form data
-  let name = req.form?.name || "Anonymous";
-  let email = req.form?.email || "";
-  let rating = req.form?.rating || "5";
-  let category = req.form?.category || "general";
-  let message = req.form?.message || "";
+  const req = context.request;
+
+  // Validate required form fields using new validation helpers
+  const name = validate.requireQueryParam(req, "name", "Name is required");
+  if (!name.valid) {
+    return Response.error(400, name.error);
+  }
+
+  const email = validate.requireQueryParam(req, "email", "Email is required");
+  if (!email.valid) {
+    return Response.error(400, email.error);
+  }
+
+  const message = validate.requireQueryParam(req, "message", "Message is required");
+  if (!message.valid) {
+    return Response.error(400, message.error);
+  }
+
+  // Optional fields with defaults
+  const rating = req.form?.rating || "5";
+  const category = req.form?.category || "general";
 
   // Log the feedback (in a real app, you'd store this in a database)
   console.log("Feedback received:");
-  console.log("Name: " + name);
-  console.log("Email: " + email);
+  console.log("Name: " + name.value);
+  console.log("Email: " + email.value);
   console.log("Rating: " + rating);
   console.log("Category: " + category);
-  console.log("Message: " + message);
+  console.log("Message: " + message.value);
 
   const thankYouHtml = `<!DOCTYPE html>
 <html lang="en">
@@ -314,7 +324,7 @@ function feedback_submit_handler(context) {
         <div class="thank-you-content">
             <div class="thank-you-emoji">🙏</div>
             <h1>Thank You!</h1>
-            <p>Thank you for your feedback, <strong>${name}</strong>! We appreciate you taking the time to share your thoughts about aiwebengine.</p>
+            <p>Thank you for your feedback, <strong>${name.value}</strong>! We appreciate you taking the time to share your thoughts about aiwebengine.</p>
             <p>Your input helps us improve and build better tools for developers like you.</p>
 
             <div class="thank-you-actions">
@@ -326,11 +336,7 @@ function feedback_submit_handler(context) {
 </body>
 </html>`;
 
-  return {
-    status: 200,
-    body: thankYouHtml,
-    contentType: "text/html",
-  };
+  return Response.html(thankYouHtml);
 }
 
 // Initialization function - called when script is loaded or updated

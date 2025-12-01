@@ -565,6 +565,31 @@ contentType: "image/gif";
 contentType: "image/svg+xml";
 ```
 
+### Response Builders
+
+aiwebengine provides convenient helper functions for creating common response types:
+
+```javascript
+// JSON responses
+return Response.json({ users: ["Alice", "Bob"] });
+return Response.json({ error: "Not found" }, 404);
+
+// Text responses
+return Response.text("Hello, World!");
+
+// HTML responses
+return Response.html("<h1>Welcome</h1>");
+
+// Error responses
+return Response.error(400, "Invalid input");
+
+// No content (204)
+return Response.noContent();
+
+// Redirects
+return Response.redirect("/new-location", 301);
+```
+
 ### Response Helper
 
 Create a helper function:
