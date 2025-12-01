@@ -90,7 +90,7 @@ impl JsAuthContext {
 /// - `auth.userEmail` - User email string or null
 /// - `auth.userName` - User display name or null
 /// - `auth.provider` - OAuth provider name or null
-/// - `auth.currentUser()` - Get complete user object or null
+/// - `auth.user` - Complete user object or null
 /// - `auth.requireAuth()` - Throw error if not authenticated
 pub struct AuthJsApi {
     #[allow(dead_code)]
@@ -150,27 +150,18 @@ impl AuthJsApi {
             auth_obj.set("provider", Null)?;
         }
 
-        // Add currentUser() method - returns object with user info or null
-        let current_user_ctx = auth_context.clone();
-        let current_user_fn =
-            Function::new(ctx.clone(), move |_ctx: Ctx<'_>| -> JsResult<String> {
-                if current_user_ctx.is_authenticated {
-                    // Return JSON string representing user object
-                    let user_json = serde_json::json!({
-                        "id": current_user_ctx.user_id,
-                        "email": current_user_ctx.email,
-                        "name": current_user_ctx.name,
-                        "provider": current_user_ctx.provider,
-                        "isAuthenticated": true,
-                    });
-                    Ok(user_json.to_string())
-                } else {
-                    Ok("null".to_string())
-                }
-            })?;
-
-        // Set the implementation function first
-        auth_obj.set("__currentUserImpl", current_user_fn)?;
+        // Add user property - complete user object or null
+        if auth_context.is_authenticated {
+            let user_obj = Object::new(ctx.clone())?;
+            user_obj.set("id", auth_context.user_id.clone())?;
+            user_obj.set("email", auth_context.email.clone())?;
+            user_obj.set("name", auth_context.name.clone())?;
+            user_obj.set("provider", auth_context.provider.clone())?;
+            user_obj.set("isAuthenticated", true)?;
+            auth_obj.set("user", user_obj)?;
+        } else {
+            auth_obj.set("user", Null)?;
+        }
 
         // Add requireAuth() method - throws if not authenticated
         let require_auth_ctx = auth_context.clone();
@@ -199,10 +190,6 @@ impl AuthJsApi {
         ctx.globals().set("__tempAuth", auth_obj.clone())?;
         ctx.eval::<(), _>(
             r#"
-            __tempAuth.currentUser = function() {
-                const json = this.__currentUserImpl();
-                return json === "null" ? null : JSON.parse(json);
-            };
             __tempAuth.requireAuth = function() {
                 try {
                     const json = this.__requireAuthImpl();
@@ -382,7 +369,7 @@ mod tests {
     }
 
     #[test]
-    fn test_current_user_function() {
+    fn test_user_property() {
         let rt = Runtime::new().unwrap();
         let ctx = Context::full(&rt).unwrap();
 
@@ -402,18 +389,30 @@ mod tests {
             req.set("auth", auth_obj).unwrap();
             ctx.globals().set("req", req).unwrap();
 
-            // Test currentUser() returns object
-            let has_user: bool = ctx.eval("req.auth.currentUser() !== null").unwrap();
+            // Test user property returns object
+            let has_user: bool = ctx.eval("req.auth.user !== null").unwrap();
             assert!(has_user);
 
             // Test user properties
-            let user_id: String = ctx.eval("req.auth.currentUser().id").unwrap();
+            let user_id: String = ctx.eval("req.auth.user.id").unwrap();
             assert_eq!(user_id, "user123");
+
+            let email: String = ctx.eval("req.auth.user.email").unwrap();
+            assert_eq!(email, "test@example.com");
+
+            let name: String = ctx.eval("req.auth.user.name").unwrap();
+            assert_eq!(name, "Test User");
+
+            let provider: String = ctx.eval("req.auth.user.provider").unwrap();
+            assert_eq!(provider, "google");
+
+            let is_auth: bool = ctx.eval("req.auth.user.isAuthenticated").unwrap();
+            assert!(is_auth);
         });
     }
 
     #[test]
-    fn test_current_user_anonymous() {
+    fn test_user_property_anonymous() {
         let rt = Runtime::new().unwrap();
         let ctx = Context::full(&rt).unwrap();
 
@@ -426,8 +425,8 @@ mod tests {
             req.set("auth", auth_obj).unwrap();
             ctx.globals().set("req", req).unwrap();
 
-            // Test currentUser() returns null for anonymous
-            let is_null: bool = ctx.eval("req.auth.currentUser() === null").unwrap();
+            // Test user property returns null for anonymous
+            let is_null: bool = ctx.eval("req.auth.user === null").unwrap();
             assert!(is_null);
         });
     }

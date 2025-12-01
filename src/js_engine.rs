@@ -313,8 +313,16 @@ impl JsHandlerContextBuilder {
             context_obj.set("handlerName", handler_name)?;
         }
 
+        // Ensure there's always a request object with at least an empty query object
+        // This provides "query object guarantees" so scripts can safely access context.request.query
         if let Some(request_obj) = request_obj {
             context_obj.set("request", request_obj)?;
+        } else {
+            // Create a minimal request object with empty query for non-HTTP handlers
+            let minimal_request = rquickjs::Object::new(ctx.clone())?;
+            let empty_query = rquickjs::Object::new(ctx.clone())?;
+            minimal_request.set("query", empty_query)?;
+            context_obj.set("request", minimal_request)?;
         }
 
         if let Some(args) = args {
@@ -444,7 +452,186 @@ fn setup_secure_global_functions(
     // Setup secure functions with proper capability validation
     secure_context.setup_secure_functions(ctx, script_uri, register_fn)?;
 
+    // Add Response builder helpers
+    setup_response_builders(ctx)?;
+
+    // Add validation helpers
+    setup_validation_helpers(ctx)?;
+
     // Auth is no longer set up as a global - it's attached to req.auth by the caller
+
+    Ok(())
+}
+
+/// Sets up Response builder helpers for JavaScript handlers
+///
+/// Provides convenient methods for creating HTTP responses:
+/// - Response.json(data, status) - JSON response
+/// - Response.text(text, status) - Text response
+/// - Response.html(html, status) - HTML response
+/// - Response.error(status, message) - Error response
+/// - Response.noContent() - 204 No Content
+/// - Response.redirect(url) - 302 redirect
+fn setup_response_builders(ctx: &rquickjs::Ctx<'_>) -> Result<(), rquickjs::Error> {
+    // Create the Response object with builder methods using JavaScript
+    ctx.eval::<(), _>(
+        r#"
+        globalThis.Response = {
+            json: function(data, status = 200) {
+                const body = JSON.stringify(data);
+                return {
+                    status: status,
+                    body: body,
+                    contentType: "application/json"
+                };
+            },
+            text: function(text, status = 200) {
+                return {
+                    status: status,
+                    body: text,
+                    contentType: "text/plain; charset=UTF-8"
+                };
+            },
+            html: function(html, status = 200) {
+                return {
+                    status: status,
+                    body: html,
+                    contentType: "text/html; charset=UTF-8"
+                };
+            },
+            error: function(status, message) {
+                const body = JSON.stringify({ error: message });
+                return {
+                    status: status,
+                    body: body,
+                    contentType: "application/json"
+                };
+            },
+            noContent: function() {
+                return {
+                    status: 204,
+                    body: "",
+                    contentType: ""
+                };
+            },
+            redirect: function(url, status = 302) {
+                return {
+                    status: status,
+                    body: "Redirecting to " + url,
+                    contentType: "text/plain; charset=UTF-8",
+                    headers: {
+                        "Location": url
+                    }
+                };
+            }
+        };
+        "#,
+    )?;
+
+    Ok(())
+}
+
+/// Sets up validation helper functions for JavaScript execution contexts
+///
+/// This function provides convenient validation utilities for JavaScript handlers
+/// to validate query parameters, path parameters, and other input data.
+fn setup_validation_helpers(ctx: &rquickjs::Ctx<'_>) -> Result<(), rquickjs::Error> {
+    // Create the validation object with helper functions using JavaScript
+    ctx.eval::<(), _>(
+        r#"
+        globalThis.validate = {
+            requireQueryParam: function(context, paramName) {
+                if (!context.request || !context.request.query) {
+                    throw new Error("Request context or query parameters not available");
+                }
+                const value = context.request.query[paramName];
+                if (value === undefined || value === null || value === "") {
+                    throw new Error("Required query parameter '" + paramName + "' is missing or empty");
+                }
+                return value;
+            },
+
+            requirePathParam: function(context, paramName) {
+                if (!context.request || !context.request.params) {
+                    throw new Error("Request context or path parameters not available");
+                }
+                const value = context.request.params[paramName];
+                if (value === undefined || value === null || value === "") {
+                    throw new Error("Required path parameter '" + paramName + "' is missing or empty");
+                }
+                return value;
+            },
+
+            validateString: function(value, options) {
+                if (typeof value !== 'string') {
+                    throw new Error("Expected string, got " + typeof value);
+                }
+
+                const opts = options || {};
+                const minLength = opts.minLength || 0;
+                const maxLength = opts.maxLength || Infinity;
+                const pattern = opts.pattern;
+
+                if (value.length < minLength) {
+                    throw new Error("String too short: minimum length is " + minLength + ", got " + value.length);
+                }
+                if (value.length > maxLength) {
+                    throw new Error("String too long: maximum length is " + maxLength + ", got " + value.length);
+                }
+                if (pattern && !pattern.test(value)) {
+                    throw new Error("String does not match required pattern");
+                }
+
+                return value;
+            },
+
+            validateNumber: function(value, options) {
+                const num = Number(value);
+                if (isNaN(num)) {
+                    throw new Error("Expected number, got " + value);
+                }
+
+                const opts = options || {};
+                const min = opts.min;
+                const max = opts.max;
+
+                if (min !== undefined && num < min) {
+                    throw new Error("Number too small: minimum is " + min + ", got " + num);
+                }
+                if (max !== undefined && num > max) {
+                    throw new Error("Number too large: maximum is " + max + ", got " + num);
+                }
+
+                return num;
+            }
+        };
+
+        // Also expose as global functions for convenience
+        globalThis.requireQueryParam = function(paramName) {
+            return globalThis.validate.requireQueryParam(globalThis.context, paramName);
+        };
+
+        globalThis.requirePathParam = function(paramName) {
+            return globalThis.validate.requirePathParam(globalThis.context, paramName);
+        };
+
+        globalThis.validateString = function(value, minLength, maxLength) {
+            return globalThis.validate.validateString(value, { minLength: minLength, maxLength: maxLength });
+        };
+
+        globalThis.validateNumber = function(value, min, max) {
+            return globalThis.validate.validateNumber(value, { min: min, max: max });
+        };
+
+        globalThis.optionalQueryParam = function(paramName, defaultValue) {
+            try {
+                return globalThis.requireQueryParam(paramName);
+            } catch (e) {
+                return defaultValue;
+            }
+        };
+        "#,
+    )?;
 
     Ok(())
 }
@@ -2519,5 +2706,326 @@ function hello() {
             body.contains("<a href=\"https://example.com\">Link to example</a>"),
             "Should contain link"
         );
+    }
+
+    #[test]
+    fn test_response_builders() {
+        let script_content = r#"
+            function testHandler(context) {
+                // Test Response.json
+                const jsonResponse = Response.json({ message: "Hello World", code: 200 });
+                if (jsonResponse.status !== 200 || jsonResponse.contentType !== "application/json") {
+                    throw new Error("JSON response failed");
+                }
+
+                // Test Response.text
+                const textResponse = Response.text("Plain text response", 201);
+                if (textResponse.status !== 201 || textResponse.contentType !== "text/plain; charset=UTF-8") {
+                    throw new Error("Text response failed");
+                }
+
+                // Test Response.html
+                const htmlResponse = Response.html("<h1>Hello</h1>", 200);
+                if (htmlResponse.status !== 200 || htmlResponse.contentType !== "text/html; charset=UTF-8") {
+                    throw new Error("HTML response failed");
+                }
+
+                // Test Response.error
+                const errorResponse = Response.error(400, "Bad Request");
+                if (errorResponse.status !== 400 || !errorResponse.body.includes("Bad Request")) {
+                    throw new Error("Error response failed");
+                }
+
+                // Test Response.noContent
+                const noContentResponse = Response.noContent();
+                if (noContentResponse.status !== 204 || noContentResponse.body !== "") {
+                    throw new Error("No content response failed");
+                }
+
+                // Test Response.redirect
+                const redirectResponse = Response.redirect("https://example.com", 302);
+                if (redirectResponse.status !== 302 || !redirectResponse.headers.Location) {
+                    throw new Error("Redirect response failed");
+                }
+
+                return Response.json({ success: true });
+            }
+        "#;
+
+        let _ = repository::upsert_script("response-builder-test", script_content);
+
+        let params = RequestExecutionParams {
+            script_uri: "response-builder-test".to_string(),
+            handler_name: "testHandler".to_string(),
+            path: "/test".to_string(),
+            method: "GET".to_string(),
+            query_params: None,
+            form_data: None,
+            raw_body: None,
+            headers: HashMap::new(),
+            user_context: UserContext::admin("test".to_string()),
+            auth_context: None,
+            route_params: None,
+        };
+
+        let result = execute_script_for_request_secure(params);
+        assert!(result.is_ok(), "Response builder test should succeed");
+
+        let response = result.unwrap();
+        assert_eq!(response.status, 200);
+        let body_str = String::from_utf8_lossy(&response.body);
+        assert!(body_str.contains("success"));
+        assert!(body_str.contains("true"));
+    }
+
+    #[test]
+    fn test_query_object_guarantees() {
+        let script_content = r#"
+            function testHandler(context) {
+                // Test that context.request.query is always available
+                if (!context.request || !context.request.query) {
+                    throw new Error("context.request.query should always be available");
+                }
+
+                // Test that it's an object (even if empty)
+                if (typeof context.request.query !== 'object') {
+                    throw new Error("context.request.query should be an object");
+                }
+
+                // Test that we can safely access properties
+                const param1 = context.request.query.param1 || "default";
+                const param2 = context.request.query.param2 || "default2";
+
+                return Response.json({
+                    param1: param1,
+                    param2: param2,
+                    queryType: typeof context.request.query
+                });
+            }
+        "#;
+
+        let _ = repository::upsert_script("query-guarantees-test", script_content);
+
+        let params = RequestExecutionParams {
+            script_uri: "query-guarantees-test".to_string(),
+            handler_name: "testHandler".to_string(),
+            path: "/test".to_string(),
+            method: "GET".to_string(),
+            query_params: Some(HashMap::from([
+                ("param1".to_string(), "value1".to_string()),
+                ("param2".to_string(), "value2".to_string()),
+            ])),
+            form_data: None,
+            raw_body: None,
+            headers: HashMap::new(),
+            user_context: UserContext::admin("test".to_string()),
+            auth_context: None,
+            route_params: None,
+        };
+
+        let result = execute_script_for_request_secure(params);
+        assert!(result.is_ok(), "Query guarantees test should succeed");
+
+        let response = result.unwrap();
+        assert_eq!(response.status, 200);
+        let body_str = String::from_utf8_lossy(&response.body);
+        assert!(body_str.contains("value1"));
+        assert!(body_str.contains("value2"));
+        assert!(body_str.contains("object"));
+    }
+
+    #[test]
+    fn test_query_object_guarantees_empty_params() {
+        let script_content = r#"
+            function testHandler(context) {
+                // Test that context.request.query is available even with no query params
+                if (!context.request || !context.request.query) {
+                    throw new Error("context.request.query should always be available");
+                }
+
+                // Should be an empty object
+                const keys = Object.keys(context.request.query);
+                if (keys.length !== 0) {
+                    throw new Error("Expected empty query object, got: " + keys.length + " keys");
+                }
+
+                return Response.json({ queryEmpty: true });
+            }
+        "#;
+
+        let _ = repository::upsert_script("query-empty-test", script_content);
+
+        let params = RequestExecutionParams {
+            script_uri: "query-empty-test".to_string(),
+            handler_name: "testHandler".to_string(),
+            path: "/test".to_string(),
+            method: "GET".to_string(),
+            query_params: None, // No query params
+            form_data: None,
+            raw_body: None,
+            headers: HashMap::new(),
+            user_context: UserContext::admin("test".to_string()),
+            auth_context: None,
+            route_params: None,
+        };
+
+        let result = execute_script_for_request_secure(params);
+        assert!(result.is_ok(), "Empty query test should succeed");
+
+        let response = result.unwrap();
+        assert_eq!(response.status, 200);
+        let body_str = String::from_utf8_lossy(&response.body);
+        assert!(body_str.contains("queryEmpty"));
+        assert!(body_str.contains("true"));
+    }
+    #[test]
+    fn test_automatic_path_parameters() {
+        let script_content = r#"
+            function testHandler(context) {
+                // Test that context.request.params contains extracted path parameters
+                if (!context.request || !context.request.params) {
+                    throw new Error("context.request.params should be available");
+                }
+
+                // Check that path parameters are correctly extracted
+                const userId = context.request.params.userId;
+                const postId = context.request.params.postId;
+
+                if (!userId || !postId) {
+                    throw new Error("Path parameters not extracted correctly");
+                }
+
+                return Response.json({
+                    userId: userId,
+                    postId: postId,
+                    paramsType: typeof context.request.params
+                });
+            }
+        "#;
+
+        let _ = repository::upsert_script("path-params-test", script_content);
+
+        let params = RequestExecutionParams {
+            script_uri: "path-params-test".to_string(),
+            handler_name: "testHandler".to_string(),
+            path: "/api/users/123/posts/456".to_string(),
+            method: "GET".to_string(),
+            query_params: None,
+            form_data: None,
+            raw_body: None,
+            headers: HashMap::new(),
+            user_context: UserContext::admin("test".to_string()),
+            auth_context: None,
+            route_params: Some(HashMap::from([
+                ("userId".to_string(), "123".to_string()),
+                ("postId".to_string(), "456".to_string()),
+            ])),
+        };
+
+        let result = execute_script_for_request_secure(params);
+        assert!(result.is_ok(), "Path parameters test should succeed");
+
+        let response = result.unwrap();
+        assert_eq!(response.status, 200);
+        let body_str = String::from_utf8_lossy(&response.body);
+        assert!(body_str.contains("123"));
+        assert!(body_str.contains("456"));
+        assert!(body_str.contains("object"));
+    }
+
+    #[test]
+    fn test_validation_helpers() {
+        let script_content = r#"
+            function testHandler(context) {
+                try {
+                    // Test requireQueryParam with existing param
+                    const existingParam = requireQueryParam("existing");
+                    if (existingParam !== "value1") {
+                        throw new Error("requireQueryParam failed for existing param");
+                    }
+
+                    // Test requireQueryParam with missing param (should throw)
+                    try {
+                        requireQueryParam("missing");
+                        throw new Error("requireQueryParam should have thrown for missing param");
+                    } catch (e) {
+                        if (!e.message.includes("missing")) {
+                            throw new Error("Wrong error message for missing param: " + e.message);
+                        }
+                    }
+
+                    // Test requirePathParam
+                    const userId = requirePathParam("userId");
+                    if (userId !== "123") {
+                        throw new Error("requirePathParam failed");
+                    }
+
+                    // Test validateString
+                    const validStr = validateString("hello", 2, 10);
+                    if (validStr !== "hello") {
+                        throw new Error("validateString failed");
+                    }
+
+                    // Test validateString with invalid length
+                    try {
+                        validateString("a", 2, 10);
+                        throw new Error("validateString should have thrown for short string");
+                    } catch (e) {
+                        // Expected
+                    }
+
+                    // Test validateNumber
+                    const validNum = validateNumber("42", 0, 100);
+                    if (validNum !== 42) {
+                        throw new Error("validateNumber failed");
+                    }
+
+                    // Test optionalQueryParam
+                    const optionalExisting = optionalQueryParam("existing", "default");
+                    const optionalMissing = optionalQueryParam("missing", "default");
+
+                    return Response.json({
+                        success: true,
+                        existingParam: existingParam,
+                        userId: userId,
+                        validStr: validStr,
+                        validNum: validNum,
+                        optionalExisting: optionalExisting,
+                        optionalMissing: optionalMissing
+                    });
+                } catch (e) {
+                    return Response.error(400, e.message);
+                }
+            }
+        "#;
+
+        let _ = repository::upsert_script("validation-helpers-test", script_content);
+
+        let params = RequestExecutionParams {
+            script_uri: "validation-helpers-test".to_string(),
+            handler_name: "testHandler".to_string(),
+            path: "/test".to_string(),
+            method: "GET".to_string(),
+            query_params: Some(HashMap::from([(
+                "existing".to_string(),
+                "value1".to_string(),
+            )])),
+            form_data: None,
+            raw_body: None,
+            headers: HashMap::new(),
+            user_context: UserContext::admin("test".to_string()),
+            auth_context: None,
+            route_params: Some(HashMap::from([("userId".to_string(), "123".to_string())])),
+        };
+
+        let result = execute_script_for_request_secure(params);
+        assert!(result.is_ok(), "Validation helpers test should succeed");
+
+        let response = result.unwrap();
+        assert_eq!(response.status, 200);
+        let body_str = String::from_utf8_lossy(&response.body);
+        assert!(body_str.contains("success"));
+        assert!(body_str.contains("value1"));
+        assert!(body_str.contains("123"));
     }
 }
