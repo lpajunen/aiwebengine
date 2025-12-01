@@ -23,7 +23,7 @@ export async function handleRequest(context) {
   }
 
   // Get current user information
-  const user = request.auth.currentUser();
+  const user = request.auth.user;
 
   // Build response based on user roles
   const roles = [];

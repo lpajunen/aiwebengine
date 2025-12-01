@@ -213,7 +213,11 @@ function feedback_submit_handler(context) {
     return Response.error(400, email.error);
   }
 
-  const message = validate.requireQueryParam(req, "message", "Message is required");
+  const message = validate.requireQueryParam(
+    req,
+    "message",
+    "Message is required",
+  );
   if (!message.valid) {
     return Response.error(400, message.error);
   }

@@ -14,7 +14,11 @@ function fetchExample(context) {
   const req = context.request;
 
   // Validate query parameters using new validation helpers
-  const url = validate.requireQueryParam(req, "url", "URL parameter is required");
+  const url = validate.requireQueryParam(
+    req,
+    "url",
+    "URL parameter is required",
+  );
   if (!url.valid) {
     return Response.error(400, url.error);
   }
@@ -46,7 +50,10 @@ function fetchWithSecret(context) {
 
   // Check if the secret exists
   if (!secretStorage.exists("example_api_key")) {
-    return Response.error(503, "API key not configured. Please set 'example_api_key' in secrets configuration");
+    return Response.error(
+      503,
+      "API key not configured. Please set 'example_api_key' in secrets configuration",
+    );
   }
 
   try {
@@ -85,12 +92,20 @@ function fetchPost(context) {
   console.log("Making POST request");
 
   // Validate required form parameters
-  const name = validate.requireQueryParam(req, "name", "Name parameter is required");
+  const name = validate.requireQueryParam(
+    req,
+    "name",
+    "Name parameter is required",
+  );
   if (!name.valid) {
     return Response.error(400, name.error);
   }
 
-  const email = validate.requireQueryParam(req, "email", "Email parameter is required");
+  const email = validate.requireQueryParam(
+    req,
+    "email",
+    "Email parameter is required",
+  );
   if (!email.valid) {
     return Response.error(400, email.error);
   }

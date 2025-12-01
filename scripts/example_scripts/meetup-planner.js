@@ -143,7 +143,7 @@ function meetup_dashboard_handler(context) {
     };
   }
 
-  const user = req.auth.currentUser();
+  const user = req.auth.user;
 
   // Load user's meetup IDs from sharedStorage (personal data with user prefix)
   let userMeetupIds = [];
@@ -385,7 +385,7 @@ function create_meetup_handler(context) {
       return { status: 400, body: "Name and description required" };
     }
 
-    const user = req.auth.currentUser();
+    const user = req.auth.user;
     const meetupId =
       "meetup_" + Date.now() + "_" + Math.random().toString(36).substr(2, 9);
 
@@ -454,7 +454,7 @@ function join_meetup_handler(context) {
     };
   }
 
-  const user = req.auth.currentUser();
+  const user = req.auth.user;
 
   // Add user to members if not already
   if (!meetup.members) meetup.members = {};
@@ -727,7 +727,7 @@ function update_response_handler(context) {
       return { status: 400, body: "Invalid response" };
     }
 
-    const user = req.auth.currentUser();
+    const user = req.auth.user;
     const meetup = getMeetupById(meetupId);
 
     if (!meetup || !meetup.members || !meetup.members[user.id]) {

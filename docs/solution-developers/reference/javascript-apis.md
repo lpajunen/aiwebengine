@@ -1828,7 +1828,10 @@ The `validate` object provides the same validation functions with a more structu
 ```javascript
 // Object-style API
 const userId = validate.requirePathParam(context, "userId");
-const name = validate.validateString(req.form.name, { minLength: 1, maxLength: 100 });
+const name = validate.validateString(req.form.name, {
+  minLength: 1,
+  maxLength: 100,
+});
 const age = validate.validateNumber(req.form.age, { min: 0, max: 150 });
 ```
 

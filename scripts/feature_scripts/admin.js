@@ -11,7 +11,7 @@
 //   * req.auth.userName (string|null) - user's display name
 //   * req.auth.provider (string|null) - OAuth provider (google, microsoft, apple)
 // - Available methods:
-//   * req.auth.currentUser() - returns user object or null
+//   * req.auth.user (object|null) - complete user object with id, email, name, provider, isAuthenticated
 //   * req.auth.requireAuth() - throws error if not authenticated
 //
 // REQUEST OBJECT:
