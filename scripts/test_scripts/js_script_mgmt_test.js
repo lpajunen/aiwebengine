@@ -60,12 +60,9 @@ function js_mgmt_check(context) {
         ? (scriptStorage.getScript("https://example.com/from_js") ?? null)
         : null;
 
-    return {
-      status: 200,
-      body: JSON.stringify({ got, list, deleted_before, deleted, after }),
-    };
+    return Response.json({ got, list, deleted_before, deleted, after });
   } catch (e) {
-    return { status: 500, body: String(e) };
+    return Response.error(500, String(e));
   }
 }
 

@@ -2,15 +2,15 @@
 
 function js_log_test_handler(context) {
   console.log("js-log-test-called");
-  return { status: 200, body: "logged" };
+  return Response.text("logged");
 }
 
 function js_list_handler(context) {
   try {
     const logs = console.listLogs();
-    return { status: 200, body: JSON.stringify(logs) };
+    return Response.json(logs);
   } catch (e) {
-    return { status: 500, body: String(e) };
+    return Response.error(500, String(e));
   }
 }
 

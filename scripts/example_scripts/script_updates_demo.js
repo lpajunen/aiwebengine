@@ -2,9 +2,7 @@
 // This example demonstrates real-time script updates using GraphQL subscriptions
 
 function scriptUpdatesDemoPage(context) {
-  return {
-    status: 200,
-    body: `
+  return Response.html(`
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -462,9 +460,7 @@ function scriptUpdatesDemoPage(context) {
 		subscribeToScriptUpdates();
 	</script>
 </body>
-</html>`,
-    contentType: "text/html",
-  };
+</html>`);
 }
 
 // Initialization function - called when script is loaded or updated

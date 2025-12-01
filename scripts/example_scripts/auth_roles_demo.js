@@ -12,14 +12,13 @@ export async function handleRequest(context) {
   }
   // Check if user is authenticated
   if (!request.auth.isAuthenticated) {
-    return {
-      status: 401,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    return Response.json(
+      {
         error: "Authentication required",
         message: "Please login to access this resource",
-      }),
-    };
+      },
+      401,
+    );
   }
 
   // Get current user information
@@ -44,49 +43,43 @@ export async function handleRequest(context) {
     request.method === "DELETE"
   ) {
     if (!request.auth.isEditor && !request.auth.isAdmin) {
-      return {
-        status: 403,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      return Response.json(
+        {
           error: "Insufficient permissions",
           message: "Editor or Administrator role required for this action",
-        }),
-      };
+        },
+        403,
+      );
     }
   }
 
   // Example: Restrict admin-only actions
   if (request.path === "/admin/settings" && !request.auth.isAdmin) {
-    return {
-      status: 403,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    return Response.json(
+      {
         error: "Insufficient permissions",
         message: "Administrator role required for this action",
-      }),
-    };
+      },
+      403,
+    );
   }
 
   // Return user info and capabilities
-  return {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        provider: user.provider,
-      },
-      roles: roles,
-      capabilities: {
-        canView: true,
-        canEdit: request.auth.isEditor || request.auth.isAdmin,
-        canAdminister: request.auth.isAdmin,
-      },
-      message: `Welcome ${user.name || user.email}! You have ${roles.join(", ")} access.`,
-    }),
-  };
+  return Response.json({
+    user: {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      provider: user.provider,
+    },
+    roles: roles,
+    capabilities: {
+      canView: true,
+      canEdit: request.auth.isEditor || request.auth.isAdmin,
+      canAdminister: request.auth.isAdmin,
+    },
+    message: `Welcome ${user.name || user.email}! You have ${roles.join(", ")} access.`,
+  });
 }
 
 /**
@@ -101,20 +94,15 @@ export async function editorOnly(context) {
   const user = request.auth.requireAuth(); // Throws if not authenticated
 
   if (!request.auth.isEditor && !request.auth.isAdmin) {
-    return {
-      status: 403,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    return Response.json(
+      {
         error: "Editor access required",
-      }),
-    };
+      },
+      403,
+    );
   }
 
-  return {
-    status: 200,
-    headers: { "Content-Type": "text/plain" },
-    body: `Hello ${user.name}, you have editor access!`,
-  };
+  return Response.text(`Hello ${user.name}, you have editor access!`);
 }
 
 /**
@@ -128,18 +116,13 @@ export async function adminOnly(context) {
   const user = request.auth.requireAuth();
 
   if (!request.auth.isAdmin) {
-    return {
-      status: 403,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    return Response.json(
+      {
         error: "Administrator access required",
-      }),
-    };
+      },
+      403,
+    );
   }
 
-  return {
-    status: 200,
-    headers: { "Content-Type": "text/plain" },
-    body: `Hello ${user.name}, you have administrator access!`,
-  };
+  return Response.text(`Hello ${user.name}, you have administrator access!`);
 }

@@ -21,16 +21,13 @@ function testStorageHandler(context) {
   const getAfterRemove = sharedStorage.getItem("test_key");
   console.log("Get after remove: " + getAfterRemove);
 
-  return {
-    status: 200,
-    body: JSON.stringify({
-      message: "sharedStorage test completed",
-      results: {
-        setResult,
-        getResult,
-        removeResult,
-        getAfterRemove,
-      },
-    }),
-  };
+  return Response.json({
+    message: "sharedStorage test completed",
+    results: {
+      setResult,
+      getResult,
+      removeResult,
+      getAfterRemove,
+    },
+  });
 }

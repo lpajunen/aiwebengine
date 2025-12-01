@@ -73,17 +73,11 @@ function triggerMessageHandler(context) {
 
   broadcastLiveMessage(message);
 
-  return {
-    status: 200,
-    body: JSON.stringify({ success: true, message: "Message broadcasted" }),
-    contentType: "application/json",
-  };
+  return Response.json({ success: true, message: "Message broadcasted" });
 }
 
 function subscriptionDemoPage(context) {
-  return {
-    status: 200,
-    body: `
+  return Response.html(`
         <!DOCTYPE html>
         <html lang="en">
         <head>
@@ -429,9 +423,7 @@ function subscriptionDemoPage(context) {
                 subscribeToMessages();
             </script>
         </body>
-        </html>`,
-    contentType: "text/html",
-  };
+        </html>`);
 }
 
 // Initialization function - called when script is loaded or updated

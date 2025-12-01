@@ -170,11 +170,7 @@ function blog_handler(context) {
             <div class="code-example">
 // Register a simple hello world endpoint
 function hello_handler(context) {
-    return {
-        status: 200,
-        body: "Hello, aiwebengine!",
-        contentType: "text/plain"
-    };
+    return Response.text("Hello, aiwebengine!");
 }
 
 routeRegistry.registerRoute('/hello', 'hello_handler', 'GET');

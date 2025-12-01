@@ -18,11 +18,7 @@ function testEditorAPI(context) {
 
   result += "Basic test completed.";
 
-  return {
-    status: 200,
-    body: result,
-    contentType: "text/plain",
-  };
+  return Response.text(result);
 }
 
 // Initialization function

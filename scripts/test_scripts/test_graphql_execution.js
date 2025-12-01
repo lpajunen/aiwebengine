@@ -44,21 +44,16 @@ function testGraphQLHandler(context) {
       query2: JSON.parse(result2),
     };
 
-    return {
-      status: 200,
-      body: JSON.stringify(response, null, 2),
-      contentType: "application/json",
-    };
+    return Response.json(response);
   } catch (error) {
     console.log("Error in testGraphQLHandler: " + error.message);
-    return {
-      status: 500,
-      body: JSON.stringify({
+    return Response.json(
+      {
         error: error.message,
         stack: error.stack,
-      }),
-      contentType: "application/json",
-    };
+      },
+      500,
+    );
   }
 }
 

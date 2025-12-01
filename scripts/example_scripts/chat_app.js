@@ -868,25 +868,14 @@ function chatInterfaceHandler(context) {
 </body>
 </html>`;
 
-    return {
-      status: 200,
-      body: html,
-      contentType: "text/html; charset=UTF-8",
-    };
+    return Response.html(html);
   } catch (error) {
     // User not authenticated, redirect to login
     const req = context.request || {};
     const currentPath = encodeURIComponent(req.path || "/chat");
     const loginUrl = "/auth/login?redirect=" + currentPath;
 
-    return {
-      status: 302,
-      headers: {
-        Location: loginUrl,
-      },
-      body: "",
-      contentType: "text/plain; charset=UTF-8",
-    };
+    return Response.redirect(loginUrl);
   }
 }
 

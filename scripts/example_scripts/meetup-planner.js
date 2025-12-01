@@ -122,11 +122,7 @@ function meetup_handler(context) {
 </body>
 </html>`;
 
-  return {
-    status: 200,
-    body: html,
-    contentType: "text/html",
-  };
+  return Response.html(html);
 }
 
 function meetup_dashboard_handler(context) {
@@ -136,11 +132,7 @@ function meetup_dashboard_handler(context) {
   if (!req.auth || !req.auth.isAuthenticated) {
     const currentPath = encodeURIComponent(req.path || "/meetup/dashboard");
     const loginUrl = "/auth/login?redirect=" + currentPath;
-    return {
-      status: 302,
-      headers: { Location: loginUrl },
-      body: "",
-    };
+    return Response.redirect(loginUrl);
   }
 
   const user = req.auth.user;
@@ -359,22 +351,18 @@ function meetup_dashboard_handler(context) {
 </body>
 </html>`;
 
-  return {
-    status: 200,
-    body: html,
-    contentType: "text/html",
-  };
+  return Response.html(html);
 }
 
 function create_meetup_handler(context) {
   const req = context.request || {};
 
   if (!req.auth || !req.auth.isAuthenticated) {
-    return { status: 401, body: "Unauthorized" };
+    return Response.error(401, "Unauthorized");
   }
 
   if (req.method !== "POST") {
-    return { status: 405, body: "Method not allowed" };
+    return Response.error(405, "Method not allowed");
   }
 
   try {
@@ -382,7 +370,7 @@ function create_meetup_handler(context) {
     const { name, description } = body;
 
     if (!name || !description) {
-      return { status: 400, body: "Name and description required" };
+      return Response.error(400, "Name and description required");
     }
 
     const user = req.auth.user;
@@ -418,14 +406,10 @@ function create_meetup_handler(context) {
       console.error("Error storing meetup key in storage:", error);
     }
 
-    return {
-      status: 201,
-      body: JSON.stringify({ id: meetupId }),
-      contentType: "application/json",
-    };
+    return Response.json({ id: meetupId }, 201);
   } catch (error) {
     console.error("Error creating meetup:", error);
-    return { status: 500, body: "Internal server error" };
+    return Response.error(500, "Internal server error");
   }
 }
 
@@ -435,23 +419,19 @@ function join_meetup_handler(context) {
   const meetupId = path.split("/meetup/join/")[1];
 
   if (!meetupId) {
-    return { status: 404, body: "Meetup not found" };
+    return Response.error(404, "Meetup not found");
   }
 
   const meetup = getMeetupById(meetupId);
   if (!meetup) {
-    return { status: 404, body: "Meetup not found" };
+    return Response.error(404, "Meetup not found");
   }
 
   // Require authentication
   if (!req.auth || !req.auth.isAuthenticated) {
     const currentPath = encodeURIComponent(req.path);
     const loginUrl = "/auth/login?redirect=" + currentPath;
-    return {
-      status: 302,
-      headers: { Location: loginUrl },
-      body: "",
-    };
+    return Response.redirect(loginUrl);
   }
 
   const user = req.auth.user;
@@ -699,11 +679,7 @@ function join_meetup_handler(context) {
 </body>
 </html>`;
 
-  return {
-    status: 200,
-    body: html,
-    contentType: "text/html",
-  };
+  return Response.html(html);
 }
 
 function update_response_handler(context) {
@@ -712,11 +688,11 @@ function update_response_handler(context) {
   const meetupId = path.split("/meetup/")[1]?.split("/response")[0];
 
   if (!meetupId || req.method !== "POST") {
-    return { status: 400, body: "Bad request" };
+    return Response.error(400, "Bad request");
   }
 
   if (!req.auth || !req.auth.isAuthenticated) {
-    return { status: 401, body: "Unauthorized" };
+    return Response.error(401, "Unauthorized");
   }
 
   try {
@@ -724,27 +700,23 @@ function update_response_handler(context) {
     const { response } = body;
 
     if (!["agree", "disagree"].includes(response)) {
-      return { status: 400, body: "Invalid response" };
+      return Response.error(400, "Invalid response");
     }
 
     const user = req.auth.user;
     const meetup = getMeetupById(meetupId);
 
     if (!meetup || !meetup.members || !meetup.members[user.id]) {
-      return { status: 404, body: "Meetup or membership not found" };
+      return Response.error(404, "Meetup or membership not found");
     }
 
     meetup.members[user.id].response = response;
     saveMeetup(meetup);
 
-    return {
-      status: 200,
-      body: JSON.stringify({ success: true }),
-      contentType: "application/json",
-    };
+    return Response.json({ success: true });
   } catch (error) {
     console.error("Error updating response:", error);
-    return { status: 500, body: "Internal server error" };
+    return Response.error(500, "Internal server error");
   }
 }
 

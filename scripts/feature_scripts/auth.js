@@ -262,13 +262,7 @@ function serveInsufficientPermissions(context) {
     </div>
 </body>
 </html>`;
-  return {
-    status: 403,
-    headers: {
-      "Content-Type": "text/html; charset=utf-8",
-    },
-    body: html,
-  };
+  return Response.html(html, 403);
 }
 
 // Initialization function - called when script is loaded or updated

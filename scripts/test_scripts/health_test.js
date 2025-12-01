@@ -15,20 +15,15 @@ function health_test_handler(context) {
       },
     };
 
-    return {
-      status: 200,
-      body: JSON.stringify(healthResponse, null, 2),
-      contentType: "application/json",
-    };
+    return Response.json(healthResponse);
   } catch (error) {
-    return {
-      status: 500,
-      body: JSON.stringify({
+    return Response.json(
+      {
         status: "error",
         error: error.message,
-      }),
-      contentType: "application/json",
-    };
+      },
+      500,
+    );
   }
 }
 

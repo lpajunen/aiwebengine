@@ -12,27 +12,15 @@ function asset_handler(context) {
         const assetMetadata = JSON.parse(assetsJson);
         // Extract just the names for backwards compatibility
         const assetNames = assetMetadata.map((a) => a.name);
-        return {
-          status: 200,
-          body: JSON.stringify({ assets: assetNames, metadata: assetMetadata }),
-          contentType: "application/json",
-        };
+        return Response.json({ assets: assetNames, metadata: assetMetadata });
       } else if (path.startsWith("/assets/")) {
         // Fetch specific asset
         const publicPath = path.substring("/assets/".length);
         const assetJson = assetStorage.fetchAsset("/" + publicPath);
         if (assetJson !== "null") {
-          return {
-            status: 200,
-            body: assetJson,
-            contentType: "application/json",
-          };
+          return Response.json(JSON.parse(assetJson));
         } else {
-          return {
-            status: 404,
-            body: JSON.stringify({ error: "Asset not found" }),
-            contentType: "application/json",
-          };
+          return Response.error(404, "Asset not found");
         }
       }
     } else if (method === "POST") {
@@ -46,19 +34,12 @@ function asset_handler(context) {
             body.mimetype,
             null,
           );
-          return {
-            status: 201,
-            body: JSON.stringify({ message: "Asset created/updated" }),
-            contentType: "application/json",
-          };
+          return Response.json({ message: "Asset created/updated" }, 201);
         } else {
-          return {
-            status: 400,
-            body: JSON.stringify({
-              error: "Missing required fields: publicPath, mimetype, content",
-            }),
-            contentType: "application/json",
-          };
+          return Response.error(
+            400,
+            "Missing required fields: publicPath, mimetype, content",
+          );
         }
       }
     } else if (method === "DELETE") {
@@ -67,33 +48,17 @@ function asset_handler(context) {
         const publicPath = path.substring("/assets/".length);
         const deleted = assetStorage.deleteAsset("/" + publicPath);
         if (deleted) {
-          return {
-            status: 200,
-            body: JSON.stringify({ message: "Asset deleted" }),
-            contentType: "application/json",
-          };
+          return Response.json({ message: "Asset deleted" });
         } else {
-          return {
-            status: 404,
-            body: JSON.stringify({ error: "Asset not found" }),
-            contentType: "application/json",
-          };
+          return Response.error(404, "Asset not found");
         }
       }
     }
 
-    return {
-      status: 400,
-      body: JSON.stringify({ error: "Invalid request" }),
-      contentType: "application/json",
-    };
+    return Response.error(400, "Invalid request");
   } catch (e) {
     console.log("Asset handler error: " + String(e));
-    return {
-      status: 500,
-      body: JSON.stringify({ error: String(e) }),
-      contentType: "application/json",
-    };
+    return Response.error(500, String(e));
   }
 }
 

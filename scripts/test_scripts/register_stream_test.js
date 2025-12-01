@@ -4,15 +4,11 @@
 function stream_test_handler(context) {
   const req = context.request || {};
   console.log("stream_test_handler called");
-  return {
-    status: 200,
-    body: JSON.stringify({
-      message: "Stream test endpoint",
-      path: req.path,
-      method: req.method,
-    }),
-    contentType: "application/json",
-  };
+  return Response.json({
+    message: "Stream test endpoint",
+    path: req.path,
+    method: req.method,
+  });
 }
 
 // Initialization function - called once when script is loaded

@@ -1043,11 +1043,7 @@ function blogRouter(context) {
   }
 
   // Unknown path
-  return {
-    status: 404,
-    body: "Not found",
-    contentType: "text/plain; charset=UTF-8",
-  };
+  return Response.error(404, "Not found");
 }
 
 function listPosts(context) {
@@ -1082,11 +1078,7 @@ function listPosts(context) {
   // Load template and render
   const template = sharedStorage.getItem("blog:template:list");
   if (!template) {
-    return {
-      status: 500,
-      body: "Template not found",
-      contentType: "text/plain; charset=UTF-8",
-    };
+    return Response.error(500, "Template not found");
   }
 
   const data = { posts: posts };
@@ -1097,18 +1089,10 @@ function listPosts(context) {
 
   if (html.startsWith("Error:")) {
     console.error(`Template rendering failed: ${html}`);
-    return {
-      status: 500,
-      body: "Template error",
-      contentType: "text/plain; charset=UTF-8",
-    };
+    return Response.error(500, "Template error");
   }
 
-  return {
-    status: 200,
-    body: html,
-    contentType: "text/html; charset=UTF-8",
-  };
+  return Response.html(html);
 }
 
 function showPost(context, slug) {
