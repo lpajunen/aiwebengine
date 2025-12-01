@@ -420,24 +420,33 @@ sendSubscriptionMessageFiltered uses **subset matching**:
 ````
 
 #### 2. Add Unit Tests
+
 Create test cases covering:
+
 - Exact matches
 - Subset matches
 - No matches
 - Edge cases (empty filters, null values, etc.)
 
 #### 3. Consider Enhanced Filtering
+
 Future enhancement - support more complex filters:
 
 ```javascript
 // Pattern matching
-{ channelId: 'channel_*' }  // Wildcard
+{
+  channelId: "channel_*";
+} // Wildcard
 
 // Multiple values
-{ channelId: ['channel_1', 'channel_2'] }  // OR logic
+{
+  channelId: ["channel_1", "channel_2"];
+} // OR logic
 
 // Negation
-{ channelId: '!system' }  // Not system channel
+{
+  channelId: "!system";
+} // Not system channel
 ```
 
 **Estimated Effort:** Small (2-3 hours for documentation, more for enhanced filtering)
