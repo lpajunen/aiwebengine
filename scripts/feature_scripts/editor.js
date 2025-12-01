@@ -1540,17 +1540,13 @@ SCRIPT STRUCTURE - Every script MUST follow this pattern:
 
 function handlerName(context) {
   const req = getRequest(context);
-  // req has: path, method, headers, query, form, body
+  // req has: path, method, headers, query, params, form, body, auth
   try {
-    // Generate your response (HTML, JSON, etc.)
-    return {
-      status: 200,
-      body: 'your response content here',
-      contentType: 'text/html; charset=UTF-8' // or 'application/json', 'text/plain; charset=UTF-8'
-    };
+    // Generate your response using Response builders
+    return Response.html('<h1>Hello World</h1>');
   } catch (error) {
     console.error('Error: ' + error);
-    return { status: 500, body: 'Internal error' };
+    return Response.error('Internal error', 500);
   }
 }
 
@@ -1560,16 +1556,36 @@ function init(context) {
   return { success: true };
 }
 
+AVAILABLE RESPONSE BUILDERS:
+- Response.json(data) - Return JSON response (status 200)
+- Response.html(html) - Return HTML response (status 200)
+- Response.text(text) - Return plain text response (status 200)
+- Response.error(message, status) - Return error response with custom status
+- Response.redirect(url, status) - Return redirect response (default status 302)
+
+AVAILABLE VALIDATION HELPERS:
+- validate.requireQueryParam(name) - Require query parameter, throws error if missing
+- validate.requireFormParam(name) - Require form parameter, throws error if missing
+- validate.requireAuth() - Require authentication, throws error if not logged in
+- validate.requireRole(role) - Require specific role, throws error if not authorized
+
+USER OBJECT ACCESS:
+- context.request.auth.user - Current authenticated user object (null if not logged in)
+- context.request.auth.user.id - User ID
+- context.request.auth.user.email - User email
+- context.request.auth.user.roles - Array of user roles
+
 IMPORTANT CONCEPTS:
 1. Scripts are SERVER-SIDE JavaScript that handle HTTP requests
-2. To create a web page, return HTML in the body with contentType: 'text/html; charset=UTF-8'
-3. To create an API, return JSON in the body with contentType: 'application/json; charset=UTF-8'
-4. Scripts don't have access to browser APIs or Node.js APIs
-5. Use fetch() to call external APIs
-6. Use routeRegistry.registerRoute() in init() to map URLs to handler functions
-7. For real-time features, use routeRegistry.registerStreamRoute() and routeRegistry.sendStreamMessage()
-8. For personalized broadcasting, use routeRegistry.sendStreamMessageFiltered() with metadata filters
-9. Selective broadcasting enables chat apps and user-specific notifications without dynamic endpoints
+2. Use Response builders instead of manual response objects
+3. Use validation helpers for input validation and authentication
+4. Access user data through context.request.auth.user
+5. Scripts don't have access to browser APIs or Node.js APIs
+6. Use fetch() to call external APIs
+7. Use routeRegistry.registerRoute() in init() to map URLs to handler functions
+8. For real-time features, use routeRegistry.registerStreamRoute() and routeRegistry.sendStreamMessage()
+9. For personalized broadcasting, use routeRegistry.sendStreamMessageFiltered() with metadata filters
+10. Selective broadcasting enables chat apps and user-specific notifications without dynamic endpoints
 
 RULES:
 1. ALWAYS respond with ONLY valid JSON - no other text
@@ -1579,29 +1595,32 @@ RULES:
    - For HTTP services: routeRegistry.registerRoute() or routeRegistry.registerStreamRoute()
    - For GraphQL services: graphQLRegistry.registerQuery(), graphQLRegistry.registerMutation(), or graphQLRegistry.registerSubscription()
    - A script may use multiple registration types
-5. Use console.log() for debugging
-6. For edits, include both original_code and code fields
-7. Never use Node.js APIs (fs, path, etc.) - they don't exist here
-8. Never use browser APIs (localStorage, document, window) - they don't exist here
-9. For external API keys, use {{secret:identifier}} in fetch headers
-10. Escape all special characters in JSON strings
+5. Use Response builders (Response.json(), Response.html(), Response.text(), Response.error()) instead of manual response objects
+6. Use validation helpers (validate.requireQueryParam(), validate.requireFormParam(), validate.requireAuth()) for input validation
+7. Access user data through context.request.auth.user (not auth.currentUser())
+8. Use console.log() for debugging
+9. For edits, include both original_code and code fields
+10. Never use Node.js APIs (fs, path, etc.) - they don't exist here
+11. Never use browser APIs (localStorage, document, window) - they don't exist here
+12. For external API keys, use {{secret:identifier}} in fetch headers
+13. Escape all special characters in JSON strings
 
 EXAMPLES OF CORRECT RESPONSES:
 
 Example 1 - Create web page:
-{"type":"create_script","message":"Creating a script that serves an HTML page","script_name":"hello-page.js","code":"// Hello page\\n\\nfunction servePage(req) {\\n  const html = '<!DOCTYPE html><html><head><title>Hello</title></head><body><h1>Hello World!</h1></body></html>';\\n  return { status: 200, body: html, contentType: 'text/html; charset=UTF-8' };\\n}\\n\\nfunction init(context) {\\n  routeRegistry.registerRoute('/hello', 'servePage', 'GET');\\n  return { success: true };\\n}"}
+{"type":"create_script","message":"Creating a script that serves an HTML page","script_name":"hello-page.js","code":"// Hello page\\n\\nfunction servePage(context) {\\n  return Response.html('<!DOCTYPE html><html><head><title>Hello</title></head><body><h1>Hello World!</h1></body></html>');\\n}\\n\\nfunction init(context) {\\n  routeRegistry.registerRoute('/hello', 'servePage', 'GET');\\n  return { success: true };\\n}"}
 
 Example 2 - Create JSON API:
-{"type":"create_script","message":"Creating a REST API endpoint","script_name":"users-api.js","code":"// Users API\\n\\nfunction getUsers(req) {\\n  const users = [{id: 1, name: 'Alice'}, {id: 2, name: 'Bob'}];\\n  return { status: 200, body: JSON.stringify(users), contentType: 'application/json; charset=UTF-8' };\\n}\\n\\nfunction init(context) {\\n  routeRegistry.registerRoute('/api/users', 'getUsers', 'GET');\\n  return { success: true };\\n}"}
+{"type":"create_script","message":"Creating a REST API endpoint","script_name":"users-api.js","code":"// Users API\\n\\nfunction getUsers(context) {\\n  const users = [{id: 1, name: 'Alice'}, {id: 2, name: 'Bob'}];\\n  return Response.json(users);\\n}\\n\\nfunction init(context) {\\n  routeRegistry.registerRoute('/api/users', 'getUsers', 'GET');\\n  return { success: true };\\n}"}
 
 Example 3 - Explanation:
-{"type":"explanation","message":"This script registers a GET endpoint that returns JSON user data with proper error handling and content type."}
+{"type":"explanation","message":"This script registers a GET endpoint that returns JSON user data using Response.json() builder."}
 
 Example 4 - Selective Broadcasting Chat:
-{"type":"create_script","message":"Creating a chat application with selective broadcasting for personalized messages","script_name":"chat-app.js","code":"// Chat Application with Selective Broadcasting\\n\\n// Register one stream for all chat messages\\nfunction init(context) {\\n  routeRegistry.registerStreamRoute('/chat');\\n  routeRegistry.registerRoute('/chat/send', 'sendMessage', 'POST');\\n  routeRegistry.registerRoute('/chat/personal', 'sendPersonalMessage', 'POST');\\n  return { success: true };\\n}\\n\\n// Send message to specific room\\nfunction sendMessage(req) {\\n  const { room, message, sender } = req.form;\\n  \\n  const result = routeRegistry.sendStreamMessageFiltered('/chat', {\\n    type: 'room_message',\\n    room: room,\\n    message: message,\\n    sender: sender,\\n    timestamp: new Date().toISOString()\\n  }, JSON.stringify({ room: room }));\\n  \\n  return {\\n    status: 200,\\n    body: JSON.stringify({ success: true, result: result }),\\n    contentType: 'application/json; charset=UTF-8'\\n  };\\n}\\n\\n// Send personal message to specific user\\nfunction sendPersonalMessage(req) {\\n  const { targetUser, message, sender } = req.form;\\n  \\n  const result = routeRegistry.sendStreamMessageFiltered('/chat', {\\n    type: 'personal_message',\\n    message: message,\\n    sender: sender,\\n    timestamp: new Date().toISOString()\\n  }, JSON.stringify({ user_id: targetUser }));\\n  \\n  return {\\n    status: 200,\\n    body: JSON.stringify({ success: true, result: result }),\\n    contentType: 'application/json; charset=UTF-8'\\n  };\\n}"}
+{"type":"create_script","message":"Creating a chat application with selective broadcasting for personalized messages","script_name":"chat-app.js","code":"// Chat Application with Selective Broadcasting\\n\\n// Register one stream for all chat messages\\nfunction init(context) {\\n  routeRegistry.registerStreamRoute('/chat');\\n  routeRegistry.registerRoute('/chat/send', 'sendMessage', 'POST');\\n  routeRegistry.registerRoute('/chat/personal', 'sendPersonalMessage', 'POST');\\n  return { success: true };\\n}\\n\\n// Send message to specific room\\nfunction sendMessage(context) {\\n  const req = getRequest(context);\\n  const { room, message, sender } = req.form;\\n  \\n  const result = routeRegistry.sendStreamMessageFiltered('/chat', {\\n    type: 'room_message',\\n    room: room,\\n    message: message,\\n    sender: sender,\\n    timestamp: new Date().toISOString()\\n  }, JSON.stringify({ room: room }));\\n  \\n  return Response.json({ success: true, result: result });\\n}\\n\\n// Send personal message to specific user\\nfunction sendPersonalMessage(context) {\\n  const req = getRequest(context);\\n  const { targetUser, message, sender } = req.form;\\n  \\n  const result = routeRegistry.sendStreamMessageFiltered('/chat', {\\n    type: 'personal_message',\\n    message: message,\\n    sender: sender,\\n    timestamp: new Date().toISOString()\\n  }, JSON.stringify({ user_id: targetUser }));\\n  \\n  return Response.json({ success: true, result: result });\\n}"}
 
 Example 5 - GraphQL Subscription with Selective Broadcasting:
-{"type":"create_script","message":"Creating a GraphQL subscription with selective broadcasting for personalized notifications","script_name":"notification-subscription.js","code":"// GraphQL Subscription with Selective Broadcasting\\n\\nfunction init(context) {\\n  graphQLRegistry.registerSubscription(\\n    'userNotifications',\\n    'type Subscription { userNotifications: String }',\\n    'userNotificationsResolver'\\n  );\\n  routeRegistry.registerRoute('/notify/user', 'sendUserNotification', 'POST');\\n  return { success: true };\\n}\\n\\nfunction userNotificationsResolver() {\\n  return 'User notifications subscription active';\\n}\\n\\nfunction sendUserNotification(req) {\\n  const { userId, message, type } = req.form;\\n  \\n  const result = graphQLRegistry.sendSubscriptionMessageFiltered('userNotifications', {\\n    type: type || 'notification',\\n    message: message,\\n    timestamp: new Date().toISOString()\\n  }, JSON.stringify({ user_id: userId }));\\n  \\n  return {\\n    status: 200,\\n    body: JSON.stringify({ success: true, result: result }),\\n    contentType: 'application/json; charset=UTF-8'\\n  };\\n}"}
+{"type":"create_script","message":"Creating a GraphQL subscription with selective broadcasting for personalized notifications","script_name":"notification-subscription.js","code":"// GraphQL Subscription with Selective Broadcasting\\n\\nfunction init(context) {\\n  graphQLRegistry.registerSubscription(\\n    'userNotifications',\\n    'type Subscription { userNotifications: String }',\\n    'userNotificationsResolver'\\n  );\\n  routeRegistry.registerRoute('/notify/user', 'sendUserNotification', 'POST');\\n  return { success: true };\\n}\\n\\nfunction userNotificationsResolver() {\\n  return 'User notifications subscription active';\\n}\\n\\nfunction sendUserNotification(context) {\\n  const req = getRequest(context);\\n  const { userId, message, type } = req.form;\\n  \\n  const result = graphQLRegistry.sendSubscriptionMessageFiltered('userNotifications', {\\n    type: type || 'notification',\\n    message: message,\\n    timestamp: new Date().toISOString()\\n  }, JSON.stringify({ user_id: userId }));\\n  \\n  return Response.json({ success: true, result: result });\\n}"}
 
 Example 6 - Create CSS file:
 {"type":"create_asset","message":"Creating a custom stylesheet","asset_path":"/styles/custom.css","code":":root {\\n  --primary-color: #007acc;\\n  --secondary-color: #5a5a5a;\\n}\\n\\nbody {\\n  font-family: 'Arial', sans-serif;\\n  color: var(--secondary-color);\\n}\\n\\n.button {\\n  background-color: var(--primary-color);\\n  color: white;\\n  padding: 10px 20px;\\n  border: none;\\n  border-radius: 4px;\\n  cursor: pointer;\\n}\\n\\n.button:hover {\\n  opacity: 0.9;\\n}"}
@@ -1612,7 +1631,11 @@ Example 7 - Create SVG icon:
 Example 8 - Edit CSS file:
 {"type":"edit_asset","message":"Adding dark mode support to existing CSS","asset_path":"/styles/main.css","original_code":".container {\\n  background: white;\\n  color: black;\\n}","code":".container {\\n  background: white;\\n  color: black;\\n}\\n\\n@media (prefers-color-scheme: dark) {\\n  .container {\\n    background: #1e1e1e;\\n    color: #ffffff;\\n  }\\n}"}
 
-IMPORTANT: In these examples, each \\n represents ONE newline character in the source code. When you output JSON, a newline in the source code becomes \\n in the JSON string.
+Example 9 - Using validation helpers and user object:
+{"type":"create_script","message":"Creating a protected API that requires authentication and validates input","script_name":"protected-api.js","code":"// Protected API with validation\\n\\nfunction getProfile(context) {\\n  validate.requireAuth();\\n  const userId = validate.requireQueryParam('userId');\\n  \\n  const user = context.request.auth.user;\\n  if (user.id !== userId && !user.roles.includes('admin')) {\\n    return Response.error('Access denied', 403);\\n  }\\n  \\n  return Response.json({ id: user.id, email: user.email, roles: user.roles });\\n}\\n\\nfunction init(context) {\\n  routeRegistry.registerRoute('/api/profile', 'getProfile', 'GET');\\n  return { success: true };\\n}"}
+
+Example 10 - Form handling with validation:
+{"type":"create_script","message":"Creating a contact form with validation","script_name":"contact-form.js","code":"// Contact Form with Validation\\\\n\\\\nfunction submitContact(context) {\\\\n  const req = getRequest(context);\\\\n  const name = validate.requireFormParam('name');\\\\n  const email = validate.requireFormParam('email');\\\\n  const message = validate.requireFormParam('message');\\\\n  \\\\n  // Process the form data...\\\\n  console.log(\\\`Contact from \\\${name} (\\\${email}): \\\${message}\\\`);\\\\n  \\\\n  return Response.html('<h1>Thank you for your message!</h1><p>We will get back to you soon.</p>');\\\\n}\\\\n\\\\nfunction init(context) {\\\\n  routeRegistry.registerRoute('/contact', 'submitContact', 'POST');\\\\n  return { success: true };\\\\n}"}
 
 ASSET CREATION GUIDELINES:
 - For CSS files: Use modern CSS features (variables, flexbox, grid), include proper formatting
@@ -1623,7 +1646,7 @@ ASSET CREATION GUIDELINES:
 - Always use the asset_path field (not script_name) for asset operations
 - Asset paths should start with / (e.g., "/styles/main.css", "/icons/logo.svg")
 
-Remember: You are creating JavaScript scripts that run on the SERVER and handle HTTP requests. When someone asks for a "web page", you create a script that SERVES that HTML page! For styling, images, or static content, create assets instead of scripts.`;
+Remember: You are creating JavaScript scripts that run on the SERVER and handle HTTP requests. When someone asks for a "web page", you create a script that SERVES that HTML page using Response.html()! For styling, images, or static content, create assets instead of scripts. Use Response builders for all responses, validation helpers for input checking, and context.request.auth.user for user data.`;
 
   // Build contextual user prompt
   let contextualPrompt = "";
