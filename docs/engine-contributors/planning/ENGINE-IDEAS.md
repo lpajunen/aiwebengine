@@ -897,6 +897,30 @@ await db.transaction(async (tx) => {
 
 ---
 
+### 18. Relational Storage API
+
+**Problem:**
+Scripts need a more structured way to store persistent data beyond simple key-value storage. Current storage mechanisms may not suffice for complex data relationships and queries.
+
+**Current Behavior:**
+Limited to basic storage operations, no support for relational data structures or SQL-like queries.
+
+**Impact:**
+Difficulty in managing complex data models, leading to inefficient or error-prone data handling in scripts.
+
+**Suggested Solution:**
+Provide a focused relational storage API that allows scripts to:
+
+- Create SQL tables with defined columns (e.g., string, integer, boolean types)
+- Perform basic queries (SELECT, INSERT, UPDATE, DELETE) on these tables
+- Support simple relationships and constraints where feasible
+
+Avoid full SQL support to maintain simplicity and security, focusing on essential relational features.
+
+**Estimated Effort:** Large
+
+---
+
 ## Implementation Priority
 
 For the remaining improvements:
@@ -924,6 +948,7 @@ For the remaining improvements:
 4. Middleware support
 5. Database transaction API
 6. Method-specific routing
+7. Relational Storage API
 
 **Rationale:** Nice-to-have improvements for mature product
 
@@ -1009,6 +1034,6 @@ These improvements are sourced from real implementation experience building prod
 
 ---
 
-**Last Updated:** December 1, 2025  
+**Last Updated:** December 2, 2025  
 **Contributor:** Development team feedback from various implementations  
 **Status:** Planning phase - ready for prioritization and implementation
