@@ -1284,6 +1284,48 @@ async fn setup_routes(
         }
 
         match rpc_request.method.as_str() {
+            "initialize" => {
+                // MCP initialization - negotiate protocol version and capabilities
+                info!("MCP: Initialize request received");
+
+                // Extract protocol version from params
+                let params = rpc_request.params.unwrap_or(serde_json::json!({}));
+                let _client_version = params
+                    .get("protocolVersion")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("2024-11-05");
+
+                // We support 2024-11-05 as our primary version
+                let supported_version = "2024-11-05";
+
+                axum::response::Json(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": rpc_request.id,
+                    "result": {
+                        "protocolVersion": supported_version,
+                        "capabilities": {
+                            "tools": {
+                                "listChanged": true
+                            }
+                        },
+                        "serverInfo": {
+                            "name": "aiwebengine",
+                            "version": env!("CARGO_PKG_VERSION")
+                        }
+                    }
+                }))
+            }
+            "notifications/initialized" => {
+                // Client signals it's ready after initialization
+                info!("MCP: Client initialized notification received");
+
+                // This is a notification, no response needed
+                // But we return empty success for compatibility
+                axum::response::Json(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": rpc_request.id
+                }))
+            }
             "tools/list" => {
                 let tools = mcp::list_tools();
 
