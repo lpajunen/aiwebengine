@@ -131,6 +131,7 @@ pub enum HandlerInvocationKind {
     StreamCustomization,
     Init,
     Scheduled,
+    McpTool,
 }
 
 impl HandlerInvocationKind {
@@ -143,6 +144,7 @@ impl HandlerInvocationKind {
             HandlerInvocationKind::StreamCustomization => "streamCustomization",
             HandlerInvocationKind::Init => "init",
             HandlerInvocationKind::Scheduled => "scheduled",
+            HandlerInvocationKind::McpTool => "mcpTool",
         }
     }
 }
@@ -1398,6 +1400,120 @@ pub fn execute_graphql_resolver(params: GraphqlResolverExecutionParams) -> Resul
         global.set("context", handler_context.clone())?;
 
         let result_value = resolver_func.call::<_, rquickjs::Value>((handler_context,))?;
+
+        // Convert the result to a JSON string
+        let result_string: String = if result_value.is_string() {
+            result_value
+                .as_string()
+                .ok_or_else(|| rquickjs::Error::new_from_js("value", "string"))?
+                .to_string()?
+        } else {
+            // Use JavaScript's JSON.stringify to convert any value to JSON
+            let json_obj: rquickjs::Object = ctx.globals().get("JSON")?;
+            let json_stringify: rquickjs::Function = json_obj.get("stringify")?;
+            let json_str: String = json_stringify.call((result_value,))?;
+            json_str
+        };
+
+        Ok(result_string)
+    });
+
+    let result_string = result_exec.map_err(|e| format!("JavaScript execution error: {}", e))?;
+
+    // Ensure clean shutdown: drop Context before Runtime
+    drop(ctx);
+    Ok(result_string)
+}
+
+/// Execute an MCP tool handler
+///
+/// This function loads a script and calls the specified MCP tool handler function with the provided arguments.
+///
+/// # Arguments
+/// * `script_uri` - The URI of the script containing the tool handler
+/// * `handler_function` - The name of the handler function to call
+/// * `tool_name` - The name of the MCP tool being invoked
+/// * `arguments` - The tool arguments as a JSON value
+///
+/// # Returns
+/// * `Ok(String)` - The result from the handler function (as JSON string)
+/// * `Err(String)` - Error message if execution fails
+pub fn execute_mcp_tool_handler(
+    script_uri: &str,
+    handler_function: &str,
+    tool_name: &str,
+    arguments: serde_json::Value,
+) -> Result<String, String> {
+    let script_uri_owned = script_uri.to_string();
+    let handler_function_owned = handler_function.to_string();
+    let tool_name_owned = tool_name.to_string();
+    let arguments_owned = arguments.clone();
+
+    let rt = Runtime::new().map_err(|e| format!("runtime new: {}", e))?;
+    let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
+
+    let result_exec = ctx.with(|ctx| -> Result<String, rquickjs::Error> {
+        // Set up all global functions using the secure helper function
+        // For MCP tool handlers, we enable minimal features
+        let config = GlobalSecurityConfig {
+            enable_graphql_registration: false,
+            enable_streams: false,
+            enable_audit_logging: false,
+            ..Default::default()
+        };
+
+        // MCP tool handlers run with admin context (similar to GraphQL resolvers)
+        // In production, this should be secured via MCP-level authentication
+        setup_secure_global_functions(
+            &ctx,
+            &script_uri_owned,
+            UserContext::admin("mcp-tool".to_string()),
+            &config,
+            None,
+            None,
+            None,
+        )?;
+
+        // Load and execute the script
+        let script_content = repository::fetch_script(&script_uri_owned)
+            .ok_or_else(|| rquickjs::Error::new_from_js("Script", "not found"))?;
+
+        // Execute the script
+        ctx.eval::<(), _>(script_content.as_str())?;
+
+        let handler_result: rquickjs::Value = ctx.globals().get(&handler_function_owned)?;
+        let handler_func = handler_result
+            .as_function()
+            .ok_or_else(|| rquickjs::Error::new_from_js("Function", "not found"))?;
+
+        let request_context = JsRequestContext {
+            path: Some("/mcp/tools/call".to_string()),
+            method: Some("POST".to_string()),
+            headers: HashMap::new(),
+            query_params: HashMap::new(),
+            form_data: HashMap::new(),
+            body: None,
+            route_params: HashMap::new(),
+        };
+
+        let context_builder = JsHandlerContextBuilder::new(HandlerInvocationKind::McpTool)
+            .with_script_metadata(&script_uri_owned, &handler_function_owned)
+            .with_request(request_context)
+            .with_args(arguments_owned)
+            .with_metadata_value(
+                "mcp",
+                serde_json::json!({
+                    "toolName": tool_name_owned
+                }),
+            );
+
+        let handler_context = context_builder.build(&ctx)?;
+
+        // Set context as a global variable
+        let global = ctx.globals();
+        global.set("context", handler_context.clone())?;
+
+        let result_value = handler_func.call::<_, rquickjs::Value>((handler_context,))?;
 
         // Convert the result to a JSON string
         let result_string: String = if result_value.is_string() {

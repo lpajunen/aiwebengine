@@ -1477,7 +1477,43 @@ AVAILABLE JAVASCRIPT APIs:
    - filterJson: string (optional JSON string with metadata filter criteria, empty "{}" matches all)
    - Returns: string describing broadcast result with success/failure counts
 
-8. schedulerService - Background job scheduler
+8. mcpRegistry - Model Context Protocol (MCP) tool registry
+
+   mcpRegistry.registerTool(name, description, inputSchemaJson, handlerName) - Register an MCP tool
+   - name: string (tool name, unique identifier)
+   - description: string (what the tool does)
+   - inputSchemaJson: string (JSON Schema defining tool parameters as JSON string)
+   - handlerName: string (name of JavaScript function that handles tool execution)
+   
+   The handler function receives context with context.args containing the tool arguments.
+   It should return a JSON string with the tool result.
+
+   Example:
+   mcpRegistry.registerTool(
+     "getCurrentTime",
+     "Get current time in specified timezone",
+     JSON.stringify({
+       type: "object",
+       properties: {
+         timezone: { type: "string", description: "IANA timezone", default: "UTC" }
+       }
+     }),
+     "getCurrentTimeHandler"
+   );
+
+   function getCurrentTimeHandler(context) {
+     const timezone = context.args.timezone || "UTC";
+     return JSON.stringify({
+       timestamp: new Date().toISOString(),
+       timezone: timezone
+     });
+   }
+
+   MCP tools are accessible at:
+   - GET /mcp/tools/list - List all registered tools
+   - POST /mcp/tools/call - Execute a tool with { "name": "toolName", "arguments": {...} }
+
+9. schedulerService - Background job scheduler
 
   schedulerService.registerOnce({ handler, runAt, name? }) - Schedule a single execution
   - handler: string (function name)
@@ -1494,7 +1530,7 @@ AVAILABLE JAVASCRIPT APIs:
 
   Scheduled handlers run with admin privileges and receive context.meta.schedule containing jobId, name, type (one-off/recurring), scheduledFor (UTC timestamp), and intervalSeconds (null for one-off jobs).
 
-9. dispatcher - Inter-script message passing for event-driven communication
+10. dispatcher - Inter-script message passing for event-driven communication
 
   dispatcher.registerListener(messageType, handlerName) - Register handler for message type
   - messageType: string (event identifier like 'user:created', 'order:completed')

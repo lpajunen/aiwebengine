@@ -4,6 +4,7 @@ use axum::response::{IntoResponse, Redirect, Response, Sse, sse::Event};
 use axum::{Router, routing::any};
 use axum_server::Server;
 use futures::StreamExt as FuturesStreamExt;
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio_stream::wrappers::BroadcastStream;
@@ -19,6 +20,7 @@ pub mod graphql;
 pub mod graphql_ws;
 pub mod http_client;
 pub mod js_engine;
+pub mod mcp;
 pub mod middleware;
 pub mod parsers;
 pub mod repository;
@@ -1229,6 +1231,88 @@ async fn setup_routes(
         }
     };
 
+    // MCP tools/list handler - returns list of available MCP tools
+    let mcp_tools_list_handler = || async move {
+        let tools = mcp::list_tools();
+
+        let tools_list: Vec<serde_json::Value> = tools
+            .iter()
+            .map(|tool| {
+                serde_json::json!({
+                    "name": tool.name,
+                    "description": tool.description,
+                    "inputSchema": tool.input_schema
+                })
+            })
+            .collect();
+
+        let response = serde_json::json!({
+            "tools": tools_list
+        });
+
+        axum::response::Json(response)
+    };
+
+    // MCP tools/call handler - executes an MCP tool
+    let mcp_tools_call_handler = |req: axum::http::Request<axum::body::Body>| async move {
+        let body_bytes = match axum::body::to_bytes(req.into_body(), usize::MAX).await {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                error!("MCP tools/call: Failed to read request body: {}", e);
+                return axum::response::Json(serde_json::json!({
+                    "error": {
+                        "code": "invalid_request",
+                        "message": "Failed to read request body"
+                    }
+                }));
+            }
+        };
+
+        #[derive(Deserialize)]
+        struct ToolCallRequest {
+            name: String,
+            arguments: Option<serde_json::Value>,
+        }
+
+        let request: ToolCallRequest = match serde_json::from_slice(&body_bytes) {
+            Ok(req) => req,
+            Err(e) => {
+                error!("MCP tools/call: Invalid JSON: {}", e);
+                return axum::response::Json(serde_json::json!({
+                    "error": {
+                        "code": "invalid_request",
+                        "message": format!("Invalid JSON: {}", e)
+                    }
+                }));
+            }
+        };
+
+        let arguments = request.arguments.unwrap_or(serde_json::json!({}));
+
+        match mcp::execute_mcp_tool(&request.name, arguments) {
+            Ok(result) => {
+                debug!("MCP tool '{}' executed successfully", request.name);
+                axum::response::Json(serde_json::json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string())
+                        }
+                    ]
+                }))
+            }
+            Err(e) => {
+                error!("MCP tool '{}' execution failed: {}", request.name, e);
+                axum::response::Json(serde_json::json!({
+                    "error": {
+                        "code": "execution_error",
+                        "message": e
+                    }
+                }))
+            }
+        }
+    };
+
     // Build the router
     let mut app = Router::new();
 
@@ -1259,6 +1343,19 @@ async fn setup_routes(
 
         app = app.merge(graphql_api_router);
 
+        // MCP endpoints - NO authentication required
+        let mcp_router = Router::new()
+            .route(
+                "/mcp/tools/list",
+                axum::routing::get(mcp_tools_list_handler),
+            )
+            .route(
+                "/mcp/tools/call",
+                axum::routing::post(mcp_tools_call_handler),
+            );
+
+        app = app.merge(mcp_router);
+
         // Mount authentication routes
         let auth_router = auth::create_auth_router(Arc::clone(auth_mgr));
         app = app.nest("/auth", auth_router);
@@ -1274,7 +1371,15 @@ async fn setup_routes(
                 axum::routing::get(graphql_post_handler).post(graphql_post_handler),
             )
             .route("/graphql/ws", axum::routing::get(graphql_ws_handler))
-            .route("/graphql/sse", axum::routing::get(graphql_sse_handler));
+            .route("/graphql/sse", axum::routing::get(graphql_sse_handler))
+            .route(
+                "/mcp/tools/list",
+                axum::routing::get(mcp_tools_list_handler),
+            )
+            .route(
+                "/mcp/tools/call",
+                axum::routing::post(mcp_tools_call_handler),
+            );
     }
 
     // Add documentation routes

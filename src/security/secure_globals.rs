@@ -142,6 +142,9 @@ impl SecureGlobalContext {
         // Always setup GraphQL functions, but they will be no-ops if disabled
         self.setup_graphql_functions(ctx, script_uri)?;
 
+        // Setup MCP (Model Context Protocol) functions
+        self.setup_mcp_functions(ctx, script_uri)?;
+
         // Setup user management functions (admin-only)
         self.setup_user_management_functions(ctx, script_uri)?;
 
@@ -808,8 +811,9 @@ impl SecureGlobalContext {
                 // This calls the init() function if it exists
                 let script_name_for_init = script_name.clone();
                 tokio::task::spawn(async move {
-                    // Clear any existing GraphQL registrations from this script before re-initializing
+                    // Clear any existing GraphQL and MCP registrations from this script before re-initializing
                     crate::graphql::clear_script_graphql_registrations(&script_name_for_init);
+                    crate::mcp::clear_script_mcp_registrations(&script_name_for_init);
 
                     let initializer = crate::script_init::ScriptInitializer::new(5000); // 5s timeout
                     match initializer
@@ -1891,6 +1895,134 @@ impl SecureGlobalContext {
             send_subscription_message_filtered,
         )?;
         global.set("graphQLRegistry", graphql_registry)?;
+
+        Ok(())
+    }
+
+    /// Setup MCP (Model Context Protocol) registry functions
+    fn setup_mcp_functions(&self, ctx: &rquickjs::Ctx<'_>, script_uri: &str) -> JsResult<()> {
+        let global = ctx.globals();
+        let user_context = self.user_context.clone();
+        let auditor = self.auditor.clone();
+        let script_uri_owned = script_uri.to_string();
+        let config = self.config.clone();
+
+        // registerTool function - registers an MCP tool
+        let user_ctx_register = user_context.clone();
+        let auditor_register = auditor.clone();
+        let script_uri_register = script_uri_owned.clone();
+        let register_tool = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  name: String,
+                  description: String,
+                  input_schema_json: String,
+                  handler_function: String|
+                  -> JsResult<String> {
+                // Check if MCP is enabled (we can use the same config flag as GraphQL for now)
+                if !config.enable_graphql_registration {
+                    debug!(
+                        "MCP tool registration disabled, skipping tool registration for: {}",
+                        name
+                    );
+                    return Ok(format!(
+                        "MCP tool '{}' registration skipped (disabled)",
+                        name
+                    ));
+                }
+
+                // Check capability - reuse ManageGraphQL for MCP tools
+                if let Err(e) = user_ctx_register
+                    .require_capability(&crate::security::Capability::ManageGraphQL)
+                {
+                    let auditor_clone = auditor_register.clone();
+                    let user_id = user_ctx_register.user_id.clone();
+                    tokio::task::spawn(async move {
+                        let _ = auditor_clone
+                            .log_authz_failure(
+                                user_id,
+                                "mcp".to_string(),
+                                "register_tool".to_string(),
+                                "ManageGraphQL".to_string(),
+                            )
+                            .await;
+                    });
+                    return Ok(format!("Error: {}", e));
+                }
+
+                // Validate inputs
+                if name.is_empty() || name.len() > 100 {
+                    return Ok(
+                        "Invalid tool name: must be between 1 and 100 characters".to_string()
+                    );
+                }
+                if description.is_empty() || description.len() > 1000 {
+                    return Ok(
+                        "Invalid description: must be between 1 and 1000 characters".to_string()
+                    );
+                }
+
+                // Parse and validate input schema JSON
+                let input_schema: serde_json::Value = serde_json::from_str(&input_schema_json)
+                    .map_err(|e| {
+                        rquickjs::Error::new_from_js_message(
+                            "schema",
+                            "InputSchema",
+                            &format!("Invalid input schema JSON: {}", e),
+                        )
+                    })?;
+
+                // Check for dangerous patterns
+                if input_schema_json.contains("__proto__")
+                    || input_schema_json.contains("constructor")
+                {
+                    return Ok("Invalid schema: contains dangerous patterns".to_string());
+                }
+
+                // Log the operation attempt
+                let auditor_clone = auditor_register.clone();
+                let user_id = user_ctx_register.user_id.clone();
+                let name_clone = name.clone();
+                let script_uri_clone = script_uri_register.clone();
+                tokio::task::spawn(async move {
+                    let _ = auditor_clone
+                        .log_event(
+                            crate::security::SecurityEvent::new(
+                                crate::security::SecurityEventType::SystemSecurityEvent,
+                                crate::security::SecuritySeverity::Medium,
+                                user_id,
+                            )
+                            .with_resource("mcp".to_string())
+                            .with_action("register_tool".to_string())
+                            .with_detail("tool_name", &name_clone)
+                            .with_detail("script_uri", &script_uri_clone),
+                        )
+                        .await;
+                });
+
+                debug!(
+                    user_id = ?user_ctx_register.user_id,
+                    name = %name,
+                    "Secure registerTool called for MCP"
+                );
+
+                // Actually register the MCP tool
+                crate::mcp::register_mcp_tool(
+                    name.clone(),
+                    description,
+                    input_schema,
+                    handler_function,
+                    script_uri_register.clone(),
+                );
+
+                Ok(format!("MCP tool '{}' registered successfully", name))
+            },
+        )?;
+
+        // Create mcpRegistry object
+        let mcp_registry = rquickjs::Object::new(ctx.clone())?;
+        mcp_registry.set("registerTool", register_tool)?;
+        global.set("mcpRegistry", mcp_registry)?;
 
         Ok(())
     }
