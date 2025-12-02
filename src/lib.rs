@@ -1231,85 +1231,176 @@ async fn setup_routes(
         }
     };
 
-    // MCP tools/list handler - returns list of available MCP tools
-    let mcp_tools_list_handler = || async move {
-        let tools = mcp::list_tools();
-
-        let tools_list: Vec<serde_json::Value> = tools
-            .iter()
-            .map(|tool| {
-                serde_json::json!({
-                    "name": tool.name,
-                    "description": tool.description,
-                    "inputSchema": tool.input_schema
-                })
-            })
-            .collect();
-
-        let response = serde_json::json!({
-            "tools": tools_list
-        });
-
-        axum::response::Json(response)
-    };
-
-    // MCP tools/call handler - executes an MCP tool
-    let mcp_tools_call_handler = |req: axum::http::Request<axum::body::Body>| async move {
+    // MCP JSON-RPC handler - supports tools/list and tools/call methods
+    let mcp_handler = |req: axum::http::Request<axum::body::Body>| async move {
         let body_bytes = match axum::body::to_bytes(req.into_body(), usize::MAX).await {
             Ok(bytes) => bytes,
             Err(e) => {
-                error!("MCP tools/call: Failed to read request body: {}", e);
+                error!("MCP: Failed to read request body: {}", e);
                 return axum::response::Json(serde_json::json!({
+                    "jsonrpc": "2.0",
                     "error": {
-                        "code": "invalid_request",
-                        "message": "Failed to read request body"
-                    }
+                        "code": -32700,
+                        "message": "Parse error: Failed to read request body"
+                    },
+                    "id": null
                 }));
             }
         };
 
         #[derive(Deserialize)]
-        struct ToolCallRequest {
-            name: String,
-            arguments: Option<serde_json::Value>,
+        struct JsonRpcRequest {
+            jsonrpc: String,
+            id: Option<serde_json::Value>,
+            method: String,
+            params: Option<serde_json::Value>,
         }
 
-        let request: ToolCallRequest = match serde_json::from_slice(&body_bytes) {
+        let rpc_request: JsonRpcRequest = match serde_json::from_slice(&body_bytes) {
             Ok(req) => req,
             Err(e) => {
-                error!("MCP tools/call: Invalid JSON: {}", e);
+                error!("MCP: Invalid JSON-RPC request: {}", e);
                 return axum::response::Json(serde_json::json!({
+                    "jsonrpc": "2.0",
                     "error": {
-                        "code": "invalid_request",
-                        "message": format!("Invalid JSON: {}", e)
-                    }
+                        "code": -32700,
+                        "message": format!("Parse error: {}", e)
+                    },
+                    "id": null
                 }));
             }
         };
 
-        let arguments = request.arguments.unwrap_or(serde_json::json!({}));
+        // Validate JSON-RPC version
+        if rpc_request.jsonrpc != "2.0" {
+            return axum::response::Json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": -32600,
+                    "message": "Invalid Request: jsonrpc must be 2.0"
+                },
+                "id": rpc_request.id
+            }));
+        }
 
-        match mcp::execute_mcp_tool(&request.name, arguments) {
-            Ok(result) => {
-                debug!("MCP tool '{}' executed successfully", request.name);
+        match rpc_request.method.as_str() {
+            "tools/list" => {
+                let tools = mcp::list_tools();
+
+                let tools_list: Vec<serde_json::Value> = tools
+                    .iter()
+                    .map(|tool| {
+                        serde_json::json!({
+                            "name": tool.name,
+                            "description": tool.description,
+                            "inputSchema": tool.input_schema
+                        })
+                    })
+                    .collect();
+
                 axum::response::Json(serde_json::json!({
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string())
-                        }
-                    ]
-                }))
-            }
-            Err(e) => {
-                error!("MCP tool '{}' execution failed: {}", request.name, e);
-                axum::response::Json(serde_json::json!({
-                    "error": {
-                        "code": "execution_error",
-                        "message": e
+                    "jsonrpc": "2.0",
+                    "id": rpc_request.id,
+                    "result": {
+                        "tools": tools_list
                     }
                 }))
             }
+            "tools/call" => {
+                #[derive(Deserialize)]
+                struct ToolCallParams {
+                    name: String,
+                    arguments: Option<serde_json::Value>,
+                }
+
+                let params: ToolCallParams = match rpc_request.params {
+                    Some(p) => match serde_json::from_value(p) {
+                        Ok(params) => params,
+                        Err(e) => {
+                            error!("MCP tools/call: Invalid params: {}", e);
+                            return axum::response::Json(serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "error": {
+                                    "code": -32602,
+                                    "message": format!("Invalid params: {}", e)
+                                },
+                                "id": rpc_request.id
+                            }));
+                        }
+                    },
+                    None => {
+                        return axum::response::Json(serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "error": {
+                                "code": -32602,
+                                "message": "Invalid params: missing required params"
+                            },
+                            "id": rpc_request.id
+                        }));
+                    }
+                };
+
+                let arguments = params.arguments.unwrap_or(serde_json::json!({}));
+
+                match mcp::execute_mcp_tool(&params.name, arguments) {
+                    Ok(result) => {
+                        debug!("MCP tool '{}' executed successfully", params.name);
+
+                        // Parse the result to determine if it's structured or just text
+                        let content = vec![serde_json::json!({
+                            "type": "text",
+                            "text": serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string())
+                        })];
+
+                        axum::response::Json(serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": rpc_request.id,
+                            "result": {
+                                "content": content,
+                                "isError": false
+                            }
+                        }))
+                    }
+                    Err(e) => {
+                        error!("MCP tool '{}' execution failed: {}", params.name, e);
+
+                        // Check if it's a "tool not found" error
+                        if e.contains("not found") {
+                            axum::response::Json(serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "error": {
+                                    "code": -32602,
+                                    "message": format!("Unknown tool: {}", params.name)
+                                },
+                                "id": rpc_request.id
+                            }))
+                        } else {
+                            // Return as tool execution error (not protocol error)
+                            let content = vec![serde_json::json!({
+                                "type": "text",
+                                "text": format!("Tool execution failed: {}", e)
+                            })];
+
+                            axum::response::Json(serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "id": rpc_request.id,
+                                "result": {
+                                    "content": content,
+                                    "isError": true
+                                }
+                            }))
+                        }
+                    }
+                }
+            }
+            _ => axum::response::Json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": -32601,
+                    "message": format!("Method not found: {}", rpc_request.method)
+                },
+                "id": rpc_request.id
+            })),
         }
     };
 
@@ -1343,16 +1434,9 @@ async fn setup_routes(
 
         app = app.merge(graphql_api_router);
 
-        // MCP endpoints - NO authentication required
-        let mcp_router = Router::new()
-            .route(
-                "/mcp/tools/list",
-                axum::routing::get(mcp_tools_list_handler),
-            )
-            .route(
-                "/mcp/tools/call",
-                axum::routing::post(mcp_tools_call_handler),
-            );
+        // MCP endpoint - NO authentication required
+        // Supports JSON-RPC 2.0 protocol with tools/list and tools/call methods
+        let mcp_router = Router::new().route("/mcp", axum::routing::post(mcp_handler));
 
         app = app.merge(mcp_router);
 
@@ -1372,14 +1456,7 @@ async fn setup_routes(
             )
             .route("/graphql/ws", axum::routing::get(graphql_ws_handler))
             .route("/graphql/sse", axum::routing::get(graphql_sse_handler))
-            .route(
-                "/mcp/tools/list",
-                axum::routing::get(mcp_tools_list_handler),
-            )
-            .route(
-                "/mcp/tools/call",
-                axum::routing::post(mcp_tools_call_handler),
-            );
+            .route("/mcp", axum::routing::post(mcp_handler));
     }
 
     // Add documentation routes
