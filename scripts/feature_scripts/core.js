@@ -776,32 +776,33 @@ function readFileHandler(context) {
 
   if (!uri) {
     return JSON.stringify({
-      error: "Missing required parameter: uri"
+      error: "Missing required parameter: uri",
     });
   }
 
   try {
-    const content = typeof scriptStorage !== "undefined" &&
+    const content =
+      typeof scriptStorage !== "undefined" &&
       typeof scriptStorage.getScript === "function"
-      ? scriptStorage.getScript(uri)
-      : null;
+        ? scriptStorage.getScript(uri)
+        : null;
 
     if (content !== null && content !== undefined) {
       return JSON.stringify({
         uri: uri,
         content: content,
         size: content.length,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       });
     } else {
       return JSON.stringify({
-        error: `File not found: ${uri}`
+        error: `File not found: ${uri}`,
       });
     }
   } catch (error) {
     console.error(`MCP read_file error: ${error.message}`);
     return JSON.stringify({
-      error: `Failed to read file: ${error.message}`
+      error: `Failed to read file: ${error.message}`,
     });
   }
 }
@@ -814,37 +815,39 @@ function writeFileHandler(context) {
 
   if (!uri) {
     return JSON.stringify({
-      error: "Missing required parameter: uri"
+      error: "Missing required parameter: uri",
     });
   }
 
   if (content === undefined || content === null) {
     return JSON.stringify({
-      error: "Missing required parameter: content"
+      error: "Missing required parameter: content",
     });
   }
 
   try {
-    const existingScript = typeof scriptStorage !== "undefined" &&
+    const existingScript =
+      typeof scriptStorage !== "undefined" &&
       typeof scriptStorage.getScript === "function"
-      ? scriptStorage.getScript(uri)
-      : null;
+        ? scriptStorage.getScript(uri)
+        : null;
     const action = existingScript ? "updated" : "created";
 
-    const success = typeof scriptStorage !== "undefined" &&
+    const success =
+      typeof scriptStorage !== "undefined" &&
       typeof scriptStorage.upsertScript === "function"
-      ? scriptStorage.upsertScript(uri, content)
-      : false;
+        ? scriptStorage.upsertScript(uri, content)
+        : false;
 
     if (!success) {
       return JSON.stringify({
-        error: "Failed to write file"
+        error: "Failed to write file",
       });
     }
 
     broadcastScriptUpdate(uri, action === "created" ? "inserted" : "updated", {
       contentLength: content.length,
-      via: "mcp"
+      via: "mcp",
     });
 
     console.log(`MCP ${action} file: ${uri} (${content.length} chars)`);
@@ -854,12 +857,12 @@ function writeFileHandler(context) {
       action: action,
       uri: uri,
       size: content.length,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
   } catch (error) {
     console.error(`MCP write_file error: ${error.message}`);
     return JSON.stringify({
-      error: `Failed to write file: ${error.message}`
+      error: `Failed to write file: ${error.message}`,
     });
   }
 }
@@ -872,36 +875,38 @@ function createFileHandler(context) {
 
   if (!uri) {
     return JSON.stringify({
-      error: "Missing required parameter: uri"
+      error: "Missing required parameter: uri",
     });
   }
 
   try {
-    const existingScript = typeof scriptStorage !== "undefined" &&
+    const existingScript =
+      typeof scriptStorage !== "undefined" &&
       typeof scriptStorage.getScript === "function"
-      ? scriptStorage.getScript(uri)
-      : null;
+        ? scriptStorage.getScript(uri)
+        : null;
 
     if (existingScript !== null && existingScript !== undefined) {
       return JSON.stringify({
-        error: `File already exists: ${uri}`
+        error: `File already exists: ${uri}`,
       });
     }
 
-    const success = typeof scriptStorage !== "undefined" &&
+    const success =
+      typeof scriptStorage !== "undefined" &&
       typeof scriptStorage.upsertScript === "function"
-      ? scriptStorage.upsertScript(uri, content)
-      : false;
+        ? scriptStorage.upsertScript(uri, content)
+        : false;
 
     if (!success) {
       return JSON.stringify({
-        error: "Failed to create file"
+        error: "Failed to create file",
       });
     }
 
     broadcastScriptUpdate(uri, "inserted", {
       contentLength: content.length,
-      via: "mcp"
+      via: "mcp",
     });
 
     console.log(`MCP created file: ${uri} (${content.length} chars)`);
@@ -910,12 +915,12 @@ function createFileHandler(context) {
       success: true,
       uri: uri,
       size: content.length,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
   } catch (error) {
     console.error(`MCP create_file error: ${error.message}`);
     return JSON.stringify({
-      error: `Failed to create file: ${error.message}`
+      error: `Failed to create file: ${error.message}`,
     });
   }
 }
@@ -926,35 +931,36 @@ function listFilesHandler(context) {
   const pattern = args.pattern || null;
 
   try {
-    const scriptsJson = typeof scriptStorage !== "undefined" &&
+    const scriptsJson =
+      typeof scriptStorage !== "undefined" &&
       typeof scriptStorage.listScripts === "function"
-      ? scriptStorage.listScripts()
-      : "[]";
+        ? scriptStorage.listScripts()
+        : "[]";
 
     let scripts = JSON.parse(scriptsJson);
 
     // Filter by pattern if provided
     if (pattern) {
       const regex = new RegExp(pattern, "i");
-      scripts = scripts.filter(script => regex.test(script.uri));
+      scripts = scripts.filter((script) => regex.test(script.uri));
     }
 
-    const files = scripts.map(script => ({
+    const files = scripts.map((script) => ({
       uri: script.uri,
       size: script.size || 0,
-      type: "script"
+      type: "script",
     }));
 
     return JSON.stringify({
       files: files,
       count: files.length,
       pattern: pattern,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
   } catch (error) {
     console.error(`MCP list_files error: ${error.message}`);
     return JSON.stringify({
-      error: `Failed to list files: ${error.message}`
+      error: `Failed to list files: ${error.message}`,
     });
   }
 }
@@ -966,19 +972,20 @@ function deleteFileHandler(context) {
 
   if (!uri) {
     return JSON.stringify({
-      error: "Missing required parameter: uri"
+      error: "Missing required parameter: uri",
     });
   }
 
   try {
-    const deleted = typeof scriptStorage !== "undefined" &&
+    const deleted =
+      typeof scriptStorage !== "undefined" &&
       typeof scriptStorage.deleteScript === "function"
-      ? scriptStorage.deleteScript(uri)
-      : false;
+        ? scriptStorage.deleteScript(uri)
+        : false;
 
     if (deleted) {
       broadcastScriptUpdate(uri, "removed", {
-        via: "mcp"
+        via: "mcp",
       });
 
       console.log(`MCP deleted file: ${uri}`);
@@ -986,17 +993,17 @@ function deleteFileHandler(context) {
       return JSON.stringify({
         success: true,
         uri: uri,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       });
     } else {
       return JSON.stringify({
-        error: `File not found: ${uri}`
+        error: `File not found: ${uri}`,
       });
     }
   } catch (error) {
     console.error(`MCP delete_file error: ${error.message}`);
     return JSON.stringify({
-      error: `Failed to delete file: ${error.message}`
+      error: `Failed to delete file: ${error.message}`,
     });
   }
 }
@@ -1009,15 +1016,16 @@ function searchFilesHandler(context) {
 
   if (!query) {
     return JSON.stringify({
-      error: "Missing required parameter: query"
+      error: "Missing required parameter: query",
     });
   }
 
   try {
-    const scriptsJson = typeof scriptStorage !== "undefined" &&
+    const scriptsJson =
+      typeof scriptStorage !== "undefined" &&
       typeof scriptStorage.listScripts === "function"
-      ? scriptStorage.listScripts()
-      : "[]";
+        ? scriptStorage.listScripts()
+        : "[]";
 
     const scriptMetadata = JSON.parse(scriptsJson);
     const results = [];
@@ -1025,10 +1033,11 @@ function searchFilesHandler(context) {
     const searchRegex = new RegExp(query, flags);
 
     for (const meta of scriptMetadata) {
-      const content = typeof scriptStorage !== "undefined" &&
+      const content =
+        typeof scriptStorage !== "undefined" &&
         typeof scriptStorage.getScript === "function"
-        ? scriptStorage.getScript(meta.uri)
-        : null;
+          ? scriptStorage.getScript(meta.uri)
+          : null;
 
       if (content) {
         const lines = content.split("\n");
@@ -1039,7 +1048,7 @@ function searchFilesHandler(context) {
             matches.push({
               line: i + 1,
               content: lines[i].trim(),
-              preview: lines[i].substring(0, 200)
+              preview: lines[i].substring(0, 200),
             });
           }
         }
@@ -1048,25 +1057,60 @@ function searchFilesHandler(context) {
           results.push({
             uri: meta.uri,
             matchCount: matches.length,
-            matches: matches.slice(0, 50) // Limit to first 50 matches per file
+            matches: matches.slice(0, 50), // Limit to first 50 matches per file
           });
         }
       }
     }
 
-    console.log(`MCP search found ${results.length} files with matches for: ${query}`);
+    console.log(
+      `MCP search found ${results.length} files with matches for: ${query}`,
+    );
 
     return JSON.stringify({
       query: query,
       caseInsensitive: caseInsensitive,
       filesMatched: results.length,
       results: results,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
   } catch (error) {
     console.error(`MCP search_files error: ${error.message}`);
     return JSON.stringify({
-      error: `Failed to search files: ${error.message}`
+      error: `Failed to search files: ${error.message}`,
+    });
+  }
+}
+
+// Read logs handler - retrieves log messages for a specific script
+function readLogsHandler(context) {
+  const args = getArgs(context);
+  const uri = args.uri;
+
+  if (!uri) {
+    return JSON.stringify({
+      error: "Missing required parameter: uri",
+    });
+  }
+
+  try {
+    const logsJson = console.listLogsForUri(uri);
+    const logs = JSON.parse(logsJson);
+
+    console.log(
+      `MCP read_logs retrieved ${logs.length} log entries for: ${uri}`,
+    );
+
+    return JSON.stringify({
+      uri: uri,
+      logs: logs,
+      count: logs.length,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error(`MCP read_logs error: ${error.message}`);
+    return JSON.stringify({
+      error: `Failed to read logs: ${error.message}`,
     });
   }
 }
@@ -1218,12 +1262,12 @@ function init(context) {
           properties: {
             uri: {
               type: "string",
-              description: "Script URI (e.g., 'https://example.com/myscript')"
-            }
+              description: "Script URI (e.g., 'https://example.com/myscript')",
+            },
           },
-          required: ["uri"]
+          required: ["uri"],
         }),
-        "readFileHandler"
+        "readFileHandler",
       );
 
       mcpRegistry.registerTool(
@@ -1234,16 +1278,16 @@ function init(context) {
           properties: {
             uri: {
               type: "string",
-              description: "Script URI"
+              description: "Script URI",
             },
             content: {
               type: "string",
-              description: "File content (JavaScript code)"
-            }
+              description: "File content (JavaScript code)",
+            },
           },
-          required: ["uri", "content"]
+          required: ["uri", "content"],
         }),
-        "writeFileHandler"
+        "writeFileHandler",
       );
 
       mcpRegistry.registerTool(
@@ -1254,17 +1298,17 @@ function init(context) {
           properties: {
             uri: {
               type: "string",
-              description: "Script URI"
+              description: "Script URI",
             },
             content: {
               type: "string",
               description: "File content (JavaScript code)",
-              default: ""
-            }
+              default: "",
+            },
           },
-          required: ["uri"]
+          required: ["uri"],
         }),
-        "createFileHandler"
+        "createFileHandler",
       );
 
       mcpRegistry.registerTool(
@@ -1275,11 +1319,11 @@ function init(context) {
           properties: {
             pattern: {
               type: "string",
-              description: "Optional regex pattern to filter files by URI"
-            }
-          }
+              description: "Optional regex pattern to filter files by URI",
+            },
+          },
         }),
-        "listFilesHandler"
+        "listFilesHandler",
       );
 
       mcpRegistry.registerTool(
@@ -1290,12 +1334,12 @@ function init(context) {
           properties: {
             uri: {
               type: "string",
-              description: "Script URI to delete"
-            }
+              description: "Script URI to delete",
+            },
           },
-          required: ["uri"]
+          required: ["uri"],
         }),
-        "deleteFileHandler"
+        "deleteFileHandler",
       );
 
       mcpRegistry.registerTool(
@@ -1306,17 +1350,33 @@ function init(context) {
           properties: {
             query: {
               type: "string",
-              description: "Text or regex pattern to search for"
+              description: "Text or regex pattern to search for",
             },
             caseInsensitive: {
               type: "boolean",
               description: "Whether search should be case-insensitive",
-              default: true
-            }
+              default: true,
+            },
           },
-          required: ["query"]
+          required: ["query"],
         }),
-        "searchFilesHandler"
+        "searchFilesHandler",
+      );
+
+      mcpRegistry.registerTool(
+        "read_logs",
+        "Read log messages for a specific script (useful for debugging)",
+        JSON.stringify({
+          type: "object",
+          properties: {
+            uri: {
+              type: "string",
+              description: "Script URI to retrieve logs for",
+            },
+          },
+          required: ["uri"],
+        }),
+        "readLogsHandler",
       );
 
       console.log("MCP file operation tools registered successfully");
@@ -1332,7 +1392,7 @@ function init(context) {
       registeredEndpoints: 8,
       registeredAssets: 5,
       registeredGraphQLOperations: 8,
-      registeredMcpTools: 6,
+      registeredMcpTools: 7,
     };
   } catch (error) {
     console.error(`Core script initialization failed: ${error.message}`);
