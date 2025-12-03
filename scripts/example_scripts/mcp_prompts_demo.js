@@ -70,7 +70,73 @@ function init(context) {
 }
 
 // Handler for create_rest_endpoint prompt
-function create_rest_endpoint(args) {
+function create_rest_endpoint(context) {
+  // Check if we're in completion mode
+  if (context.mode === "completion") {
+    const { completingArgument, partialValue, arguments: args } = context;
+
+    // Provide completions based on which argument is being completed
+    if (completingArgument === "method") {
+      const methods = ["GET", "POST", "PUT", "DELETE", "PATCH"];
+      const filtered = methods.filter((m) =>
+        m.toLowerCase().startsWith(partialValue.toLowerCase()),
+      );
+      return {
+        values: filtered,
+        total: filtered.length,
+        hasMore: false,
+      };
+    }
+
+    if (completingArgument === "resourceName") {
+      // Common resource name suggestions
+      const suggestions = ["users", "products", "orders", "customers", "items"];
+      const filtered = suggestions.filter((s) =>
+        s.toLowerCase().startsWith(partialValue.toLowerCase()),
+      );
+      return {
+        values: filtered,
+        total: filtered.length,
+        hasMore: false,
+      };
+    }
+
+    if (completingArgument === "path") {
+      // Suggest path based on resource name if available
+      const resourceName = args.resourceName || "resource";
+      const method = args.method || "GET";
+      const suggestions = [
+        `/api/${resourceName}`,
+        `/${resourceName}`,
+        `/v1/${resourceName}`,
+      ];
+
+      // If it's a GET/PUT/DELETE with ID parameter
+      if (method !== "POST") {
+        suggestions.push(`/api/${resourceName}/:id`);
+        suggestions.push(`/${resourceName}/:id`);
+      }
+
+      const filtered = suggestions.filter((s) =>
+        s.toLowerCase().includes(partialValue.toLowerCase()),
+      );
+      return {
+        values: filtered,
+        total: filtered.length,
+        hasMore: false,
+      };
+    }
+
+    // Default: no completions
+    return {
+      values: [],
+      total: 0,
+      hasMore: false,
+    };
+  }
+
+  // Prompt mode - generate the actual code
+  const { arguments: args } = context;
   const resourceName = args.resourceName || "resource";
   const method = args.method || "GET";
   const path = args.path || `/api/${resourceName}`;
@@ -115,7 +181,60 @@ console.log("Registered ${method} ${path}");
 }
 
 // Handler for add_graphql_query prompt
-function add_graphql_query(args) {
+function add_graphql_query(context) {
+  // Check if we're in completion mode
+  if (context.mode === "completion") {
+    const { completingArgument, partialValue } = context;
+
+    if (completingArgument === "queryName") {
+      const suggestions = [
+        "getUser",
+        "listUsers",
+        "getProduct",
+        "listProducts",
+        "getOrder",
+        "listOrders",
+      ];
+      const filtered = suggestions.filter((s) =>
+        s.toLowerCase().startsWith(partialValue.toLowerCase()),
+      );
+      return {
+        values: filtered,
+        total: filtered.length,
+        hasMore: false,
+      };
+    }
+
+    if (completingArgument === "returnType") {
+      const suggestions = [
+        "String",
+        "Int",
+        "Boolean",
+        "User",
+        "Product",
+        "[User]",
+        "[Product]",
+      ];
+      const filtered = suggestions.filter((s) =>
+        s.toLowerCase().startsWith(partialValue.toLowerCase()),
+      );
+      return {
+        values: filtered,
+        total: filtered.length,
+        hasMore: false,
+      };
+    }
+
+    // Default: no completions
+    return {
+      values: [],
+      total: 0,
+      hasMore: false,
+    };
+  }
+
+  // Prompt mode - generate the actual code
+  const { arguments: args } = context;
   const queryName = args.queryName || "myQuery";
   const returnType = args.returnType || "String";
   const queryArgs = args.arguments || "";

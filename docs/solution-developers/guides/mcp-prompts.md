@@ -132,9 +132,28 @@ mcpRegistry.registerPrompt(name, description, argumentsJson, handlerFunction);
 **Handler Function:**
 
 - Named as specified in the registration
-- Receives object with user-provided arguments as parameter
-- Must return object with `messages` array containing role/content pairs
+- Receives **context object** with mode and arguments
+- In **prompt mode** (`context.mode === "prompt"`): returns messages array
+- In **completion mode** (`context.mode === "completion"`): returns completion suggestions
 - Has access to all standard APIs (console, sharedStorage, fetch, etc.)
+
+**Context Object Structure:**
+
+```javascript
+// Prompt mode (prompts/get)
+{
+  mode: "prompt",
+  arguments: { /* all provided arguments */ }
+}
+
+// Completion mode (completion/complete)
+{
+  mode: "completion",
+  completingArgument: "argumentName",  // which argument is being completed
+  partialValue: "partial text",        // what user has typed so far
+  arguments: { /* previously completed arguments */ }
+}
+```
 
 ### Security Requirements
 
@@ -267,7 +286,45 @@ curl -X POST https://softagen.com/mcp \
 }
 ```
 
-### 3. Test via VS Code MCP Client
+### 3. Test Completions
+
+```bash
+curl -X POST https://softagen.com/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "completion/complete",
+    "params": {
+      "ref": {
+        "type": "ref/prompt",
+        "name": "create_rest_endpoint"
+      },
+      "argument": {
+        "name": "method",
+        "value": "P"
+      }
+    }
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "result": {
+    "completion": {
+      "values": ["POST", "PUT", "PATCH"],
+      "total": 3,
+      "hasMore": false
+    }
+  }
+}
+```
+
+### 4. Test via VS Code MCP Client
 
 Configure `.vscode/mcp.json`:
 
@@ -335,10 +392,31 @@ Then in AI assistant:
 }
 ```
 
-### 4. Return Well-Formatted Messages
+### 4. Support Both Prompt and Completion Modes
 
 ```javascript
-function myPromptHandler(args) {
+function myPromptHandler(context) {
+  // Handle completion mode
+  if (context.mode === "completion") {
+    const { completingArgument, partialValue, arguments: args } = context;
+
+    if (completingArgument === "method") {
+      const methods = ["GET", "POST", "PUT", "DELETE"];
+      const filtered = methods.filter((m) =>
+        m.toLowerCase().startsWith(partialValue.toLowerCase()),
+      );
+      return {
+        values: filtered,
+        total: filtered.length,
+        hasMore: false,
+      };
+    }
+
+    return { values: [], total: 0, hasMore: false };
+  }
+
+  // Handle prompt mode
+  const { arguments: args } = context;
   return {
     messages: [
       {
@@ -363,7 +441,15 @@ function myPromptHandler(args) {
 ### 5. Validate Arguments
 
 ```javascript
-function myPromptHandler(args) {
+function myPromptHandler(context) {
+  // Skip validation in completion mode
+  if (context.mode === "completion") {
+    // Handle completions...
+    return { values: [], total: 0, hasMore: false };
+  }
+
+  const { arguments: args } = context;
+
   if (!args.required_param) {
     throw new Error("required_param is missing");
   }

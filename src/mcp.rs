@@ -280,11 +280,62 @@ pub fn execute_mcp_prompt(
         (prompt.script_uri.clone(), prompt.handler_function.clone())
     };
 
+    // Build context for handler - all arguments provided, full prompt mode
+    let context = serde_json::json!({
+        "mode": "prompt",
+        "arguments": arguments
+    });
+
     // Execute the JavaScript handler
     let result =
-        crate::js_engine::execute_mcp_prompt_handler(&script_uri, &handler_function, arguments)?;
+        crate::js_engine::execute_mcp_prompt_handler(&script_uri, &handler_function, context)?;
 
     debug!("MCP prompt '{}' executed successfully", prompt_name);
+    Ok(result)
+}
+
+/// Execute an MCP completion by calling the prompt's JavaScript handler in completion mode
+pub fn execute_mcp_completion(
+    prompt_name: &str,
+    argument_name: &str,
+    argument_value: &str,
+    context_arguments: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    debug!(
+        "Executing MCP completion for prompt: {}, argument: {}, value: '{}'",
+        prompt_name, argument_name, argument_value
+    );
+
+    // Get the prompt from registry
+    let registry_arc = get_registry();
+    let (script_uri, handler_function) = {
+        let registry = registry_arc
+            .read()
+            .map_err(|e| format!("Failed to read MCP registry: {}", e))?;
+
+        let prompt = registry
+            .get_prompt(prompt_name)
+            .ok_or_else(|| format!("Prompt '{}' not found", prompt_name))?;
+
+        (prompt.script_uri.clone(), prompt.handler_function.clone())
+    };
+
+    // Build context for handler - completion mode with partial arguments
+    let context = serde_json::json!({
+        "mode": "completion",
+        "completingArgument": argument_name,
+        "partialValue": argument_value,
+        "arguments": context_arguments.unwrap_or(serde_json::json!({}))
+    });
+
+    // Execute the JavaScript handler in completion mode
+    let result =
+        crate::js_engine::execute_mcp_prompt_handler(&script_uri, &handler_function, context)?;
+
+    debug!(
+        "MCP completion for prompt '{}' executed successfully",
+        prompt_name
+    );
     Ok(result)
 }
 

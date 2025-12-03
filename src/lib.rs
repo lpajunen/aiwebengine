@@ -1309,7 +1309,8 @@ async fn setup_routes(
                             },
                             "prompts": {
                                 "listChanged": true
-                            }
+                            },
+                            "completions": {}
                         },
                         "serverInfo": {
                             "name": "aiwebengine",
@@ -1507,6 +1508,117 @@ async fn setup_routes(
                     }
                     Err(e) => {
                         error!("MCP prompts/get error: {}", e);
+                        axum::response::Json(serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "error": {
+                                "code": -32602,
+                                "message": e
+                            },
+                            "id": rpc_request.id
+                        }))
+                    }
+                }
+            }
+            "completion/complete" => {
+                #[derive(Deserialize)]
+                struct CompletionRef {
+                    #[serde(rename = "type")]
+                    ref_type: String,
+                    name: Option<String>,
+                }
+
+                #[derive(Deserialize)]
+                struct CompletionArgument {
+                    name: String,
+                    value: String,
+                }
+
+                #[derive(Deserialize)]
+                struct CompletionContext {
+                    arguments: Option<serde_json::Value>,
+                }
+
+                #[derive(Deserialize)]
+                struct CompletionParams {
+                    #[serde(rename = "ref")]
+                    reference: CompletionRef,
+                    argument: CompletionArgument,
+                    context: Option<CompletionContext>,
+                }
+
+                let params: CompletionParams = match rpc_request.params {
+                    Some(p) => match serde_json::from_value(p) {
+                        Ok(params) => params,
+                        Err(e) => {
+                            error!("MCP completion/complete: Invalid params: {}", e);
+                            return axum::response::Json(serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "error": {
+                                    "code": -32602,
+                                    "message": format!("Invalid params: {}", e)
+                                },
+                                "id": rpc_request.id
+                            }));
+                        }
+                    },
+                    None => {
+                        return axum::response::Json(serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "error": {
+                                "code": -32602,
+                                "message": "Invalid params: missing required params"
+                            },
+                            "id": rpc_request.id
+                        }));
+                    }
+                };
+
+                // Only support ref/prompt type for now
+                if params.reference.ref_type != "ref/prompt" {
+                    return axum::response::Json(serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "error": {
+                            "code": -32602,
+                            "message": format!("Unsupported reference type: {}", params.reference.ref_type)
+                        },
+                        "id": rpc_request.id
+                    }));
+                }
+
+                let prompt_name = match params.reference.name {
+                    Some(name) => name,
+                    None => {
+                        return axum::response::Json(serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "error": {
+                                "code": -32602,
+                                "message": "Missing prompt name in reference"
+                            },
+                            "id": rpc_request.id
+                        }));
+                    }
+                };
+
+                let context_arguments = params.context.and_then(|c| c.arguments);
+
+                match mcp::execute_mcp_completion(
+                    &prompt_name,
+                    &params.argument.name,
+                    &params.argument.value,
+                    context_arguments,
+                ) {
+                    Ok(result) => {
+                        // The handler should return an object with "values", optional "total", and optional "hasMore"
+                        axum::response::Json(serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": rpc_request.id,
+                            "result": {
+                                "completion": result
+                            }
+                        }))
+                    }
+                    Err(e) => {
+                        error!("MCP completion/complete error: {}", e);
                         axum::response::Json(serde_json::json!({
                             "jsonrpc": "2.0",
                             "error": {
