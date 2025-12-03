@@ -2019,9 +2019,124 @@ impl SecureGlobalContext {
             },
         )?;
 
+        // registerPrompt function - registers an MCP prompt
+        let user_ctx_prompt = user_context.clone();
+        let auditor_prompt = auditor.clone();
+        let script_uri_prompt = script_uri_owned.clone();
+        let config_prompt = config.clone();
+        let register_prompt = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  name: String,
+                  description: String,
+                  arguments_json: String,
+                  handler_function: String|
+                  -> JsResult<String> {
+                // Check if MCP is enabled
+                if !config_prompt.enable_graphql_registration {
+                    debug!(
+                        "MCP prompt registration disabled, skipping prompt registration for: {}",
+                        name
+                    );
+                    return Ok(format!(
+                        "MCP prompt '{}' registration skipped (disabled)",
+                        name
+                    ));
+                }
+
+                // Check capability - reuse ManageGraphQL for MCP prompts
+                if let Err(e) =
+                    user_ctx_prompt.require_capability(&crate::security::Capability::ManageGraphQL)
+                {
+                    let auditor_clone = auditor_prompt.clone();
+                    let user_id = user_ctx_prompt.user_id.clone();
+                    tokio::task::spawn(async move {
+                        let _ = auditor_clone
+                            .log_authz_failure(
+                                user_id,
+                                "mcp".to_string(),
+                                "register_prompt".to_string(),
+                                "ManageGraphQL".to_string(),
+                            )
+                            .await;
+                    });
+                    return Ok(format!("Error: {}", e));
+                }
+
+                // Validate inputs
+                if name.is_empty() || name.len() > 100 {
+                    return Ok(
+                        "Invalid prompt name: must be between 1 and 100 characters".to_string()
+                    );
+                }
+                if description.is_empty() || description.len() > 1000 {
+                    return Ok(
+                        "Invalid description: must be between 1 and 1000 characters".to_string()
+                    );
+                }
+                if handler_function.is_empty() || handler_function.len() > 100 {
+                    return Ok(
+                        "Invalid handler function: must be between 1 and 100 characters"
+                            .to_string(),
+                    );
+                }
+
+                // Validate arguments JSON
+                if arguments_json.contains("__proto__") || arguments_json.contains("constructor") {
+                    return Ok("Invalid arguments: contains dangerous patterns".to_string());
+                }
+
+                // Log the operation attempt
+                let auditor_clone = auditor_prompt.clone();
+                let user_id = user_ctx_prompt.user_id.clone();
+                let name_clone = name.clone();
+                let script_uri_clone = script_uri_prompt.clone();
+                let handler_clone = handler_function.clone();
+                tokio::task::spawn(async move {
+                    let _ = auditor_clone
+                        .log_event(
+                            crate::security::SecurityEvent::new(
+                                crate::security::SecurityEventType::SystemSecurityEvent,
+                                crate::security::SecuritySeverity::Medium,
+                                user_id,
+                            )
+                            .with_resource("mcp".to_string())
+                            .with_action("register_prompt".to_string())
+                            .with_detail("prompt_name", &name_clone)
+                            .with_detail("handler", &handler_clone)
+                            .with_detail("script_uri", &script_uri_clone),
+                        )
+                        .await;
+                });
+
+                debug!(
+                    user_id = ?user_ctx_prompt.user_id,
+                    name = %name,
+                    handler = %handler_function,
+                    "Secure registerPrompt called for MCP"
+                );
+
+                // Actually register the MCP prompt
+                match crate::mcp::register_mcp_prompt(
+                    name.clone(),
+                    description,
+                    arguments_json,
+                    handler_function.clone(),
+                    script_uri_prompt.clone(),
+                ) {
+                    Ok(_) => Ok(format!(
+                        "MCP prompt '{}' registered successfully with handler '{}'",
+                        name, handler_function
+                    )),
+                    Err(e) => Ok(format!("Error registering prompt: {}", e)),
+                }
+            },
+        )?;
+
         // Create mcpRegistry object
         let mcp_registry = rquickjs::Object::new(ctx.clone())?;
         mcp_registry.set("registerTool", register_tool)?;
+        mcp_registry.set("registerPrompt", register_prompt)?;
         global.set("mcpRegistry", mcp_registry)?;
 
         Ok(())

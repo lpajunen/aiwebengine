@@ -1438,6 +1438,84 @@ pub fn execute_graphql_resolver(params: GraphqlResolverExecutionParams) -> Resul
 /// # Returns
 /// * `Ok(String)` - The result from the handler function (as JSON string)
 /// * `Err(String)` - Error message if execution fails
+pub fn execute_mcp_prompt_handler(
+    script_uri: &str,
+    handler_function: &str,
+    arguments: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let script_uri_owned = script_uri.to_string();
+    let handler_function_owned = handler_function.to_string();
+    let arguments_owned = arguments.clone();
+
+    let rt = Runtime::new().map_err(|e| format!("runtime new: {}", e))?;
+    let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
+
+    let result_exec = ctx.with(|ctx| -> Result<serde_json::Value, rquickjs::Error> {
+        // Set up all global functions using the secure helper function
+        // For MCP prompt handlers, we enable minimal features
+        let config = GlobalSecurityConfig {
+            enable_graphql_registration: false,
+            enable_streams: false,
+            enable_audit_logging: false,
+            ..Default::default()
+        };
+
+        // MCP prompt handlers run with admin context (similar to GraphQL resolvers)
+        setup_secure_global_functions(
+            &ctx,
+            &script_uri_owned,
+            UserContext::admin("mcp-prompt".to_string()),
+            &config,
+            None,
+            None,
+            None,
+        )?;
+
+        // Load and execute the script
+        let script_content = repository::fetch_script(&script_uri_owned)
+            .ok_or_else(|| rquickjs::Error::new_from_js("Script", "not found"))?;
+
+        // Execute the script
+        ctx.eval::<(), _>(script_content.as_str())?;
+
+        // Get the handler function
+        let handler_result: rquickjs::Value = ctx.globals().get(&handler_function_owned)?;
+        let handler_func = handler_result
+            .as_function()
+            .ok_or_else(|| rquickjs::Error::new_from_js("Function", "not found"))?;
+
+        // Parse arguments as a JavaScript object
+        let args_str = arguments_owned.to_string();
+        let args_obj: rquickjs::Value = ctx.json_parse(args_str)?;
+
+        // Call the handler with arguments
+        let result: rquickjs::Value = handler_func.call((args_obj,))?;
+
+        // Convert result to JSON
+        let result_json_str = ctx
+            .json_stringify(result)?
+            .ok_or_else(|| rquickjs::Error::new_from_js("value", "Failed to stringify result"))?;
+
+        let result_json: String = result_json_str.to_string()?;
+
+        serde_json::from_str(&result_json)
+            .map_err(|_e| rquickjs::Error::new_from_js("value", "Invalid JSON from prompt handler"))
+    });
+
+    result_exec.map_err(|e| format!("Prompt handler execution failed: {}", e))
+}
+
+/// Execute an MCP tool handler function
+///
+/// # Arguments
+/// * `script_uri` - The URI of the script containing the handler
+/// * `handler_function` - The name of the handler function to call
+/// * `tool_name` - The name of the MCP tool being executed
+/// * `arguments` - The arguments to pass to the handler
+///
+/// # Returns
+/// * `Ok(String)` - The result from the handler function (as JSON string)
+/// * `Err(String)` - Error message if execution fails
 pub fn execute_mcp_tool_handler(
     script_uri: &str,
     handler_function: &str,

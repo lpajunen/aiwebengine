@@ -32,6 +32,7 @@ Deep dives into specific development areas:
 | -------------------------------------------------------- | ---------------------------------------------------------------- |
 | [Script Development](guides/scripts.md)                  | Create handlers, register routes, manage state, error handling   |
 | [MCP Tools Development](guides/mcp-tools.md)             | Create AI-discoverable tools using Model Context Protocol        |
+| [MCP Prompts Development](guides/mcp-prompts.md)         | Create reusable templates for AI-assisted code generation        |
 | [Asset Management](guides/assets.md)                     | Upload and serve images, CSS, JavaScript, and other static files |
 | [Logging & Debugging](guides/logging.md)                 | Write logs, debug issues, monitor script behavior                |
 | [Streaming & Real-time](guides/streaming.md)             | Build real-time features with Server-Sent Events                 |
@@ -90,6 +91,9 @@ Real-world code examples:
 
 **Create MCP tools for AI**
 → Follow [MCP Tools Development](guides/mcp-tools.md)
+
+**Create MCP prompts for AI**
+→ Follow [MCP Prompts Development](guides/mcp-prompts.md)
 
 **Debug my script**
 → Use [Logging Guide](guides/logging.md)

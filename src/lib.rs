@@ -1306,6 +1306,9 @@ async fn setup_routes(
                         "capabilities": {
                             "tools": {
                                 "listChanged": true
+                            },
+                            "prompts": {
+                                "listChanged": true
                             }
                         },
                         "serverInfo": {
@@ -1432,6 +1435,86 @@ async fn setup_routes(
                                 }
                             }))
                         }
+                    }
+                }
+            }
+            "prompts/list" => {
+                let prompts = mcp::list_prompts();
+
+                let prompts_list: Vec<serde_json::Value> = prompts
+                    .iter()
+                    .map(|prompt| {
+                        serde_json::json!({
+                            "name": prompt.name,
+                            "description": prompt.description,
+                            "arguments": prompt.arguments
+                        })
+                    })
+                    .collect();
+
+                axum::response::Json(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": rpc_request.id,
+                    "result": {
+                        "prompts": prompts_list
+                    }
+                }))
+            }
+            "prompts/get" => {
+                #[derive(Deserialize)]
+                struct PromptGetParams {
+                    name: String,
+                    arguments: Option<serde_json::Value>,
+                }
+
+                let params: PromptGetParams = match rpc_request.params {
+                    Some(p) => match serde_json::from_value(p) {
+                        Ok(params) => params,
+                        Err(e) => {
+                            error!("MCP prompts/get: Invalid params: {}", e);
+                            return axum::response::Json(serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "error": {
+                                    "code": -32602,
+                                    "message": format!("Invalid params: {}", e)
+                                },
+                                "id": rpc_request.id
+                            }));
+                        }
+                    },
+                    None => {
+                        return axum::response::Json(serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "error": {
+                                "code": -32602,
+                                "message": "Invalid params: missing required params"
+                            },
+                            "id": rpc_request.id
+                        }));
+                    }
+                };
+
+                let arguments = params.arguments.unwrap_or(serde_json::json!({}));
+
+                match mcp::execute_mcp_prompt(&params.name, arguments) {
+                    Ok(result) => {
+                        // The handler should return an object with a "messages" array
+                        axum::response::Json(serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": rpc_request.id,
+                            "result": result
+                        }))
+                    }
+                    Err(e) => {
+                        error!("MCP prompts/get error: {}", e);
+                        axum::response::Json(serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "error": {
+                                "code": -32602,
+                                "message": e
+                            },
+                            "id": rpc_request.id
+                        }))
                     }
                 }
             }
