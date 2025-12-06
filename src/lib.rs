@@ -1702,7 +1702,11 @@ async fn setup_routes(
 
         let registration_manager = Arc::new(auth::ClientRegistrationManager::new(90)); // 90 day secret expiry
 
-        let oauth2_router = auth::create_oauth2_router(metadata_config, Some(registration_manager));
+        let oauth2_router = auth::create_oauth2_router(
+            metadata_config,
+            Some(registration_manager),
+            Arc::clone(auth_mgr),
+        );
         app = app.merge(oauth2_router);
     } else {
         warn!("⚠️  Authentication DISABLED - no auth routes or middleware");

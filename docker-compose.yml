@@ -53,7 +53,7 @@ services:
       # Mount custom configuration
       - ./config.production.toml:/app/config.yaml:ro
     environment:
-      - RUST_LOG=info
+      - RUST_LOG=trace
       - CONFIG_FILE=/app/config.yaml
       # Auth configuration
       - APP_AUTH__JWT_SECRET=${APP_AUTH__JWT_SECRET:-change-this-in-production}

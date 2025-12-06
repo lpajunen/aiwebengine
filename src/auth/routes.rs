@@ -1,5 +1,7 @@
 use crate::auth::client_registration::{ClientRegistrationManager, register_client_handler};
-use crate::auth::metadata::{MetadataConfig, metadata_handler};
+use crate::auth::metadata::{
+    MetadataConfig, metadata_handler, protected_resource_metadata_handler,
+};
 /// Authentication Routes
 ///
 /// HTTP route handlers for OAuth2 authentication flow including
@@ -14,6 +16,10 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::RwLock;
+use tower_http::cors::{Any, CorsLayer};
+use chrono::{DateTime, Utc};
 
 /// OAuth2 callback parameters
 #[derive(Debug, Deserialize)]
@@ -44,6 +50,39 @@ pub struct LoginParams {
 pub struct LogoutParams {
     /// Optional redirect URL after logout
     redirect: Option<String>,
+}
+
+/// Authorization code data stored temporarily
+#[derive(Debug, Clone)]
+struct AuthorizationCodeData {
+    user_id: String,
+    client_id: String,
+    redirect_uri: String,
+    code_challenge: Option<String>,
+    code_challenge_method: Option<String>,
+    scope: Option<String>,
+    expires_at: DateTime<Utc>,
+    used: bool,
+}
+
+/// In-memory authorization code store
+/// In production, this should be stored in Redis or database
+type AuthCodeStore = Arc<RwLock<HashMap<String, AuthorizationCodeData>>>;
+
+/// OAuth2 shared state for protocol endpoints
+#[derive(Clone)]
+pub struct OAuth2State {
+    auth_manager: Arc<AuthManager>,
+    code_store: AuthCodeStore,
+}
+
+impl OAuth2State {
+    pub fn new(auth_manager: Arc<AuthManager>) -> Self {
+        Self {
+            auth_manager,
+            code_store: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
 }
 
 /// JSON response for successful authentication
@@ -176,15 +215,17 @@ async fn start_login(
     let ip_addr = get_client_ip(&headers);
 
     // Generate authorization URL with or without redirect
-    let (auth_url, _state) = if let Some(redirect_url) = params.redirect {
+    let (auth_url, _state) = if let Some(ref redirect_url) = params.redirect {
+        tracing::info!("Starting login with redirect URL: {}", redirect_url);
         auth_manager
-            .start_login_with_redirect(&provider, &ip_addr, redirect_url)
+            .start_login_with_redirect(&provider, &ip_addr, redirect_url.clone())
             .await
             .map_err(|e| ErrorResponse {
                 error: "login_failed".to_string(),
                 message: e.to_string(),
             })?
     } else {
+        tracing::info!("Starting login without redirect URL");
         auth_manager
             .start_login(&provider, &ip_addr)
             .await
@@ -230,6 +271,13 @@ async fn oauth_callback(
     // Provider comes from the URL path parameter
     // Extract redirect URL from state (stateless approach)
     let redirect_url = AuthSecurityContext::extract_redirect_url(&state);
+
+    // Log the redirect URL for debugging
+    if let Some(ref url) = redirect_url {
+        tracing::info!("OAuth callback redirect URL extracted from state: {}", url);
+    } else {
+        tracing::warn!("No redirect URL found in OAuth state, will redirect to /");
+    }
 
     // Handle callback
     let session_token = auth_manager
@@ -366,6 +414,476 @@ async fn auth_status(
     })
 }
 
+/// OAuth 2.0 authorization request parameters (RFC 6749)
+#[derive(Debug, Deserialize)]
+pub struct AuthorizeParams {
+    /// Client identifier
+    response_type: String,
+
+    /// Client identifier
+    client_id: String,
+
+    /// Redirection URI
+    #[serde(default)]
+    redirect_uri: Option<String>,
+
+    /// Requested scope
+    #[serde(default)]
+    scope: Option<String>,
+
+    /// Opaque value for CSRF protection
+    #[serde(default)]
+    state: Option<String>,
+
+    /// PKCE code challenge (RFC 7636)
+    #[serde(default)]
+    code_challenge: Option<String>,
+
+    /// PKCE code challenge method (S256 or plain)
+    #[serde(default)]
+    code_challenge_method: Option<String>,
+
+    /// Resource indicator (RFC 8707)
+    #[serde(default)]
+    resource: Option<String>,
+}
+
+/// OAuth 2.0 authorization endpoint
+/// This endpoint handles authorization requests from OAuth clients
+async fn oauth2_authorize(
+    State(oauth2_state): State<OAuth2State>,
+    Query(params): Query<AuthorizeParams>,
+    req: axum::extract::Request,
+) -> Response {
+    // Check if user is already authenticated via middleware
+    let auth_user = req.extensions().get::<crate::auth::AuthUser>().cloned();
+    let is_authenticated = auth_user.is_some();
+    // Validate response_type
+    if params.response_type != "code" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "unsupported_response_type".to_string(),
+                message: "Only 'code' response type is supported".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    // Validate client_id (basic validation - in production, check against registered clients)
+    if params.client_id.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "invalid_request".to_string(),
+                message: "Missing client_id parameter".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    // If not authenticated, redirect to login with return URL
+    if !is_authenticated {
+        // Build query string with only non-empty parameters
+        let mut query_params = vec![
+            format!(
+                "response_type={}",
+                urlencoding::encode(&params.response_type)
+            ),
+            format!("client_id={}", urlencoding::encode(&params.client_id)),
+        ];
+
+        if let Some(ref uri) = params.redirect_uri
+            && !uri.is_empty()
+        {
+            query_params.push(format!("redirect_uri={}", urlencoding::encode(uri)));
+        }
+        if let Some(ref scope) = params.scope
+            && !scope.is_empty()
+        {
+            query_params.push(format!("scope={}", urlencoding::encode(scope)));
+        }
+        if let Some(ref state) = params.state
+            && !state.is_empty()
+        {
+            query_params.push(format!("state={}", urlencoding::encode(state)));
+        }
+        if let Some(ref challenge) = params.code_challenge
+            && !challenge.is_empty()
+        {
+            query_params.push(format!("code_challenge={}", urlencoding::encode(challenge)));
+        }
+        if let Some(ref method) = params.code_challenge_method
+            && !method.is_empty()
+        {
+            query_params.push(format!(
+                "code_challenge_method={}",
+                urlencoding::encode(method)
+            ));
+        }
+        if let Some(ref resource) = params.resource
+            && !resource.is_empty()
+        {
+            query_params.push(format!("resource={}", urlencoding::encode(resource)));
+        }
+
+        let query_string = if query_params.is_empty() {
+            String::new()
+        } else {
+            format!("?{}", query_params.join("&"))
+        };
+
+        let return_url = format!("/authorize{}", query_string);
+        let encoded_return = urlencoding::encode(&return_url);
+
+        return Redirect::to(&format!("/auth/login?redirect={}", encoded_return)).into_response();
+    }
+
+    // TODO: In a complete implementation:
+    // 1. Validate the client_id against registered clients
+    // 2. Validate redirect_uri matches registered URIs
+    // 3. Show consent screen if needed
+
+    // For MCP: Generate authorization code and redirect back to client
+    // Since we don't have client validation yet, we'll accept any client_id for development
+
+    // Get authenticated user ID
+    let user_id = auth_user
+        .as_ref()
+        .map(|u| u.user_id.clone())
+        .expect("User must be authenticated at this point");
+
+    // Generate a random authorization code
+    let auth_code = format!("code_{}", uuid::Uuid::new_v4());
+
+    // Store the authorization code with associated data
+    let code_data = AuthorizationCodeData {
+        user_id,
+        client_id: params.client_id.clone(),
+        redirect_uri: params.redirect_uri.clone().unwrap_or_default(),
+        code_challenge: params.code_challenge.clone(),
+        code_challenge_method: params.code_challenge_method.clone(),
+        scope: params.scope.clone(),
+        expires_at: Utc::now() + chrono::Duration::minutes(10), // 10 minute expiry
+        used: false,
+    };
+
+    if let Ok(mut store) = oauth2_state.code_store.write() {
+        store.insert(auth_code.clone(), code_data);
+        tracing::info!("Stored authorization code for user: {}", auth_user.as_ref().unwrap().user_id);
+    }
+
+    // Build redirect URI with code
+    let redirect_uri = match params.redirect_uri.as_ref() {
+        Some(uri) => {
+            tracing::info!("Authorization complete, redirect_uri from client: {}", uri);
+            uri
+        }
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "invalid_request".to_string(),
+                    message: "redirect_uri is required".to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    // Build the redirect URL with code and state parameters
+    // Handle both http(s) URLs and custom schemes like vscode://
+    let redirect_with_code = if redirect_uri.contains('?') {
+        // URL already has query parameters, append with &
+        format!("{}&code={}", redirect_uri, urlencoding::encode(&auth_code))
+    } else {
+        // No existing query parameters, start with ?
+        format!("{}?code={}", redirect_uri, urlencoding::encode(&auth_code))
+    };
+
+    let final_redirect = if let Some(ref state) = params.state {
+        format!(
+            "{}&state={}",
+            redirect_with_code,
+            urlencoding::encode(state)
+        )
+    } else {
+        redirect_with_code
+    };
+
+    tracing::info!(
+        "Redirecting to client with authorization code: {}",
+        final_redirect
+    );
+
+    // Return HTML with meta refresh for custom schemes like vscode://
+    // because Redirect::to() doesn't work well with custom URI schemes
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html>
+<head>
+    <meta http-equiv="refresh" content="0;url={}" />
+    <title>Redirecting...</title>
+</head>
+<body>
+    <p>Redirecting to application... If you are not redirected, <a href="{}">click here</a>.</p>
+    <script>window.location.href = "{}";</script>
+</body>
+</html>"#,
+        html_escape::encode_text(&final_redirect),
+        html_escape::encode_text(&final_redirect),
+        html_escape::encode_text(&final_redirect)
+    );
+
+    (StatusCode::OK, Html(html)).into_response()
+}
+
+/// OAuth 2.0 token request parameters (RFC 6749)
+#[derive(Debug, Deserialize)]
+pub struct TokenParams {
+    /// Grant type
+    grant_type: String,
+
+    /// Authorization code (for authorization_code grant)
+    #[serde(default)]
+    code: Option<String>,
+
+    /// Redirect URI (for authorization_code grant)
+    #[serde(default)]
+    redirect_uri: Option<String>,
+
+    /// PKCE code verifier (RFC 7636)
+    #[serde(default)]
+    code_verifier: Option<String>,
+
+    /// Refresh token (for refresh_token grant)
+    #[serde(default)]
+    refresh_token: Option<String>,
+
+    /// Client identifier
+    #[serde(default)]
+    client_id: Option<String>,
+}
+
+/// OAuth 2.0 token response
+#[derive(Debug, Serialize)]
+pub struct TokenResponse {
+    access_token: String,
+    token_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires_in: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refresh_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<String>,
+}
+
+/// OAuth 2.0 token endpoint
+/// This endpoint issues access tokens in exchange for authorization codes
+async fn oauth2_token(
+    State(oauth2_state): State<OAuth2State>,
+    headers: HeaderMap,
+    axum::Form(params): axum::Form<TokenParams>,
+) -> Response {
+    tracing::info!("📩 Token exchange request received");
+    tracing::info!("  grant_type: {}", params.grant_type);
+    tracing::info!("  code: {:?}", params.code);
+    tracing::info!("  client_id: {:?}", params.client_id);
+    tracing::info!("  redirect_uri: {:?}", params.redirect_uri);
+
+    // Validate grant_type
+    if params.grant_type != "authorization_code" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "unsupported_grant_type".to_string(),
+                message: "Only authorization_code grant type is supported".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    // Validate required parameters
+    let code = match params.code {
+        Some(ref c) if c.starts_with("code_") => c,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "invalid_request".to_string(),
+                    message: "Missing or invalid code parameter".to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    tracing::info!("Exchanging code: {}", code);
+
+    // Retrieve and validate the authorization code
+    let code_data = {
+        let mut store = match oauth2_state.code_store.write() {
+            Ok(s) => s,
+            Err(_) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse {
+                    error: "server_error".to_string(),
+                    message: "Failed to access code store".to_string(),
+                })).into_response();
+            }
+        };
+
+        match store.get_mut(code) {
+            Some(data) if !data.used && data.expires_at > Utc::now() => {
+                // Mark code as used
+                data.used = true;
+                data.clone()
+            }
+            Some(data) if data.used => {
+                return (StatusCode::BAD_REQUEST, Json(ErrorResponse {
+                    error: "invalid_grant".to_string(),
+                    message: "Authorization code has already been used".to_string(),
+                })).into_response();
+            }
+            Some(_) => {
+                return (StatusCode::BAD_REQUEST, Json(ErrorResponse {
+                    error: "invalid_grant".to_string(),
+                    message: "Authorization code has expired".to_string(),
+                })).into_response();
+            }
+            None => {
+                return (StatusCode::BAD_REQUEST, Json(ErrorResponse {
+                    error: "invalid_grant".to_string(),
+                    message: "Invalid authorization code".to_string(),
+                })).into_response();
+            }
+        }
+    };
+
+    // Verify redirect_uri matches
+    if let Some(ref redirect_uri) = params.redirect_uri {
+        if redirect_uri != &code_data.redirect_uri {
+            return (StatusCode::BAD_REQUEST, Json(ErrorResponse {
+                error: "invalid_grant".to_string(),
+                message: "redirect_uri does not match authorization request".to_string(),
+            })).into_response();
+        }
+    }
+
+    // Verify PKCE code_verifier if code_challenge was provided
+    if let Some(ref challenge) = code_data.code_challenge {
+        match params.code_verifier.as_ref() {
+            Some(verifier) => {
+                // Verify the code_verifier against code_challenge
+                let computed_challenge = if code_data.code_challenge_method.as_deref() == Some("S256") {
+                    use sha2::{Sha256, Digest};
+                    use base64::Engine;
+                    let hash = Sha256::digest(verifier.as_bytes());
+                    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hash)
+                } else {
+                    // plain method
+                    verifier.clone()
+                };
+
+                if &computed_challenge != challenge {
+                    return (StatusCode::BAD_REQUEST, Json(ErrorResponse {
+                        error: "invalid_grant".to_string(),
+                        message: "PKCE verification failed".to_string(),
+                    })).into_response();
+                }
+            }
+            None => {
+                return (StatusCode::BAD_REQUEST, Json(ErrorResponse {
+                    error: "invalid_request".to_string(),
+                    message: "code_verifier required for PKCE".to_string(),
+                })).into_response();
+            }
+        }
+    }
+
+    // Create a session for the user
+    let ip_addr = extract_client_ip_from_headers(&headers);
+    let user_agent = extract_user_agent_from_headers(&headers);
+
+    // Get user info from the user repository to get email, name, is_admin, is_editor
+    // For now, we'll use defaults since we don't have direct access to user repo here
+    // In production, pass user repository or fetch this info during code storage
+    let session_params = crate::auth::session::CreateAuthSessionParams {
+        user_id: code_data.user_id.clone(),
+        provider: "oauth2".to_string(),
+        email: None, // TODO: Store with code or fetch from user repo
+        name: None,  // TODO: Store with code or fetch from user repo
+        is_admin: false, // TODO: Store with code or fetch from user repo
+        is_editor: false, // TODO: Store with code or fetch from user repo
+        ip_addr: ip_addr.clone(),
+        user_agent: user_agent.clone(),
+        refresh_token: None,
+        audience: None,
+    };
+
+    match oauth2_state.auth_manager.session_manager().create_session(session_params).await {
+        Ok(session_token) => {
+            tracing::info!("Token exchange successful, created session for user: {}", code_data.user_id);
+            
+            let response = TokenResponse {
+                access_token: session_token.token, // Extract the token string from SessionToken struct
+                token_type: "Bearer".to_string(),
+                expires_in: Some(3600),
+                refresh_token: None,
+                scope: code_data.scope,
+            };
+
+            (StatusCode::OK, Json(response)).into_response()
+        }
+        Err(e) => {
+            tracing::error!("Failed to create session: {:?}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse {
+                error: "server_error".to_string(),
+                message: "Failed to create session".to_string(),
+            })).into_response()
+        }
+    }
+}
+
+// Helper functions for token endpoint
+fn extract_session_token_from_headers(headers: &HeaderMap, cookie_name: &str) -> Option<String> {
+    headers
+        .get(header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|cookies| {
+            cookies.split(';').find_map(|cookie| {
+                let parts: Vec<&str> = cookie.trim().splitn(2, '=').collect();
+                if parts.len() == 2 && parts[0] == cookie_name {
+                    Some(parts[1].to_string())
+                } else {
+                    None
+                }
+            })
+        })
+}
+
+fn extract_client_ip_from_headers(headers: &HeaderMap) -> String {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(|s| s.trim().to_string())
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn extract_user_agent_from_headers(headers: &HeaderMap) -> String {
+    headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
 /// Create authentication router with all routes
 pub fn create_auth_router(auth_manager: Arc<AuthManager>) -> Router {
     Router::new()
@@ -381,23 +899,55 @@ pub fn create_auth_router(auth_manager: Arc<AuthManager>) -> Router {
 pub fn create_oauth2_router(
     metadata_config: Arc<MetadataConfig>,
     registration_manager: Option<Arc<ClientRegistrationManager>>,
+    auth_manager: Arc<AuthManager>,
 ) -> Router {
     let metadata_router = Router::new()
         .route(
             "/.well-known/oauth-authorization-server",
             get(metadata_handler),
         )
+        .route(
+            "/.well-known/oauth-protected-resource",
+            get(protected_resource_metadata_handler),
+        )
+        .route(
+            "/.well-known/oauth-protected-resource/{*resource}",
+            get(protected_resource_metadata_handler),
+        )
         .with_state(metadata_config);
 
+    // Add OAuth 2.0 protocol endpoints
+    // Enable CORS for token endpoint to allow MCP clients on localhost
+    let cors = CorsLayer::new()
+        .allow_origin(Any) // Allow requests from any origin (needed for localhost MCP clients)
+        .allow_methods([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::OPTIONS,
+        ])
+        .allow_headers(Any);
+
+    let oauth2_state = OAuth2State::new(auth_manager);
+    
+    let oauth2_protocol_router = Router::new()
+        .route("/oauth2/authorize", get(oauth2_authorize))
+        .route("/authorize", get(oauth2_authorize)) // Also support /authorize for compatibility
+        .route("/oauth2/token", post(oauth2_token))
+        .route("/token", post(oauth2_token)) // Also support /token for compatibility
+        .layer(cors)
+        .with_state(oauth2_state);
+
     // Add dynamic client registration endpoint if enabled
+    let router = metadata_router.merge(oauth2_protocol_router);
+
     if let Some(manager) = registration_manager {
         let registration_router = Router::new()
             .route("/oauth2/register", post(register_client_handler))
             .with_state(manager);
 
-        metadata_router.merge(registration_router)
+        router.merge(registration_router)
     } else {
-        metadata_router
+        router
     }
 }
 

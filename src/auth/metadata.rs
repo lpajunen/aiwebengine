@@ -143,6 +143,41 @@ pub async fn metadata_handler(State(config): State<Arc<MetadataConfig>>) -> impl
     (StatusCode::OK, Json(metadata))
 }
 
+/// OAuth 2.0 Protected Resource Metadata (RFC 8414 Section 5)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProtectedResourceMetadata {
+    /// The protected resource's identifier
+    pub resource: String,
+
+    /// Authorization servers that can issue tokens for this resource
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authorization_servers: Option<Vec<String>>,
+
+    /// OAuth 2.0 Bearer Token Usage endpoint
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bearer_methods_supported: Option<Vec<String>>,
+
+    /// Resource indicators supported
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource_signing_alg_values_supported: Option<Vec<String>>,
+}
+
+/// Handler for /.well-known/oauth-protected-resource
+pub async fn protected_resource_metadata_handler(
+    State(config): State<Arc<MetadataConfig>>,
+) -> impl IntoResponse {
+    let issuer = config.issuer.trim_end_matches('/').to_string();
+
+    let metadata = ProtectedResourceMetadata {
+        resource: issuer.clone(),
+        authorization_servers: Some(vec![issuer]),
+        bearer_methods_supported: Some(vec!["header".to_string(), "body".to_string()]),
+        resource_signing_alg_values_supported: None,
+    };
+
+    (StatusCode::OK, Json(metadata))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
