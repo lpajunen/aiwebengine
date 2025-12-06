@@ -14,12 +14,12 @@ use axum::{
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
 };
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
-use chrono::{DateTime, Utc};
 
 /// OAuth2 callback parameters
 #[derive(Debug, Deserialize)]
@@ -56,6 +56,7 @@ pub struct LogoutParams {
 #[derive(Debug, Clone)]
 struct AuthorizationCodeData {
     user_id: String,
+    #[allow(dead_code)] // Stored for future validation
     client_id: String,
     redirect_uri: String,
     code_challenge: Option<String>,
@@ -570,7 +571,10 @@ async fn oauth2_authorize(
 
     if let Ok(mut store) = oauth2_state.code_store.write() {
         store.insert(auth_code.clone(), code_data);
-        tracing::info!("Stored authorization code for user: {}", auth_user.as_ref().unwrap().user_id);
+        tracing::info!(
+            "Stored authorization code for user: {}",
+            auth_user.as_ref().unwrap().user_id
+        );
     }
 
     // Build redirect URI with code
@@ -658,6 +662,7 @@ pub struct TokenParams {
 
     /// Refresh token (for refresh_token grant)
     #[serde(default)]
+    #[allow(dead_code)] // Used by serde for form deserialization
     refresh_token: Option<String>,
 
     /// Client identifier
@@ -725,10 +730,14 @@ async fn oauth2_token(
         let mut store = match oauth2_state.code_store.write() {
             Ok(s) => s,
             Err(_) => {
-                return (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse {
-                    error: "server_error".to_string(),
-                    message: "Failed to access code store".to_string(),
-                })).into_response();
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: "server_error".to_string(),
+                        message: "Failed to access code store".to_string(),
+                    }),
+                )
+                    .into_response();
             }
         };
 
@@ -739,34 +748,50 @@ async fn oauth2_token(
                 data.clone()
             }
             Some(data) if data.used => {
-                return (StatusCode::BAD_REQUEST, Json(ErrorResponse {
-                    error: "invalid_grant".to_string(),
-                    message: "Authorization code has already been used".to_string(),
-                })).into_response();
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        error: "invalid_grant".to_string(),
+                        message: "Authorization code has already been used".to_string(),
+                    }),
+                )
+                    .into_response();
             }
             Some(_) => {
-                return (StatusCode::BAD_REQUEST, Json(ErrorResponse {
-                    error: "invalid_grant".to_string(),
-                    message: "Authorization code has expired".to_string(),
-                })).into_response();
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        error: "invalid_grant".to_string(),
+                        message: "Authorization code has expired".to_string(),
+                    }),
+                )
+                    .into_response();
             }
             None => {
-                return (StatusCode::BAD_REQUEST, Json(ErrorResponse {
-                    error: "invalid_grant".to_string(),
-                    message: "Invalid authorization code".to_string(),
-                })).into_response();
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        error: "invalid_grant".to_string(),
+                        message: "Invalid authorization code".to_string(),
+                    }),
+                )
+                    .into_response();
             }
         }
     };
 
     // Verify redirect_uri matches
-    if let Some(ref redirect_uri) = params.redirect_uri {
-        if redirect_uri != &code_data.redirect_uri {
-            return (StatusCode::BAD_REQUEST, Json(ErrorResponse {
+    if let Some(ref redirect_uri) = params.redirect_uri
+        && redirect_uri != &code_data.redirect_uri
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
                 error: "invalid_grant".to_string(),
                 message: "redirect_uri does not match authorization request".to_string(),
-            })).into_response();
-        }
+            }),
+        )
+            .into_response();
     }
 
     // Verify PKCE code_verifier if code_challenge was provided
@@ -774,28 +799,37 @@ async fn oauth2_token(
         match params.code_verifier.as_ref() {
             Some(verifier) => {
                 // Verify the code_verifier against code_challenge
-                let computed_challenge = if code_data.code_challenge_method.as_deref() == Some("S256") {
-                    use sha2::{Sha256, Digest};
-                    use base64::Engine;
-                    let hash = Sha256::digest(verifier.as_bytes());
-                    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hash)
-                } else {
-                    // plain method
-                    verifier.clone()
-                };
+                let computed_challenge =
+                    if code_data.code_challenge_method.as_deref() == Some("S256") {
+                        use base64::Engine;
+                        use sha2::{Digest, Sha256};
+                        let hash = Sha256::digest(verifier.as_bytes());
+                        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hash)
+                    } else {
+                        // plain method
+                        verifier.clone()
+                    };
 
                 if &computed_challenge != challenge {
-                    return (StatusCode::BAD_REQUEST, Json(ErrorResponse {
-                        error: "invalid_grant".to_string(),
-                        message: "PKCE verification failed".to_string(),
-                    })).into_response();
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(ErrorResponse {
+                            error: "invalid_grant".to_string(),
+                            message: "PKCE verification failed".to_string(),
+                        }),
+                    )
+                        .into_response();
                 }
             }
             None => {
-                return (StatusCode::BAD_REQUEST, Json(ErrorResponse {
-                    error: "invalid_request".to_string(),
-                    message: "code_verifier required for PKCE".to_string(),
-                })).into_response();
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        error: "invalid_request".to_string(),
+                        message: "code_verifier required for PKCE".to_string(),
+                    }),
+                )
+                    .into_response();
             }
         }
     }
@@ -810,9 +844,9 @@ async fn oauth2_token(
     let session_params = crate::auth::session::CreateAuthSessionParams {
         user_id: code_data.user_id.clone(),
         provider: "oauth2".to_string(),
-        email: None, // TODO: Store with code or fetch from user repo
-        name: None,  // TODO: Store with code or fetch from user repo
-        is_admin: false, // TODO: Store with code or fetch from user repo
+        email: None,      // TODO: Store with code or fetch from user repo
+        name: None,       // TODO: Store with code or fetch from user repo
+        is_admin: false,  // TODO: Store with code or fetch from user repo
         is_editor: false, // TODO: Store with code or fetch from user repo
         ip_addr: ip_addr.clone(),
         user_agent: user_agent.clone(),
@@ -820,10 +854,18 @@ async fn oauth2_token(
         audience: None,
     };
 
-    match oauth2_state.auth_manager.session_manager().create_session(session_params).await {
+    match oauth2_state
+        .auth_manager
+        .session_manager()
+        .create_session(session_params)
+        .await
+    {
         Ok(session_token) => {
-            tracing::info!("Token exchange successful, created session for user: {}", code_data.user_id);
-            
+            tracing::info!(
+                "Token exchange successful, created session for user: {}",
+                code_data.user_id
+            );
+
             let response = TokenResponse {
                 access_token: session_token.token, // Extract the token string from SessionToken struct
                 token_type: "Bearer".to_string(),
@@ -836,31 +878,19 @@ async fn oauth2_token(
         }
         Err(e) => {
             tracing::error!("Failed to create session: {:?}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse {
-                error: "server_error".to_string(),
-                message: "Failed to create session".to_string(),
-            })).into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "server_error".to_string(),
+                    message: "Failed to create session".to_string(),
+                }),
+            )
+                .into_response()
         }
     }
 }
 
 // Helper functions for token endpoint
-fn extract_session_token_from_headers(headers: &HeaderMap, cookie_name: &str) -> Option<String> {
-    headers
-        .get(header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|cookies| {
-            cookies.split(';').find_map(|cookie| {
-                let parts: Vec<&str> = cookie.trim().splitn(2, '=').collect();
-                if parts.len() == 2 && parts[0] == cookie_name {
-                    Some(parts[1].to_string())
-                } else {
-                    None
-                }
-            })
-        })
-}
-
 fn extract_client_ip_from_headers(headers: &HeaderMap) -> String {
     headers
         .get("x-forwarded-for")
@@ -928,7 +958,7 @@ pub fn create_oauth2_router(
         .allow_headers(Any);
 
     let oauth2_state = OAuth2State::new(auth_manager);
-    
+
     let oauth2_protocol_router = Router::new()
         .route("/oauth2/authorize", get(oauth2_authorize))
         .route("/authorize", get(oauth2_authorize)) // Also support /authorize for compatibility
