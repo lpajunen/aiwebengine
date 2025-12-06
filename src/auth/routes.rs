@@ -62,6 +62,7 @@ struct AuthorizationCodeData {
     code_challenge: Option<String>,
     code_challenge_method: Option<String>,
     scope: Option<String>,
+    resource: Option<String>,
     expires_at: DateTime<Utc>,
     used: bool,
 }
@@ -565,6 +566,7 @@ async fn oauth2_authorize(
         code_challenge: params.code_challenge.clone(),
         code_challenge_method: params.code_challenge_method.clone(),
         scope: params.scope.clone(),
+        resource: params.resource.clone(),
         expires_at: Utc::now() + chrono::Duration::minutes(10), // 10 minute expiry
         used: false,
     };
@@ -622,6 +624,10 @@ async fn oauth2_authorize(
 
     // Return HTML with meta refresh for custom schemes like vscode://
     // because Redirect::to() doesn't work well with custom URI schemes
+    // Use serde_json to safely encode the URL for JavaScript
+    let js_redirect = serde_json::to_string(&final_redirect)
+        .unwrap_or_else(|_| format!("\"{}\"", final_redirect));
+
     let html = format!(
         r#"<!DOCTYPE html>
 <html>
@@ -631,12 +637,12 @@ async fn oauth2_authorize(
 </head>
 <body>
     <p>Redirecting to application... If you are not redirected, <a href="{}">click here</a>.</p>
-    <script>window.location.href = "{}";</script>
+    <script>window.location.href = {};</script>
 </body>
 </html>"#,
         html_escape::encode_text(&final_redirect),
         html_escape::encode_text(&final_redirect),
-        html_escape::encode_text(&final_redirect)
+        js_redirect
     );
 
     (StatusCode::OK, Html(html)).into_response()
@@ -851,7 +857,7 @@ async fn oauth2_token(
         ip_addr: ip_addr.clone(),
         user_agent: user_agent.clone(),
         refresh_token: None,
-        audience: None,
+        audience: code_data.resource.clone(),
     };
 
     match oauth2_state
