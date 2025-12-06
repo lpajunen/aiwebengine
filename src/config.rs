@@ -76,6 +76,12 @@ pub struct ServerConfig {
     /// Server port
     pub port: u16,
 
+    /// Base URL for the server (e.g., "https://softage.com" or "http://localhost:8080")
+    /// Used for OAuth metadata, redirects, and other absolute URLs
+    /// If not provided, will be constructed from host and port
+    #[serde(default)]
+    pub base_url: Option<String>,
+
     /// Request timeout in seconds
     pub request_timeout_secs: u64,
 
@@ -245,11 +251,40 @@ impl Default for ServerConfig {
         Self {
             host: "127.0.0.1".to_string(),
             port: 8080,
+            base_url: None,
             request_timeout_secs: 30,
             keep_alive_timeout_secs: 60,
             max_connections: 10000,
             graceful_shutdown: true,
             shutdown_timeout_secs: 30,
+        }
+    }
+}
+
+impl ServerConfig {
+    /// Get the base URL for the server
+    /// If base_url is configured, use it. Otherwise construct from host and port.
+    pub fn get_base_url(&self) -> String {
+        if let Some(ref base_url) = self.base_url {
+            base_url.clone()
+        } else {
+            // Construct from host and port
+            // If host is 0.0.0.0 or ::, use localhost instead
+            let host = if self.host == "0.0.0.0" || self.host == "::" {
+                "localhost"
+            } else {
+                &self.host
+            };
+
+            // Use https for standard port 443, http otherwise
+            let scheme = if self.port == 443 { "https" } else { "http" };
+
+            // Omit standard ports (80 for http, 443 for https)
+            if (scheme == "http" && self.port == 80) || (scheme == "https" && self.port == 443) {
+                format!("{}://{}", scheme, host)
+            } else {
+                format!("{}://{}:{}", scheme, host, self.port)
+            }
         }
     }
 }

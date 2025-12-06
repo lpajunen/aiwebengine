@@ -136,16 +136,26 @@ pub trait OAuth2Provider: Send + Sync {
     /// # Arguments
     /// * `state` - CSRF state token to include in the authorization request
     /// * `nonce` - Optional nonce for OIDC providers
+    /// * `code_challenge` - Optional PKCE code challenge (base64url-encoded SHA256 of code_verifier)
+    /// * `resource` - Optional resource indicator (RFC 8707) - URI of the resource to access
     ///
     /// # Returns
     /// The authorization URL to redirect the user to
-    fn authorization_url(&self, state: &str, nonce: Option<&str>) -> Result<String, AuthError>;
+    fn authorization_url(
+        &self,
+        state: &str,
+        nonce: Option<&str>,
+        code_challenge: Option<&str>,
+        resource: Option<&str>,
+    ) -> Result<String, AuthError>;
 
     /// Exchange the authorization code for tokens
     ///
     /// # Arguments
     /// * `code` - The authorization code from the provider callback
     /// * `state` - The CSRF state token to validate
+    /// * `code_verifier` - Optional PKCE code verifier (plain random string that was hashed)
+    /// * `resource` - Optional resource indicator (RFC 8707) - must match authorization request
     ///
     /// # Returns
     /// The token response containing access token, ID token, etc.
@@ -153,6 +163,8 @@ pub trait OAuth2Provider: Send + Sync {
         &self,
         code: &str,
         state: &str,
+        code_verifier: Option<&str>,
+        resource: Option<&str>,
     ) -> Result<OAuth2TokenResponse, AuthError>;
 
     /// Get user information using the access token

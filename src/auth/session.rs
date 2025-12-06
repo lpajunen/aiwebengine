@@ -20,6 +20,8 @@ pub struct CreateAuthSessionParams {
     pub is_editor: bool,
     pub ip_addr: String,
     pub user_agent: String,
+    pub refresh_token: Option<String>,
+    pub audience: Option<String>,
 }
 
 /// Authentication session (user-facing)
@@ -77,6 +79,8 @@ impl AuthSessionManager {
             is_editor: params.is_editor,
             ip_addr: params.ip_addr,
             user_agent: params.user_agent,
+            refresh_token: params.refresh_token,
+            audience: params.audience,
         };
 
         let token = self
@@ -123,6 +127,32 @@ impl AuthSessionManager {
     pub async fn can_create_session(&self, user_id: &str, max_sessions: usize) -> bool {
         self.get_user_session_count(user_id).await < max_sessions
     }
+
+    /// Validate session with resource indicator check (RFC 8707)
+    ///
+    /// # Arguments
+    /// * `token` - Session token to validate
+    /// * `ip_addr` - Client IP address
+    /// * `user_agent` - Client user agent
+    /// * `resource` - Optional resource indicator to validate
+    ///
+    /// # Returns
+    /// Session data if valid and authorized for resource
+    pub async fn validate_session_with_resource(
+        &self,
+        token: &str,
+        ip_addr: &str,
+        user_agent: &str,
+        resource: Option<&str>,
+    ) -> Result<AuthSession, AuthError> {
+        let session_data = self
+            .session_manager
+            .validate_session_with_resource(token, ip_addr, user_agent, resource)
+            .await
+            .map_err(AuthError::Session)?;
+
+        Ok(AuthSession::from(session_data))
+    }
 }
 
 #[cfg(test)]
@@ -154,6 +184,8 @@ mod tests {
                 is_editor: false,
                 ip_addr: "192.168.1.1".to_string(),
                 user_agent: "Mozilla/5.0".to_string(),
+                refresh_token: None,
+                audience: None,
             })
             .await
             .unwrap();
@@ -184,6 +216,8 @@ mod tests {
                 is_editor: false,
                 ip_addr: "192.168.1.1".to_string(),
                 user_agent: "Mozilla/5.0".to_string(),
+                refresh_token: None,
+                audience: None,
             })
             .await
             .unwrap();
@@ -217,6 +251,8 @@ mod tests {
                     is_editor: false,
                     ip_addr: format!("192.168.1.{}", i),
                     user_agent: "Mozilla/5.0".to_string(),
+                    refresh_token: None,
+                    audience: None,
                 })
                 .await
                 .unwrap();
@@ -243,6 +279,8 @@ mod tests {
                 is_editor: false,
                 ip_addr: "192.168.1.1".to_string(),
                 user_agent: "Mozilla/5.0".to_string(),
+                refresh_token: None,
+                audience: None,
             })
             .await
             .unwrap();

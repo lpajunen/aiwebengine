@@ -7,6 +7,9 @@
 # Bind to all interfaces in production
 host = "0.0.0.0"
 port = 3000
+# Base URL for OAuth metadata and redirects
+# IMPORTANT: Update this to your actual domain
+base_url = "https://softagen.com"
 # Longer timeout for production reliability
 request_timeout_ms = 30000
 # Larger body limit for production workloads

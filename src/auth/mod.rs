@@ -1,28 +1,42 @@
 // Authentication Module
 // Provides OAuth2/OIDC authentication with session management
 
+pub mod client_registration;
 pub mod config;
 pub mod error;
 pub mod js_api;
 pub mod manager;
+pub mod mcp_middleware;
+pub mod metadata;
 pub mod middleware;
+pub mod pkce;
 pub mod providers;
 pub mod routes;
 pub mod security;
 pub mod session;
 
+pub use client_registration::{
+    ClientRegistrationManager, ClientRegistrationRequest, ClientRegistrationResponse,
+    RegisteredClient, RegisteredClientMetadata,
+};
 pub use config::{AuthConfig, CookieConfig, ProviderConfig, ProvidersConfig, SameSitePolicy};
 pub use error::AuthError;
 pub use js_api::{AuthJsApi, JsAuthContext};
 pub use manager::{AuthManager, AuthManagerConfig, AuthenticatedUser, CookieSameSite};
+pub use mcp_middleware::{
+    McpAuthSession, mcp_auth_middleware, mcp_require_admin_middleware,
+    mcp_require_editor_middleware, optional_mcp_auth_middleware,
+};
+pub use metadata::{AuthorizationServerMetadata, MetadataConfig};
 pub use middleware::{
     AuthUser, AuthenticatedUser as AuthUserExtractor, optional_auth_middleware,
     redirect_to_login_middleware, require_editor_or_admin_middleware, required_auth_middleware,
 };
+pub use pkce::{PkcePair, generate_code_challenge, generate_code_verifier};
 pub use providers::{
     OAuth2Provider, OAuth2ProviderConfig, OAuth2TokenResponse, OAuth2UserInfo, ProviderFactory,
 };
-pub use routes::create_auth_router;
+pub use routes::{create_auth_router, create_oauth2_router};
 pub use security::AuthSecurityContext;
 pub use session::{AuthSession, AuthSessionManager, CreateAuthSessionParams};
 

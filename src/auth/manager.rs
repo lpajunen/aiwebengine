@@ -145,8 +145,8 @@ impl AuthManager {
         // Generate nonce for OIDC providers
         let nonce = format!("nonce_{}", uuid::Uuid::new_v4());
 
-        // Generate authorization URL
-        let auth_url = provider.authorization_url(&state, Some(&nonce))?;
+        // Generate authorization URL (no PKCE for now - will be added when needed)
+        let auth_url = provider.authorization_url(&state, Some(&nonce), None, None)?;
 
         // Log authentication attempt
         self.security_context
@@ -184,8 +184,8 @@ impl AuthManager {
         // Generate nonce for OIDC providers
         let nonce = format!("nonce_{}", uuid::Uuid::new_v4());
 
-        // Generate authorization URL
-        let auth_url = provider.authorization_url(&state, Some(&nonce))?;
+        // Generate authorization URL (no PKCE for now - will be added when needed)
+        let auth_url = provider.authorization_url(&state, Some(&nonce), None, None)?;
 
         // Log authentication attempt
         self.security_context
@@ -236,20 +236,23 @@ impl AuthManager {
             return Err(AuthError::RateLimitExceeded);
         }
 
-        // Exchange code for tokens
-        let tokens = provider.exchange_code(code, state).await.map_err(|e| {
-            // Log failure (spawn to avoid blocking)
-            let security_context = self.security_context.clone();
-            let provider_name = provider_name.to_string();
-            let error_msg = format!("Token exchange failed: {}", e);
-            let ip = ip_addr.to_string();
-            tokio::spawn(async move {
-                let _ = security_context
-                    .log_auth_failure(&provider_name, &error_msg, Some(&ip))
-                    .await;
-            });
-            e
-        })?;
+        // Exchange code for tokens (no PKCE verifier for now - will be added when needed)
+        let tokens = provider
+            .exchange_code(code, state, None, None)
+            .await
+            .map_err(|e| {
+                // Log failure (spawn to avoid blocking)
+                let security_context = self.security_context.clone();
+                let provider_name = provider_name.to_string();
+                let error_msg = format!("Token exchange failed: {}", e);
+                let ip = ip_addr.to_string();
+                tokio::spawn(async move {
+                    let _ = security_context
+                        .log_auth_failure(&provider_name, &error_msg, Some(&ip))
+                        .await;
+                });
+                e
+            })?;
 
         // Get user info
         let user_info = provider
@@ -319,6 +322,8 @@ impl AuthManager {
                 is_editor,
                 ip_addr: ip_addr.to_string(),
                 user_agent: user_agent.to_string(),
+                refresh_token: tokens.refresh_token.clone(),
+                audience: None, // Will be set for MCP endpoints
             })
             .await?;
 
@@ -368,6 +373,28 @@ impl AuthManager {
     ) -> Result<crate::auth::session::AuthSession, AuthError> {
         self.session_manager
             .get_session(session_token, ip_addr, user_agent)
+            .await
+    }
+
+    /// Validate session with resource indicator check (RFC 8707)
+    ///
+    /// # Arguments
+    /// * `session_token` - Session token to validate
+    /// * `ip_addr` - Client IP address
+    /// * `user_agent` - Client user agent string
+    /// * `resource` - Optional resource indicator (e.g., "/mcp/tools")
+    ///
+    /// # Returns
+    /// Complete AuthSession if valid and authorized for resource
+    pub async fn validate_session_with_resource(
+        &self,
+        session_token: &str,
+        ip_addr: &str,
+        user_agent: &str,
+        resource: Option<&str>,
+    ) -> Result<crate::auth::session::AuthSession, AuthError> {
+        self.session_manager
+            .validate_session_with_resource(session_token, ip_addr, user_agent, resource)
             .await
     }
 

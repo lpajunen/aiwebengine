@@ -40,6 +40,8 @@ async fn test_session_lifecycle() {
         is_editor: false,
         ip_addr: "192.168.1.1".to_string(),
         user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)".to_string(),
+        refresh_token: None,
+        audience: None,
     };
     let token = manager.create_session(params).await.unwrap();
 
@@ -87,6 +89,8 @@ async fn test_session_fingerprint_user_agent_mismatch() {
         is_editor: false,
         ip_addr: "192.168.1.1".to_string(),
         user_agent: "Mozilla/5.0".to_string(),
+        refresh_token: None,
+        audience: None,
     };
     let token = manager.create_session(params).await.unwrap();
 
@@ -113,6 +117,8 @@ async fn test_session_ip_change_tolerance() {
         is_editor: false,
         ip_addr: "192.168.1.1".to_string(),
         user_agent: "Mozilla/5.0".to_string(),
+        refresh_token: None,
+        audience: None,
     };
     let token = manager.create_session(params).await.unwrap();
 
@@ -143,6 +149,8 @@ async fn test_concurrent_session_limit() {
                 is_editor: false,
                 ip_addr: format!("192.168.1.{}", i),
                 user_agent: "Mozilla/5.0".to_string(),
+                refresh_token: None,
+                audience: None,
             };
             manager.create_session(params).await.unwrap();
         }
@@ -174,6 +182,8 @@ async fn test_session_encryption_integrity() {
         is_admin: true,
         is_editor: false,
         ip_addr: "192.168.1.1".to_string(),
+        refresh_token: None,
+        audience: None,
         user_agent: "Mozilla/5.0".to_string(),
     };
     let token = manager.create_session(params).await.unwrap();
@@ -421,6 +431,8 @@ async fn test_full_auth_flow_simulation() {
         is_editor: false,
         ip_addr: "203.0.113.1".to_string(),
         user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)".to_string(),
+        refresh_token: None,
+        audience: None,
     };
     let session_token = session_manager.create_session(params).await.unwrap();
     println!("Session created: {}", session_token.token);
@@ -480,6 +492,8 @@ async fn test_concurrent_users_isolation() {
             is_editor: false,
             ip_addr: format!("192.168.1.{}", user.len()),
             user_agent: "Mozilla/5.0".to_string(),
+            refresh_token: None,
+            audience: None,
         };
         let token = session_manager.create_session(params).await.unwrap();
         tokens.push((user, token));

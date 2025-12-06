@@ -24,6 +24,9 @@ pub enum SessionError {
     #[error("Session expired")]
     SessionExpired,
 
+    #[error("Invalid session")]
+    InvalidSession,
+
     #[error("Session validation failed: {0}")]
     ValidationFailed(String),
 
@@ -57,6 +60,10 @@ pub struct SessionData {
     pub last_access: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub fingerprint: SessionFingerprint,
+    /// OAuth refresh token for renewing access tokens
+    pub refresh_token: Option<String>,
+    /// Target resource URI (for OAuth2 resource indicators)
+    pub audience: Option<String>,
 }
 
 /// Parameters for creating a new session
@@ -70,6 +77,10 @@ pub struct CreateSessionParams {
     pub is_editor: bool,
     pub ip_addr: String,
     pub user_agent: String,
+    /// OAuth refresh token (if available)
+    pub refresh_token: Option<String>,
+    /// Target resource audience
+    pub audience: Option<String>,
 }
 
 /// Session fingerprint for detecting hijacking attempts
@@ -236,6 +247,8 @@ impl SecureSessionManager {
                 &params.user_agent,
                 self.strict_ip_validation,
             ),
+            refresh_token: params.refresh_token.clone(),
+            audience: params.audience.clone(),
         };
 
         // Encrypt session data
@@ -350,6 +363,74 @@ impl SecureSessionManager {
         sessions.insert(token.to_string(), encrypted);
 
         debug!("Validated session for user {}", session_data.user_id);
+
+        Ok(session_data)
+    }
+
+    /// Validate session with resource indicator check (RFC 8707)
+    ///
+    /// # Arguments
+    /// * `token` - Session token to validate
+    /// * `ip_addr` - Client IP address
+    /// * `user_agent` - Client user agent
+    /// * `resource` - Optional resource indicator to validate against session audience
+    ///
+    /// # Returns
+    /// Session data if valid and authorized for the requested resource
+    pub async fn validate_session_with_resource(
+        &self,
+        token: &str,
+        ip_addr: &str,
+        user_agent: &str,
+        resource: Option<&str>,
+    ) -> Result<SessionData, SessionError> {
+        // First validate the session normally
+        let session_data = self.validate_session(token, ip_addr, user_agent).await?;
+
+        // If a resource is requested, validate audience claim
+        if let Some(requested_resource) = resource {
+            match &session_data.audience {
+                Some(audience) if audience == requested_resource => {
+                    // Audience matches, allow access
+                    debug!(
+                        "Session audience validated for resource: {}",
+                        requested_resource
+                    );
+                }
+                Some(audience) => {
+                    // Audience mismatch
+                    warn!(
+                        "Session audience mismatch: expected {}, got {}",
+                        requested_resource, audience
+                    );
+
+                    self.auditor
+                        .log_event(
+                            SecurityEvent::new(
+                                SecurityEventType::AuthorizationFailure,
+                                SecuritySeverity::Medium,
+                                Some(session_data.user_id.clone()),
+                            )
+                            .with_detail("reason", "Audience mismatch")
+                            .with_detail("requested_resource", requested_resource)
+                            .with_detail("session_audience", audience),
+                        )
+                        .await;
+
+                    return Err(SessionError::InvalidSession);
+                }
+                None => {
+                    // Session has no audience claim - allow for backward compatibility
+                    // but log a warning for MCP endpoints
+                    if requested_resource.starts_with("/mcp") {
+                        warn!(
+                            "Session without audience claim used for MCP endpoint: {}",
+                            requested_resource
+                        );
+                    }
+                }
+            }
+        }
 
         Ok(session_data)
     }
@@ -504,6 +585,8 @@ mod tests {
             is_editor: false,
             ip_addr: "192.168.1.1".to_string(),
             user_agent: "Mozilla/5.0".to_string(),
+            refresh_token: None,
+            audience: None,
         };
 
         let token = manager.create_session(params).await.unwrap();
@@ -532,6 +615,8 @@ mod tests {
             is_editor: false,
             ip_addr: "192.168.1.1".to_string(),
             user_agent: "Mozilla/5.0".to_string(),
+            refresh_token: None,
+            audience: None,
         };
 
         let token = manager.create_session(params).await.unwrap();
@@ -560,6 +645,8 @@ mod tests {
                     is_editor: false,
                     ip_addr: "192.168.1.1".to_string(),
                     user_agent: "Mozilla/5.0".to_string(),
+                    refresh_token: None,
+                    audience: None,
                 };
                 manager.create_session(params).await.unwrap();
             }
@@ -588,6 +675,8 @@ mod tests {
             is_editor: false,
             ip_addr: "192.168.1.1".to_string(),
             user_agent: "Mozilla/5.0".to_string(),
+            refresh_token: None,
+            audience: None,
         };
 
         let token = manager.create_session(params).await.unwrap();

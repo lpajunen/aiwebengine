@@ -1,3 +1,5 @@
+use crate::auth::client_registration::{ClientRegistrationManager, register_client_handler};
+use crate::auth::metadata::{MetadataConfig, metadata_handler};
 /// Authentication Routes
 ///
 /// HTTP route handlers for OAuth2 authentication flow including
@@ -8,7 +10,7 @@ use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Redirect, Response},
-    routing::get,
+    routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -373,6 +375,30 @@ pub fn create_auth_router(auth_manager: Arc<AuthManager>) -> Router {
         .route("/logout", get(logout).post(logout))
         .route("/status", get(auth_status))
         .with_state(auth_manager)
+}
+
+/// Create OAuth2 metadata and registration router
+pub fn create_oauth2_router(
+    metadata_config: Arc<MetadataConfig>,
+    registration_manager: Option<Arc<ClientRegistrationManager>>,
+) -> Router {
+    let metadata_router = Router::new()
+        .route(
+            "/.well-known/oauth-authorization-server",
+            get(metadata_handler),
+        )
+        .with_state(metadata_config);
+
+    // Add dynamic client registration endpoint if enabled
+    if let Some(manager) = registration_manager {
+        let registration_router = Router::new()
+            .route("/oauth2/register", post(register_client_handler))
+            .with_state(manager);
+
+        metadata_router.merge(registration_router)
+    } else {
+        metadata_router
+    }
 }
 
 #[cfg(test)]

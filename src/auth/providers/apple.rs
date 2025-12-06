@@ -70,6 +70,10 @@ struct AppleTokenRequest {
     client_secret: String,
     redirect_uri: String,
     grant_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code_verifier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resource: Option<String>,
 }
 
 /// Apple OAuth2 token response
@@ -321,7 +325,13 @@ impl OAuth2Provider for AppleProvider {
         "apple"
     }
 
-    fn authorization_url(&self, state: &str, nonce: Option<&str>) -> Result<String, AuthError> {
+    fn authorization_url(
+        &self,
+        state: &str,
+        nonce: Option<&str>,
+        code_challenge: Option<&str>,
+        resource: Option<&str>,
+    ) -> Result<String, AuthError> {
         let auth_url = self.config.auth_url.as_deref().unwrap_or(APPLE_AUTH_URL);
 
         let mut url = url::Url::parse(auth_url)
@@ -340,6 +350,17 @@ impl OAuth2Provider for AppleProvider {
                 query.append_pair("nonce", nonce);
             }
 
+            // PKCE support (RFC 7636)
+            if let Some(challenge) = code_challenge {
+                query.append_pair("code_challenge", challenge);
+                query.append_pair("code_challenge_method", "S256");
+            }
+
+            // Resource indicator (RFC 8707)
+            if let Some(res) = resource {
+                query.append_pair("resource", res);
+            }
+
             // Add extra parameters (excluding private key related params)
             for (key, value) in &self.config.extra_params {
                 if !matches!(key.as_str(), "team_id" | "key_id" | "private_key") {
@@ -355,6 +376,8 @@ impl OAuth2Provider for AppleProvider {
         &self,
         code: &str,
         _state: &str,
+        code_verifier: Option<&str>,
+        resource: Option<&str>,
     ) -> Result<OAuth2TokenResponse, AuthError> {
         let token_url = self.config.token_url.as_deref().unwrap_or(APPLE_TOKEN_URL);
         let client_secret = self.generate_client_secret()?;
@@ -365,6 +388,8 @@ impl OAuth2Provider for AppleProvider {
             client_secret,
             redirect_uri: self.config.redirect_uri.clone(),
             grant_type: "authorization_code".to_string(),
+            code_verifier: code_verifier.map(|s| s.to_string()),
+            resource: resource.map(|s| s.to_string()),
         };
 
         let response = self
@@ -538,7 +563,7 @@ mod tests {
         let provider = AppleProvider::new(config).unwrap();
 
         let auth_url = provider
-            .authorization_url("test-state", Some("test-nonce"))
+            .authorization_url("test-state", Some("test-nonce"), None, None)
             .unwrap();
 
         assert!(auth_url.contains("client_id=com.example.service"));

@@ -6,6 +6,9 @@
 # Use 0.0.0.0 to be accessible from Caddy container
 host = "0.0.0.0"
 port = 3000
+# Optional: Base URL for OAuth metadata and redirects
+# If not set, will auto-construct from host and port (e.g., http://localhost:3000)
+# base_url = "http://localhost:3000"
 # Short timeout for quick feedback during development
 request_timeout_ms = 5000
 # Small body limit for development testing

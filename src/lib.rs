@@ -567,6 +567,7 @@ fn path_has_any_route(path: &str) -> bool {
 /// Initialize authentication manager with all dependencies
 async fn initialize_auth_manager(
     auth_config: auth::AuthConfig,
+    server_config: &config::ServerConfig,
 ) -> Result<Arc<auth::AuthManager>, auth::AuthError> {
     use auth::{
         AuthManager, AuthManagerConfig, AuthSecurityContext, AuthSessionManager, CookieSameSite,
@@ -608,9 +609,12 @@ async fn initialize_auth_manager(
     // Create auth session manager
     let auth_session_manager = Arc::new(AuthSessionManager::new(Arc::clone(&session_manager)));
 
+    // Get base URL from server config
+    let base_url = server_config.get_base_url();
+
     // Create AuthManager config from auth config
     let manager_config = AuthManagerConfig {
-        base_url: "http://localhost:8080".to_string(), // TODO: Get from app config
+        base_url: base_url.clone(),
         session_cookie_name: auth_config.cookie.name.clone(),
         cookie_domain: auth_config.cookie.domain.clone(),
         cookie_secure: auth_config.cookie.secure,
@@ -916,7 +920,7 @@ async fn initialize_auth_if_enabled(config: &config::Config) -> Option<Arc<auth:
             user_repository::set_bootstrap_admins(auth_config.bootstrap_admins.clone());
         }
 
-        match initialize_auth_manager(auth_config).await {
+        match initialize_auth_manager(auth_config, &config.server).await {
             Ok(manager) => {
                 info!("AuthManager initialized successfully");
                 Some(manager)
@@ -941,7 +945,7 @@ async fn initialize_auth_if_enabled(config: &config::Config) -> Option<Arc<auth:
 
 /// Setup all routes and middleware for the application
 async fn setup_routes(
-    _config: &config::Config,
+    config: &config::Config,
     script_timeout_ms: u64,
     auth_enabled: bool,
     auth_manager: Option<&Arc<auth::AuthManager>>,
@@ -1671,15 +1675,35 @@ async fn setup_routes(
 
         app = app.merge(graphql_api_router);
 
-        // MCP endpoint - NO authentication required
+        // MCP endpoint - REQUIRES Bearer token authentication
         // Supports JSON-RPC 2.0 protocol with tools/list and tools/call methods
-        let mcp_router = Router::new().route("/mcp", axum::routing::post(mcp_handler));
+        let auth_mgr_for_mcp = Arc::clone(auth_mgr);
+        let mcp_router = Router::new()
+            .route("/mcp", axum::routing::post(mcp_handler))
+            .layer(axum::middleware::from_fn_with_state(
+                auth_mgr_for_mcp,
+                auth::mcp_auth_middleware,
+            ));
 
         app = app.merge(mcp_router);
 
         // Mount authentication routes
         let auth_router = auth::create_auth_router(Arc::clone(auth_mgr));
         app = app.nest("/auth", auth_router);
+
+        // Mount OAuth2 metadata and dynamic client registration endpoints
+        // These provide RFC 8414 authorization server metadata and RFC 7591 client registration
+        let metadata_config = Arc::new(auth::MetadataConfig {
+            issuer: config.server.get_base_url(),
+            enable_registration: true,
+            require_pkce: true,
+            resource_indicators_supported: true,
+        });
+
+        let registration_manager = Arc::new(auth::ClientRegistrationManager::new(90)); // 90 day secret expiry
+
+        let oauth2_router = auth::create_oauth2_router(metadata_config, Some(registration_manager));
+        app = app.merge(oauth2_router);
     } else {
         warn!("⚠️  Authentication DISABLED - no auth routes or middleware");
 
@@ -1692,8 +1716,10 @@ async fn setup_routes(
                 axum::routing::get(graphql_post_handler).post(graphql_post_handler),
             )
             .route("/graphql/ws", axum::routing::get(graphql_ws_handler))
-            .route("/graphql/sse", axum::routing::get(graphql_sse_handler))
-            .route("/mcp", axum::routing::post(mcp_handler));
+            .route("/graphql/sse", axum::routing::get(graphql_sse_handler));
+
+        // MCP endpoint without authentication (auth is disabled globally)
+        app = app.route("/mcp", axum::routing::post(mcp_handler));
     }
 
     // Add documentation routes

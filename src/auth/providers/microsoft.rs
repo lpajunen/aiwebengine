@@ -81,6 +81,10 @@ struct MicrosoftTokenRequest {
     redirect_uri: String,
     grant_type: String,
     scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code_verifier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resource: Option<String>,
 }
 
 /// Microsoft OAuth2 token response
@@ -308,7 +312,13 @@ impl OAuth2Provider for MicrosoftProvider {
         "microsoft"
     }
 
-    fn authorization_url(&self, state: &str, nonce: Option<&str>) -> Result<String, AuthError> {
+    fn authorization_url(
+        &self,
+        state: &str,
+        nonce: Option<&str>,
+        code_challenge: Option<&str>,
+        resource: Option<&str>,
+    ) -> Result<String, AuthError> {
         let auth_url = self.get_auth_url();
 
         let mut url = url::Url::parse(&auth_url)
@@ -327,6 +337,17 @@ impl OAuth2Provider for MicrosoftProvider {
                 query.append_pair("nonce", nonce);
             }
 
+            // PKCE support (RFC 7636)
+            if let Some(challenge) = code_challenge {
+                query.append_pair("code_challenge", challenge);
+                query.append_pair("code_challenge_method", "S256");
+            }
+
+            // Resource indicator (RFC 8707)
+            if let Some(res) = resource {
+                query.append_pair("resource", res);
+            }
+
             // Add extra parameters (excluding tenant_id which is in URL)
             for (key, value) in &self.config.extra_params {
                 if key != "tenant_id" {
@@ -342,6 +363,8 @@ impl OAuth2Provider for MicrosoftProvider {
         &self,
         code: &str,
         _state: &str,
+        code_verifier: Option<&str>,
+        resource: Option<&str>,
     ) -> Result<OAuth2TokenResponse, AuthError> {
         let token_url = self.get_token_url();
 
@@ -352,6 +375,8 @@ impl OAuth2Provider for MicrosoftProvider {
             redirect_uri: self.config.redirect_uri.clone(),
             grant_type: "authorization_code".to_string(),
             scope: Some(self.config.scopes.join(" ")),
+            code_verifier: code_verifier.map(|s| s.to_string()),
+            resource: resource.map(|s| s.to_string()),
         };
 
         let response = self
@@ -516,7 +541,7 @@ mod tests {
         let provider = MicrosoftProvider::new(config).unwrap();
 
         let auth_url = provider
-            .authorization_url("test-state", Some("test-nonce"))
+            .authorization_url("test-state", Some("test-nonce"), None, None)
             .unwrap();
 
         assert!(auth_url.contains("client_id=test-client-id"));
@@ -536,7 +561,9 @@ mod tests {
         let provider = MicrosoftProvider::new(config).unwrap();
         assert_eq!(provider.tenant_id, "custom-tenant");
 
-        let auth_url = provider.authorization_url("test-state", None).unwrap();
+        let auth_url = provider
+            .authorization_url("test-state", None, None, None)
+            .unwrap();
         assert!(auth_url.contains("/custom-tenant/oauth2/v2.0/authorize"));
     }
 
