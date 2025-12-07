@@ -2342,6 +2342,20 @@ fn build_http_response_from_js(js_response: js_engine::JsHttpResponse) -> Respon
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Once;
+
+    static INIT_DB: Once = Once::new();
+
+    fn setup_db() {
+        INIT_DB.call_once(|| {
+            let pool = sqlx::PgPool::connect_lazy(
+                "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+            )
+            .unwrap();
+            let db = Arc::new(crate::database::Database::from_pool(pool));
+            crate::database::initialize_global_database(db);
+        });
+    }
 
     #[test]
     fn test_parse_query_string() {
@@ -2371,8 +2385,9 @@ mod tests {
         assert_eq!(result.get("key"), Some(&"second".to_string()));
     }
 
-    #[test]
-    fn test_editor_script_execution() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_editor_script_execution() {
+        setup_db();
         // Load test scripts dynamically using upsert_script
         let _ = repository::upsert_script(
             "https://example.com/test_editor",
