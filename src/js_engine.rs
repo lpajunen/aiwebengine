@@ -1971,6 +1971,18 @@ mod tests {
         super::execute_script(uri, content)
     }
 
+    // Shadow execute_script_secure
+    fn execute_script_secure(
+        uri: &str,
+        content: &str,
+        user_context: crate::security::UserContext,
+    ) -> ScriptExecutionResult {
+        let rt = get_runtime();
+        let _guard = rt.enter();
+        setup_db();
+        super::execute_script_secure(uri, content, user_context)
+    }
+
     // Shadow execute_script_for_request_secure
     fn execute_script_for_request_secure(
         params: RequestExecutionParams,

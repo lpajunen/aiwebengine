@@ -1907,9 +1907,18 @@ pub fn bootstrap_scripts() -> AppResult<()> {
             for (uri, code) in all_scripts {
                 let mut exists = false;
                 // Check if script already exists
-                if let Ok(Some(_)) = db_get_script(pool, uri).await {
+                if let Ok(Some(existing_content)) = db_get_script(pool, uri).await {
                     debug!("Script already exists in database: {}", uri);
                     exists = true;
+
+                    // Update if content differs
+                    if existing_content != code {
+                        info!("Updating bootstrap script in database: {}", uri);
+                        if let Err(e) = db_upsert_script(pool, uri, code).await {
+                            error!("Failed to update bootstrap script {}: {}", uri, e);
+                            return Err(e);
+                        }
+                    }
                 }
 
                 if !exists {
