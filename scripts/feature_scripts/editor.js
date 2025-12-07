@@ -1769,7 +1769,7 @@ Remember: You are creating JavaScript scripts that run on the SERVER and handle 
       },
       body: JSON.stringify({
         model: "claude-haiku-4-5-20251001",
-        max_tokens: 8192 * 3,
+        max_tokens: 32768,
         system: systemPrompt,
         messages: [
           {
@@ -1801,7 +1801,8 @@ Remember: You are creating JavaScript scripts that run on the SERVER and handle 
       const stopReason = data.stop_reason || "unknown";
       console.log(`AI Assistant: Stop reason: ${stopReason}`);
 
-      if (stopReason === "max_tokens") {
+      const wasTruncated = stopReason === "max_tokens";
+      if (wasTruncated) {
         console.log(
           `AI Assistant: WARNING - Response truncated due to max_tokens limit`,
         );
@@ -1825,18 +1826,27 @@ Remember: You are creating JavaScript scripts that run on the SERVER and handle 
 
       // Try to parse AI response as JSON for structured commands
       let parsedResponse = null;
+      let parseError = null;
       try {
         parsedResponse = JSON.parse(cleanedResponse);
         console.log(
           `AI Assistant: Successfully parsed structured response of type: ${parsedResponse.type}`,
         );
-      } catch (parseError) {
+      } catch (error) {
+        parseError = String(error);
         console.log(
-          `AI Assistant: Response is plain text, not JSON - Error: ${parseError}`,
+          `AI Assistant: Response is plain text or invalid JSON - Error: ${parseError}`,
         );
         console.log(
           `AI Assistant: First 200 chars: ${cleanedResponse.substring(0, 200)}`,
         );
+
+        // If it was truncated and JSON parsing failed, it's likely incomplete JSON
+        if (wasTruncated) {
+          console.log(
+            `AI Assistant: Response was truncated AND JSON parsing failed - likely incomplete JSON`,
+          );
+        }
       }
 
       return {
@@ -1848,6 +1858,8 @@ Remember: You are creating JavaScript scripts that run on the SERVER and handle 
           model: data.model,
           usage: data.usage,
           stop_reason: stopReason,
+          truncated: wasTruncated,
+          parse_error: parseError,
         }),
         contentType: "application/json",
       };

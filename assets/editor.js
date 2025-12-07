@@ -1395,12 +1395,37 @@ function init(context) {
 
       const data = await response.json();
 
+      // Check if response was truncated
+      if (data.truncated) {
+        console.warn("AI response was truncated due to length");
+
+        // If we have a parse error, show a helpful message
+        if (data.parse_error && !data.parsed) {
+          responseDiv.classList.remove("loading");
+          responseDiv.innerHTML = `
+            <div class="ai-response-content">
+              <p><strong>⚠️ Response Incomplete</strong></p>
+              <p style="color: var(--warning-color);">
+                The AI's response was too long and got cut off. The generated code may be incomplete.
+              </p>
+              <p style="font-size: 12px; color: var(--text-muted);">
+                Try asking for a simpler version or breaking your request into smaller parts.
+              </p>
+              <hr style="border-color: var(--border-color); margin: 10px 0;">
+              <div class="ai-response-text">${this.escapeHtml(data.response)}</div>
+            </div>
+          `;
+          this.showStatus("AI response was truncated", "warning");
+          return;
+        }
+      }
+
       // Check if we got a structured response
       if (data.parsed && data.parsed.type) {
-        this.handleStructuredAIResponse(data.parsed, prompt);
+        this.handleStructuredAIResponse(data.parsed, prompt, data.truncated);
       } else {
         // Display plain text response
-        this.displayPlainAIResponse(data.response, prompt);
+        this.displayPlainAIResponse(data.response, prompt, data.truncated);
       }
 
       this.showStatus("AI response received", "success");
@@ -1419,13 +1444,23 @@ function init(context) {
     }
   }
 
-  displayPlainAIResponse(responseText, prompt) {
+  displayPlainAIResponse(responseText, prompt, truncated = false) {
     const responseDiv = document.getElementById("ai-response");
     responseDiv.classList.remove("loading");
+
+    const truncationWarning = truncated
+      ? `
+      <div style="background: var(--warning-bg, #fff3cd); color: var(--warning-color, #856404); padding: 10px; border-radius: 4px; margin-bottom: 10px;">
+        ⚠️ <strong>Note:</strong> The response may have been truncated due to length. Consider asking for a shorter version.
+      </div>
+    `
+      : "";
+
     responseDiv.innerHTML = `
       <div class="ai-response-content">
         <p><strong>You asked:</strong> ${this.escapeHtml(prompt)}</p>
         <hr style="border-color: var(--border-color); margin: 10px 0;">
+        ${truncationWarning}
         <div class="ai-response-text">${this.escapeHtml(responseText)}</div>
         <p style="color: var(--text-muted); font-size: 11px; margin-top: 10px;">
           ${new Date().toLocaleString()}
@@ -1434,7 +1469,7 @@ function init(context) {
     `;
   }
 
-  handleStructuredAIResponse(parsed, prompt) {
+  handleStructuredAIResponse(parsed, prompt, truncated = false) {
     const responseDiv = document.getElementById("ai-response");
     responseDiv.classList.remove("loading");
 
@@ -1455,10 +1490,19 @@ function init(context) {
       message: message,
     };
 
+    const truncationWarning = truncated
+      ? `
+      <div style="background: var(--warning-bg, #fff3cd); color: var(--warning-color, #856404); padding: 10px; border-radius: 4px; margin-bottom: 10px;">
+        ⚠️ <strong>Warning:</strong> The AI response was truncated. The generated code may be incomplete. Please review carefully before applying.
+      </div>
+    `
+      : "";
+
     let html = `
       <div class="ai-response-content">
         <p><strong>You asked:</strong> ${this.escapeHtml(prompt)}</p>
         <hr style="border-color: var(--border-color); margin: 10px 0;">
+        ${truncationWarning}
         <div class="ai-action-header">
           <span class="ai-action-type ai-action-${actionType}">${actionType.replace(/_/g, " ").toUpperCase()}</span>
         </div>
