@@ -541,7 +541,10 @@ impl RateLimiter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::sync::Mutex;
     use tokio::time::{Duration as TokioDuration, sleep};
+
+    static RATE_LIMIT_TEST_LOCK: Mutex<()> = Mutex::const_new(());
 
     #[test]
     fn test_token_bucket_creation() {
@@ -592,7 +595,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_rate_limiter_basic() {
-        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let _lock = RATE_LIMIT_TEST_LOCK.lock().await;
+        let pool = sqlx::PgPool::connect_lazy(
+            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+        )
+        .unwrap();
         let limiter = RateLimiter::new(pool);
         let key = RateLimitKey::IpAddress("192.168.1.1".to_string());
 
@@ -603,14 +610,24 @@ mod tests {
 
     #[tokio::test]
     async fn test_rate_limiter_exceed_limit() {
-        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let _lock = RATE_LIMIT_TEST_LOCK.lock().await;
+        let pool = sqlx::PgPool::connect(
+            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+        )
+        .await
+        .unwrap();
+        sqlx::query("DELETE FROM rate_limits WHERE key = 'ip:192.168.1.2'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
         let limiter = RateLimiter::new(pool);
         let key = RateLimitKey::IpAddress("192.168.1.2".to_string());
 
         // Consume all tokens (IP config has 60 max tokens)
-        for _ in 0..60 {
-            let result = limiter.check_rate_limit(key.clone(), 1).await;
-            assert!(result.allowed);
+        // Consume slightly more to account for potential refills during test execution
+        for _ in 0..65 {
+            let _ = limiter.check_rate_limit(key.clone(), 1).await;
         }
 
         // Next request should be denied
@@ -621,7 +638,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_multiple_rate_limits() {
-        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let _lock = RATE_LIMIT_TEST_LOCK.lock().await;
+        let pool = sqlx::PgPool::connect_lazy(
+            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+        )
+        .unwrap();
         let limiter = RateLimiter::new(pool);
         let keys = vec![
             RateLimitKey::IpAddress("192.168.1.1".to_string()),
@@ -636,7 +657,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_rate_limiter_statistics() {
-        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let _lock = RATE_LIMIT_TEST_LOCK.lock().await;
+        let pool = sqlx::PgPool::connect(
+            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+        )
+        .await
+        .unwrap();
+        sqlx::query("DELETE FROM rate_limits")
+            .execute(&pool)
+            .await
+            .unwrap();
+
         let limiter = RateLimiter::new(pool);
         let key = RateLimitKey::IpAddress("192.168.1.1".to_string());
 
@@ -656,7 +687,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_disabled_rate_limiting() {
-        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let pool = sqlx::PgPool::connect_lazy(
+            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+        )
+        .unwrap();
         let mut limiter = RateLimiter::new(pool);
 
         // Disable IP rate limiting

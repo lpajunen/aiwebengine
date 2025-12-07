@@ -1943,6 +1943,51 @@ pub fn call_init_if_exists(
 mod tests {
     use super::*;
     use crate::stream_registry;
+    use std::sync::{Arc, Once, OnceLock};
+
+    static INIT: Once = Once::new();
+    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+
+    fn setup_db() {
+        INIT.call_once(|| {
+            let pool = sqlx::PgPool::connect_lazy(
+                "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+            )
+            .unwrap();
+            let db = Arc::new(crate::database::Database::from_pool(pool));
+            crate::database::initialize_global_database(db);
+        });
+    }
+
+    fn get_runtime() -> &'static tokio::runtime::Runtime {
+        RUNTIME.get_or_init(|| tokio::runtime::Runtime::new().unwrap())
+    }
+
+    // Shadow the super::execute_script with one that ensures setup
+    fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
+        let rt = get_runtime();
+        let _guard = rt.enter();
+        setup_db();
+        super::execute_script(uri, content)
+    }
+
+    // Shadow execute_script_for_request_secure
+    fn execute_script_for_request_secure(
+        params: RequestExecutionParams,
+    ) -> Result<JsHttpResponse, String> {
+        let rt = get_runtime();
+        let _guard = rt.enter();
+        setup_db();
+        super::execute_script_for_request_secure(params)
+    }
+
+    // Shadow execute_graphql_resolver
+    fn execute_graphql_resolver(params: GraphqlResolverExecutionParams) -> Result<String, String> {
+        let rt = get_runtime();
+        let _guard = rt.enter();
+        setup_db();
+        super::execute_graphql_resolver(params)
+    }
 
     #[test]
     fn test_execute_script_simple_registration() {

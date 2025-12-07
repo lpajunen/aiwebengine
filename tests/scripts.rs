@@ -15,7 +15,24 @@ use aiwebengine::repository::{get_script_metadata, upsert_script};
 use aiwebengine::script_init::{InitContext, ScriptInitializer};
 use common::TestContext;
 use std::time::Duration;
+use tokio::sync::OnceCell;
 use tokio::time::timeout;
+
+static INIT: OnceCell<()> = OnceCell::const_new();
+
+async fn setup_env() {
+    INIT.get_or_init(|| async {
+        // Initialize Repository to Memory FIRST
+        repository::initialize_repository(repository::UnifiedRepository::new_memory());
+
+        // Initialize DB for SecureGlobals
+        let config = aiwebengine::config::AppConfig::test_config_with_port(0);
+        if let Ok(db) = aiwebengine::database::Database::new(&config.repository).await {
+            aiwebengine::database::initialize_global_database(std::sync::Arc::new(db));
+        }
+    })
+    .await;
+}
 
 // ============================================================================
 // QuickJS Integration Tests
@@ -1030,6 +1047,7 @@ function init(context) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_init_function_called_successfully() {
+    setup_env().await;
     let script_uri = "test://init-success";
     let script_content = r#"
         let initWasCalled = false;
@@ -1065,6 +1083,7 @@ async fn test_init_function_called_successfully() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_initializer_updates_metadata() {
+    setup_env().await;
     let script_uri = "test://init-metadata";
     let script_content = r#"
         function init(context) {
@@ -1098,6 +1117,7 @@ async fn test_script_initializer_updates_metadata() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_without_init_function() {
+    setup_env().await;
     let script_uri = "test://no-init";
     let script_content = r#"
         function handleRequest(request) {
@@ -1119,6 +1139,7 @@ async fn test_script_without_init_function() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_init_function_with_error() {
+    setup_env().await;
     let script_uri = "test://init-error";
     let script_content = r#"
         function init(context) {
@@ -1159,6 +1180,7 @@ async fn test_init_function_with_error() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_initializer_single_script() {
+    setup_env().await;
     let script_uri = "test://initializer-test";
     let script_content = r#"
         function init(context) {
@@ -1181,6 +1203,7 @@ async fn test_script_initializer_single_script() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_initializer_all_scripts() {
+    setup_env().await;
     // Create multiple test scripts
     let scripts = vec![
         (
@@ -1214,6 +1237,7 @@ async fn test_script_initializer_all_scripts() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_init_context_properties() {
+    setup_env().await;
     let script_uri = "test://context-test";
     let script_content = r#"
         let capturedContext = null;

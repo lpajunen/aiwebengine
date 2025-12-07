@@ -2,9 +2,30 @@
 // This verifies that the admin script loads and initializes correctly
 
 use aiwebengine::{js_engine, repository, security::UserContext};
+use std::sync::Once;
+
+static INIT: Once = Once::new();
+
+fn setup() {
+    INIT.call_once(|| {
+        // Initialize Repository to Memory FIRST to ensure we have scripts
+        // This prevents get_repository() from defaulting to Postgres when GLOBAL_DATABASE is set
+        repository::initialize_repository(repository::UnifiedRepository::new_memory());
+
+        // Initialize DB for SecureGlobals
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let config = aiwebengine::config::AppConfig::test_config_with_port(0);
+            if let Ok(db) = aiwebengine::database::Database::new(&config.repository).await {
+                aiwebengine::database::initialize_global_database(std::sync::Arc::new(db));
+            }
+        });
+    });
+}
 
 #[test]
 fn test_manager_script_loads() {
+    setup();
     // Ensure admin script is in the repository
     let script = repository::fetch_script("https://example.com/admin");
     assert!(script.is_some(), "Admin script should be in repository");
@@ -30,6 +51,7 @@ fn test_manager_script_loads() {
 
 #[test]
 fn test_manager_script_executes() {
+    setup();
     let script_uri = "https://example.com/admin";
     let script_content =
         repository::fetch_script(script_uri).expect("Admin script should be in repository");
@@ -50,6 +72,7 @@ fn test_manager_script_executes() {
 
 #[test]
 fn test_manager_script_init() {
+    setup();
     use aiwebengine::script_init;
 
     let script_uri = "https://example.com/admin";

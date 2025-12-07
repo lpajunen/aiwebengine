@@ -27,7 +27,10 @@ use std::sync::Arc;
 #[tokio::test]
 async fn test_session_lifecycle() {
     let key: [u8; 32] = rand::random();
-    let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+    let pool = sqlx::PgPool::connect_lazy(
+        "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+    )
+    .unwrap();
     let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
     let manager = SecureSessionManager::new(pool, &key, 3600, 3, auditor).unwrap();
 
@@ -78,7 +81,10 @@ async fn test_session_lifecycle() {
 #[tokio::test]
 async fn test_session_fingerprint_user_agent_mismatch() {
     let key: [u8; 32] = rand::random();
-    let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+    let pool = sqlx::PgPool::connect_lazy(
+        "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+    )
+    .unwrap();
     let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
     let manager = SecureSessionManager::new(pool, &key, 3600, 3, auditor).unwrap();
 
@@ -107,7 +113,10 @@ async fn test_session_fingerprint_user_agent_mismatch() {
 #[tokio::test]
 async fn test_session_ip_change_tolerance() {
     let key: [u8; 32] = rand::random();
-    let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+    let pool = sqlx::PgPool::connect_lazy(
+        "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+    )
+    .unwrap();
     let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
     let manager = SecureSessionManager::new(pool, &key, 3600, 3, auditor).unwrap();
 
@@ -138,14 +147,18 @@ async fn test_concurrent_session_limit() {
     // Add timeout to prevent hanging
     let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         let key: [u8; 32] = rand::random();
-        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let pool = sqlx::PgPool::connect_lazy(
+            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+        )
+        .unwrap();
         let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
         let manager = SecureSessionManager::new(pool, &key, 3600, 3, auditor).unwrap();
+        let unique_user_id = format!("user_concurrent_{}", rand::random::<u32>());
 
         // Create 5 sessions (limit is 3)
         for i in 0..5 {
             let params = CreateSessionParams {
-                user_id: "user123".to_string(),
+                user_id: unique_user_id.clone(),
                 provider: "google".to_string(),
                 email: None,
                 name: None,
@@ -160,7 +173,7 @@ async fn test_concurrent_session_limit() {
         }
 
         // Should only have 3 sessions
-        let count = manager.get_user_session_count("user123").await;
+        let count = manager.get_user_session_count(&unique_user_id).await;
         assert_eq!(count, 3);
     })
     .await;
@@ -174,7 +187,10 @@ async fn test_concurrent_session_limit() {
 #[tokio::test]
 async fn test_session_encryption() {
     let key: [u8; 32] = rand::random();
-    let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+    let pool = sqlx::PgPool::connect_lazy(
+        "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+    )
+    .unwrap();
     let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
     let manager = SecureSessionManager::new(pool, &key, 3600, 3, auditor).unwrap();
 
@@ -404,7 +420,10 @@ fn test_password_based_encryption() {
 async fn test_full_auth_flow_simulation() {
     // Setup all components
     let key: [u8; 32] = rand::random();
-    let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+    let pool = sqlx::PgPool::connect_lazy(
+        "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+    )
+    .unwrap();
     let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
     let session_manager =
         Arc::new(SecureSessionManager::new(pool, &key, 3600, 3, auditor).unwrap());
@@ -482,7 +501,10 @@ async fn test_full_auth_flow_simulation() {
 #[tokio::test]
 async fn test_concurrent_users_isolation() {
     let key: [u8; 32] = rand::random();
-    let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+    let pool = sqlx::PgPool::connect_lazy(
+        "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+    )
+    .unwrap();
     let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
     let session_manager =
         Arc::new(SecureSessionManager::new(pool, &key, 3600, 5, auditor).unwrap());

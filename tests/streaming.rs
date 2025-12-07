@@ -16,8 +16,27 @@ use aiwebengine::{
 };
 use common::{TestContext, wait_for_server};
 use std::time::Duration;
+use tokio::sync::OnceCell;
 use tokio::time::{sleep, timeout};
 use tracing::info;
+
+static INIT: OnceCell<()> = OnceCell::const_new();
+
+async fn setup_env() {
+    INIT.get_or_init(|| async {
+        // Initialize Repository to Memory FIRST
+        aiwebengine::repository::initialize_repository(
+            aiwebengine::repository::UnifiedRepository::new_memory(),
+        );
+
+        // Initialize DB for SecureGlobals
+        let config = aiwebengine::config::AppConfig::test_config_with_port(0);
+        if let Ok(db) = aiwebengine::database::Database::new(&config.repository).await {
+            aiwebengine::database::initialize_global_database(std::sync::Arc::new(db));
+        }
+    })
+    .await;
+}
 
 // ============================================================================
 // Core Script Streaming Tests
@@ -25,6 +44,7 @@ use tracing::info;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_core_js_script_streaming() {
+    setup_env().await;
     // Test the real core.js script with streaming functionality
 
     // First, read the actual core.js file to use for testing
@@ -185,7 +205,8 @@ async fn test_core_js_script_streaming() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_stream_health_and_stats() {
-    // Test that we can get health and stats for the script update stream
+    setup_env().await;
+    // Test that we can retrieve health and stats for script streams
 
     let core_js_path = "/Users/lassepajunen/work/aiwebengine/scripts/feature_scripts/core.js";
     let core_script_content =
@@ -234,6 +255,7 @@ async fn test_script_stream_health_and_stats() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_basic_streaming_functionality() {
+    setup_env().await;
     // Test basic streaming functionality with a minimal script
 
     let test_script = r#"
@@ -326,6 +348,7 @@ async fn test_basic_streaming_functionality() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_direct_stream_message() {
+    setup_env().await;
     // Test direct stream message sending without using request handlers
 
     let test_script = r#"
@@ -424,8 +447,8 @@ async fn test_direct_stream_message() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_update_streaming_integration() {
-    // This test verifies that script update streaming works via the HTTP API
-    // It tests the /script_updates stream endpoint and broadcasts
+    setup_env().await;
+    // Test integration between script updates and streaming
 
     // First, upsert the streaming test script
     let core_script_content = r#"
@@ -518,6 +541,7 @@ async fn test_script_update_streaming_integration() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_update_message_format() {
+    setup_env().await;
     // Test that the script update message format is correct via HTTP API
     // This test verifies the core.js script properly formats broadcast messages
 
@@ -625,6 +649,7 @@ async fn test_script_update_message_format() {
 use reqwest::Client;
 #[tokio::test(flavor = "multi_thread")]
 async fn test_stream_endpoints() {
+    setup_env().await;
     let context = TestContext::new();
 
     // Start server
@@ -734,6 +759,7 @@ async fn test_stream_endpoints() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_stream_messaging() {
+    setup_env().await;
     let context = TestContext::new();
 
     // Start server
@@ -869,6 +895,7 @@ async fn test_stream_messaging() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_broadcast_result_structure() {
+    setup_env().await;
     // Test BroadcastResult utility methods
     let full_success = BroadcastResult {
         successful_sends: 5,
@@ -904,6 +931,7 @@ async fn test_broadcast_result_structure() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_automatic_failed_connection_cleanup() {
+    setup_env().await;
     let registry = StreamRegistry::new();
 
     // Register a stream
@@ -944,6 +972,7 @@ async fn test_automatic_failed_connection_cleanup() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_global_registry_error_handling() {
+    setup_env().await;
     // Test error handling with the global registry
 
     // Register a stream
@@ -983,6 +1012,7 @@ async fn test_global_registry_error_handling() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_stream_registry_health_status() {
+    setup_env().await;
     let registry = StreamRegistry::new();
 
     // Register multiple streams
@@ -1015,6 +1045,7 @@ async fn test_stream_registry_health_status() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_graceful_shutdown() {
+    setup_env().await;
     let registry = StreamRegistry::new();
 
     // Register streams and add connections
@@ -1052,6 +1083,7 @@ async fn test_graceful_shutdown() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_stale_connection_cleanup() {
+    setup_env().await;
     let registry = StreamRegistry::new();
 
     // Register a stream
@@ -1089,8 +1121,9 @@ async fn test_stale_connection_cleanup() {
 // Simple Streaming Tests
 // ============================================================================
 
-#[test]
-fn test_simple_stream_registration() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_simple_stream_registration() {
+    setup_env().await;
     // Test just the stream registration part first
 
     let test_script = r#"
@@ -1122,8 +1155,9 @@ fn test_simple_stream_registration() {
     println!("Simple stream registration test passed!");
 }
 
-#[test]
-fn test_simple_message_sending() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_simple_message_sending() {
+    setup_env().await;
     // Test just the message sending part
 
     let test_script = r#"
@@ -1151,8 +1185,9 @@ fn test_simple_message_sending() {
     }
 }
 
-#[test]
-fn test_combined_functionality() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_combined_functionality() {
+    setup_env().await;
     // Test both registration and sending together
 
     let test_script = r#"

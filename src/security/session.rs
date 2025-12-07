@@ -585,13 +585,19 @@ mod tests {
     use super::*;
 
     fn create_test_auditor() -> Arc<SecurityAuditor> {
-        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let pool = sqlx::PgPool::connect_lazy(
+            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+        )
+        .unwrap();
         Arc::new(SecurityAuditor::new(pool))
     }
 
     fn create_test_manager() -> SecureSessionManager {
         let key: [u8; 32] = rand::random();
-        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let pool = sqlx::PgPool::connect_lazy(
+            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+        )
+        .unwrap();
         SecureSessionManager::new(pool, &key, 3600, 3, create_test_auditor()).unwrap()
     }
 
@@ -656,11 +662,22 @@ mod tests {
         // Add timeout to prevent hanging
         let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             let manager = create_test_manager();
+            let user_id = "user_concurrent";
+
+            // Clean up any existing sessions for this user to ensure clean state
+            let pool = sqlx::PgPool::connect_lazy(
+                "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+            )
+            .unwrap();
+            let _ = sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+                .bind(user_id)
+                .execute(&pool)
+                .await;
 
             // Create 4 sessions (limit is 3)
             for _i in 0..4 {
                 let params = CreateSessionParams {
-                    user_id: "user123".to_string(),
+                    user_id: user_id.to_string(),
                     provider: "google".to_string(),
                     email: None,
                     name: None,
@@ -674,7 +691,7 @@ mod tests {
                 manager.create_session(params).await.unwrap();
             }
 
-            let count = manager.get_user_session_count("user123").await;
+            let count = manager.get_user_session_count(user_id).await;
             assert_eq!(count, 3); // Should be limited to 3
         })
         .await;

@@ -475,7 +475,10 @@ mod tests {
 
     async fn create_test_manager() -> AuthManager {
         let config = AuthManagerConfig::default();
-        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let pool = sqlx::PgPool::connect_lazy(
+            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+        )
+        .unwrap();
 
         // Create security infrastructure
         let auditor = Arc::new(SecurityAuditor::new(pool.clone()));

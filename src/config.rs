@@ -462,6 +462,10 @@ impl AppConfig {
     pub fn test_config_with_port(port: u16) -> Self {
         let mut config = Self::default();
         config.server.port = port;
+        // Use Postgres for tests
+        config.repository.storage_type = "postgresql".to_string();
+        config.repository.connection_string =
+            Some("postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine".to_string());
         config
     }
 

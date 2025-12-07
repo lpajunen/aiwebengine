@@ -161,7 +161,10 @@ mod tests {
     use crate::security::SecurityAuditor;
 
     async fn create_test_manager() -> AuthSessionManager {
-        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let pool = sqlx::PgPool::connect_lazy(
+            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+        )
+        .unwrap();
         let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
         let encryption_key: [u8; 32] = *b"test-encryption-key-32-bytes!!!!";
         let session_manager =
@@ -178,7 +181,7 @@ mod tests {
 
         let token = manager
             .create_session(CreateAuthSessionParams {
-                user_id: "user123".to_string(),
+                user_id: "user_create_get".to_string(),
                 provider: "google".to_string(),
                 email: Some("user@example.com".to_string()),
                 name: Some("Test User".to_string()),
@@ -197,7 +200,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(session.user_id, "user123");
+        assert_eq!(session.user_id, "user_create_get");
         assert_eq!(session.provider, "google");
         assert_eq!(session.email, Some("user@example.com".to_string()));
         assert!(!session.is_admin);
@@ -210,7 +213,7 @@ mod tests {
 
         let token = manager
             .create_session(CreateAuthSessionParams {
-                user_id: "user123".to_string(),
+                user_id: "user_delete".to_string(),
                 provider: "google".to_string(),
                 email: None,
                 name: None,
@@ -237,9 +240,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_session_count() {
+        // Clean up first
+        let pool = sqlx::PgPool::connect(
+            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+        )
+        .await
+        .unwrap();
+        sqlx::query("DELETE FROM sessions WHERE user_id = 'user_count'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
         let manager = create_test_manager().await;
 
-        let user_id = "user123";
+        let user_id = "user_count";
 
         // Create 2 sessions
         for i in 0..2 {

@@ -227,7 +227,7 @@ fn safe_lock_provider_index()
 
 /// Get database pool if available
 fn get_db_pool() -> Option<std::sync::Arc<crate::database::Database>> {
-    crate::database::get_global_database()
+    crate::repository::get_db_pool()
 }
 
 /// Convert chrono::DateTime to SystemTime
@@ -309,6 +309,23 @@ async fn db_upsert_user(
 
     debug!("Created new user in database: {}", user_id);
     Ok(user_id)
+}
+
+/// Database-backed delete user
+async fn db_delete_user(pool: &PgPool, user_id: &str) -> AppResult<bool> {
+    let result = sqlx::query("DELETE FROM users WHERE user_id = $1")
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .map_err(|e| {
+            error!("Database error deleting user: {}", e);
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
+        })?;
+
+    Ok(result.rows_affected() > 0)
 }
 
 /// Database-backed get user
@@ -610,11 +627,13 @@ pub fn upsert_user_with_bootstrap(
             }
             Err(e) => {
                 warn!("Database upsert failed, falling back to in-memory: {}", e);
+                eprintln!("DEBUG: Database upsert failed: {}", e);
                 // Fall through to in-memory implementation
             }
         }
     }
 
+    eprintln!("DEBUG: Falling back to in-memory upsert");
     // Fall back to in-memory implementation
     upsert_user_in_memory(
         email,
@@ -1049,8 +1068,8 @@ pub fn delete_user(user_id: &str) -> AppResult<bool> {
     let mut users = safe_lock_users()?;
     let mut provider_index = safe_lock_provider_index()?;
 
-    // Remove user
-    if let Some(user) = users.remove(user_id) {
+    // Remove user from memory
+    let memory_deleted = if let Some(user) = users.remove(user_id) {
         // Remove all provider index entries for this user
         for provider_info in user.providers {
             let provider_key = ProviderKey {
@@ -1059,7 +1078,22 @@ pub fn delete_user(user_id: &str) -> AppResult<bool> {
             };
             provider_index.remove(&provider_key);
         }
+        true
+    } else {
+        false
+    };
 
+    // Delete from database
+    let db_deleted = if let Some(db) = get_db_pool() {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(async { db_delete_user(db.pool(), user_id).await })
+        })?
+    } else {
+        false
+    };
+
+    if memory_deleted || db_deleted {
         debug!("Deleted user: {}", user_id);
         Ok(true)
     } else {
@@ -1070,10 +1104,16 @@ pub fn delete_user(user_id: &str) -> AppResult<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use std::sync::OnceLock;
+    use tokio::runtime::Runtime;
 
     // Use a global mutex to serialize tests that access global state
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
+    // static crate::repository::GLOBAL_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn get_runtime() -> &'static Runtime {
+        static RUNTIME: OnceLock<Runtime> = OnceLock::new();
+        RUNTIME.get_or_init(|| Runtime::new().expect("Failed to create Tokio runtime"))
+    }
 
     #[test]
     fn test_user_creation() {
@@ -1093,80 +1133,89 @@ mod tests {
 
     #[test]
     fn test_upsert_user_new() {
-        let _lock = TEST_LOCK.lock().unwrap();
+        let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
+        let rt = get_runtime();
 
-        let user_id = upsert_user(
-            "new@example.com".to_string(),
-            Some("New User".to_string()),
-            "github".to_string(),
-            "github456".to_string(),
-        )
-        .unwrap();
+        rt.block_on(async {
+            let user_id = upsert_user(
+                "new@example.com".to_string(),
+                Some("New User".to_string()),
+                "github".to_string(),
+                "github456".to_string(),
+            )
+            .unwrap();
 
-        let user = get_user(&user_id).unwrap();
-        assert_eq!(user.email, "new@example.com");
-        assert_eq!(user.name, Some("New User".to_string()));
+            let user = get_user(&user_id).unwrap();
+            assert_eq!(user.email, "new@example.com");
+            assert_eq!(user.name, Some("New User".to_string()));
+        });
     }
 
     #[test]
     fn test_upsert_user_existing() {
-        let _lock = TEST_LOCK.lock().unwrap();
+        let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
+        let rt = get_runtime();
 
-        // First insert
-        let user_id1 = upsert_user(
-            "existing@example.com".to_string(),
-            Some("Existing User".to_string()),
-            "google".to_string(),
-            "google789".to_string(),
-        )
-        .unwrap();
+        rt.block_on(async {
+            // First insert
+            let user_id1 = upsert_user(
+                "existing@example.com".to_string(),
+                Some("Existing User".to_string()),
+                "google".to_string(),
+                "google789".to_string(),
+            )
+            .unwrap();
 
-        // Second insert with same provider credentials
-        let user_id2 = upsert_user(
-            "updated@example.com".to_string(),
-            Some("Updated User".to_string()),
-            "google".to_string(),
-            "google789".to_string(),
-        )
-        .unwrap();
+            // Second insert with same provider credentials
+            let user_id2 = upsert_user(
+                "updated@example.com".to_string(),
+                Some("Updated User".to_string()),
+                "google".to_string(),
+                "google789".to_string(),
+            )
+            .unwrap();
 
-        // Should return the same user ID
-        assert_eq!(user_id1, user_id2);
+            // Should return the same user ID
+            assert_eq!(user_id1, user_id2);
 
-        // User info should be updated
-        let user = get_user(&user_id1).unwrap();
-        assert_eq!(user.email, "updated@example.com");
-        assert_eq!(user.name, Some("Updated User".to_string()));
+            // User info should be updated
+            let user = get_user(&user_id1).unwrap();
+            assert_eq!(user.email, "updated@example.com");
+            assert_eq!(user.name, Some("Updated User".to_string()));
+        });
     }
 
     #[test]
     fn test_role_management() {
-        let _lock = TEST_LOCK.lock().unwrap();
+        let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
+        let rt = get_runtime();
 
-        let user_id = upsert_user(
-            "roles@example.com".to_string(),
-            None,
-            "google".to_string(),
-            "google_roles".to_string(),
-        )
-        .unwrap();
+        rt.block_on(async {
+            let user_id = upsert_user(
+                "roles@example.com".to_string(),
+                None,
+                "google".to_string(),
+                "google_roles".to_string(),
+            )
+            .unwrap();
 
-        // Add Editor role
-        add_user_role(&user_id, UserRole::Editor).unwrap();
-        let user = get_user(&user_id).unwrap();
-        assert!(user.has_role(&UserRole::Editor));
-        assert!(user.has_role(&UserRole::Authenticated));
+            // Add Editor role
+            add_user_role(&user_id, UserRole::Editor).unwrap();
+            let user = get_user(&user_id).unwrap();
+            assert!(user.has_role(&UserRole::Editor));
+            assert!(user.has_role(&UserRole::Authenticated));
 
-        // Add Administrator role
-        add_user_role(&user_id, UserRole::Administrator).unwrap();
-        let user = get_user(&user_id).unwrap();
-        assert!(user.has_role(&UserRole::Administrator));
+            // Add Administrator role
+            add_user_role(&user_id, UserRole::Administrator).unwrap();
+            let user = get_user(&user_id).unwrap();
+            assert!(user.has_role(&UserRole::Administrator));
 
-        // Remove Editor role
-        remove_user_role(&user_id, &UserRole::Editor).unwrap();
-        let user = get_user(&user_id).unwrap();
-        assert!(!user.has_role(&UserRole::Editor));
-        assert!(user.has_role(&UserRole::Administrator));
+            // Remove Editor role
+            remove_user_role(&user_id, &UserRole::Editor).unwrap();
+            let user = get_user(&user_id).unwrap();
+            assert!(!user.has_role(&UserRole::Editor));
+            assert!(user.has_role(&UserRole::Administrator));
+        });
     }
 
     #[test]
@@ -1186,181 +1235,202 @@ mod tests {
 
     #[test]
     fn test_cannot_remove_authenticated_role() {
-        let _lock = TEST_LOCK.lock().unwrap();
+        let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
+        let rt = get_runtime();
 
-        let user_id = upsert_user(
-            "auth@example.com".to_string(),
-            None,
-            "google".to_string(),
-            "google_auth".to_string(),
-        )
-        .unwrap();
+        rt.block_on(async {
+            let user_id = upsert_user(
+                "auth@example.com".to_string(),
+                None,
+                "google".to_string(),
+                "google_auth".to_string(),
+            )
+            .unwrap();
 
-        let result = remove_user_role(&user_id, &UserRole::Authenticated);
-        assert!(result.is_err());
+            let result = remove_user_role(&user_id, &UserRole::Authenticated);
+            assert!(result.is_err());
+        });
     }
 
     #[test]
     fn test_find_user_by_provider() {
-        let _lock = TEST_LOCK.lock().unwrap();
+        let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
+        let rt = get_runtime();
 
-        let user_id = upsert_user(
-            "provider@example.com".to_string(),
-            None,
-            "github".to_string(),
-            "github_provider".to_string(),
-        )
-        .unwrap();
-
-        let found = find_user_by_provider("github", "github_provider")
-            .unwrap()
+        rt.block_on(async {
+            let user_id = upsert_user(
+                "provider@example.com".to_string(),
+                None,
+                "github".to_string(),
+                "github_provider".to_string(),
+            )
             .unwrap();
-        assert_eq!(found.id, user_id);
 
-        let not_found = find_user_by_provider("github", "nonexistent").unwrap();
-        assert!(not_found.is_none());
+            let found = find_user_by_provider("github", "github_provider")
+                .unwrap()
+                .unwrap();
+            assert_eq!(found.id, user_id);
+
+            let not_found = find_user_by_provider("github", "nonexistent").unwrap();
+            assert!(not_found.is_none());
+        });
     }
 
     #[test]
     fn test_update_user_roles() {
-        let _lock = TEST_LOCK.lock().unwrap();
+        let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
+        let rt = get_runtime();
 
-        let user_id = upsert_user(
-            "update@example.com".to_string(),
-            None,
-            "google".to_string(),
-            "google_update".to_string(),
-        )
-        .unwrap();
+        rt.block_on(async {
+            let user_id = upsert_user(
+                "update@example.com".to_string(),
+                None,
+                "google".to_string(),
+                "google_update".to_string(),
+            )
+            .unwrap();
 
-        // Set roles to Editor and Administrator
-        update_user_roles(&user_id, vec![UserRole::Editor, UserRole::Administrator]).unwrap();
+            // Set roles to Editor and Administrator
+            update_user_roles(&user_id, vec![UserRole::Editor, UserRole::Administrator]).unwrap();
 
-        let user = get_user(&user_id).unwrap();
-        assert_eq!(user.roles.len(), 3); // Authenticated is auto-added
-        assert!(user.has_role(&UserRole::Authenticated));
-        assert!(user.has_role(&UserRole::Editor));
-        assert!(user.has_role(&UserRole::Administrator));
+            let user = get_user(&user_id).unwrap();
+            assert_eq!(user.roles.len(), 3); // Authenticated is auto-added
+            assert!(user.has_role(&UserRole::Authenticated));
+            assert!(user.has_role(&UserRole::Editor));
+            assert!(user.has_role(&UserRole::Administrator));
+        });
     }
 
     #[test]
     fn test_delete_user() {
-        let _lock = TEST_LOCK.lock().unwrap();
+        let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
+        let rt = get_runtime();
 
-        let user_id = upsert_user(
-            "delete@example.com".to_string(),
-            None,
-            "google".to_string(),
-            "google_delete".to_string(),
-        )
-        .unwrap();
+        rt.block_on(async {
+            let user_id = upsert_user(
+                "delete@example.com".to_string(),
+                None,
+                "google".to_string(),
+                "google_delete".to_string(),
+            )
+            .unwrap();
 
-        // Verify user exists
-        assert!(get_user(&user_id).is_ok());
+            // Verify user exists
+            assert!(get_user(&user_id).is_ok());
 
-        // Delete user
-        let deleted = delete_user(&user_id).unwrap();
-        assert!(deleted);
+            // Delete user
+            let deleted = delete_user(&user_id).unwrap();
+            assert!(deleted);
 
-        // Verify user is gone
-        assert!(get_user(&user_id).is_err());
+            // Verify user is gone
+            assert!(get_user(&user_id).is_err());
 
-        // Verify provider index is cleaned up
-        let found = find_user_by_provider("google", "google_delete").unwrap();
-        assert!(found.is_none());
+            // Verify provider index is cleaned up
+            let found = find_user_by_provider("google", "google_delete").unwrap();
+            assert!(found.is_none());
+        });
     }
 
     #[test]
     fn test_validation() {
-        // Empty email
-        assert!(
-            upsert_user(
-                "".to_string(),
-                None,
-                "google".to_string(),
-                "user123".to_string()
-            )
-            .is_err()
-        );
+        let rt = get_runtime();
+        rt.block_on(async {
+            // Empty email
+            assert!(
+                upsert_user(
+                    "".to_string(),
+                    None,
+                    "google".to_string(),
+                    "user123".to_string()
+                )
+                .is_err()
+            );
 
-        // Empty provider name
-        assert!(
-            upsert_user(
-                "user@example.com".to_string(),
-                None,
-                "".to_string(),
-                "user123".to_string()
-            )
-            .is_err()
-        );
+            // Empty provider name
+            assert!(
+                upsert_user(
+                    "user@example.com".to_string(),
+                    None,
+                    "".to_string(),
+                    "user123".to_string()
+                )
+                .is_err()
+            );
 
-        // Empty provider user ID
-        assert!(
-            upsert_user(
-                "user@example.com".to_string(),
-                None,
-                "google".to_string(),
-                "".to_string()
-            )
-            .is_err()
-        );
+            // Empty provider user ID
+            assert!(
+                upsert_user(
+                    "user@example.com".to_string(),
+                    None,
+                    "google".to_string(),
+                    "".to_string()
+                )
+                .is_err()
+            );
+        });
     }
 
     #[test]
     fn test_bootstrap_admin() {
-        let _lock = TEST_LOCK.lock().unwrap();
+        let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
+        let rt = get_runtime();
 
-        let bootstrap_admins = vec!["admin@example.com".to_string()];
+        rt.block_on(async {
+            let bootstrap_admins = vec!["admin@example.com".to_string()];
 
-        // Create user with bootstrap admin email
-        let admin_id = upsert_user_with_bootstrap(
-            "admin@example.com".to_string(),
-            Some("Admin User".to_string()),
-            "google".to_string(),
-            "google_admin".to_string(),
-            &bootstrap_admins,
-        )
-        .unwrap();
+            // Create user with bootstrap admin email
+            let admin_id = upsert_user_with_bootstrap(
+                "admin@example.com".to_string(),
+                Some("Admin User".to_string()),
+                "google".to_string(),
+                "google_admin".to_string(),
+                &bootstrap_admins,
+            )
+            .unwrap();
 
-        // User should have Administrator role automatically
-        let admin_user = get_user(&admin_id).unwrap();
-        assert!(admin_user.has_role(&UserRole::Administrator));
-        assert!(admin_user.has_role(&UserRole::Authenticated));
+            // User should have Administrator role automatically
+            let admin_user = get_user(&admin_id).unwrap();
+            assert!(admin_user.has_role(&UserRole::Administrator));
+            assert!(admin_user.has_role(&UserRole::Authenticated));
 
-        // Create regular user (not in bootstrap list)
-        let user_id = upsert_user_with_bootstrap(
-            "regular@example.com".to_string(),
-            Some("Regular User".to_string()),
-            "google".to_string(),
-            "google_regular".to_string(),
-            &bootstrap_admins,
-        )
-        .unwrap();
+            // Create regular user (not in bootstrap list)
+            let user_id = upsert_user_with_bootstrap(
+                "regular@example.com".to_string(),
+                Some("Regular User".to_string()),
+                "google".to_string(),
+                "google_regular".to_string(),
+                &bootstrap_admins,
+            )
+            .unwrap();
 
-        // User should NOT have Administrator role
-        let regular_user = get_user(&user_id).unwrap();
-        assert!(!regular_user.has_role(&UserRole::Administrator));
-        assert!(regular_user.has_role(&UserRole::Authenticated));
+            // User should NOT have Administrator role
+            let regular_user = get_user(&user_id).unwrap();
+            assert!(!regular_user.has_role(&UserRole::Administrator));
+            assert!(regular_user.has_role(&UserRole::Authenticated));
+        });
     }
 
     #[test]
     fn test_bootstrap_admin_case_insensitive() {
-        let _lock = TEST_LOCK.lock().unwrap();
+        let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
+        let rt = get_runtime();
 
-        let bootstrap_admins = vec!["Admin@Example.COM".to_string()];
+        rt.block_on(async {
+            let bootstrap_admins = vec!["Admin@Example.COM".to_string()];
 
-        // Create user with different case
-        let admin_id = upsert_user_with_bootstrap(
-            "admin@example.com".to_string(),
-            Some("Admin User".to_string()),
-            "google".to_string(),
-            "google_admin_case".to_string(),
-            &bootstrap_admins,
-        )
-        .unwrap();
+            // Create user with different case
+            let admin_id = upsert_user_with_bootstrap(
+                "admin@example.com".to_string(),
+                Some("Admin User".to_string()),
+                "google".to_string(),
+                "google_admin_case".to_string(),
+                &bootstrap_admins,
+            )
+            .unwrap();
 
-        // Should still get admin role (case-insensitive comparison)
-        let admin_user = get_user(&admin_id).unwrap();
-        assert!(admin_user.has_role(&UserRole::Administrator));
+            // Should still get admin role (case-insensitive comparison)
+            let admin_user = get_user(&admin_id).unwrap();
+            assert!(admin_user.has_role(&UserRole::Administrator));
+        });
     }
 }

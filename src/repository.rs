@@ -329,8 +329,24 @@ fn safe_lock_privilege_overrides()
 }
 
 /// Get database pool if available
-fn get_db_pool() -> Option<std::sync::Arc<crate::database::Database>> {
-    crate::database::get_global_database()
+pub fn get_db_pool() -> Option<std::sync::Arc<crate::database::Database>> {
+    // If repository is explicitly set to Memory, ignore global database
+    if let Some(UnifiedRepository::Memory(_)) = GLOBAL_REPOSITORY.get() {
+        return None;
+    }
+
+    if let Some(db) = crate::database::get_global_database() {
+        return Some(db);
+    }
+
+    // Fallback: try to get pool from GLOBAL_REPOSITORY if it is Postgres
+    if let Some(UnifiedRepository::Postgres(repo)) = GLOBAL_REPOSITORY.get() {
+        return Some(std::sync::Arc::new(crate::database::Database::from_pool(
+            repo.pool.clone(),
+        )));
+    }
+
+    None
 }
 
 /// Database-backed upsert script
@@ -1889,23 +1905,33 @@ pub fn bootstrap_scripts() -> AppResult<()> {
 
         let result = run_blocking(async {
             for (uri, code) in all_scripts {
+                let mut exists = false;
                 // Check if script already exists
                 if let Ok(Some(_)) = db_get_script(pool, uri).await {
                     debug!("Script already exists in database: {}", uri);
-                    continue;
+                    exists = true;
                 }
 
-                // Insert the script
-                if let Err(e) = db_upsert_script(pool, uri, code).await {
-                    error!("Failed to bootstrap script {}: {}", uri, e);
-                    return Err(e);
-                } else {
-                    info!("Bootstrapped script into database: {}", uri);
+                if !exists {
+                    // Insert the script
+                    if let Err(e) = db_upsert_script(pool, uri, code).await {
+                        error!("Failed to bootstrap script {}: {}", uri, e);
+                        return Err(e);
+                    } else {
+                        info!("Bootstrapped script into database: {}", uri);
+                    }
+                }
+
+                // Ensure privileged flag is set for privileged scripts
+                if PRIVILEGED_BOOTSTRAP_SCRIPTS.contains(&uri) {
                     if let Err(e) = db_set_script_privileged(pool, uri, true).await {
                         warn!(
                             "Failed to flag bootstrapped script {} as privileged: {}",
                             uri, e
                         );
+                        eprintln!("DEBUG: Failed to set privileged flag for {}: {}", uri, e);
+                    } else {
+                        eprintln!("DEBUG: Successfully set privileged flag for {}", uri);
                     }
                 }
             }
@@ -3384,8 +3410,17 @@ pub fn initialize_repository(repo: UnifiedRepository) -> bool {
 
 /// Get the global repository
 pub fn get_repository() -> &'static UnifiedRepository {
-    GLOBAL_REPOSITORY.get_or_init(UnifiedRepository::new_memory)
+    GLOBAL_REPOSITORY.get_or_init(|| {
+        if let Some(db) = crate::database::get_global_database() {
+            UnifiedRepository::Postgres(PostgresRepository::new(db.pool().clone()))
+        } else {
+            UnifiedRepository::new_memory()
+        }
+    })
 }
+
+#[cfg(test)]
+pub static GLOBAL_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 mod tests {
@@ -3410,6 +3445,7 @@ mod tests {
 
     #[test]
     fn test_bootstrap_scripts() {
+        let _lock = GLOBAL_TEST_LOCK.lock().unwrap();
         // Test that bootstrap_scripts doesn't crash when no database is configured
         let result = bootstrap_scripts();
         assert!(
@@ -3583,7 +3619,20 @@ mod tests {
 
     #[test]
     fn test_script_privileged_flag_defaults() {
+        let _lock = GLOBAL_TEST_LOCK.lock().unwrap();
+
+        // Clean up potential pollution from other tests
         let bootstrap_uri = "https://example.com/core";
+        let _ = delete_script(bootstrap_uri);
+
+        // Clear overrides to ensure clean state
+        if let Ok(mut guard) = safe_lock_privilege_overrides() {
+            guard.clear();
+        }
+
+        // Ensure scripts are bootstrapped
+        let _ = bootstrap_scripts();
+
         let bootstrap_profile =
             get_script_security_profile(bootstrap_uri).expect("bootstrap profile available");
         assert!(

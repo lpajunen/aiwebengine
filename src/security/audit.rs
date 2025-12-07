@@ -512,7 +512,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_auditor_logging() {
-        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let pool = sqlx::PgPool::connect_lazy(
+            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+        )
+        .unwrap();
         let auditor = SecurityAuditor::new(pool);
 
         // Test various logging methods

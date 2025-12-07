@@ -33,6 +33,11 @@ pub struct Database {
 }
 
 impl Database {
+    /// Create a new database instance from an existing pool (useful for testing)
+    pub fn from_pool(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
     /// Create a new database connection pool
     pub async fn new(config: &RepositoryConfig) -> Result<Self> {
         let connection_string = config

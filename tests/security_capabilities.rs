@@ -24,6 +24,25 @@ use aiwebengine::security::{
 };
 use std::collections::HashMap;
 use std::time::Duration;
+use tokio::sync::OnceCell;
+
+static INIT: OnceCell<()> = OnceCell::const_new();
+
+async fn setup_env() {
+    INIT.get_or_init(|| async {
+        // Initialize Repository to Memory FIRST
+        aiwebengine::repository::initialize_repository(
+            aiwebengine::repository::UnifiedRepository::new_memory(),
+        );
+
+        // Initialize DB for SecureGlobals
+        let config = aiwebengine::config::AppConfig::test_config_with_port(0);
+        if let Ok(db) = aiwebengine::database::Database::new(&config.repository).await {
+            aiwebengine::database::initialize_global_database(std::sync::Arc::new(db));
+        }
+    })
+    .await;
+}
 
 // Helper function to create a user with specific capabilities
 fn create_user_with_capabilities(user_id: &str, caps: Vec<Capability>) -> UserContext {
@@ -252,7 +271,10 @@ async fn test_asset_upload_enforces_size_limits() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_rate_limiting_blocks_excessive_requests() {
-    let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+    let pool = sqlx::PgPool::connect_lazy(
+        "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+    )
+    .unwrap();
     let limiter = RateLimiter::new(pool);
     let key = RateLimitKey::IpAddress("test_client".to_string());
 
@@ -277,7 +299,10 @@ async fn test_rate_limiting_blocks_excessive_requests() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_rate_limiting_resets_after_window() {
-    let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+    let pool = sqlx::PgPool::connect_lazy(
+        "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+    )
+    .unwrap();
     let limiter = RateLimiter::new(pool);
     let key = RateLimitKey::IpAddress("test_client_reset".to_string());
 
@@ -522,6 +547,7 @@ use aiwebengine::js_engine::{
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_secure_script_execution_authenticated() {
+    setup_env().await;
     // Test with admin user (needs route registration capability)
     let user_context = UserContext::admin("test_admin".to_string());
     let script_content = r#"
@@ -558,6 +584,7 @@ async fn test_secure_script_execution_authenticated() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_secure_script_execution_anonymous() {
+    setup_env().await;
     // Test with anonymous user (limited capabilities)
     let user_context = UserContext::anonymous();
     let script_content = r#"
@@ -579,6 +606,7 @@ async fn test_secure_script_execution_anonymous() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_secure_request_execution() {
+    setup_env().await;
     // First, set up a script with authenticated user
     let user_context = UserContext::authenticated("test_user".to_string());
     let script_content = r#"
@@ -631,6 +659,7 @@ async fn test_secure_request_execution() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_secure_script_validation() {
+    setup_env().await;
     let user_context = UserContext::authenticated("test_user".to_string());
 
     // Test script with potentially dangerous patterns but valid JavaScript
@@ -650,6 +679,7 @@ async fn test_secure_script_validation() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_capability_enforcement() {
+    setup_env().await;
     let user_context = UserContext::anonymous(); // No DeleteScripts capability
 
     let script_content = r#"

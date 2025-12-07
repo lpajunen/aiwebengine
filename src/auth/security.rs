@@ -208,7 +208,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_security_context() {
-        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let pool = sqlx::PgPool::connect_lazy(
+            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+        )
+        .unwrap();
         let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
         let rate_limiter =
             Arc::new(RateLimiter::new(pool.clone()).with_security_auditor(Arc::clone(&auditor)));
@@ -223,7 +226,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_csrf_protection() {
-        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let pool = sqlx::PgPool::connect_lazy(
+            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+        )
+        .unwrap();
         let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
         let rate_limiter =
             Arc::new(RateLimiter::new(pool.clone()).with_security_auditor(Arc::clone(&auditor)));
@@ -244,7 +250,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_oauth_state_validation() {
-        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let pool = sqlx::PgPool::connect_lazy(
+            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+        )
+        .unwrap();
         let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
         let rate_limiter =
             Arc::new(RateLimiter::new(pool.clone()).with_security_auditor(Arc::clone(&auditor)));
@@ -282,7 +291,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_rate_limiting() {
-        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let pool = sqlx::PgPool::connect_lazy(
+            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+        )
+        .unwrap();
         let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
         let rate_limiter =
             Arc::new(RateLimiter::new(pool.clone()).with_security_auditor(Arc::clone(&auditor)));
