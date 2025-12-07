@@ -568,6 +568,7 @@ fn path_has_any_route(path: &str) -> bool {
 async fn initialize_auth_manager(
     auth_config: auth::AuthConfig,
     server_config: &config::ServerConfig,
+    pool: sqlx::PgPool,
 ) -> Result<Arc<auth::AuthManager>, auth::AuthError> {
     use auth::{
         AuthManager, AuthManagerConfig, AuthSecurityContext, AuthSessionManager, CookieSameSite,
@@ -577,10 +578,10 @@ async fn initialize_auth_manager(
     };
 
     // Create security infrastructure
-    let auditor = Arc::new(SecurityAuditor::new());
+    let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
 
     // Create rate limiter
-    let rate_limiter = Arc::new(RateLimiter::new());
+    let rate_limiter = Arc::new(RateLimiter::new(pool.clone()));
 
     // Create CSRF protection with random key
     let csrf_key: [u8; 32] = rand::random();
@@ -592,6 +593,7 @@ async fn initialize_auth_manager(
 
     // Create secure session manager
     let session_manager = Arc::new(SecureSessionManager::new(
+        pool.clone(),
         &encryption_key,
         3600, // 1 hour session lifetime (seconds)
         10,   // max 10 sessions per user
@@ -869,8 +871,11 @@ pub async fn start_server_with_config(
     // Clone the timeout value to avoid borrow checker issues in async closures
     let script_timeout_ms = config.javascript.execution_timeout_ms;
 
+    // Get database pool if available
+    let pool = database::get_global_database().map(|db| db.pool().clone());
+
     // Initialize authentication if configured and enabled
-    let auth_manager = initialize_auth_if_enabled(&config).await;
+    let auth_manager = initialize_auth_if_enabled(&config, pool.clone()).await;
 
     // Determine if auth is enabled
     let auth_enabled = auth_manager.is_some();
@@ -881,6 +886,7 @@ pub async fn start_server_with_config(
         script_timeout_ms,
         auth_enabled,
         auth_manager.as_ref(),
+        pool,
     )
     .await;
 
@@ -899,11 +905,25 @@ pub async fn start_server_with_config(
 }
 
 /// Initialize authentication manager if configured and enabled
-async fn initialize_auth_if_enabled(config: &config::Config) -> Option<Arc<auth::AuthManager>> {
+async fn initialize_auth_if_enabled(
+    config: &config::Config,
+    pool: Option<sqlx::PgPool>,
+) -> Option<Arc<auth::AuthManager>> {
     if let Some(auth_config) = config.auth.clone()
         && auth_config.enabled
     {
         info!("Authentication is enabled, initializing AuthManager...");
+
+        let pool = match pool {
+            Some(p) => p,
+            None => {
+                error!(
+                    "Authentication enabled but database not initialized. Disabling authentication."
+                );
+                return None;
+            }
+        };
+
         debug!(
             "Auth config: enabled={}, providers={:?}",
             auth_config.enabled,
@@ -920,7 +940,7 @@ async fn initialize_auth_if_enabled(config: &config::Config) -> Option<Arc<auth:
             user_repository::set_bootstrap_admins(auth_config.bootstrap_admins.clone());
         }
 
-        match initialize_auth_manager(auth_config, &config.server).await {
+        match initialize_auth_manager(auth_config, &config.server, pool).await {
             Ok(manager) => {
                 info!("AuthManager initialized successfully");
                 Some(manager)
@@ -949,6 +969,7 @@ async fn setup_routes(
     script_timeout_ms: u64,
     auth_enabled: bool,
     auth_manager: Option<&Arc<auth::AuthManager>>,
+    pool: Option<sqlx::PgPool>,
 ) -> Router {
     // GraphQL GET handler - serves GraphiQL (requires authentication when auth is enabled)
     let graphql_get_handler = move |req: axum::http::Request<axum::body::Body>| {
@@ -1702,10 +1723,13 @@ async fn setup_routes(
 
         let registration_manager = Arc::new(auth::ClientRegistrationManager::new(90)); // 90 day secret expiry
 
+        let pool = pool.expect("Database pool required when auth is enabled");
+
         let oauth2_router = auth::create_oauth2_router(
             metadata_config,
             Some(registration_manager),
             Arc::clone(auth_mgr),
+            pool,
         );
         app = app.merge(oauth2_router);
     } else {

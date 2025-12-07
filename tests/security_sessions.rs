@@ -27,8 +27,9 @@ use std::sync::Arc;
 #[tokio::test]
 async fn test_session_lifecycle() {
     let key: [u8; 32] = rand::random();
-    let auditor = Arc::new(SecurityAuditor::new());
-    let manager = SecureSessionManager::new(&key, 3600, 3, auditor).unwrap();
+    let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+    let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
+    let manager = SecureSessionManager::new(pool, &key, 3600, 3, auditor).unwrap();
 
     // Create session
     let params = CreateSessionParams {
@@ -77,8 +78,9 @@ async fn test_session_lifecycle() {
 #[tokio::test]
 async fn test_session_fingerprint_user_agent_mismatch() {
     let key: [u8; 32] = rand::random();
-    let auditor = Arc::new(SecurityAuditor::new());
-    let manager = SecureSessionManager::new(&key, 3600, 3, auditor).unwrap();
+    let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+    let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
+    let manager = SecureSessionManager::new(pool, &key, 3600, 3, auditor).unwrap();
 
     let params = CreateSessionParams {
         user_id: "user123".to_string(),
@@ -105,8 +107,9 @@ async fn test_session_fingerprint_user_agent_mismatch() {
 #[tokio::test]
 async fn test_session_ip_change_tolerance() {
     let key: [u8; 32] = rand::random();
-    let auditor = Arc::new(SecurityAuditor::new());
-    let manager = SecureSessionManager::new(&key, 3600, 3, auditor).unwrap();
+    let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+    let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
+    let manager = SecureSessionManager::new(pool, &key, 3600, 3, auditor).unwrap();
 
     let params = CreateSessionParams {
         user_id: "user123".to_string(),
@@ -135,8 +138,9 @@ async fn test_concurrent_session_limit() {
     // Add timeout to prevent hanging
     let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         let key: [u8; 32] = rand::random();
-        let auditor = Arc::new(SecurityAuditor::new());
-        let manager = SecureSessionManager::new(&key, 3600, 3, auditor).unwrap();
+        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
+        let manager = SecureSessionManager::new(pool, &key, 3600, 3, auditor).unwrap();
 
         // Create 5 sessions (limit is 3)
         for i in 0..5 {
@@ -168,10 +172,11 @@ async fn test_concurrent_session_limit() {
 }
 
 #[tokio::test]
-async fn test_session_encryption_integrity() {
+async fn test_session_encryption() {
     let key: [u8; 32] = rand::random();
-    let auditor = Arc::new(SecurityAuditor::new());
-    let manager = SecureSessionManager::new(&key, 3600, 3, auditor).unwrap();
+    let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+    let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
+    let manager = SecureSessionManager::new(pool, &key, 3600, 3, auditor).unwrap();
 
     // Create session with sensitive data
     let params = CreateSessionParams {
@@ -399,8 +404,10 @@ fn test_password_based_encryption() {
 async fn test_full_auth_flow_simulation() {
     // Setup all components
     let key: [u8; 32] = rand::random();
-    let auditor = Arc::new(SecurityAuditor::new());
-    let session_manager = Arc::new(SecureSessionManager::new(&key, 3600, 3, auditor).unwrap());
+    let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+    let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
+    let session_manager =
+        Arc::new(SecureSessionManager::new(pool, &key, 3600, 3, auditor).unwrap());
     let oauth_state = Arc::new(OAuthStateManager::new(key));
     let encryption = Arc::new(DataEncryption::new(&key));
     let encryptor = FieldEncryptor::new(encryption);
@@ -475,8 +482,10 @@ async fn test_full_auth_flow_simulation() {
 #[tokio::test]
 async fn test_concurrent_users_isolation() {
     let key: [u8; 32] = rand::random();
-    let auditor = Arc::new(SecurityAuditor::new());
-    let session_manager = Arc::new(SecureSessionManager::new(&key, 3600, 5, auditor).unwrap());
+    let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+    let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
+    let session_manager =
+        Arc::new(SecureSessionManager::new(pool, &key, 3600, 5, auditor).unwrap());
 
     // Create sessions for multiple users
     let users = vec!["alice", "bob", "charlie"];

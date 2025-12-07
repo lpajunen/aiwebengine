@@ -10,9 +10,10 @@ use aes_gcm::{
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use std::collections::HashMap;
+use sqlx::PgPool;
+
 use std::sync::Arc;
-use tokio::sync::RwLock;
+
 use tracing::{debug, info, warn};
 
 /// Session-related errors
@@ -129,7 +130,7 @@ impl SessionFingerprint {
 }
 
 /// Encrypted session storage
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct EncryptedSessionData {
     ciphertext: Vec<u8>,
     nonce: [u8; 12],
@@ -154,10 +155,8 @@ impl SessionToken {
 
 /// Secure session manager with encryption and comprehensive security controls
 pub struct SecureSessionManager {
-    /// Encrypted session storage
-    sessions: Arc<RwLock<HashMap<String, EncryptedSessionData>>>,
-    /// User session index for concurrent session tracking
-    user_sessions: Arc<RwLock<HashMap<String, Vec<String>>>>,
+    /// Database pool for session storage
+    pool: PgPool,
     /// Encryption cipher
     cipher: Aes256Gcm,
     /// Maximum concurrent sessions per user
@@ -173,6 +172,7 @@ pub struct SecureSessionManager {
 impl SecureSessionManager {
     /// Create a new secure session manager
     pub fn new(
+        pool: PgPool,
         encryption_key: &[u8; 32],
         session_timeout_seconds: i64,
         max_concurrent_sessions: usize,
@@ -181,8 +181,7 @@ impl SecureSessionManager {
         let cipher = Aes256Gcm::new(encryption_key.into());
 
         Ok(Self {
-            sessions: Arc::new(RwLock::new(HashMap::new())),
-            user_sessions: Arc::new(RwLock::new(HashMap::new())),
+            pool,
             cipher,
             max_concurrent_sessions,
             session_timeout: Duration::seconds(session_timeout_seconds),
@@ -197,28 +196,31 @@ impl SecureSessionManager {
         params: CreateSessionParams,
     ) -> Result<SessionToken, SessionError> {
         let user_id = params.user_id.clone();
-        // Check concurrent session limits and get token to remove if needed
-        let token_to_remove = {
-            let mut user_sessions = self.user_sessions.write().await;
-            let existing_sessions = user_sessions
-                .entry(user_id.clone())
-                .or_insert_with(Vec::new);
 
-            if existing_sessions.len() >= self.max_concurrent_sessions {
-                // Get oldest session token to remove
-                let oldest_token = existing_sessions.first().cloned();
-                if oldest_token.is_some() {
-                    existing_sessions.remove(0);
-                }
-                oldest_token
-            } else {
-                None
-            }
-        }; // Lock is dropped here
+        // Check concurrent session limits
+        let active_sessions_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sessions WHERE user_id = $1 AND expires_at > NOW()",
+        )
+        .bind(&user_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| SessionError::ValidationFailed(format!("Database error: {}", e)))?;
 
-        // Remove the oldest session if needed (without holding the user_sessions lock)
-        if let Some(token) = token_to_remove {
-            self.invalidate_session_internal(&token).await?;
+        if active_sessions_count >= self.max_concurrent_sessions as i64 {
+            // Remove oldest session
+            sqlx::query(
+                "DELETE FROM sessions WHERE id IN (
+                     SELECT id FROM sessions 
+                     WHERE user_id = $1 
+                     ORDER BY created_at ASC 
+                     LIMIT 1
+                 )",
+            )
+            .bind(&user_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| SessionError::ValidationFailed(format!("Database error: {}", e)))?;
+
             warn!(
                 "Removed oldest session for user {} due to concurrent session limit",
                 user_id
@@ -253,19 +255,23 @@ impl SecureSessionManager {
 
         // Encrypt session data
         let encrypted = self.encrypt_session(&session_data)?;
+        let encrypted_json = serde_json::to_value(&encrypted)
+            .map_err(|e| SessionError::EncryptionError(e.to_string()))?;
 
-        // Store encrypted session
-        let mut sessions = self.sessions.write().await;
-        sessions.insert(token.clone(), encrypted);
-        drop(sessions);
-
-        // Track session for user (re-acquire lock separately)
-        let mut user_sessions = self.user_sessions.write().await;
-        user_sessions
-            .entry(user_id.clone())
-            .or_insert_with(Vec::new)
-            .push(token.clone());
-        drop(user_sessions);
+        // Store in database
+        sqlx::query(
+            "INSERT INTO sessions (session_id, user_id, data, created_at, expires_at, last_accessed_at) 
+             VALUES ($1, $2, $3, $4, $5, $6)"
+        )
+        .bind(&token)
+        .bind(&user_id)
+        .bind(encrypted_json)
+        .bind(now)
+        .bind(expires_at)
+        .bind(now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| SessionError::ValidationFailed(format!("Database error: {}", e)))?;
 
         // Audit log
         self.auditor
@@ -296,18 +302,18 @@ impl SecureSessionManager {
         user_agent: &str,
     ) -> Result<SessionData, SessionError> {
         // Retrieve encrypted session
-        let sessions = self.sessions.read().await;
-        let encrypted = sessions
-            .get(token)
-            .ok_or(SessionError::SessionNotFound)?
-            .clone();
-        drop(sessions);
+        let row: (serde_json::Value, DateTime<Utc>) =
+            sqlx::query_as("SELECT data, expires_at FROM sessions WHERE session_id = $1")
+                .bind(token)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| SessionError::ValidationFailed(format!("Database error: {}", e)))?
+                .ok_or(SessionError::SessionNotFound)?;
 
-        // Decrypt session data
-        let mut session_data = self.decrypt_session(&encrypted)?;
+        let (encrypted_json, expires_at) = row;
 
         // Check expiration
-        if Utc::now() > session_data.expires_at {
+        if expires_at < Utc::now() {
             self.invalidate_session(token).await?;
 
             self.auditor
@@ -315,7 +321,7 @@ impl SecureSessionManager {
                     SecurityEvent::new(
                         SecurityEventType::AuthenticationFailure,
                         SecuritySeverity::Low,
-                        Some(session_data.user_id.clone()),
+                        None,
                     )
                     .with_error("Session expired".to_string()),
                 )
@@ -323,6 +329,12 @@ impl SecureSessionManager {
 
             return Err(SessionError::SessionExpired);
         }
+
+        let encrypted: EncryptedSessionData = serde_json::from_value(encrypted_json)
+            .map_err(|e| SessionError::ValidationFailed(format!("Data corruption: {}", e)))?;
+
+        // Decrypt session data
+        let mut session_data = self.decrypt_session(&encrypted)?;
 
         // Validate fingerprint
         if !session_data.fingerprint.validate(ip_addr, user_agent) {
@@ -359,8 +371,17 @@ impl SecureSessionManager {
 
         // Re-encrypt and update session
         let encrypted = self.encrypt_session(&session_data)?;
-        let mut sessions = self.sessions.write().await;
-        sessions.insert(token.to_string(), encrypted);
+        let encrypted_json = serde_json::to_value(&encrypted)
+            .map_err(|e| SessionError::EncryptionError(e.to_string()))?;
+
+        sqlx::query(
+            "UPDATE sessions SET data = $1, last_accessed_at = NOW() WHERE session_id = $2",
+        )
+        .bind(encrypted_json)
+        .bind(token)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| SessionError::ValidationFailed(format!("Database error: {}", e)))?;
 
         debug!("Validated session for user {}", session_data.user_id);
 
@@ -441,36 +462,38 @@ impl SecureSessionManager {
     }
 
     async fn invalidate_session_internal(&self, token: &str) -> Result<(), SessionError> {
+        // Get user_id before deleting for logging
+        let user_id: Option<String> =
+            sqlx::query_scalar("SELECT user_id FROM sessions WHERE session_id = $1")
+                .bind(token)
+                .fetch_optional(&self.pool)
+                .await
+                .unwrap_or(None);
+
         // Remove session
-        let mut sessions = self.sessions.write().await;
-        let encrypted = sessions
-            .remove(token)
-            .ok_or(SessionError::SessionNotFound)?;
-        drop(sessions);
+        let result = sqlx::query("DELETE FROM sessions WHERE session_id = $1")
+            .bind(token)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| SessionError::ValidationFailed(format!("Database error: {}", e)))?;
 
-        // Decrypt to get user_id for cleanup
-        if let Ok(session_data) = self.decrypt_session(&encrypted) {
-            // Remove from user sessions index
-            let mut user_sessions = self.user_sessions.write().await;
-            if let Some(user_tokens) = user_sessions.get_mut(&session_data.user_id) {
-                user_tokens.retain(|t| t != token);
-                if user_tokens.is_empty() {
-                    user_sessions.remove(&session_data.user_id);
-                }
-            }
+        if result.rows_affected() == 0 {
+            return Err(SessionError::SessionNotFound);
+        }
 
+        if let Some(uid) = user_id {
             self.auditor
                 .log_event(
                     SecurityEvent::new(
                         SecurityEventType::SystemSecurityEvent,
                         SecuritySeverity::Low,
-                        Some(session_data.user_id.clone()),
+                        Some(uid.clone()),
                     )
                     .with_action("logout".to_string()),
                 )
                 .await;
 
-            info!("Invalidated session for user {}", session_data.user_id);
+            info!("Invalidated session for user {}", uid);
         }
 
         Ok(())
@@ -478,38 +501,36 @@ impl SecureSessionManager {
 
     /// Cleanup expired sessions
     pub async fn cleanup_expired_sessions(&self) -> usize {
-        let now = Utc::now();
-        let mut sessions = self.sessions.write().await;
-        let mut expired_tokens = Vec::new();
+        let result = sqlx::query("DELETE FROM sessions WHERE expires_at < NOW()")
+            .execute(&self.pool)
+            .await;
 
-        // Find expired sessions
-        for (token, encrypted) in sessions.iter() {
-            if let Ok(session_data) = self.decrypt_session(encrypted)
-                && now > session_data.expires_at
-            {
-                expired_tokens.push(token.clone());
+        match result {
+            Ok(res) => {
+                let count = res.rows_affected() as usize;
+                if count > 0 {
+                    info!("Cleaned up {} expired sessions", count);
+                }
+                count
+            }
+            Err(e) => {
+                warn!("Failed to cleanup expired sessions: {}", e);
+                0
             }
         }
-
-        // Remove expired sessions
-        let count = expired_tokens.len();
-        for token in expired_tokens {
-            sessions.remove(&token);
-        }
-
-        drop(sessions);
-
-        if count > 0 {
-            info!("Cleaned up {} expired sessions", count);
-        }
-
-        count
     }
 
     /// Get active session count for a user
     pub async fn get_user_session_count(&self, user_id: &str) -> usize {
-        let user_sessions = self.user_sessions.read().await;
-        user_sessions.get(user_id).map(|v| v.len()).unwrap_or(0)
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sessions WHERE user_id = $1 AND expires_at > NOW()",
+        )
+        .bind(user_id)
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or(0);
+
+        count as usize
     }
 
     /// Encrypt session data
@@ -564,12 +585,14 @@ mod tests {
     use super::*;
 
     fn create_test_auditor() -> Arc<SecurityAuditor> {
-        Arc::new(SecurityAuditor::new())
+        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        Arc::new(SecurityAuditor::new(pool))
     }
 
     fn create_test_manager() -> SecureSessionManager {
         let key: [u8; 32] = rand::random();
-        SecureSessionManager::new(&key, 3600, 3, create_test_auditor()).unwrap()
+        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        SecureSessionManager::new(pool, &key, 3600, 3, create_test_auditor()).unwrap()
     }
 
     #[tokio::test]

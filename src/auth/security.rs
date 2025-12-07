@@ -208,8 +208,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_security_context() {
-        let auditor = Arc::new(SecurityAuditor::new());
-        let rate_limiter = Arc::new(RateLimiter::new().with_security_auditor(Arc::clone(&auditor)));
+        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
+        let rate_limiter =
+            Arc::new(RateLimiter::new(pool.clone()).with_security_auditor(Arc::clone(&auditor)));
         let csrf_key: [u8; 32] = *b"test-csrf-secret-key-32-bytes!!!";
         let csrf = Arc::new(CsrfProtection::new(csrf_key, 3600));
         let encryption_key: [u8; 32] = *b"test-encryption-key-32-bytes!!!!";
@@ -220,9 +222,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_oauth_state_creation() {
-        let auditor = Arc::new(SecurityAuditor::new());
-        let rate_limiter = Arc::new(RateLimiter::new().with_security_auditor(Arc::clone(&auditor)));
+    async fn test_csrf_protection() {
+        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
+        let rate_limiter =
+            Arc::new(RateLimiter::new(pool.clone()).with_security_auditor(Arc::clone(&auditor)));
         let csrf_key: [u8; 32] = *b"test-csrf-secret-key-32-bytes!!!";
         let csrf = Arc::new(CsrfProtection::new(csrf_key, 3600));
         let encryption_key: [u8; 32] = *b"test-encryption-key-32-bytes!!!!";
@@ -240,8 +244,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_oauth_state_validation() {
-        let auditor = Arc::new(SecurityAuditor::new());
-        let rate_limiter = Arc::new(RateLimiter::new().with_security_auditor(Arc::clone(&auditor)));
+        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
+        let rate_limiter =
+            Arc::new(RateLimiter::new(pool.clone()).with_security_auditor(Arc::clone(&auditor)));
         let csrf_key: [u8; 32] = *b"test-csrf-secret-key-32-bytes!!!";
         let csrf = Arc::new(CsrfProtection::new(csrf_key, 3600));
         let encryption_key: [u8; 32] = *b"test-encryption-key-32-bytes!!!!";
@@ -276,8 +282,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_rate_limiting() {
-        let auditor = Arc::new(SecurityAuditor::new());
-        let rate_limiter = Arc::new(RateLimiter::new().with_security_auditor(Arc::clone(&auditor)));
+        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
+        let rate_limiter =
+            Arc::new(RateLimiter::new(pool.clone()).with_security_auditor(Arc::clone(&auditor)));
         let csrf_key: [u8; 32] = *b"test-csrf-secret-key-32-bytes!!!";
         let csrf = Arc::new(CsrfProtection::new(csrf_key, 3600));
         let encryption_key: [u8; 32] = *b"test-encryption-key-32-bytes!!!!";

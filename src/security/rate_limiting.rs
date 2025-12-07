@@ -5,7 +5,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+
 use tracing::{debug, info, warn};
 
 use crate::security::{
@@ -162,10 +162,12 @@ pub struct RateLimitResult {
     pub config: RateLimitConfig,
 }
 
+use sqlx::{PgPool, Row};
+
 /// Rate limiter with multiple bucket types
 pub struct RateLimiter {
-    /// Token buckets by key
-    buckets: Arc<RwLock<HashMap<RateLimitKey, TokenBucket>>>,
+    /// Database pool
+    pool: PgPool,
     /// Configuration by key type
     configs: HashMap<String, RateLimitConfig>,
     /// Default configuration
@@ -177,7 +179,7 @@ pub struct RateLimiter {
 }
 
 impl RateLimiter {
-    pub fn new() -> Self {
+    pub fn new(pool: PgPool) -> Self {
         let mut configs = HashMap::new();
 
         // Per-IP rate limiting (stricter)
@@ -217,7 +219,7 @@ impl RateLimiter {
         );
 
         Self {
-            buckets: Arc::new(RwLock::new(HashMap::new())),
+            pool,
             configs,
             default_config: RateLimitConfig::default(),
             threat_detector: None,
@@ -240,6 +242,7 @@ impl RateLimiter {
     /// Check rate limit for a key
     pub async fn check_rate_limit(&self, key: RateLimitKey, tokens: u32) -> RateLimitResult {
         let config = self.get_config(&key);
+        let key_str = key.as_string();
 
         if !config.enabled {
             return RateLimitResult {
@@ -252,19 +255,16 @@ impl RateLimiter {
             };
         }
 
-        let mut buckets = self.buckets.write().await;
-        let bucket = buckets
-            .entry(key.clone())
-            .or_insert_with(|| TokenBucket::new(config.max_tokens, config.refill_rate));
-
-        let allowed = bucket.consume(tokens);
-        let remaining_tokens = bucket.available_tokens();
-
-        let retry_after = if !allowed {
-            Some(tokens as f64 / config.refill_rate)
-        } else {
-            None
-        };
+        // Database operations
+        let (allowed, remaining_tokens, retry_after) =
+            match self.process_rate_limit(&key_str, tokens, &config).await {
+                Ok(result) => result,
+                Err(e) => {
+                    warn!("Rate limit DB error: {}", e);
+                    // Fail open
+                    (true, config.max_tokens as f64, None)
+                }
+            };
 
         let result = RateLimitResult {
             allowed,
@@ -284,6 +284,79 @@ impl RateLimiter {
         }
 
         result
+    }
+
+    async fn process_rate_limit(
+        &self,
+        key: &str,
+        tokens: u32,
+        config: &RateLimitConfig,
+    ) -> Result<(bool, f64, Option<f64>), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+
+        let row = sqlx::query(
+            "SELECT tokens, last_refill, total_requests, rejected_requests FROM rate_limits WHERE key = $1 FOR UPDATE"
+        )
+        .bind(key)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let (mut current_tokens, last_refill, mut total_requests, mut rejected_requests) =
+            if let Some(row) = row {
+                let tokens: f64 = row.get("tokens");
+                let last_refill: DateTime<Utc> = row.get("last_refill");
+                let total: i64 = row.get("total_requests");
+                let rejected: i64 = row.get("rejected_requests");
+                (tokens, last_refill, total, rejected)
+            } else {
+                (config.max_tokens as f64, Utc::now(), 0i64, 0i64)
+            };
+
+        // Refill logic
+        let now = Utc::now();
+        let elapsed = now.signed_duration_since(last_refill);
+        let elapsed_seconds = elapsed.num_milliseconds() as f64 / 1000.0;
+
+        if elapsed_seconds > 0.0 {
+            let tokens_to_add = elapsed_seconds * config.refill_rate;
+            current_tokens = (current_tokens + tokens_to_add).min(config.max_tokens as f64);
+        }
+
+        // Consume logic
+        let allowed = if current_tokens >= tokens as f64 {
+            current_tokens -= tokens as f64;
+            true
+        } else {
+            rejected_requests += 1;
+            false
+        };
+
+        total_requests += 1;
+
+        // Update DB
+        sqlx::query(
+            "INSERT INTO rate_limits (key, tokens, last_refill, total_requests, rejected_requests)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (key) DO UPDATE SET
+             tokens = $2, last_refill = $3, total_requests = $4, rejected_requests = $5",
+        )
+        .bind(key)
+        .bind(current_tokens)
+        .bind(now)
+        .bind(total_requests)
+        .bind(rejected_requests)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        let retry_after = if !allowed {
+            Some(tokens as f64 / config.refill_rate)
+        } else {
+            None
+        };
+
+        Ok((allowed, current_tokens, retry_after))
     }
 
     /// Get configuration for a key
@@ -392,27 +465,48 @@ impl RateLimiter {
 
     /// Get statistics for all buckets
     pub async fn get_statistics(&self) -> HashMap<String, (u64, u64, f64)> {
-        let buckets = self.buckets.read().await;
+        let rows = sqlx::query("SELECT key, total_requests, rejected_requests FROM rate_limits")
+            .fetch_all(&self.pool)
+            .await
+            .unwrap_or_default();
+
         let mut stats = HashMap::new();
 
-        for (key, bucket) in buckets.iter() {
-            stats.insert(key.as_string(), bucket.stats());
+        for row in rows {
+            let key: String = row.get("key");
+            let total: i64 = row.get("total_requests");
+            let rejected: i64 = row.get("rejected_requests");
+
+            let success_rate = if total > 0 {
+                ((total - rejected) as f64 / total as f64) * 100.0
+            } else {
+                100.0
+            };
+
+            stats.insert(key, (total as u64, rejected as u64, success_rate));
         }
 
         stats
     }
-
     /// Clean up old buckets
     pub async fn cleanup_old_buckets(&self, max_age: Duration) {
-        let mut buckets = self.buckets.write().await;
         let cutoff = Utc::now() - max_age;
-        let initial_count = buckets.len();
 
-        buckets.retain(|_, bucket| bucket.last_refill > cutoff);
+        let result = sqlx::query("DELETE FROM rate_limits WHERE last_refill < $1")
+            .bind(cutoff)
+            .execute(&self.pool)
+            .await;
 
-        let removed_count = initial_count - buckets.len();
-        if removed_count > 0 {
-            info!("Cleaned up {} old rate limit buckets", removed_count);
+        match result {
+            Ok(res) => {
+                let count = res.rows_affected();
+                if count > 0 {
+                    info!("Cleaned up {} old rate limit buckets", count);
+                }
+            }
+            Err(e) => {
+                warn!("Failed to cleanup old rate limit buckets: {}", e);
+            }
         }
     }
 
@@ -441,12 +535,6 @@ impl RateLimiter {
         let results = self.check_multiple_rate_limits(keys, tokens).await;
         let rate_limited = results.iter().any(|r| !r.allowed);
         (rate_limited, results)
-    }
-}
-
-impl Default for RateLimiter {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -504,7 +592,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_rate_limiter_basic() {
-        let limiter = RateLimiter::new();
+        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let limiter = RateLimiter::new(pool);
         let key = RateLimitKey::IpAddress("192.168.1.1".to_string());
 
         let result = limiter.check_rate_limit(key.clone(), 1).await;
@@ -514,8 +603,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_rate_limiter_exceed_limit() {
-        let limiter = RateLimiter::new();
-        let key = RateLimitKey::IpAddress("192.168.1.1".to_string());
+        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let limiter = RateLimiter::new(pool);
+        let key = RateLimitKey::IpAddress("192.168.1.2".to_string());
 
         // Consume all tokens (IP config has 60 max tokens)
         for _ in 0..60 {
@@ -531,7 +621,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_multiple_rate_limits() {
-        let limiter = RateLimiter::new();
+        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let limiter = RateLimiter::new(pool);
         let keys = vec![
             RateLimitKey::IpAddress("192.168.1.1".to_string()),
             RateLimitKey::UserId("user123".to_string()),
@@ -545,7 +636,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_rate_limiter_statistics() {
-        let limiter = RateLimiter::new();
+        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let limiter = RateLimiter::new(pool);
         let key = RateLimitKey::IpAddress("192.168.1.1".to_string());
 
         // Make some requests
@@ -564,7 +656,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_disabled_rate_limiting() {
-        let mut limiter = RateLimiter::new();
+        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let mut limiter = RateLimiter::new(pool);
 
         // Disable IP rate limiting
         let config = RateLimitConfig {

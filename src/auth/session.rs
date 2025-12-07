@@ -161,10 +161,12 @@ mod tests {
     use crate::security::SecurityAuditor;
 
     async fn create_test_manager() -> AuthSessionManager {
-        let auditor = Arc::new(SecurityAuditor::new());
+        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
         let encryption_key: [u8; 32] = *b"test-encryption-key-32-bytes!!!!";
         let session_manager =
-            SecureSessionManager::new(&encryption_key, 3600, 10, Arc::clone(&auditor)).unwrap();
+            SecureSessionManager::new(pool, &encryption_key, 10, 3600, Arc::clone(&auditor))
+                .unwrap();
         let session_manager = Arc::new(session_manager);
 
         AuthSessionManager::new(session_manager)

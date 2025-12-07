@@ -475,19 +475,27 @@ mod tests {
 
     async fn create_test_manager() -> AuthManager {
         let config = AuthManagerConfig::default();
+        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
 
         // Create security infrastructure
-        let auditor = Arc::new(SecurityAuditor::new());
-        let rate_limiter = Arc::new(RateLimiter::new().with_security_auditor(Arc::clone(&auditor)));
+        let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
+        let rate_limiter =
+            Arc::new(RateLimiter::new(pool.clone()).with_security_auditor(Arc::clone(&auditor)));
         let threat_config = ThreatDetectionConfig::default();
-        let _threat_detector = Arc::new(ThreatDetector::new(threat_config));
+        let _threat_detector = Arc::new(ThreatDetector::new(pool.clone(), threat_config));
         let csrf_key: [u8; 32] = *b"test-csrf-secret-key-32-bytes!!!";
         let csrf = Arc::new(CsrfProtection::new(csrf_key, 3600));
         let encryption_key: [u8; 32] = *b"test-encryption-key-32-bytes!!!!";
         let encryption = Arc::new(DataEncryption::new(&encryption_key));
 
-        let session_mgr =
-            SecureSessionManager::new(&encryption_key, 3600, 10, Arc::clone(&auditor)).unwrap();
+        let session_mgr = SecureSessionManager::new(
+            pool.clone(),
+            &encryption_key,
+            10,
+            3600,
+            Arc::clone(&auditor),
+        )
+        .unwrap();
         let session_mgr = Arc::new(session_mgr);
 
         let auth_session_mgr = Arc::new(AuthSessionManager::new(session_mgr));

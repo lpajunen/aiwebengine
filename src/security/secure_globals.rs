@@ -56,20 +56,30 @@ impl Default for GlobalSecurityConfig {
 
 impl SecureGlobalContext {
     pub fn new(user_context: UserContext) -> Self {
+        let pool = crate::database::get_global_database()
+            .expect("Database not initialized")
+            .pool()
+            .clone();
+
         Self {
             user_context,
             secure_ops: SecureOperations::new(),
-            auditor: SecurityAuditor::new(),
+            auditor: SecurityAuditor::new(pool),
             config: GlobalSecurityConfig::default(),
             secrets_manager: None,
         }
     }
 
     pub fn new_with_config(user_context: UserContext, config: GlobalSecurityConfig) -> Self {
+        let pool = crate::database::get_global_database()
+            .expect("Database not initialized")
+            .pool()
+            .clone();
+
         Self {
             user_context,
             secure_ops: SecureOperations::new(),
-            auditor: SecurityAuditor::new(),
+            auditor: SecurityAuditor::new(pool),
             config,
             secrets_manager: None,
         }
@@ -80,10 +90,15 @@ impl SecureGlobalContext {
         config: GlobalSecurityConfig,
         secrets_manager: Arc<SecretsManager>,
     ) -> Self {
+        let pool = crate::database::get_global_database()
+            .expect("Database not initialized")
+            .pool()
+            .clone();
+
         Self {
             user_context,
             secure_ops: SecureOperations::new(),
-            auditor: SecurityAuditor::new(),
+            auditor: SecurityAuditor::new(pool),
             config,
             secrets_manager: Some(secrets_manager),
         }

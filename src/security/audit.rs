@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
 use std::collections::HashMap;
 use tracing::{error, info, warn};
 
@@ -101,9 +102,9 @@ pub struct SecurityAuditor {
 }
 
 impl SecurityAuditor {
-    pub fn new() -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self {
-            threat_detector: ThreatDetector::with_default_config(),
+            threat_detector: ThreatDetector::with_default_config(pool),
         }
     }
 
@@ -114,7 +115,7 @@ impl SecurityAuditor {
     /// Log a security event with enhanced threat analysis
     pub async fn log_event(&self, event: SecurityEvent) {
         // Perform threat analysis
-        let threat_assessment = self.threat_detector.analyze_event(&event);
+        let threat_assessment = self.threat_detector.analyze_event(&event).await;
 
         // Log based on original severity and threat assessment
         let effective_severity =
@@ -378,13 +379,13 @@ impl SecurityAuditor {
     }
 
     /// Get threat statistics for monitoring
-    pub fn get_threat_statistics(&self) -> super::threat_detection::ThreatStatistics {
-        self.threat_detector.get_threat_statistics()
+    pub async fn get_threat_statistics(&self) -> super::threat_detection::ThreatStatistics {
+        self.threat_detector.get_threat_statistics().await
     }
 
     /// Cleanup old threat data
-    pub fn cleanup_old_data(&self) {
-        self.threat_detector.cleanup_old_data();
+    pub async fn cleanup_old_data(&self) {
+        self.threat_detector.cleanup_old_data().await;
     }
 
     /// Log suspicious activity
@@ -441,12 +442,6 @@ impl SecurityAuditor {
             "CRITICAL SECURITY ALERT: {}",
             event.error_message.as_deref().unwrap_or("Unknown critical event")
         );
-    }
-}
-
-impl Default for SecurityAuditor {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -517,7 +512,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_auditor_logging() {
-        let auditor = SecurityAuditor::new();
+        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let auditor = SecurityAuditor::new(pool);
 
         // Test various logging methods
         auditor

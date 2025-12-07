@@ -16,9 +16,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 
 /// OAuth2 callback parameters
@@ -52,8 +50,10 @@ pub struct LogoutParams {
     redirect: Option<String>,
 }
 
+use sqlx::PgPool;
+
 /// Authorization code data stored temporarily
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 struct AuthorizationCodeData {
     user_id: String,
     #[allow(dead_code)] // Stored for future validation
@@ -67,23 +67,16 @@ struct AuthorizationCodeData {
     used: bool,
 }
 
-/// In-memory authorization code store
-/// In production, this should be stored in Redis or database
-type AuthCodeStore = Arc<RwLock<HashMap<String, AuthorizationCodeData>>>;
-
 /// OAuth2 shared state for protocol endpoints
 #[derive(Clone)]
 pub struct OAuth2State {
     auth_manager: Arc<AuthManager>,
-    code_store: AuthCodeStore,
+    pool: PgPool,
 }
 
 impl OAuth2State {
-    pub fn new(auth_manager: Arc<AuthManager>) -> Self {
-        Self {
-            auth_manager,
-            code_store: Arc::new(RwLock::new(HashMap::new())),
-        }
+    pub fn new(auth_manager: Arc<AuthManager>, pool: PgPool) -> Self {
+        Self { auth_manager, pool }
     }
 }
 
@@ -559,25 +552,37 @@ async fn oauth2_authorize(
     let auth_code = format!("code_{}", uuid::Uuid::new_v4());
 
     // Store the authorization code with associated data
-    let code_data = AuthorizationCodeData {
-        user_id,
-        client_id: params.client_id.clone(),
-        redirect_uri: params.redirect_uri.clone().unwrap_or_default(),
-        code_challenge: params.code_challenge.clone(),
-        code_challenge_method: params.code_challenge_method.clone(),
-        scope: params.scope.clone(),
-        resource: params.resource.clone(),
-        expires_at: Utc::now() + chrono::Duration::minutes(10), // 10 minute expiry
-        used: false,
-    };
+    let expires_at = Utc::now() + chrono::Duration::minutes(10); // 10 minute expiry
 
-    if let Ok(mut store) = oauth2_state.code_store.write() {
-        store.insert(auth_code.clone(), code_data);
-        tracing::info!(
-            "Stored authorization code for user: {}",
-            auth_user.as_ref().unwrap().user_id
-        );
+    let result = sqlx::query(
+        "INSERT INTO oauth_authorization_codes (code, user_id, client_id, redirect_uri, code_challenge, code_challenge_method, scope, resource, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
+    )
+    .bind(&auth_code)
+    .bind(&user_id)
+    .bind(&params.client_id)
+    .bind(params.redirect_uri.clone().unwrap_or_default())
+    .bind(&params.code_challenge)
+    .bind(&params.code_challenge_method)
+    .bind(&params.scope)
+    .bind(&params.resource)
+    .bind(expires_at)
+    .execute(&oauth2_state.pool)
+    .await;
+
+    if let Err(e) = result {
+        tracing::error!("Failed to store authorization code: {}", e);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "server_error".to_string(),
+                message: "Failed to generate authorization code".to_string(),
+            }),
+        )
+            .into_response();
     }
+
+    tracing::info!("Stored authorization code for user: {}", user_id);
 
     // Build redirect URI with code
     let redirect_uri = match params.redirect_uri.as_ref() {
@@ -732,59 +737,83 @@ async fn oauth2_token(
     tracing::info!("Exchanging code: {}", code);
 
     // Retrieve and validate the authorization code
-    let code_data = {
-        let mut store = match oauth2_state.code_store.write() {
-            Ok(s) => s,
-            Err(_) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: "server_error".to_string(),
-                        message: "Failed to access code store".to_string(),
-                    }),
-                )
-                    .into_response();
-            }
-        };
-
-        match store.get_mut(code) {
-            Some(data) if !data.used && data.expires_at > Utc::now() => {
-                // Mark code as used
-                data.used = true;
-                data.clone()
-            }
-            Some(data) if data.used => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(ErrorResponse {
-                        error: "invalid_grant".to_string(),
-                        message: "Authorization code has already been used".to_string(),
-                    }),
-                )
-                    .into_response();
-            }
-            Some(_) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(ErrorResponse {
-                        error: "invalid_grant".to_string(),
-                        message: "Authorization code has expired".to_string(),
-                    }),
-                )
-                    .into_response();
-            }
-            None => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(ErrorResponse {
-                        error: "invalid_grant".to_string(),
-                        message: "Invalid authorization code".to_string(),
-                    }),
-                )
-                    .into_response();
-            }
+    let mut tx = match oauth2_state.pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            tracing::error!("Database error: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "server_error".to_string(),
+                    message: "Database error".to_string(),
+                }),
+            )
+                .into_response();
         }
     };
+
+    let code_data_opt: Option<AuthorizationCodeData> =
+        sqlx::query_as("SELECT * FROM oauth_authorization_codes WHERE code = $1 FOR UPDATE")
+            .bind(code)
+            .fetch_optional(&mut *tx)
+            .await
+            .unwrap_or(None);
+
+    let code_data = match code_data_opt {
+        Some(data) if !data.used && data.expires_at > Utc::now() => {
+            // Mark code as used
+            let _ = sqlx::query("UPDATE oauth_authorization_codes SET used = TRUE WHERE code = $1")
+                .bind(code)
+                .execute(&mut *tx)
+                .await;
+            data
+        }
+        Some(data) if data.used => {
+            let _ = tx.rollback().await;
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "invalid_grant".to_string(),
+                    message: "Authorization code has already been used".to_string(),
+                }),
+            )
+                .into_response();
+        }
+        Some(_) => {
+            let _ = tx.rollback().await;
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "invalid_grant".to_string(),
+                    message: "Authorization code has expired".to_string(),
+                }),
+            )
+                .into_response();
+        }
+        None => {
+            let _ = tx.rollback().await;
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "invalid_grant".to_string(),
+                    message: "Invalid authorization code".to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    if let Err(e) = tx.commit().await {
+        tracing::error!("Database commit error: {}", e);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "server_error".to_string(),
+                message: "Database error".to_string(),
+            }),
+        )
+            .into_response();
+    }
 
     // Verify redirect_uri matches
     if let Some(ref redirect_uri) = params.redirect_uri
@@ -936,6 +965,7 @@ pub fn create_oauth2_router(
     metadata_config: Arc<MetadataConfig>,
     registration_manager: Option<Arc<ClientRegistrationManager>>,
     auth_manager: Arc<AuthManager>,
+    pool: PgPool,
 ) -> Router {
     let metadata_router = Router::new()
         .route(
@@ -963,7 +993,7 @@ pub fn create_oauth2_router(
         ])
         .allow_headers(Any);
 
-    let oauth2_state = OAuth2State::new(auth_manager);
+    let oauth2_state = OAuth2State::new(auth_manager, pool);
 
     let oauth2_protocol_router = Router::new()
         .route("/oauth2/authorize", get(oauth2_authorize))

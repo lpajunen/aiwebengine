@@ -252,7 +252,8 @@ async fn test_asset_upload_enforces_size_limits() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_rate_limiting_blocks_excessive_requests() {
-    let limiter = RateLimiter::new();
+    let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+    let limiter = RateLimiter::new(pool);
     let key = RateLimitKey::IpAddress("test_client".to_string());
 
     // IP limits are 1 token per second with max 60
@@ -276,7 +277,8 @@ async fn test_rate_limiting_blocks_excessive_requests() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_rate_limiting_resets_after_window() {
-    let limiter = RateLimiter::new();
+    let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+    let limiter = RateLimiter::new(pool);
     let key = RateLimitKey::IpAddress("test_client_reset".to_string());
 
     // Use up many tokens quickly

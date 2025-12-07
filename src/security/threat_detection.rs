@@ -1,26 +1,17 @@
 use chrono::{DateTime, Duration, Timelike, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, RwLock};
+use std::collections::HashMap;
 use tracing::warn;
 
 use super::{SecurityEvent, SecurityEventType};
 
+use sqlx::PgPool;
+
 /// Threat detection and anomaly analysis system
 #[derive(Clone)]
 pub struct ThreatDetector {
-    /// Failed authentication attempts by IP
-    failed_auth_attempts: Arc<RwLock<HashMap<String, VecDeque<DateTime<Utc>>>>>,
-    /// Failed authorization attempts by user
-    failed_authz_attempts: Arc<RwLock<HashMap<String, VecDeque<DateTime<Utc>>>>>,
-    /// Suspicious activity patterns by IP
-    suspicious_activity: Arc<RwLock<HashMap<String, VecDeque<SuspiciousActivity>>>>,
-    /// Geographic anomaly tracking (TODO: implement geo-location features)
-    #[allow(dead_code)]
-    geo_anomalies: Arc<RwLock<HashMap<String, Vec<GeoLocation>>>>,
-    /// Rate limiting violations (TODO: integrate with rate limiter)
-    #[allow(dead_code)]
-    rate_limit_violations: Arc<RwLock<HashMap<String, VecDeque<DateTime<Utc>>>>>,
+    /// Database pool
+    pool: PgPool,
     /// Configuration for threat detection
     config: ThreatDetectionConfig,
 }
@@ -118,45 +109,38 @@ pub struct ThreatIndicator {
 }
 
 impl ThreatDetector {
-    pub fn new(config: ThreatDetectionConfig) -> Self {
-        Self {
-            failed_auth_attempts: Arc::new(RwLock::new(HashMap::new())),
-            failed_authz_attempts: Arc::new(RwLock::new(HashMap::new())),
-            suspicious_activity: Arc::new(RwLock::new(HashMap::new())),
-            geo_anomalies: Arc::new(RwLock::new(HashMap::new())),
-            rate_limit_violations: Arc::new(RwLock::new(HashMap::new())),
-            config,
-        }
+    pub fn new(pool: PgPool, config: ThreatDetectionConfig) -> Self {
+        Self { pool, config }
     }
 
-    pub fn with_default_config() -> Self {
-        Self::new(ThreatDetectionConfig::default())
+    pub fn with_default_config(pool: PgPool) -> Self {
+        Self::new(pool, ThreatDetectionConfig::default())
     }
 
     /// Analyze a security event for threats and anomalies
-    pub fn analyze_event(&self, event: &SecurityEvent) -> ThreatAssessment {
+    pub async fn analyze_event(&self, event: &SecurityEvent) -> ThreatAssessment {
         let mut threat_indicators = Vec::new();
 
         match event.event_type {
             SecurityEventType::AuthenticationFailure => {
                 if let Some(ip) = &event.ip_address {
-                    threat_indicators.extend(self.analyze_authentication_failure(ip));
+                    threat_indicators.extend(self.analyze_authentication_failure(ip).await);
                 }
             }
             SecurityEventType::AuthorizationFailure => {
                 if let Some(user_id) = &event.user_id {
-                    threat_indicators.extend(self.analyze_authorization_failure(user_id));
+                    threat_indicators.extend(self.analyze_authorization_failure(user_id).await);
                 }
             }
             SecurityEventType::InputValidationFailure => {
-                threat_indicators.extend(self.analyze_input_validation_failure(event));
+                threat_indicators.extend(self.analyze_input_validation_failure(event).await);
             }
             SecurityEventType::SuspiciousActivity => {
-                threat_indicators.extend(self.analyze_suspicious_activity(event));
+                threat_indicators.extend(self.analyze_suspicious_activity(event).await);
             }
             _ => {
                 // Basic analysis for other event types
-                threat_indicators.extend(self.analyze_general_activity(event));
+                threat_indicators.extend(self.analyze_general_activity(event).await);
             }
         }
 
@@ -181,102 +165,108 @@ impl ThreatDetector {
     }
 
     /// Analyze failed authentication attempts for brute force patterns
-    fn analyze_authentication_failure(&self, ip_address: &str) -> Vec<ThreatIndicator> {
+    async fn analyze_authentication_failure(&self, ip_address: &str) -> Vec<ThreatIndicator> {
         let mut indicators = Vec::new();
+        let now = Utc::now();
+        let cutoff = now - Duration::minutes(self.config.auth_failure_window_minutes);
 
-        if let Ok(mut attempts) = self.failed_auth_attempts.write() {
-            let entry = attempts
-                .entry(ip_address.to_string())
-                .or_insert_with(VecDeque::new);
-            let now = Utc::now();
+        // Record failure
+        let _ = sqlx::query(
+            "INSERT INTO failed_auth_attempts (identifier, attempt_time, type) VALUES ($1, $2, 'authentication')"
+        )
+        .bind(ip_address)
+        .bind(now)
+        .execute(&self.pool)
+        .await;
 
-            // Add current attempt
-            entry.push_back(now);
+        // Count recent failures
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM failed_auth_attempts WHERE identifier = $1 AND type = 'authentication' AND attempt_time > $2"
+        )
+        .bind(ip_address)
+        .bind(cutoff)
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or(0);
 
-            // Clean old attempts outside the window
-            let cutoff = now - Duration::minutes(self.config.auth_failure_window_minutes);
-            while let Some(&front_time) = entry.front() {
-                if front_time < cutoff {
-                    entry.pop_front();
-                } else {
-                    break;
-                }
-            }
+        if count as usize >= self.config.max_failed_auth_attempts {
+            indicators.push(ThreatIndicator {
+                indicator_type: "brute_force_authentication".to_string(),
+                severity: 80.0,
+                description: format!(
+                    "Potential brute force attack: {} failed authentication attempts from {} in {} minutes",
+                    count,
+                    ip_address,
+                    self.config.auth_failure_window_minutes
+                ),
+                evidence: vec![
+                    format!("IP: {}", ip_address),
+                    format!("Failed attempts: {}", count),
+                    format!("Time window: {} minutes", self.config.auth_failure_window_minutes),
+                ],
+            });
 
-            // Check if we exceed the threshold
-            if entry.len() >= self.config.max_failed_auth_attempts {
-                indicators.push(ThreatIndicator {
-                    indicator_type: "brute_force_authentication".to_string(),
-                    severity: 80.0,
-                    description: format!(
-                        "Potential brute force attack: {} failed authentication attempts from {} in {} minutes",
-                        entry.len(),
-                        ip_address,
-                        self.config.auth_failure_window_minutes
-                    ),
-                    evidence: vec![
-                        format!("IP: {}", ip_address),
-                        format!("Failed attempts: {}", entry.len()),
-                        format!("Time window: {} minutes", self.config.auth_failure_window_minutes),
-                    ],
-                });
-
-                warn!(
-                    ip_address = %ip_address,
-                    failed_attempts = entry.len(),
-                    "Potential brute force attack detected"
-                );
-            }
+            warn!(
+                ip_address = %ip_address,
+                failed_attempts = count,
+                "Potential brute force attack detected"
+            );
         }
 
         indicators
     }
 
     /// Analyze failed authorization attempts for privilege escalation
-    fn analyze_authorization_failure(&self, user_id: &str) -> Vec<ThreatIndicator> {
+    async fn analyze_authorization_failure(&self, user_id: &str) -> Vec<ThreatIndicator> {
         let mut indicators = Vec::new();
+        let now = Utc::now();
+        let cutoff = now - Duration::minutes(self.config.authz_failure_window_minutes);
 
-        if let Ok(mut attempts) = self.failed_authz_attempts.write() {
-            let entry = attempts
-                .entry(user_id.to_string())
-                .or_insert_with(VecDeque::new);
-            let now = Utc::now();
+        // Record failure
+        let _ = sqlx::query(
+            "INSERT INTO failed_auth_attempts (identifier, attempt_time, type) VALUES ($1, $2, 'authorization')"
+        )
+        .bind(user_id)
+        .bind(now)
+        .execute(&self.pool)
+        .await;
 
-            entry.push_back(now);
+        // Count recent failures
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM failed_auth_attempts WHERE identifier = $1 AND type = 'authorization' AND attempt_time > $2"
+        )
+        .bind(user_id)
+        .bind(cutoff)
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or(0);
 
-            // Clean old attempts
-            let cutoff = now - Duration::minutes(self.config.authz_failure_window_minutes);
-            while let Some(&front_time) = entry.front() {
-                if front_time < cutoff {
-                    entry.pop_front();
-                } else {
-                    break;
-                }
-            }
-
-            if entry.len() >= self.config.max_failed_authz_attempts {
-                indicators.push(ThreatIndicator {
-                    indicator_type: "privilege_escalation_attempt".to_string(),
-                    severity: 70.0,
-                    description: format!(
-                        "Potential privilege escalation: {} failed authorization attempts by user {} in {} minutes",
-                        entry.len(),
-                        user_id,
-                        self.config.authz_failure_window_minutes
-                    ),
-                    evidence: vec![
-                        format!("User ID: {}", user_id),
-                        format!("Failed authz attempts: {}", entry.len()),
-                    ],
-                });
-            }
+        if count as usize >= self.config.max_failed_authz_attempts {
+            indicators.push(ThreatIndicator {
+                indicator_type: "privilege_escalation_attempt".to_string(),
+                severity: 70.0,
+                description: format!(
+                    "Potential privilege escalation: {} failed authorization attempts by user {} in {} minutes",
+                    count,
+                    user_id,
+                    self.config.authz_failure_window_minutes
+                ),
+                evidence: vec![
+                    format!("User ID: {}", user_id),
+                    format!("Failed attempts: {}", count),
+                    format!("Time window: {} minutes", self.config.authz_failure_window_minutes),
+                ],
+            });
         }
 
         indicators
     }
 
     /// Analyze input validation failures for injection attempts
-    fn analyze_input_validation_failure(&self, event: &SecurityEvent) -> Vec<ThreatIndicator> {
+    async fn analyze_input_validation_failure(
+        &self,
+        event: &SecurityEvent,
+    ) -> Vec<ThreatIndicator> {
         let mut indicators = Vec::new();
 
         if let Some(error_msg) = &event.error_message {
@@ -338,7 +328,7 @@ impl ThreatDetector {
     }
 
     /// Analyze suspicious activity patterns
-    fn analyze_suspicious_activity(&self, event: &SecurityEvent) -> Vec<ThreatIndicator> {
+    async fn analyze_suspicious_activity(&self, event: &SecurityEvent) -> Vec<ThreatIndicator> {
         let mut indicators = Vec::new();
 
         // Check for unusual time patterns
@@ -377,7 +367,7 @@ impl ThreatDetector {
     }
 
     /// General activity analysis
-    fn analyze_general_activity(&self, event: &SecurityEvent) -> Vec<ThreatIndicator> {
+    async fn analyze_general_activity(&self, event: &SecurityEvent) -> Vec<ThreatIndicator> {
         let mut indicators = Vec::new();
 
         // Check for rapid sequential requests from same IP
@@ -460,67 +450,55 @@ impl ThreatDetector {
     }
 
     /// Get threat statistics for monitoring dashboard
-    pub fn get_threat_statistics(&self) -> ThreatStatistics {
-        let auth_failures = self
-            .failed_auth_attempts
-            .read()
-            .map(|attempts| attempts.len())
-            .unwrap_or(0);
+    pub async fn get_threat_statistics(&self) -> ThreatStatistics {
+        let auth_failures: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM failed_auth_attempts WHERE type = 'authentication'",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or(0);
 
-        let authz_failures = self
-            .failed_authz_attempts
-            .read()
-            .map(|attempts| attempts.len())
-            .unwrap_or(0);
+        let authz_failures: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM failed_auth_attempts WHERE type = 'authorization'",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or(0);
 
-        let suspicious_ips = self
-            .suspicious_activity
-            .read()
-            .map(|activity| activity.len())
-            .unwrap_or(0);
+        let suspicious_ips: i64 =
+            sqlx::query_scalar("SELECT COUNT(DISTINCT identifier) FROM suspicious_activity")
+                .fetch_one(&self.pool)
+                .await
+                .unwrap_or(0);
 
         ThreatStatistics {
-            active_threats: auth_failures + authz_failures,
-            monitored_ips: suspicious_ips,
-            auth_failure_count: auth_failures,
-            authz_failure_count: authz_failures,
+            active_threats: (auth_failures + authz_failures) as usize,
+            monitored_ips: suspicious_ips as usize,
+            auth_failure_count: auth_failures as usize,
+            authz_failure_count: authz_failures as usize,
             last_updated: Utc::now(),
         }
     }
 
     /// Clean up old threat data to prevent memory leaks
-    pub fn cleanup_old_data(&self) {
+    pub async fn cleanup_old_data(&self) {
         let now = Utc::now();
         let auth_cutoff = now - Duration::minutes(self.config.auth_failure_window_minutes * 2);
         let authz_cutoff = now - Duration::minutes(self.config.authz_failure_window_minutes * 2);
 
-        // Clean old authentication failures
-        if let Ok(mut attempts) = self.failed_auth_attempts.write() {
-            attempts.retain(|_, queue| {
-                while let Some(&front_time) = queue.front() {
-                    if front_time < auth_cutoff {
-                        queue.pop_front();
-                    } else {
-                        break;
-                    }
-                }
-                !queue.is_empty()
-            });
-        }
+        let _ = sqlx::query(
+            "DELETE FROM failed_auth_attempts WHERE type = 'authentication' AND attempt_time < $1",
+        )
+        .bind(auth_cutoff)
+        .execute(&self.pool)
+        .await;
 
-        // Clean old authorization failures
-        if let Ok(mut attempts) = self.failed_authz_attempts.write() {
-            attempts.retain(|_, queue| {
-                while let Some(&front_time) = queue.front() {
-                    if front_time < authz_cutoff {
-                        queue.pop_front();
-                    } else {
-                        break;
-                    }
-                }
-                !queue.is_empty()
-            });
-        }
+        let _ = sqlx::query(
+            "DELETE FROM failed_auth_attempts WHERE type = 'authorization' AND attempt_time < $1",
+        )
+        .bind(authz_cutoff)
+        .execute(&self.pool)
+        .await;
     }
 }
 
@@ -533,27 +511,23 @@ pub struct ThreatStatistics {
     pub last_updated: DateTime<Utc>,
 }
 
-impl Default for ThreatDetector {
-    fn default() -> Self {
-        Self::with_default_config()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::security::SecuritySeverity;
 
-    #[test]
-    fn test_threat_detector_creation() {
-        let detector = ThreatDetector::with_default_config();
-        let stats = detector.get_threat_statistics();
+    #[tokio::test]
+    async fn test_threat_detector_creation() {
+        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let detector = ThreatDetector::with_default_config(pool);
+        let stats = detector.get_threat_statistics().await;
         assert_eq!(stats.active_threats, 0);
     }
 
-    #[test]
-    fn test_brute_force_detection() {
-        let detector = ThreatDetector::with_default_config();
+    #[tokio::test]
+    async fn test_brute_force_detection() {
+        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let detector = ThreatDetector::with_default_config(pool);
 
         // Simulate multiple failed auth attempts
         for _ in 0..6 {
@@ -564,7 +538,7 @@ mod tests {
             )
             .with_request_context(None, Some("192.168.1.100".to_string()));
 
-            let assessment = detector.analyze_event(&event);
+            let assessment = detector.analyze_event(&event).await;
 
             // After 5+ attempts, should detect brute force
             if let ThreatLevel::High = assessment.threat_level {
@@ -579,9 +553,10 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_sql_injection_detection() {
-        let detector = ThreatDetector::with_default_config();
+    #[tokio::test]
+    async fn test_sql_injection_detection() {
+        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let detector = ThreatDetector::with_default_config(pool);
 
         let event = SecurityEvent::new(
             SecurityEventType::InputValidationFailure,
@@ -590,7 +565,7 @@ mod tests {
         )
         .with_error("SQL injection attempt: UNION SELECT * FROM users".to_string());
 
-        let assessment = detector.analyze_event(&event);
+        let assessment = detector.analyze_event(&event).await;
 
         assert!(
             assessment
@@ -601,9 +576,10 @@ mod tests {
         assert!(assessment.confidence_score > 50.0);
     }
 
-    #[test]
-    fn test_threat_level_calculation() {
-        let detector = ThreatDetector::with_default_config();
+    #[tokio::test]
+    async fn test_threat_level_calculation() {
+        let pool = sqlx::PgPool::connect_lazy("postgres://localhost/dummy").unwrap();
+        let detector = ThreatDetector::with_default_config(pool);
 
         // Test different confidence scores
         assert!(matches!(
