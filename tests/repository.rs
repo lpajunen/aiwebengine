@@ -17,8 +17,28 @@ use tracing::info;
 // Script Repository Tests
 // ============================================================================
 
-#[test]
-fn test_dynamic_script_lifecycle() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_dynamic_script_lifecycle_memory() {
+    test_dynamic_script_lifecycle("memory").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_dynamic_script_lifecycle_postgres() {
+    // Skip if no database connection
+    if std::env::var("DATABASE_URL").is_err() {
+        return;
+    }
+    test_dynamic_script_lifecycle("postgresql").await;
+}
+
+async fn test_dynamic_script_lifecycle(storage_type: &str) {
+    let context = TestContext::new();
+    let port = context
+        .start_server_with_storage(storage_type)
+        .await
+        .expect("Server failed to start");
+    wait_for_server(port, 20).await.expect("Server not ready");
+
     // Verify initial static scripts exist
     let scripts = repository::fetch_scripts();
     assert!(scripts.contains_key("https://example.com/core"));
@@ -42,10 +62,31 @@ fn test_dynamic_script_lifecycle() {
 
     let scripts = repository::fetch_scripts();
     assert!(!scripts.contains_key("https://example.com/dyn"));
+
+    context.cleanup().await.expect("Failed to cleanup");
 }
 
-#[test]
-fn test_upsert_overwrites_existing_script() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_upsert_overwrites_existing_script_memory() {
+    test_upsert_overwrites_existing_script("memory").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_upsert_overwrites_existing_script_postgres() {
+    if std::env::var("DATABASE_URL").is_err() {
+        return;
+    }
+    test_upsert_overwrites_existing_script("postgresql").await;
+}
+
+async fn test_upsert_overwrites_existing_script(storage_type: &str) {
+    let context = TestContext::new();
+    let port = context
+        .start_server_with_storage(storage_type)
+        .await
+        .expect("Server failed to start");
+    wait_for_server(port, 20).await.expect("Server not ready");
+
     let uri = "https://example.com/dyn2";
     let content_v1 =
         "routeRegistry.registerRoute('/dyn2', (req) => ({ status: 200, body: 'v1' }));";
@@ -65,24 +106,47 @@ fn test_upsert_overwrites_existing_script() {
 
     // Cleanup
     let _ = repository::delete_script(uri);
+    context.cleanup().await.expect("Failed to cleanup");
 }
 
 // ============================================================================
 // Log Message Repository Tests
 // ============================================================================
 
-#[test]
-fn test_insert_and_list_log_messages() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_insert_and_list_log_messages_memory() {
+    test_insert_and_list_log_messages("memory").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_insert_and_list_log_messages_postgres() {
+    if std::env::var("DATABASE_URL").is_err() {
+        return;
+    }
+    test_insert_and_list_log_messages("postgresql").await;
+}
+
+async fn test_insert_and_list_log_messages(storage_type: &str) {
+    let context = TestContext::new();
+    let port = context
+        .start_server_with_storage(storage_type)
+        .await
+        .expect("Server failed to start");
+    wait_for_server(port, 20).await.expect("Server not ready");
+
     // Use a unique URI for this test to avoid interference from other tests
-    let test_uri = "test_insert_and_list_log_messages";
+    let test_uri = format!("test_insert_and_list_log_messages_{}", storage_type);
+
+    // Clear any existing logs for this URI
+    let _ = repository::clear_log_messages(&test_uri);
 
     // Record starting length so test is robust to previous state
-    let start = repository::fetch_log_messages(test_uri).len();
+    let start = repository::fetch_log_messages(&test_uri).len();
 
-    repository::insert_log_message(test_uri, "log-one", "INFO");
-    repository::insert_log_message(test_uri, "log-two", "INFO");
+    repository::insert_log_message(&test_uri, "log-one", "INFO");
+    repository::insert_log_message(&test_uri, "log-two", "INFO");
 
-    let msgs = repository::fetch_log_messages(test_uri);
+    let msgs = repository::fetch_log_messages(&test_uri);
     assert!(
         msgs.len() >= start + 2,
         "expected at least two new messages"
@@ -91,20 +155,44 @@ fn test_insert_and_list_log_messages() {
     let last = &msgs[msgs.len() - 2..];
     assert_eq!(last[0].message, "log-one");
     assert_eq!(last[1].message, "log-two");
+
+    context.cleanup().await.expect("Failed to cleanup");
 }
 
-#[test]
-fn test_prune_keeps_latest_20_logs() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_prune_keeps_latest_20_logs_memory() {
+    test_prune_keeps_latest_20_logs("memory").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_prune_keeps_latest_20_logs_postgres() {
+    if std::env::var("DATABASE_URL").is_err() {
+        return;
+    }
+    test_prune_keeps_latest_20_logs("postgresql").await;
+}
+
+async fn test_prune_keeps_latest_20_logs(storage_type: &str) {
+    let context = TestContext::new();
+    let port = context
+        .start_server_with_storage(storage_type)
+        .await
+        .expect("Server failed to start");
+    wait_for_server(port, 20).await.expect("Server not ready");
+
     // Use a unique URI for this test to avoid interference from other tests
-    let test_uri = "test_prune_keeps_latest_20_logs";
+    let test_uri = format!("test_prune_keeps_latest_20_logs_{}", storage_type);
+
+    // Clear any existing logs for this URI
+    let _ = repository::clear_log_messages(&test_uri);
 
     // Insert 25 distinct messages
     for i in 0..25 {
-        repository::insert_log_message(test_uri, &format!("prune-test-{}", i), "INFO");
+        repository::insert_log_message(&test_uri, &format!("prune-test-{}", i), "INFO");
     }
 
     let _ = repository::prune_log_messages();
-    let msgs = repository::fetch_log_messages(test_uri);
+    let msgs = repository::fetch_log_messages(&test_uri);
     assert!(msgs.len() <= 20, "prune should keep at most 20 messages");
 
     // Ensure the latest message is the last one we inserted
@@ -116,14 +204,35 @@ fn test_prune_keeps_latest_20_logs() {
     } else {
         panic!("no messages after prune");
     }
+
+    context.cleanup().await.expect("Failed to cleanup");
 }
 
 // ============================================================================
 // Asset Repository Tests
 // ============================================================================
 
-#[test]
-fn test_asset_management() {
+#[tokio::test(flavor = "multi_thread")]
+async fn test_asset_management_memory() {
+    test_asset_management("memory").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_asset_management_postgres() {
+    if std::env::var("DATABASE_URL").is_err() {
+        return;
+    }
+    test_asset_management("postgresql").await;
+}
+
+async fn test_asset_management(storage_type: &str) {
+    let context = TestContext::new();
+    let port = context
+        .start_server_with_storage(storage_type)
+        .await
+        .expect("Server failed to start");
+    wait_for_server(port, 20).await.expect("Server not ready");
+
     // Test static asset
     let asset = repository::fetch_asset("logo.svg");
     assert!(asset.is_some());
@@ -163,6 +272,8 @@ fn test_asset_management() {
     // Verify it's gone
     let fetched_after_delete = repository::fetch_asset("test.txt");
     assert!(fetched_after_delete.is_none());
+
+    context.cleanup().await.expect("Failed to cleanup");
 }
 
 // ============================================================================

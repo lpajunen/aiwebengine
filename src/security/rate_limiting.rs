@@ -624,11 +624,9 @@ mod tests {
         let limiter = RateLimiter::new(pool);
         let key = RateLimitKey::IpAddress("192.168.1.2".to_string());
 
-        // Consume all tokens (IP config has 60 max tokens)
-        // Consume slightly more to account for potential refills during test execution
-        for _ in 0..65 {
-            let _ = limiter.check_rate_limit(key.clone(), 1).await;
-        }
+        // Consume all tokens at once (IP config has 60 max tokens)
+        let result = limiter.check_rate_limit(key.clone(), 60).await;
+        assert!(result.allowed);
 
         // Next request should be denied
         let result = limiter.check_rate_limit(key.clone(), 1).await;

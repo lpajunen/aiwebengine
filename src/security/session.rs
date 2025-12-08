@@ -589,7 +589,7 @@ mod tests {
             "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
         )
         .unwrap();
-        Arc::new(SecurityAuditor::new(pool))
+        Arc::new(SecurityAuditor::new(Some(pool)))
     }
 
     fn create_test_manager() -> SecureSessionManager {

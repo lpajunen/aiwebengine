@@ -102,7 +102,7 @@ pub struct SecurityAuditor {
 }
 
 impl SecurityAuditor {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: Option<PgPool>) -> Self {
         Self {
             threat_detector: ThreatDetector::with_default_config(pool),
         }
@@ -516,7 +516,7 @@ mod tests {
             "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
         )
         .unwrap();
-        let auditor = SecurityAuditor::new(pool);
+        let auditor = SecurityAuditor::new(Some(pool));
 
         // Test various logging methods
         auditor

@@ -212,7 +212,7 @@ mod tests {
             "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
         )
         .unwrap();
-        let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
+        let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
         let rate_limiter =
             Arc::new(RateLimiter::new(pool.clone()).with_security_auditor(Arc::clone(&auditor)));
         let csrf_key: [u8; 32] = *b"test-csrf-secret-key-32-bytes!!!";
@@ -230,7 +230,7 @@ mod tests {
             "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
         )
         .unwrap();
-        let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
+        let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
         let rate_limiter =
             Arc::new(RateLimiter::new(pool.clone()).with_security_auditor(Arc::clone(&auditor)));
         let csrf_key: [u8; 32] = *b"test-csrf-secret-key-32-bytes!!!";
@@ -254,7 +254,7 @@ mod tests {
             "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
         )
         .unwrap();
-        let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
+        let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
         let rate_limiter =
             Arc::new(RateLimiter::new(pool.clone()).with_security_auditor(Arc::clone(&auditor)));
         let csrf_key: [u8; 32] = *b"test-csrf-secret-key-32-bytes!!!";
@@ -295,7 +295,7 @@ mod tests {
             "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
         )
         .unwrap();
-        let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
+        let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
         let rate_limiter =
             Arc::new(RateLimiter::new(pool.clone()).with_security_auditor(Arc::clone(&auditor)));
         let csrf_key: [u8; 32] = *b"test-csrf-secret-key-32-bytes!!!";

@@ -459,10 +459,19 @@ impl AppConfig {
     }
 
     /// Create a test configuration with a specific port
+    /// Defaults to in-memory storage for fast, isolated testing
     pub fn test_config_with_port(port: u16) -> Self {
         let mut config = Self::default();
         config.server.port = port;
-        // Use Postgres for tests
+        config.repository.storage_type = "memory".to_string();
+        config.repository.connection_string = None;
+        config
+    }
+
+    /// Create a test configuration using PostgreSQL
+    /// Requires a running database
+    pub fn test_config_postgres(port: u16) -> Self {
+        let mut config = Self::test_config_with_port(port);
         config.repository.storage_type = "postgresql".to_string();
         config.repository.connection_string =
             Some("postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine".to_string());

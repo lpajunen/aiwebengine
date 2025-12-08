@@ -165,7 +165,7 @@ mod tests {
             "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
         )
         .unwrap();
-        let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
+        let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
         let encryption_key: [u8; 32] = *b"test-encryption-key-32-bytes!!!!";
         let session_manager =
             SecureSessionManager::new(pool, &encryption_key, 10, 3600, Arc::clone(&auditor))

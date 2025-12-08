@@ -1148,7 +1148,7 @@ async fn db_fetch_log_messages(pool: &PgPool, script_uri: &str) -> AppResult<Vec
         r#"
         SELECT message, log_level, created_at FROM logs
         WHERE script_uri = $1
-        ORDER BY created_at DESC
+        ORDER BY created_at ASC
         "#,
     )
     .bind(script_uri)

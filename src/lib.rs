@@ -185,13 +185,30 @@ async fn initialize_database_and_repository(config: &config::Config) -> AppResul
         config.repository.storage_type
     );
 
+    // Handle memory storage explicitly - no database connection needed
+    if config.repository.storage_type == "memory" {
+        info!("Initializing in-memory repository (no database connection required)");
+        let repo = repository::UnifiedRepository::new_memory();
+        if repository::initialize_repository(repo) {
+            info!("Global repository initialized with Memory");
+        } else {
+            warn!("Global repository was already initialized");
+        }
+        return Ok(());
+    }
+
+    // For non-memory storage, we require a connection string
     if let Some(ref conn_str) = config.repository.connection_string {
         let safe_conn_str = sanitize_connection_string(conn_str);
         info!("Repository config - connection_string: {}", safe_conn_str);
     } else {
-        warn!("Repository config - connection_string: None (not set!)");
+        return Err(AppError::ConfigValidation {
+            field: "repository.connection_string".to_string(),
+            reason: "Connection string is required for non-memory storage".to_string(),
+        });
     }
 
+    // Attempt to initialize database
     match database::init_database(
         &config.repository,
         config.repository.storage_type == "postgresql",
@@ -215,30 +232,14 @@ async fn initialize_database_and_repository(config: &config::Config) -> AppResul
             }
         }
         Err(e) => {
-            // Only fail if we're trying to use PostgreSQL storage
-            if config.repository.storage_type == "postgresql" {
-                return Err(AppError::Database {
-                    message: format!(
-                        "Database initialization failed: {}. Cannot continue with PostgreSQL storage.",
-                        e
-                    ),
-                    source: None,
-                });
-            } else {
-                warn!(
-                    "Database initialization failed: {}. Continuing without database (using {} storage).",
+            // Strict failure: Do not fallback to memory if database fails
+            return Err(AppError::Database {
+                message: format!(
+                    "Database initialization failed: {}. Fatal error for storage_type '{}'.",
                     e, config.repository.storage_type
-                );
-                warn!("Health checks will report database as unavailable");
-
-                // Initialize UnifiedRepository with Memory
-                let repo = repository::UnifiedRepository::new_memory();
-                if repository::initialize_repository(repo) {
-                    info!("Global repository initialized with Memory");
-                } else {
-                    warn!("Global repository was already initialized");
-                }
-            }
+                ),
+                source: None,
+            });
         }
     }
 
@@ -578,7 +579,7 @@ async fn initialize_auth_manager(
     };
 
     // Create security infrastructure
-    let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
+    let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
 
     // Create rate limiter
     let rate_limiter = Arc::new(RateLimiter::new(pool.clone()));

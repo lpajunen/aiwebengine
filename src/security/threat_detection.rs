@@ -10,8 +10,8 @@ use sqlx::PgPool;
 /// Threat detection and anomaly analysis system
 #[derive(Clone)]
 pub struct ThreatDetector {
-    /// Database pool
-    pool: PgPool,
+    /// Database pool (optional for memory-only mode)
+    pool: Option<PgPool>,
     /// Configuration for threat detection
     config: ThreatDetectionConfig,
 }
@@ -109,17 +109,29 @@ pub struct ThreatIndicator {
 }
 
 impl ThreatDetector {
-    pub fn new(pool: PgPool, config: ThreatDetectionConfig) -> Self {
+    pub fn new(pool: Option<PgPool>, config: ThreatDetectionConfig) -> Self {
         Self { pool, config }
     }
 
-    pub fn with_default_config(pool: PgPool) -> Self {
+    pub fn with_default_config(pool: Option<PgPool>) -> Self {
         Self::new(pool, ThreatDetectionConfig::default())
     }
 
     /// Analyze a security event for threats and anomalies
     pub async fn analyze_event(&self, event: &SecurityEvent) -> ThreatAssessment {
         let mut threat_indicators = Vec::new();
+
+        // If no database, we can only do stateless analysis
+        if self.pool.is_none() {
+            // Perform basic stateless analysis
+            threat_indicators.extend(self.analyze_input_validation_failure(event).await);
+            if event.event_type == SecurityEventType::SuspiciousActivity {
+                threat_indicators.extend(self.analyze_suspicious_activity(event).await);
+            }
+
+            // Return early with limited assessment
+            return self.create_assessment(threat_indicators);
+        }
 
         match event.event_type {
             SecurityEventType::AuthenticationFailure => {
@@ -145,28 +157,18 @@ impl ThreatDetector {
         }
 
         // Calculate overall confidence score
-        let confidence_score = threat_indicators
-            .iter()
-            .map(|indicator| indicator.severity)
-            .sum::<f64>()
-            / threat_indicators.len().max(1) as f64;
-
-        let threat_level = self.determine_threat_level(confidence_score);
-        let recommended_actions =
-            self.generate_recommended_actions(&threat_level, &threat_indicators);
-
-        ThreatAssessment {
-            threat_level,
-            confidence_score,
-            threat_indicators,
-            recommended_actions,
-            assessment_timestamp: Utc::now(),
-        }
+        self.create_assessment(threat_indicators)
     }
 
     /// Analyze failed authentication attempts for brute force patterns
     async fn analyze_authentication_failure(&self, ip_address: &str) -> Vec<ThreatIndicator> {
         let mut indicators = Vec::new();
+
+        let pool = match &self.pool {
+            Some(p) => p,
+            None => return indicators,
+        };
+
         let now = Utc::now();
         let cutoff = now - Duration::minutes(self.config.auth_failure_window_minutes);
 
@@ -176,7 +178,7 @@ impl ThreatDetector {
         )
         .bind(ip_address)
         .bind(now)
-        .execute(&self.pool)
+        .execute(pool)
         .await;
 
         // Count recent failures
@@ -185,7 +187,7 @@ impl ThreatDetector {
         )
         .bind(ip_address)
         .bind(cutoff)
-        .fetch_one(&self.pool)
+        .fetch_one(pool)
         .await
         .unwrap_or(0);
 
@@ -219,6 +221,12 @@ impl ThreatDetector {
     /// Analyze failed authorization attempts for privilege escalation
     async fn analyze_authorization_failure(&self, user_id: &str) -> Vec<ThreatIndicator> {
         let mut indicators = Vec::new();
+
+        let pool = match &self.pool {
+            Some(p) => p,
+            None => return indicators,
+        };
+
         let now = Utc::now();
         let cutoff = now - Duration::minutes(self.config.authz_failure_window_minutes);
 
@@ -228,7 +236,7 @@ impl ThreatDetector {
         )
         .bind(user_id)
         .bind(now)
-        .execute(&self.pool)
+        .execute(pool)
         .await;
 
         // Count recent failures
@@ -237,7 +245,7 @@ impl ThreatDetector {
         )
         .bind(user_id)
         .bind(cutoff)
-        .fetch_one(&self.pool)
+        .fetch_one(pool)
         .await
         .unwrap_or(0);
 
@@ -451,23 +459,36 @@ impl ThreatDetector {
 
     /// Get threat statistics for monitoring dashboard
     pub async fn get_threat_statistics(&self) -> ThreatStatistics {
+        let pool = match &self.pool {
+            Some(p) => p,
+            None => {
+                return ThreatStatistics {
+                    active_threats: 0,
+                    monitored_ips: 0,
+                    auth_failure_count: 0,
+                    authz_failure_count: 0,
+                    last_updated: Utc::now(),
+                };
+            }
+        };
+
         let auth_failures: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM failed_auth_attempts WHERE type = 'authentication'",
         )
-        .fetch_one(&self.pool)
+        .fetch_one(pool)
         .await
         .unwrap_or(0);
 
         let authz_failures: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM failed_auth_attempts WHERE type = 'authorization'",
         )
-        .fetch_one(&self.pool)
+        .fetch_one(pool)
         .await
         .unwrap_or(0);
 
         let suspicious_ips: i64 =
             sqlx::query_scalar("SELECT COUNT(DISTINCT identifier) FROM suspicious_activity")
-                .fetch_one(&self.pool)
+                .fetch_one(pool)
                 .await
                 .unwrap_or(0);
 
@@ -482,6 +503,11 @@ impl ThreatDetector {
 
     /// Clean up old threat data to prevent memory leaks
     pub async fn cleanup_old_data(&self) {
+        let pool = match &self.pool {
+            Some(p) => p,
+            None => return,
+        };
+
         let now = Utc::now();
         let auth_cutoff = now - Duration::minutes(self.config.auth_failure_window_minutes * 2);
         let authz_cutoff = now - Duration::minutes(self.config.authz_failure_window_minutes * 2);
@@ -490,15 +516,37 @@ impl ThreatDetector {
             "DELETE FROM failed_auth_attempts WHERE type = 'authentication' AND attempt_time < $1",
         )
         .bind(auth_cutoff)
-        .execute(&self.pool)
+        .execute(pool)
         .await;
 
         let _ = sqlx::query(
             "DELETE FROM failed_auth_attempts WHERE type = 'authorization' AND attempt_time < $1",
         )
         .bind(authz_cutoff)
-        .execute(&self.pool)
+        .execute(pool)
         .await;
+    }
+
+    /// Helper to create threat assessment from indicators
+    fn create_assessment(&self, threat_indicators: Vec<ThreatIndicator>) -> ThreatAssessment {
+        // Calculate overall confidence score
+        let confidence_score = threat_indicators
+            .iter()
+            .map(|indicator| indicator.severity)
+            .sum::<f64>()
+            / threat_indicators.len().max(1) as f64;
+
+        let threat_level = self.determine_threat_level(confidence_score);
+        let recommended_actions =
+            self.generate_recommended_actions(&threat_level, &threat_indicators);
+
+        ThreatAssessment {
+            threat_level,
+            confidence_score,
+            threat_indicators,
+            recommended_actions,
+            assessment_timestamp: Utc::now(),
+        }
     }
 }
 
@@ -536,7 +584,7 @@ mod tests {
             .await
             .unwrap();
 
-        let detector = ThreatDetector::with_default_config(pool);
+        let detector = ThreatDetector::with_default_config(Some(pool));
         let stats = detector.get_threat_statistics().await;
         assert_eq!(stats.active_threats, 0);
     }
@@ -548,7 +596,7 @@ mod tests {
             "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
         )
         .unwrap();
-        let detector = ThreatDetector::with_default_config(pool);
+        let detector = ThreatDetector::with_default_config(Some(pool));
 
         // Simulate multiple failed auth attempts
         for _ in 0..6 {
@@ -580,7 +628,7 @@ mod tests {
             "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
         )
         .unwrap();
-        let detector = ThreatDetector::with_default_config(pool);
+        let detector = ThreatDetector::with_default_config(Some(pool));
 
         let event = SecurityEvent::new(
             SecurityEventType::InputValidationFailure,
@@ -606,7 +654,7 @@ mod tests {
             "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
         )
         .unwrap();
-        let detector = ThreatDetector::with_default_config(pool);
+        let detector = ThreatDetector::with_default_config(Some(pool));
 
         // Test different confidence scores
         assert!(matches!(

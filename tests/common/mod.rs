@@ -20,8 +20,18 @@ pub struct TestServer {
 
 impl TestServer {
     /// Start a test server with automatic port selection and shutdown support
+    #[allow(dead_code)]
     pub async fn start() -> anyhow::Result<Self> {
-        let mut test_config = config::Config::test_config_with_port(0);
+        Self::start_with_storage("memory").await
+    }
+
+    /// Start a test server with specific storage type
+    pub async fn start_with_storage(storage_type: &str) -> anyhow::Result<Self> {
+        let mut test_config = if storage_type == "postgresql" {
+            config::Config::test_config_postgres(0)
+        } else {
+            config::Config::test_config_with_port(0)
+        };
 
         // Disable auth for tests by default to avoid overhead
         test_config.auth = None;
@@ -77,7 +87,12 @@ impl TestContext {
 
     /// Start a new server and add it to the context
     pub async fn start_server(&self) -> anyhow::Result<u16> {
-        let server = TestServer::start().await?;
+        self.start_server_with_storage("memory").await
+    }
+
+    /// Start a new server with specific storage and add it to the context
+    pub async fn start_server_with_storage(&self, storage_type: &str) -> anyhow::Result<u16> {
+        let server = TestServer::start_with_storage(storage_type).await?;
         let port = server.port();
         self.servers.lock().await.push(server);
         Ok(port)

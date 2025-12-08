@@ -31,7 +31,7 @@ async fn test_session_lifecycle() {
         "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
     )
     .unwrap();
-    let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
+    let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
     let manager = SecureSessionManager::new(pool, &key, 3600, 3, auditor).unwrap();
 
     // Create session
@@ -85,7 +85,7 @@ async fn test_session_fingerprint_user_agent_mismatch() {
         "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
     )
     .unwrap();
-    let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
+    let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
     let manager = SecureSessionManager::new(pool, &key, 3600, 3, auditor).unwrap();
 
     let params = CreateSessionParams {
@@ -117,7 +117,7 @@ async fn test_session_ip_change_tolerance() {
         "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
     )
     .unwrap();
-    let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
+    let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
     let manager = SecureSessionManager::new(pool, &key, 3600, 3, auditor).unwrap();
 
     let params = CreateSessionParams {
@@ -151,7 +151,7 @@ async fn test_concurrent_session_limit() {
             "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
         )
         .unwrap();
-        let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
+        let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
         let manager = SecureSessionManager::new(pool, &key, 3600, 3, auditor).unwrap();
         let unique_user_id = format!("user_concurrent_{}", rand::random::<u32>());
 
@@ -191,7 +191,7 @@ async fn test_session_encryption() {
         "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
     )
     .unwrap();
-    let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
+    let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
     let manager = SecureSessionManager::new(pool, &key, 3600, 3, auditor).unwrap();
 
     // Create session with sensitive data
@@ -424,7 +424,7 @@ async fn test_full_auth_flow_simulation() {
         "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
     )
     .unwrap();
-    let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
+    let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
     let session_manager =
         Arc::new(SecureSessionManager::new(pool, &key, 3600, 3, auditor).unwrap());
     let oauth_state = Arc::new(OAuthStateManager::new(key));
@@ -505,7 +505,7 @@ async fn test_concurrent_users_isolation() {
         "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
     )
     .unwrap();
-    let auditor = Arc::new(SecurityAuditor::new(pool.clone()));
+    let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
     let session_manager =
         Arc::new(SecureSessionManager::new(pool, &key, 3600, 5, auditor).unwrap());
 
