@@ -53,7 +53,7 @@ services:
       # Mount custom configuration
       - ./config.production.toml:/app/config.yaml:ro
     environment:
-      - RUST_LOG=info
+      - RUST_LOG=trace
       - CONFIG_FILE=/app/config.yaml
       # Auth configuration
       - APP_AUTH__JWT_SECRET=${APP_AUTH__JWT_SECRET:-change-this-in-production}
@@ -74,6 +74,10 @@ services:
       # - APP_AUTH__PROVIDERS__APPLE__TEAM_ID=${APP_AUTH__PROVIDERS__APPLE__TEAM_ID:-}
       # Security
       - APP_SECURITY__API_KEY=${APP_SECURITY__API_KEY:-change-this-in-production}
+      # CSRF & session encryption keys (base64 encoded 32-byte values)
+      # Generate example: openssl rand -base64 32
+      - APP_SECURITY__CSRF_KEY=${APP_SECURITY__CSRF_KEY:-}
+      - APP_SECURITY__SESSION_ENCRYPTION_KEY=${APP_SECURITY__SESSION_ENCRYPTION_KEY:-}
       # Repository
       - APP_REPOSITORY__STORAGE_TYPE=postgresql
       - APP_REPOSITORY__DATABASE_URL=postgresql://aiwebengine:${POSTGRES_PASSWORD:-change-this-password}@postgres:5432/aiwebengine

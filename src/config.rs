@@ -199,6 +199,11 @@ pub struct SecurityConfig {
     /// Enable CSRF protection
     pub enable_csrf: bool,
 
+    /// Optional base64-encoded 32-byte CSRF key used to validate tokens across instances
+    /// Example (env): APP_SECURITY__CSRF_KEY
+    #[serde(default)]
+    pub csrf_key: Option<String>,
+
     /// Enable rate limiting
     pub enable_rate_limiting: bool,
 
@@ -216,6 +221,11 @@ pub struct SecurityConfig {
 
     /// Maximum request body size in bytes
     pub max_request_body_bytes: usize,
+
+    /// Optional base64-encoded 32-byte encryption key used for session encryption
+    /// Example (env): APP_SECURITY__SESSION_ENCRYPTION_KEY
+    #[serde(default)]
+    pub session_encryption_key: Option<String>,
 }
 
 /// Performance configuration
@@ -347,6 +357,8 @@ impl Default for SecurityConfig {
             ),
             enable_request_validation: true,
             max_request_body_bytes: 1024 * 1024, // 1MB
+            csrf_key: None,
+            session_encryption_key: None,
         }
     }
 }
@@ -396,7 +408,11 @@ impl AppConfig {
                     } else {
                         value.clone()
                     }
-                } else if key.contains("SECRET") {
+                } else if key.contains("SECRET")
+                    || key.contains("CSRF")
+                    || key.contains("SESSION_ENCRYPTION")
+                    || key.contains("ENCRYPTION_KEY")
+                {
                     "****".to_string()
                 } else {
                     value.clone()

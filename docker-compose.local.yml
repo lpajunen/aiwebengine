@@ -90,6 +90,9 @@ services:
       - APP_AUTH__PROVIDERS__MICROSOFT__TENANT_ID=${APP_AUTH__PROVIDERS__MICROSOFT__TENANT_ID:-common}
       # Security
       - APP_SECURITY__API_KEY=${APP_SECURITY__API_KEY:-dev-api-key-12345}
+      # CSRF & session encryption keys (base64 encoded 32-byte values)
+      - APP_SECURITY__CSRF_KEY=${APP_SECURITY__CSRF_KEY:-}
+      - APP_SECURITY__SESSION_ENCRYPTION_KEY=${APP_SECURITY__SESSION_ENCRYPTION_KEY:-}
       # AI
       - SECRET_ANTHROPIC_API_KEY=${SECRET_ANTHROPIC_API_KEY:-}
     networks:

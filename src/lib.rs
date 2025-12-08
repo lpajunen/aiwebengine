@@ -569,6 +569,7 @@ fn path_has_any_route(path: &str) -> bool {
 async fn initialize_auth_manager(
     auth_config: auth::AuthConfig,
     server_config: &config::ServerConfig,
+    security_config: &config::SecurityConfig,
     pool: sqlx::PgPool,
 ) -> Result<Arc<auth::AuthManager>, auth::AuthError> {
     use auth::{
@@ -584,12 +585,58 @@ async fn initialize_auth_manager(
     // Create rate limiter
     let rate_limiter = Arc::new(RateLimiter::new(pool.clone()));
 
-    // Create CSRF protection with random key
-    let csrf_key: [u8; 32] = rand::random();
+    // Load CSRF key from configuration (base64 encoded 32 bytes)
+    let csrf_key = match &security_config.csrf_key {
+        Some(s) => {
+            let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, s)
+                .map_err(|e| auth::AuthError::InvalidConfig {
+                    key: "security.csrf_key".to_string(),
+                    reason: format!("base64 decode failed: {}", e),
+                })?;
+            if decoded.len() != 32 {
+                return Err(auth::AuthError::InvalidConfig {
+                    key: "security.csrf_key".to_string(),
+                    reason: "expected 32 bytes after base64 decoding".to_string(),
+                });
+            }
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&decoded);
+            arr
+        }
+        None => {
+            return Err(auth::AuthError::MissingConfig(
+                "security.csrf_key".to_string(),
+            ));
+        }
+    };
+
     let csrf = Arc::new(CsrfProtection::new(csrf_key, 3600)); // 1 hour lifetime
 
-    // Create encryption with random key for sessions
-    let encryption_key: [u8; 32] = rand::random();
+    // Load session encryption key from configuration (base64 encoded 32 bytes)
+    let encryption_key = match &security_config.session_encryption_key {
+        Some(s) => {
+            let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, s)
+                .map_err(|e| auth::AuthError::InvalidConfig {
+                    key: "security.session_encryption_key".to_string(),
+                    reason: format!("base64 decode failed: {}", e),
+                })?;
+            if decoded.len() != 32 {
+                return Err(auth::AuthError::InvalidConfig {
+                    key: "security.session_encryption_key".to_string(),
+                    reason: "expected 32 bytes after base64 decoding".to_string(),
+                });
+            }
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&decoded);
+            arr
+        }
+        None => {
+            return Err(auth::AuthError::MissingConfig(
+                "security.session_encryption_key".to_string(),
+            ));
+        }
+    };
+
     let encryption = Arc::new(DataEncryption::new(&encryption_key));
 
     // Create secure session manager
@@ -941,7 +988,7 @@ async fn initialize_auth_if_enabled(
             user_repository::set_bootstrap_admins(auth_config.bootstrap_admins.clone());
         }
 
-        match initialize_auth_manager(auth_config, &config.server, pool).await {
+        match initialize_auth_manager(auth_config, &config.server, &config.security, pool).await {
             Ok(manager) => {
                 info!("AuthManager initialized successfully");
                 Some(manager)

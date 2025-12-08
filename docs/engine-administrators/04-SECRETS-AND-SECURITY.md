@@ -119,16 +119,50 @@ export APP_AUTH__PROVIDERS__GOOGLE__REDIRECT_URI="https://yourdomain.com/auth/ca
 
 #### Step 5: Test
 
-```bash
+````bash
 # Restart aiwebengine
 docker-compose restart aiwebengine
 
+### CSRF & Session Encryption Keys (NEW)
+
+aiwebengine requires two 32-byte cryptographic keys for secure session encryption and CSRF protection. These keys must be the same across ALL server instances (do not use per-instance random keys) — otherwise sessions and CSRF tokens will be invalid when requests are routed to a different instance.
+
+Key names (environment variables / config):
+
+- APP_SECURITY__CSRF_KEY — base64-encoded 32-byte key used for CSRF token generation/validation
+- APP_SECURITY__SESSION_ENCRYPTION_KEY — base64-encoded 32-byte key used to encrypt session payloads
+
+Recommended generation (on Linux/macOS):
+
+```bash
+# Generate a strong 32-byte random key and print Base64
+openssl rand -base64 32
+
+# Example output (do NOT use these literal values):
+# 1Pv2VndcGhv2q5x8WZ9v+v9R6n9KJfJq9s2fB2xQ9E4=
+````
+
+How to provide keys to aiwebengine:
+
+- Docker / docker-compose — set APP_SECURITY**CSRF_KEY and APP_SECURITY**SESSION_ENCRYPTION_KEY in the container environment (examples included in the repo's docker-compose files).
+- Kubernetes — create secrets and mount them as environment variables or files; ensure all replicas use the same secret values.
+- Secret manager — store both keys in your secrets manager (Vault, Secrets Manager) and load them into the environment during deployment.
+
+Security notes:
+
+- **Do not** store plain keys in source control. Use environment variables or a secrets manager.
+- Rotate keys carefully: rotating the session encryption key will invalidate existing sessions; plan rotation window and migrate sessions if needed.
+- Keep CSRF keys secret and rotate when you suspect compromise.
+
 # Open sign-in page
+
 open http://localhost:3000/auth/login
 
 # Click "Sign in with Google"
+
 # You should be redirected to Google's OAuth page
-```
+
+````
 
 ### Microsoft OAuth (Optional)
 
@@ -157,7 +191,7 @@ export APP_AUTH__PROVIDERS__MICROSOFT__CLIENT_ID="your-application-id"
 export APP_AUTH__PROVIDERS__MICROSOFT__CLIENT_SECRET="your-client-secret"
 export APP_AUTH__PROVIDERS__MICROSOFT__REDIRECT_URI="https://yourdomain.com/auth/callback/microsoft"
 export APP_AUTH__PROVIDERS__MICROSOFT__TENANT_ID="common"  # or your tenant ID
-```
+````
 
 **In config.toml**, uncomment:
 

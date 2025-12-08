@@ -122,6 +122,8 @@ pub async fn mcp_auth_middleware(
     {
         Ok(s) => s,
         Err(e) => {
+            // Log the specific AuthError reason at debug level for diagnostics
+            tracing::debug!("MCP session validation error for token (redacted): {:?}", e);
             // Session validation failed - return 401 with appropriate error
             let (error, error_desc) = match e {
                 AuthError::NoSession | AuthError::SessionError(_) => {

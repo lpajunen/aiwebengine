@@ -145,6 +145,11 @@ redirect_uri = "http://localhost:3000/auth/callback/google"
 export APP_AUTH__JWT_SECRET="$(openssl rand -base64 48)"
 export APP_SECURITY__API_KEY="$(openssl rand -hex 32)"
 
+# CSRF and session encryption keys (32 bytes base64)
+# These must be identical across all instances in a clustered deployment
+export APP_SECURITY__CSRF_KEY="$(openssl rand -base64 32)"
+export APP_SECURITY__SESSION_ENCRYPTION_KEY="$(openssl rand -base64 32)"
+
 # Database (Docker or local)
 export APP_REPOSITORY__DATABASE_URL="postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine"
 
@@ -221,6 +226,8 @@ cp config.staging.toml config.toml
 # 2. Set environment variables (not .env file!)
 export APP_AUTH__JWT_SECRET="$(openssl rand -base64 48)"
 export APP_SECURITY__API_KEY="$(openssl rand -hex 32)"
+export APP_SECURITY__CSRF_KEY="$(openssl rand -base64 32)"
+export APP_SECURITY__SESSION_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 
 # 3. Database
 export APP_REPOSITORY__DATABASE_URL="postgresql://user:pass@staging-db.example.com:5432/aiwebengine"
