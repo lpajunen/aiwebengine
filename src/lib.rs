@@ -587,7 +587,7 @@ async fn initialize_auth_manager(
 
     // Load CSRF key from configuration (base64 encoded 32 bytes)
     let csrf_key = match &security_config.csrf_key {
-        Some(s) => {
+        Some(s) if !s.is_empty() => {
             let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, s)
                 .map_err(|e| auth::AuthError::InvalidConfig {
                     key: "security.csrf_key".to_string(),
@@ -603,10 +603,9 @@ async fn initialize_auth_manager(
             arr.copy_from_slice(&decoded);
             arr
         }
-        None => {
-            return Err(auth::AuthError::MissingConfig(
-                "security.csrf_key".to_string(),
-            ));
+        _ => {
+            warn!("security.csrf_key not configured. Generating random key. CSRF tokens will be invalid after restart.");
+            rand::random::<[u8; 32]>()
         }
     };
 
@@ -614,7 +613,7 @@ async fn initialize_auth_manager(
 
     // Load session encryption key from configuration (base64 encoded 32 bytes)
     let encryption_key = match &security_config.session_encryption_key {
-        Some(s) => {
+        Some(s) if !s.is_empty() => {
             let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, s)
                 .map_err(|e| auth::AuthError::InvalidConfig {
                     key: "security.session_encryption_key".to_string(),
@@ -630,10 +629,9 @@ async fn initialize_auth_manager(
             arr.copy_from_slice(&decoded);
             arr
         }
-        None => {
-            return Err(auth::AuthError::MissingConfig(
-                "security.session_encryption_key".to_string(),
-            ));
+        _ => {
+            warn!("security.session_encryption_key not configured. Generating random key. Sessions will be invalid after restart.");
+            rand::random::<[u8; 32]>()
         }
     };
 
@@ -678,7 +676,12 @@ async fn initialize_auth_manager(
     };
 
     // Create auth manager
-    let mut auth_manager = AuthManager::new(manager_config, auth_session_manager, security_context);
+    let mut auth_manager = AuthManager::new(
+        manager_config,
+        auth_session_manager,
+        security_context,
+        security_config.api_key.clone(),
+    );
 
     // Register OAuth2 providers if configured
     if let Some(google_config) = auth_config.providers.google {

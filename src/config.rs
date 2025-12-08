@@ -226,6 +226,11 @@ pub struct SecurityConfig {
     /// Example (env): APP_SECURITY__SESSION_ENCRYPTION_KEY
     #[serde(default)]
     pub session_encryption_key: Option<String>,
+
+    /// Optional API key for machine-to-machine authentication (e.g. MCP)
+    /// Example (env): APP_SECURITY__API_KEY
+    #[serde(default)]
+    pub api_key: Option<String>,
 }
 
 /// Performance configuration
@@ -359,6 +364,7 @@ impl Default for SecurityConfig {
             max_request_body_bytes: 1024 * 1024, // 1MB
             csrf_key: None,
             session_encryption_key: None,
+            api_key: None,
         }
     }
 }

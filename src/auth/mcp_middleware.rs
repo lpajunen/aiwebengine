@@ -8,6 +8,7 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use chrono;
 use std::sync::Arc;
 
 use crate::auth::{AuthError, AuthManager, AuthSession};
@@ -83,9 +84,29 @@ pub async fn mcp_auth_middleware(
     next: Next,
 ) -> Response {
     let headers = request.headers();
+    let uri = request.uri();
+    
+    tracing::debug!("MCP request: {} {}", request.method(), uri);
 
-    // Extract Bearer token
-    let token = match extract_bearer_token(headers) {
+    // Try to extract token from Bearer header first
+    let mut token = extract_bearer_token(headers);
+
+    // If not found, try query parameter (api_key or token)
+    if token.is_none() {
+        if let Some(query) = request.uri().query() {
+            let params: std::collections::HashMap<String, String> =
+                url::form_urlencoded::parse(query.as_bytes())
+                    .into_owned()
+                    .collect();
+
+            token = params
+                .get("api_key")
+                .or_else(|| params.get("token"))
+                .cloned();
+        }
+    }
+
+    let token = match token {
         Some(t) => t,
         None => {
             // No token provided - return 401 with WWW-Authenticate challenge
@@ -114,6 +135,28 @@ pub async fn mcp_auth_middleware(
     } else {
         None
     };
+
+    // Check if token is a valid API key
+    if auth_manager.validate_api_key(&token) {
+        // Create a synthetic session for API key access
+        // API keys have admin privileges for MCP
+        let session = AuthSession {
+            user_id: "system-api".to_string(),
+            provider: "api_key".to_string(),
+            email: Some("system@aiwebengine.com".to_string()),
+            name: Some("System API".to_string()),
+            picture: None,
+            is_admin: true,
+            is_editor: true,
+            created_at: chrono::Utc::now(),
+            expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+        };
+
+        // Store session in request extensions
+        request.extensions_mut().insert(McpAuthSession { session });
+
+        return next.run(request).await;
+    }
 
     // Validate session with resource indicator
     let session = match auth_manager
