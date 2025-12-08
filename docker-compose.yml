@@ -50,11 +50,8 @@ services:
       - ./scripts:/app/scripts:ro
       # Persist database
       - ./data:/app/data
-      # Mount custom configuration
-      - ./config.production.toml:/app/config.yaml:ro
     environment:
       - RUST_LOG=trace
-      - CONFIG_FILE=/app/config.yaml
       # Auth configuration
       - APP_AUTH__JWT_SECRET=${APP_AUTH__JWT_SECRET:-change-this-in-production}
       - APP_AUTH__BOOTSTRAP_ADMINS=${APP_AUTH__BOOTSTRAP_ADMINS:-["admin@example.com"]}

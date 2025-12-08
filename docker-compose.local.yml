@@ -46,8 +46,8 @@ services:
       - ./Cargo.lock:/app/Cargo.lock:ro
       # Mount migrations (required for sqlx::migrate! macro)
       - ./migrations:/app/migrations:ro
-      # Mount configuration (using config.local.toml as config.toml)
-      - ./config.local.toml:/app/config.toml:ro
+      # Mount configuration (using config.local.toml as config.local.toml)
+      - ./config.local.toml:/app/config.local.toml:ro
       # Mount scripts for testing
       - ./scripts:/app/scripts:ro
       # Mount assets
