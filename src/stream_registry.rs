@@ -1086,8 +1086,8 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_stream_registry_broadcasting() {
+    #[tokio::test]
+    async fn test_stream_registry_broadcasting() {
         let registry = StreamRegistry::new();
 
         // Register multiple streams

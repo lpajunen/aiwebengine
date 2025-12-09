@@ -1006,6 +1006,7 @@ async fn health_handler() -> impl IntoResponse {
         "status": "healthy",
         "instance_id": server_id,
         "timestamp": chrono::Utc::now().to_rfc3339(),
+        "checks": {}
     }))
 }
 
