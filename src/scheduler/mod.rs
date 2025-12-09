@@ -421,6 +421,7 @@ impl Scheduler {
                 job = %job_key,
                 "Skipping job execution - another instance has the lock"
             );
+            // Don't release lock we never acquired
             return;
         }
 

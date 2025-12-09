@@ -21,8 +21,10 @@ services:
     networks:
       - aiwebengine-network
     depends_on:
-      - aiwebengine-1
-      - aiwebengine-2
+      aiwebengine-1:
+        condition: service_healthy
+      aiwebengine-2:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/"]
       interval: 30s
@@ -45,12 +47,12 @@ services:
     # ports:
     #   - "127.0.0.1:3000:3000"
     volumes:
-      # Persist logs
-      - ./logs:/app/logs
+      # Persist logs (instance-specific)
+      - ./logs/instance-1:/app/logs
       # Persist scripts
       - ./scripts:/app/scripts:ro
-      # Persist database
-      - ./data:/app/data
+      # Migration files (read-only)
+      - ./data:/app/data:ro
     environment:
       - RUST_LOG=info
       # Auth configuration
@@ -83,12 +85,15 @@ services:
       - SECRET_ANTHROPIC_API_KEY=${SECRET_ANTHROPIC_API_KEY:-}
     networks:
       - aiwebengine-network
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
-      interval: 30s
+      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/localhost/3000' || exit 1"]
+      interval: 10s
       timeout: 3s
       retries: 3
-      start_period: 10s
+      start_period: 30s
 
   # Production deployment - Instance 2
   aiwebengine-2:
@@ -131,12 +136,15 @@ services:
       - SECRET_ANTHROPIC_API_KEY=${SECRET_ANTHROPIC_API_KEY:-}
     networks:
       - aiwebengine-network
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
-      interval: 30s
+      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/localhost/3000' || exit 1"]
+      interval: 10s
       timeout: 3s
       retries: 3
-      start_period: 10s
+      start_period: 30s
 
   # PostgreSQL database
   postgres:
