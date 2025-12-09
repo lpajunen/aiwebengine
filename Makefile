@@ -169,7 +169,7 @@ docker-stop:
 
 # View production logs
 docker-logs:
-	docker-compose logs -f aiwebengine
+	docker-compose logs -f aiwebengine-1 aiwebengine-2
 
 # View local/development logs
 docker-logs-local:

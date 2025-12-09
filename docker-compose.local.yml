@@ -23,14 +23,15 @@ services:
     networks:
       - aiwebengine-dev-network
     depends_on:
-      - aiwebengine-dev
+      - aiwebengine-dev-1
+      - aiwebengine-dev-2
 
-  # Development server with hot-reload
-  aiwebengine-dev:
+  # Development server with hot-reload - Instance 1
+  aiwebengine-dev-1:
     build:
       context: .
       dockerfile: Dockerfile.local
-    container_name: aiwebengine-dev
+    container_name: aiwebengine-dev-1
     restart: unless-stopped
     # Expose port only to internal network
     expose:
@@ -103,6 +104,81 @@ services:
     stdin_open: true
     tty: true
 
+  # Development server with hot-reload - Instance 2
+  aiwebengine-dev-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.local
+    container_name: aiwebengine-dev-2
+    restart: unless-stopped
+    # Expose port only to internal network
+    expose:
+      - "3000"
+    volumes:
+      # Mount source code for hot-reload
+      - ./src:/app/src:ro
+      - ./tests:/app/tests:ro
+      - ./Cargo.toml:/app/Cargo.toml:ro
+      - ./Cargo.lock:/app/Cargo.lock:ro
+      # Mount migrations (required for sqlx::migrate! macro)
+      - ./migrations:/app/migrations:ro
+      # Mount configuration (using config.local.toml as config.local.toml)
+      - ./config.local.toml:/app/config.local.toml:ro
+      # Mount scripts for testing
+      - ./scripts:/app/scripts:ro
+      # Mount assets
+      - ./assets:/app/assets:ro
+      # Mount docs for development
+      - ./docs:/app/docs:ro
+      # Persist logs
+      - ./logs:/app/logs
+      # Persist database
+      - ./data:/app/data
+      # Cache cargo registry and target to speed up builds
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - target-cache-2:/app/target
+    environment:
+      - RUST_LOG=debug
+      - RUST_BACKTRACE=1
+      # Server configuration  
+      - APP_SERVER__HOST=0.0.0.0
+      - APP_SERVER__PORT=3000
+      # Development OAuth credentials (optional)
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      - JWT_SECRET=${JWT_SECRET:-dev-secret-key}
+      - SESSION_SECRET=${SESSION_SECRET:-dev-session-secret}
+      # PostgreSQL connection (note: double underscores for nested config)
+      - APP_REPOSITORY__STORAGE_TYPE=postgresql
+      - APP_REPOSITORY__DATABASE_URL=postgresql://aiwebengine:devpassword@postgres-dev:5432/aiwebengine
+      # Auth configuration
+      - APP_AUTH__JWT_SECRET=${APP_AUTH__JWT_SECRET:-dev-jwt-secret-minimum-32-characters-required-for-security}
+      - APP_AUTH__BOOTSTRAP_ADMINS=${APP_AUTH__BOOTSTRAP_ADMINS:-["admin@example.com"]}
+      # Google OAuth
+      - APP_AUTH__PROVIDERS__GOOGLE__CLIENT_ID=${APP_AUTH__PROVIDERS__GOOGLE__CLIENT_ID:-}
+      - APP_AUTH__PROVIDERS__GOOGLE__CLIENT_SECRET=${APP_AUTH__PROVIDERS__GOOGLE__CLIENT_SECRET:-}
+      - APP_AUTH__PROVIDERS__GOOGLE__REDIRECT_URI=${APP_AUTH__PROVIDERS__GOOGLE__REDIRECT_URI:-http://localhost:3000/auth/callback/google}
+      # Microsoft OAuth
+      - APP_AUTH__PROVIDERS__MICROSOFT__CLIENT_ID=${APP_AUTH__PROVIDERS__MICROSOFT__CLIENT_ID:-}
+      - APP_AUTH__PROVIDERS__MICROSOFT__CLIENT_SECRET=${APP_AUTH__PROVIDERS__MICROSOFT__CLIENT_SECRET:-}
+      - APP_AUTH__PROVIDERS__MICROSOFT__REDIRECT_URI=${APP_AUTH__PROVIDERS__MICROSOFT__REDIRECT_URI:-https://local.softagen.com/auth/callback/microsoft}
+      - APP_AUTH__PROVIDERS__MICROSOFT__TENANT_ID=${APP_AUTH__PROVIDERS__MICROSOFT__TENANT_ID:-common}
+      # Security
+      - APP_SECURITY__API_KEY=${APP_SECURITY__API_KEY:-dev-api-key-12345}
+      # CSRF & session encryption keys (base64 encoded 32-byte values)
+      - APP_SECURITY__CSRF_KEY=${APP_SECURITY__CSRF_KEY:-}
+      - APP_SECURITY__SESSION_ENCRYPTION_KEY=${APP_SECURITY__SESSION_ENCRYPTION_KEY:-}
+      # AI
+      - SECRET_ANTHROPIC_API_KEY=${SECRET_ANTHROPIC_API_KEY:-}
+    networks:
+      - aiwebengine-dev-network
+    depends_on:
+      postgres-dev:
+        condition: service_healthy
+    stdin_open: true
+    tty: true
+
   # Development PostgreSQL
   postgres-dev:
     image: postgres:16-alpine
@@ -132,6 +208,7 @@ volumes:
   cargo-registry:
   cargo-git:
   target-cache:
+  target-cache-2:
   postgres-dev-data:
   caddy-data:
   caddy-config:

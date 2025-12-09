@@ -3,8 +3,17 @@
 
 # Main production domain
 softagen.com {
-    # Reverse proxy to aiwebengine container
-    reverse_proxy aiwebengine:3000
+    # Reverse proxy with load balancing to both aiwebengine instances
+    reverse_proxy aiwebengine-1:3000 aiwebengine-2:3000 {
+        # Load balancing policy
+        lb_policy round_robin
+        
+        # Health checks
+        health_uri /health
+        health_interval 10s
+        health_timeout 5s
+        health_status 2xx
+    }
     
     # Enable gzip compression
     encode gzip

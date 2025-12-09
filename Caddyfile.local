@@ -19,8 +19,17 @@
 localhost {
     tls internal
     
-    # Reverse proxy to aiwebengine container
-    reverse_proxy aiwebengine-dev:3000
+    # Reverse proxy with load balancing to both aiwebengine instances
+    reverse_proxy aiwebengine-dev-1:3000 aiwebengine-dev-2:3000 {
+        # Load balancing policy
+        lb_policy round_robin
+        
+        # Health checks
+        health_uri /health
+        health_interval 10s
+        health_timeout 5s
+        health_status 2xx
+    }
     
     # Enable gzip compression
     encode gzip
@@ -39,8 +48,17 @@ local.softagen.com {
         dns digitalocean {env.DIGITALOCEAN_TOKEN}
     }
     
-    # Reverse proxy to aiwebengine container
-    reverse_proxy aiwebengine-dev:3000
+    # Reverse proxy with load balancing to both aiwebengine instances
+    reverse_proxy aiwebengine-dev-1:3000 aiwebengine-dev-2:3000 {
+        # Load balancing policy
+        lb_policy round_robin
+        
+        # Health checks
+        health_uri /health
+        health_interval 10s
+        health_timeout 5s
+        health_status 2xx
+    }
     
     # Enable gzip compression
     encode gzip

@@ -21,7 +21,8 @@ services:
     networks:
       - aiwebengine-network
     depends_on:
-      - aiwebengine
+      - aiwebengine-1
+      - aiwebengine-2
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/"]
       interval: 30s
@@ -29,13 +30,13 @@ services:
       retries: 3
       start_period: 10s
 
-  # Production deployment
-  aiwebengine:
+  # Production deployment - Instance 1
+  aiwebengine-1:
     # build:
     #   context: .
     #   dockerfile: Dockerfile
     image: aiwebengine:latest
-    container_name: aiwebengine
+    container_name: aiwebengine-1
     restart: unless-stopped
     # Expose port only to internal network (not to host)
     expose:
@@ -73,6 +74,54 @@ services:
       - APP_SECURITY__API_KEY=${APP_SECURITY__API_KEY:-change-this-in-production}
       # CSRF & session encryption keys (base64 encoded 32-byte values)
       # Generate example: openssl rand -base64 32
+      - APP_SECURITY__CSRF_KEY=${APP_SECURITY__CSRF_KEY:-}
+      - APP_SECURITY__SESSION_ENCRYPTION_KEY=${APP_SECURITY__SESSION_ENCRYPTION_KEY:-}
+      # Repository
+      - APP_REPOSITORY__STORAGE_TYPE=postgresql
+      - APP_REPOSITORY__DATABASE_URL=postgresql://aiwebengine:${POSTGRES_PASSWORD:-change-this-password}@postgres:5432/aiwebengine
+      # AI
+      - SECRET_ANTHROPIC_API_KEY=${SECRET_ANTHROPIC_API_KEY:-}
+    networks:
+      - aiwebengine-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  # Production deployment - Instance 2
+  aiwebengine-2:
+    image: aiwebengine:latest
+    container_name: aiwebengine-2
+    restart: unless-stopped
+    # Expose port only to internal network (not to host)
+    expose:
+      - "3000"
+    volumes:
+      # Persist logs
+      - ./logs:/app/logs
+      # Persist scripts
+      - ./scripts:/app/scripts:ro
+      # Persist database
+      - ./data:/app/data
+    environment:
+      - RUST_LOG=info
+      # Auth configuration
+      - APP_AUTH__JWT_SECRET=${APP_AUTH__JWT_SECRET:-change-this-in-production}
+      - APP_AUTH__BOOTSTRAP_ADMINS=${APP_AUTH__BOOTSTRAP_ADMINS:-["admin@example.com"]}
+      # Google OAuth
+      - APP_AUTH__PROVIDERS__GOOGLE__CLIENT_ID=${APP_AUTH__PROVIDERS__GOOGLE__CLIENT_ID:-}
+      - APP_AUTH__PROVIDERS__GOOGLE__CLIENT_SECRET=${APP_AUTH__PROVIDERS__GOOGLE__CLIENT_SECRET:-}
+      - APP_AUTH__PROVIDERS__GOOGLE__REDIRECT_URI=${APP_AUTH__PROVIDERS__GOOGLE__REDIRECT_URI:-}
+      # Microsoft OAuth
+      - APP_AUTH__PROVIDERS__MICROSOFT__CLIENT_ID=${APP_AUTH__PROVIDERS__MICROSOFT__CLIENT_ID:-}
+      - APP_AUTH__PROVIDERS__MICROSOFT__CLIENT_SECRET=${APP_AUTH__PROVIDERS__MICROSOFT__CLIENT_SECRET:-}
+      - APP_AUTH__PROVIDERS__MICROSOFT__REDIRECT_URI=${APP_AUTH__PROVIDERS__MICROSOFT__REDIRECT_URI:-}
+      - APP_AUTH__PROVIDERS__MICROSOFT__TENANT_ID=${APP_AUTH__PROVIDERS__MICROSOFT__TENANT_ID:-common}
+      # Security
+      - APP_SECURITY__API_KEY=${APP_SECURITY__API_KEY:-change-this-in-production}
+      # CSRF & session encryption keys (base64 encoded 32-byte values)
       - APP_SECURITY__CSRF_KEY=${APP_SECURITY__CSRF_KEY:-}
       - APP_SECURITY__SESSION_ENCRYPTION_KEY=${APP_SECURITY__SESSION_ENCRYPTION_KEY:-}
       # Repository
