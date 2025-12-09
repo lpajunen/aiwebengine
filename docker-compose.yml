@@ -99,12 +99,12 @@ services:
     expose:
       - "3000"
     volumes:
-      # Persist logs
-      - ./logs:/app/logs
+      # Persist logs (instance-specific)
+      - ./logs/instance-2:/app/logs
       # Persist scripts
       - ./scripts:/app/scripts:ro
-      # Persist database
-      - ./data:/app/data
+      # Migration files (read-only)
+      - ./data:/app/data:ro
     environment:
       - RUST_LOG=info
       # Auth configuration

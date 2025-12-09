@@ -224,9 +224,14 @@ async fn initialize_database_and_repository(config: &config::Config) -> AppResul
                 warn!("Global database was already initialized");
             }
 
-            // Generate unique server ID for this instance
+            // Generate unique server ID for this instance (once)
             let server_id = notifications::generate_server_id();
             info!("Generated server ID: {}", server_id);
+
+            // Store server ID globally for use by other components
+            if !notifications::initialize_server_id(server_id.clone()) {
+                warn!("Server ID was already initialized");
+            }
 
             // Initialize UnifiedRepository with Postgres and server_id
             let repo =
@@ -769,7 +774,11 @@ async fn initialize_components(config: &config::Config) -> AppResult<()> {
         && let Some(db) = database::get_global_database()
     {
         info!("Starting PostgreSQL notification listener for script synchronization...");
-        let server_id = notifications::generate_server_id();
+
+        // Get the server ID that was generated during repository initialization
+        let server_id = notifications::get_server_id()
+            .expect("Server ID should be initialized before notification listener");
+
         let listener = Arc::new(notifications::NotificationListener::new(
             server_id.clone(),
             db.pool().clone(),
@@ -987,6 +996,70 @@ pub async fn start_server_with_config(
     start_server_instance(app, actual_addr, server_shutdown_rx);
 
     Ok(actual_port)
+}
+
+/// Health check endpoint - returns basic instance status
+async fn health_handler() -> impl IntoResponse {
+    let server_id = notifications::get_server_id().unwrap_or_else(|| "unknown".to_string());
+
+    axum::response::Json(serde_json::json!({
+        "status": "healthy",
+        "instance_id": server_id,
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+    }))
+}
+
+/// Cluster health endpoint - returns detailed cluster status
+async fn health_cluster_handler() -> impl IntoResponse {
+    let server_id = notifications::get_server_id().unwrap_or_else(|| "unknown".to_string());
+
+    // Get database pool stats if available
+    let pool_stats = if let Some(db) = database::get_global_database() {
+        let pool = db.pool();
+        let size = pool.size() as usize;
+        let idle = pool.num_idle();
+        serde_json::json!({
+            "available": true,
+            "active_connections": size.saturating_sub(idle),
+            "idle_connections": idle,
+            "max_connections": pool.options().get_max_connections(),
+        })
+    } else {
+        serde_json::json!({
+            "available": false,
+            "message": "Database not initialized (memory mode)"
+        })
+    };
+
+    // Get notification listener status
+    let listener_status = if let Some(_listener) = notifications::get_global_listener() {
+        serde_json::json!({
+            "active": true,
+            "server_id": server_id.clone(),
+        })
+    } else {
+        serde_json::json!({
+            "active": false,
+            "message": "Notification listener not initialized"
+        })
+    };
+
+    // Get scheduler job counts per script
+    let scheduler = scheduler::get_scheduler();
+    let job_counts = scheduler.get_job_counts();
+    let total_jobs: usize = job_counts.values().sum();
+
+    axum::response::Json(serde_json::json!({
+        "status": "healthy",
+        "instance_id": server_id,
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "database": pool_stats,
+        "notification_listener": listener_status,
+        "scheduler": {
+            "total_jobs": total_jobs,
+            "jobs_by_script": job_counts,
+        }
+    }))
 }
 
 /// Initialize authentication manager if configured and enabled
@@ -1834,6 +1907,14 @@ async fn setup_routes(
         // MCP endpoint without authentication (auth is disabled globally)
         app = app.route("/mcp", axum::routing::post(mcp_handler));
     }
+
+    // Add health check endpoints (no authentication required)
+    app = app
+        .route("/health", axum::routing::get(health_handler))
+        .route(
+            "/health/cluster",
+            axum::routing::get(health_cluster_handler),
+        );
 
     // Add documentation routes
     app = app.route(

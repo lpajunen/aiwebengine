@@ -11,6 +11,9 @@ use uuid::Uuid;
 /// Global notification listener instance
 static GLOBAL_LISTENER: OnceLock<Arc<NotificationListener>> = OnceLock::new();
 
+/// Global server ID for this instance
+static GLOBAL_SERVER_ID: OnceLock<String> = OnceLock::new();
+
 /// Initialize the global notification listener
 pub fn initialize_global_listener(listener: Arc<NotificationListener>) -> bool {
     GLOBAL_LISTENER.set(listener).is_ok()
@@ -26,11 +29,30 @@ pub fn generate_server_id() -> String {
     Uuid::new_v4().to_string()
 }
 
+/// Initialize the global server ID (should be called once at startup)
+pub fn initialize_server_id(server_id: String) -> bool {
+    GLOBAL_SERVER_ID.set(server_id).is_ok()
+}
+
+/// Get the global server ID
+pub fn get_server_id() -> Option<String> {
+    GLOBAL_SERVER_ID.get().cloned()
+}
+
 /// Message structure for script notifications
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NotificationMessage {
     pub uri: String,
     pub action: String, // "upserted" or "deleted"
+    pub timestamp: i64,
+    pub server_id: String,
+}
+
+/// Message structure for stream broadcast notifications
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamBroadcastMessage {
+    pub stream_path: String,
+    pub message: String,
     pub timestamp: i64,
     pub server_id: String,
 }
@@ -113,7 +135,16 @@ impl NotificationListener {
                 source: None,
             })?;
 
-        info!("Listening on PostgreSQL channels: script_upserted, script_deleted");
+        listener.listen("stream_broadcast").await.map_err(|e| {
+            crate::error::AppError::Database {
+                message: format!("Failed to listen on stream_broadcast: {}", e),
+                source: None,
+            }
+        })?;
+
+        info!(
+            "Listening on PostgreSQL channels: script_upserted, script_deleted, stream_broadcast"
+        );
 
         loop {
             tokio::select! {
@@ -127,41 +158,74 @@ impl NotificationListener {
                 notification = listener.recv() => {
                     match notification {
                         Ok(notification) => {
-                            debug!("Received notification on channel: {}", notification.channel());
+                            let channel = notification.channel();
+                            debug!("Received notification on channel: {}", channel);
 
-                            // Parse the JSON payload
-                            match serde_json::from_str::<NotificationMessage>(notification.payload()) {
-                                Ok(msg) => {
-                                    // Ignore notifications from this server
-                                    if msg.server_id == server_id {
-                                        debug!("Ignoring own notification for {}", msg.uri);
-                                        continue;
-                                    }
+                            match channel {
+                                "script_upserted" | "script_deleted" => {
+                                    // Parse as script notification
+                                    match serde_json::from_str::<NotificationMessage>(notification.payload()) {
+                                        Ok(msg) => {
+                                            // Ignore notifications from this server
+                                            if msg.server_id == server_id {
+                                                debug!("Ignoring own notification for {}", msg.uri);
+                                                continue;
+                                            }
 
-                                    info!(
-                                        "Processing {} notification for script '{}' from server {}",
-                                        msg.action, msg.uri, msg.server_id
-                                    );
+                                            info!(
+                                                "Processing {} notification for script '{}' from server {}",
+                                                msg.action, msg.uri, msg.server_id
+                                            );
 
-                                    // Handle based on action
-                                    match msg.action.as_str() {
-                                        "upserted" => {
-                                            if let Err(e) = Self::handle_script_upserted(&msg.uri).await {
-                                                error!("Failed to handle script upserted: {}", e);
+                                            // Handle based on action
+                                            match msg.action.as_str() {
+                                                "upserted" => {
+                                                    if let Err(e) = Self::handle_script_upserted(&msg.uri).await {
+                                                        error!("Failed to handle script upserted: {}", e);
+                                                    }
+                                                }
+                                                "deleted" => {
+                                                    if let Err(e) = Self::handle_script_deleted(&msg.uri).await {
+                                                        error!("Failed to handle script deleted: {}", e);
+                                                    }
+                                                }
+                                                _ => {
+                                                    warn!("Unknown notification action: {}", msg.action);
+                                                }
                                             }
                                         }
-                                        "deleted" => {
-                                            if let Err(e) = Self::handle_script_deleted(&msg.uri).await {
-                                                error!("Failed to handle script deleted: {}", e);
-                                            }
-                                        }
-                                        _ => {
-                                            warn!("Unknown notification action: {}", msg.action);
+                                        Err(e) => {
+                                            error!("Failed to parse script notification payload: {}", e);
                                         }
                                     }
                                 }
-                                Err(e) => {
-                                    error!("Failed to parse notification payload: {}", e);
+                                "stream_broadcast" => {
+                                    // Parse as stream broadcast notification
+                                    match serde_json::from_str::<StreamBroadcastMessage>(notification.payload()) {
+                                        Ok(msg) => {
+                                            // Ignore notifications from this server
+                                            if msg.server_id == server_id {
+                                                debug!("Ignoring own stream broadcast for {}", msg.stream_path);
+                                                continue;
+                                            }
+
+                                            debug!(
+                                                "Processing stream broadcast for path '{}' from server {}",
+                                                msg.stream_path, msg.server_id
+                                            );
+
+                                            // Handle stream broadcast
+                                            if let Err(e) = Self::handle_stream_broadcast(&msg).await {
+                                                error!("Failed to handle stream broadcast: {}", e);
+                                            }
+                                        }
+                                        Err(e) => {
+                                            error!("Failed to parse stream broadcast payload: {}", e);
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    warn!("Unknown notification channel: {}", channel);
                                 }
                             }
                         }
@@ -250,6 +314,40 @@ impl NotificationListener {
         }
 
         info!("✓ Script '{}' cleanup completed after remote deletion", uri);
+
+        Ok(())
+    }
+
+    /// Handle stream broadcast notification from another instance
+    async fn handle_stream_broadcast(msg: &StreamBroadcastMessage) -> AppResult<()> {
+        use crate::stream_registry;
+
+        debug!(
+            "Broadcasting message to local connections on path '{}' from remote instance {}",
+            msg.stream_path, msg.server_id
+        );
+
+        // Get the global stream registry
+        let registry = stream_registry::get_global_registry();
+
+        // Broadcast to local connections on this path
+        match registry.broadcast_to_stream(&msg.stream_path, &msg.message) {
+            Ok(result) => {
+                debug!(
+                    "Broadcast to {} local connections on '{}' (from remote): {} successful, {} failed",
+                    result.total_connections,
+                    msg.stream_path,
+                    result.successful_sends,
+                    result.failed_connections.len()
+                );
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to broadcast to local connections on '{}': {}",
+                    msg.stream_path, e
+                );
+            }
+        }
 
         Ok(())
     }

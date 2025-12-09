@@ -205,6 +205,16 @@ impl Scheduler {
         removed
     }
 
+    /// Get job counts per script for monitoring
+    pub fn get_job_counts(&self) -> HashMap<String, usize> {
+        let guard = self.lock_jobs();
+        let mut counts = HashMap::new();
+        for (script_uri, jobs_vec) in guard.iter() {
+            counts.insert(script_uri.clone(), jobs_vec.len());
+        }
+        counts
+    }
+
     fn normalize_key(handler_name: &str, key: Option<String>) -> Result<String, SchedulerError> {
         let chosen = key.unwrap_or_else(|| handler_name.to_string());
         let trimmed = chosen.trim();
@@ -307,10 +317,119 @@ impl Scheduler {
         }
     }
 
+    /// Generate a unique lock key for a job
+    /// Uses the job's script URI, handler name, and key to create a deterministic lock ID
+    fn generate_lock_key(invocation: &ScheduledInvocation) -> String {
+        format!(
+            "{}:{}:{}",
+            invocation.script_uri, invocation.handler_name, invocation.key
+        )
+    }
+
+    /// Try to acquire PostgreSQL advisory lock for a job
+    /// Returns true if lock was acquired, false if another instance has it
+    async fn try_acquire_job_lock(invocation: &ScheduledInvocation) -> bool {
+        // Get database pool if available
+        let db = match crate::database::get_global_database() {
+            Some(db) => db,
+            None => {
+                // No database available (memory mode), allow execution
+                return true;
+            }
+        };
+
+        let lock_key = Self::generate_lock_key(invocation);
+
+        // Use pg_try_advisory_lock with hashtext for deterministic lock ID
+        // Returns true if lock was acquired, false if already held
+        match sqlx::query_scalar::<_, bool>("SELECT pg_try_advisory_lock(hashtext($1))")
+            .bind(&lock_key)
+            .fetch_one(db.pool())
+            .await
+        {
+            Ok(acquired) => {
+                if acquired {
+                    debug!("Acquired advisory lock for job: {}", lock_key);
+                } else {
+                    debug!(
+                        "Failed to acquire advisory lock for job: {} (another instance has it)",
+                        lock_key
+                    );
+                }
+                acquired
+            }
+            Err(e) => {
+                warn!(
+                    "Error trying to acquire advisory lock for job {}: {}. Allowing execution.",
+                    lock_key, e
+                );
+                // If we can't acquire lock due to error, allow execution to avoid blocking
+                true
+            }
+        }
+    }
+
+    /// Release PostgreSQL advisory lock for a job
+    async fn release_job_lock(invocation: &ScheduledInvocation) {
+        // Get database pool if available
+        let db = match crate::database::get_global_database() {
+            Some(db) => db,
+            None => {
+                // No database available (memory mode), nothing to release
+                return;
+            }
+        };
+
+        let lock_key = Self::generate_lock_key(invocation);
+
+        // Use pg_advisory_unlock with hashtext to release the lock
+        match sqlx::query_scalar::<_, bool>("SELECT pg_advisory_unlock(hashtext($1))")
+            .bind(&lock_key)
+            .fetch_one(db.pool())
+            .await
+        {
+            Ok(released) => {
+                if released {
+                    debug!("Released advisory lock for job: {}", lock_key);
+                } else {
+                    warn!(
+                        "Failed to release advisory lock for job: {} (was not held)",
+                        lock_key
+                    );
+                }
+            }
+            Err(e) => {
+                error!("Error releasing advisory lock for job {}: {}", lock_key, e);
+            }
+        }
+    }
+
     async fn dispatch(invocation: ScheduledInvocation) {
         let script_uri = invocation.script_uri.clone();
         let handler_name = invocation.handler_name.clone();
+        let job_key = invocation.key.clone();
         let invocation_for_engine = invocation.clone();
+
+        // Try to acquire PostgreSQL advisory lock for this job
+        // This ensures only one instance executes the job
+        let lock_acquired = Self::try_acquire_job_lock(&invocation).await;
+
+        if !lock_acquired {
+            debug!(
+                script = %script_uri,
+                handler = %handler_name,
+                job = %job_key,
+                "Skipping job execution - another instance has the lock"
+            );
+            return;
+        }
+
+        debug!(
+            script = %script_uri,
+            handler = %handler_name,
+            job = %job_key,
+            "Acquired lock for job execution"
+        );
 
         let execution = tokio::task::spawn_blocking(move || {
             js_engine::execute_scheduled_handler(&script_uri, &handler_name, &invocation_for_engine)
@@ -365,6 +484,9 @@ impl Scheduler {
                 );
             }
         }
+
+        // Release the advisory lock
+        Self::release_job_lock(&invocation).await;
     }
 
     fn sleep_duration_until(&self, next: Option<DateTime<Utc>>) -> StdDuration {

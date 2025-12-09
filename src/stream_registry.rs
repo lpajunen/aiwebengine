@@ -5,6 +5,51 @@ use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
+/// Send PostgreSQL notification for stream broadcast (cross-instance sync)
+async fn send_stream_broadcast_notification(path: &str, message: &str) -> Result<(), String> {
+    // Get database pool if available
+    let db = match crate::database::get_global_database() {
+        Some(db) => db,
+        None => {
+            // No database available (memory mode), skip notification
+            return Ok(());
+        }
+    };
+
+    // Get server ID
+    let server_id = match crate::notifications::get_server_id() {
+        Some(id) => id,
+        None => {
+            // No server ID available, skip notification
+            return Ok(());
+        }
+    };
+
+    // Create notification payload
+    let payload = serde_json::json!({
+        "stream_path": path,
+        "message": message,
+        "timestamp": chrono::Utc::now().timestamp(),
+        "server_id": server_id,
+    });
+
+    let payload_str = payload.to_string();
+
+    // Send notification using pg_notify
+    sqlx::query("SELECT pg_notify($1, $2)")
+        .bind("stream_broadcast")
+        .bind(&payload_str)
+        .execute(db.pool())
+        .await
+        .map_err(|e| {
+            error!("Failed to send stream broadcast notification: {}", e);
+            format!("Failed to send notification: {}", e)
+        })?;
+
+    debug!("Sent stream broadcast notification for path: {}", path);
+    Ok(())
+}
+
 /// Result of a broadcast operation
 #[derive(Debug, Clone, PartialEq)]
 pub struct BroadcastResult {
@@ -514,6 +559,18 @@ impl StreamRegistry {
         path: &str,
         message: &str,
     ) -> Result<BroadcastResult, String> {
+        // Send cross-instance notification in background (non-blocking)
+        let path_clone = path.to_string();
+        let message_clone = message.to_string();
+        tokio::spawn(async move {
+            if let Err(e) = send_stream_broadcast_notification(&path_clone, &message_clone).await {
+                debug!(
+                    "Failed to send cross-instance broadcast notification: {}",
+                    e
+                );
+            }
+        });
+
         match self.streams.lock() {
             Ok(mut streams) => {
                 match streams.get_mut(path) {
@@ -874,6 +931,11 @@ impl Default for StreamRegistry {
 lazy_static::lazy_static! {
     /// Global stream registry instance
     pub static ref GLOBAL_STREAM_REGISTRY: StreamRegistry = StreamRegistry::new();
+}
+
+/// Get the global stream registry instance
+pub fn get_global_registry() -> &'static StreamRegistry {
+    &GLOBAL_STREAM_REGISTRY
 }
 
 #[cfg(test)]
