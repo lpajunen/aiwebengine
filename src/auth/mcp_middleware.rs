@@ -85,25 +85,25 @@ pub async fn mcp_auth_middleware(
 ) -> Response {
     let headers = request.headers();
     let uri = request.uri();
-    
+
     tracing::debug!("MCP request: {} {}", request.method(), uri);
 
     // Try to extract token from Bearer header first
     let mut token = extract_bearer_token(headers);
 
     // If not found, try query parameter (api_key or token)
-    if token.is_none() {
-        if let Some(query) = request.uri().query() {
-            let params: std::collections::HashMap<String, String> =
-                url::form_urlencoded::parse(query.as_bytes())
-                    .into_owned()
-                    .collect();
+    if token.is_none()
+        && let Some(query) = request.uri().query()
+    {
+        let params: std::collections::HashMap<String, String> =
+            url::form_urlencoded::parse(query.as_bytes())
+                .into_owned()
+                .collect();
 
-            token = params
-                .get("api_key")
-                .or_else(|| params.get("token"))
-                .cloned();
-        }
+        token = params
+            .get("api_key")
+            .or_else(|| params.get("token"))
+            .cloned();
     }
 
     let token = match token {

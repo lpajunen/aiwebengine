@@ -211,8 +211,8 @@ static DYNAMIC_PERSONAL_STORAGE: OnceLock<Mutex<PersonalStorageMap>> = OnceLock:
 static SCRIPT_PRIVILEGE_OVERRIDES: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
 
 /// Safe mutex access with recovery from poisoned state
-fn safe_lock_scripts() -> AppResult<std::sync::MutexGuard<'static, HashMap<String, ScriptMetadata>>>
-{
+pub fn safe_lock_scripts()
+-> AppResult<std::sync::MutexGuard<'static, HashMap<String, ScriptMetadata>>> {
     let store = DYNAMIC_SCRIPTS.get_or_init(|| Mutex::new(HashMap::new()));
 
     match store.lock() {
@@ -349,8 +349,54 @@ pub fn get_db_pool() -> Option<std::sync::Arc<crate::database::Database>> {
     None
 }
 
+/// Send PostgreSQL notification about script change
+async fn send_script_notification(
+    pool: &PgPool,
+    uri: &str,
+    action: &str,
+    server_id: &str,
+) -> AppResult<()> {
+    let channel = match action {
+        "upserted" => "script_upserted",
+        "deleted" => "script_deleted",
+        _ => return Ok(()), // Unknown action, skip notification
+    };
+
+    // Create notification payload
+    let payload = serde_json::json!({
+        "uri": uri,
+        "action": action,
+        "timestamp": chrono::Utc::now().timestamp(),
+        "server_id": server_id,
+    });
+
+    let payload_str = payload.to_string();
+
+    // Send notification using pg_notify
+    sqlx::query("SELECT pg_notify($1, $2)")
+        .bind(channel)
+        .bind(&payload_str)
+        .execute(pool)
+        .await
+        .map_err(|e| {
+            error!("Failed to send {} notification for {}: {}", action, uri, e);
+            AppError::Database {
+                message: format!("Failed to send notification: {}", e),
+                source: None,
+            }
+        })?;
+
+    debug!("Sent {} notification for script: {}", action, uri);
+    Ok(())
+}
+
 /// Database-backed upsert script
-async fn db_upsert_script(pool: &PgPool, uri: &str, content: &str) -> AppResult<()> {
+async fn db_upsert_script(
+    pool: &PgPool,
+    uri: &str,
+    content: &str,
+    server_id: &str,
+) -> AppResult<()> {
     let now = chrono::Utc::now();
 
     // Extract name from URI (last segment after /)
@@ -380,6 +426,8 @@ async fn db_upsert_script(pool: &PgPool, uri: &str, content: &str) -> AppResult<
 
     if update_result.rows_affected() > 0 {
         debug!("Updated existing script in database: {}", uri);
+        // Send notification about script upsert
+        send_script_notification(pool, uri, "upserted", server_id).await?;
         return Ok(());
     }
 
@@ -405,6 +453,8 @@ async fn db_upsert_script(pool: &PgPool, uri: &str, content: &str) -> AppResult<
     })?;
 
     debug!("Created new script in database: {}", uri);
+    // Send notification about script upsert
+    send_script_notification(pool, uri, "upserted", server_id).await?;
     Ok(())
 }
 
@@ -480,7 +530,7 @@ async fn db_list_scripts(pool: &PgPool) -> AppResult<HashMap<String, String>> {
 }
 
 /// Database-backed delete script
-async fn db_delete_script(pool: &PgPool, uri: &str) -> AppResult<bool> {
+async fn db_delete_script(pool: &PgPool, uri: &str, server_id: &str) -> AppResult<bool> {
     let result = sqlx::query(
         r#"
         DELETE FROM scripts WHERE uri = $1
@@ -500,6 +550,8 @@ async fn db_delete_script(pool: &PgPool, uri: &str) -> AppResult<bool> {
     let existed = result.rows_affected() > 0;
     if existed {
         debug!("Deleted script from database: {}", uri);
+        // Send notification about script deletion
+        send_script_notification(pool, uri, "deleted", server_id).await?;
     } else {
         debug!("Script not found in database for deletion: {}", uri);
     }
@@ -1914,7 +1966,7 @@ pub fn bootstrap_scripts() -> AppResult<()> {
                     // Update if content differs
                     if existing_content != code {
                         info!("Updating bootstrap script in database: {}", uri);
-                        if let Err(e) = db_upsert_script(pool, uri, code).await {
+                        if let Err(e) = db_upsert_script(pool, uri, code, "").await {
                             error!("Failed to update bootstrap script {}: {}", uri, e);
                             return Err(e);
                         }
@@ -1923,7 +1975,7 @@ pub fn bootstrap_scripts() -> AppResult<()> {
 
                 if !exists {
                     // Insert the script
-                    if let Err(e) = db_upsert_script(pool, uri, code).await {
+                    if let Err(e) = db_upsert_script(pool, uri, code, "").await {
                         error!("Failed to bootstrap script {}: {}", uri, e);
                         return Err(e);
                     } else {
@@ -2481,11 +2533,12 @@ pub trait Repository: Send + Sync {
 /// PostgreSQL implementation of the Repository trait
 pub struct PostgresRepository {
     pool: PgPool,
+    server_id: String,
 }
 
 impl PostgresRepository {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+    pub fn new(pool: PgPool, server_id: String) -> Self {
+        Self { pool, server_id }
     }
 }
 
@@ -2500,7 +2553,7 @@ impl Repository for PostgresRepository {
     }
 
     async fn upsert_script(&self, uri: &str, content: &str) -> AppResult<()> {
-        db_upsert_script(&self.pool, uri, content).await?;
+        db_upsert_script(&self.pool, uri, content, &self.server_id).await?;
         // Invalidate cache
         if let Ok(mut guard) = safe_lock_scripts() {
             guard.remove(uri);
@@ -2509,7 +2562,7 @@ impl Repository for PostgresRepository {
     }
 
     async fn delete_script(&self, uri: &str) -> AppResult<bool> {
-        let result = db_delete_script(&self.pool, uri).await?;
+        let result = db_delete_script(&self.pool, uri, &self.server_id).await?;
         if result && let Ok(mut guard) = safe_lock_scripts() {
             guard.remove(uri);
         }
@@ -3146,8 +3199,8 @@ pub enum UnifiedRepository {
 }
 
 impl UnifiedRepository {
-    pub fn new_postgres(pool: PgPool) -> Self {
-        Self::Postgres(PostgresRepository::new(pool))
+    pub fn new_postgres(pool: PgPool, server_id: String) -> Self {
+        Self::Postgres(PostgresRepository::new(pool, server_id))
     }
 
     pub fn new_memory() -> Self {
@@ -3421,7 +3474,9 @@ pub fn initialize_repository(repo: UnifiedRepository) -> bool {
 pub fn get_repository() -> &'static UnifiedRepository {
     GLOBAL_REPOSITORY.get_or_init(|| {
         if let Some(db) = crate::database::get_global_database() {
-            UnifiedRepository::Postgres(PostgresRepository::new(db.pool().clone()))
+            // Fallback initialization with empty server_id (shouldn't happen in normal flow)
+            warn!("Repository not initialized, using fallback with empty server_id");
+            UnifiedRepository::Postgres(PostgresRepository::new(db.pool().clone(), String::new()))
         } else {
             UnifiedRepository::new_memory()
         }

@@ -22,6 +22,7 @@ pub mod http_client;
 pub mod js_engine;
 pub mod mcp;
 pub mod middleware;
+pub mod notifications;
 pub mod parsers;
 pub mod repository;
 pub mod safe_helpers;
@@ -223,8 +224,13 @@ async fn initialize_database_and_repository(config: &config::Config) -> AppResul
                 warn!("Global database was already initialized");
             }
 
-            // Initialize UnifiedRepository with Postgres
-            let repo = repository::UnifiedRepository::new_postgres(db_arc.pool().clone());
+            // Generate unique server ID for this instance
+            let server_id = notifications::generate_server_id();
+            info!("Generated server ID: {}", server_id);
+
+            // Initialize UnifiedRepository with Postgres and server_id
+            let repo =
+                repository::UnifiedRepository::new_postgres(db_arc.pool().clone(), server_id);
             if repository::initialize_repository(repo) {
                 info!("Global repository initialized with Postgres");
             } else {
@@ -604,7 +610,9 @@ async fn initialize_auth_manager(
             arr
         }
         _ => {
-            warn!("security.csrf_key not configured. Generating random key. CSRF tokens will be invalid after restart.");
+            warn!(
+                "security.csrf_key not configured. Generating random key. CSRF tokens will be invalid after restart."
+            );
             rand::random::<[u8; 32]>()
         }
     };
@@ -630,7 +638,9 @@ async fn initialize_auth_manager(
             arr
         }
         _ => {
-            warn!("security.session_encryption_key not configured. Generating random key. Sessions will be invalid after restart.");
+            warn!(
+                "security.session_encryption_key not configured. Generating random key. Sessions will be invalid after restart."
+            );
             rand::random::<[u8; 32]>()
         }
     };
@@ -753,6 +763,30 @@ async fn initialize_components(config: &config::Config) -> AppResult<()> {
 
     // Initialize database connection and repository
     initialize_database_and_repository(config).await?;
+
+    // Start PostgreSQL notification listener if using PostgreSQL storage
+    if config.repository.storage_type == "postgresql"
+        && let Some(db) = database::get_global_database()
+    {
+        info!("Starting PostgreSQL notification listener for script synchronization...");
+        let server_id = notifications::generate_server_id();
+        let listener = Arc::new(notifications::NotificationListener::new(
+            server_id.clone(),
+            db.pool().clone(),
+        ));
+
+        if let Err(e) = listener.start().await {
+            error!("Failed to start notification listener: {}", e);
+            // Don't fail startup, just log the error
+        } else {
+            info!(
+                "PostgreSQL notification listener started with server_id: {}",
+                server_id
+            );
+            // Store listener globally for cleanup
+            notifications::initialize_global_listener(listener);
+        }
+    }
 
     // Ensure scheduler state exists before scripts start registering jobs
     scheduler::initialize_global_scheduler();
