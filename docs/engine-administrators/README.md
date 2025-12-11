@@ -226,4 +226,3 @@ See [04-SECRETS-AND-SECURITY.md](04-SECRETS-AND-SECURITY.md) for comprehensive s
 ---
 
 **Last updated:** December 2025
-

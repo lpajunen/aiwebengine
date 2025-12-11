@@ -74,15 +74,15 @@ make docker-prod
 
 ### Critical Variables
 
-| Variable                                     | Purpose                      | How to Generate            |
-| -------------------------------------------- | ---------------------------- | -------------------------- |
-| `APP_AUTH__JWT_SECRET`                       | JWT signing key              | `openssl rand -base64 48`  |
-| `APP_SECURITY__API_KEY`                      | API authentication           | `openssl rand -hex 32`     |
-| `APP_SECURITY__CSRF_KEY`                     | CSRF protection              | `openssl rand -base64 32`  |
-| `APP_SECURITY__SESSION_ENCRYPTION_KEY`       | Session encryption           | `openssl rand -base64 32`  |
-| `APP_REPOSITORY__DATABASE_URL`               | Database connection          | Manual setup               |
-| `APP_AUTH__PROVIDERS__GOOGLE__CLIENT_ID`     | Google OAuth                 | Google Console             |
-| `APP_AUTH__PROVIDERS__GOOGLE__CLIENT_SECRET` | Google OAuth                 | Google Console             |
+| Variable                                     | Purpose             | How to Generate           |
+| -------------------------------------------- | ------------------- | ------------------------- |
+| `APP_AUTH__JWT_SECRET`                       | JWT signing key     | `openssl rand -base64 48` |
+| `APP_SECURITY__API_KEY`                      | API authentication  | `openssl rand -hex 32`    |
+| `APP_SECURITY__CSRF_KEY`                     | CSRF protection     | `openssl rand -base64 32` |
+| `APP_SECURITY__SESSION_ENCRYPTION_KEY`       | Session encryption  | `openssl rand -base64 32` |
+| `APP_REPOSITORY__DATABASE_URL`               | Database connection | Manual setup              |
+| `APP_AUTH__PROVIDERS__GOOGLE__CLIENT_ID`     | Google OAuth        | Google Console            |
+| `APP_AUTH__PROVIDERS__GOOGLE__CLIENT_SECRET` | Google OAuth        | Google Console            |
 
 ### Naming Convention
 
@@ -165,12 +165,12 @@ cp config.production.toml config.toml
 
 ### Key Differences
 
-| Setting                     | Local   | Staging  | Production |
-| --------------------------- | ------- | -------- | ---------- |
-| `logging.level`             | `debug` | `info`   | `info`     |
-| `security.enable_csrf`      | `false` | `true`   | `true`     |
+| Setting                         | Local   | Staging  | Production |
+| ------------------------------- | ------- | -------- | ---------- |
+| `logging.level`                 | `debug` | `info`   | `info`     |
+| `security.enable_csrf`          | `false` | `true`   | `true`     |
 | `security.cors_allowed_origins` | `["*"]` | Specific | Specific   |
-| Session cookie `secure`     | `false` | `true`   | `true`     |
+| Session cookie `secure`         | `false` | `true`   | `true`     |
 
 ---
 

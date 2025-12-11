@@ -52,15 +52,15 @@ cp config.production.toml config.toml
 
 ### Environment Comparison
 
-| Setting            | Local       | Staging    | Production      |
-| ------------------ | ----------- | ---------- | --------------- |
-| **Purpose**        | Development | Testing    | Live deployment |
-| **Log Level**      | `debug`     | `info`     | `info`          |
-| **Database**       | PostgreSQL  | PostgreSQL | PostgreSQL      |
-| **CORS**           | `["*"]`     | Specific   | Specific        |
-| **Cookie Secure**  | `false`     | `true`     | `true`          |
-| **Rate Limiting**  | Disabled    | Enabled    | Enabled         |
-| **CSRF Protection**| Disabled    | Enabled    | Enabled         |
+| Setting             | Local       | Staging    | Production      |
+| ------------------- | ----------- | ---------- | --------------- |
+| **Purpose**         | Development | Testing    | Live deployment |
+| **Log Level**       | `debug`     | `info`     | `info`          |
+| **Database**        | PostgreSQL  | PostgreSQL | PostgreSQL      |
+| **CORS**            | `["*"]`     | Specific   | Specific        |
+| **Cookie Secure**   | `false`     | `true`     | `true`          |
+| **Rate Limiting**   | Disabled    | Enabled    | Enabled         |
+| **CSRF Protection** | Disabled    | Enabled    | Enabled         |
 
 ---
 
@@ -609,66 +609,66 @@ export APP_LOGGING__LEVEL="debug"
 
 Quick lookup for all available settings:
 
-| Section         | Key                          | Type    | Range/Options               | Default       |
-| --------------- | ---------------------------- | ------- | --------------------------- | ------------- |
-| `[server]`      | `host`                       | string  | IP address                  | `127.0.0.1`   |
-| `[server]`      | `port`                       | integer | 1-65535                     | `8080`        |
-| `[server]`      | `base_url`                   | string  | URL                         | `None`        |
-| `[server]`      | `request_timeout_secs`       | integer | 1-300                       | `30`          |
-| `[server]`      | `keep_alive_timeout_secs`    | integer | 1-600                       | `60`          |
-| `[server]`      | `max_connections`            | integer | 1-100000                    | `10000`       |
-| `[server]`      | `graceful_shutdown`          | boolean | true/false                  | `true`        |
-| `[server]`      | `shutdown_timeout_secs`      | integer | 1-300                       | `30`          |
-| `[logging]`     | `level`                      | string  | trace/debug/info/warn/error | `info`        |
-| `[logging]`     | `format`                     | string  | json/pretty/compact         | `pretty`      |
-| `[logging]`     | `file_enabled`               | boolean | true/false                  | `false`       |
-| `[logging]`     | `file_path`                  | string  | Path                        | `None`        |
-| `[logging]`     | `file_max_size_mb`           | integer | 1-1000                      | `100`         |
-| `[logging]`     | `file_max_files`             | integer | 1-100                       | `10`          |
-| `[logging]`     | `console_enabled`            | boolean | true/false                  | `true`        |
-| `[javascript]`  | `execution_timeout_ms`       | integer | 100-60000                   | `5000`        |
-| `[javascript]`  | `max_memory_bytes`           | integer | 1048576-1073741824          | `10485760`    |
-| `[javascript]`  | `max_concurrent_executions`  | integer | 1-1000                      | `100`         |
-| `[javascript]`  | `enable_compilation_cache`   | boolean | true/false                  | `true`        |
-| `[javascript]`  | `max_cached_scripts`         | integer | 1-10000                     | `1000`        |
-| `[javascript]`  | `stack_size_bytes`           | integer | 8192-10485760               | `1048576`     |
-| `[javascript]`  | `enable_init_functions`      | boolean | true/false                  | `true`        |
-| `[javascript]`  | `fail_startup_on_init_error` | boolean | true/false                  | `false`       |
-| `[repository]`  | `storage_type`               | string  | postgresql/memory           | `memory`      |
-| `[repository]`  | `database_url`               | string  | Connection string           | `None`        |
-| `[repository]`  | `max_script_size_bytes`      | integer | 1024-10485760               | `1048576`     |
-| `[repository]`  | `max_asset_size_bytes`       | integer | 1024-104857600              | `10485760`    |
-| `[repository]`  | `max_log_messages_per_script`| integer | 1-10000                     | `100`         |
-| `[repository]`  | `log_retention_hours`        | integer | 1-720                       | `24`          |
-| `[repository]`  | `auto_prune_logs`            | boolean | true/false                  | `true`        |
-| `[security]`    | `enable_cors`                | boolean | true/false                  | `true`        |
-| `[security]`    | `cors_allowed_origins`       | array   | URLs                        | `["*"]`       |
-| `[security]`    | `enable_csrf`                | boolean | true/false                  | `false`       |
-| `[security]`    | `csrf_key`                   | string  | Base64 key                  | `None`        |
-| `[security]`    | `enable_rate_limiting`       | boolean | true/false                  | `true`        |
-| `[security]`    | `rate_limit_per_minute`      | integer | 0-10000                     | `100`         |
-| `[security]`    | `enable_security_headers`    | boolean | true/false                  | `true`        |
-| `[security]`    | `max_request_body_bytes`     | integer | 1024-104857600              | `1048576`     |
-| `[security]`    | `session_encryption_key`     | string  | Base64 key                  | `None`        |
-| `[security]`    | `api_key`                    | string  | API key                     | `None`        |
-| `[auth]`        | `enabled`                    | boolean | true/false                  | `true`        |
-| `[auth]`        | `jwt_secret`                 | string  | Min 32 chars                | Required      |
-| `[auth]`        | `session_timeout`            | integer | 60-604800                   | `3600`        |
-| `[auth]`        | `max_concurrent_sessions`    | integer | 1-10                        | `3`           |
-| `[auth]`        | `bootstrap_admins`           | array   | Email addresses             | `[]`          |
-| `[auth.cookie]` | `name`                       | string  | Cookie name                 | `aiwebengine_session` |
-| `[auth.cookie]` | `path`                       | string  | Path                        | `/`           |
-| `[auth.cookie]` | `secure`                     | boolean | true/false                  | `false`       |
-| `[auth.cookie]` | `http_only`                  | boolean | true/false                  | `true`        |
-| `[auth.cookie]` | `same_site`                  | string  | strict/lax/none             | `lax`         |
-| `[performance]` | `enable_compression`         | boolean | true/false                  | `true`        |
-| `[performance]` | `compression_level`          | integer | 1-9                         | `6`           |
-| `[performance]` | `enable_response_cache`      | boolean | true/false                  | `false`       |
-| `[performance]` | `response_cache_ttl_secs`    | integer | 1-86400                     | `300`         |
-| `[performance]` | `max_cached_responses`       | integer | 1-100000                    | `1000`        |
-| `[performance]` | `worker_threads`             | integer | 1-32 (or None)              | `None`        |
-| `[performance]` | `enable_metrics`             | boolean | true/false                  | `true`        |
-| `[performance]` | `metrics_interval_secs`      | integer | 1-3600                      | `60`          |
+| Section         | Key                           | Type    | Range/Options               | Default               |
+| --------------- | ----------------------------- | ------- | --------------------------- | --------------------- |
+| `[server]`      | `host`                        | string  | IP address                  | `127.0.0.1`           |
+| `[server]`      | `port`                        | integer | 1-65535                     | `8080`                |
+| `[server]`      | `base_url`                    | string  | URL                         | `None`                |
+| `[server]`      | `request_timeout_secs`        | integer | 1-300                       | `30`                  |
+| `[server]`      | `keep_alive_timeout_secs`     | integer | 1-600                       | `60`                  |
+| `[server]`      | `max_connections`             | integer | 1-100000                    | `10000`               |
+| `[server]`      | `graceful_shutdown`           | boolean | true/false                  | `true`                |
+| `[server]`      | `shutdown_timeout_secs`       | integer | 1-300                       | `30`                  |
+| `[logging]`     | `level`                       | string  | trace/debug/info/warn/error | `info`                |
+| `[logging]`     | `format`                      | string  | json/pretty/compact         | `pretty`              |
+| `[logging]`     | `file_enabled`                | boolean | true/false                  | `false`               |
+| `[logging]`     | `file_path`                   | string  | Path                        | `None`                |
+| `[logging]`     | `file_max_size_mb`            | integer | 1-1000                      | `100`                 |
+| `[logging]`     | `file_max_files`              | integer | 1-100                       | `10`                  |
+| `[logging]`     | `console_enabled`             | boolean | true/false                  | `true`                |
+| `[javascript]`  | `execution_timeout_ms`        | integer | 100-60000                   | `5000`                |
+| `[javascript]`  | `max_memory_bytes`            | integer | 1048576-1073741824          | `10485760`            |
+| `[javascript]`  | `max_concurrent_executions`   | integer | 1-1000                      | `100`                 |
+| `[javascript]`  | `enable_compilation_cache`    | boolean | true/false                  | `true`                |
+| `[javascript]`  | `max_cached_scripts`          | integer | 1-10000                     | `1000`                |
+| `[javascript]`  | `stack_size_bytes`            | integer | 8192-10485760               | `1048576`             |
+| `[javascript]`  | `enable_init_functions`       | boolean | true/false                  | `true`                |
+| `[javascript]`  | `fail_startup_on_init_error`  | boolean | true/false                  | `false`               |
+| `[repository]`  | `storage_type`                | string  | postgresql/memory           | `memory`              |
+| `[repository]`  | `database_url`                | string  | Connection string           | `None`                |
+| `[repository]`  | `max_script_size_bytes`       | integer | 1024-10485760               | `1048576`             |
+| `[repository]`  | `max_asset_size_bytes`        | integer | 1024-104857600              | `10485760`            |
+| `[repository]`  | `max_log_messages_per_script` | integer | 1-10000                     | `100`                 |
+| `[repository]`  | `log_retention_hours`         | integer | 1-720                       | `24`                  |
+| `[repository]`  | `auto_prune_logs`             | boolean | true/false                  | `true`                |
+| `[security]`    | `enable_cors`                 | boolean | true/false                  | `true`                |
+| `[security]`    | `cors_allowed_origins`        | array   | URLs                        | `["*"]`               |
+| `[security]`    | `enable_csrf`                 | boolean | true/false                  | `false`               |
+| `[security]`    | `csrf_key`                    | string  | Base64 key                  | `None`                |
+| `[security]`    | `enable_rate_limiting`        | boolean | true/false                  | `true`                |
+| `[security]`    | `rate_limit_per_minute`       | integer | 0-10000                     | `100`                 |
+| `[security]`    | `enable_security_headers`     | boolean | true/false                  | `true`                |
+| `[security]`    | `max_request_body_bytes`      | integer | 1024-104857600              | `1048576`             |
+| `[security]`    | `session_encryption_key`      | string  | Base64 key                  | `None`                |
+| `[security]`    | `api_key`                     | string  | API key                     | `None`                |
+| `[auth]`        | `enabled`                     | boolean | true/false                  | `true`                |
+| `[auth]`        | `jwt_secret`                  | string  | Min 32 chars                | Required              |
+| `[auth]`        | `session_timeout`             | integer | 60-604800                   | `3600`                |
+| `[auth]`        | `max_concurrent_sessions`     | integer | 1-10                        | `3`                   |
+| `[auth]`        | `bootstrap_admins`            | array   | Email addresses             | `[]`                  |
+| `[auth.cookie]` | `name`                        | string  | Cookie name                 | `aiwebengine_session` |
+| `[auth.cookie]` | `path`                        | string  | Path                        | `/`                   |
+| `[auth.cookie]` | `secure`                      | boolean | true/false                  | `false`               |
+| `[auth.cookie]` | `http_only`                   | boolean | true/false                  | `true`                |
+| `[auth.cookie]` | `same_site`                   | string  | strict/lax/none             | `lax`                 |
+| `[performance]` | `enable_compression`          | boolean | true/false                  | `true`                |
+| `[performance]` | `compression_level`           | integer | 1-9                         | `6`                   |
+| `[performance]` | `enable_response_cache`       | boolean | true/false                  | `false`               |
+| `[performance]` | `response_cache_ttl_secs`     | integer | 1-86400                     | `300`                 |
+| `[performance]` | `max_cached_responses`        | integer | 1-100000                    | `1000`                |
+| `[performance]` | `worker_threads`              | integer | 1-32 (or None)              | `None`                |
+| `[performance]` | `enable_metrics`              | boolean | true/false                  | `true`                |
+| `[performance]` | `metrics_interval_secs`       | integer | 1-3600                      | `60`                  |
 
 ---
 

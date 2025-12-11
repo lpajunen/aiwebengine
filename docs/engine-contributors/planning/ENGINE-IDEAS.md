@@ -1054,18 +1054,21 @@ The engine provides an impressive array of JavaScript APIs with excellent securi
 ### ✅ Well-Implemented Capabilities
 
 #### 1. HTTP Route Management (`routeRegistry`)
+
 - ✅ Route registration with metadata
-- ✅ Asset route registration  
+- ✅ Asset route registration
 - ✅ Route listing and OpenAPI generation
 - ✅ Comprehensive security with capability checks
 
 #### 2. Real-Time Streaming (`routeRegistry`)
+
 - ✅ SSE stream registration
 - ✅ Broadcast messages to all connections
 - ✅ Filtered broadcasting with metadata matching
 - ✅ Stream listing
 
 #### 3. Script Management (`scriptStorage`)
+
 - ✅ List, get, upsert, delete scripts
 - ✅ Ownership management (add/remove owners)
 - ✅ Privilege management (admin-only)
@@ -1073,36 +1076,43 @@ The engine provides an impressive array of JavaScript APIs with excellent securi
 - ✅ Security profiles
 
 #### 4. Asset Management (`assetStorage`)
+
 - ✅ List, fetch, upsert, delete assets
 - ✅ Base64 encoding/decoding
 - ✅ MIME type support
 - ✅ 10MB size limits
 
 #### 5. GraphQL Support (`graphQLRegistry`)
+
 - ✅ Query, mutation, subscription registration
 - ✅ Direct GraphQL execution from JS
 - ✅ Subscription messaging (broadcast and filtered)
 
 #### 6. MCP (Model Context Protocol) (`mcpRegistry`)
+
 - ✅ Tool registration
 - ✅ Prompt registration
 
 #### 7. Storage APIs
+
 - ✅ `sharedStorage` - Script-scoped key-value storage
 - ✅ `personalStorage` - User-scoped authenticated storage
 
 #### 8. HTTP Client (`fetch`)
+
 - ✅ Full HTTP methods support
 - ✅ Secret injection via `{{secret:identifier}}`
 - ✅ Security validation (blocked localhost/private IPs)
 - ✅ 10MB response limit
 
 #### 9. Logging (`console`)
+
 - ✅ Multiple log levels (log, info, warn, error, debug)
 - ✅ List logs with timestamps
 - ✅ Prune logs
 
 #### 10. Utilities
+
 - ✅ `convert.markdown_to_html()`
 - ✅ `convert.render_handlebars_template()`
 - ✅ `checkDatabaseHealth()`
@@ -1119,6 +1129,7 @@ No database query API is exposed to JavaScript. Scripts cannot persist structure
 **Current State:** ❌ **NOT IMPLEMENTED**
 
 **What's Missing:**
+
 - No SQL query execution from JavaScript
 - No ORM-like query builder
 - No transaction support
@@ -1129,24 +1140,24 @@ No database query API is exposed to JavaScript. Scripts cannot persist structure
 Severely limits application complexity - scripts cannot build real applications with relational data.
 
 **Proposed Solution:**
+
 ```javascript
 // Basic query API
-db.query("SELECT * FROM users WHERE id = $1", [userId])
-db.execute("INSERT INTO logs (message) VALUES ($1)", [msg])
+db.query("SELECT * FROM users WHERE id = $1", [userId]);
+db.execute("INSERT INTO logs (message) VALUES ($1)", [msg]);
 
 // Transaction support
 db.transaction(async (tx) => {
   await tx.query("...");
   await tx.query("...");
-})
+});
 
 // Query builder (optional)
-db.table('users')
-  .where('email', email)
-  .first()
+db.table("users").where("email", email).first();
 ```
 
 **Implementation Considerations:**
+
 - Use existing PostgreSQL connection pool
 - Prepared statement support for security
 - Row-level security integration
@@ -1157,6 +1168,7 @@ db.table('users')
 **Priority:** 🔴 **CRITICAL** - This is the #1 gap for building real applications
 
 **Estimated Effort:** Large (3-4 weeks)
+
 - Week 1: Design API, prepare statement handling
 - Week 2: Implement basic query/execute functions
 - Week 3: Add transaction support
@@ -1172,6 +1184,7 @@ No cryptographic or hashing functions are exposed to JavaScript.
 **Current State:** ❌ **NOT EXPOSED**
 
 **What's Missing:**
+
 - No password hashing (bcrypt/argon2)
 - No UUID generation
 - No random token generation
@@ -1183,28 +1196,30 @@ No cryptographic or hashing functions are exposed to JavaScript.
 Scripts cannot implement secure authentication, generate tokens, or handle sensitive data properly.
 
 **Proposed Solution:**
+
 ```javascript
 // Hashing
-crypto.hash('sha256', data)
-crypto.bcrypt(password, rounds)
-crypto.argon2(password, { timeCost: 3, memoryCost: 12 })
+crypto.hash("sha256", data);
+crypto.bcrypt(password, rounds);
+crypto.argon2(password, { timeCost: 3, memoryCost: 12 });
 
 // UUID and tokens
-crypto.uuid() // v4
-crypto.randomToken(32) // hex string
-crypto.randomBytes(16) // base64
+crypto.uuid(); // v4
+crypto.randomToken(32); // hex string
+crypto.randomBytes(16); // base64
 
 // HMAC and signing
-crypto.hmac('sha256', key, data)
-crypto.sign(data, privateKey)
-crypto.verify(data, signature, publicKey)
+crypto.hmac("sha256", key, data);
+crypto.sign(data, privateKey);
+crypto.verify(data, signature, publicKey);
 
 // Encryption (optional)
-crypto.encrypt(data, key, algorithm)
-crypto.decrypt(encrypted, key, algorithm)
+crypto.encrypt(data, key, algorithm);
+crypto.decrypt(encrypted, key, algorithm);
 ```
 
 **Security Considerations:**
+
 - All operations must use secure Rust implementations
 - No JavaScript implementations (vulnerable to timing attacks)
 - Rate limiting on expensive operations (bcrypt, argon2)
@@ -1213,6 +1228,7 @@ crypto.decrypt(encrypted, key, algorithm)
 **Priority:** 🔴 **CRITICAL** - Security essential for authentication and data protection
 
 **Estimated Effort:** Medium (2-3 weeks)
+
 - Week 1: Implement hashing and UUID functions
 - Week 2: Add HMAC, signing, encryption
 - Week 3: Rate limiting, testing, documentation
@@ -1227,6 +1243,7 @@ Limited request body parsing - only supports form data and basic raw body.
 **Current State:** ⚠️ **LIMITED**
 
 **What's Missing:**
+
 - No automatic JSON body parsing
 - No multipart/form-data file upload support
 - No XML parsing
@@ -1235,28 +1252,31 @@ Limited request body parsing - only supports form data and basic raw body.
 - No automatic content-type detection
 
 **Current Workaround:**
+
 ```javascript
 // Manual JSON parsing required
 const data = req.body ? JSON.parse(req.body) : {};
 ```
 
 **Proposed Solution:**
+
 ```javascript
 function handler(context) {
   const req = context.request;
-  
+
   // Auto-parsed based on Content-Type
   const data = req.json; // application/json
   const files = req.files; // multipart/form-data
   const text = req.text; // text/plain
   const xml = req.xml; // application/xml (optional)
-  
+
   // File upload object
-  files.avatar // { name, size, mimetype, content (base64) }
+  files.avatar; // { name, size, mimetype, content (base64) }
 }
 ```
 
 **Implementation Requirements:**
+
 - Automatic content-type detection
 - JSON parsing with error handling
 - Multipart parsing for file uploads
@@ -1278,6 +1298,7 @@ Manual header and cookie management required, no convenience methods.
 **Current State:** ⚠️ **BASIC**
 
 **What's Missing:**
+
 - No cookie setting API
 - No session management helpers
 - No response header helpers
@@ -1286,15 +1307,17 @@ Manual header and cookie management required, no convenience methods.
 - No response compression options
 
 **Current Pattern:**
+
 ```javascript
 return {
   status: 200,
   body: JSON.stringify(data),
-  contentType: "application/json"
+  contentType: "application/json",
 };
 ```
 
 **Proposed Solution:**
+
 ```javascript
 // Static response helpers
 return Response.json({ data }, { status: 200 });
@@ -1305,13 +1328,12 @@ return Response.notFound();
 return Response.unauthorized();
 
 // Cookie support
-return Response.json(data)
-  .setCookie("session", value, { 
-    httpOnly: true, 
-    secure: true,
-    sameSite: "strict",
-    maxAge: 3600 
-  });
+return Response.json(data).setCookie("session", value, {
+  httpOnly: true,
+  secure: true,
+  sameSite: "strict",
+  maxAge: 3600,
+});
 
 // Header support
 return Response.json(data)
@@ -1320,6 +1342,7 @@ return Response.json(data)
 ```
 
 **Implementation Options:**
+
 1. Extend existing response object structure
 2. Add Response builder class
 3. Provide convenience functions
@@ -1338,16 +1361,18 @@ Partial authentication implementation with limited context.
 **Current State:** ⚠️ **PARTIALLY IMPLEMENTED**
 
 **What's Available:**
+
 ```javascript
-req.auth.isAuthenticated
-req.auth.userId
-req.auth.userEmail
-req.auth.userName
-req.auth.provider
-req.auth.user
+req.auth.isAuthenticated;
+req.auth.userId;
+req.auth.userEmail;
+req.auth.userName;
+req.auth.provider;
+req.auth.user;
 ```
 
 **What's Missing:**
+
 - No user roles/permissions querying
 - No token refresh API
 - No logout API
@@ -1357,20 +1382,21 @@ req.auth.user
 - No permission checking helpers
 
 **Proposed Solution:**
+
 ```javascript
 // Extended auth context
-req.auth.roles // ['user', 'editor']
-req.auth.permissions // ['read:users', 'write:posts']
-req.auth.hasRole('admin')
-req.auth.hasPermission('write:users')
-req.auth.hasAnyRole(['admin', 'moderator'])
-req.auth.tokenExpiresAt // timestamp
-req.auth.mfaEnabled // boolean
+req.auth.roles; // ['user', 'editor']
+req.auth.permissions; // ['read:users', 'write:posts']
+req.auth.hasRole("admin");
+req.auth.hasPermission("write:users");
+req.auth.hasAnyRole(["admin", "moderator"]);
+req.auth.tokenExpiresAt; // timestamp
+req.auth.mfaEnabled; // boolean
 
 // Auth actions
-req.auth.logout()
-req.auth.refreshToken()
-req.auth.invalidateSession()
+req.auth.logout();
+req.auth.refreshToken();
+req.auth.invalidateSession();
 ```
 
 **Priority:** 🟠 **HIGH** - Required for robust authorization
@@ -1389,25 +1415,26 @@ No email sending API available.
 **Current State:** ❌ **NOT IMPLEMENTED**
 
 **What's Needed:**
+
 ```javascript
 await email.send({
   to: "user@example.com",
   subject: "Welcome",
   template: "welcome",
-  data: { name: "John" }
+  data: { name: "John" },
 });
 
 // SMS (optional)
 await sms.send({
   to: "+1234567890",
-  message: "Your code is 123456"
+  message: "Your code is 123456",
 });
 
 // Push notifications (future)
 await push.send({
   userId: "user123",
   title: "New Message",
-  body: "You have a new message"
+  body: "You have a new message",
 });
 ```
 
@@ -1425,25 +1452,27 @@ No background task scheduling available.
 **Current State:** ❌ **NOT IMPLEMENTED**
 
 **What's Needed:**
+
 ```javascript
 // Cron-like scheduling
 scheduler.register("cleanup-logs", "0 0 * * *", cleanupOldLogs);
 scheduler.register("send-reminders", "0 9 * * MON", sendWeeklyReminders);
 
 // Delayed execution
-scheduler.delay("send-reminder", { 
+scheduler.delay("send-reminder", {
   delay: 3600000, // 1 hour in ms
-  args: { userId: "123" }
+  args: { userId: "123" },
 });
 
 // Task management
-scheduler.list()
-scheduler.cancel("task-id")
-scheduler.pause("task-id")
-scheduler.resume("task-id")
+scheduler.list();
+scheduler.cancel("task-id");
+scheduler.pause("task-id");
+scheduler.resume("task-id");
 ```
 
 **Implementation Notes:**
+
 - Persistent task storage in database
 - Task execution tracking
 - Error handling and retries
@@ -1464,6 +1493,7 @@ Only basic sharedStorage without expiration support.
 **Current State:** ⚠️ **LIMITED - no TTL/expiration**
 
 **What's Needed:**
+
 ```javascript
 // Set with TTL
 cache.set(key, value, { ttl: 3600 }); // 1 hour
@@ -1472,8 +1502,8 @@ cache.set(key, value, { ttl: 3600 }); // 1 hour
 const value = cache.get(key, defaultValue);
 
 // Pattern operations
-cache.delete('user:*'); // Delete matching pattern
-cache.keys('session:*'); // List matching keys
+cache.delete("user:*"); // Delete matching pattern
+cache.keys("session:*"); // List matching keys
 
 // Cache management
 cache.clear(); // Clear all
@@ -1495,12 +1525,13 @@ Manual validation in every handler.
 **Current State:** ❌ **MANUAL VALIDATION REQUIRED**
 
 **What's Needed:**
+
 ```javascript
 const schema = {
-  email: 'email|required',
-  age: 'integer|min:18|max:120',
-  name: 'string|required|max:100',
-  tags: 'array|max:10'
+  email: "email|required",
+  age: "integer|min:18|max:120",
+  name: "string|required|max:100",
+  tags: "array|max:10",
 };
 
 const validated = validate(req.form, schema);
@@ -1508,12 +1539,12 @@ const validated = validate(req.form, schema);
 
 // Or schema objects
 const UserSchema = {
-  type: 'object',
+  type: "object",
   properties: {
-    email: { type: 'string', format: 'email' },
-    age: { type: 'integer', minimum: 18 }
+    email: { type: "string", format: "email" },
+    age: { type: "integer", minimum: 18 },
   },
-  required: ['email']
+  required: ["email"],
 };
 ```
 
@@ -1531,23 +1562,24 @@ Console logging only accepts strings, no structured data.
 **Current State:** ⚠️ **STRING-ONLY**
 
 **What's Needed:**
+
 ```javascript
 // Structured logging
 console.log("User action", { userId, action, timestamp });
 console.error("Operation failed", { error, context });
 
 // Metrics
-console.metrics({ 
-  event: "login", 
+console.metrics({
+  event: "login",
   duration: 123,
-  status: "success" 
+  status: "success",
 });
 
 // Query logs
 const logs = console.query({
-  level: 'error',
+  level: "error",
   since: timestamp,
-  limit: 100
+  limit: 100,
 });
 ```
 
@@ -1567,6 +1599,7 @@ Only SSE streams, no bidirectional WebSocket.
 **Current State:** ⚠️ **SSE ONLY**
 
 **Note:** SSE works for many cases, but WebSockets needed for:
+
 - Gaming/real-time collaboration
 - Bidirectional protocols
 - Binary data streaming
@@ -1585,14 +1618,15 @@ No performance measurement tools available.
 **Current State:** ❌ **NOT EXPOSED**
 
 **What's Needed:**
+
 ```javascript
 const start = performance.now();
 // ... work ...
 const duration = performance.now() - start;
 
-performance.mark('start-processing');
+performance.mark("start-processing");
 // ... work ...
-performance.measure('processing', 'start-processing');
+performance.measure("processing", "start-processing");
 
 // Memory usage
 const usage = performance.memory();
@@ -1612,13 +1646,14 @@ Basic fetch functionality without advanced features.
 **Current State:** ⚠️ **GOOD BUT LIMITED**
 
 **What Could Improve:**
+
 ```javascript
 fetch(url, {
   retries: 3,
   timeout: 5000,
   retryDelay: 1000,
   onProgress: (bytes) => {},
-  validateStatus: (status) => status < 500
+  validateStatus: (status) => status < 500,
 });
 ```
 
@@ -1631,6 +1666,7 @@ fetch(url, {
 ### 📊 Implementation Priority Summary
 
 #### 🔴 Critical (Must Have - Next 1-2 Months)
+
 1. **Database Query API** - Essential for real applications (3-4 weeks)
 2. **Cryptographic Functions** - Security essential (2-3 weeks)
 3. **Request Body Parsing** - Better JSON/file upload (2 weeks)
@@ -1640,6 +1676,7 @@ fetch(url, {
 **Total:** ~10-13 weeks
 
 #### 🟡 Medium (Should Have - Next 3-6 Months)
+
 6. **Email/Notifications** - User communication (2-3 weeks)
 7. **Scheduled Tasks** - Background jobs (3-4 weeks)
 8. **Cache with TTL** - Performance (1-2 weeks)
@@ -1649,6 +1686,7 @@ fetch(url, {
 **Total:** ~9-13 weeks
 
 #### 🟢 Low (Nice to Have - Future)
+
 11. **WebSocket Support** - Advanced real-time (4+ weeks)
 12. **Performance APIs** - Profiling tools (1 week)
 13. **HTTP Client Enhancements** - Advanced features (1-2 weeks)
@@ -1660,31 +1698,22 @@ fetch(url, {
 ### Recommended Phased Implementation
 
 **Phase 1: Foundation (Months 1-2)**
+
 1. Database query API
 2. Crypto/hashing functions
 3. Better request parsing
 
 **Rationale:** These are blocking features for building production applications
 
-**Phase 2: Developer Experience (Month 3)**
-4. Response builder helpers
-5. Request validation framework
-6. Enhanced auth context
+**Phase 2: Developer Experience (Month 3)** 4. Response builder helpers 5. Request validation framework 6. Enhanced auth context
 
 **Rationale:** Significantly improve developer productivity and code quality
 
-**Phase 3: Advanced Features (Months 4-6)**
-7. Email sending API
-8. Scheduled tasks/cron
-9. Cache API with TTL
-10. Structured logging
+**Phase 3: Advanced Features (Months 4-6)** 7. Email sending API 8. Scheduled tasks/cron 9. Cache API with TTL 10. Structured logging
 
 **Rationale:** Common requirements for mature applications
 
-**Phase 4: Future Enhancements**
-11. WebSocket support
-12. Performance measurement
-13. Advanced HTTP client features
+**Phase 4: Future Enhancements** 11. WebSocket support 12. Performance measurement 13. Advanced HTTP client features
 
 **Rationale:** Nice-to-have improvements for specific use cases
 
