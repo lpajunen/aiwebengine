@@ -69,11 +69,6 @@ services:
       # Server configuration  
       - APP_SERVER__HOST=0.0.0.0
       - APP_SERVER__PORT=3000
-      # Development OAuth credentials (optional)
-      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
-      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
-      - JWT_SECRET=${JWT_SECRET:-dev-secret-key}
-      - SESSION_SECRET=${SESSION_SECRET:-dev-session-secret}
       # PostgreSQL connection (note: double underscores for nested config)
       - APP_REPOSITORY__STORAGE_TYPE=postgresql
       - APP_REPOSITORY__DATABASE_URL=postgresql://aiwebengine:devpassword@postgres-dev:5432/aiwebengine
@@ -144,11 +139,6 @@ services:
       # Server configuration  
       - APP_SERVER__HOST=0.0.0.0
       - APP_SERVER__PORT=3000
-      # Development OAuth credentials (optional)
-      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
-      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
-      - JWT_SECRET=${JWT_SECRET:-dev-secret-key}
-      - SESSION_SECRET=${SESSION_SECRET:-dev-session-secret}
       # PostgreSQL connection (note: double underscores for nested config)
       - APP_REPOSITORY__STORAGE_TYPE=postgresql
       - APP_REPOSITORY__DATABASE_URL=postgresql://aiwebengine:devpassword@postgres-dev:5432/aiwebengine
