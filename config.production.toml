@@ -11,72 +11,112 @@ port = 3000
 # IMPORTANT: Update this to your actual domain
 base_url = "https://softagen.com"
 # Longer timeout for production reliability
-request_timeout_ms = 30000
-# Larger body limit for production workloads
-max_body_size_mb = 10
+request_timeout_secs = 30
+# Keep-alive timeout in seconds
+keep_alive_timeout_secs = 75
+# Maximum concurrent connections
+max_connections = 10000
+# Enable graceful shutdown
+graceful_shutdown = true
+# Shutdown timeout in seconds
+shutdown_timeout_secs = 30
 
 [logging]
-# Error level only for production performance
+# Info level for production (error logs critical issues, info logs important events)
 level = "info"
 # Structured logging for production log aggregation
-structured = true
-# Log to file only in production
-targets = ["file"]
+format = "json"
+# Enable file logging
+file_enabled = true
+# Log file path
 file_path = "/var/log/aiwebengine/aiwebengine.log"
-# Rotate logs hourly for production volume
-rotation = "hourly"
-# Keep logs for 30 days for compliance
-retention_days = 30
+# Log file rotation size in MB
+file_max_size_mb = 100
+# Number of rotated log files to keep (30 for compliance)
+file_max_files = 30
+# Enable console logging
+console_enabled = false
 
 [javascript]
-# Larger memory limit for production workloads
-max_memory_mb = 128
-# Longer execution timeout for production
+# Longer execution timeout for production (milliseconds)
 execution_timeout_ms = 10000
-# Larger stack size for production
-max_stack_size = 262144
-# Disable console in production for security
-enable_console = false
-# Restrict APIs in production for security
-allowed_apis = ["fetch", "database", "logging"]
+# Larger memory limit for production workloads (bytes)
+max_memory_bytes = 134217728  # 128 MB
+# Maximum concurrent script executions
+max_concurrent_executions = 200
+# Enable script compilation caching
+enable_compilation_cache = true
+# Maximum number of cached compiled scripts
+max_cached_scripts = 2000
+# Larger stack size for production (bytes)
+stack_size_bytes = 262144
+# Enable script init() function calls
+enable_init_functions = true
+# Init function timeout in milliseconds (defaults to execution_timeout_ms if not set)
+# init_timeout_ms = 15000
+# Fail server startup if any script init fails (recommended for production)
+fail_startup_on_init_error = true
 
 [repository]
 # Use PostgreSQL for production scalability
 storage_type = "postgresql"
-# MUST be set via APP_REPOSITORY_DATABASE_URL environment variable
-database_url = "${APP_REPOSITORY_DATABASE_URL}"
-# Large connection pool for production
-max_connections = 50
-# Longer timeout for production reliability
-connection_timeout_ms = 10000
-# Disable auto-migrate in production for safety
-auto_migrate = false
+# MUST be set via APP_REPOSITORY__DATABASE_URL environment variable
+# database_url is set via environment variable
+
+# Maximum script size in bytes (1 MB)
+max_script_size_bytes = 1048576
+# Maximum asset size in bytes (10 MB)
+max_asset_size_bytes = 10485760
+# Maximum number of log messages per script
+max_log_messages_per_script = 1000
+# Log message retention time in hours (7 days)
+log_retention_hours = 168
+# Enable automatic log pruning
+auto_prune_logs = true
 
 [security]
 # Enable CORS with specific origins
 enable_cors = true
-# Restrict origins in production - MUST be set via APP_SECURITY_CORS_ORIGINS
-cors_origins = ["${APP_SECURITY_CORS_ORIGIN_1}", "${APP_SECURITY_CORS_ORIGIN_2}"]
+# Restrict origins in production - MUST be set via environment variables
+cors_allowed_origins = ["${APP_SECURITY__CORS_ORIGIN_1}", "${APP_SECURITY__CORS_ORIGIN_2}"]
+# Enable CSRF protection in production
+enable_csrf = true
+# MUST be set via APP_SECURITY__CSRF_KEY environment variable (base64-encoded 32-byte key)
+csrf_key = "${APP_SECURITY__CSRF_KEY}"
+# Enable rate limiting in production
+enable_rate_limiting = true
 # Rate limiting in production
 rate_limit_per_minute = 1000
-# MUST be set via APP_SECURITY_API_KEY environment variable
-api_key = "${APP_SECURITY_API_KEY}"
-# Require HTTPS in production
-require_https = true
-# Restrict content types in production
-allowed_content_types = ["application/json", "application/x-www-form-urlencoded"]
+# Enable security headers
+enable_security_headers = true
+# Content Security Policy
+content_security_policy = "default-src 'self'; script-src 'self'; style-src 'self'"
+# Request validation
+enable_request_validation = true
+# Maximum request body size in bytes (10 MB)
+max_request_body_bytes = 10485760
+# MUST be set via APP_SECURITY__SESSION_ENCRYPTION_KEY environment variable (base64-encoded 32-byte key)
+session_encryption_key = "${APP_SECURITY__SESSION_ENCRYPTION_KEY}"
+# MUST be set via APP_SECURITY__API_KEY environment variable
+api_key = "${APP_SECURITY__API_KEY}"
 
 [performance]
-# Large cache for production performance
-cache_size_mb = 512
-# Longer cache TTL for production efficiency
-cache_ttl_seconds = 3600
 # Enable compression for production bandwidth
 enable_compression = true
-# Large worker pool for production concurrency
-worker_pool_size = 8
-# Large request queue for production load
-max_request_queue_size = 1000
+# Compression level (1-9)
+compression_level = 6
+# Enable response caching
+enable_response_cache = true
+# Response cache TTL in seconds (1 hour)
+response_cache_ttl_secs = 3600
+# Maximum number of cached responses
+max_cached_responses = 2000
+# Worker thread pool size (None = use Tokio default)
+# worker_threads = 8
+# Enable metrics collection
+enable_metrics = true
+# Metrics collection interval in seconds
+metrics_interval_secs = 60
 
 # Authentication Configuration
 [auth]
@@ -135,3 +175,14 @@ scopes = ["openid", "email", "profile", "User.Read"]
 # team_id = "${APP_AUTH_PROVIDERS_APPLE_TEAM_ID}"
 # key_id = "${APP_AUTH_PROVIDERS_APPLE_KEY_ID}"
 # private_key = """${APP_AUTH_PROVIDERS_APPLE_PRIVATE_KEY}"""
+
+# Secrets Configuration
+# Store secret identifiers and values
+# ALL secrets MUST be set via environment variables in production!
+# Environment variables prefixed with SECRET_ will also be loaded automatically
+# Never hardcode secrets in production configuration files!
+[secrets]
+# Example secrets (MUST use environment variables in production):
+# anthropic_api_key = "${ANTHROPIC_API_KEY}"
+# sendgrid_api_key = "${SENDGRID_API_KEY}"
+

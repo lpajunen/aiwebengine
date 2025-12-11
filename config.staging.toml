@@ -8,54 +8,111 @@ host = "0.0.0.0"
 port = 8080
 # Base URL for OAuth metadata and redirects - update for your staging domain
 base_url = "https://staging.softagen.com"
-request_timeout_ms = 15000
-max_body_size_mb = 5
+# Moderate timeout for staging testing
+request_timeout_secs = 15
+# Keep-alive timeout in seconds
+keep_alive_timeout_secs = 60
+# Maximum concurrent connections
+max_connections = 5000
+# Enable graceful shutdown
+graceful_shutdown = true
+# Shutdown timeout in seconds
+shutdown_timeout_secs = 30
 
 [logging]
 # Info level for staging debugging
 level = "info"
-structured = true
-targets = ["console", "file"]
+# Log format (json, pretty, compact)
+format = "json"
+# Enable file logging
+file_enabled = true
+# Log file path
 file_path = "./logs/aiwebengine-staging.log"
-rotation = "daily"
-retention_days = 14
+# Log file rotation size in MB
+file_max_size_mb = 100
+# Number of rotated log files to keep
+file_max_files = 14
+# Enable console logging
+console_enabled = true
 
 [javascript]
-max_memory_mb = 64
+# Moderate timeout for staging testing (milliseconds)
 execution_timeout_ms = 5000
-max_stack_size = 131072
-# Allow console in staging for debugging
-enable_console = true
-# Full API access in staging for testing
-allowed_apis = ["fetch", "database", "logging", "filesystem"]
+# Medium memory limit for staging (bytes)
+max_memory_bytes = 67108864  # 64 MB
+# Maximum concurrent script executions
+max_concurrent_executions = 100
+# Enable script compilation caching
+enable_compilation_cache = true
+# Maximum number of cached compiled scripts
+max_cached_scripts = 1000
+# Script execution stack size (bytes)
+stack_size_bytes = 131072
+# Enable script init() function calls
+enable_init_functions = true
+# Init function timeout in milliseconds (defaults to execution_timeout_ms if not set)
+# init_timeout_ms = 10000
+# Fail server startup if any script init fails
+fail_startup_on_init_error = false
 
 [repository]
 storage_type = "postgresql"
-# Set via APP_REPOSITORY_DATABASE_URL environment variable
-database_url = "${APP_REPOSITORY_DATABASE_URL}"
-max_connections = 20
-connection_timeout_ms = 5000
-# Allow auto-migrate in staging for testing
-auto_migrate = true
+# Set via APP_REPOSITORY__DATABASE_URL environment variable
+# database_url is set via environment variable
+
+# Maximum script size in bytes (1 MB)
+max_script_size_bytes = 1048576
+# Maximum asset size in bytes (10 MB)
+max_asset_size_bytes = 10485760
+# Maximum number of log messages per script
+max_log_messages_per_script = 100
+# Log message retention time in hours
+log_retention_hours = 48
+# Enable automatic log pruning
+auto_prune_logs = true
 
 [security]
 enable_cors = true
 # Allow staging and development origins
-cors_origins = ["https://staging.yourdomain.com", "http://localhost:3000"]
+cors_allowed_origins = ["https://staging.yourdomain.com", "http://localhost:3000"]
+# Enable CSRF protection in staging
+enable_csrf = true
+# Optional: base64-encoded 32-byte CSRF key (set via APP_SECURITY__CSRF_KEY)
+csrf_key = "${APP_SECURITY__CSRF_KEY}"
+# Enable rate limiting in staging
+enable_rate_limiting = true
 # Moderate rate limiting for staging
 rate_limit_per_minute = 500
-# Set via APP_SECURITY_API_KEY environment variable
-api_key = "${APP_SECURITY_API_KEY}"
-# HTTPS preferred but not required in staging
-require_https = false
-allowed_content_types = ["application/json", "application/x-www-form-urlencoded", "multipart/form-data"]
+# Security headers
+enable_security_headers = true
+# Content Security Policy
+content_security_policy = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+# Request validation
+enable_request_validation = true
+# Maximum request body size in bytes (5 MB)
+max_request_body_bytes = 5242880
+# Optional: base64-encoded 32-byte session encryption key (set via APP_SECURITY__SESSION_ENCRYPTION_KEY)
+session_encryption_key = "${APP_SECURITY__SESSION_ENCRYPTION_KEY}"
+# Set via APP_SECURITY__API_KEY environment variable
+api_key = "${APP_SECURITY__API_KEY}"
 
 [performance]
-cache_size_mb = 128
-cache_ttl_seconds = 1800
+# Enable compression in staging
 enable_compression = true
-worker_pool_size = 4
-max_request_queue_size = 200
+# Compression level (1-9)
+compression_level = 6
+# Response caching (enabled in staging)
+enable_response_cache = true
+# Response cache TTL in seconds (30 minutes)
+response_cache_ttl_secs = 1800
+# Maximum number of cached responses
+max_cached_responses = 500
+# Worker thread pool size (None = use Tokio default)
+# worker_threads = 4
+# Enable metrics collection
+enable_metrics = true
+# Metrics collection interval in seconds
+metrics_interval_secs = 60
 
 # Authentication Configuration
 [auth]
@@ -100,3 +157,12 @@ scopes = ["openid", "email", "profile"]
 # redirect_uri = "${APP_AUTH_PROVIDERS_MICROSOFT_REDIRECT_URI}"
 # tenant_id = "${APP_AUTH_PROVIDERS_MICROSOFT_TENANT_ID}"
 # scopes = ["openid", "email", "profile", "User.Read"]
+
+# Secrets Configuration
+# Store secret identifiers and values
+# Environment variables prefixed with SECRET_ will also be loaded automatically
+# Values can reference environment variables using ${VAR_NAME} syntax
+[secrets]
+# Example secrets (use environment variables in staging):
+# anthropic_api_key = "${ANTHROPIC_API_KEY}"
+# sendgrid_api_key = "${SENDGRID_API_KEY}"
