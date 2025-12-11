@@ -55,14 +55,12 @@ cp config.production.toml config.toml
 | Setting            | Local       | Staging    | Production      |
 | ------------------ | ----------- | ---------- | --------------- |
 | **Purpose**        | Development | Testing    | Live deployment |
-| **Log Level**      | `debug`     | `info`     | `warn`          |
+| **Log Level**      | `debug`     | `info`     | `info`          |
 | **Database**       | PostgreSQL  | PostgreSQL | PostgreSQL      |
-| **Auto-migrate**   | `true`      | `true`     | `false`         |
-| **HTTPS Required** | `false`     | `true`     | `true`          |
 | **CORS**           | `["*"]`     | Specific   | Specific        |
-| **Console API**    | Enabled     | Enabled    | Disabled        |
 | **Cookie Secure**  | `false`     | `true`     | `true`          |
 | **Rate Limiting**  | Disabled    | Enabled    | Enabled         |
+| **CSRF Protection**| Disabled    | Enabled    | Enabled         |
 
 ---
 
@@ -118,11 +116,29 @@ export APP_REPOSITORY__MAX_CONNECTIONS="50"
 # API key for endpoint authentication
 export APP_SECURITY__API_KEY="$(openssl rand -hex 32)"
 
-# Require HTTPS
-export APP_SECURITY__REQUIRE_HTTPS="true"
+# Enable CORS
+export APP_SECURITY__ENABLE_CORS="true"
 
-# CORS origins (JSON array format)
-export APP_SECURITY__CORS_ORIGINS='["https://yourdomain.com"]'
+# CORS allowed origins (JSON array format)
+export APP_SECURITY__CORS_ALLOWED_ORIGINS='["https://yourdomain.com"]'
+
+# Enable CSRF protection
+export APP_SECURITY__ENABLE_CSRF="true"
+
+# CSRF key (base64-encoded 32-byte key)
+export APP_SECURITY__CSRF_KEY="$(openssl rand -base64 32)"
+
+# Session encryption key (base64-encoded 32-byte key)
+export APP_SECURITY__SESSION_ENCRYPTION_KEY="$(openssl rand -base64 32)"
+
+# Enable rate limiting
+export APP_SECURITY__ENABLE_RATE_LIMITING="true"
+
+# Rate limit per minute
+export APP_SECURITY__RATE_LIMIT_PER_MINUTE="1000"
+
+# Maximum request body size in bytes
+export APP_SECURITY__MAX_REQUEST_BODY_BYTES="10485760"  # 10 MB
 ```
 
 #### Server
@@ -134,8 +150,17 @@ export APP_SERVER__HOST="0.0.0.0"
 # Port
 export APP_SERVER__PORT="8080"
 
-# Request timeout (milliseconds)
-export APP_SERVER__REQUEST_TIMEOUT_MS="30000"
+# Base URL for OAuth and redirects
+export APP_SERVER__BASE_URL="https://yourdomain.com"
+
+# Request timeout (seconds)
+export APP_SERVER__REQUEST_TIMEOUT_SECS="30"
+
+# Keep-alive timeout (seconds)
+export APP_SERVER__KEEP_ALIVE_TIMEOUT_SECS="75"
+
+# Maximum concurrent connections
+export APP_SERVER__MAX_CONNECTIONS="10000"
 ```
 
 #### Logging
@@ -144,11 +169,23 @@ export APP_SERVER__REQUEST_TIMEOUT_MS="30000"
 # Log level: trace, debug, info, warn, error
 export APP_LOGGING__LEVEL="info"
 
+# Log format: json, pretty, compact
+export APP_LOGGING__FORMAT="json"
+
+# Enable file logging
+export APP_LOGGING__FILE_ENABLED="true"
+
 # Log file path
 export APP_LOGGING__FILE_PATH="/var/log/aiwebengine/app.log"
 
-# Enable structured JSON logging
-export APP_LOGGING__STRUCTURED="true"
+# Log file rotation size in MB
+export APP_LOGGING__FILE_MAX_SIZE_MB="100"
+
+# Number of rotated log files to keep
+export APP_LOGGING__FILE_MAX_FILES="30"
+
+# Enable console logging
+export APP_LOGGING__CONSOLE_ENABLED="true"
 ```
 
 ### Using .env Files
@@ -198,10 +235,14 @@ Controls the HTTP server behavior.
 
 ```toml
 [server]
-host = "127.0.0.1"              # Bind address (0.0.0.0 for all interfaces)
-port = 3000                      # Listen port (1-65535)
-request_timeout_ms = 5000        # Request timeout (100-300000)
-max_body_size_mb = 1            # Max request body size (1-100 MB)
+host = "127.0.0.1"                    # Bind address (0.0.0.0 for all interfaces)
+port = 3000                            # Listen port (1-65535)
+base_url = "http://localhost:3000"    # Base URL for OAuth and redirects
+request_timeout_secs = 30              # Request timeout in seconds
+keep_alive_timeout_secs = 60          # Keep-alive timeout in seconds
+max_connections = 10000                # Maximum concurrent connections
+graceful_shutdown = true               # Enable graceful shutdown
+shutdown_timeout_secs = 30            # Shutdown timeout in seconds
 ```
 
 **Environment overrides:**
@@ -209,6 +250,8 @@ max_body_size_mb = 1            # Max request body size (1-100 MB)
 ```bash
 export APP_SERVER__HOST="0.0.0.0"
 export APP_SERVER__PORT="8080"
+export APP_SERVER__BASE_URL="https://yourdomain.com"
+export APP_SERVER__REQUEST_TIMEOUT_SECS="30"
 ```
 
 ### [logging]
@@ -218,17 +261,19 @@ Controls application logging.
 ```toml
 [logging]
 level = "info"                   # trace | debug | info | warn | error
-structured = true                # Enable JSON logging
-targets = ["console", "file"]    # Where to log: console, file, or both
+format = "pretty"                # json | pretty | compact
+file_enabled = true              # Enable file logging
 file_path = "./logs/app.log"    # Log file path
-rotation = "daily"               # hourly | daily | weekly
-retention_days = 7               # Days to keep old logs (1-365)
+file_max_size_mb = 100          # Log file rotation size in MB
+file_max_files = 10             # Number of rotated log files to keep
+console_enabled = true           # Enable console logging
 ```
 
 **Environment overrides:**
 
 ```bash
 export APP_LOGGING__LEVEL="debug"
+export APP_LOGGING__FORMAT="json"
 export APP_LOGGING__FILE_PATH="/var/log/aiwebengine.log"
 export RUST_LOG="aiwebengine=debug"  # Additional Rust logging control
 ```
@@ -239,26 +284,24 @@ Controls the JavaScript engine (QuickJS).
 
 ```toml
 [javascript]
-max_memory_mb = 16              # Max memory per JS context (1-1024)
-execution_timeout_ms = 1000      # Script timeout (100-60000)
-max_stack_size = 65536          # Stack size (8192-1048576)
-enable_console = true            # Allow console.log in scripts
-allowed_apis = [                # Available APIs for scripts
-    "fetch",                    # HTTP requests
-    "database",                 # Database operations
-    "logging",                  # Logging functions
-    "filesystem"                # File operations (dev only!)
-]
+execution_timeout_ms = 5000              # Script execution timeout (milliseconds)
+max_memory_bytes = 10485760              # Max memory per script (bytes, 10MB)
+max_concurrent_executions = 100          # Maximum concurrent script executions
+enable_compilation_cache = true          # Enable script compilation caching
+max_cached_scripts = 1000                # Maximum number of cached compiled scripts
+stack_size_bytes = 1048576               # Script execution stack size (bytes, 1MB)
+enable_init_functions = true             # Enable script init() function calls
+init_timeout_ms = 5000                   # Init function timeout (defaults to execution_timeout_ms)
+fail_startup_on_init_error = false       # Fail server startup if any script init fails
 ```
 
 **Environment overrides:**
 
 ```bash
-export APP_JAVASCRIPT__MAX_MEMORY_MB="32"
-export APP_JAVASCRIPT__ENABLE_CONSOLE="false"
+export APP_JAVASCRIPT__MAX_MEMORY_BYTES="33554432"  # 32 MB
+export APP_JAVASCRIPT__EXECUTION_TIMEOUT_MS="10000"
+export APP_JAVASCRIPT__FAIL_STARTUP_ON_INIT_ERROR="true"  # Recommended for production
 ```
-
-**⚠️ Security Note:** Disable `filesystem` API in production and `enable_console` should be `false` in production.
 
 ### [repository]
 
@@ -266,27 +309,24 @@ Controls database and script storage.
 
 ```toml
 [repository]
-storage_type = "postgresql"     # postgresql | memory
+storage_type = "postgresql"              # postgresql | memory
 database_url = "postgresql://user:pass@localhost:5432/aiwebengine"
-max_connections = 5              # Connection pool size (1-100)
-connection_timeout_ms = 2000     # Connection timeout (100-30000)
-auto_migrate = true              # Auto-run migrations (disable in prod!)
+max_script_size_bytes = 1048576          # Maximum script size (bytes, 1MB)
+max_asset_size_bytes = 10485760          # Maximum asset size (bytes, 10MB)
+max_log_messages_per_script = 100        # Maximum log messages per script
+log_retention_hours = 24                 # Log retention time in hours
+auto_prune_logs = true                   # Enable automatic log pruning
 ```
 
 **Environment overrides:**
 
 ```bash
 export APP_REPOSITORY__DATABASE_URL="postgresql://user:pass@host/db"
-export APP_REPOSITORY__MAX_CONNECTIONS="50"
-export APP_REPOSITORY__AUTO_MIGRATE="false"
+export APP_REPOSITORY__MAX_SCRIPT_SIZE_BYTES="2097152"  # 2 MB
+export APP_REPOSITORY__LOG_RETENTION_HOURS="168"  # 7 days
 ```
 
-**Production tip:** Set `auto_migrate = false` and run migrations manually:
-
-```bash
-# Manual migration (when needed)
-cargo run --bin migrate
-```
+**Note:** The `database_url` field is internally renamed to `connection_string` in the code.
 
 ### [security]
 
@@ -294,28 +334,37 @@ Controls security features.
 
 ```toml
 [security]
-enable_cors = true               # Enable CORS
-cors_origins = ["*"]            # Allowed origins (use ["*"] for dev only!)
-rate_limit_per_minute = 0        # Requests per minute (0 = disabled)
-api_key = "dev-key"             # API key (override with env var!)
-require_https = false            # Require HTTPS (true in production)
-allowed_content_types = [        # Allowed request content types
-    "application/json",
-    "application/x-www-form-urlencoded",
-    "multipart/form-data"
-]
+enable_cors = true                           # Enable CORS
+cors_allowed_origins = ["*"]                 # Allowed origins (use ["*"] for dev only!)
+enable_csrf = false                          # Enable CSRF protection
+csrf_key = "${APP_SECURITY__CSRF_KEY}"      # Base64-encoded 32-byte CSRF key
+enable_rate_limiting = true                  # Enable rate limiting
+rate_limit_per_minute = 100                  # Requests per minute per IP
+enable_security_headers = true               # Enable security headers
+content_security_policy = "default-src 'self'" # Content Security Policy
+enable_request_validation = true             # Enable request validation
+max_request_body_bytes = 1048576            # Max request body size (bytes, 1MB)
+session_encryption_key = "${APP_SECURITY__SESSION_ENCRYPTION_KEY}"  # Base64-encoded 32-byte key
+api_key = "${APP_SECURITY__API_KEY}"        # API key (override with env var!)
 ```
 
 **Environment overrides:**
 
 ```bash
 export APP_SECURITY__API_KEY="$(openssl rand -hex 32)"
-export APP_SECURITY__REQUIRE_HTTPS="true"
-export APP_SECURITY__CORS_ORIGINS='["https://yourdomain.com"]'
-export APP_SECURITY__RATE_LIMIT_PER_MINUTE="100"
+export APP_SECURITY__CSRF_KEY="$(openssl rand -base64 32)"
+export APP_SECURITY__SESSION_ENCRYPTION_KEY="$(openssl rand -base64 32)"
+export APP_SECURITY__CORS_ALLOWED_ORIGINS='["https://yourdomain.com"]'
+export APP_SECURITY__RATE_LIMIT_PER_MINUTE="1000"
+export APP_SECURITY__MAX_REQUEST_BODY_BYTES="10485760"  # 10 MB
 ```
 
-**⚠️ Production:** Never hardcode `api_key` in config files - always use environment variables!
+**⚠️ Production:**
+
+- Never hardcode secrets in config files - always use environment variables!
+- Enable CSRF protection (`enable_csrf = true`)
+- Use strong encryption keys for CSRF and session encryption
+- All server instances must use the same CSRF and session encryption keys
 
 ### [performance]
 
@@ -323,19 +372,23 @@ Controls performance optimizations.
 
 ```toml
 [performance]
-cache_size_mb = 10              # Response cache size (1-1024)
-cache_ttl_seconds = 60          # Cache time-to-live (1-86400)
-enable_compression = false       # Enable gzip compression
-worker_pool_size = 2            # Worker threads (1-32)
-max_request_queue_size = 50     # Max queued requests (10-10000)
+enable_compression = true                # Enable response compression
+compression_level = 6                    # Compression level (1-9)
+enable_response_cache = false            # Enable response caching
+response_cache_ttl_secs = 300           # Response cache TTL in seconds
+max_cached_responses = 1000             # Maximum number of cached responses
+worker_threads = 4                       # Worker thread pool size (None = Tokio default)
+enable_metrics = true                    # Enable metrics collection
+metrics_interval_secs = 60              # Metrics collection interval in seconds
 ```
 
 **Environment overrides:**
 
 ```bash
-export APP_PERFORMANCE__CACHE_SIZE_MB="100"
 export APP_PERFORMANCE__ENABLE_COMPRESSION="true"
-export APP_PERFORMANCE__WORKER_POOL_SIZE="4"
+export APP_PERFORMANCE__COMPRESSION_LEVEL="6"
+export APP_PERFORMANCE__ENABLE_RESPONSE_CACHE="true"
+export APP_PERFORMANCE__WORKER_THREADS="8"
 ```
 
 ### [auth]
@@ -461,16 +514,14 @@ cargo run --release
 - Use `config.production.toml` as base
 - **NEVER** store secrets in config files
 - Use strong, randomly generated secrets
-- Require HTTPS (`require_https = true`)
 - Secure session cookies (`secure = true`)
-- Disable auto-migrations (`auto_migrate = false`)
-- Disable console API (`enable_console = false`)
-- Remove filesystem API from `allowed_apis`
 - Set specific CORS origins
-- Enable rate limiting
+- Enable rate limiting and CSRF protection
 - Use production secret management (AWS Secrets Manager, Vault, etc.)
 - Set appropriate timeouts
-- Use log level `warn` or `error`
+- Use log level `info` or `warn`
+- Generate strong CSRF and session encryption keys
+- Ensure all server instances use the same encryption keys
 
 ```bash
 cp config.production.toml config.toml
@@ -478,6 +529,8 @@ cp config.production.toml config.toml
 # Use secret management system
 export APP_AUTH__JWT_SECRET="$(aws secretsmanager get-secret-value --secret-id jwt-secret --query SecretString --output text)"
 export APP_SECURITY__API_KEY="$(aws secretsmanager get-secret-value --secret-id api-key --query SecretString --output text)"
+export APP_SECURITY__CSRF_KEY="$(aws secretsmanager get-secret-value --secret-id csrf-key --query SecretString --output text)"
+export APP_SECURITY__SESSION_ENCRYPTION_KEY="$(aws secretsmanager get-secret-value --secret-id session-key --query SecretString --output text)"
 export APP_REPOSITORY__DATABASE_URL="postgresql://user:$(cat /secrets/db-pass)@db.prod.example.com/aiwebengine"
 
 # OAuth with production URLs
@@ -493,8 +546,11 @@ cargo run --release
 - Commit secrets to Git
 - Use development configs in production
 - Hardcode API keys or passwords
-- Use `CORS = ["*"]` in production
-- Enable filesystem API in production
+- Use `cors_allowed_origins = ["*"]` in production
+- Skip HTTPS for production deployments
+- Use weak or short secrets
+- Ignore security warnings
+- Use different encryption keys across server instances
 - Skip HTTPS in production
 - Use weak or short secrets
 - Ignore security warnings
@@ -553,32 +609,66 @@ export APP_LOGGING__LEVEL="debug"
 
 Quick lookup for all available settings:
 
-| Section         | Key                     | Type    | Range/Options               | Default       |
-| --------------- | ----------------------- | ------- | --------------------------- | ------------- |
-| `[server]`      | `host`                  | string  | IP address                  | `127.0.0.1`   |
-| `[server]`      | `port`                  | integer | 1-65535                     | `3000`        |
-| `[server]`      | `request_timeout_ms`    | integer | 100-300000                  | `5000`        |
-| `[server]`      | `max_body_size_mb`      | integer | 1-100                       | `1`           |
-| `[logging]`     | `level`                 | string  | trace/debug/info/warn/error | `info`        |
-| `[logging]`     | `structured`            | boolean | true/false                  | `true`        |
-| `[logging]`     | `targets`               | array   | console, file               | `["console"]` |
-| `[logging]`     | `rotation`              | string  | hourly/daily/weekly         | `daily`       |
-| `[logging]`     | `retention_days`        | integer | 1-365                       | `7`           |
-| `[javascript]`  | `max_memory_mb`         | integer | 1-1024                      | `16`          |
-| `[javascript]`  | `execution_timeout_ms`  | integer | 100-60000                   | `1000`        |
-| `[javascript]`  | `enable_console`        | boolean | true/false                  | `true`        |
-| `[repository]`  | `storage_type`          | string  | postgresql/memory           | `postgresql`  |
-| `[repository]`  | `max_connections`       | integer | 1-100                       | `5`           |
-| `[repository]`  | `auto_migrate`          | boolean | true/false                  | `true`        |
-| `[security]`    | `enable_cors`           | boolean | true/false                  | `true`        |
-| `[security]`    | `require_https`         | boolean | true/false                  | `false`       |
-| `[security]`    | `rate_limit_per_minute` | integer | 0-10000                     | `0`           |
-| `[auth]`        | `enabled`               | boolean | true/false                  | `true`        |
-| `[auth]`        | `session_timeout`       | integer | 300-86400                   | `3600`        |
-| `[auth.cookie]` | `secure`                | boolean | true/false                  | `false`       |
-| `[performance]` | `cache_size_mb`         | integer | 1-1024                      | `10`          |
-| `[performance]` | `enable_compression`    | boolean | true/false                  | `false`       |
-| `[performance]` | `worker_pool_size`      | integer | 1-32                        | `2`           |
+| Section         | Key                          | Type    | Range/Options               | Default       |
+| --------------- | ---------------------------- | ------- | --------------------------- | ------------- |
+| `[server]`      | `host`                       | string  | IP address                  | `127.0.0.1`   |
+| `[server]`      | `port`                       | integer | 1-65535                     | `8080`        |
+| `[server]`      | `base_url`                   | string  | URL                         | `None`        |
+| `[server]`      | `request_timeout_secs`       | integer | 1-300                       | `30`          |
+| `[server]`      | `keep_alive_timeout_secs`    | integer | 1-600                       | `60`          |
+| `[server]`      | `max_connections`            | integer | 1-100000                    | `10000`       |
+| `[server]`      | `graceful_shutdown`          | boolean | true/false                  | `true`        |
+| `[server]`      | `shutdown_timeout_secs`      | integer | 1-300                       | `30`          |
+| `[logging]`     | `level`                      | string  | trace/debug/info/warn/error | `info`        |
+| `[logging]`     | `format`                     | string  | json/pretty/compact         | `pretty`      |
+| `[logging]`     | `file_enabled`               | boolean | true/false                  | `false`       |
+| `[logging]`     | `file_path`                  | string  | Path                        | `None`        |
+| `[logging]`     | `file_max_size_mb`           | integer | 1-1000                      | `100`         |
+| `[logging]`     | `file_max_files`             | integer | 1-100                       | `10`          |
+| `[logging]`     | `console_enabled`            | boolean | true/false                  | `true`        |
+| `[javascript]`  | `execution_timeout_ms`       | integer | 100-60000                   | `5000`        |
+| `[javascript]`  | `max_memory_bytes`           | integer | 1048576-1073741824          | `10485760`    |
+| `[javascript]`  | `max_concurrent_executions`  | integer | 1-1000                      | `100`         |
+| `[javascript]`  | `enable_compilation_cache`   | boolean | true/false                  | `true`        |
+| `[javascript]`  | `max_cached_scripts`         | integer | 1-10000                     | `1000`        |
+| `[javascript]`  | `stack_size_bytes`           | integer | 8192-10485760               | `1048576`     |
+| `[javascript]`  | `enable_init_functions`      | boolean | true/false                  | `true`        |
+| `[javascript]`  | `fail_startup_on_init_error` | boolean | true/false                  | `false`       |
+| `[repository]`  | `storage_type`               | string  | postgresql/memory           | `memory`      |
+| `[repository]`  | `database_url`               | string  | Connection string           | `None`        |
+| `[repository]`  | `max_script_size_bytes`      | integer | 1024-10485760               | `1048576`     |
+| `[repository]`  | `max_asset_size_bytes`       | integer | 1024-104857600              | `10485760`    |
+| `[repository]`  | `max_log_messages_per_script`| integer | 1-10000                     | `100`         |
+| `[repository]`  | `log_retention_hours`        | integer | 1-720                       | `24`          |
+| `[repository]`  | `auto_prune_logs`            | boolean | true/false                  | `true`        |
+| `[security]`    | `enable_cors`                | boolean | true/false                  | `true`        |
+| `[security]`    | `cors_allowed_origins`       | array   | URLs                        | `["*"]`       |
+| `[security]`    | `enable_csrf`                | boolean | true/false                  | `false`       |
+| `[security]`    | `csrf_key`                   | string  | Base64 key                  | `None`        |
+| `[security]`    | `enable_rate_limiting`       | boolean | true/false                  | `true`        |
+| `[security]`    | `rate_limit_per_minute`      | integer | 0-10000                     | `100`         |
+| `[security]`    | `enable_security_headers`    | boolean | true/false                  | `true`        |
+| `[security]`    | `max_request_body_bytes`     | integer | 1024-104857600              | `1048576`     |
+| `[security]`    | `session_encryption_key`     | string  | Base64 key                  | `None`        |
+| `[security]`    | `api_key`                    | string  | API key                     | `None`        |
+| `[auth]`        | `enabled`                    | boolean | true/false                  | `true`        |
+| `[auth]`        | `jwt_secret`                 | string  | Min 32 chars                | Required      |
+| `[auth]`        | `session_timeout`            | integer | 60-604800                   | `3600`        |
+| `[auth]`        | `max_concurrent_sessions`    | integer | 1-10                        | `3`           |
+| `[auth]`        | `bootstrap_admins`           | array   | Email addresses             | `[]`          |
+| `[auth.cookie]` | `name`                       | string  | Cookie name                 | `aiwebengine_session` |
+| `[auth.cookie]` | `path`                       | string  | Path                        | `/`           |
+| `[auth.cookie]` | `secure`                     | boolean | true/false                  | `false`       |
+| `[auth.cookie]` | `http_only`                  | boolean | true/false                  | `true`        |
+| `[auth.cookie]` | `same_site`                  | string  | strict/lax/none             | `lax`         |
+| `[performance]` | `enable_compression`         | boolean | true/false                  | `true`        |
+| `[performance]` | `compression_level`          | integer | 1-9                         | `6`           |
+| `[performance]` | `enable_response_cache`      | boolean | true/false                  | `false`       |
+| `[performance]` | `response_cache_ttl_secs`    | integer | 1-86400                     | `300`         |
+| `[performance]` | `max_cached_responses`       | integer | 1-100000                    | `1000`        |
+| `[performance]` | `worker_threads`             | integer | 1-32 (or None)              | `None`        |
+| `[performance]` | `enable_metrics`             | boolean | true/false                  | `true`        |
+| `[performance]` | `metrics_interval_secs`      | integer | 1-3600                      | `60`          |
 
 ---
 
@@ -614,32 +704,86 @@ redirect_uri = "http://localhost:3000/auth/callback/google"
 [server]
 host = "0.0.0.0"
 port = 3000
-request_timeout_ms = 30000
-max_body_size_mb = 10
+base_url = "https://yourdomain.com"
+request_timeout_secs = 30
+keep_alive_timeout_secs = 75
+max_connections = 10000
+graceful_shutdown = true
+shutdown_timeout_secs = 30
 
 [logging]
-level = "warn"
-structured = true
-targets = ["console", "file"]
+level = "info"
+format = "json"
+file_enabled = true
 file_path = "/var/log/aiwebengine/app.log"
-rotation = "daily"
-retention_days = 30
+file_max_size_mb = 100
+file_max_files = 30
+console_enabled = false
 
 [javascript]
-max_memory_mb = 64
-execution_timeout_ms = 5000
-enable_console = false
-allowed_apis = ["fetch", "database", "logging"]
+execution_timeout_ms = 10000
+max_memory_bytes = 134217728  # 128 MB
+max_concurrent_executions = 200
+enable_compilation_cache = true
+max_cached_scripts = 2000
+stack_size_bytes = 262144
+enable_init_functions = true
+fail_startup_on_init_error = true
 
 [repository]
 storage_type = "postgresql"
 database_url = "${APP_REPOSITORY__DATABASE_URL}"
-max_connections = 50
-auto_migrate = false
+max_script_size_bytes = 1048576
+max_asset_size_bytes = 10485760
+max_log_messages_per_script = 1000
+log_retention_hours = 168
+auto_prune_logs = true
 
 [security]
 enable_cors = true
-cors_origins = ["https://yourdomain.com"]
+cors_allowed_origins = ["https://yourdomain.com"]
+enable_csrf = true
+csrf_key = "${APP_SECURITY__CSRF_KEY}"
+enable_rate_limiting = true
+rate_limit_per_minute = 1000
+enable_security_headers = true
+content_security_policy = "default-src 'self'; script-src 'self'; style-src 'self'"
+enable_request_validation = true
+max_request_body_bytes = 10485760
+session_encryption_key = "${APP_SECURITY__SESSION_ENCRYPTION_KEY}"
+api_key = "${APP_SECURITY__API_KEY}"
+
+[performance]
+enable_compression = true
+compression_level = 6
+enable_response_cache = true
+response_cache_ttl_secs = 3600
+max_cached_responses = 2000
+# worker_threads = 8
+enable_metrics = true
+metrics_interval_secs = 60
+
+[auth]
+jwt_secret = "${APP_AUTH__JWT_SECRET}"
+session_timeout = 7200
+max_concurrent_sessions = 3
+bootstrap_admins = ["admin@yourdomain.com"]
+
+[auth.cookie]
+name = "aiwebengine_session"
+path = "/"
+secure = true
+http_only = true
+same_site = "strict"
+
+[auth.providers.google]
+client_id = "${APP_AUTH__PROVIDERS__GOOGLE__CLIENT_ID}"
+client_secret = "${APP_AUTH__PROVIDERS__GOOGLE__CLIENT_SECRET}"
+redirect_uri = "https://yourdomain.com/auth/callback/google"
+scopes = ["openid", "email", "profile"]
+
+[secrets]
+# All secrets via environment variables in production!
 rate_limit_per_minute = 100
 api_key = "${APP_SECURITY__API_KEY}"
 require_https = true

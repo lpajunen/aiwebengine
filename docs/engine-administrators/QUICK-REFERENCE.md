@@ -58,6 +58,8 @@ cp config.production.toml config.toml
 # Set all secrets via environment (NEVER in files!)
 export APP_AUTH__JWT_SECRET="$(openssl rand -base64 48)"
 export APP_SECURITY__API_KEY="$(openssl rand -hex 32)"
+export APP_SECURITY__CSRF_KEY="$(openssl rand -base64 32)"
+export APP_SECURITY__SESSION_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 export APP_REPOSITORY__DATABASE_URL="postgresql://user:pass@host/db"
 
 # Deploy
@@ -72,13 +74,15 @@ make docker-prod
 
 ### Critical Variables
 
-| Variable                                     | Purpose             | How to Generate           |
-| -------------------------------------------- | ------------------- | ------------------------- |
-| `APP_AUTH__JWT_SECRET`                       | JWT signing key     | `openssl rand -base64 48` |
-| `APP_SECURITY__API_KEY`                      | API authentication  | `openssl rand -hex 32`    |
-| `APP_REPOSITORY__DATABASE_URL`               | Database connection | Manual setup              |
-| `APP_AUTH__PROVIDERS__GOOGLE__CLIENT_ID`     | Google OAuth        | Google Console            |
-| `APP_AUTH__PROVIDERS__GOOGLE__CLIENT_SECRET` | Google OAuth        | Google Console            |
+| Variable                                     | Purpose                      | How to Generate            |
+| -------------------------------------------- | ---------------------------- | -------------------------- |
+| `APP_AUTH__JWT_SECRET`                       | JWT signing key              | `openssl rand -base64 48`  |
+| `APP_SECURITY__API_KEY`                      | API authentication           | `openssl rand -hex 32`     |
+| `APP_SECURITY__CSRF_KEY`                     | CSRF protection              | `openssl rand -base64 32`  |
+| `APP_SECURITY__SESSION_ENCRYPTION_KEY`       | Session encryption           | `openssl rand -base64 32`  |
+| `APP_REPOSITORY__DATABASE_URL`               | Database connection          | Manual setup               |
+| `APP_AUTH__PROVIDERS__GOOGLE__CLIENT_ID`     | Google OAuth                 | Google Console             |
+| `APP_AUTH__PROVIDERS__GOOGLE__CLIENT_SECRET` | Google OAuth                 | Google Console             |
 
 ### Naming Convention
 
@@ -105,18 +109,21 @@ export APP_LOGGING__LEVEL="info"
 # Server
 export APP_SERVER__HOST="0.0.0.0"
 export APP_SERVER__PORT="8080"
+export APP_SERVER__BASE_URL="https://yourdomain.com"
 
 # Logging
 export APP_LOGGING__LEVEL="info"              # trace, debug, info, warn, error
+export APP_LOGGING__FORMAT="json"             # json, pretty, compact
 export APP_LOGGING__FILE_PATH="/var/log/aiwebengine.log"
 
 # Database
 export APP_REPOSITORY__DATABASE_URL="postgresql://user:pass@host/db"
-export APP_REPOSITORY__MAX_CONNECTIONS="50"
 
 # Security
-export APP_SECURITY__REQUIRE_HTTPS="true"
-export APP_SECURITY__CORS_ORIGINS='["https://yourdomain.com"]'
+export APP_SECURITY__ENABLE_CSRF="true"
+export APP_SECURITY__CSRF_KEY="$(openssl rand -base64 32)"
+export APP_SECURITY__SESSION_ENCRYPTION_KEY="$(openssl rand -base64 32)"
+export APP_SECURITY__CORS_ALLOWED_ORIGINS='["https://yourdomain.com"]'
 
 # Bootstrap Admins (JSON array format)
 export APP_AUTH__BOOTSTRAP_ADMINS='["admin@example.com"]'
@@ -160,11 +167,9 @@ cp config.production.toml config.toml
 
 | Setting                     | Local   | Staging  | Production |
 | --------------------------- | ------- | -------- | ---------- |
-| `logging.level`             | `debug` | `info`   | `warn`     |
-| `security.require_https`    | `false` | `true`   | `true`     |
-| `security.cors_origins`     | `["*"]` | Specific | Specific   |
-| `javascript.enable_console` | `true`  | `true`   | `false`    |
-| `repository.auto_migrate`   | `true`  | `true`   | `false`    |
+| `logging.level`             | `debug` | `info`   | `info`     |
+| `security.enable_csrf`      | `false` | `true`   | `true`     |
+| `security.cors_allowed_origins` | `["*"]` | Specific | Specific   |
 | Session cookie `secure`     | `false` | `true`   | `true`     |
 
 ---
@@ -323,7 +328,7 @@ openssl rand -hex 32
 
 Example output: `a3f9e2c1...` (64 characters)
 
-### Session Secret (32 bytes, base64)
+### CSRF Key (32 bytes, base64)
 
 ```bash
 openssl rand -base64 32
@@ -331,13 +336,25 @@ openssl rand -base64 32
 
 Example output: `8kDp5Nc...` (44 characters)
 
+**Important:** All server instances must use the same CSRF key!
+
+### Session Encryption Key (32 bytes, base64)
+
+```bash
+openssl rand -base64 32
+```
+
+Example output: `Xq8nPm...` (44 characters)
+
+**Important:** All server instances must use the same session encryption key!
+
 ### Database Password (strong random)
 
 ```bash
 openssl rand -base64 24
 ```
 
-Example output: `Xq8nPm...` (32 characters)
+Example output: `Yp9oQn...` (32 characters)
 
 ---
 

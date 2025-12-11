@@ -72,6 +72,8 @@ cp config.production.toml config.toml
 # 2. Set secrets via environment (NEVER in files!)
 export APP_AUTH__JWT_SECRET="$(openssl rand -base64 48)"
 export APP_SECURITY__API_KEY="$(openssl rand -hex 32)"
+export APP_SECURITY__CSRF_KEY="$(openssl rand -base64 32)"
+export APP_SECURITY__SESSION_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 
 # 3. Deploy with Docker
 make docker-prod
@@ -170,6 +172,8 @@ Each environment has optimized settings for its use case. See [02-CONFIGURATION.
 3. **Authentication**
    - Configure OAuth providers correctly
    - Use strong JWT secrets (48+ bytes)
+   - Generate strong CSRF and session encryption keys (32 bytes each)
+   - Ensure all server instances use the same encryption keys
    - Set session timeouts appropriately
    - Limit bootstrap admin accounts
 
@@ -221,4 +225,5 @@ See [04-SECRETS-AND-SECURITY.md](04-SECRETS-AND-SECURITY.md) for comprehensive s
 
 ---
 
-_Last updated: October 2025_
+**Last updated:** December 2025
+
