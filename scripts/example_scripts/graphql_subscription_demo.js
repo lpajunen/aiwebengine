@@ -434,18 +434,20 @@ function init(context) {
     );
     console.log(`Init context: ${JSON.stringify(context)}`);
 
-    // Register a GraphQL subscription
+    // Register a GraphQL subscription (external - used by clients)
     graphQLRegistry.registerSubscription(
       "liveMessages",
       "type Subscription { liveMessages: String }",
       "liveMessagesResolver",
+      "external",
     );
 
-    // Register a GraphQL mutation to trigger the subscription
+    // Register a GraphQL mutation to trigger the subscription (external - used by clients)
     graphQLRegistry.registerMutation(
       "sendMessage",
       "type Mutation { sendMessage(text: String!): String }",
       "sendMessageResolver",
+      "external",
     );
 
     // Register HTTP endpoints for testing

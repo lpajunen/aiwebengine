@@ -66,11 +66,12 @@ function init(context) {
     "metadataDemoCustomizer",
   );
 
-  // Register GraphQL subscription (resolver acts as customization function)
+  // Register GraphQL subscription (external - used by clients for testing)
   graphQLRegistry.registerSubscription(
     "chatMessages",
     "type Subscription { chatMessages: String }",
     "chatMessagesResolver",
+    "external",
   );
 
   console.log("Selective broadcasting test endpoints registered successfully");

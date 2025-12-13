@@ -3,16 +3,19 @@ graphQLRegistry.registerQuery(
   "hello",
   "type Query { hello: String }",
   "helloResolver",
+  "external",
 );
 graphQLRegistry.registerMutation(
   "createUser",
   "type Mutation { createUser(name: String!): String }",
   "createUserResolver",
+  "external",
 );
 graphQLRegistry.registerSubscription(
   "userUpdates",
   "type Subscription { userUpdates: String }",
   "userUpdatesResolver",
+  "external",
 );
 
 // Simple resolvers (for testing)
@@ -34,6 +37,7 @@ graphQLRegistry.registerMutation(
   "triggerUserUpdate",
   "type Mutation { triggerUserUpdate(userId: String!): String }",
   "triggerUserUpdateResolver",
+  "external",
 );
 
 function triggerUserUpdateResolver(args) {

@@ -1271,12 +1271,14 @@ impl SecureGlobalContext {
             move |_ctx: rquickjs::Ctx<'_>,
                   name: String,
                   sdl: String,
-                  resolver_function: String|
+                  resolver_function: String,
+                  visibility: String|
                   -> JsResult<String> {
                 // If GraphQL registration is disabled, return success without doing anything
                 tracing::info!(
-                    "registerGraphQLQuery called: name={}, enable_graphql_registration={}",
+                    "registerGraphQLQuery called: name={}, visibility={}, enable_graphql_registration={}",
                     name,
+                    visibility,
                     config_query.enable_graphql_registration
                 );
                 if !config_query.enable_graphql_registration {
@@ -1331,6 +1333,7 @@ impl SecureGlobalContext {
                 let name_clone = name.clone();
                 let script_uri_clone = script_uri_query.clone();
                 let sdl_len = sdl.len();
+                let visibility_clone = visibility.clone();
                 tokio::task::spawn(async move {
                     let _ = auditor_clone
                         .log_event(
@@ -1343,7 +1346,8 @@ impl SecureGlobalContext {
                             .with_action("register_query".to_string())
                             .with_detail("query_name", &name_clone)
                             .with_detail("script_uri", &script_uri_clone)
-                            .with_detail("sdl_length", sdl_len.to_string()),
+                            .with_detail("sdl_length", sdl_len.to_string())
+                            .with_detail("visibility", &visibility_clone),
                         )
                         .await;
                 });
@@ -1352,17 +1356,21 @@ impl SecureGlobalContext {
                     user_id = ?user_ctx_query.user_id,
                     name = %name,
                     sdl_len = sdl.len(),
+                    visibility = %visibility,
                     "Secure registerGraphQLQuery called"
                 );
 
                 // Actually register the GraphQL query
-                crate::graphql::register_graphql_query(
+                match crate::graphql::register_graphql_query(
                     name.clone(),
                     sdl.clone(),
                     resolver_function.clone(),
                     script_uri_query.clone(),
-                );
-                Ok(format!("GraphQL query '{}' registered successfully", name))
+                    visibility,
+                ) {
+                    Ok(()) => Ok(format!("GraphQL query '{}' registered successfully", name)),
+                    Err(e) => Ok(format!("Error registering GraphQL query '{}': {}", name, e)),
+                }
             },
         )?;
 
@@ -1377,12 +1385,13 @@ impl SecureGlobalContext {
             move |_ctx: rquickjs::Ctx<'_>,
                   name: String,
                   sdl: String,
-                  resolver_function: String|
+                  resolver_function: String,
+                  visibility: String|
                   -> JsResult<String> {
                 // If GraphQL registration is disabled, return success without doing anything
                 debug!(
-                    "registerGraphQLMutation called: name={}, enable_graphql_registration={}",
-                    name, config_mutation.enable_graphql_registration
+                    "registerGraphQLMutation called: name={}, visibility={}, enable_graphql_registration={}",
+                    name, visibility, config_mutation.enable_graphql_registration
                 );
                 if !config_mutation.enable_graphql_registration {
                     debug!(
@@ -1433,6 +1442,7 @@ impl SecureGlobalContext {
                 let user_id = user_ctx_mutation.user_id.clone();
                 let name_clone = name.clone();
                 let sdl_len = sdl.len();
+                let visibility_clone = visibility.clone();
                 tokio::task::spawn(async move {
                     let _ = auditor_clone
                         .log_event(
@@ -1444,7 +1454,8 @@ impl SecureGlobalContext {
                             .with_resource("graphql".to_string())
                             .with_action("register_mutation".to_string())
                             .with_detail("mutation_name", &name_clone)
-                            .with_detail("sdl_length", sdl_len.to_string()),
+                            .with_detail("sdl_length", sdl_len.to_string())
+                            .with_detail("visibility", &visibility_clone),
                         )
                         .await;
                 });
@@ -1453,20 +1464,27 @@ impl SecureGlobalContext {
                     user_id = ?user_ctx_mutation.user_id,
                     name = %name,
                     sdl_len = sdl.len(),
+                    visibility = %visibility,
                     "Secure registerGraphQLMutation called"
                 );
 
                 // Actually register the GraphQL mutation
-                crate::graphql::register_graphql_mutation(
+                match crate::graphql::register_graphql_mutation(
                     name.clone(),
                     sdl.clone(),
                     resolver_function.clone(),
                     script_uri_mutation.clone(),
-                );
-                Ok(format!(
-                    "GraphQL mutation '{}' registered successfully",
-                    name
-                ))
+                    visibility,
+                ) {
+                    Ok(()) => Ok(format!(
+                        "GraphQL mutation '{}' registered successfully",
+                        name
+                    )),
+                    Err(e) => Ok(format!(
+                        "Error registering GraphQL mutation '{}': {}",
+                        name, e
+                    )),
+                }
             },
         )?;
 
@@ -1481,12 +1499,13 @@ impl SecureGlobalContext {
             move |_ctx: rquickjs::Ctx<'_>,
                   name: String,
                   sdl: String,
-                  resolver_function: String|
+                  resolver_function: String,
+                  visibility: String|
                   -> JsResult<String> {
                 // If GraphQL registration is disabled, return success without doing anything
                 debug!(
-                    "registerGraphQLSubscription called: name={}, enable_graphql_registration={}",
-                    name, config_subscription.enable_graphql_registration
+                    "registerGraphQLSubscription called: name={}, visibility={}, enable_graphql_registration={}",
+                    name, visibility, config_subscription.enable_graphql_registration
                 );
                 if !config_subscription.enable_graphql_registration {
                     debug!(
@@ -1538,6 +1557,7 @@ impl SecureGlobalContext {
                 let user_id = user_ctx_subscription.user_id.clone();
                 let name_clone = name.clone();
                 let sdl_len = sdl.len();
+                let visibility_clone = visibility.clone();
                 tokio::task::spawn(async move {
                     let _ = auditor_clone
                         .log_event(
@@ -1549,7 +1569,8 @@ impl SecureGlobalContext {
                             .with_resource("graphql".to_string())
                             .with_action("register_subscription".to_string())
                             .with_detail("subscription_name", &name_clone)
-                            .with_detail("sdl_length", sdl_len.to_string()),
+                            .with_detail("sdl_length", sdl_len.to_string())
+                            .with_detail("visibility", &visibility_clone),
                         )
                         .await;
                 });
@@ -1558,20 +1579,27 @@ impl SecureGlobalContext {
                     user_id = ?user_ctx_subscription.user_id,
                     name = %name,
                     sdl_len = sdl.len(),
+                    visibility = %visibility,
                     "Secure registerGraphQLSubscription called"
                 );
 
                 // Actually register the GraphQL subscription
-                crate::graphql::register_graphql_subscription(
+                match crate::graphql::register_graphql_subscription(
                     name.clone(),
                     sdl.clone(),
                     resolver_function.clone(),
                     script_uri_subscription.clone(),
-                );
-                Ok(format!(
-                    "GraphQL subscription '{}' registered successfully",
-                    name
-                ))
+                    visibility,
+                ) {
+                    Ok(()) => Ok(format!(
+                        "GraphQL subscription '{}' registered successfully",
+                        name
+                    )),
+                    Err(e) => Ok(format!(
+                        "Error registering GraphQL subscription '{}': {}",
+                        name, e
+                    )),
+                }
             },
         )?;
 

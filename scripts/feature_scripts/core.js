@@ -1182,55 +1182,64 @@ function init(context) {
       "scriptUpdatesCustomizer",
     );
 
-    // Register GraphQL subscription
+    // Register GraphQL subscription (external - used by UI clients)
     graphQLRegistry.registerSubscription(
       "scriptUpdates",
       "type ScriptUpdate { type: String!, uri: String!, action: String!, timestamp: String!, contentLength: Int, previousExists: Boolean, via: String } type Subscription { scriptUpdates: ScriptUpdate! }",
       "scriptUpdatesResolver",
+      "external",
     );
 
-    // Register GraphQL queries
+    // Register GraphQL queries (external - used by clients and tests)
     graphQLRegistry.registerQuery(
       "scripts",
       "type ScriptInfo { uri: String!, chars: Int!, owners: [String!]! } type Query { scripts: [ScriptInfo!]! }",
       "scriptsQuery",
+      "external",
     );
     graphQLRegistry.registerQuery(
       "script",
       "type ScriptDetail { uri: String!, content: String!, contentLength: Int!, logs: [String!]!, owners: [String!]! } type Query { script(uri: String!): ScriptDetail }",
       "scriptQuery",
+      "external",
     );
     graphQLRegistry.registerQuery(
       "scriptInitStatus",
       "type ScriptInitStatus { scriptName: String!, initialized: Boolean!, initError: String, lastInitTime: Float, createdAt: Float, updatedAt: Float } type Query { scriptInitStatus(uri: String!): ScriptInitStatus }",
       "scriptInitStatusQuery",
+      "external",
     );
     graphQLRegistry.registerQuery(
       "allScriptsInitStatus",
       "type ScriptInitStatus { scriptName: String!, initialized: Boolean!, initError: String, lastInitTime: Float, createdAt: Float, updatedAt: Float } type Query { allScriptsInitStatus: [ScriptInitStatus!]! }",
       "allScriptsInitStatusQuery",
+      "external",
     );
 
-    // Register GraphQL mutations
+    // Register GraphQL mutations (external - used by clients and tests)
     graphQLRegistry.registerMutation(
       "upsertScript",
       "type UpsertScriptResponse { message: String!, uri: String!, chars: Int!, success: Boolean! } type Mutation { upsertScript(uri: String!, content: String!): UpsertScriptResponse! }",
       "upsertScriptMutation",
+      "external",
     );
     graphQLRegistry.registerMutation(
       "deleteScript",
       "type DeleteScriptResponse { message: String!, uri: String!, success: Boolean! } type Mutation { deleteScript(uri: String!): DeleteScriptResponse! }",
       "deleteScriptMutation",
+      "external",
     );
     graphQLRegistry.registerMutation(
       "addScriptOwner",
       "type OwnershipResponse { message: String!, uri: String!, userId: String!, success: Boolean! } type Mutation { addScriptOwner(uri: String!, userId: String!): OwnershipResponse! }",
       "addScriptOwnerMutation",
+      "external",
     );
     graphQLRegistry.registerMutation(
       "removeScriptOwner",
       "type OwnershipResponse { message: String!, uri: String!, userId: String!, success: Boolean! } type Mutation { removeScriptOwner(uri: String!, userId: String!): OwnershipResponse! }",
       "removeScriptOwnerMutation",
+      "external",
     );
 
     if (typeof schedulerService !== "undefined") {

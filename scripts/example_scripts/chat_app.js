@@ -908,43 +908,49 @@ function init(context) {
       console.log("System channel created");
     }
 
-    // Register GraphQL queries
+    // Register GraphQL queries (all external - used by chat UI)
     graphQLRegistry.registerQuery(
       "channels",
       "type Channel { id: String!, name: String!, isPrivate: Boolean!, createdBy: String!, createdAt: String! } type Query { channels: [Channel!]! }",
       "channelsResolver",
+      "external",
     );
 
     graphQLRegistry.registerQuery(
       "messages",
       "type Message { id: String!, sender: String!, text: String!, timestamp: String!, type: String! } type Query { messages(channelId: String!, limit: Int): [Message!]! }",
       "messagesResolver",
+      "external",
     );
 
     graphQLRegistry.registerQuery(
       "currentUser",
       "type User { id: String!, name: String!, email: String! } type Query { currentUser: User! }",
       "currentUserResolver",
+      "external",
     );
 
-    // Register GraphQL mutations
+    // Register GraphQL mutations (all external - used by chat UI)
     graphQLRegistry.registerMutation(
       "createChannel",
       "type Mutation { createChannel(name: String!, isPrivate: Boolean): Channel! }",
       "createChannelResolver",
+      "external",
     );
 
     graphQLRegistry.registerMutation(
       "sendMessage",
       "type Mutation { sendMessage(channelId: String!, text: String!): Message! }",
       "sendMessageResolver",
+      "external",
     );
 
-    // Register GraphQL subscription with explicit channelId argument
+    // Register GraphQL subscription with explicit channelId argument (external - used by chat UI)
     graphQLRegistry.registerSubscription(
       "chatUpdates",
       "type Subscription { chatUpdates(channelId: String!): Message }",
       "chatUpdatesResolver",
+      "external",
     );
 
     // Register HTTP route for chat interface

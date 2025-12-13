@@ -843,6 +843,7 @@ async fn test_graphql_registration_clearing() {
                 sdl: "type Query { testQuery: String }".to_string(),
                 resolver_function: "testResolver".to_string(),
                 script_uri: script_uri.to_string(),
+                visibility: aiwebengine::graphql::OperationVisibility::External,
             },
         );
         registry.mutations.insert(
@@ -851,6 +852,7 @@ async fn test_graphql_registration_clearing() {
                 sdl: "type Mutation { testMutation: String }".to_string(),
                 resolver_function: "testMutationResolver".to_string(),
                 script_uri: script_uri.to_string(),
+                visibility: aiwebengine::graphql::OperationVisibility::External,
             },
         );
         registry.subscriptions.insert(
@@ -859,6 +861,7 @@ async fn test_graphql_registration_clearing() {
                 sdl: "type Subscription { testSubscription: String }".to_string(),
                 resolver_function: "testSubscriptionResolver".to_string(),
                 script_uri: script_uri.to_string(),
+                visibility: aiwebengine::graphql::OperationVisibility::External,
             },
         );
     }

@@ -1,10 +1,66 @@
 use async_graphql::dynamic::*;
 use async_stream;
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use tracing::{debug, error};
 
 use crate::js_engine::{GraphqlOperationKind, GraphqlResolverExecutionParams};
+
+/// Visibility level for GraphQL operations
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationVisibility {
+    /// Only callable from within the same script
+    ScriptInternal,
+    /// Callable from any script, but not externally via HTTP
+    EngineInternal,
+    /// Accessible via external HTTP/WebSocket endpoints
+    External,
+}
+
+impl FromStr for OperationVisibility {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "script-internal" => Ok(Self::ScriptInternal),
+            "engine-internal" => Ok(Self::EngineInternal),
+            "external" => Ok(Self::External),
+            _ => Err(format!(
+                "Invalid visibility: '{}'. Must be 'script-internal', 'engine-internal', or 'external'",
+                s
+            )),
+        }
+    }
+}
+
+/// Source of a GraphQL execution request
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExecutionSource {
+    /// Called from external HTTP/WebSocket endpoint
+    ExternalHttp,
+    /// Called from a script via graphQLRegistry.executeGraphQL()
+    ScriptCall {
+        /// URI of the calling script
+        calling_script_uri: String,
+    },
+    /// Debug introspection for a specific script
+    DebugIntrospection {
+        /// URI of the script being debugged
+        script_uri: String,
+    },
+}
+
+/// Context for building different GraphQL schema tiers
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchemaContext {
+    /// External schema - only includes operations with External visibility
+    External,
+    /// Internal schema - includes External + EngineInternal operations
+    Internal,
+    /// Debug schema - includes all operations for a specific script
+    Debug,
+}
 
 /// Represents a GraphQL operation registration from JavaScript
 #[derive(Debug, Clone)]
@@ -15,6 +71,8 @@ pub struct GraphQLOperation {
     pub resolver_function: String,
     /// The script URI that contains this operation
     pub script_uri: String,
+    /// Visibility level of this operation
+    pub visibility: OperationVisibility,
 }
 
 /// Registry for storing GraphQL operations registered from JavaScript
@@ -159,6 +217,24 @@ pub fn rebuild_schema() -> Result<Schema, async_graphql::Error> {
     Ok(schema)
 }
 
+/// Get the external GraphQL schema (only External visibility operations)
+/// This is used for the public /graphql, /graphql/ws, /graphql/sse endpoints
+pub fn get_external_schema() -> Result<Schema, async_graphql::Error> {
+    build_schema_with_context(SchemaContext::External, None)
+}
+
+/// Get the internal GraphQL schema (External + EngineInternal visibility operations)
+/// This is used for script-to-script GraphQL calls via executeGraphQL()
+pub fn get_internal_schema() -> Result<Schema, async_graphql::Error> {
+    build_schema_with_context(SchemaContext::Internal, None)
+}
+
+/// Get a debug schema for a specific script (all operations for that script)
+/// This is used for per-script developer introspection
+pub fn get_debug_schema(script_uri: &str) -> Result<Schema, async_graphql::Error> {
+    build_schema_with_context(SchemaContext::Debug, Some(script_uri))
+}
+
 /// Clear all GraphQL registrations from a specific script URI
 pub fn clear_script_graphql_registrations(script_uri: &str) {
     debug!("Clearing GraphQL registrations for script: {}", script_uri);
@@ -179,15 +255,19 @@ pub fn register_graphql_query(
     sdl: String,
     resolver_function: String,
     script_uri: String,
-) {
+    visibility: String,
+) -> Result<(), String> {
+    let visibility_enum = OperationVisibility::from_str(&visibility)?;
+
     debug!(
-        "Registering GraphQL query: {} with resolver: {} from script: {}",
-        name, resolver_function, script_uri
+        "Registering GraphQL query: {} with resolver: {} from script: {} with visibility: {:?}",
+        name, resolver_function, script_uri, visibility_enum
     );
     let operation = GraphQLOperation {
         sdl,
         resolver_function,
         script_uri: script_uri.clone(),
+        visibility: visibility_enum,
     };
 
     if let Ok(mut registry) = get_registry().write() {
@@ -197,8 +277,11 @@ pub fn register_graphql_query(
             name,
             registry.get_queries().len()
         );
+        Ok(())
     } else {
-        error!("Failed to acquire write lock on GraphQL registry");
+        let err = "Failed to acquire write lock on GraphQL registry".to_string();
+        error!("{}", err);
+        Err(err)
     }
 }
 
@@ -208,17 +291,28 @@ pub fn register_graphql_mutation(
     sdl: String,
     resolver_function: String,
     script_uri: String,
-) {
+    visibility: String,
+) -> Result<(), String> {
+    let visibility_enum = OperationVisibility::from_str(&visibility)?;
+
+    debug!(
+        "Registering GraphQL mutation: {} with resolver: {} from script: {} with visibility: {:?}",
+        name, resolver_function, script_uri, visibility_enum
+    );
     let operation = GraphQLOperation {
         sdl,
         resolver_function,
         script_uri: script_uri.clone(),
+        visibility: visibility_enum,
     };
 
     if let Ok(mut registry) = get_registry().write() {
         registry.register_mutation(name, operation);
+        Ok(())
     } else {
-        error!("Failed to acquire write lock on GraphQL registry");
+        let err = "Failed to acquire write lock on GraphQL registry".to_string();
+        error!("{}", err);
+        Err(err)
     }
 }
 
@@ -228,16 +322,30 @@ pub fn register_graphql_subscription(
     sdl: String,
     resolver_function: String,
     script_uri: String,
-) {
+    visibility: String,
+) -> Result<(), String> {
+    let visibility_enum = OperationVisibility::from_str(&visibility)?;
+
+    // Subscriptions must be external-only
+    if visibility_enum != OperationVisibility::External {
+        let err = format!(
+            "Subscription '{}' must have 'external' visibility (got '{}'). Subscriptions are only available via HTTP/WebSocket.",
+            name, visibility
+        );
+        error!("{}", err);
+        return Err(err);
+    }
+
     debug!(
-        "Registering GraphQL subscription: {} with resolver: {} from script: {}",
-        name, resolver_function, script_uri
+        "Registering GraphQL subscription: {} with resolver: {} from script: {} with visibility: {:?}",
+        name, resolver_function, script_uri, visibility_enum
     );
 
     let operation = GraphQLOperation {
         sdl,
         resolver_function: resolver_function.clone(),
         script_uri: script_uri.clone(),
+        visibility: visibility_enum,
     };
 
     // Register stream with resolver as customization function
@@ -269,8 +377,11 @@ pub fn register_graphql_subscription(
             name,
             registry.get_subscriptions().len()
         );
+        Ok(())
     } else {
-        error!("Failed to acquire write lock on GraphQL registry");
+        let err = "Failed to acquire write lock on GraphQL registry".to_string();
+        error!("{}", err);
+        Err(err)
     }
 }
 
@@ -504,24 +615,62 @@ fn parse_json_to_graphql_value(json_str: &str) -> Result<async_graphql::Value, s
 
 /// Build a dynamic GraphQL schema from registered operations
 pub fn build_schema() -> Result<Schema, async_graphql::Error> {
+    build_schema_with_context(SchemaContext::External, None)
+}
+
+/// Build a dynamic GraphQL schema for a specific context
+pub fn build_schema_with_context(
+    context: SchemaContext,
+    script_filter: Option<&str>,
+) -> Result<Schema, async_graphql::Error> {
     let registry_arc = get_registry();
     let registry_guard = registry_arc.read().map_err(|e| {
         async_graphql::Error::new(format!("Failed to read GraphQL registry: {}", e))
     })?;
 
-    // Collect the data we need before creating closures
-    let queries: Vec<(String, GraphQLOperation)> =
-        registry_guard.get_queries().clone().into_iter().collect();
-    let mutations: Vec<(String, GraphQLOperation)> =
-        registry_guard.get_mutations().clone().into_iter().collect();
+    // Collect and filter operations based on context
+    let filter_operation = |op: &GraphQLOperation| -> bool {
+        match context {
+            SchemaContext::External => op.visibility == OperationVisibility::External,
+            SchemaContext::Internal => {
+                op.visibility == OperationVisibility::External
+                    || op.visibility == OperationVisibility::EngineInternal
+            }
+            SchemaContext::Debug => {
+                // For debug context, only include operations from the specified script
+                if let Some(script_uri) = script_filter {
+                    op.script_uri == script_uri
+                } else {
+                    // No script filter means include all
+                    true
+                }
+            }
+        }
+    };
+
+    // Collect the data we need before creating closures, with filtering
+    let queries: Vec<(String, GraphQLOperation)> = registry_guard
+        .get_queries()
+        .clone()
+        .into_iter()
+        .filter(|(_, op)| filter_operation(op))
+        .collect();
+    let mutations: Vec<(String, GraphQLOperation)> = registry_guard
+        .get_mutations()
+        .clone()
+        .into_iter()
+        .filter(|(_, op)| filter_operation(op))
+        .collect();
     let subscriptions: Vec<(String, GraphQLOperation)> = registry_guard
         .get_subscriptions()
         .clone()
         .into_iter()
+        .filter(|(_, op)| filter_operation(op))
         .collect();
 
     debug!(
-        "Building GraphQL schema with {} queries, {} mutations, {} subscriptions",
+        "Building GraphQL schema ({:?}) with {} queries, {} mutations, {} subscriptions",
+        context,
         queries.len(),
         mutations.len(),
         subscriptions.len()
@@ -945,8 +1094,10 @@ pub fn execute_graphql_query_sync(
 ) -> Result<String, String> {
     debug!("Executing GraphQL query synchronously: {}", query);
 
-    // Get the current schema
-    let schema = get_schema().map_err(|e| format!("Failed to get GraphQL schema: {:?}", e))?;
+    // Get the internal schema (includes External + EngineInternal operations)
+    // This allows scripts to call engine-internal operations via executeGraphQL()
+    let schema =
+        get_internal_schema().map_err(|e| format!("Failed to get GraphQL schema: {:?}", e))?;
 
     // Create the GraphQL request
     let mut request = async_graphql::Request::new(query);

@@ -1844,14 +1844,19 @@ async fn setup_routes(
 
         app = app.merge(graphql_router);
 
-        // GraphQL API endpoints (queries, mutations, subscriptions) - NO authentication required
+        // GraphQL API endpoints (queries, mutations, subscriptions) - REQUIRES authentication
+        let auth_mgr_for_graphql_api = Arc::clone(auth_mgr);
         let graphql_api_router = Router::new()
             .route(
                 "/graphql",
                 axum::routing::get(graphql_post_handler).post(graphql_post_handler),
             )
             .route("/graphql/ws", axum::routing::get(graphql_ws_handler))
-            .route("/graphql/sse", axum::routing::get(graphql_sse_handler));
+            .route("/graphql/sse", axum::routing::get(graphql_sse_handler))
+            .layer(axum::middleware::from_fn_with_state(
+                auth_mgr_for_graphql_api,
+                auth::required_auth_middleware,
+            ));
 
         app = app.merge(graphql_api_router);
 
