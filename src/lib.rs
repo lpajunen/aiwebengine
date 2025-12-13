@@ -909,33 +909,24 @@ async fn initialize_script_functions(config: &config::Config) -> AppResult<()> {
             // Log any failures for visibility
             for result in results.iter().filter(|r| !r.success) {
                 if let Some(ref error) = result.error {
-                    warn!(
+                    error!(
                         "Script '{}' initialization failed: {}",
                         result.script_uri, error
                     );
                 }
             }
 
-            // Fail startup if configured and any script failed
-            if config.javascript.fail_startup_on_init_error && failed > 0 {
-                return Err(AppError::JsExecution {
-                    message: format!(
-                        "Server startup aborted: {} script(s) failed initialization",
-                        failed
-                    ),
-                });
+            // Log warning but don't fail startup - scripts can be fixed and reloaded
+            if failed > 0 {
+                warn!(
+                    "Server startup: {} script(s) failed initialization but continuing",
+                    failed
+                );
             }
         }
         Err(e) => {
             error!("Failed to initialize scripts: {}", e);
-            if config.javascript.fail_startup_on_init_error {
-                return Err(AppError::JsExecution {
-                    message: format!(
-                        "Server startup aborted: script initialization failed: {}",
-                        e
-                    ),
-                });
-            }
+            warn!("Server continuing despite script initialization error");
         }
     }
 
