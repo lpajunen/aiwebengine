@@ -8,7 +8,6 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use chrono;
 use std::sync::Arc;
 
 use crate::auth::{AuthError, AuthManager, AuthSession};
@@ -90,8 +89,16 @@ pub async fn mcp_auth_middleware(
 
     // Extract token from Bearer header only
     let token = match extract_bearer_token(headers) {
-        Some(t) => t,
+        Some(t) => {
+            tracing::info!(
+                "MCP: Received Bearer token (length: {}, first 10 chars: {})",
+                t.len(),
+                t.chars().take(10).collect::<String>()
+            );
+            t
+        }
         None => {
+            tracing::warn!("MCP: No Bearer token found in request headers");
             // No token provided - return 401 with WWW-Authenticate challenge
             let challenge = create_auth_challenge(
                 "MCP API",
@@ -119,28 +126,6 @@ pub async fn mcp_auth_middleware(
         None
     };
 
-    // Check if token is a valid API key
-    if auth_manager.validate_api_key(&token) {
-        // Create a synthetic session for API key access
-        // API keys have admin privileges for MCP
-        let session = AuthSession {
-            user_id: "system-api".to_string(),
-            provider: "api_key".to_string(),
-            email: Some("system@aiwebengine.com".to_string()),
-            name: Some("System API".to_string()),
-            picture: None,
-            is_admin: true,
-            is_editor: true,
-            created_at: chrono::Utc::now(),
-            expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
-        };
-
-        // Store session in request extensions
-        request.extensions_mut().insert(McpAuthSession { session });
-
-        return next.run(request).await;
-    }
-
     // Validate session with resource indicator
     let session = match auth_manager
         .validate_session_with_resource(&token, &ip_addr, &user_agent, resource)
@@ -148,19 +133,36 @@ pub async fn mcp_auth_middleware(
     {
         Ok(s) => s,
         Err(e) => {
-            // Log the specific AuthError reason at debug level for diagnostics
-            tracing::debug!("MCP session validation error for token (redacted): {:?}", e);
+            // Log the specific AuthError reason at error level for diagnostics
+            tracing::error!("MCP session validation error: {:?}", e);
+            tracing::error!(
+                "Token (first 10 chars): {}",
+                &token.chars().take(10).collect::<String>()
+            );
+            tracing::error!(
+                "IP: {}, UA: {}, Resource: {:?}",
+                ip_addr,
+                user_agent,
+                resource
+            );
             // Session validation failed - return 401 with appropriate error
             let (error, error_desc) = match e {
-                AuthError::NoSession | AuthError::SessionError(_) => {
-                    ("invalid_token", "Session not found or expired")
+                AuthError::NoSession => ("invalid_token", "Session not found or expired"),
+                AuthError::SessionError(ref msg) => ("invalid_token", msg.as_str()),
+                AuthError::Session(ref session_err) => {
+                    // Log the specific SessionError
+                    tracing::error!("Session validation SessionError: {:?}", session_err);
+                    ("invalid_token", "Session validation failed")
                 }
                 AuthError::TokenExpired => ("invalid_token", "Session expired"),
                 AuthError::InsufficientPermissions => (
                     "insufficient_scope",
                     "Insufficient permissions for this resource",
                 ),
-                _ => ("invalid_token", "Session validation failed"),
+                _ => {
+                    tracing::error!("Unhandled auth error type");
+                    ("invalid_token", "Session validation failed")
+                }
             };
 
             let challenge = create_auth_challenge("MCP API", Some(error), Some(error_desc));
