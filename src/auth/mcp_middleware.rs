@@ -88,25 +88,8 @@ pub async fn mcp_auth_middleware(
 
     tracing::debug!("MCP request: {} {}", request.method(), uri);
 
-    // Try to extract token from Bearer header first
-    let mut token = extract_bearer_token(headers);
-
-    // If not found, try query parameter (api_key or token)
-    if token.is_none()
-        && let Some(query) = request.uri().query()
-    {
-        let params: std::collections::HashMap<String, String> =
-            url::form_urlencoded::parse(query.as_bytes())
-                .into_owned()
-                .collect();
-
-        token = params
-            .get("api_key")
-            .or_else(|| params.get("token"))
-            .cloned();
-    }
-
-    let token = match token {
+    // Extract token from Bearer header only
+    let token = match extract_bearer_token(headers) {
         Some(t) => t,
         None => {
             // No token provided - return 401 with WWW-Authenticate challenge
