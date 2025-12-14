@@ -2960,8 +2960,10 @@ impl SecureGlobalContext {
     }
 
     /// Setup database functions
-    fn setup_database_functions(&self, ctx: &rquickjs::Ctx<'_>, _script_uri: &str) -> JsResult<()> {
+    fn setup_database_functions(&self, ctx: &rquickjs::Ctx<'_>, script_uri: &str) -> JsResult<()> {
         let global = ctx.globals();
+        let script_uri_owned = script_uri.to_string();
+        let user_context = self.user_context.clone();
 
         // Create the checkDatabaseHealth function
         let check_db_health = Function::new(
@@ -2974,7 +2976,313 @@ impl SecureGlobalContext {
         )?;
 
         global.set("checkDatabaseHealth", check_db_health)?;
-        debug!("checkDatabaseHealth() function initialized");
+
+        // Create the database namespace object for schema management
+        let database_obj = rquickjs::Object::new(ctx.clone())?;
+
+        // database.createTable(tableName) - Create a new table for this script
+        let script_uri_create = script_uri_owned.clone();
+        let user_ctx_create = user_context.clone();
+        let create_table = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, table_name: String| -> JsResult<String> {
+                debug!(
+                    "database.createTable called for script {} with table: {}",
+                    script_uri_create, table_name
+                );
+
+                // Check permission
+                if let Err(_) = user_ctx_create
+                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                {
+                    return Ok(
+                        "{\"error\": \"Insufficient permissions for database schema operations\"}"
+                            .to_string(),
+                    );
+                }
+
+                match crate::repository::create_script_table(&script_uri_create, &table_name) {
+                    Ok(physical_name) => Ok(format!(
+                        "{{\"success\": true, \"tableName\": \"{}\", \"physicalName\": \"{}\"}}",
+                        table_name, physical_name
+                    )),
+                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                }
+            },
+        )?;
+        database_obj.set("createTable", create_table)?;
+
+        // database.addIntegerColumn(tableName, columnName, nullable, defaultValue)
+        let script_uri_add_int = script_uri_owned.clone();
+        let user_ctx_add_int = user_context.clone();
+        let add_integer_column = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  table_name: String,
+                  column_name: String,
+                  nullable: Opt<bool>,
+                  default_value: Opt<String>|
+                  -> JsResult<String> {
+                debug!(
+                    "database.addIntegerColumn called for script {}",
+                    script_uri_add_int
+                );
+
+                if let Err(_) = user_ctx_add_int
+                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                {
+                    return Ok(
+                        "{\"error\": \"Insufficient permissions for database schema operations\"}"
+                            .to_string(),
+                    );
+                }
+
+                let nullable = nullable.0.unwrap_or(true);
+                let default_val = default_value.0.as_deref();
+
+                match crate::repository::add_column_to_script_table(
+                    &script_uri_add_int,
+                    &table_name,
+                    &column_name,
+                    crate::db_schema_utils::ColumnType::Integer,
+                    nullable,
+                    default_val,
+                ) {
+                    Ok(()) => Ok(format!(
+                        "{{\"success\": true, \"column\": \"{}\"}}",
+                        column_name
+                    )),
+                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                }
+            },
+        )?;
+        database_obj.set("addIntegerColumn", add_integer_column)?;
+
+        // database.addTextColumn(tableName, columnName, nullable, defaultValue)
+        let script_uri_add_text = script_uri_owned.clone();
+        let user_ctx_add_text = user_context.clone();
+        let add_text_column = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  table_name: String,
+                  column_name: String,
+                  nullable: Opt<bool>,
+                  default_value: Opt<String>|
+                  -> JsResult<String> {
+                debug!(
+                    "database.addTextColumn called for script {}",
+                    script_uri_add_text
+                );
+
+                if let Err(_) = user_ctx_add_text
+                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                {
+                    return Ok(
+                        "{\"error\": \"Insufficient permissions for database schema operations\"}"
+                            .to_string(),
+                    );
+                }
+
+                let nullable = nullable.0.unwrap_or(true);
+                let default_val = default_value.0.as_deref();
+
+                match crate::repository::add_column_to_script_table(
+                    &script_uri_add_text,
+                    &table_name,
+                    &column_name,
+                    crate::db_schema_utils::ColumnType::Text,
+                    nullable,
+                    default_val,
+                ) {
+                    Ok(()) => Ok(format!(
+                        "{{\"success\": true, \"column\": \"{}\"}}",
+                        column_name
+                    )),
+                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                }
+            },
+        )?;
+        database_obj.set("addTextColumn", add_text_column)?;
+
+        // database.addBooleanColumn(tableName, columnName, nullable, defaultValue)
+        let script_uri_add_bool = script_uri_owned.clone();
+        let user_ctx_add_bool = user_context.clone();
+        let add_boolean_column = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  table_name: String,
+                  column_name: String,
+                  nullable: Opt<bool>,
+                  default_value: Opt<String>|
+                  -> JsResult<String> {
+                debug!(
+                    "database.addBooleanColumn called for script {}",
+                    script_uri_add_bool
+                );
+
+                if let Err(_) = user_ctx_add_bool
+                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                {
+                    return Ok(
+                        "{\"error\": \"Insufficient permissions for database schema operations\"}"
+                            .to_string(),
+                    );
+                }
+
+                let nullable = nullable.0.unwrap_or(true);
+                let default_val = default_value.0.as_deref();
+
+                match crate::repository::add_column_to_script_table(
+                    &script_uri_add_bool,
+                    &table_name,
+                    &column_name,
+                    crate::db_schema_utils::ColumnType::Boolean,
+                    nullable,
+                    default_val,
+                ) {
+                    Ok(()) => Ok(format!(
+                        "{{\"success\": true, \"column\": \"{}\"}}",
+                        column_name
+                    )),
+                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                }
+            },
+        )?;
+        database_obj.set("addBooleanColumn", add_boolean_column)?;
+
+        // database.addTimestampColumn(tableName, columnName, nullable, defaultValue)
+        let script_uri_add_ts = script_uri_owned.clone();
+        let user_ctx_add_ts = user_context.clone();
+        let add_timestamp_column = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  table_name: String,
+                  column_name: String,
+                  nullable: Opt<bool>,
+                  default_value: Opt<String>|
+                  -> JsResult<String> {
+                debug!(
+                    "database.addTimestampColumn called for script {}",
+                    script_uri_add_ts
+                );
+
+                if let Err(_) = user_ctx_add_ts
+                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                {
+                    return Ok(
+                        "{\"error\": \"Insufficient permissions for database schema operations\"}"
+                            .to_string(),
+                    );
+                }
+
+                let nullable = nullable.0.unwrap_or(true);
+                let default_val = default_value.0.as_deref();
+
+                match crate::repository::add_column_to_script_table(
+                    &script_uri_add_ts,
+                    &table_name,
+                    &column_name,
+                    crate::db_schema_utils::ColumnType::Timestamp,
+                    nullable,
+                    default_val,
+                ) {
+                    Ok(()) => Ok(format!(
+                        "{{\"success\": true, \"column\": \"{}\"}}",
+                        column_name
+                    )),
+                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                }
+            },
+        )?;
+        database_obj.set("addTimestampColumn", add_timestamp_column)?;
+
+        // database.createReference(tableName, columnName, referencedTableName)
+        let script_uri_ref = script_uri_owned.clone();
+        let user_ctx_ref = user_context.clone();
+        let create_reference = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  table_name: String,
+                  column_name: String,
+                  referenced_table_name: String|
+                  -> JsResult<String> {
+                debug!(
+                    "database.createReference called for script {}",
+                    script_uri_ref
+                );
+
+                if let Err(_) = user_ctx_ref
+                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                {
+                    return Ok(
+                        "{\"error\": \"Insufficient permissions for database schema operations\"}"
+                            .to_string(),
+                    );
+                }
+
+                match crate::repository::create_script_foreign_key(
+                    &script_uri_ref,
+                    &table_name,
+                    &column_name,
+                    &referenced_table_name,
+                ) {
+                    Ok(()) => Ok(format!(
+                        "{{\"success\": true, \"foreignKey\": \"{}.{} -> {}\"}}",
+                        table_name, column_name, referenced_table_name
+                    )),
+                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                }
+            },
+        )?;
+        database_obj.set("createReference", create_reference)?;
+
+        // database.dropTable(tableName)
+        let script_uri_drop = script_uri_owned.clone();
+        let user_ctx_drop = user_context.clone();
+        let drop_table = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, table_name: String| -> JsResult<String> {
+                debug!(
+                    "database.dropTable called for script {} with table: {}",
+                    script_uri_drop, table_name
+                );
+
+                if let Err(_) = user_ctx_drop
+                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                {
+                    return Ok(
+                        "{\"error\": \"Insufficient permissions for database schema operations\"}"
+                            .to_string(),
+                    );
+                }
+
+                match crate::repository::drop_script_table(&script_uri_drop, &table_name) {
+                    Ok(existed) => {
+                        if existed {
+                            Ok(format!(
+                                "{{\"success\": true, \"tableName\": \"{}\", \"dropped\": true}}",
+                                table_name
+                            ))
+                        } else {
+                            Ok(format!(
+                                "{{\"success\": true, \"tableName\": \"{}\", \"dropped\": false, \"message\": \"Table did not exist\"}}",
+                                table_name
+                            ))
+                        }
+                    }
+                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                }
+            },
+        )?;
+        database_obj.set("dropTable", drop_table)?;
+
+        // Set the database object on the global scope
+        global.set("database", database_obj)?;
+
+        debug!(
+            "database JavaScript API initialized for script: {}",
+            script_uri
+        );
 
         Ok(())
     }
