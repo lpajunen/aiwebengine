@@ -8,7 +8,8 @@
  * - Creating tables with automatic ID column
  * - Adding columns of different types (INTEGER, TEXT, BOOLEAN, TIMESTAMP)
  * - Setting nullable and default values
- * - Creating foreign key references
+ * - Creating foreign key references with addReferenceColumn
+ * - Dropping columns
  * - Dropping tables
  * - Automatic cleanup on script deletion
  */
@@ -20,6 +21,7 @@ function init() {
   routeRegistry.register("GET", "/test/db/create", "testCreateTable");
   routeRegistry.register("GET", "/test/db/columns", "testAddColumns");
   routeRegistry.register("GET", "/test/db/references", "testForeignKeys");
+  routeRegistry.register("GET", "/test/db/drop-column", "testDropColumn");
   routeRegistry.register("GET", "/test/db/drop", "testDropTable");
   routeRegistry.register("GET", "/test/db/full", "testFullWorkflow");
 }
@@ -140,11 +142,8 @@ function testForeignKeys(context) {
   database.createTable("authors");
   database.createTable("books");
 
-  // Add a column to reference authors
-  database.addIntegerColumn("books", "author_id", false, null);
-
-  // Create the foreign key
-  const fkResult = database.createReference("books", "author_id", "authors");
+  // Add a reference column (this now creates the column AND the FK in one step)
+  const fkResult = database.addReferenceColumn("books", "author_id", "authors", false);
   const data = JSON.parse(fkResult);
 
   if (data.error) {
@@ -159,7 +158,7 @@ function testForeignKeys(context) {
     };
   }
 
-  log("Created foreign key: " + data.foreignKey);
+  log("Created foreign key: " + data.foreignKey + ", nullable: " + data.nullable);
 
   return {
     status: 200,
@@ -167,13 +166,58 @@ function testForeignKeys(context) {
       test: "foreignKeys",
       success: true,
       foreignKey: data.foreignKey,
+      nullable: data.nullable,
     }),
     contentType: "application/json",
   };
 }
 
 /**
- * Test 4: Drop a table
+ * Test 4: Drop a column
+ */
+function testDropColumn(context) {
+  log("Testing column drop...");
+
+  // Create a table and add a column
+  database.createTable("temp_table_col");
+  database.addTextColumn("temp_table_col", "temp_column", true, null);
+
+  // Drop the column
+  const dropResult = database.dropColumn("temp_table_col", "temp_column");
+  const data = JSON.parse(dropResult);
+
+  if (data.error) {
+    return {
+      status: 500,
+      body: JSON.stringify({
+        test: "dropColumn",
+        success: false,
+        error: data.error,
+      }),
+      contentType: "application/json",
+    };
+  }
+
+  log("Dropped column: " + data.columnName + " from " + data.tableName + ", existed: " + data.dropped);
+
+  // Clean up table
+  database.dropTable("temp_table_col");
+
+  return {
+    status: 200,
+    body: JSON.stringify({
+      test: "dropColumn",
+      success: true,
+      tableName: data.tableName,
+      columnName: data.columnName,
+      dropped: data.dropped,
+    }),
+    contentType: "application/json",
+  };
+}
+
+/**
+ * Test 5: Drop a table
  */
 function testDropTable(context) {
   log("Testing table drop...");
@@ -211,7 +255,7 @@ function testDropTable(context) {
 }
 
 /**
- * Test 5: Full workflow test
+ * Test 6: Full workflow test
  */
 function testFullWorkflow(context) {
   log("Testing full database schema workflow...");

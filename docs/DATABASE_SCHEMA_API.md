@@ -129,17 +129,18 @@ database.addTimestampColumn("users", "created_at", false, "NOW()");
 database.addTimestampColumn("users", "last_login", true, null);
 ```
 
-### `database.createReference(tableName, columnName, referencedTableName)`
+### `database.addReferenceColumn(tableName, columnName, referencedTableName, nullable)`
 
-Creates a foreign key constraint between two script-owned tables.
+Adds an INTEGER column with a foreign key constraint to another script-owned table. This is a convenience method that combines adding an INTEGER column and creating a foreign key relationship in one step.
 
 **Parameters:**
 
 - `tableName` (string): Source table name
-- `columnName` (string): Column name in source table (must be INTEGER)
+- `columnName` (string): Column name in source table (will be created as INTEGER)
 - `referencedTableName` (string): Target table name (references the `id` column)
+- `nullable` (boolean, optional): Whether the column can be NULL (default: true)
 
-**Returns:** JSON string with `success` and `foreignKey` description or `error`
+**Returns:** JSON string with `success`, `foreignKey` description, and `nullable` flag, or `error`
 
 **Example:**
 
@@ -148,12 +149,35 @@ Creates a foreign key constraint between two script-owned tables.
 database.createTable("authors");
 database.createTable("books");
 
-// Add foreign key column
-database.addIntegerColumn("books", "author_id", false, null);
+// Add foreign key column (nullable by default)
+const result = database.addReferenceColumn("books", "author_id", "authors");
+// Result: {"success": true, "foreignKey": "books.author_id -> authors", "nullable": true}
 
-// Create the reference
-const result = database.createReference("books", "author_id", "authors");
-// Result: {"success": true, "foreignKey": "books.author_id -> authors"}
+// Add non-nullable foreign key column
+database.addReferenceColumn("posts", "user_id", "users", false);
+```
+
+### `database.dropColumn(tableName, columnName)`
+
+Drops a column from a script-owned table. Cannot drop the `id` column.
+
+**Parameters:**
+
+- `tableName` (string): Table name
+- `columnName` (string): Column name to drop
+
+**Returns:** JSON string with `success`, `dropped` (boolean indicating if column existed), or `error`
+
+**Example:**
+
+```javascript
+const result = database.dropColumn("users", "age");
+const data = JSON.parse(result);
+if (data.dropped) {
+  log("Column was dropped");
+} else {
+  log("Column did not exist");
+}
 ```
 
 ### `database.dropTable(tableName)`

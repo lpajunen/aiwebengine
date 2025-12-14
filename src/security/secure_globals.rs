@@ -3196,18 +3196,19 @@ impl SecureGlobalContext {
         )?;
         database_obj.set("addTimestampColumn", add_timestamp_column)?;
 
-        // database.createReference(tableName, columnName, referencedTableName)
+        // database.addReferenceColumn(tableName, columnName, referencedTableName, nullable)
         let script_uri_ref = script_uri_owned.clone();
         let user_ctx_ref = user_context.clone();
-        let create_reference = Function::new(
+        let add_reference_column = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>,
                   table_name: String,
                   column_name: String,
-                  referenced_table_name: String|
+                  referenced_table_name: String,
+                  nullable: Opt<bool>|
                   -> JsResult<String> {
                 debug!(
-                    "database.createReference called for script {}",
+                    "database.addReferenceColumn called for script {}",
                     script_uri_ref
                 );
 
@@ -3220,21 +3221,64 @@ impl SecureGlobalContext {
                     );
                 }
 
-                match crate::repository::create_script_foreign_key(
+                let nullable = nullable.0.unwrap_or(true);
+
+                match crate::repository::add_reference_column(
                     &script_uri_ref,
                     &table_name,
                     &column_name,
                     &referenced_table_name,
+                    nullable,
                 ) {
                     Ok(()) => Ok(format!(
-                        "{{\"success\": true, \"foreignKey\": \"{}.{} -> {}\"}}",
-                        table_name, column_name, referenced_table_name
+                        "{{\"success\": true, \"foreignKey\": \"{}.{} -> {}\", \"nullable\": {}}}",
+                        table_name, column_name, referenced_table_name, nullable
                     )),
                     Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
                 }
             },
         )?;
-        database_obj.set("createReference", create_reference)?;
+        database_obj.set("addReferenceColumn", add_reference_column)?;
+
+        // database.dropColumn(tableName, columnName)
+        let script_uri_drop_col = script_uri_owned.clone();
+        let user_ctx_drop_col = user_context.clone();
+        let drop_column = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, table_name: String, column_name: String| -> JsResult<String> {
+                debug!(
+                    "database.dropColumn called for script {} with table: {}, column: {}",
+                    script_uri_drop_col, table_name, column_name
+                );
+
+                if let Err(_) = user_ctx_drop_col
+                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                {
+                    return Ok(
+                        "{\"error\": \"Insufficient permissions for database schema operations\"}"
+                            .to_string(),
+                    );
+                }
+
+                match crate::repository::drop_column(&script_uri_drop_col, &table_name, &column_name) {
+                    Ok(existed) => {
+                        if existed {
+                            Ok(format!(
+                                "{{\"success\": true, \"tableName\": \"{}\", \"columnName\": \"{}\", \"dropped\": true}}",
+                                table_name, column_name
+                            ))
+                        } else {
+                            Ok(format!(
+                                "{{\"success\": true, \"tableName\": \"{}\", \"columnName\": \"{}\", \"dropped\": false, \"message\": \"Column did not exist\"}}",
+                                table_name, column_name
+                            ))
+                        }
+                    }
+                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                }
+            },
+        )?;
+        database_obj.set("dropColumn", drop_column)?;
 
         // database.dropTable(tableName)
         let script_uri_drop = script_uri_owned.clone();

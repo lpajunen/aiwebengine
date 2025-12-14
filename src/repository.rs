@@ -1826,13 +1826,14 @@ async fn db_add_column_to_script_table(
     Ok(())
 }
 
-/// Database-backed create foreign key reference
-async fn db_create_foreign_key(
+/// Database-backed add reference column (creates INTEGER column with FK constraint)
+async fn db_add_reference_column(
     pool: &PgPool,
     script_uri: &str,
     logical_table_name: &str,
     column_name: &str,
     referenced_logical_table_name: &str,
+    nullable: bool,
 ) -> AppResult<()> {
     // Validate identifiers
     validate_identifier(logical_table_name).map_err(|e| AppError::Validation {
@@ -1848,7 +1849,19 @@ async fn db_create_foreign_key(
         reason: e.to_string(),
     })?;
 
-    // Get physical table names
+    // First, add the integer column
+    db_add_column_to_script_table(
+        pool,
+        script_uri,
+        logical_table_name,
+        column_name,
+        ColumnType::Integer,
+        nullable,
+        None,
+    )
+    .await?;
+
+    // Get physical table names for FK constraint
     let source_table: String = sqlx::query_scalar(
         "SELECT physical_table_name FROM script_tables WHERE script_uri = $1 AND logical_table_name = $2",
     )
@@ -1909,11 +1922,113 @@ async fn db_create_foreign_key(
     })?;
 
     debug!(
-        "Created foreign key: {}.{} -> {}.id",
-        logical_table_name, column_name, referenced_logical_table_name
+        "Created reference column: {}.{} -> {}.id (nullable: {})",
+        logical_table_name, column_name, referenced_logical_table_name, nullable
     );
 
     Ok(())
+}
+
+/// Database-backed drop column from script-owned table
+async fn db_drop_column(
+    pool: &PgPool,
+    script_uri: &str,
+    logical_table_name: &str,
+    column_name: &str,
+) -> AppResult<bool> {
+    // Validate identifiers
+    validate_identifier(logical_table_name).map_err(|e| AppError::Validation {
+        field: "table_name".to_string(),
+        reason: e.to_string(),
+    })?;
+    validate_identifier(column_name).map_err(|e| AppError::Validation {
+        field: "column_name".to_string(),
+        reason: e.to_string(),
+    })?;
+
+    // Get the physical table name and schema
+    let row: Option<(String, serde_json::Value)> = sqlx::query_as(
+        "SELECT physical_table_name, schema_json FROM script_tables WHERE script_uri = $1 AND logical_table_name = $2",
+    )
+    .bind(script_uri)
+    .bind(logical_table_name)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error fetching table metadata: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    let (physical_table_name, mut schema_json) = row.ok_or_else(|| AppError::Validation {
+        field: "table_name".to_string(),
+        reason: format!("Table '{}' not found for this script", logical_table_name),
+    })?;
+
+    // Check if column exists in schema
+    let column_exists = schema_json
+        .get("columns")
+        .and_then(|c| c.as_array())
+        .map(|columns| {
+            columns
+                .iter()
+                .any(|col| col.get("name").and_then(|n| n.as_str()) == Some(column_name))
+        })
+        .unwrap_or(false);
+
+    if !column_exists {
+        return Ok(false);
+    }
+
+    // Don't allow dropping the id column
+    if column_name == "id" {
+        return Err(AppError::Validation {
+            field: "column_name".to_string(),
+            reason: "Cannot drop the 'id' column".to_string(),
+        });
+    }
+
+    // Drop the column
+    let drop_sql = format!(
+        "ALTER TABLE {} DROP COLUMN {}",
+        quote_identifier(&physical_table_name),
+        quote_identifier(column_name)
+    );
+
+    sqlx::query(&drop_sql).execute(pool).await.map_err(|e| {
+        error!("Database error dropping column: {}", e);
+        AppError::Database {
+            message: format!("Failed to drop column: {}", e),
+            source: None,
+        }
+    })?;
+
+    // Update schema_json metadata
+    if let Some(columns) = schema_json.get_mut("columns").and_then(|c| c.as_array_mut()) {
+        columns.retain(|col| col.get("name").and_then(|n| n.as_str()) != Some(column_name));
+    }
+
+    sqlx::query(
+        "UPDATE script_tables SET schema_json = $1, updated_at = NOW() WHERE script_uri = $2 AND logical_table_name = $3",
+    )
+    .bind(schema_json)
+    .bind(script_uri)
+    .bind(logical_table_name)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error updating schema metadata: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    debug!("Dropped column {} from table {}", column_name, logical_table_name);
+
+    Ok(true)
 }
 
 /// Database-backed drop script-owned table
@@ -2608,22 +2723,37 @@ pub fn add_column_to_script_table(
     })
 }
 
-/// Create a foreign key reference between script-owned tables
-pub fn create_script_foreign_key(
+/// Add a reference column (INTEGER with FK) to a script-owned table
+pub fn add_reference_column(
     script_uri: &str,
     logical_table_name: &str,
     column_name: &str,
     referenced_logical_table_name: &str,
+    nullable: bool,
 ) -> AppResult<()> {
     let repo = get_repository();
     run_blocking(async {
-        repo.create_foreign_key(
+        repo.add_reference_column(
             script_uri,
             logical_table_name,
             column_name,
             referenced_logical_table_name,
+            nullable,
         )
         .await
+    })
+}
+
+/// Drop a column from a script-owned table
+pub fn drop_column(
+    script_uri: &str,
+    logical_table_name: &str,
+    column_name: &str,
+) -> AppResult<bool> {
+    let repo = get_repository();
+    run_blocking(async {
+        repo.drop_column(script_uri, logical_table_name, column_name)
+            .await
     })
 }
 
@@ -3087,13 +3217,20 @@ pub trait Repository: Send + Sync {
         nullable: bool,
         default_value: Option<&str>,
     ) -> AppResult<()>;
-    async fn create_foreign_key(
+    async fn add_reference_column(
         &self,
         script_uri: &str,
         logical_table_name: &str,
         column_name: &str,
         referenced_logical_table_name: &str,
+        nullable: bool,
     ) -> AppResult<()>;
+    async fn drop_column(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        column_name: &str,
+    ) -> AppResult<bool>;
     async fn drop_script_table(
         &self,
         script_uri: &str,
@@ -3400,21 +3537,32 @@ impl Repository for PostgresRepository {
         .await
     }
 
-    async fn create_foreign_key(
+    async fn add_reference_column(
         &self,
         script_uri: &str,
         logical_table_name: &str,
         column_name: &str,
         referenced_logical_table_name: &str,
+        nullable: bool,
     ) -> AppResult<()> {
-        db_create_foreign_key(
+        db_add_reference_column(
             &self.pool,
             script_uri,
             logical_table_name,
             column_name,
             referenced_logical_table_name,
+            nullable,
         )
         .await
+    }
+
+    async fn drop_column(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        column_name: &str,
+    ) -> AppResult<bool> {
+        db_drop_column(&self.pool, script_uri, logical_table_name, column_name).await
     }
 
     async fn drop_script_table(
@@ -3842,13 +3990,26 @@ impl Repository for MemoryRepository {
         })
     }
 
-    async fn create_foreign_key(
+    async fn add_reference_column(
         &self,
         _script_uri: &str,
         _logical_table_name: &str,
         _column_name: &str,
         _referenced_logical_table_name: &str,
+        _nullable: bool,
     ) -> AppResult<()> {
+        Err(AppError::Validation {
+            field: "database".to_string(),
+            reason: "Database schema operations not supported in memory mode".to_string(),
+        })
+    }
+
+    async fn drop_column(
+        &self,
+        _script_uri: &str,
+        _logical_table_name: &str,
+        _column_name: &str,
+    ) -> AppResult<bool> {
         Err(AppError::Validation {
             field: "database".to_string(),
             reason: "Database schema operations not supported in memory mode".to_string(),
@@ -4188,32 +4349,47 @@ impl Repository for UnifiedRepository {
         }
     }
 
-    async fn create_foreign_key(
+    async fn add_reference_column(
         &self,
         script_uri: &str,
         logical_table_name: &str,
         column_name: &str,
         referenced_logical_table_name: &str,
+        nullable: bool,
     ) -> AppResult<()> {
         match self {
             Self::Postgres(repo) => {
-                repo.create_foreign_key(
+                repo.add_reference_column(
                     script_uri,
                     logical_table_name,
                     column_name,
                     referenced_logical_table_name,
+                    nullable,
                 )
                 .await
             }
             Self::Memory(repo) => {
-                repo.create_foreign_key(
+                repo.add_reference_column(
                     script_uri,
                     logical_table_name,
                     column_name,
                     referenced_logical_table_name,
+                    nullable,
                 )
                 .await
             }
+        }
+    }
+
+    async fn drop_column(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        column_name: &str,
+    ) -> AppResult<bool> {
+        match self {
+            Self::Postgres(repo) => repo.drop_column(script_uri, logical_table_name, column_name).await,
+            Self::Memory(repo) => repo.drop_column(script_uri, logical_table_name, column_name).await,
         }
     }
 
