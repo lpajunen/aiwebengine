@@ -18,6 +18,7 @@ pub mod db_schema_utils;
 pub mod dispatcher;
 pub mod error;
 pub mod graphql;
+pub mod graphql_schema_gen;
 pub mod graphql_ws;
 pub mod http_client;
 pub mod js_engine;

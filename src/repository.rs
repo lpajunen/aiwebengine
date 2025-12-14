@@ -198,6 +198,46 @@ pub struct Asset {
     pub updated_at: std::time::SystemTime,
 }
 
+// ============================================================================
+// Script Database Schema Introspection Types
+// ============================================================================
+
+/// Metadata about a script-owned table
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TableInfo {
+    pub logical_name: String,
+    pub physical_name: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Schema information for a table
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TableSchema {
+    pub table_name: String,
+    pub columns: Vec<ColumnInfo>,
+}
+
+/// Information about a table column
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ColumnInfo {
+    pub name: String,
+    pub data_type: String, // "INTEGER", "TEXT", "BOOLEAN", "TIMESTAMPTZ"
+    pub nullable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_value: Option<String>,
+    #[serde(default)]
+    pub is_primary_key: bool,
+}
+
+/// Foreign key relationship information
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ForeignKeyInfo {
+    pub column_name: String,
+    pub referenced_table_logical: String,
+    pub referenced_table_physical: String,
+    pub referenced_column: String,
+}
+
 static DYNAMIC_SCRIPTS: OnceLock<Mutex<HashMap<String, ScriptMetadata>>> = OnceLock::new();
 static DYNAMIC_LOGS: OnceLock<Mutex<HashMap<String, Vec<String>>>> = OnceLock::new();
 static DYNAMIC_ASSETS: OnceLock<Mutex<HashMap<String, Asset>>> = OnceLock::new();
@@ -2157,6 +2197,635 @@ async fn db_drop_all_script_tables(pool: &PgPool, script_uri: &str) -> AppResult
     Ok(count)
 }
 
+// ============================================================================
+// Script Database Schema Introspection Functions
+// ============================================================================
+
+/// List all tables owned by a script
+async fn db_list_script_tables(pool: &PgPool, script_uri: &str) -> AppResult<Vec<TableInfo>> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT logical_table_name, physical_table_name, created_at
+        FROM script_tables
+        WHERE script_uri = $1
+        ORDER BY logical_table_name
+        "#,
+        script_uri
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error listing script tables: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| TableInfo {
+            logical_name: row.logical_table_name,
+            physical_name: row.physical_table_name,
+            created_at: row.created_at,
+        })
+        .collect())
+}
+
+/// Get detailed schema information for a specific table
+async fn db_get_table_schema(
+    pool: &PgPool,
+    script_uri: &str,
+    logical_table_name: &str,
+) -> AppResult<TableSchema> {
+    // Fetch schema_json from script_tables
+    let schema_json: Option<serde_json::Value> = sqlx::query_scalar(
+        "SELECT schema_json FROM script_tables WHERE script_uri = $1 AND logical_table_name = $2",
+    )
+    .bind(script_uri)
+    .bind(logical_table_name)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error fetching table schema: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    let schema_json = schema_json.ok_or_else(|| AppError::Validation {
+        field: "table_name".to_string(),
+        reason: format!("Table '{}' not found for this script", logical_table_name),
+    })?;
+
+    // Parse columns from schema_json
+    let columns_array = schema_json
+        .get("columns")
+        .and_then(|c| c.as_array())
+        .ok_or_else(|| AppError::Validation {
+            field: "schema_json".to_string(),
+            reason: "Invalid schema format: missing columns array".to_string(),
+        })?;
+
+    let mut columns = Vec::new();
+    for col in columns_array {
+        let name = col
+            .get("name")
+            .and_then(|n| n.as_str())
+            .ok_or_else(|| AppError::Validation {
+                field: "column".to_string(),
+                reason: "Column missing name".to_string(),
+            })?
+            .to_string();
+
+        let data_type = col
+            .get("type")
+            .and_then(|t| t.as_str())
+            .ok_or_else(|| AppError::Validation {
+                field: "column".to_string(),
+                reason: format!("Column '{}' missing type", name),
+            })?
+            .to_string();
+
+        let nullable = col
+            .get("nullable")
+            .and_then(|n| n.as_bool())
+            .unwrap_or(true);
+
+        let default_value = col.get("default").map(|d| {
+            if let Some(s) = d.as_str() {
+                s.to_string()
+            } else {
+                d.to_string()
+            }
+        });
+
+        let is_primary_key = col
+            .get("primary_key")
+            .and_then(|p| p.as_bool())
+            .unwrap_or(false);
+
+        columns.push(ColumnInfo {
+            name,
+            data_type,
+            nullable,
+            default_value,
+            is_primary_key,
+        });
+    }
+
+    Ok(TableSchema {
+        table_name: logical_table_name.to_string(),
+        columns,
+    })
+}
+
+/// Get foreign key relationships for a table
+async fn db_get_foreign_keys(
+    pool: &PgPool,
+    script_uri: &str,
+    logical_table_name: &str,
+) -> AppResult<Vec<ForeignKeyInfo>> {
+    // Get the physical table name first
+    let physical_table_name: Option<String> = sqlx::query_scalar(
+        "SELECT physical_table_name FROM script_tables WHERE script_uri = $1 AND logical_table_name = $2",
+    )
+    .bind(script_uri)
+    .bind(logical_table_name)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error fetching table metadata: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    let physical_table_name = physical_table_name.ok_or_else(|| AppError::Validation {
+        field: "table_name".to_string(),
+        reason: format!("Table '{}' not found for this script", logical_table_name),
+    })?;
+
+    // Query PostgreSQL information_schema for foreign keys
+    let rows = sqlx::query!(
+        r#"
+        SELECT
+            kcu.column_name,
+            ccu.table_name AS referenced_table_physical,
+            ccu.column_name AS referenced_column
+        FROM information_schema.table_constraints AS tc
+        JOIN information_schema.key_column_usage AS kcu
+            ON tc.constraint_name = kcu.constraint_name
+            AND tc.table_schema = kcu.table_schema
+        JOIN information_schema.constraint_column_usage AS ccu
+            ON ccu.constraint_name = tc.constraint_name
+            AND ccu.table_schema = tc.table_schema
+        WHERE tc.constraint_type = 'FOREIGN KEY'
+            AND tc.table_name = $1
+        "#,
+        &physical_table_name
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error fetching foreign keys: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    let mut foreign_keys = Vec::new();
+
+    for row in rows {
+        // Look up the logical table name for the referenced table
+        let referenced_table_logical: Option<String> = sqlx::query_scalar(
+            "SELECT logical_table_name FROM script_tables WHERE script_uri = $1 AND physical_table_name = $2",
+        )
+        .bind(script_uri)
+        .bind(&row.referenced_table_physical)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| {
+            error!("Database error fetching referenced table name: {}", e);
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
+        })?;
+
+        // Only include FK if it references another table owned by the same script
+        if let Some(referenced_logical) = referenced_table_logical
+            && let Some(column_name) = row.column_name
+        {
+            foreign_keys.push(ForeignKeyInfo {
+                column_name,
+                referenced_table_logical: referenced_logical,
+                referenced_table_physical: row.referenced_table_physical.unwrap_or_default(),
+                referenced_column: row.referenced_column.unwrap_or_else(|| "id".to_string()),
+            });
+        }
+    }
+
+    Ok(foreign_keys)
+}
+
+// ============================================================================
+// Script Database Data Access Functions
+// ============================================================================
+
+/// Query rows from a script-owned table
+async fn db_query_table(
+    pool: &PgPool,
+    script_uri: &str,
+    logical_table_name: &str,
+    filters: Option<&HashMap<String, serde_json::Value>>,
+    limit: Option<i64>,
+) -> AppResult<Vec<serde_json::Value>> {
+    // Get physical table name
+    let physical_table_name: Option<String> = sqlx::query_scalar(
+        "SELECT physical_table_name FROM script_tables WHERE script_uri = $1 AND logical_table_name = $2",
+    )
+    .bind(script_uri)
+    .bind(logical_table_name)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error fetching table metadata: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    let physical_table_name = physical_table_name.ok_or_else(|| AppError::Validation {
+        field: "table_name".to_string(),
+        reason: format!("Table '{}' not found for this script", logical_table_name),
+    })?;
+
+    // Build query with filters
+    let mut query = format!("SELECT * FROM {}", quote_identifier(&physical_table_name));
+    let mut where_clauses = Vec::new();
+    let mut param_count = 0;
+
+    if let Some(filters) = filters {
+        for column in filters.keys() {
+            validate_identifier(column).map_err(|e| AppError::Validation {
+                field: "filter_column".to_string(),
+                reason: e.to_string(),
+            })?;
+            param_count += 1;
+            where_clauses.push(format!("{} = ${}", quote_identifier(column), param_count));
+        }
+    }
+
+    if !where_clauses.is_empty() {
+        query.push_str(&format!(" WHERE {}", where_clauses.join(" AND ")));
+    }
+
+    // Apply limit (default 100, max 1000)
+    let limit = limit.unwrap_or(100).min(1000);
+    param_count += 1;
+    query.push_str(&format!(" LIMIT ${}", param_count));
+
+    // Build and execute query
+    let mut sql_query = sqlx::query(&query);
+
+    if let Some(filters) = filters {
+        for value in filters.values() {
+            // Bind parameters based on type
+            match value {
+                serde_json::Value::Number(n) => {
+                    if let Some(i) = n.as_i64() {
+                        sql_query = sql_query.bind(i as i32);
+                    } else if let Some(f) = n.as_f64() {
+                        sql_query = sql_query.bind(f);
+                    }
+                }
+                serde_json::Value::String(s) => {
+                    sql_query = sql_query.bind(s);
+                }
+                serde_json::Value::Bool(b) => {
+                    sql_query = sql_query.bind(b);
+                }
+                serde_json::Value::Null => {
+                    sql_query = sql_query.bind(Option::<String>::None);
+                }
+                _ => {
+                    return Err(AppError::Validation {
+                        field: "filter_value".to_string(),
+                        reason: "Unsupported filter value type".to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    sql_query = sql_query.bind(limit);
+
+    let rows = sql_query.fetch_all(pool).await.map_err(|e| {
+        error!("Database error querying table: {}", e);
+        AppError::Database {
+            message: format!("Query error: {}", e),
+            source: None,
+        }
+    })?;
+
+    // Convert rows to JSON
+    let mut results = Vec::new();
+    for row in rows {
+        let mut obj = serde_json::Map::new();
+        let columns = row.columns();
+        for (idx, column) in columns.iter().enumerate() {
+            use sqlx::Column;
+            let column_name = column.name().to_string();
+            let value = if let Ok(v) = row.try_get::<i32, _>(idx) {
+                serde_json::Value::Number(v.into())
+            } else if let Ok(v) = row.try_get::<String, _>(idx) {
+                serde_json::Value::String(v)
+            } else if let Ok(v) = row.try_get::<bool, _>(idx) {
+                serde_json::Value::Bool(v)
+            } else if let Ok(v) = row.try_get::<DateTime<Utc>, _>(idx) {
+                serde_json::Value::String(v.to_rfc3339())
+            } else {
+                serde_json::Value::Null
+            };
+            obj.insert(column_name, value);
+        }
+        results.push(serde_json::Value::Object(obj));
+    }
+
+    Ok(results)
+}
+
+/// Insert a row into a script-owned table
+async fn db_insert_row(
+    pool: &PgPool,
+    script_uri: &str,
+    logical_table_name: &str,
+    data: &HashMap<String, serde_json::Value>,
+) -> AppResult<serde_json::Value> {
+    // Get physical table name
+    let physical_table_name: Option<String> = sqlx::query_scalar(
+        "SELECT physical_table_name FROM script_tables WHERE script_uri = $1 AND logical_table_name = $2",
+    )
+    .bind(script_uri)
+    .bind(logical_table_name)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error fetching table metadata: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    let physical_table_name = physical_table_name.ok_or_else(|| AppError::Validation {
+        field: "table_name".to_string(),
+        reason: format!("Table '{}' not found for this script", logical_table_name),
+    })?;
+
+    if data.is_empty() {
+        return Err(AppError::Validation {
+            field: "data".to_string(),
+            reason: "No data provided for insert".to_string(),
+        });
+    }
+
+    // Build INSERT query
+    let mut columns = Vec::new();
+    let mut placeholders = Vec::new();
+    let mut param_count = 0;
+
+    for column in data.keys() {
+        validate_identifier(column).map_err(|e| AppError::Validation {
+            field: "column_name".to_string(),
+            reason: e.to_string(),
+        })?;
+        columns.push(quote_identifier(column));
+        param_count += 1;
+        placeholders.push(format!("${}", param_count));
+    }
+
+    let query = format!(
+        "INSERT INTO {} ({}) VALUES ({}) RETURNING *",
+        quote_identifier(&physical_table_name),
+        columns.join(", "),
+        placeholders.join(", ")
+    );
+
+    // Build and execute query
+    let mut sql_query = sqlx::query(&query);
+
+    for value in data.values() {
+        match value {
+            serde_json::Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    sql_query = sql_query.bind(i as i32);
+                } else if let Some(f) = n.as_f64() {
+                    sql_query = sql_query.bind(f);
+                }
+            }
+            serde_json::Value::String(s) => {
+                sql_query = sql_query.bind(s);
+            }
+            serde_json::Value::Bool(b) => {
+                sql_query = sql_query.bind(b);
+            }
+            serde_json::Value::Null => {
+                sql_query = sql_query.bind(Option::<String>::None);
+            }
+            _ => {
+                return Err(AppError::Validation {
+                    field: "data_value".to_string(),
+                    reason: "Unsupported data value type".to_string(),
+                });
+            }
+        }
+    }
+
+    let row = sql_query.fetch_one(pool).await.map_err(|e| {
+        error!("Database error inserting row: {}", e);
+        AppError::Database {
+            message: format!("Insert error: {}", e),
+            source: None,
+        }
+    })?;
+
+    // Convert row to JSON
+    let mut obj = serde_json::Map::new();
+    let columns = row.columns();
+    for (idx, column) in columns.iter().enumerate() {
+        use sqlx::Column;
+        let column_name = column.name().to_string();
+        let value = if let Ok(v) = row.try_get::<i32, _>(idx) {
+            serde_json::Value::Number(v.into())
+        } else if let Ok(v) = row.try_get::<String, _>(idx) {
+            serde_json::Value::String(v)
+        } else if let Ok(v) = row.try_get::<bool, _>(idx) {
+            serde_json::Value::Bool(v)
+        } else if let Ok(v) = row.try_get::<DateTime<Utc>, _>(idx) {
+            serde_json::Value::String(v.to_rfc3339())
+        } else {
+            serde_json::Value::Null
+        };
+        obj.insert(column_name, value);
+    }
+
+    Ok(serde_json::Value::Object(obj))
+}
+
+/// Update a row in a script-owned table
+async fn db_update_row(
+    pool: &PgPool,
+    script_uri: &str,
+    logical_table_name: &str,
+    id: i32,
+    data: &HashMap<String, serde_json::Value>,
+) -> AppResult<serde_json::Value> {
+    // Get physical table name
+    let physical_table_name: Option<String> = sqlx::query_scalar(
+        "SELECT physical_table_name FROM script_tables WHERE script_uri = $1 AND logical_table_name = $2",
+    )
+    .bind(script_uri)
+    .bind(logical_table_name)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error fetching table metadata: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    let physical_table_name = physical_table_name.ok_or_else(|| AppError::Validation {
+        field: "table_name".to_string(),
+        reason: format!("Table '{}' not found for this script", logical_table_name),
+    })?;
+
+    if data.is_empty() {
+        return Err(AppError::Validation {
+            field: "data".to_string(),
+            reason: "No data provided for update".to_string(),
+        });
+    }
+
+    // Build UPDATE query
+    let mut set_clauses = Vec::new();
+    let mut param_count = 0;
+
+    for column in data.keys() {
+        validate_identifier(column).map_err(|e| AppError::Validation {
+            field: "column_name".to_string(),
+            reason: e.to_string(),
+        })?;
+        param_count += 1;
+        set_clauses.push(format!("{} = ${}", quote_identifier(column), param_count));
+    }
+
+    param_count += 1;
+    let query = format!(
+        "UPDATE {} SET {} WHERE id = ${} RETURNING *",
+        quote_identifier(&physical_table_name),
+        set_clauses.join(", "),
+        param_count
+    );
+
+    // Build and execute query
+    let mut sql_query = sqlx::query(&query);
+
+    for value in data.values() {
+        match value {
+            serde_json::Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    sql_query = sql_query.bind(i as i32);
+                } else if let Some(f) = n.as_f64() {
+                    sql_query = sql_query.bind(f);
+                }
+            }
+            serde_json::Value::String(s) => {
+                sql_query = sql_query.bind(s);
+            }
+            serde_json::Value::Bool(b) => {
+                sql_query = sql_query.bind(b);
+            }
+            serde_json::Value::Null => {
+                sql_query = sql_query.bind(Option::<String>::None);
+            }
+            _ => {
+                return Err(AppError::Validation {
+                    field: "data_value".to_string(),
+                    reason: "Unsupported data value type".to_string(),
+                });
+            }
+        }
+    }
+
+    sql_query = sql_query.bind(id);
+
+    let row = sql_query.fetch_one(pool).await.map_err(|e| {
+        error!("Database error updating row: {}", e);
+        AppError::Database {
+            message: format!("Update error: {}", e),
+            source: None,
+        }
+    })?;
+
+    // Convert row to JSON
+    let mut obj = serde_json::Map::new();
+    let columns = row.columns();
+    for (idx, column) in columns.iter().enumerate() {
+        use sqlx::Column;
+        let column_name = column.name().to_string();
+        let value = if let Ok(v) = row.try_get::<i32, _>(idx) {
+            serde_json::Value::Number(v.into())
+        } else if let Ok(v) = row.try_get::<String, _>(idx) {
+            serde_json::Value::String(v)
+        } else if let Ok(v) = row.try_get::<bool, _>(idx) {
+            serde_json::Value::Bool(v)
+        } else if let Ok(v) = row.try_get::<DateTime<Utc>, _>(idx) {
+            serde_json::Value::String(v.to_rfc3339())
+        } else {
+            serde_json::Value::Null
+        };
+        obj.insert(column_name, value);
+    }
+
+    Ok(serde_json::Value::Object(obj))
+}
+
+/// Delete a row from a script-owned table
+async fn db_delete_row(
+    pool: &PgPool,
+    script_uri: &str,
+    logical_table_name: &str,
+    id: i32,
+) -> AppResult<bool> {
+    // Get physical table name
+    let physical_table_name: Option<String> = sqlx::query_scalar(
+        "SELECT physical_table_name FROM script_tables WHERE script_uri = $1 AND logical_table_name = $2",
+    )
+    .bind(script_uri)
+    .bind(logical_table_name)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error fetching table metadata: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    let physical_table_name = physical_table_name.ok_or_else(|| AppError::Validation {
+        field: "table_name".to_string(),
+        reason: format!("Table '{}' not found for this script", logical_table_name),
+    })?;
+
+    let query = format!(
+        "DELETE FROM {} WHERE id = $1",
+        quote_identifier(&physical_table_name)
+    );
+
+    let result = sqlx::query(&query)
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| {
+            error!("Database error deleting row: {}", e);
+            AppError::Database {
+                message: format!("Delete error: {}", e),
+                source: None,
+            }
+        })?;
+
+    Ok(result.rows_affected() > 0)
+}
+
 /// Fetch scripts from repository with proper error handling
 pub fn fetch_scripts() -> HashMap<String, String> {
     let repo = get_repository();
@@ -2768,6 +3437,75 @@ pub fn drop_script_table(script_uri: &str, logical_table_name: &str) -> AppResul
     run_blocking(async { repo.drop_script_table(script_uri, logical_table_name).await })
 }
 
+// ============================================================================
+// Script Database Introspection and Data Operations (Synchronous Wrappers)
+// ============================================================================
+
+/// List all tables owned by a script
+pub fn list_script_tables(script_uri: &str) -> AppResult<Vec<TableInfo>> {
+    let repo = get_repository();
+    run_blocking(async { repo.list_script_tables(script_uri).await })
+}
+
+/// Get detailed schema for a table
+pub fn get_table_schema(script_uri: &str, logical_table_name: &str) -> AppResult<TableSchema> {
+    let repo = get_repository();
+    run_blocking(async { repo.get_table_schema(script_uri, logical_table_name).await })
+}
+
+/// Get foreign key relationships for a table
+pub fn get_foreign_keys(
+    script_uri: &str,
+    logical_table_name: &str,
+) -> AppResult<Vec<ForeignKeyInfo>> {
+    let repo = get_repository();
+    run_blocking(async { repo.get_foreign_keys(script_uri, logical_table_name).await })
+}
+
+/// Query rows from a script-owned table
+pub fn query_table(
+    script_uri: &str,
+    logical_table_name: &str,
+    filters: Option<&HashMap<String, serde_json::Value>>,
+    limit: Option<i64>,
+) -> AppResult<Vec<serde_json::Value>> {
+    let repo = get_repository();
+    run_blocking(async {
+        repo.query_table(script_uri, logical_table_name, filters, limit)
+            .await
+    })
+}
+
+/// Insert a row into a script-owned table
+pub fn insert_row(
+    script_uri: &str,
+    logical_table_name: &str,
+    data: &HashMap<String, serde_json::Value>,
+) -> AppResult<serde_json::Value> {
+    let repo = get_repository();
+    run_blocking(async { repo.insert_row(script_uri, logical_table_name, data).await })
+}
+
+/// Update a row in a script-owned table
+pub fn update_row(
+    script_uri: &str,
+    logical_table_name: &str,
+    id: i32,
+    data: &HashMap<String, serde_json::Value>,
+) -> AppResult<serde_json::Value> {
+    let repo = get_repository();
+    run_blocking(async {
+        repo.update_row(script_uri, logical_table_name, id, data)
+            .await
+    })
+}
+
+/// Delete a row from a script-owned table
+pub fn delete_row(script_uri: &str, logical_table_name: &str, id: i32) -> AppResult<bool> {
+    let repo = get_repository();
+    run_blocking(async { repo.delete_row(script_uri, logical_table_name, id).await })
+}
+
 /// Helper function to get static assets embedded at compile time
 fn get_static_assets() -> HashMap<String, Asset> {
     let mut m = HashMap::new();
@@ -3241,6 +3979,47 @@ pub trait Repository: Send + Sync {
         script_uri: &str,
         logical_table_name: &str,
     ) -> AppResult<bool>;
+
+    // Script database introspection operations
+    async fn list_script_tables(&self, script_uri: &str) -> AppResult<Vec<TableInfo>>;
+    async fn get_table_schema(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+    ) -> AppResult<TableSchema>;
+    async fn get_foreign_keys(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+    ) -> AppResult<Vec<ForeignKeyInfo>>;
+
+    // Script database data operations
+    async fn query_table(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        filters: Option<&HashMap<String, serde_json::Value>>,
+        limit: Option<i64>,
+    ) -> AppResult<Vec<serde_json::Value>>;
+    async fn insert_row(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        data: &HashMap<String, serde_json::Value>,
+    ) -> AppResult<serde_json::Value>;
+    async fn update_row(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        id: i32,
+        data: &HashMap<String, serde_json::Value>,
+    ) -> AppResult<serde_json::Value>;
+    async fn delete_row(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        id: i32,
+    ) -> AppResult<bool>;
 }
 
 /// PostgreSQL implementation of the Repository trait
@@ -3576,6 +4355,64 @@ impl Repository for PostgresRepository {
         logical_table_name: &str,
     ) -> AppResult<bool> {
         db_drop_script_table(&self.pool, script_uri, logical_table_name).await
+    }
+
+    async fn list_script_tables(&self, script_uri: &str) -> AppResult<Vec<TableInfo>> {
+        db_list_script_tables(&self.pool, script_uri).await
+    }
+
+    async fn get_table_schema(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+    ) -> AppResult<TableSchema> {
+        db_get_table_schema(&self.pool, script_uri, logical_table_name).await
+    }
+
+    async fn get_foreign_keys(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+    ) -> AppResult<Vec<ForeignKeyInfo>> {
+        db_get_foreign_keys(&self.pool, script_uri, logical_table_name).await
+    }
+
+    async fn query_table(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        filters: Option<&HashMap<String, serde_json::Value>>,
+        limit: Option<i64>,
+    ) -> AppResult<Vec<serde_json::Value>> {
+        db_query_table(&self.pool, script_uri, logical_table_name, filters, limit).await
+    }
+
+    async fn insert_row(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        data: &HashMap<String, serde_json::Value>,
+    ) -> AppResult<serde_json::Value> {
+        db_insert_row(&self.pool, script_uri, logical_table_name, data).await
+    }
+
+    async fn update_row(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        id: i32,
+        data: &HashMap<String, serde_json::Value>,
+    ) -> AppResult<serde_json::Value> {
+        db_update_row(&self.pool, script_uri, logical_table_name, id, data).await
+    }
+
+    async fn delete_row(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        id: i32,
+    ) -> AppResult<bool> {
+        db_delete_row(&self.pool, script_uri, logical_table_name, id).await
     }
 }
 
@@ -4031,6 +4868,85 @@ impl Repository for MemoryRepository {
             reason: "Database schema operations not supported in memory mode".to_string(),
         })
     }
+
+    async fn list_script_tables(&self, _script_uri: &str) -> AppResult<Vec<TableInfo>> {
+        Err(AppError::Validation {
+            field: "database".to_string(),
+            reason: "Database schema operations not supported in memory mode".to_string(),
+        })
+    }
+
+    async fn get_table_schema(
+        &self,
+        _script_uri: &str,
+        _logical_table_name: &str,
+    ) -> AppResult<TableSchema> {
+        Err(AppError::Validation {
+            field: "database".to_string(),
+            reason: "Database schema operations not supported in memory mode".to_string(),
+        })
+    }
+
+    async fn get_foreign_keys(
+        &self,
+        _script_uri: &str,
+        _logical_table_name: &str,
+    ) -> AppResult<Vec<ForeignKeyInfo>> {
+        Err(AppError::Validation {
+            field: "database".to_string(),
+            reason: "Database schema operations not supported in memory mode".to_string(),
+        })
+    }
+
+    async fn query_table(
+        &self,
+        _script_uri: &str,
+        _logical_table_name: &str,
+        _filters: Option<&HashMap<String, serde_json::Value>>,
+        _limit: Option<i64>,
+    ) -> AppResult<Vec<serde_json::Value>> {
+        Err(AppError::Validation {
+            field: "database".to_string(),
+            reason: "Database schema operations not supported in memory mode".to_string(),
+        })
+    }
+
+    async fn insert_row(
+        &self,
+        _script_uri: &str,
+        _logical_table_name: &str,
+        _data: &HashMap<String, serde_json::Value>,
+    ) -> AppResult<serde_json::Value> {
+        Err(AppError::Validation {
+            field: "database".to_string(),
+            reason: "Database schema operations not supported in memory mode".to_string(),
+        })
+    }
+
+    async fn update_row(
+        &self,
+        _script_uri: &str,
+        _logical_table_name: &str,
+        _id: i32,
+        _data: &HashMap<String, serde_json::Value>,
+    ) -> AppResult<serde_json::Value> {
+        Err(AppError::Validation {
+            field: "database".to_string(),
+            reason: "Database schema operations not supported in memory mode".to_string(),
+        })
+    }
+
+    async fn delete_row(
+        &self,
+        _script_uri: &str,
+        _logical_table_name: &str,
+        _id: i32,
+    ) -> AppResult<bool> {
+        Err(AppError::Validation {
+            field: "database".to_string(),
+            reason: "Database schema operations not supported in memory mode".to_string(),
+        })
+    }
 }
 
 /// Unified repository that delegates to either Postgres or Memory implementation
@@ -4412,6 +5328,97 @@ impl Repository for UnifiedRepository {
         match self {
             Self::Postgres(repo) => repo.drop_script_table(script_uri, logical_table_name).await,
             Self::Memory(repo) => repo.drop_script_table(script_uri, logical_table_name).await,
+        }
+    }
+
+    async fn list_script_tables(&self, script_uri: &str) -> AppResult<Vec<TableInfo>> {
+        match self {
+            Self::Postgres(repo) => repo.list_script_tables(script_uri).await,
+            Self::Memory(repo) => repo.list_script_tables(script_uri).await,
+        }
+    }
+
+    async fn get_table_schema(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+    ) -> AppResult<TableSchema> {
+        match self {
+            Self::Postgres(repo) => repo.get_table_schema(script_uri, logical_table_name).await,
+            Self::Memory(repo) => repo.get_table_schema(script_uri, logical_table_name).await,
+        }
+    }
+
+    async fn get_foreign_keys(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+    ) -> AppResult<Vec<ForeignKeyInfo>> {
+        match self {
+            Self::Postgres(repo) => repo.get_foreign_keys(script_uri, logical_table_name).await,
+            Self::Memory(repo) => repo.get_foreign_keys(script_uri, logical_table_name).await,
+        }
+    }
+
+    async fn query_table(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        filters: Option<&HashMap<String, serde_json::Value>>,
+        limit: Option<i64>,
+    ) -> AppResult<Vec<serde_json::Value>> {
+        match self {
+            Self::Postgres(repo) => {
+                repo.query_table(script_uri, logical_table_name, filters, limit)
+                    .await
+            }
+            Self::Memory(repo) => {
+                repo.query_table(script_uri, logical_table_name, filters, limit)
+                    .await
+            }
+        }
+    }
+
+    async fn insert_row(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        data: &HashMap<String, serde_json::Value>,
+    ) -> AppResult<serde_json::Value> {
+        match self {
+            Self::Postgres(repo) => repo.insert_row(script_uri, logical_table_name, data).await,
+            Self::Memory(repo) => repo.insert_row(script_uri, logical_table_name, data).await,
+        }
+    }
+
+    async fn update_row(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        id: i32,
+        data: &HashMap<String, serde_json::Value>,
+    ) -> AppResult<serde_json::Value> {
+        match self {
+            Self::Postgres(repo) => {
+                repo.update_row(script_uri, logical_table_name, id, data)
+                    .await
+            }
+            Self::Memory(repo) => {
+                repo.update_row(script_uri, logical_table_name, id, data)
+                    .await
+            }
+        }
+    }
+
+    async fn delete_row(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        id: i32,
+    ) -> AppResult<bool> {
+        match self {
+            Self::Postgres(repo) => repo.delete_row(script_uri, logical_table_name, id).await,
+            Self::Memory(repo) => repo.delete_row(script_uri, logical_table_name, id).await,
         }
     }
 }

@@ -3335,6 +3335,317 @@ impl SecureGlobalContext {
         )?;
         database_obj.set("dropTable", drop_table)?;
 
+        // database.query(tableName, filters, limit) - Query rows from table
+        let script_uri_query = script_uri_owned.clone();
+        let user_ctx_query = user_context.clone();
+        let query_table = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  table_name: String,
+                  filters: Opt<String>,
+                  limit: Opt<i32>|
+                  -> JsResult<String> {
+                debug!(
+                    "database.query called for script {} on table: {}",
+                    script_uri_query, table_name
+                );
+
+                if user_ctx_query
+                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                    .is_err()
+                {
+                    return Ok(
+                        "{\"error\": \"Insufficient permissions for database operations\"}"
+                            .to_string(),
+                    );
+                }
+
+                // Parse filters from JSON string if provided
+                let filters_map = if let Some(filters_str) = filters.0 {
+                    match serde_json::from_str::<std::collections::HashMap<String, serde_json::Value>>(
+                        &filters_str,
+                    ) {
+                        Ok(map) => Some(map),
+                        Err(e) => {
+                            return Ok(format!("{{\"error\": \"Invalid filters JSON: {}\"}}", e));
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                let limit_val = limit.0.map(|l| l as i64);
+
+                match crate::repository::query_table(
+                    &script_uri_query,
+                    &table_name,
+                    filters_map.as_ref(),
+                    limit_val,
+                ) {
+                    Ok(rows) => match serde_json::to_string(&rows) {
+                        Ok(json) => Ok(json),
+                        Err(e) => Ok(format!("{{\"error\": \"Serialization error: {}\"}}", e)),
+                    },
+                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                }
+            },
+        )?;
+        database_obj.set("query", query_table)?;
+
+        // database.insert(tableName, data) - Insert a row
+        let script_uri_insert = script_uri_owned.clone();
+        let user_ctx_insert = user_context.clone();
+        let insert_row = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, table_name: String, data: String| -> JsResult<String> {
+                debug!(
+                    "database.insert called for script {} on table: {}",
+                    script_uri_insert, table_name
+                );
+
+                if user_ctx_insert
+                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                    .is_err()
+                {
+                    return Ok(
+                        "{\"error\": \"Insufficient permissions for database operations\"}"
+                            .to_string(),
+                    );
+                }
+
+                // Parse data from JSON string
+                let data_map = match serde_json::from_str::<
+                    std::collections::HashMap<String, serde_json::Value>,
+                >(&data)
+                {
+                    Ok(map) => map,
+                    Err(e) => return Ok(format!("{{\"error\": \"Invalid data JSON: {}\"}}", e)),
+                };
+
+                match crate::repository::insert_row(&script_uri_insert, &table_name, &data_map) {
+                    Ok(row) => match serde_json::to_string(&row) {
+                        Ok(json) => Ok(json),
+                        Err(e) => Ok(format!("{{\"error\": \"Serialization error: {}\"}}", e)),
+                    },
+                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                }
+            },
+        )?;
+        database_obj.set("insert", insert_row)?;
+
+        // database.update(tableName, id, data) - Update a row
+        let script_uri_update = script_uri_owned.clone();
+        let user_ctx_update = user_context.clone();
+        let update_row = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  table_name: String,
+                  id: i32,
+                  data: String|
+                  -> JsResult<String> {
+                debug!(
+                    "database.update called for script {} on table: {}, id: {}",
+                    script_uri_update, table_name, id
+                );
+
+                if user_ctx_update
+                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                    .is_err()
+                {
+                    return Ok(
+                        "{\"error\": \"Insufficient permissions for database operations\"}"
+                            .to_string(),
+                    );
+                }
+
+                // Parse data from JSON string
+                let data_map = match serde_json::from_str::<
+                    std::collections::HashMap<String, serde_json::Value>,
+                >(&data)
+                {
+                    Ok(map) => map,
+                    Err(e) => return Ok(format!("{{\"error\": \"Invalid data JSON: {}\"}}", e)),
+                };
+
+                match crate::repository::update_row(&script_uri_update, &table_name, id, &data_map)
+                {
+                    Ok(row) => match serde_json::to_string(&row) {
+                        Ok(json) => Ok(json),
+                        Err(e) => Ok(format!("{{\"error\": \"Serialization error: {}\"}}", e)),
+                    },
+                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                }
+            },
+        )?;
+        database_obj.set("update", update_row)?;
+
+        // database.delete(tableName, id) - Delete a row
+        let script_uri_delete = script_uri_owned.clone();
+        let user_ctx_delete = user_context.clone();
+        let delete_row = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, table_name: String, id: i32| -> JsResult<String> {
+                debug!(
+                    "database.delete called for script {} on table: {}, id: {}",
+                    script_uri_delete, table_name, id
+                );
+
+                if user_ctx_delete
+                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                    .is_err()
+                {
+                    return Ok(
+                        "{\"error\": \"Insufficient permissions for database operations\"}"
+                            .to_string(),
+                    );
+                }
+
+                match crate::repository::delete_row(&script_uri_delete, &table_name, id) {
+                    Ok(deleted) => Ok(format!("{{\"success\": true, \"deleted\": {}}}", deleted)),
+                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                }
+            },
+        )?;
+        database_obj.set("delete", delete_row)?;
+
+        // database.generateGraphQLForTable(tableName, options) - Auto-generate GraphQL operations
+        let script_uri_graphql = script_uri_owned.clone();
+        let user_ctx_graphql = user_context.clone();
+        let generate_graphql = Function::new(
+            ctx.clone(),
+            move |ctx_inner: rquickjs::Ctx<'_>,
+                  table_name: String,
+                  options: Opt<String>|
+                  -> JsResult<String> {
+                debug!(
+                    "database.generateGraphQLForTable called for script {} on table: {}",
+                    script_uri_graphql, table_name
+                );
+
+                if user_ctx_graphql
+                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                    .is_err()
+                {
+                    return Ok(
+                        "{\"error\": \"Insufficient permissions for database operations\"}"
+                            .to_string(),
+                    );
+                }
+
+                // Parse options (default: ScriptInternal visibility)
+                let visibility = if let Some(opts_str) = options.0 {
+                    match serde_json::from_str::<serde_json::Value>(&opts_str) {
+                        Ok(opts) => opts
+                            .get("visibility")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("script_internal")
+                            .to_string(),
+                        Err(_) => "script_internal".to_string(),
+                    }
+                } else {
+                    "script_internal".to_string()
+                };
+
+                // Get table schema
+                let schema =
+                    match crate::repository::get_table_schema(&script_uri_graphql, &table_name) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            return Ok(format!(
+                                "{{\"error\": \"Failed to get table schema: {}\"}}",
+                                e
+                            ));
+                        }
+                    };
+
+                // Get foreign keys
+                let foreign_keys =
+                    match crate::repository::get_foreign_keys(&script_uri_graphql, &table_name) {
+                        Ok(fks) => fks,
+                        Err(e) => {
+                            return Ok(format!(
+                                "{{\"error\": \"Failed to get foreign keys: {}\"}}",
+                                e
+                            ));
+                        }
+                    };
+
+                // Generate GraphQL operations
+                let operations = crate::graphql_schema_gen::generate_table_operations(
+                    &table_name,
+                    &schema,
+                    &foreign_keys,
+                );
+
+                // Inject resolver functions into JavaScript context
+                for query in &operations.queries {
+                    // Evaluate resolver code in the current context
+                    if let Err(e) = ctx_inner.eval::<(), _>(query.resolver_code.as_str()) {
+                        return Ok(format!(
+                            "{{\"error\": \"Failed to inject resolver {}: {:?}\"}}",
+                            query.resolver_function_name, e
+                        ));
+                    }
+                }
+
+                for mutation in &operations.mutations {
+                    if let Err(e) = ctx_inner.eval::<(), _>(mutation.resolver_code.as_str()) {
+                        return Ok(format!(
+                            "{{\"error\": \"Failed to inject resolver {}: {:?}\"}}",
+                            mutation.resolver_function_name, e
+                        ));
+                    }
+                }
+
+                // Register queries
+                for query in &operations.queries {
+                    if let Err(e) = crate::graphql::register_graphql_query(
+                        query.name.clone(),
+                        query.sdl.clone(),
+                        query.resolver_function_name.clone(),
+                        script_uri_graphql.clone(),
+                        visibility.clone(),
+                    ) {
+                        return Ok(format!(
+                            "{{\"error\": \"Failed to register query {}: {}\"}}",
+                            query.name, e
+                        ));
+                    }
+                }
+
+                // Register mutations
+                for mutation in &operations.mutations {
+                    if let Err(e) = crate::graphql::register_graphql_mutation(
+                        mutation.name.clone(),
+                        mutation.sdl.clone(),
+                        mutation.resolver_function_name.clone(),
+                        script_uri_graphql.clone(),
+                        visibility.clone(),
+                    ) {
+                        return Ok(format!(
+                            "{{\"error\": \"Failed to register mutation {}: {}\"}}",
+                            mutation.name, e
+                        ));
+                    }
+                }
+
+                // Return success with operation names
+                let query_names: Vec<&str> =
+                    operations.queries.iter().map(|q| q.name.as_str()).collect();
+                let mutation_names: Vec<&str> = operations
+                    .mutations
+                    .iter()
+                    .map(|m| m.name.as_str())
+                    .collect();
+
+                Ok(format!(
+                    "{{\"success\": true, \"table\": \"{}\", \"queries\": {:?}, \"mutations\": {:?}}}",
+                    table_name, query_names, mutation_names
+                ))
+            },
+        )?;
+        database_obj.set("generateGraphQLForTable", generate_graphql)?;
+
         // Set the database object on the global scope
         global.set("database", database_obj)?;
 
