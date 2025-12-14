@@ -14,6 +14,7 @@ pub mod asset_registry;
 pub mod config;
 pub mod conversion;
 pub mod database;
+pub mod db_schema_utils;
 pub mod dispatcher;
 pub mod error;
 pub mod graphql;

@@ -53,6 +53,7 @@ impl UserContext {
                 Capability::DeleteLogs,    // Allow log management in dev mode
                 Capability::ManageGraphQL, // Allow GraphQL operations in dev mode
                 Capability::ManageStreams, // Allow stream operations in dev mode
+                Capability::ManageScriptDatabase, // Allow database schema operations in dev mode
             ]
             .into_iter()
             .collect()
@@ -76,6 +77,7 @@ impl UserContext {
             Capability::WriteAssets,
             Capability::ViewLogs,
             Capability::ManageStreams,
+            Capability::ManageScriptDatabase,
         ]
         .into_iter()
         .collect()
@@ -94,6 +96,7 @@ impl UserContext {
             Capability::ViewLogs,
             Capability::ManageStreams,
             Capability::ManageGraphQL,
+            Capability::ManageScriptDatabase,
         ]
         .into_iter()
         .collect()

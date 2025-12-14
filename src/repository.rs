@@ -531,6 +531,9 @@ async fn db_list_scripts(pool: &PgPool) -> AppResult<HashMap<String, String>> {
 
 /// Database-backed delete script
 async fn db_delete_script(pool: &PgPool, uri: &str, server_id: &str) -> AppResult<bool> {
+    // First, drop all script-owned tables
+    let _ = db_drop_all_script_tables(pool, uri).await;
+
     let result = sqlx::query(
         r#"
         DELETE FROM scripts WHERE uri = $1
@@ -1555,6 +1558,485 @@ async fn db_delete_asset(pool: &PgPool, uri: &str) -> AppResult<bool> {
     Ok(existed)
 }
 
+// ============================================================================
+// Script Database Schema Management Functions
+// ============================================================================
+
+use crate::db_schema_utils::{
+    ColumnType, MAX_COLUMNS_PER_TABLE, MAX_TABLES_PER_SCRIPT, generate_physical_table_name,
+    quote_identifier, validate_default_value, validate_identifier,
+};
+
+/// Database-backed create script-owned table
+async fn db_create_script_table(
+    pool: &PgPool,
+    script_uri: &str,
+    logical_table_name: &str,
+) -> AppResult<String> {
+    // Validate the logical table name
+    validate_identifier(logical_table_name).map_err(|e| AppError::Validation {
+        field: "table_name".to_string(),
+        reason: e.to_string(),
+    })?;
+
+    // Check table limit for this script
+    let table_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM script_tables WHERE script_uri = $1")
+            .bind(script_uri)
+            .fetch_one(pool)
+            .await
+            .map_err(|e| {
+                error!("Database error counting tables for script: {}", e);
+                AppError::Database {
+                    message: format!("Database error: {}", e),
+                    source: None,
+                }
+            })?;
+
+    if table_count >= MAX_TABLES_PER_SCRIPT as i64 {
+        return Err(AppError::Validation {
+            field: "table_name".to_string(),
+            reason: format!(
+                "Script has reached maximum table limit of {}",
+                MAX_TABLES_PER_SCRIPT
+            ),
+        });
+    }
+
+    // Generate physical table name
+    let physical_table_name = generate_physical_table_name(script_uri, logical_table_name);
+
+    // Check if table already exists for this script
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM script_tables WHERE script_uri = $1 AND logical_table_name = $2)",
+    )
+    .bind(script_uri)
+    .bind(logical_table_name)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error checking table existence: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    if exists {
+        return Err(AppError::Validation {
+            field: "table_name".to_string(),
+            reason: format!(
+                "Table '{}' already exists for this script",
+                logical_table_name
+            ),
+        });
+    }
+
+    // Create the physical table with id column
+    let create_table_sql = format!(
+        "CREATE TABLE {} (id SERIAL PRIMARY KEY)",
+        quote_identifier(&physical_table_name)
+    );
+
+    sqlx::query(&create_table_sql)
+        .execute(pool)
+        .await
+        .map_err(|e| {
+            error!("Database error creating table: {}", e);
+            AppError::Database {
+                message: format!("Failed to create table: {}", e),
+                source: None,
+            }
+        })?;
+
+    // Record the table in script_tables metadata
+    let schema_json = serde_json::json!({
+        "columns": [
+            {"name": "id", "type": "SERIAL", "nullable": false, "primary_key": true}
+        ]
+    });
+
+    sqlx::query(
+        r#"
+        INSERT INTO script_tables (script_uri, logical_table_name, physical_table_name, schema_json)
+        VALUES ($1, $2, $3, $4)
+        "#,
+    )
+    .bind(script_uri)
+    .bind(logical_table_name)
+    .bind(&physical_table_name)
+    .bind(schema_json)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error recording table metadata: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    debug!(
+        "Created script table: {} -> {}",
+        logical_table_name, physical_table_name
+    );
+
+    Ok(physical_table_name)
+}
+
+/// Database-backed add column to script-owned table
+async fn db_add_column_to_script_table(
+    pool: &PgPool,
+    script_uri: &str,
+    logical_table_name: &str,
+    column_name: &str,
+    column_type: ColumnType,
+    nullable: bool,
+    default_value: Option<&str>,
+) -> AppResult<()> {
+    // Validate identifiers
+    validate_identifier(logical_table_name).map_err(|e| AppError::Validation {
+        field: "table_name".to_string(),
+        reason: e.to_string(),
+    })?;
+    validate_identifier(column_name).map_err(|e| AppError::Validation {
+        field: "column_name".to_string(),
+        reason: e.to_string(),
+    })?;
+
+    // Get the physical table name
+    let row: Option<(String, serde_json::Value)> = sqlx::query_as(
+        "SELECT physical_table_name, schema_json FROM script_tables WHERE script_uri = $1 AND logical_table_name = $2",
+    )
+    .bind(script_uri)
+    .bind(logical_table_name)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error fetching table metadata: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    let (physical_table_name, mut schema_json) = row.ok_or_else(|| AppError::Validation {
+        field: "table_name".to_string(),
+        reason: format!("Table '{}' not found for this script", logical_table_name),
+    })?;
+
+    // Check column limit
+    let column_count = schema_json
+        .get("columns")
+        .and_then(|c| c.as_array())
+        .map(|c| c.len())
+        .unwrap_or(0);
+
+    if column_count >= MAX_COLUMNS_PER_TABLE {
+        return Err(AppError::Validation {
+            field: "column_name".to_string(),
+            reason: format!(
+                "Table has reached maximum column limit of {}",
+                MAX_COLUMNS_PER_TABLE
+            ),
+        });
+    }
+
+    // Check if column already exists
+    if let Some(columns) = schema_json.get("columns").and_then(|c| c.as_array()) {
+        if columns
+            .iter()
+            .any(|col| col.get("name").and_then(|n| n.as_str()) == Some(column_name))
+        {
+            return Err(AppError::Validation {
+                field: "column_name".to_string(),
+                reason: format!(
+                    "Column '{}' already exists in table '{}'",
+                    column_name, logical_table_name
+                ),
+            });
+        }
+    }
+
+    // Build ALTER TABLE statement
+    let mut alter_sql = format!(
+        "ALTER TABLE {} ADD COLUMN {} {}",
+        quote_identifier(&physical_table_name),
+        quote_identifier(column_name),
+        column_type.to_sql()
+    );
+
+    if !nullable {
+        alter_sql.push_str(" NOT NULL");
+    }
+
+    if let Some(default) = default_value {
+        let validated_default =
+            validate_default_value(&column_type, default).map_err(|e| AppError::Validation {
+                field: "default_value".to_string(),
+                reason: e.to_string(),
+            })?;
+        alter_sql.push_str(&format!(" DEFAULT {}", validated_default));
+    }
+
+    // Execute the ALTER TABLE
+    sqlx::query(&alter_sql).execute(pool).await.map_err(|e| {
+        error!("Database error adding column: {}", e);
+        AppError::Database {
+            message: format!("Failed to add column: {}", e),
+            source: None,
+        }
+    })?;
+
+    // Update schema_json metadata
+    if let Some(columns) = schema_json
+        .get_mut("columns")
+        .and_then(|c| c.as_array_mut())
+    {
+        columns.push(serde_json::json!({
+            "name": column_name,
+            "type": column_type.to_sql(),
+            "nullable": nullable,
+            "default": default_value,
+        }));
+    }
+
+    sqlx::query("UPDATE script_tables SET schema_json = $1, updated_at = NOW() WHERE script_uri = $2 AND logical_table_name = $3")
+        .bind(schema_json)
+        .bind(script_uri)
+        .bind(logical_table_name)
+        .execute(pool)
+        .await
+        .map_err(|e| {
+            error!("Database error updating schema metadata: {}", e);
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
+        })?;
+
+    debug!(
+        "Added column {} to table {}: {} {}",
+        column_name,
+        logical_table_name,
+        column_type.to_sql(),
+        if nullable { "NULL" } else { "NOT NULL" }
+    );
+
+    Ok(())
+}
+
+/// Database-backed create foreign key reference
+async fn db_create_foreign_key(
+    pool: &PgPool,
+    script_uri: &str,
+    logical_table_name: &str,
+    column_name: &str,
+    referenced_logical_table_name: &str,
+) -> AppResult<()> {
+    // Validate identifiers
+    validate_identifier(logical_table_name).map_err(|e| AppError::Validation {
+        field: "table_name".to_string(),
+        reason: e.to_string(),
+    })?;
+    validate_identifier(column_name).map_err(|e| AppError::Validation {
+        field: "column_name".to_string(),
+        reason: e.to_string(),
+    })?;
+    validate_identifier(referenced_logical_table_name).map_err(|e| AppError::Validation {
+        field: "referenced_table_name".to_string(),
+        reason: e.to_string(),
+    })?;
+
+    // Get physical table names
+    let source_table: String = sqlx::query_scalar(
+        "SELECT physical_table_name FROM script_tables WHERE script_uri = $1 AND logical_table_name = $2",
+    )
+    .bind(script_uri)
+    .bind(logical_table_name)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error fetching source table: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?
+    .ok_or_else(|| AppError::Validation {
+        field: "table_name".to_string(),
+        reason: format!("Table '{}' not found for this script", logical_table_name),
+    })?;
+
+    let referenced_table: String = sqlx::query_scalar(
+        "SELECT physical_table_name FROM script_tables WHERE script_uri = $1 AND logical_table_name = $2",
+    )
+    .bind(script_uri)
+    .bind(referenced_logical_table_name)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error fetching referenced table: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?
+    .ok_or_else(|| AppError::Validation {
+        field: "referenced_table_name".to_string(),
+        reason: format!(
+            "Referenced table '{}' not found for this script",
+            referenced_logical_table_name
+        ),
+    })?;
+
+    // Create the foreign key constraint
+    let constraint_name = format!("fk_{}_{}", logical_table_name.replace("_", ""), column_name);
+    let alter_sql = format!(
+        "ALTER TABLE {} ADD CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} (id)",
+        quote_identifier(&source_table),
+        quote_identifier(&constraint_name),
+        quote_identifier(column_name),
+        quote_identifier(&referenced_table)
+    );
+
+    sqlx::query(&alter_sql).execute(pool).await.map_err(|e| {
+        error!("Database error creating foreign key: {}", e);
+        AppError::Database {
+            message: format!("Failed to create foreign key: {}", e),
+            source: None,
+        }
+    })?;
+
+    debug!(
+        "Created foreign key: {}.{} -> {}.id",
+        logical_table_name, column_name, referenced_logical_table_name
+    );
+
+    Ok(())
+}
+
+/// Database-backed drop script-owned table
+async fn db_drop_script_table(
+    pool: &PgPool,
+    script_uri: &str,
+    logical_table_name: &str,
+) -> AppResult<bool> {
+    // Validate identifier
+    validate_identifier(logical_table_name).map_err(|e| AppError::Validation {
+        field: "table_name".to_string(),
+        reason: e.to_string(),
+    })?;
+
+    // Get the physical table name
+    let physical_table_name: Option<String> = sqlx::query_scalar(
+        "SELECT physical_table_name FROM script_tables WHERE script_uri = $1 AND logical_table_name = $2",
+    )
+    .bind(script_uri)
+    .bind(logical_table_name)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| {
+        error!("Database error fetching table metadata: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    if let Some(physical_name) = physical_table_name {
+        // Drop the physical table
+        let drop_sql = format!(
+            "DROP TABLE IF EXISTS {} CASCADE",
+            quote_identifier(&physical_name)
+        );
+
+        sqlx::query(&drop_sql).execute(pool).await.map_err(|e| {
+            error!("Database error dropping table: {}", e);
+            AppError::Database {
+                message: format!("Failed to drop table: {}", e),
+                source: None,
+            }
+        })?;
+
+        // Remove from script_tables metadata (will cascade due to FK)
+        sqlx::query("DELETE FROM script_tables WHERE script_uri = $1 AND logical_table_name = $2")
+            .bind(script_uri)
+            .bind(logical_table_name)
+            .execute(pool)
+            .await
+            .map_err(|e| {
+                error!("Database error removing table metadata: {}", e);
+                AppError::Database {
+                    message: format!("Database error: {}", e),
+                    source: None,
+                }
+            })?;
+
+        debug!(
+            "Dropped script table: {} ({})",
+            logical_table_name, physical_name
+        );
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// Database-backed drop all tables for a script
+async fn db_drop_all_script_tables(pool: &PgPool, script_uri: &str) -> AppResult<usize> {
+    // Get all tables for this script
+    let tables: Vec<String> =
+        sqlx::query_scalar("SELECT physical_table_name FROM script_tables WHERE script_uri = $1")
+            .bind(script_uri)
+            .fetch_all(pool)
+            .await
+            .map_err(|e| {
+                error!("Database error fetching script tables: {}", e);
+                AppError::Database {
+                    message: format!("Database error: {}", e),
+                    source: None,
+                }
+            })?;
+
+    let count = tables.len();
+
+    // Drop each table
+    for physical_name in tables {
+        let drop_sql = format!(
+            "DROP TABLE IF EXISTS {} CASCADE",
+            quote_identifier(&physical_name)
+        );
+
+        sqlx::query(&drop_sql).execute(pool).await.map_err(|e| {
+            error!("Database error dropping table {}: {}", physical_name, e);
+            AppError::Database {
+                message: format!("Failed to drop table: {}", e),
+                source: None,
+            }
+        })?;
+    }
+
+    // Delete metadata entries (script_uri FK will auto-delete on script deletion)
+    sqlx::query("DELETE FROM script_tables WHERE script_uri = $1")
+        .bind(script_uri)
+        .execute(pool)
+        .await
+        .map_err(|e| {
+            error!("Database error removing table metadata: {}", e);
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
+        })?;
+
+    if count > 0 {
+        debug!("Dropped {} tables for script {}", count, script_uri);
+    }
+
+    Ok(count)
+}
+
 /// Fetch scripts from repository with proper error handling
 pub fn fetch_scripts() -> HashMap<String, String> {
     let repo = get_repository();
@@ -2090,6 +2572,67 @@ pub fn count_script_owners(uri: &str) -> AppResult<i64> {
     run_blocking(async { repo.count_script_owners(uri).await })
 }
 
+// ============================================================================
+// Script Database Schema Public API
+// ============================================================================
+
+/// Create a new table for a script
+pub fn create_script_table(script_uri: &str, logical_table_name: &str) -> AppResult<String> {
+    let repo = get_repository();
+    run_blocking(async {
+        repo.create_script_table(script_uri, logical_table_name)
+            .await
+    })
+}
+
+/// Add a column to a script-owned table
+pub fn add_column_to_script_table(
+    script_uri: &str,
+    logical_table_name: &str,
+    column_name: &str,
+    column_type: ColumnType,
+    nullable: bool,
+    default_value: Option<&str>,
+) -> AppResult<()> {
+    let repo = get_repository();
+    run_blocking(async {
+        repo.add_column_to_script_table(
+            script_uri,
+            logical_table_name,
+            column_name,
+            column_type,
+            nullable,
+            default_value,
+        )
+        .await
+    })
+}
+
+/// Create a foreign key reference between script-owned tables
+pub fn create_script_foreign_key(
+    script_uri: &str,
+    logical_table_name: &str,
+    column_name: &str,
+    referenced_logical_table_name: &str,
+) -> AppResult<()> {
+    let repo = get_repository();
+    run_blocking(async {
+        repo.create_foreign_key(
+            script_uri,
+            logical_table_name,
+            column_name,
+            referenced_logical_table_name,
+        )
+        .await
+    })
+}
+
+/// Drop a script-owned table
+pub fn drop_script_table(script_uri: &str, logical_table_name: &str) -> AppResult<bool> {
+    let repo = get_repository();
+    run_blocking(async { repo.drop_script_table(script_uri, logical_table_name).await })
+}
+
 /// Helper function to get static assets embedded at compile time
 fn get_static_assets() -> HashMap<String, Asset> {
     let mut m = HashMap::new();
@@ -2528,6 +3071,34 @@ pub trait Repository: Send + Sync {
     async fn get_script_owners(&self, uri: &str) -> AppResult<Vec<String>>;
     async fn user_owns_script(&self, uri: &str, user_id: &str) -> AppResult<bool>;
     async fn count_script_owners(&self, uri: &str) -> AppResult<i64>;
+
+    // Script database schema operations
+    async fn create_script_table(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+    ) -> AppResult<String>;
+    async fn add_column_to_script_table(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        column_name: &str,
+        column_type: ColumnType,
+        nullable: bool,
+        default_value: Option<&str>,
+    ) -> AppResult<()>;
+    async fn create_foreign_key(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        column_name: &str,
+        referenced_logical_table_name: &str,
+    ) -> AppResult<()>;
+    async fn drop_script_table(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+    ) -> AppResult<bool>;
 }
 
 /// PostgreSQL implementation of the Repository trait
@@ -2798,6 +3369,60 @@ impl Repository for PostgresRepository {
 
     async fn count_script_owners(&self, uri: &str) -> AppResult<i64> {
         db_count_script_owners(&self.pool, uri).await
+    }
+
+    async fn create_script_table(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+    ) -> AppResult<String> {
+        db_create_script_table(&self.pool, script_uri, logical_table_name).await
+    }
+
+    async fn add_column_to_script_table(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        column_name: &str,
+        column_type: ColumnType,
+        nullable: bool,
+        default_value: Option<&str>,
+    ) -> AppResult<()> {
+        db_add_column_to_script_table(
+            &self.pool,
+            script_uri,
+            logical_table_name,
+            column_name,
+            column_type,
+            nullable,
+            default_value,
+        )
+        .await
+    }
+
+    async fn create_foreign_key(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        column_name: &str,
+        referenced_logical_table_name: &str,
+    ) -> AppResult<()> {
+        db_create_foreign_key(
+            &self.pool,
+            script_uri,
+            logical_table_name,
+            column_name,
+            referenced_logical_table_name,
+        )
+        .await
+    }
+
+    async fn drop_script_table(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+    ) -> AppResult<bool> {
+        db_drop_script_table(&self.pool, script_uri, logical_table_name).await
     }
 }
 
@@ -3190,6 +3815,56 @@ impl Repository for MemoryRepository {
             Ok(0)
         }
     }
+
+    async fn create_script_table(
+        &self,
+        _script_uri: &str,
+        _logical_table_name: &str,
+    ) -> AppResult<String> {
+        Err(AppError::Validation {
+            field: "database".to_string(),
+            reason: "Database schema operations not supported in memory mode".to_string(),
+        })
+    }
+
+    async fn add_column_to_script_table(
+        &self,
+        _script_uri: &str,
+        _logical_table_name: &str,
+        _column_name: &str,
+        _column_type: ColumnType,
+        _nullable: bool,
+        _default_value: Option<&str>,
+    ) -> AppResult<()> {
+        Err(AppError::Validation {
+            field: "database".to_string(),
+            reason: "Database schema operations not supported in memory mode".to_string(),
+        })
+    }
+
+    async fn create_foreign_key(
+        &self,
+        _script_uri: &str,
+        _logical_table_name: &str,
+        _column_name: &str,
+        _referenced_logical_table_name: &str,
+    ) -> AppResult<()> {
+        Err(AppError::Validation {
+            field: "database".to_string(),
+            reason: "Database schema operations not supported in memory mode".to_string(),
+        })
+    }
+
+    async fn drop_script_table(
+        &self,
+        _script_uri: &str,
+        _logical_table_name: &str,
+    ) -> AppResult<bool> {
+        Err(AppError::Validation {
+            field: "database".to_string(),
+            reason: "Database schema operations not supported in memory mode".to_string(),
+        })
+    }
 }
 
 /// Unified repository that delegates to either Postgres or Memory implementation
@@ -3458,6 +4133,98 @@ impl Repository for UnifiedRepository {
         match self {
             Self::Postgres(repo) => repo.count_script_owners(uri).await,
             Self::Memory(repo) => repo.count_script_owners(uri).await,
+        }
+    }
+
+    async fn create_script_table(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+    ) -> AppResult<String> {
+        match self {
+            Self::Postgres(repo) => {
+                repo.create_script_table(script_uri, logical_table_name)
+                    .await
+            }
+            Self::Memory(repo) => {
+                repo.create_script_table(script_uri, logical_table_name)
+                    .await
+            }
+        }
+    }
+
+    async fn add_column_to_script_table(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        column_name: &str,
+        column_type: ColumnType,
+        nullable: bool,
+        default_value: Option<&str>,
+    ) -> AppResult<()> {
+        match self {
+            Self::Postgres(repo) => {
+                repo.add_column_to_script_table(
+                    script_uri,
+                    logical_table_name,
+                    column_name,
+                    column_type,
+                    nullable,
+                    default_value,
+                )
+                .await
+            }
+            Self::Memory(repo) => {
+                repo.add_column_to_script_table(
+                    script_uri,
+                    logical_table_name,
+                    column_name,
+                    column_type,
+                    nullable,
+                    default_value,
+                )
+                .await
+            }
+        }
+    }
+
+    async fn create_foreign_key(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        column_name: &str,
+        referenced_logical_table_name: &str,
+    ) -> AppResult<()> {
+        match self {
+            Self::Postgres(repo) => {
+                repo.create_foreign_key(
+                    script_uri,
+                    logical_table_name,
+                    column_name,
+                    referenced_logical_table_name,
+                )
+                .await
+            }
+            Self::Memory(repo) => {
+                repo.create_foreign_key(
+                    script_uri,
+                    logical_table_name,
+                    column_name,
+                    referenced_logical_table_name,
+                )
+                .await
+            }
+        }
+    }
+
+    async fn drop_script_table(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+    ) -> AppResult<bool> {
+        match self {
+            Self::Postgres(repo) => repo.drop_script_table(script_uri, logical_table_name).await,
+            Self::Memory(repo) => repo.drop_script_table(script_uri, logical_table_name).await,
         }
     }
 }

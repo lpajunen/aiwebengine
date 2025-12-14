@@ -58,6 +58,7 @@ pub enum Capability {
     ViewLogs,
     ManageStreams,
     ManageGraphQL,
+    ManageScriptDatabase,
 }
 
 /// Comprehensive input validator - ALL VALIDATION IN RUST
