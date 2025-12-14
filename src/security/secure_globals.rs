@@ -2992,8 +2992,9 @@ impl SecureGlobalContext {
                 );
 
                 // Check permission
-                if let Err(_) = user_ctx_create
+                if user_ctx_create
                     .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                    .is_err()
                 {
                     return Ok(
                         "{\"error\": \"Insufficient permissions for database schema operations\"}"
@@ -3028,8 +3029,9 @@ impl SecureGlobalContext {
                     script_uri_add_int
                 );
 
-                if let Err(_) = user_ctx_add_int
+                if user_ctx_add_int
                     .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                    .is_err()
                 {
                     return Ok(
                         "{\"error\": \"Insufficient permissions for database schema operations\"}"
@@ -3074,8 +3076,9 @@ impl SecureGlobalContext {
                     script_uri_add_text
                 );
 
-                if let Err(_) = user_ctx_add_text
+                if user_ctx_add_text
                     .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                    .is_err()
                 {
                     return Ok(
                         "{\"error\": \"Insufficient permissions for database schema operations\"}"
@@ -3120,8 +3123,9 @@ impl SecureGlobalContext {
                     script_uri_add_bool
                 );
 
-                if let Err(_) = user_ctx_add_bool
+                if user_ctx_add_bool
                     .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                    .is_err()
                 {
                     return Ok(
                         "{\"error\": \"Insufficient permissions for database schema operations\"}"
@@ -3166,8 +3170,9 @@ impl SecureGlobalContext {
                     script_uri_add_ts
                 );
 
-                if let Err(_) = user_ctx_add_ts
+                if user_ctx_add_ts
                     .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                    .is_err()
                 {
                     return Ok(
                         "{\"error\": \"Insufficient permissions for database schema operations\"}"
@@ -3212,8 +3217,9 @@ impl SecureGlobalContext {
                     script_uri_ref
                 );
 
-                if let Err(_) = user_ctx_ref
+                if user_ctx_ref
                     .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                    .is_err()
                 {
                     return Ok(
                         "{\"error\": \"Insufficient permissions for database schema operations\"}"
@@ -3245,14 +3251,18 @@ impl SecureGlobalContext {
         let user_ctx_drop_col = user_context.clone();
         let drop_column = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, table_name: String, column_name: String| -> JsResult<String> {
+            move |_ctx: rquickjs::Ctx<'_>,
+                  table_name: String,
+                  column_name: String|
+                  -> JsResult<String> {
                 debug!(
                     "database.dropColumn called for script {} with table: {}, column: {}",
                     script_uri_drop_col, table_name, column_name
                 );
 
-                if let Err(_) = user_ctx_drop_col
+                if user_ctx_drop_col
                     .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                    .is_err()
                 {
                     return Ok(
                         "{\"error\": \"Insufficient permissions for database schema operations\"}"
@@ -3260,7 +3270,11 @@ impl SecureGlobalContext {
                     );
                 }
 
-                match crate::repository::drop_column(&script_uri_drop_col, &table_name, &column_name) {
+                match crate::repository::drop_column(
+                    &script_uri_drop_col,
+                    &table_name,
+                    &column_name,
+                ) {
                     Ok(existed) => {
                         if existed {
                             Ok(format!(
@@ -3291,8 +3305,9 @@ impl SecureGlobalContext {
                     script_uri_drop, table_name
                 );
 
-                if let Err(_) = user_ctx_drop
+                if user_ctx_drop
                     .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                    .is_err()
                 {
                     return Ok(
                         "{\"error\": \"Insufficient permissions for database schema operations\"}"

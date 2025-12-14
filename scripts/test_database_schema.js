@@ -143,7 +143,12 @@ function testForeignKeys(context) {
   database.createTable("books");
 
   // Add a reference column (this now creates the column AND the FK in one step)
-  const fkResult = database.addReferenceColumn("books", "author_id", "authors", false);
+  const fkResult = database.addReferenceColumn(
+    "books",
+    "author_id",
+    "authors",
+    false,
+  );
   const data = JSON.parse(fkResult);
 
   if (data.error) {
@@ -158,7 +163,9 @@ function testForeignKeys(context) {
     };
   }
 
-  log("Created foreign key: " + data.foreignKey + ", nullable: " + data.nullable);
+  log(
+    "Created foreign key: " + data.foreignKey + ", nullable: " + data.nullable,
+  );
 
   return {
     status: 200,
@@ -198,7 +205,14 @@ function testDropColumn(context) {
     };
   }
 
-  log("Dropped column: " + data.columnName + " from " + data.tableName + ", existed: " + data.dropped);
+  log(
+    "Dropped column: " +
+      data.columnName +
+      " from " +
+      data.tableName +
+      ", existed: " +
+      data.dropped,
+  );
 
   // Clean up table
   database.dropTable("temp_table_col");

@@ -1743,19 +1743,18 @@ async fn db_add_column_to_script_table(
     }
 
     // Check if column already exists
-    if let Some(columns) = schema_json.get("columns").and_then(|c| c.as_array()) {
-        if columns
+    if let Some(columns) = schema_json.get("columns").and_then(|c| c.as_array())
+        && columns
             .iter()
             .any(|col| col.get("name").and_then(|n| n.as_str()) == Some(column_name))
-        {
-            return Err(AppError::Validation {
-                field: "column_name".to_string(),
-                reason: format!(
-                    "Column '{}' already exists in table '{}'",
-                    column_name, logical_table_name
-                ),
-            });
-        }
+    {
+        return Err(AppError::Validation {
+            field: "column_name".to_string(),
+            reason: format!(
+                "Column '{}' already exists in table '{}'",
+                column_name, logical_table_name
+            ),
+        });
     }
 
     // Build ALTER TABLE statement
@@ -2006,7 +2005,10 @@ async fn db_drop_column(
     })?;
 
     // Update schema_json metadata
-    if let Some(columns) = schema_json.get_mut("columns").and_then(|c| c.as_array_mut()) {
+    if let Some(columns) = schema_json
+        .get_mut("columns")
+        .and_then(|c| c.as_array_mut())
+    {
         columns.retain(|col| col.get("name").and_then(|n| n.as_str()) != Some(column_name));
     }
 
@@ -2026,7 +2028,10 @@ async fn db_drop_column(
         }
     })?;
 
-    debug!("Dropped column {} from table {}", column_name, logical_table_name);
+    debug!(
+        "Dropped column {} from table {}",
+        column_name, logical_table_name
+    );
 
     Ok(true)
 }
@@ -4388,8 +4393,14 @@ impl Repository for UnifiedRepository {
         column_name: &str,
     ) -> AppResult<bool> {
         match self {
-            Self::Postgres(repo) => repo.drop_column(script_uri, logical_table_name, column_name).await,
-            Self::Memory(repo) => repo.drop_column(script_uri, logical_table_name, column_name).await,
+            Self::Postgres(repo) => {
+                repo.drop_column(script_uri, logical_table_name, column_name)
+                    .await
+            }
+            Self::Memory(repo) => {
+                repo.drop_column(script_uri, logical_table_name, column_name)
+                    .await
+            }
         }
     }
 

@@ -1,5 +1,6 @@
 use regex::Regex;
 use sha2::{Digest, Sha256};
+use std::str::FromStr;
 use std::sync::OnceLock;
 
 /// Maximum number of tables per script
@@ -63,8 +64,12 @@ impl ColumnType {
             ColumnType::Timestamp => "TIMESTAMPTZ",
         }
     }
+}
 
-    pub fn from_str(s: &str) -> Result<Self, SchemaError> {
+impl FromStr for ColumnType {
+    type Err = SchemaError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "integer" | "int" => Ok(ColumnType::Integer),
             "text" | "string" => Ok(ColumnType::Text),

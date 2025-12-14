@@ -11,6 +11,7 @@ Refactored the JavaScript database schema management API based on user feedback 
 **Rationale**: The new name better reflects that this function both creates a column AND establishes a foreign key relationship in one step.
 
 **Before:**
+
 ```javascript
 // Two-step process
 database.addIntegerColumn("books", "author_id", false, null);
@@ -18,6 +19,7 @@ database.createReference("books", "author_id", "authors");
 ```
 
 **After:**
+
 ```javascript
 // One-step process with clearer naming
 database.addReferenceColumn("books", "author_id", "authors", false);
@@ -30,8 +32,9 @@ database.addReferenceColumn("books", "author_id", "authors", false);
 **Purpose**: Allows scripts to remove columns from tables, matching the pattern of `dropTable`.
 
 **Signature:**
+
 ```javascript
-database.dropColumn(tableName, columnName)
+database.dropColumn(tableName, columnName);
 ```
 
 **Returns**: JSON with `success`, `dropped` (boolean), `tableName`, `columnName`, or `error`
@@ -39,6 +42,7 @@ database.dropColumn(tableName, columnName)
 **Safety**: Prevents dropping the `id` column to maintain table integrity.
 
 **Example:**
+
 ```javascript
 const result = database.dropColumn("users", "age");
 const data = JSON.parse(result);
@@ -86,13 +90,16 @@ if (data.dropped) {
 ## API Changes Summary
 
 ### Removed
+
 - `database.createReference(tableName, columnName, referencedTableName)` ❌
 
 ### Added
+
 - `database.addReferenceColumn(tableName, columnName, referencedTableName, nullable)` ✅
 - `database.dropColumn(tableName, columnName)` ✅
 
 ### Modified
+
 - None of the existing functions changed signatures
 
 ## Backward Compatibility
@@ -100,6 +107,7 @@ if (data.dropped) {
 ⚠️ **Breaking Change**: Scripts using `database.createReference()` must be updated to use `database.addReferenceColumn()`.
 
 **Migration Path:**
+
 ```javascript
 // Old code (two steps):
 database.addIntegerColumn("table", "col", false, null);
@@ -139,6 +147,7 @@ database.addReferenceColumn("table", "col", "ref_table", false);
 ## Test Coverage
 
 All existing tests pass with updated API:
+
 - Table creation ✅
 - Column addition (all types) ✅
 - Foreign key references (updated to use addReferenceColumn) ✅
