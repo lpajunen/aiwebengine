@@ -75,7 +75,10 @@ function triggerMessageHandler(context) {
 
   broadcastLiveMessage(message);
 
-  return ResponseBuilder.json({ success: true, message: "Message broadcasted" });
+  return ResponseBuilder.json({
+    success: true,
+    message: "Message broadcasted",
+  });
 }
 
 function subscriptionDemoPage(context) {

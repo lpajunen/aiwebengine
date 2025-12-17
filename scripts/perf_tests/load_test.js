@@ -28,7 +28,8 @@ export default function () {
   check(response, {
     "status is 200": (r) => r.status === 200,
     "response time < 500ms": (r) => r.timings.duration < 500,
-    "has HTML content": (r) => r.body.includes("Welcome"),
+    "has HTML content": (r) =>
+      typeof r.body === "string" && r.body.includes("Welcome"),
   });
 
   // Simulate real user behavior with random sleep

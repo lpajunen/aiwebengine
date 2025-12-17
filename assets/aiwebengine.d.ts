@@ -158,11 +158,26 @@ interface RouteRegistry {
    * @param path - URL path pattern (e.g., "/blog/post/:id")
    * @param handlerName - Name of the handler function to call
    * @param method - HTTP method (GET, POST, PUT, DELETE, etc.)
+   * @param metadata - Optional OpenAPI metadata (summary, description, tags)
    * @returns Registration result message
    * @example
    * routeRegistry.registerRoute("/api/users", "listUsers", "GET");
+   * routeRegistry.registerRoute("/api/users", "createUser", "POST", {
+   *   summary: "Create user",
+   *   description: "Create a new user account",
+   *   tags: ["Users"]
+   * });
    */
-  registerRoute(path: string, handlerName: string, method: string): string;
+  registerRoute(
+    path: string,
+    handlerName: string,
+    method: string,
+    metadata?: {
+      summary?: string;
+      description?: string;
+      tags?: string[];
+    },
+  ): string;
 
   /**
    * Register a Server-Sent Events (SSE) stream endpoint
@@ -232,6 +247,15 @@ interface RouteRegistry {
    * const streams = JSON.parse(routeRegistry.listStreams());
    */
   listStreams(): string;
+
+  /**
+   * Generate OpenAPI 3.0 specification from registered routes
+   * @returns JSON string with OpenAPI 3.0 specification
+   * @example
+   * const spec = routeRegistry.generateOpenApi();
+   * const openapi = JSON.parse(spec);
+   */
+  generateOpenApi(): string;
 }
 
 // ============================================================================
@@ -1190,6 +1214,67 @@ interface Convert {
 }
 
 // ============================================================================
+// Scheduler Service API (Privileged Scripts Only)
+// ============================================================================
+
+/**
+ * Scheduler service for managing scheduled tasks
+ * Only available to privileged scripts
+ */
+interface SchedulerService {
+  /**
+   * Register a one-time scheduled job
+   * @param options - Job options
+   * @param options.handler - Name of the handler function to call
+   * @param options.runAt - UTC ISO timestamp when to run (e.g., "2025-12-17T15:30:00Z")
+   * @param options.name - Optional job name/key
+   * @returns Result message with job details
+   * @example
+   * const oneHourFromNow = new Date(Date.now() + 3600000).toISOString();
+   * schedulerService.registerOnce({
+   *   handler: "sendReminder",
+   *   runAt: oneHourFromNow,
+   *   name: "reminder-job"
+   * });
+   */
+  registerOnce(options: {
+    handler: string;
+    runAt: string;
+    name?: string;
+  }): string;
+
+  /**
+   * Register a recurring scheduled job
+   * @param options - Job options
+   * @param options.handler - Name of the handler function to call
+   * @param options.intervalMinutes - Interval in minutes (minimum 1)
+   * @param options.name - Optional job name/key
+   * @param options.startAt - Optional UTC ISO timestamp for first run
+   * @returns Result message with job details
+   * @example
+   * schedulerService.registerRecurring({
+   *   handler: "cleanupOldData",
+   *   intervalMinutes: 60,
+   *   name: "cleanup-job"
+   * });
+   */
+  registerRecurring(options: {
+    handler: string;
+    intervalMinutes: number;
+    name?: string;
+    startAt?: string;
+  }): string;
+
+  /**
+   * Clear all scheduled jobs for the current script
+   * @returns Result message with count of cleared jobs
+   * @example
+   * schedulerService.clearAll();
+   */
+  clearAll(): string;
+}
+
+// ============================================================================
 // Global Objects
 // ============================================================================
 
@@ -1206,6 +1291,7 @@ declare var userStorage: UserStorage;
 declare var dispatcher: MessageDispatcher;
 declare var convert: Convert;
 declare var secretStorage: SecretStorage;
+declare var schedulerService: SchedulerService;
 
 /**
  * Base64 encode a string

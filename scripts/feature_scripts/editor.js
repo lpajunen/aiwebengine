@@ -1159,7 +1159,7 @@ function apiSaveAsset(context) {
       typeof assetStorage !== "undefined" &&
       typeof assetStorage.upsertAsset === "function"
     ) {
-      assetStorage.upsertAsset(assetName, content, mimetype, null);
+      assetStorage.upsertAsset(assetName, mimetype, content);
       return {
         status: 200,
         body: JSON.stringify({ message: "Asset saved successfully" }),
@@ -1782,9 +1782,10 @@ Remember: You are creating JavaScript scripts that run on the SERVER and handle 
       }),
     });
 
-    const responseJson = fetch(
-      "https://api.anthropic.com/v1/messages",
-      options,
+    const responseJson = /** @type {string} */ (
+      /** @type {unknown} */ (
+        fetch("https://api.anthropic.com/v1/messages", JSON.parse(options))
+      )
     );
     const response = JSON.parse(responseJson);
 
@@ -1793,10 +1794,10 @@ Remember: You are creating JavaScript scripts that run on the SERVER and handle 
       let aiResponse = data.content[0].text;
       console.log(`AI Assistant: Success - Model: ${data.model}`);
       console.log(
-        `AI Assistant: Raw response length: ${aiResponseBuilder.length} chars`,
+        `AI Assistant: Raw response length: ${aiResponse.length} chars`,
       );
       console.log(
-        `AI Assistant: Raw response start: ${aiResponseBuilder.substring(0, 100)}...`,
+        `AI Assistant: Raw response start: ${aiResponse.substring(0, 100)}...`,
       );
 
       // Check if response was truncated (stopped mid-response)
@@ -1811,18 +1812,18 @@ Remember: You are creating JavaScript scripts that run on the SERVER and handle 
       }
 
       // Clean up response - remove markdown code blocks if present
-      let cleanedResponse = aiResponseBuilder.trim();
+      let cleanedResponse = aiResponse.trim();
 
       // Remove markdown code blocks (```json ... ``` or ``` ... ```)
-      if (cleanedResponseBuilder.startsWith("```")) {
+      if (cleanedResponse.startsWith("```")) {
         console.log(`AI Assistant: Removing markdown code blocks`);
         // Remove opening ```json or ```
-        cleanedResponse = cleanedResponseBuilder.replace(/^```(?:json)?\s*\n?/, "");
+        cleanedResponse = cleanedResponse.replace(/^```(?:json)?\s*\n?/, "");
         // Remove closing ```
-        cleanedResponse = cleanedResponseBuilder.replace(/\n?```\s*$/, "");
-        cleanedResponse = cleanedResponseBuilder.trim();
+        cleanedResponse = cleanedResponse.replace(/\n?```\s*$/, "");
+        cleanedResponse = cleanedResponse.trim();
         console.log(
-          `AI Assistant: Cleaned response start: ${cleanedResponseBuilder.substring(0, 100)}...`,
+          `AI Assistant: Cleaned response start: ${cleanedResponse.substring(0, 100)}...`,
         );
       }
 
@@ -1832,7 +1833,7 @@ Remember: You are creating JavaScript scripts that run on the SERVER and handle 
       try {
         parsedResponse = JSON.parse(cleanedResponse);
         console.log(
-          `AI Assistant: Successfully parsed structured response of type: ${parsedResponseBuilder.type}`,
+          `AI Assistant: Successfully parsed structured response of type: ${parsedResponse.type}`,
         );
       } catch (error) {
         parseError = String(error);
@@ -1840,7 +1841,7 @@ Remember: You are creating JavaScript scripts that run on the SERVER and handle 
           `AI Assistant: Response is plain text or invalid JSON - Error: ${parseError}`,
         );
         console.log(
-          `AI Assistant: First 200 chars: ${cleanedResponseBuilder.substring(0, 200)}`,
+          `AI Assistant: First 200 chars: ${cleanedResponse.substring(0, 200)}`,
         );
 
         // If it was truncated and JSON parsing failed, it's likely incomplete JSON

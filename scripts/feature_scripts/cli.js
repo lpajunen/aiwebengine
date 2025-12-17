@@ -14,7 +14,10 @@ function asset_handler(context) {
         const assetMetadata = JSON.parse(assetsJson);
         // Extract just the names for backwards compatibility
         const assetNames = assetMetadata.map((a) => a.name);
-        return ResponseBuilder.json({ assets: assetNames, metadata: assetMetadata });
+        return ResponseBuilder.json({
+          assets: assetNames,
+          metadata: assetMetadata,
+        });
       } else if (path.startsWith("/assets/")) {
         // Fetch specific asset
         const publicPath = path.substring("/assets/".length);
@@ -35,7 +38,10 @@ function asset_handler(context) {
             body.mimetype,
             body.content,
           );
-          return ResponseBuilder.json({ message: "Asset created/updated" }, 201);
+          return ResponseBuilder.json(
+            { message: "Asset created/updated" },
+            201,
+          );
         } else {
           return ResponseBuilder.error(
             400,
