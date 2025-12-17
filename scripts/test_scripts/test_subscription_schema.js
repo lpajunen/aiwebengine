@@ -10,7 +10,9 @@ function init(context) {
     "testSubscriptionSchema",
     "GET",
   );
-  console.log("Subscription schema test initialized at /test/subscription-schema");
+  console.log(
+    "Subscription schema test initialized at /test/subscription-schema",
+  );
 }
 
 function testSubscriptionSchema(context) {
@@ -46,7 +48,11 @@ function testSubscriptionSchema(context) {
       return ResponseBuilder.text(output);
     }
 
-    if (result.data && result.data.__schema && result.data.__schema.subscriptionType) {
+    if (
+      result.data &&
+      result.data.__schema &&
+      result.data.__schema.subscriptionType
+    ) {
       output += "✅ GraphQL subscription type is configured!\n\n";
       output += `Subscription type name: ${result.data.__schema.subscriptionType.name}\n\n`;
       output += "Available subscription fields:\n";

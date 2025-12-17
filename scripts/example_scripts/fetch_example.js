@@ -20,34 +20,32 @@ function init(context) {
 function fetchExample(context) {
   const req = context.request;
 
-  // Validate query parameters using new validation helpers
-  const url = validate.requireQueryParam(
-    req,
-    "url",
-    "URL parameter is required",
-  );
-  if (!url.valid) {
-    return Response.error(400, url.error);
+  // Validate query parameters
+  const url = req.query?.url;
+  if (!url || url.trim() === "") {
+    return ResponseBuilder.error(400, "URL parameter is required");
   }
 
-  console.log("Fetching data from: " + url.value);
+  console.log("Fetching data from: " + url);
 
   try {
-    const responseJson = fetch(url.value);
+    const responseJson = /** @type {string} */ (
+      /** @type {unknown} */ (fetch(url))
+    );
     const response = JSON.parse(responseJson);
 
     if (response.ok) {
       console.log("Fetch successful! Status: " + response.status);
-      return Response.json({
+      return ResponseBuilder.json({
         message: "Fetch successful",
         data: JSON.parse(response.body),
       });
     } else {
-      return Response.error(response.status, "Request failed");
+      return ResponseBuilder.error(response.status, "Request failed");
     }
   } catch (error) {
     console.error("Fetch error: " + error);
-    return Response.error(500, "Internal error: " + error);
+    return ResponseBuilder.error(500, "Internal error: " + error);
   }
 }
 
@@ -57,7 +55,7 @@ function fetchWithSecret(context) {
 
   // Check if the secret exists
   if (!secretStorage.exists("example_api_key")) {
-    return Response.error(
+    return ResponseBuilder.error(
       503,
       "API key not configured. Please set 'example_api_key' in secrets configuration",
     );
@@ -65,17 +63,19 @@ function fetchWithSecret(context) {
 
   try {
     // Use {{secret:identifier}} syntax to inject the API key
-    const options = JSON.stringify({
+    const options = {
       method: "GET",
       headers: {
         "X-API-Key": "{{secret:example_api_key}}",
         "User-Agent": "aiwebengine/fetch-example",
       },
-    });
+    };
 
     // This would work with a real API that requires authentication
     // For demo purposes, we'll use httpbin
-    const responseJson = fetch("https://httpbin.org/headers", options);
+    const responseJson = /** @type {string} */ (
+      /** @type {unknown} */ (fetch("https://httpbin.org/headers", options))
+    );
     const response = JSON.parse(responseJson);
 
     if (response.ok) {
@@ -85,11 +85,11 @@ function fetchWithSecret(context) {
         headers: data.headers,
       });
     } else {
-      return Response.error(response.status, "Request failed");
+      return ResponseBuilder.error(response.status, "Request failed");
     }
   } catch (error) {
     console.error("Fetch error: " + error);
-    return Response.error(500, "Internal error: " + error);
+    return ResponseBuilder.error(500, "Internal error: " + error);
   }
 }
 
@@ -99,55 +99,49 @@ function fetchPost(context) {
   console.log("Making POST request");
 
   // Validate required form parameters
-  const name = validate.requireQueryParam(
-    req,
-    "name",
-    "Name parameter is required",
-  );
-  if (!name.valid) {
-    return Response.error(400, name.error);
+  const name = req.form?.name;
+  if (!name || name.trim() === "") {
+    return ResponseBuilder.error(400, "Name parameter is required");
   }
 
-  const email = validate.requireQueryParam(
-    req,
-    "email",
-    "Email parameter is required",
-  );
-  if (!email.valid) {
-    return Response.error(400, email.error);
+  const email = req.form?.email;
+  if (!email || email.trim() === "") {
+    return ResponseBuilder.error(400, "Email parameter is required");
   }
 
   try {
     const requestData = {
-      name: name.value,
-      email: email.value,
+      name: name,
+      email: email,
       timestamp: new Date().toISOString(),
     };
 
-    const options = JSON.stringify({
+    const options = {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
       },
       body: JSON.stringify(requestData),
-    });
+    };
 
-    const responseJson = fetch("https://httpbin.org/post", options);
+    const responseJson = /** @type {string} */ (
+      /** @type {unknown} */ (fetch("https://httpbin.org/post", options))
+    );
     const response = JSON.parse(responseJson);
 
     if (response.ok) {
       const data = JSON.parse(response.body);
-      return Response.json({
+      return ResponseBuilder.json({
         message: "POST successful",
         sentData: requestData,
         echo: data.json,
       });
     } else {
-      return Response.error(response.status, "POST failed");
+      return ResponseBuilder.error(response.status, "POST failed");
     }
   } catch (error) {
     console.error("POST error: " + error);
-    return Response.error(500, "Internal error: " + error);
+    return ResponseBuilder.error(500, "Internal error: " + error);
   }
 }

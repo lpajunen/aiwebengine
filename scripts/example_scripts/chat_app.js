@@ -870,14 +870,14 @@ function chatInterfaceHandler(context) {
 </body>
 </html>`;
 
-    return Response.html(html);
+    return ResponseBuilder.html(html);
   } catch (error) {
     // User not authenticated, redirect to login
     const req = context.request || {};
     const currentPath = encodeURIComponent(req.path || "/chat");
     const loginUrl = "/auth/login?redirect=" + currentPath;
 
-    return Response.redirect(loginUrl);
+    return ResponseBuilder.redirect(loginUrl);
   }
 }
 

@@ -203,30 +203,26 @@ function feedback_form_handler(context) {
 </body>
 </html>`;
 
-  return Response.html(html);
+  return ResponseBuilder.html(html);
 }
 
 function feedback_submit_handler(context) {
   const req = context.request;
 
-  // Validate required form fields using new validation helpers
-  const name = validate.requireQueryParam(req, "name", "Name is required");
-  if (!name.valid) {
-    return Response.error(400, name.error);
+  // Validate required form fields
+  const name = req.form?.name;
+  if (!name || name.trim() === "") {
+    return ResponseBuilder.error(400, "Name is required");
   }
 
-  const email = validate.requireQueryParam(req, "email", "Email is required");
-  if (!email.valid) {
-    return Response.error(400, email.error);
+  const email = req.form?.email;
+  if (!email || email.trim() === "") {
+    return ResponseBuilder.error(400, "Email is required");
   }
 
-  const message = validate.requireQueryParam(
-    req,
-    "message",
-    "Message is required",
-  );
-  if (!message.valid) {
-    return Response.error(400, message.error);
+  const message = req.form?.message;
+  if (!message || message.trim() === "") {
+    return ResponseBuilder.error(400, "Message is required");
   }
 
   // Optional fields with defaults
@@ -235,11 +231,11 @@ function feedback_submit_handler(context) {
 
   // Log the feedback (in a real app, you'd store this in a database)
   console.log("Feedback received:");
-  console.log("Name: " + name.value);
-  console.log("Email: " + email.value);
+  console.log("Name: " + name);
+  console.log("Email: " + email);
   console.log("Rating: " + rating);
   console.log("Category: " + category);
-  console.log("Message: " + message.value);
+  console.log("Message: " + message);
 
   const thankYouHtml = `<!DOCTYPE html>
 <html lang="en">
@@ -347,7 +343,7 @@ function feedback_submit_handler(context) {
 </body>
 </html>`;
 
-  return Response.html(thankYouHtml);
+  return ResponseBuilder.html(thankYouHtml);
 }
 
 // Initialization function - called when script is loaded or updated

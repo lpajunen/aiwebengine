@@ -2,7 +2,9 @@
   "compilerOptions": {
     "checkJs": true,
     "target": "ES2020",
-    "lib": ["ES2020"]
+    "lib": ["ES2020"],
+    "types": []
   },
-  "include": ["scripts/**/*.js", "assets/**/*.d.ts"]
+  "include": ["scripts/**/*.js", "assets/**/*.d.ts"],
+  "exclude": ["node_modules"]
 }

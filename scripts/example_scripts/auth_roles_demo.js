@@ -14,7 +14,7 @@ export async function handleRequest(context) {
   }
   // Check if user is authenticated
   if (!request.auth.isAuthenticated) {
-    return Response.json(
+    return ResponseBuilder.json(
       {
         error: "Authentication required",
         message: "Please login to access this resource",
@@ -45,7 +45,7 @@ export async function handleRequest(context) {
     request.method === "DELETE"
   ) {
     if (!request.auth.isEditor && !request.auth.isAdmin) {
-      return Response.json(
+      return ResponseBuilder.json(
         {
           error: "Insufficient permissions",
           message: "Editor or Administrator role required for this action",
@@ -57,7 +57,7 @@ export async function handleRequest(context) {
 
   // Example: Restrict admin-only actions
   if (request.path === "/admin/settings" && !request.auth.isAdmin) {
-    return Response.json(
+    return ResponseBuilder.json(
       {
         error: "Insufficient permissions",
         message: "Administrator role required for this action",
@@ -67,7 +67,7 @@ export async function handleRequest(context) {
   }
 
   // Return user info and capabilities
-  return Response.json({
+  return ResponseBuilder.json({
     user: {
       id: user.id,
       email: user.email,
@@ -96,7 +96,7 @@ export async function editorOnly(context) {
   const user = request.auth.requireAuth(); // Throws if not authenticated
 
   if (!request.auth.isEditor && !request.auth.isAdmin) {
-    return Response.json(
+    return ResponseBuilder.json(
       {
         error: "Editor access required",
       },
@@ -104,7 +104,7 @@ export async function editorOnly(context) {
     );
   }
 
-  return Response.text(`Hello ${user.name}, you have editor access!`);
+  return ResponseBuilder.text(`Hello ${user.name}, you have editor access!`);
 }
 
 /**
@@ -118,7 +118,7 @@ export async function adminOnly(context) {
   const user = request.auth.requireAuth();
 
   if (!request.auth.isAdmin) {
-    return Response.json(
+    return ResponseBuilder.json(
       {
         error: "Administrator access required",
       },
@@ -126,5 +126,7 @@ export async function adminOnly(context) {
     );
   }
 
-  return Response.text(`Hello ${user.name}, you have administrator access!`);
+  return ResponseBuilder.text(
+    `Hello ${user.name}, you have administrator access!`,
+  );
 }
