@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT logical_table_name, physical_table_name, created_at\n        FROM script_tables\n        WHERE script_uri = $1\n        ORDER BY logical_table_name\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "logical_table_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "physical_table_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "1c50a4e8642c2fb46ee9e66fa0b1bfd4dcc9009675dcf6f2d22b488083399fd3"
+}

@@ -16,6 +16,9 @@ WORKDIR /app
 # Copy dependency manifests
 COPY Cargo.toml Cargo.lock ./
 
+# Copy SQLx offline query metadata (required for sqlx::query! macros)
+COPY .sqlx ./.sqlx
+
 # Create dummy source files to cache dependencies
 RUN mkdir -p src/bin && \
     echo "fn main() {}" > src/lib.rs && \
