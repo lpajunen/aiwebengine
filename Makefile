@@ -90,7 +90,7 @@ format-markdown:
 	./node_modules/.bin/prettier --write "**/*.md"
 
 format-javascript:
-	./node_modules/.bin/prettier --write "**/*.js"
+	./node_modules/.bin/prettier --write "**/*.js" "**/*.ts"
 
 # Generate test coverage report
 coverage:

@@ -1,7 +1,7 @@
 /**
  * TypeScript type definitions for aiwebengine JavaScript API
  * @version 0.1.0
- * 
+ *
  * Add this reference to your scripts for IDE autocomplete and type checking:
  * /// <reference path="https://your-engine.com/api/types/v0.1.0/aiwebengine.d.ts" />
  */
@@ -16,25 +16,25 @@
 interface HttpRequest {
   /** Request path (e.g., "/blog/post/123") */
   path: string;
-  
+
   /** HTTP method (GET, POST, PUT, DELETE, etc.) */
   method: string;
-  
+
   /** Request headers as key-value pairs */
   headers: Record<string, string>;
-  
+
   /** URL query parameters as key-value pairs */
   query: Record<string, string>;
-  
+
   /** Route parameters from path patterns (e.g., {id: "123"}) */
   params: Record<string, string>;
-  
+
   /** Form data from POST requests as key-value pairs */
   form: Record<string, string>;
-  
+
   /** Raw request body as string */
   body: string;
-  
+
   /** Authentication context (available when user is authenticated) */
   auth?: AuthContext;
 }
@@ -45,19 +45,19 @@ interface HttpRequest {
 interface AuthContext {
   /** User ID */
   userId: string;
-  
+
   /** User email address */
   email: string;
-  
+
   /** User display name */
   name: string;
-  
+
   /** Authentication provider (google, microsoft, apple) */
   provider: string;
-  
+
   /** Whether user has admin privileges */
   isAdmin: boolean;
-  
+
   /** Whether user has premium status */
   isPremium: boolean;
 }
@@ -68,16 +68,16 @@ interface AuthContext {
 interface HttpResponse {
   /** HTTP status code (200, 404, 500, etc.) */
   status: number;
-  
+
   /** Response body as string (mutually exclusive with bodyBase64) */
   body?: string;
-  
+
   /** Response body as base64-encoded string (for binary data) */
   bodyBase64?: string;
-  
+
   /** Content-Type header value */
   contentType?: string;
-  
+
   /** Additional response headers */
   headers?: Record<string, string>;
 }
@@ -88,13 +88,19 @@ interface HttpResponse {
 interface HandlerContext {
   /** HTTP request information (for HTTP route handlers) */
   request?: HttpRequest;
-  
+
   /** GraphQL or function arguments (for GraphQL resolvers) */
   args?: Record<string, any>;
-  
+
   /** Handler invocation type */
-  invocationType?: "httpRoute" | "graphqlQuery" | "graphqlMutation" | "graphqlSubscription" | "scheduledJob" | "mcpTool";
-  
+  invocationType?:
+    | "httpRoute"
+    | "graphqlQuery"
+    | "graphqlMutation"
+    | "graphqlSubscription"
+    | "scheduledJob"
+    | "mcpTool";
+
   /** Additional metadata */
   metadata?: Record<string, any>;
 }
@@ -117,7 +123,7 @@ interface RouteRegistry {
    * routeRegistry.registerRoute("/api/users", "listUsers", "GET");
    */
   registerRoute(path: string, handlerName: string, method: string): string;
-  
+
   /**
    * Register a Server-Sent Events (SSE) stream endpoint
    * @param path - URL path for the stream (must start with /)
@@ -126,7 +132,7 @@ interface RouteRegistry {
    * routeRegistry.registerStreamRoute("/events/notifications");
    */
   registerStreamRoute(path: string): string;
-  
+
   /**
    * Register a static asset route
    * @param httpPath - HTTP path where asset will be served (e.g., "/styles/main.css")
@@ -136,20 +142,20 @@ interface RouteRegistry {
    * routeRegistry.registerAssetRoute("/styles/main.css", "main.css");
    */
   registerAssetRoute(httpPath: string, assetName: string): string;
-  
+
   /**
    * Broadcast a message to all connections on a stream
    * @param path - Stream path
    * @param data - Data to send (will be JSON serialized)
    * @returns Broadcast result message
    * @example
-   * routeRegistry.sendStreamMessage("/events/notifications", { 
-   *   type: "alert", 
-   *   message: "New update available" 
+   * routeRegistry.sendStreamMessage("/events/notifications", {
+   *   type: "alert",
+   *   message: "New update available"
    * });
    */
   sendStreamMessage(path: string, data: any): string;
-  
+
   /**
    * Send a message to filtered connections based on metadata
    * @param path - Stream path
@@ -163,8 +169,12 @@ interface RouteRegistry {
    *   JSON.stringify({ role: "admin" })
    * );
    */
-  sendStreamMessageFiltered(path: string, data: any, filterJson: string): string;
-  
+  sendStreamMessageFiltered(
+    path: string,
+    data: any,
+    filterJson: string,
+  ): string;
+
   /**
    * List all registered routes
    * @returns JSON string array of registered routes
@@ -172,7 +182,7 @@ interface RouteRegistry {
    * const routes = JSON.parse(routeRegistry.listRoutes());
    */
   listRoutes(): string;
-  
+
   /**
    * List all registered streams
    * @returns JSON string array of registered streams
@@ -192,19 +202,19 @@ interface RouteRegistry {
 interface AssetMetadata {
   /** Asset URI/name */
   uri: string;
-  
+
   /** Display name */
   name: string;
-  
+
   /** MIME type */
   mimetype: string;
-  
+
   /** Size in bytes */
   size: number;
-  
+
   /** Creation timestamp */
   created_at: string;
-  
+
   /** Last update timestamp */
   updated_at: string;
 }
@@ -221,7 +231,7 @@ interface AssetStorage {
    * const assets = JSON.parse(assetsJson);
    */
   listAssets(): string;
-  
+
   /**
    * Fetch an asset's content
    * @param name - Asset name/URI
@@ -230,7 +240,7 @@ interface AssetStorage {
    * const content = assetStorage.fetchAsset("logo.svg");
    */
   fetchAsset(name: string): string;
-  
+
   /**
    * Create or update an asset
    * @param name - Asset name/URI
@@ -241,7 +251,7 @@ interface AssetStorage {
    * assetStorage.upsertAsset("logo.svg", "image/svg+xml", base64Content);
    */
   upsertAsset(name: string, mimetype: string, contentBase64: string): string;
-  
+
   /**
    * Delete an asset
    * @param name - Asset name/URI
@@ -265,27 +275,27 @@ interface SharedStorage {
    * @param key - Storage key
    * @returns Stored value or null if not found
    * @example
-   * const counter = sharedStorage.get("pageViews") || "0";
+   * const counter = sharedStorage.getItem("pageViews") || "0";
    */
-  get(key: string): string | null;
-  
+  getItem(key: string): string | null;
+
   /**
    * Set a value in shared storage
    * @param key - Storage key
    * @param value - Value to store
    * @example
-   * sharedStorage.set("pageViews", "42");
+   * sharedStorage.setItem("pageViews", "42");
    */
-  set(key: string, value: string): void;
-  
+  setItem(key: string, value: string): void;
+
   /**
-   * Delete a key from shared storage
+   * Remove a key from shared storage
    * @param key - Storage key
    * @example
-   * sharedStorage.delete("oldData");
+   * sharedStorage.removeItem("oldData");
    */
-  delete(key: string): void;
-  
+  removeItem(key: string): void;
+
   /**
    * Clear all data from shared storage
    * @example
@@ -304,29 +314,29 @@ interface PersonalStorage {
    * @returns Stored value or null if not found
    * @throws If user is not authenticated
    * @example
-   * const preferences = personalStorage.get("theme") || "light";
+   * const preferences = personalStorage.getItem("theme") || "light";
    */
-  get(key: string): string | null;
-  
+  getItem(key: string): string | null;
+
   /**
    * Set a value in personal storage for the authenticated user
    * @param key - Storage key
    * @param value - Value to store
    * @throws If user is not authenticated
    * @example
-   * personalStorage.set("theme", "dark");
+   * personalStorage.setItem("theme", "dark");
    */
-  set(key: string, value: string): void;
-  
+  setItem(key: string, value: string): void;
+
   /**
-   * Delete a key from personal storage for the authenticated user
+   * Remove a key from personal storage for the authenticated user
    * @param key - Storage key
    * @throws If user is not authenticated
    * @example
-   * personalStorage.delete("oldPreference");
+   * personalStorage.removeItem("oldPreference");
    */
-  delete(key: string): void;
-  
+  removeItem(key: string): void;
+
   /**
    * Clear all data from personal storage for the authenticated user
    * @throws If user is not authenticated
@@ -358,7 +368,7 @@ interface GraphQLRegistry {
    * );
    */
   registerQuery(name: string, schema: string, resolverName: string): string;
-  
+
   /**
    * Register a GraphQL mutation
    * @param name - Mutation name
@@ -373,7 +383,7 @@ interface GraphQLRegistry {
    * );
    */
   registerMutation(name: string, schema: string, resolverName: string): string;
-  
+
   /**
    * Register a GraphQL subscription
    * @param name - Subscription name
@@ -387,23 +397,12 @@ interface GraphQLRegistry {
    *   "messageAddedResolver"
    * );
    */
-  registerSubscription(name: string, schema: string, resolverName: string): string;
-  
-  /**
-   * Register a GraphQL type definition
-   * @param typeDef - GraphQL type definition
-   * @returns Registration result message
-   * @example
-   * graphQLRegistry.registerType(`
-   *   type User {
-   *     id: ID!
-   *     name: String!
-   *     email: String!
-   *   }
-   * `);
-   */
-  registerType(typeDef: string): string;
-  
+  registerSubscription(
+    name: string,
+    schema: string,
+    resolverName: string,
+  ): string;
+
   /**
    * Execute a GraphQL query internally
    * @param query - GraphQL query string
@@ -419,94 +418,6 @@ interface GraphQLRegistry {
 }
 
 // ============================================================================
-// Authentication API
-// ============================================================================
-
-/**
- * Authentication helper functions
- */
-interface Authentication {
-  /**
-   * Check if current request is authenticated
-   * @param context - Handler context
-   * @returns true if authenticated, false otherwise
-   * @example
-   * if (Authentication.isAuthenticated(context)) {
-   *   // Handle authenticated request
-   * }
-   */
-  isAuthenticated(context: HandlerContext): boolean;
-  
-  /**
-   * Get the authenticated user's ID
-   * @param context - Handler context
-   * @returns User ID or null if not authenticated
-   * @example
-   * const userId = Authentication.getUserId(context);
-   */
-  getUserId(context: HandlerContext): string | null;
-  
-  /**
-   * Get the authenticated user's email
-   * @param context - Handler context
-   * @returns Email or null if not authenticated
-   * @example
-   * const email = Authentication.getEmail(context);
-   */
-  getEmail(context: HandlerContext): string | null;
-  
-  /**
-   * Get the authenticated user's name
-   * @param context - Handler context
-   * @returns Name or null if not authenticated
-   * @example
-   * const name = Authentication.getName(context);
-   */
-  getName(context: HandlerContext): string | null;
-  
-  /**
-   * Get the authentication provider
-   * @param context - Handler context
-   * @returns Provider name (google, microsoft, apple) or null if not authenticated
-   * @example
-   * const provider = Authentication.getProvider(context);
-   */
-  getProvider(context: HandlerContext): string | null;
-  
-  /**
-   * Check if user has admin privileges
-   * @param context - Handler context
-   * @returns true if user is admin, false otherwise
-   * @example
-   * if (Authentication.isAdmin(context)) {
-   *   // Admin-only functionality
-   * }
-   */
-  isAdmin(context: HandlerContext): boolean;
-  
-  /**
-   * Check if user has premium status
-   * @param context - Handler context
-   * @returns true if user is premium, false otherwise
-   * @example
-   * if (Authentication.isPremium(context)) {
-   *   // Premium features
-   * }
-   */
-  isPremium(context: HandlerContext): boolean;
-  
-  /**
-   * Require authentication, throw error if not authenticated
-   * @param context - Handler context
-   * @throws If user is not authenticated
-   * @example
-   * Authentication.requireAuth(context);
-   * // Continue with authenticated-only code
-   */
-  requireAuth(context: HandlerContext): void;
-}
-
-// ============================================================================
 // HTTP Fetch API
 // ============================================================================
 
@@ -516,13 +427,13 @@ interface Authentication {
 interface FetchOptions {
   /** HTTP method (default: GET) */
   method?: string;
-  
+
   /** Request headers */
   headers?: Record<string, string>;
-  
+
   /** Request body */
   body?: string;
-  
+
   /** Timeout in milliseconds (default: 30000) */
   timeout?: number;
 }
@@ -533,10 +444,10 @@ interface FetchOptions {
 interface FetchResponse {
   /** HTTP status code */
   status: number;
-  
+
   /** Response body as string */
   body: string;
-  
+
   /** Response headers */
   headers: Record<string, string>;
 }
@@ -550,11 +461,11 @@ interface FetchResponse {
  * // Simple GET request
  * const response = fetch("https://api.example.com/data");
  * const data = JSON.parse(response);
- * 
+ *
  * // POST with secret injection
  * const response = fetch("https://api.example.com/endpoint", {
  *   method: "POST",
- *   headers: { 
+ *   headers: {
  *     "Authorization": "Bearer {{API_TOKEN}}",
  *     "Content-Type": "application/json"
  *   },
@@ -578,7 +489,23 @@ interface Console {
    * console.log("Request received: " + req.path);
    */
   log(message: string): void;
-  
+
+  /**
+   * Write an info log message
+   * @param message - Info message to log
+   * @example
+   * console.info("User logged in");
+   */
+  info(message: string): void;
+
+  /**
+   * Write a warning log message
+   * @param message - Warning message to log
+   * @example
+   * console.warn("Deprecated API usage detected");
+   */
+  warn(message: string): void;
+
   /**
    * Write an error log message
    * @param message - Error message to log
@@ -586,16 +513,61 @@ interface Console {
    * console.error("Failed to process request: " + error);
    */
   error(message: string): void;
+
+  /**
+   * Write a debug log message
+   * @param message - Debug message to log
+   * @example
+   * console.debug("Processing item: " + item.id);
+   */
+  debug(message: string): void;
+
+  /**
+   * List all log entries
+   * @returns JSON string array of log entries
+   * @example
+   * const logs = JSON.parse(console.listLogs());
+   */
+  listLogs(): string;
+
+  /**
+   * List log entries for a specific script URI
+   * @param uri - Script URI to filter logs
+   * @returns JSON string array of log entries
+   * @example
+   * const logs = JSON.parse(console.listLogsForUri("my-script"));
+   */
+  listLogsForUri(uri: string): string;
+
+  /**
+   * Prune old log entries
+   * @returns Prune operation result message
+   * @example
+   * console.pruneLogs();
+   */
+  pruneLogs(): string;
 }
+
+// ============================================================================
+// Global Objects
+// ============================================================================
+
+declare var routeRegistry: RouteRegistry;
+declare var assetStorage: AssetStorage;
+declare var sharedStorage: SharedStorage;
+declare var personalStorage: PersonalStorage;
+declare var graphQLRegistry: GraphQLRegistry;
+declare var console: Console;
 
 // ============================================================================
 // Response Builder Helpers
 // ============================================================================
 
 /**
- * Response builder utility functions
+ * Response builder utility object with methods for creating HTTP responses.
+ * Note: In aiwebengine environment, this replaces the browser's Response API.
  */
-interface ResponseBuilder {
+declare var Response: {
   /**
    * Create a JSON response
    * @param data - Data to serialize as JSON
@@ -605,7 +577,7 @@ interface ResponseBuilder {
    * return Response.json({ message: "Success", data: results });
    */
   json(data: any, status?: number): HttpResponse;
-  
+
   /**
    * Create a plain text response
    * @param text - Text content
@@ -615,7 +587,7 @@ interface ResponseBuilder {
    * return Response.text("Hello, World!");
    */
   text(text: string, status?: number): HttpResponse;
-  
+
   /**
    * Create an HTML response
    * @param html - HTML content
@@ -625,17 +597,17 @@ interface ResponseBuilder {
    * return Response.html("<h1>Welcome</h1>");
    */
   html(html: string, status?: number): HttpResponse;
-  
+
   /**
    * Create an error response
+   * @param status - HTTP status code
    * @param message - Error message
-   * @param status - HTTP status code (default: 500)
    * @returns HTTP response object
    * @example
-   * return Response.error("Not found", 404);
+   * return Response.error(404, "Not found");
    */
-  error(message: string, status?: number): HttpResponse;
-  
+  error(status: number, message: string): HttpResponse;
+
   /**
    * Create a 204 No Content response
    * @returns HTTP response object
@@ -643,7 +615,7 @@ interface ResponseBuilder {
    * return Response.noContent();
    */
   noContent(): HttpResponse;
-  
+
   /**
    * Create a 302 redirect response
    * @param location - Redirect URL
@@ -652,33 +624,4 @@ interface ResponseBuilder {
    * return Response.redirect("/login");
    */
   redirect(location: string): HttpResponse;
-}
-
-// ============================================================================
-// Global Objects
-// ============================================================================
-
-declare const routeRegistry: RouteRegistry;
-declare const assetStorage: AssetStorage;
-declare const sharedStorage: SharedStorage;
-declare const personalStorage: PersonalStorage;
-declare const graphQLRegistry: GraphQLRegistry;
-declare const Authentication: Authentication;
-declare const console: Console;
-declare const Response: ResponseBuilder;
-
-// ============================================================================
-// Helper Functions (if exposed globally)
-// ============================================================================
-
-/**
- * Get request object from context (convenience helper)
- * @param context - Handler context
- * @returns Request object
- * @example
- * function myHandler(context) {
- *   const req = getRequest(context);
- *   return Response.text("Path: " + req.path);
- * }
- */
-declare function getRequest(context: HandlerContext): HttpRequest;
+};
