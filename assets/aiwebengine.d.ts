@@ -384,6 +384,141 @@ interface PersonalStorage {
   clear(): void;
 }
 
+/**
+ * Script metadata
+ */
+interface ScriptMetadata {
+  /** Script URI */
+  uri: string;
+
+  /** Script name */
+  name: string;
+
+  /** Script size in bytes */
+  size: number;
+
+  /** Created timestamp (milliseconds since epoch) */
+  createdAt: number;
+
+  /** Updated timestamp (milliseconds since epoch) */
+  updatedAt: number;
+
+  /** Whether script has privileged access */
+  privileged: boolean;
+
+  /** Whether script has been initialized */
+  initialized: boolean;
+
+  /** Initialization error message if any */
+  initError?: string;
+}
+
+/**
+ * Script storage for managing JavaScript scripts
+ */
+interface ScriptStorage {
+  /**
+   * List all scripts with metadata
+   * @returns JSON string array of script metadata
+   * @example
+   * const scripts = JSON.parse(scriptStorage.listScripts());
+   */
+  listScripts(): string;
+
+  /**
+   * Get script content by name
+   * @param scriptName - Script name/URI
+   * @returns Script content or null if not found
+   * @example
+   * const content = scriptStorage.getScript("my-script");
+   */
+  getScript(scriptName: string): string | null;
+
+  /**
+   * Get script initialization status
+   * @param scriptName - Script name/URI
+   * @returns JSON string with init status or null
+   * @example
+   * const status = JSON.parse(scriptStorage.getScriptInitStatus("my-script"));
+   */
+  getScriptInitStatus(scriptName: string): string | null;
+
+  /**
+   * Get script security profile
+   * @param scriptName - Script name/URI
+   * @returns JSON string with security profile or null
+   * @example
+   * const profile = JSON.parse(scriptStorage.getScriptSecurityProfile("my-script"));
+   */
+  getScriptSecurityProfile(scriptName: string): string | null;
+
+  /**
+   * Create or update a script
+   * @param scriptName - Script name/URI
+   * @param content - Script content
+   * @returns Result message
+   * @example
+   * scriptStorage.upsertScript("my-script", "function init() { ... }");
+   */
+  upsertScript(scriptName: string, content: string): string;
+
+  /**
+   * Delete a script (requires ownership or admin privileges)
+   * @param scriptName - Script name/URI
+   * @returns True if deleted, false if failed
+   * @example
+   * scriptStorage.deleteScript("old-script");
+   */
+  deleteScript(scriptName: string): boolean;
+
+  /**
+   * Set privileged status for a script (admin only)
+   * @param scriptName - Script name/URI
+   * @param privileged - Whether script should be privileged
+   * @returns True if successful
+   * @example
+   * scriptStorage.setScriptPrivileged("system-script", true);
+   */
+  setScriptPrivileged(scriptName: string, privileged: boolean): boolean;
+
+  /**
+   * Check if current user can manage script privileges
+   * @returns True if user has admin capability
+   * @example
+   * if (scriptStorage.canManageScriptPrivileges()) { ... }
+   */
+  canManageScriptPrivileges(): boolean;
+
+  /**
+   * Get list of owner user IDs for a script
+   * @param scriptName - Script name/URI
+   * @returns JSON string array of owner user IDs
+   * @example
+   * const owners = JSON.parse(scriptStorage.getScriptOwners("my-script"));
+   */
+  getScriptOwners(scriptName: string): string;
+
+  /**
+   * Add an owner to a script (requires current ownership or admin)
+   * @param scriptName - Script name/URI
+   * @param userId - User ID to add as owner
+   * @returns Result message
+   * @example
+   * scriptStorage.addScriptOwner("my-script", "user123");
+   */
+  addScriptOwner(scriptName: string, userId: string): string;
+
+  /**
+   * Remove an owner from a script (requires current ownership or admin)
+   * @param scriptName - Script name/URI
+   * @param userId - User ID to remove
+   * @returns Result message
+   * @example
+   * scriptStorage.removeScriptOwner("my-script", "user123");
+   */
+  removeScriptOwner(scriptName: string, userId: string): string;
+}
+
 // ============================================================================
 // GraphQL Registry API
 // ============================================================================
@@ -456,6 +591,69 @@ interface GraphQLRegistry {
 }
 
 // ============================================================================
+// MCP (Model Context Protocol) Registry API
+// ============================================================================
+
+/**
+ * MCP Registry for registering tools and prompts
+ */
+interface McpRegistry {
+  /**
+   * Register an MCP tool
+   * @param name - Tool name (1-100 characters)
+   * @param description - Tool description (1-1000 characters)
+   * @param inputSchemaJson - JSON string defining input schema
+   * @param handlerFunction - Name of handler function to call
+   * @returns Registration result message
+   * @example
+   * mcpRegistry.registerTool(
+   *   "calculateSum",
+   *   "Calculates the sum of two numbers",
+   *   JSON.stringify({
+   *     type: "object",
+   *     properties: {
+   *       a: { type: "number" },
+   *       b: { type: "number" }
+   *     },
+   *     required: ["a", "b"]
+   *   }),
+   *   "handleCalculateSum"
+   * );
+   */
+  registerTool(
+    name: string,
+    description: string,
+    inputSchemaJson: string,
+    handlerFunction: string,
+  ): string;
+
+  /**
+   * Register an MCP prompt
+   * @param name - Prompt name (1-100 characters)
+   * @param description - Prompt description (1-1000 characters)
+   * @param argumentsJson - JSON string defining prompt arguments
+   * @param handlerFunction - Name of handler function to call (1-100 characters)
+   * @returns Registration result message
+   * @example
+   * mcpRegistry.registerPrompt(
+   *   "generateCode",
+   *   "Generates code based on requirements",
+   *   JSON.stringify({
+   *     language: { type: "string", description: "Programming language" },
+   *     task: { type: "string", description: "Task description" }
+   *   }),
+   *   "handleGenerateCode"
+   * );
+   */
+  registerPrompt(
+    name: string,
+    description: string,
+    argumentsJson: string,
+    handlerFunction: string,
+  ): string;
+}
+
+// ============================================================================
 // HTTP Fetch API
 // ============================================================================
 
@@ -511,6 +709,193 @@ interface FetchResponse {
  * });
  */
 declare function fetch(url: string, options?: FetchOptions): string;
+
+// ============================================================================
+// Database API (Script-Scoped Table Management)
+// ============================================================================
+
+/**
+ * Database interface for script-scoped table management and operations.
+ * Each script can create and manage its own tables with automatic namespacing.
+ */
+interface Database {
+  /**
+   * Create a new table for this script
+   * @param tableName - Logical table name (will be prefixed with script namespace)
+   * @returns JSON string with result: {success: boolean, tableName: string, physicalName: string} or {error: string}
+   * @example
+   * const result = JSON.parse(database.createTable("users"));
+   * // {success: true, tableName: "users", physicalName: "script_myapp_users"}
+   */
+  createTable(tableName: string): string;
+
+  /**
+   * Drop a table owned by this script
+   * @param tableName - Table name to drop
+   * @returns JSON string with result: {success: boolean, tableName: string, dropped: boolean} or {error: string}
+   * @example
+   * const result = JSON.parse(database.dropTable("old_data"));
+   */
+  dropTable(tableName: string): string;
+
+  /**
+   * Add an integer column to a table
+   * @param tableName - Table name
+   * @param columnName - Column name
+   * @param nullable - Whether column can be NULL (default: true)
+   * @param defaultValue - Default value (optional)
+   * @returns JSON string with result: {success: boolean, column: string} or {error: string}
+   * @example
+   * database.addIntegerColumn("users", "age", true);
+   * database.addIntegerColumn("products", "stock", false, "0");
+   */
+  addIntegerColumn(
+    tableName: string,
+    columnName: string,
+    nullable?: boolean,
+    defaultValue?: string,
+  ): string;
+
+  /**
+   * Add a text column to a table
+   * @param tableName - Table name
+   * @param columnName - Column name
+   * @param nullable - Whether column can be NULL (default: true)
+   * @param defaultValue - Default value (optional)
+   * @returns JSON string with result: {success: boolean, column: string} or {error: string}
+   * @example
+   * database.addTextColumn("users", "email", false);
+   * database.addTextColumn("posts", "title", false, "Untitled");
+   */
+  addTextColumn(
+    tableName: string,
+    columnName: string,
+    nullable?: boolean,
+    defaultValue?: string,
+  ): string;
+
+  /**
+   * Add a boolean column to a table
+   * @param tableName - Table name
+   * @param columnName - Column name
+   * @param nullable - Whether column can be NULL (default: true)
+   * @param defaultValue - Default value (optional, "true" or "false")
+   * @returns JSON string with result: {success: boolean, column: string} or {error: string}
+   * @example
+   * database.addBooleanColumn("users", "active", false, "true");
+   */
+  addBooleanColumn(
+    tableName: string,
+    columnName: string,
+    nullable?: boolean,
+    defaultValue?: string,
+  ): string;
+
+  /**
+   * Add a timestamp column to a table
+   * @param tableName - Table name
+   * @param columnName - Column name
+   * @param nullable - Whether column can be NULL (default: true)
+   * @param defaultValue - Default value (optional, e.g., "CURRENT_TIMESTAMP")
+   * @returns JSON string with result: {success: boolean, column: string} or {error: string}
+   * @example
+   * database.addTimestampColumn("posts", "created_at", false, "CURRENT_TIMESTAMP");
+   */
+  addTimestampColumn(
+    tableName: string,
+    columnName: string,
+    nullable?: boolean,
+    defaultValue?: string,
+  ): string;
+
+  /**
+   * Add a foreign key reference column to a table
+   * @param tableName - Table name
+   * @param columnName - Column name
+   * @param referencedTableName - Referenced table name
+   * @param nullable - Whether column can be NULL (default: true)
+   * @returns JSON string with result: {success: boolean, foreignKey: string, nullable: boolean} or {error: string}
+   * @example
+   * database.addReferenceColumn("posts", "author_id", "users", false);
+   */
+  addReferenceColumn(
+    tableName: string,
+    columnName: string,
+    referencedTableName: string,
+    nullable?: boolean,
+  ): string;
+
+  /**
+   * Drop a column from a table
+   * @param tableName - Table name
+   * @param columnName - Column name
+   * @returns JSON string with result: {success: boolean, tableName: string, columnName: string, dropped: boolean} or {error: string}
+   * @example
+   * const result = JSON.parse(database.dropColumn("users", "old_field"));
+   */
+  dropColumn(tableName: string, columnName: string): string;
+
+  /**
+   * Query rows from a table with optional filters and limit
+   * @param tableName - Table name
+   * @param filters - JSON string with filter conditions (optional)
+   * @param limit - Maximum number of rows to return (optional)
+   * @returns JSON string array of matching rows or {error: string}
+   * @example
+   * const users = JSON.parse(database.query("users", JSON.stringify({active: true}), 10));
+   * const allPosts = JSON.parse(database.query("posts"));
+   */
+  query(tableName: string, filters?: string, limit?: number): string;
+
+  /**
+   * Insert a row into a table
+   * @param tableName - Table name
+   * @param data - JSON string with column values
+   * @returns JSON string with inserted row (including generated id) or {error: string}
+   * @example
+   * const result = JSON.parse(
+   *   database.insert("users", JSON.stringify({name: "John", email: "john@example.com"}))
+   * );
+   */
+  insert(tableName: string, data: string): string;
+
+  /**
+   * Update a row in a table by ID
+   * @param tableName - Table name
+   * @param id - Row ID
+   * @param data - JSON string with column values to update
+   * @returns JSON string with updated row or {error: string}
+   * @example
+   * const result = JSON.parse(
+   *   database.update("users", 1, JSON.stringify({name: "Jane"}))
+   * );
+   */
+  update(tableName: string, id: number, data: string): string;
+
+  /**
+   * Delete a row from a table by ID
+   * @param tableName - Table name
+   * @param id - Row ID
+   * @returns JSON string with result: {success: boolean, deleted: boolean} or {error: string}
+   * @example
+   * const result = JSON.parse(database.delete("users", 5));
+   */
+  delete(tableName: string, id: number): string;
+
+  /**
+   * Auto-generate GraphQL operations for a table
+   * @param tableName - Table name
+   * @param options - JSON string with options (optional): {visibility: "script_internal" | "public" | "authenticated"}
+   * @returns JSON string with result: {success: boolean, table: string, queries: string[], mutations: string[]} or {error: string}
+   * @example
+   * const result = JSON.parse(
+   *   database.generateGraphQLForTable("users", JSON.stringify({visibility: "authenticated"}))
+   * );
+   * // Automatically creates queries like: getUser, listUsers
+   * // And mutations like: createUser, updateUser, deleteUser
+   */
+  generateGraphQLForTable(tableName: string, options?: string): string;
+}
 
 // ============================================================================
 // Console API
@@ -594,8 +979,20 @@ declare var routeRegistry: RouteRegistry;
 declare var assetStorage: AssetStorage;
 declare var sharedStorage: SharedStorage;
 declare var personalStorage: PersonalStorage;
+declare var scriptStorage: ScriptStorage;
 declare var graphQLRegistry: GraphQLRegistry;
+declare var mcpRegistry: McpRegistry;
+declare var database: Database;
 declare var console: Console;
+
+/**
+ * Check database health status
+ * @returns Health status message
+ * @example
+ * const health = checkDatabaseHealth();
+ * console.log(health);
+ */
+declare function checkDatabaseHealth(): string;
 
 // ============================================================================
 // Response Builder Helpers
