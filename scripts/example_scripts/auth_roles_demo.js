@@ -1,3 +1,5 @@
+/// <reference path="../../assets/aiwebengine.d.ts" />
+
 /**
  * Authentication Roles Demo
  *

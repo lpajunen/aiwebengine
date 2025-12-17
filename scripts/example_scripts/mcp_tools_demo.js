@@ -1,3 +1,5 @@
+/// <reference path="../../assets/aiwebengine.d.ts" />
+
 // MCP (Model Context Protocol) Tools Demo
 // This script demonstrates how to register and use MCP tools
 

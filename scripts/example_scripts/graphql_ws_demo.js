@@ -1,3 +1,5 @@
+/// <reference path="../../assets/aiwebengine.d.ts" />
+
 // GraphQL WebSocket Subscription Example
 // This script demonstrates GraphQL subscriptions using WebSocket (graphql-transport-ws protocol)
 

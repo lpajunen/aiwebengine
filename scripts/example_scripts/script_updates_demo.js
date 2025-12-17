@@ -1,3 +1,5 @@
+/// <reference path="../../assets/aiwebengine.d.ts" />
+
 // GraphQL Script Updates Demo Page
 // This example demonstrates real-time script updates using GraphQL subscriptions
 

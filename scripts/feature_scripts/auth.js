@@ -1,3 +1,5 @@
+/// <reference path="../../assets/aiwebengine.d.ts" />
+
 // Insufficient Permissions Page
 // This page is displayed when a user is authenticated but doesn't have the required role
 // to access a particular resource (e.g., Editor or Administrator privileges required).

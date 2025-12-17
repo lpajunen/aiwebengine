@@ -1,3 +1,5 @@
+/// <reference path="../../assets/aiwebengine.d.ts" />
+
 // GraphQL Subscription Example with Streaming
 // This script shows how to create GraphQL subscriptions that work with Server-Sent Events
 

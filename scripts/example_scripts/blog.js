@@ -1,4 +1,4 @@
-/// <reference path="https://your-engine.com/api/types/v0.1.0/aiwebengine.d.ts" />
+/// <reference path="../../assets/aiwebengine.d.ts" />
 
 // Example blog script demonstrating aiwebengine capabilities
 // This script registers a /blog endpoint that serves a sample blog post

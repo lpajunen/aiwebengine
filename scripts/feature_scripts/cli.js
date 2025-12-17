@@ -1,3 +1,5 @@
+/// <reference path="../../assets/aiwebengine.d.ts" />
+
 // asset management script: demonstrates asset CRUD operations
 function asset_handler(context) {
   const req = context.request || {};

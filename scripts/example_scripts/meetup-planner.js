@@ -1,3 +1,5 @@
+/// <reference path="../../assets/aiwebengine.d.ts" />
+
 // Meetup Planner Example Script
 // Demonstrates creating and managing meetups with public sharing and member responses
 

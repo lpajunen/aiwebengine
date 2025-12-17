@@ -1,3 +1,5 @@
+/// <reference path="../../assets/aiwebengine.d.ts" />
+
 // Markdown Blog Example
 // Demonstrates using convert.markdown_to_html() to render blog posts
 

@@ -1,4 +1,4 @@
-/// <reference path="https://your-engine.com/api/types/v0.1.0/aiwebengine.d.ts" />
+/// <reference path="../../assets/aiwebengine.d.ts" />
 
 // Example feedback script demonstrating form handling
 // This script registers a /feedback endpoint with GET (form) and POST (submission) handlers

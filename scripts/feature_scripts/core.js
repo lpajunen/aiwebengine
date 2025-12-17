@@ -1,3 +1,5 @@
+/// <reference path="../../assets/aiwebengine.d.ts" />
+
 function getRequest(context) {
   return (context && context.request) || {};
 }
