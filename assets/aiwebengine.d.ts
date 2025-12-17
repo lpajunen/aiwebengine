@@ -1021,6 +1021,71 @@ interface Console {
 }
 
 // ============================================================================
+// User Management API
+// ============================================================================
+
+/**
+ * User object returned from user management functions
+ */
+interface User {
+  /** User ID */
+  id: string;
+
+  /** User email */
+  email: string;
+
+  /** User display name */
+  name: string;
+
+  /** Array of role names (e.g., ["Authenticated", "Editor"]) */
+  roles: string[];
+
+  /** Array of OAuth provider names (e.g., ["google", "microsoft"]) */
+  providers: string[];
+
+  /** Account creation timestamp (SystemTime debug format) */
+  created_at: string;
+}
+
+/**
+ * User storage API for managing users and roles (admin-only)
+ */
+interface UserStorage {
+  /**
+   * List all users (requires admin privileges)
+   * @returns JSON string array of user objects
+   * @throws If user doesn't have administrator privileges
+   * @example
+   * const usersJson = userStorage.listUsers();
+   * const users = JSON.parse(usersJson);
+   * users.forEach(user => {
+   *   console.log(`${user.email}: ${user.roles.join(', ')}`);
+   * });
+   */
+  listUsers(): string;
+
+  /**
+   * Add a role to a user (requires admin privileges)
+   * @param userId - User ID
+   * @param role - Role name ("Editor", "Administrator", or "Authenticated")
+   * @throws If user doesn't have administrator privileges or role is invalid
+   * @example
+   * userStorage.addUserRole("user123", "Editor");
+   */
+  addUserRole(userId: string, role: string): void;
+
+  /**
+   * Remove a role from a user (requires admin privileges)
+   * @param userId - User ID
+   * @param role - Role name ("Editor" or "Administrator", cannot remove "Authenticated")
+   * @throws If user doesn't have administrator privileges, role is invalid, or attempting to remove "Authenticated" role
+   * @example
+   * userStorage.removeUserRole("user123", "Editor");
+   */
+  removeUserRole(userId: string, role: string): void;
+}
+
+// ============================================================================
 // Global Objects
 // ============================================================================
 
@@ -1033,6 +1098,7 @@ declare var graphQLRegistry: GraphQLRegistry;
 declare var mcpRegistry: McpRegistry;
 declare var database: Database;
 declare var console: Console;
+declare var userStorage: UserStorage;
 
 /**
  * Check database health status

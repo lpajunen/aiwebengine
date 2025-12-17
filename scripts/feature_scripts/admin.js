@@ -51,11 +51,11 @@ function handleManagerUI(context) {
   const request = getRequest(context);
   // Check if user is authenticated and is an administrator
   if (!request.auth || !request.auth.isAuthenticated) {
-    return Response.redirect("/auth/login?redirect=/engine/admin");
+    return ResponseBuilder.redirect("/auth/login?redirect=/engine/admin");
   }
 
   if (!request.auth.isAdmin) {
-    return Response.error(
+    return ResponseBuilder.error(
       403,
       "Access denied. Administrator privileges required.",
     );
@@ -442,7 +442,7 @@ function handleManagerUI(context) {
 </body>
 </html>`;
 
-  return Response.html(html);
+  return ResponseBuilder.html(html);
 }
 
 // API endpoint to list all users
@@ -450,11 +450,11 @@ function handleListUsers(context) {
   const request = getRequest(context);
   // Check if user is authenticated and is an administrator
   if (!request.auth || !request.auth.isAuthenticated) {
-    return Response.error(401, "Authentication required");
+    return ResponseBuilder.error(401, "Authentication required");
   }
 
   if (!request.auth.isAdmin) {
-    return Response.error(
+    return ResponseBuilder.error(
       403,
       "Access denied. Administrator privileges required.",
     );
@@ -465,12 +465,12 @@ function handleListUsers(context) {
     const usersJson = userStorage.listUsers();
     const users = JSON.parse(usersJson);
 
-    return Response.json({
+    return ResponseBuilder.json({
       users: users,
       total: users.length,
     });
   } catch (error) {
-    return Response.error(500, "Failed to list users");
+    return ResponseBuilder.error(500, "Failed to list users");
   }
 }
 
@@ -479,11 +479,11 @@ function handleUpdateUserRole(context) {
   const request = getRequest(context);
   // Check if user is authenticated and is an administrator
   if (!request.auth || !request.auth.isAuthenticated) {
-    return Response.error(401, "Authentication required");
+    return ResponseBuilder.error(401, "Authentication required");
   }
 
   if (!request.auth.isAdmin) {
-    return Response.error(
+    return ResponseBuilder.error(
       403,
       "Access denied. Administrator privileges required.",
     );
@@ -495,22 +495,28 @@ function handleUpdateUserRole(context) {
     try {
       body = JSON.parse(request.body);
     } catch (e) {
-      return Response.error(400, "Invalid JSON in request body");
+      return ResponseBuilder.error(400, "Invalid JSON in request body");
     }
 
     const { role, action } = body;
 
     // Validate parameters
     if (!role || !action) {
-      return Response.error(400, "Missing required fields: role, action");
+      return ResponseBuilder.error(
+        400,
+        "Missing required fields: role, action",
+      );
     }
 
     if (!["add", "remove"].includes(action)) {
-      return Response.error(400, 'Invalid action. Must be "add" or "remove"');
+      return ResponseBuilder.error(
+        400,
+        'Invalid action. Must be "add" or "remove"',
+      );
     }
 
     if (!["Editor", "Administrator"].includes(role)) {
-      return Response.error(
+      return ResponseBuilder.error(
         400,
         'Invalid role. Must be "Editor" or "Administrator"',
       );
@@ -521,7 +527,7 @@ function handleUpdateUserRole(context) {
     const userId = pathParts[pathParts.indexOf("users") + 1];
 
     if (!userId) {
-      return Response.error(400, "User ID is required");
+      return ResponseBuilder.error(400, "User ID is required");
     }
 
     // Call Rust function to update role
@@ -531,13 +537,13 @@ function handleUpdateUserRole(context) {
       userStorage.removeUserRole(userId, role);
     }
 
-    return Response.json({
+    return ResponseBuilder.json({
       success: true,
       userId: userId,
       role: role,
       action: action,
     });
   } catch (error) {
-    return Response.error(500, "Failed to update user role");
+    return ResponseBuilder.error(500, "Failed to update user role");
   }
 }

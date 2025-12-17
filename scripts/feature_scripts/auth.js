@@ -15,13 +15,10 @@ function serveInsufficientPermissions(context) {
   let isAuthenticated = false;
 
   try {
-    if (typeof auth !== "undefined") {
-      const user = auth.getUser();
-      if (user) {
-        isAuthenticated = true;
-        userName = user.name || user.email || "User";
-        userEmail = user.email || "";
-      }
+    if (req.auth && req.auth.isAuthenticated) {
+      isAuthenticated = true;
+      userName = req.auth.userName || req.auth.userEmail || "User";
+      userEmail = req.auth.userEmail || "";
     }
   } catch (error) {
     console.error("Could not get user info: " + error.message);
@@ -264,7 +261,7 @@ function serveInsufficientPermissions(context) {
     </div>
 </body>
 </html>`;
-  return Response.html(html, 403);
+  return ResponseBuilder.html(html, 403);
 }
 
 // Initialization function - called when script is loaded or updated
