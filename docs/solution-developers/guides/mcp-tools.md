@@ -504,7 +504,7 @@ function searchDataHandler(context) {
   const data = JSON.parse(response.body);
 
   // Use sharedStorage to cache results
-  sharedStorage.set(`search:${query}`, response.body);
+  sharedStorage.setItem(`search:${query}`, response.body);
 
   // Log the search
   console.log(`Search performed: ${query}`);

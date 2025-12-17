@@ -1552,7 +1552,7 @@ return {
 
 Convenient helper functions for creating common HTTP responses. These functions return properly formatted response objects that can be returned directly from handlers.
 
-### Response.json(data, status)
+### ResponseBuilder.json(data, status)
 
 Creates a JSON response with automatic content-type header.
 
@@ -1568,15 +1568,15 @@ Creates a JSON response with automatic content-type header.
 ```javascript
 function apiHandler(context) {
   const data = { users: ["Alice", "Bob"], count: 2 };
-  return Response.json(data);
+  return ResponseBuilder.json(data);
 }
 
 function errorHandler(context) {
-  return Response.json({ error: "Not found" }, 404);
+  return ResponseBuilder.json({ error: "Not found" }, 404);
 }
 ```
 
-### Response.text(text, status)
+### ResponseBuilder.text(text, status)
 
 Creates a plain text response.
 
@@ -1591,11 +1591,11 @@ Creates a plain text response.
 
 ```javascript
 function helloHandler(context) {
-  return Response.text("Hello, World!");
+  return ResponseBuilder.text("Hello, World!");
 }
 ```
 
-### Response.html(html, status)
+### ResponseBuilder.html(html, status)
 
 Creates an HTML response.
 
@@ -1619,11 +1619,11 @@ function pageHandler(context) {
     </body>
     </html>
   `;
-  return Response.html(html);
+  return ResponseBuilder.html(html);
 }
 ```
 
-### Response.error(status, message)
+### ResponseBuilder.error(status, message)
 
 Creates a JSON error response.
 
@@ -1638,11 +1638,11 @@ Creates a JSON error response.
 
 ```javascript
 function notFoundHandler(context) {
-  return Response.error(404, "Resource not found");
+  return ResponseBuilder.error(404, "Resource not found");
 }
 ```
 
-### Response.noContent()
+### ResponseBuilder.noContent()
 
 Creates a 204 No Content response.
 
@@ -1654,11 +1654,11 @@ Creates a 204 No Content response.
 function deleteHandler(context) {
   // Delete resource
   deleteResource(context.request.params.id);
-  return Response.noContent();
+  return ResponseBuilder.noContent();
 }
 ```
 
-### Response.redirect(url, status)
+### ResponseBuilder.redirect(url, status)
 
 Creates a redirect response.
 
@@ -1673,7 +1673,7 @@ Creates a redirect response.
 
 ```javascript
 function redirectHandler(context) {
-  return Response.redirect("/new-location", 301);
+  return ResponseBuilder.redirect("/new-location", 301);
 }
 ```
 
@@ -1700,9 +1700,9 @@ function searchHandler(context) {
   try {
     const query = requireQueryParam("q");
     const results = search(query);
-    return Response.json({ results });
+    return ResponseBuilder.json({ results });
   } catch (error) {
-    return Response.error(400, error.message);
+    return ResponseBuilder.error(400, error.message);
   }
 }
 ```
@@ -1726,9 +1726,9 @@ function userHandler(context) {
   try {
     const userId = requirePathParam("id");
     const user = getUser(userId);
-    return Response.json({ user });
+    return ResponseBuilder.json({ user });
   } catch (error) {
-    return Response.error(400, error.message);
+    return ResponseBuilder.error(400, error.message);
   }
 }
 
@@ -1761,9 +1761,9 @@ function createUserHandler(context) {
     const email = validateString(req.form.email, 5, 255);
 
     const user = createUser(name, email);
-    return Response.json({ user }, 201);
+    return ResponseBuilder.json({ user }, 201);
   } catch (error) {
-    return Response.error(400, error.message);
+    return ResponseBuilder.error(400, error.message);
   }
 }
 ```
@@ -1791,9 +1791,9 @@ function updateScoreHandler(context) {
   try {
     const score = validateNumber(req.form.score, 0, 100);
     updateScore(req.params.userId, score);
-    return Response.json({ success: true });
+    return ResponseBuilder.json({ success: true });
   } catch (error) {
-    return Response.error(400, error.message);
+    return ResponseBuilder.error(400, error.message);
   }
 }
 ```
@@ -1817,7 +1817,7 @@ function listHandler(context) {
   const limit = optionalQueryParam("limit", "10");
 
   const results = getItems(parseInt(page), parseInt(limit));
-  return Response.json({ results });
+  return ResponseBuilder.json({ results });
 }
 ```
 
@@ -1855,6 +1855,7 @@ Basic console logging (output goes to server logs).
 - `console.debug(message)`: Log a debug message (level: DEBUG)
 - `console.listLogs()`: Retrieve all log entries as a JSON string
 - `console.listLogsForUri(uri)`: Retrieve log entries for a specific script URI as a JSON string
+- `console.pruneLogs()`: Remove old log entries to free up storage space
 
 **Example:**
 
@@ -2192,9 +2193,9 @@ function createUser(context) {
   const { username, email } = req.form;
 
   // Store user in database
-  const userId = sharedStorage.get("nextUserId") || "1";
-  sharedStorage.set("user:" + userId, JSON.stringify({ username, email }));
-  sharedStorage.set("nextUserId", String(parseInt(userId) + 1));
+  const userId = sharedStorage.getItem("nextUserId") || "1";
+  sharedStorage.setItem("user:" + userId, JSON.stringify({ username, email }));
+  sharedStorage.setItem("nextUserId", String(parseInt(userId) + 1));
 
   // Broadcast user creation event
   dispatcher.sendMessage(
@@ -2232,8 +2233,10 @@ function onUserCreated(context) {
   );
 
   // Update metrics
-  const totalUsers = parseInt(sharedStorage.get("metrics:totalUsers") || "0");
-  sharedStorage.set("metrics:totalUsers", String(totalUsers + 1));
+  const totalUsers = parseInt(
+    sharedStorage.getItem("metrics:totalUsers") || "0",
+  );
+  sharedStorage.setItem("metrics:totalUsers", String(totalUsers + 1));
 }
 
 function init(context) {

@@ -571,23 +571,23 @@ aiwebengine provides convenient helper functions for creating common response ty
 
 ```javascript
 // JSON responses
-return Response.json({ users: ["Alice", "Bob"] });
-return Response.json({ error: "Not found" }, 404);
+return ResponseBuilder.json({ users: ["Alice", "Bob"] });
+return ResponseBuilder.json({ error: "Not found" }, 404);
 
 // Text responses
-return Response.text("Hello, World!");
+return ResponseBuilder.text("Hello, World!");
 
 // HTML responses
-return Response.html("<h1>Welcome</h1>");
+return ResponseBuilder.html("<h1>Welcome</h1>");
 
 // Error responses
-return Response.error(400, "Invalid input");
+return ResponseBuilder.error(400, "Invalid input");
 
 // No content (204)
-return Response.noContent();
+return ResponseBuilder.noContent();
 
 // Redirects
-return Response.redirect("/new-location", 301);
+return ResponseBuilder.redirect("/new-location", 301);
 ```
 
 ### Response Helper
@@ -1019,13 +1019,13 @@ Best for: Configuration, simple data sharing, caching
 // Writer script: config-manager.js
 function updateConfigHandler(context) {
   const config = context.request.form;
-  sharedStorage.set("app:config", JSON.stringify(config));
+  sharedStorage.setItem("app:config", JSON.stringify(config));
   return jsonResponse(200, { updated: true });
 }
 
 // Reader script: api-service.js
 function apiHandler(context) {
-  const configStr = sharedStorage.get("app:config");
+  const configStr = sharedStorage.getItem("app:config");
   const config = configStr ? JSON.parse(configStr) : {};
 
   // Use config settings

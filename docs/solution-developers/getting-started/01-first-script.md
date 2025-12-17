@@ -463,8 +463,8 @@ function helloHandler(context) {
   // IDE now provides autocomplete for req.query, req.method, etc.
   const name = req.query.name || "World";
 
-  // IDE knows about Response.text() and its parameters
-  return Response.text(`Hello, ${name}!`);
+  // IDE knows about ResponseBuilder.text() and its parameters
+  return ResponseBuilder.text(`Hello, ${name}!`);
 }
 
 function init() {

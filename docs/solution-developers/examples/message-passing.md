@@ -48,7 +48,7 @@ function registerUser(context) {
   };
 
   // Store in database
-  sharedStorage.set(`user:${userId}`, JSON.stringify(user));
+  sharedStorage.setItem(`user:${userId}`, JSON.stringify(user));
 
   // Broadcast user creation event
   const eventData = JSON.stringify({
@@ -73,8 +73,8 @@ function registerUser(context) {
 }
 
 function generateUserId() {
-  const counter = parseInt(sharedStorage.get("userIdCounter") || "1000");
-  sharedStorage.set("userIdCounter", String(counter + 1));
+  const counter = parseInt(sharedStorage.getItem("userIdCounter") || "1000");
+  sharedStorage.setItem("userIdCounter", String(counter + 1));
   return `user_${counter}`;
 }
 
@@ -133,12 +133,14 @@ function trackUserRegistration(context) {
   // Update registration metrics
   const today = new Date().toISOString().split("T")[0];
   const key = `metrics:registrations:${today}`;
-  const count = parseInt(sharedStorage.get(key) || "0");
-  sharedStorage.set(key, String(count + 1));
+  const count = parseInt(sharedStorage.getItem(key) || "0");
+  sharedStorage.setItem(key, String(count + 1));
 
   // Track total users
-  const totalUsers = parseInt(sharedStorage.get("metrics:totalUsers") || "0");
-  sharedStorage.set("metrics:totalUsers", String(totalUsers + 1));
+  const totalUsers = parseInt(
+    sharedStorage.getItem("metrics:totalUsers") || "0",
+  );
+  sharedStorage.setItem("metrics:totalUsers", String(totalUsers + 1));
 
   console.log(
     `Analytics: User registration tracked. Total users: ${totalUsers + 1}`,
@@ -175,7 +177,7 @@ function createVerificationToken(context) {
   const expiry = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(); // 24 hours
 
   // Store token
-  sharedStorage.set(
+  sharedStorage.setItem(
     `verification:${token}`,
     JSON.stringify({
       userId: userData.userId,
@@ -237,7 +239,7 @@ function sendChatMessage(context) {
   };
 
   // Store message
-  sharedStorage.set(
+  sharedStorage.setItem(
     `message:${messageData.messageId}`,
     JSON.stringify(messageData),
   );
@@ -345,15 +347,15 @@ function trackChatActivity(context) {
   const messageData = context.messageData;
 
   // Update last activity timestamp
-  sharedStorage.set(
+  sharedStorage.setItem(
     `activity:user:${messageData.userId}`,
     new Date().toISOString(),
   );
 
   // Update room activity count
   const roomKey = `activity:room:${messageData.roomId}:count`;
-  const count = parseInt(sharedStorage.get(roomKey) || "0");
-  sharedStorage.set(roomKey, String(count + 1));
+  const count = parseInt(sharedStorage.getItem(roomKey) || "0");
+  sharedStorage.setItem(roomKey, String(count + 1));
 
   // Broadcast presence update
   dispatcher.sendMessage(
@@ -404,7 +406,7 @@ function createPost(context) {
   };
 
   // Store post
-  sharedStorage.set(`post:${post.id}`, JSON.stringify(post));
+  sharedStorage.setItem(`post:${post.id}`, JSON.stringify(post));
 
   // Dispatch creation event
   dispatcher.sendMessage("content.created", JSON.stringify(post));
@@ -420,7 +422,7 @@ function publishPost(context) {
   const req = context.request;
   const postId = req.query.id;
 
-  const postData = sharedStorage.get(`post:${postId}`);
+  const postData = sharedStorage.getItem(`post:${postId}`);
   if (!postData) {
     return { status: 404, body: "Post not found" };
   }
@@ -429,7 +431,7 @@ function publishPost(context) {
   post.status = "published";
   post.publishedAt = new Date().toISOString();
 
-  sharedStorage.set(`post:${postId}`, JSON.stringify(post));
+  sharedStorage.setItem(`post:${postId}`, JSON.stringify(post));
 
   // Dispatch publish event
   dispatcher.sendMessage("content.published", JSON.stringify(post));
@@ -473,7 +475,7 @@ function indexContent(context) {
     keywords: extractKeywords(post.title + " " + post.content),
   };
 
-  sharedStorage.set(`search:index:${post.id}`, JSON.stringify(indexEntry));
+  sharedStorage.setItem(`search:index:${post.id}`, JSON.stringify(indexEntry));
 
   console.log(`Indexed content: ${post.title} (${post.id})`);
 }
@@ -505,7 +507,7 @@ function notifySubscribers(context) {
 
   // Get subscribers for this category
   const subscribersKey = `subscribers:category:${post.category}`;
-  const subscribersData = sharedStorage.get(subscribersKey) || "[]";
+  const subscribersData = sharedStorage.getItem(subscribersKey) || "[]";
   const subscribers = JSON.parse(subscribersData);
 
   console.log(
