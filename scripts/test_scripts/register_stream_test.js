@@ -4,7 +4,7 @@
 function stream_test_handler(context) {
   const req = context.request || {};
   console.log("stream_test_handler called");
-  return Response.json({
+  return ResponseBuilder.json({
     message: "Stream test endpoint",
     path: req.path,
     method: req.method,

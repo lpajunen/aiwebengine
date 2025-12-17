@@ -11,7 +11,7 @@
  * @example
  * // Minimal script structure
  * function myHandler(context) {
- *   return Response.json({ message: "Hello" });
+ *   return ResponseBuilder.json({ message: "Hello" });
  * }
  *
  * function init() {
@@ -98,9 +98,6 @@ interface AuthContext {
 
   /** Whether user has admin privileges */
   isAdmin: boolean;
-
-  /** Whether user has premium status */
-  isPremium: boolean;
 }
 
 /**
@@ -606,16 +603,15 @@ declare var console: Console;
 
 /**
  * Response builder utility object with methods for creating HTTP responses.
- * Note: In aiwebengine environment, this replaces the browser's Response API.
  */
-declare var Response: {
+declare var ResponseBuilder: {
   /**
    * Create a JSON response
    * @param data - Data to serialize as JSON
    * @param status - HTTP status code (default: 200)
    * @returns HTTP response object
    * @example
-   * return Response.json({ message: "Success", data: results });
+   * return ResponseBuilder.json({ message: "Success", data: results });
    */
   json(data: any, status?: number): HttpResponse;
 
@@ -625,7 +621,7 @@ declare var Response: {
    * @param status - HTTP status code (default: 200)
    * @returns HTTP response object
    * @example
-   * return Response.text("Hello, World!");
+   * return ResponseBuilder.text("Hello, World!");
    */
   text(text: string, status?: number): HttpResponse;
 
@@ -635,7 +631,7 @@ declare var Response: {
    * @param status - HTTP status code (default: 200)
    * @returns HTTP response object
    * @example
-   * return Response.html("<h1>Welcome</h1>");
+   * return ResponseBuilder.html("<h1>Welcome</h1>");
    */
   html(html: string, status?: number): HttpResponse;
 
@@ -645,7 +641,7 @@ declare var Response: {
    * @param message - Error message
    * @returns HTTP response object
    * @example
-   * return Response.error(404, "Not found");
+   * return ResponseBuilder.error(404, "Not found");
    */
   error(status: number, message: string): HttpResponse;
 
@@ -653,7 +649,7 @@ declare var Response: {
    * Create a 204 No Content response
    * @returns HTTP response object
    * @example
-   * return Response.noContent();
+   * return ResponseBuilder.noContent();
    */
   noContent(): HttpResponse;
 
@@ -662,7 +658,7 @@ declare var Response: {
    * @param location - Redirect URL
    * @returns HTTP response object
    * @example
-   * return Response.redirect("/login");
+   * return ResponseBuilder.redirect("/login");
    */
   redirect(location: string): HttpResponse;
 };

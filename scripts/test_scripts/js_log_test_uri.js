@@ -10,12 +10,12 @@ function list_logs_for_uri_handler(context) {
     const other_logs = console.listLogsForUri(
       "https://example.com/other-script",
     );
-    return Response.json({
+    return ResponseBuilder.json({
       current: current_logs,
       other: other_logs,
     });
   } catch (e) {
-    return Response.error(500, String(e));
+    return ResponseBuilder.error(500, String(e));
   }
 }
 

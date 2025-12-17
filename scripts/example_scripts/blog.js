@@ -177,7 +177,7 @@ function blog_handler(context) {
             <div class="code-example">
 // Register a simple hello world endpoint
 function hello_handler(context) {
-    return Response.text("Hello, aiwebengine!");
+    return ResponseBuilder.text("Hello, aiwebengine!");
 }
 
 routeRegistry.registerRoute('/hello', 'hello_handler', 'GET');
@@ -202,7 +202,7 @@ routeRegistry.registerRoute('/hello', 'hello_handler', 'GET');
 </body>
 </html>`;
 
-  return Response.html(html);
+  return ResponseBuilder.html(html);
 }
 
 // Initialization function - called when script is loaded or updated

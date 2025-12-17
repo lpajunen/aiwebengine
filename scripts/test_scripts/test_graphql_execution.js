@@ -44,10 +44,10 @@ function testGraphQLHandler(context) {
       query2: JSON.parse(result2),
     };
 
-    return Response.json(response);
+    return ResponseBuilder.json(response);
   } catch (error) {
     console.log("Error in testGraphQLHandler: " + error.message);
-    return Response.json(
+    return ResponseBuilder.json(
       {
         error: error.message,
         stack: error.stack,

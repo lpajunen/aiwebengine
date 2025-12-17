@@ -18,7 +18,7 @@ function testEditorAPI(context) {
 
   result += "Basic test completed.";
 
-  return Response.text(result);
+  return ResponseBuilder.text(result);
 }
 
 // Initialization function

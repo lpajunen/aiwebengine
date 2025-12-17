@@ -15,9 +15,9 @@ function health_test_handler(context) {
       },
     };
 
-    return Response.json(healthResponse);
+    return ResponseBuilder.json(healthResponse);
   } catch (error) {
-    return Response.json(
+    return ResponseBuilder.json(
       {
         status: "error",
         error: error.message,

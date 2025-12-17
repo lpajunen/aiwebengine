@@ -2,15 +2,15 @@
 
 function js_log_test_handler(context) {
   console.log("js-log-test-called");
-  return Response.text("logged");
+  return ResponseBuilder.text("logged");
 }
 
 function js_list_handler(context) {
   try {
     const logs = console.listLogs();
-    return Response.json(logs);
+    return ResponseBuilder.json(logs);
   } catch (e) {
-    return Response.error(500, String(e));
+    return ResponseBuilder.error(500, String(e));
   }
 }
 

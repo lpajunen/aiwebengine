@@ -475,10 +475,10 @@ fn setup_secure_global_functions(
 /// - Response.noContent() - 204 No Content
 /// - Response.redirect(url) - 302 redirect
 fn setup_response_builders(ctx: &rquickjs::Ctx<'_>) -> Result<(), rquickjs::Error> {
-    // Create the Response object with builder methods using JavaScript
+    // Create the ResponseBuilder object with builder methods using JavaScript
     ctx.eval::<(), _>(
         r#"
-        globalThis.Response = {
+        globalThis.ResponseBuilder = {
             json: function(data, status = 200) {
                 const body = JSON.stringify(data);
                 return {
@@ -2963,43 +2963,43 @@ function hello() {
     fn test_response_builders() {
         let script_content = r#"
             function testHandler(context) {
-                // Test Response.json
-                const jsonResponse = Response.json({ message: "Hello World", code: 200 });
+                // Test ResponseBuilder.json
+                const jsonResponse = ResponseBuilder.json({ message: "Hello World", code: 200 });
                 if (jsonResponse.status !== 200 || jsonResponse.contentType !== "application/json") {
                     throw new Error("JSON response failed");
                 }
 
-                // Test Response.text
-                const textResponse = Response.text("Plain text response", 201);
+                // Test ResponseBuilder.text
+                const textResponse = ResponseBuilder.text("Plain text response", 201);
                 if (textResponse.status !== 201 || textResponse.contentType !== "text/plain; charset=UTF-8") {
                     throw new Error("Text response failed");
                 }
 
-                // Test Response.html
-                const htmlResponse = Response.html("<h1>Hello</h1>", 200);
+                // Test ResponseBuilder.html
+                const htmlResponse = ResponseBuilder.html("<h1>Hello</h1>", 200);
                 if (htmlResponse.status !== 200 || htmlResponse.contentType !== "text/html; charset=UTF-8") {
                     throw new Error("HTML response failed");
                 }
 
-                // Test Response.error
-                const errorResponse = Response.error(400, "Bad Request");
+                // Test ResponseBuilder.error
+                const errorResponse = ResponseBuilder.error(400, "Bad Request");
                 if (errorResponse.status !== 400 || !errorResponse.body.includes("Bad Request")) {
                     throw new Error("Error response failed");
                 }
 
-                // Test Response.noContent
-                const noContentResponse = Response.noContent();
+                // Test ResponseBuilder.noContent
+                const noContentResponse = ResponseBuilder.noContent();
                 if (noContentResponse.status !== 204 || noContentResponse.body !== "") {
                     throw new Error("No content response failed");
                 }
 
-                // Test Response.redirect
-                const redirectResponse = Response.redirect("https://example.com", 302);
+                // Test ResponseBuilder.redirect
+                const redirectResponse = ResponseBuilder.redirect("https://example.com", 302);
                 if (redirectResponse.status !== 302 || !redirectResponse.headers.Location) {
                     throw new Error("Redirect response failed");
                 }
 
-                return Response.json({ success: true });
+                return ResponseBuilder.json({ success: true });
             }
         "#;
 
@@ -3020,6 +3020,9 @@ function hello() {
         };
 
         let result = execute_script_for_request_secure(params);
+        if let Err(ref e) = result {
+            eprintln!("Test error: {}", e);
+        }
         assert!(result.is_ok(), "Response builder test should succeed");
 
         let response = result.unwrap();
@@ -3047,7 +3050,7 @@ function hello() {
                 const param1 = context.request.query.param1 || "default";
                 const param2 = context.request.query.param2 || "default2";
 
-                return Response.json({
+                return ResponseBuilder.json({
                     param1: param1,
                     param2: param2,
                     queryType: typeof context.request.query
@@ -3100,7 +3103,7 @@ function hello() {
                     throw new Error("Expected empty query object, got: " + keys.length + " keys");
                 }
 
-                return Response.json({ queryEmpty: true });
+                return ResponseBuilder.json({ queryEmpty: true });
             }
         "#;
 
@@ -3146,7 +3149,7 @@ function hello() {
                     throw new Error("Path parameters not extracted correctly");
                 }
 
-                return Response.json({
+                return ResponseBuilder.json({
                     userId: userId,
                     postId: postId,
                     paramsType: typeof context.request.params
@@ -3235,7 +3238,7 @@ function hello() {
                     const optionalExisting = optionalQueryParam("existing", "default");
                     const optionalMissing = optionalQueryParam("missing", "default");
 
-                    return Response.json({
+                    return ResponseBuilder.json({
                         success: true,
                         existingParam: existingParam,
                         userId: userId,
@@ -3245,7 +3248,7 @@ function hello() {
                         optionalMissing: optionalMissing
                     });
                 } catch (e) {
-                    return Response.error(400, e.message);
+                    return ResponseBuilder.error(400, e.message);
                 }
             }
         "#;
