@@ -4,7 +4,48 @@
  *
  * Add this reference to your scripts for IDE autocomplete and type checking:
  * /// <reference path="https://your-engine.com/api/types/v0.1.0/aiwebengine.d.ts" />
+ *
+ * IMPORTANT: Every script MUST export an init() function that registers routes,
+ * GraphQL resolvers, or other initialization logic.
+ *
+ * @example
+ * // Minimal script structure
+ * function myHandler(context) {
+ *   return Response.json({ message: "Hello" });
+ * }
+ *
+ * function init() {
+ *   routeRegistry.registerRoute("/api/hello", "myHandler", "GET");
+ * }
  */
+
+// ============================================================================
+// Script Initialization
+// ============================================================================
+
+/**
+ * Initialization function that must be exported by every script.
+ * This function is called when the script is loaded and should register
+ * routes, GraphQL resolvers, or perform other setup tasks.
+ *
+ * @param context - Handler context (optional, may not be provided during init)
+ * @example
+ * function init() {
+ *   // Register HTTP routes
+ *   routeRegistry.registerRoute("/api/users", "listUsers", "GET");
+ *   routeRegistry.registerRoute("/api/users/:id", "getUser", "GET");
+ *
+ *   // Register GraphQL queries
+ *   graphQLRegistry.registerQuery("getUser", "getUser(id: ID!): User", "getUserResolver");
+ *
+ *   // Register streams
+ *   routeRegistry.registerStreamRoute("/events/notifications");
+ *
+ *   // Log initialization
+ *   console.log("Script initialized successfully");
+ * }
+ */
+declare function init(context?: HandlerContext): void;
 
 // ============================================================================
 // HTTP Request and Response Types
