@@ -1,3 +1,5 @@
+/// <reference path="../../assets/aiwebengine.d.ts" />
+
 // Test script demonstrating the new asset registration system
 // This script shows how to register assets to public HTTP paths
 

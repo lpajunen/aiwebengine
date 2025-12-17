@@ -1,3 +1,5 @@
+/// <reference path="../assets/aiwebengine.d.ts" />
+
 /**
  * Test Script for Database Schema Management API
  *

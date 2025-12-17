@@ -1,3 +1,5 @@
+/// <reference path="../../assets/aiwebengine.d.ts" />
+
 // Test script for personalStorage functionality
 routeRegistry.registerRoute(
   "/test-personal-storage",

@@ -1,3 +1,5 @@
+/// <reference path="../../assets/aiwebengine.d.ts" />
+
 // Test script for executeGraphQL function
 // Demonstrates how to execute GraphQL queries from JavaScript
 

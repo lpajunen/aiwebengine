@@ -1,3 +1,5 @@
+/// <reference path="../../assets/aiwebengine.d.ts" />
+
 // Test script for selective broadcasting functionality
 // NEW SEMANTICS: Customization functions return connection filter criteria
 // Message metadata is matched against connection criteria for delivery

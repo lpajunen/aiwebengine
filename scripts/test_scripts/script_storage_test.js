@@ -1,3 +1,5 @@
+/// <reference path="../../assets/aiwebengine.d.ts" />
+
 // Test script for sharedStorage functionality
 routeRegistry.registerRoute("/test-storage", "testStorageHandler", "GET");
 

@@ -1,3 +1,5 @@
+/// <reference path="../../assets/aiwebengine.d.ts" />
+
 // JS test script: tests console.listLogsForUri function
 
 function list_logs_for_uri_handler(context) {

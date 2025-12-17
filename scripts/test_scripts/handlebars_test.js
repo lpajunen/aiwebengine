@@ -1,3 +1,5 @@
+/// <reference path="../../assets/aiwebengine.d.ts" />
+
 // Test script for the new render_handlebars_template function
 // This script demonstrates the usage of convert.render_handlebars_template
 

@@ -1,3 +1,5 @@
+/// <reference path="../../assets/aiwebengine.d.ts" />
+
 // Test script for form data handling
 function form_handler(context) {
   const req = context.request || {};

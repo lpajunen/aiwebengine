@@ -1,3 +1,5 @@
+/// <reference path="../../assets/aiwebengine.d.ts" />
+
 // Test endpoint for editor API
 function testEditorAPI(context) {
   let result = "Testing editor API endpoints...\n\n";

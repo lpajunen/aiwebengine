@@ -1,3 +1,5 @@
+/// <reference path="../../assets/aiwebengine.d.ts" />
+
 // Minimal test to isolate routeRegistry.sendStreamMessage issue
 console.log("Starting minimal routeRegistry.sendStreamMessage test");
 

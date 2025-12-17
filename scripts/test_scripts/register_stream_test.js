@@ -1,3 +1,5 @@
+/// <reference path="../../assets/aiwebengine.d.ts" />
+
 // Test script for routeRegistry.registerStreamRoute functionality
 // This script demonstrates the new streaming API
 

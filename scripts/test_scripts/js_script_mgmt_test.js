@@ -1,3 +1,5 @@
+/// <reference path="../../assets/aiwebengine.d.ts" />
+
 // JS script for testing script-management host functions
 
 // rely on bootstrap-provided register/handle which supports handler name strings

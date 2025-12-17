@@ -1,3 +1,5 @@
+/// <reference path="../../assets/aiwebengine.d.ts" />
+
 // Test script for the aiwebengine editor
 // This script tests the editor API endpoints
 

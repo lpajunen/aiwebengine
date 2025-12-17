@@ -1,3 +1,5 @@
+/// <reference path="../../assets/aiwebengine.d.ts" />
+
 // Test GraphQL registrations
 graphQLRegistry.registerQuery(
   "hello",

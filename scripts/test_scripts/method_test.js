@@ -1,3 +1,5 @@
+/// <reference path="../../assets/aiwebengine.d.ts" />
+
 // Test script demonstrating different HTTP methods
 function get_handler(context) {
   const req = context.request || {};

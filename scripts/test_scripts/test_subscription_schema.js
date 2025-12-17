@@ -1,3 +1,5 @@
+/// <reference path="../../assets/aiwebengine.d.ts" />
+
 // Test script to verify GraphQL subscription schema configuration
 async function testSubscriptionSchema() {
   const baseUrl = process.env.BASE_URL || "http://localhost:8080";

@@ -1,3 +1,5 @@
+/// <reference path="../../assets/aiwebengine.d.ts" />
+
 // JS test script: registers /js-log-test and uses writeLog
 
 function js_log_test_handler(context) {

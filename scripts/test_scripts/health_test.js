@@ -1,3 +1,5 @@
+/// <reference path="../../assets/aiwebengine.d.ts" />
+
 // Health check test script
 function health_test_handler(context) {
   try {

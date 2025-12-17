@@ -1,3 +1,5 @@
+/// <reference path="../../assets/aiwebengine.d.ts" />
+
 // Test script for query parameter handling
 function query_handler(context) {
   const req = context.request || {};

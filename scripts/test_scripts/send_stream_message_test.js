@@ -1,3 +1,5 @@
+/// <reference path="../../assets/aiwebengine.d.ts" />
+
 // Test script for routeRegistry.sendStreamMessage functionality
 // This script demonstrates how to register a stream and send messages to it
 
