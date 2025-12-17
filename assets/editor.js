@@ -1,8 +1,43 @@
 // aiwebengine Editor - Main JavaScript
+
+/**
+ * @typedef {Object} ScriptData
+ * @property {string} uri
+ * @property {string} content
+ * @property {boolean} privileged
+ * @property {boolean} [defaultPrivileged]
+ * @property {string[]} owners
+ * @property {boolean} [isOwner]
+ * @property {number} [ownerCount]
+ * @property {string} [displayName]
+ * @property {number} [size]
+ */
+
+/**
+ * @typedef {Object} SecurityProfile
+ * @property {boolean} privileged
+ * @property {boolean} [defaultPrivileged]
+ * @property {string[]} [owners]
+ * @property {boolean} [isOwner]
+ * @property {number} [ownerCount]
+ */
+
 class AIWebEngineEditor {
   constructor() {
+    /** @type {string | null} */
     this.currentScript = null;
+    /** @type {string | null} */
     this.currentAsset = null;
+    /** @type {ScriptData[]} */
+    this.scriptsData = [];
+    /** @type {Object.<string, SecurityProfile>} */
+    this.scriptSecurityProfiles = {};
+    /** @type {any} */
+    this.monacoEditor = null;
+    /** @type {any} */
+    this.monacoAssetEditor = null;
+    /** @type {Object.<string, Function>} */
+    this.templates = {};
     this.monacoEditor = null;
     this.monacoAssetEditor = null;
     this.templates = {};
@@ -13,6 +48,103 @@ class AIWebEngineEditor {
     this.currentUserId = null;
     this.init();
   }
+
+  // ============================================================================
+  // Helper Utilities for Type-Safe DOM Access
+  // ============================================================================
+
+  /**
+   * Get element by ID with null check
+   * @param {string} id
+   * @returns {HTMLElement | null}
+   */
+  getElement(id) {
+    return document.getElementById(id);
+  }
+
+  /**
+   * Get button element by ID
+   * @param {string} id
+   * @returns {HTMLButtonElement | null}
+   */
+  getButton(id) {
+    return /** @type {HTMLButtonElement | null} */ (
+      document.getElementById(id)
+    );
+  }
+
+  /**
+   * Get input element by ID
+   * @param {string} id
+   * @returns {HTMLInputElement | null}
+   */
+  getInput(id) {
+    return /** @type {HTMLInputElement | null} */ (document.getElementById(id));
+  }
+
+  /**
+   * Get select element by ID
+   * @param {string} id
+   * @returns {HTMLSelectElement | null}
+   */
+  getSelect(id) {
+    return /** @type {HTMLSelectElement | null} */ (
+      document.getElementById(id)
+    );
+  }
+
+  /**
+   * Set text content safely
+   * @param {string} id
+   * @param {string} text
+   */
+  setText(id, text) {
+    const elem = this.getElement(id);
+    if (elem) {
+      elem.textContent = text;
+    }
+  }
+
+  /**
+   * Set disabled state on button
+   * @param {string} id
+   * @param {boolean} disabled
+   */
+  setDisabled(id, disabled) {
+    const btn = this.getButton(id);
+    if (btn) {
+      btn.disabled = disabled;
+    }
+  }
+
+  /**
+   * Add event listener with null check
+   * @param {string} id
+   * @param {string} event
+   * @param {EventListener} handler
+   */
+  addListener(id, event, handler) {
+    const elem = this.getElement(id);
+    if (elem) {
+      elem.addEventListener(event, handler);
+    }
+  }
+
+  /**
+   * Set element display style
+   * @param {string} id
+   * @param {string} display
+   */
+  setDisplay(id, display) {
+    const elem = this.getElement(id);
+    if (elem) {
+      elem.style.display = display;
+    }
+  }
+
+  // ============================================================================
+  // Initialization
+  // ============================================================================
 
   async init() {
     console.log("[Editor] Starting initialization...");
@@ -33,6 +165,7 @@ class AIWebEngineEditor {
   compileTemplates() {
     // Using plain JavaScript template functions instead of Handlebars
     this.templates = {
+      /** @param {any} data */
       "script-item": (data) => {
         const ownerClass =
           data.ownerCount === 0
@@ -67,6 +200,7 @@ class AIWebEngineEditor {
           </div>
         `;
       },
+      /** @param {any} data */
       "asset-item": (data) => `
         <div class="asset-item ${data.active ? "active" : ""}" data-path="${data.uri}" title="${data.uri}">
           <div class="asset-icon">${data.icon}</div>
@@ -76,6 +210,7 @@ class AIWebEngineEditor {
           </div>
         </div>
       `,
+      /** @param {any} data */
       "log-entry": (data) => `
         <div class="log-entry log-${data.level}">
           <span class="log-time">${data.time}</span>
@@ -83,6 +218,7 @@ class AIWebEngineEditor {
           <span class="log-message">${data.message}</span>
         </div>
       `,
+      /** @param {any} data */
       "route-item": (data) => `
         <div class="route-item">
           <div class="route-method ${data.method}">${data.method}</div>
@@ -100,107 +236,112 @@ class AIWebEngineEditor {
   setupEventListeners() {
     // Tab navigation
     document.querySelectorAll(".nav-tab").forEach((tab) => {
-      tab.addEventListener("click", (e) =>
-        this.switchTab(e.target.dataset.tab),
-      );
+      tab.addEventListener("click", (e) => {
+        const target = /** @type {HTMLElement} */ (e.target);
+        if (target && target.dataset.tab) {
+          this.switchTab(target.dataset.tab);
+        }
+      });
     });
 
     // Script management
-    document
-      .getElementById("new-script-btn")
-      .addEventListener("click", () => this.createNewScript());
-    document
-      .getElementById("save-script-btn")
-      .addEventListener("click", () => this.saveCurrentScript());
-    document
-      .getElementById("delete-script-btn")
-      .addEventListener("click", () => this.deleteCurrentScript());
-    document
-      .getElementById("toggle-privileged-btn")
-      .addEventListener("click", () => this.togglePrivilegedFlag());
-    document
-      .getElementById("manage-owners-btn")
-      .addEventListener("click", () => this.showManageOwnersModal());
-    document
-      .getElementById("scripts-filter-select")
-      .addEventListener("change", (e) => this.filterScripts(e.target.value));
+    this.addListener("new-script-btn", "click", () => this.createNewScript());
+    this.addListener("save-script-btn", "click", () =>
+      this.saveCurrentScript(),
+    );
+    this.addListener("delete-script-btn", "click", () =>
+      this.deleteCurrentScript(),
+    );
+    this.addListener("toggle-privileged-btn", "click", () =>
+      this.togglePrivilegedFlag(),
+    );
+    this.addListener("manage-owners-btn", "click", () =>
+      this.showManageOwnersModal(),
+    );
+
+    const scriptsFilter = this.getSelect("scripts-filter-select");
+    if (scriptsFilter) {
+      scriptsFilter.addEventListener("change", (e) => {
+        const target = /** @type {HTMLSelectElement} */ (e.target);
+        if (target) {
+          this.filterScripts(target.value);
+        }
+      });
+    }
 
     // Asset management
-    document
-      .getElementById("new-asset-btn")
-      .addEventListener("click", () => this.createNewAsset());
-    document
-      .getElementById("upload-asset-btn")
-      .addEventListener("click", () => this.triggerAssetUpload());
-    document
-      .getElementById("asset-upload")
-      .addEventListener("change", (e) => this.uploadAssets(e.target.files));
-    document
-      .getElementById("save-asset-btn")
-      .addEventListener("click", () => this.saveCurrentAsset());
-    document
-      .getElementById("delete-asset-btn")
-      .addEventListener("click", () => this.deleteCurrentAsset());
+    this.addListener("new-asset-btn", "click", () => this.createNewAsset());
+    this.addListener("upload-asset-btn", "click", () =>
+      this.triggerAssetUpload(),
+    );
+
+    const assetUpload = this.getInput("asset-upload");
+    if (assetUpload) {
+      assetUpload.addEventListener("change", (e) => {
+        const target = /** @type {HTMLInputElement} */ (e.target);
+        if (target && target.files) {
+          this.uploadAssets(target.files);
+        }
+      });
+    }
+
+    this.addListener("save-asset-btn", "click", () => this.saveCurrentAsset());
+    this.addListener("delete-asset-btn", "click", () =>
+      this.deleteCurrentAsset(),
+    );
 
     // Logs - Jump to Latest (guarded event listeners)
-    const refreshLogsBtn = document.getElementById("refresh-logs-btn");
-    if (refreshLogsBtn) {
-      refreshLogsBtn.addEventListener("click", () => this.jumpToLatestLogs());
-    }
-    const clearLogsBtn = document.getElementById("clear-logs-btn");
-    if (clearLogsBtn) {
-      clearLogsBtn.addEventListener("click", () => this.clearLogs());
-    }
+    this.addListener("refresh-logs-btn", "click", () =>
+      this.jumpToLatestLogs(),
+    );
+    this.addListener("clear-logs-btn", "click", () => this.clearLogs());
 
     // Routes
-    document
-      .getElementById("refresh-routes-btn")
-      .addEventListener("click", () => this.loadRoutes());
+    this.addListener("refresh-routes-btn", "click", () => this.loadRoutes());
 
     // Test endpoint
-    document
-      .getElementById("test-endpoint-btn")
-      .addEventListener("click", () => this.testEndpoint());
+    this.addListener("test-endpoint-btn", "click", () => this.testEndpoint());
 
     // AI Assistant
-    document
-      .getElementById("toggle-ai-assistant")
-      .addEventListener("click", () => this.toggleAIAssistant());
-    document
-      .getElementById("submit-prompt-btn")
-      .addEventListener("click", () => this.submitAIPrompt());
-    document
-      .getElementById("clear-prompt-btn")
-      .addEventListener("click", () => this.clearAIPrompt());
+    this.addListener("toggle-ai-assistant", "click", () =>
+      this.toggleAIAssistant(),
+    );
+    this.addListener("submit-prompt-btn", "click", () => this.submitAIPrompt());
+    this.addListener("clear-prompt-btn", "click", () => this.clearAIPrompt());
 
     // Allow Enter key to submit (Shift+Enter for new line)
-    document.getElementById("ai-prompt").addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        this.submitAIPrompt();
-      }
-    });
+    const aiPrompt = this.getElement("ai-prompt");
+    if (aiPrompt) {
+      aiPrompt.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          this.submitAIPrompt();
+        }
+      });
+    }
 
     // Diff modal controls
-    document
-      .getElementById("close-diff-modal")
-      .addEventListener("click", () => this.closeDiffModal());
-    document
-      .getElementById("reject-changes-btn")
-      .addEventListener("click", () => this.closeDiffModal());
-    document
-      .getElementById("apply-changes-btn")
-      .addEventListener("click", () => this.applyPendingChange());
+    this.addListener("close-diff-modal", "click", () => this.closeDiffModal());
+    this.addListener("reject-changes-btn", "click", () =>
+      this.closeDiffModal(),
+    );
+    this.addListener("apply-changes-btn", "click", () =>
+      this.applyPendingChange(),
+    );
   }
 
+  /** @returns {Promise<void>} */
   async setupMonacoEditor() {
     // Load Monaco Editor
     return new Promise((resolve) => {
+      // @ts-ignore - require is loaded via AMD script tag
       require.config({
         paths: { vs: "https://unpkg.com/monaco-editor@0.45.0/min/vs" },
       });
 
+      // @ts-ignore - AMD require is loaded via script tag
       require(["vs/editor/editor.main"], () => {
+        // @ts-ignore - monaco is global from AMD module
         // Script editor
         this.monacoEditor = monaco.editor.create(
           document.getElementById("monaco-editor"),
@@ -221,6 +362,7 @@ class AIWebEngineEditor {
         });
 
         // Asset editor
+        // @ts-ignore - monaco is global from AMD module
         this.monacoAssetEditor = monaco.editor.create(
           document.getElementById("monaco-asset-editor"),
           {
@@ -239,23 +381,32 @@ class AIWebEngineEditor {
           this.updateAssetSaveButton();
         });
 
-        resolve();
+        resolve(undefined);
       });
     });
   }
 
+  /**
+   * @param {string} tabName
+   */
   switchTab(tabName) {
     // Update navigation
     document
       .querySelectorAll(".nav-tab")
       .forEach((tab) => tab.classList.remove("active"));
-    document.querySelector(`[data-tab="${tabName}"]`).classList.add("active");
+    const navTab = document.querySelector(`[data-tab="${tabName}"]`);
+    if (navTab) {
+      navTab.classList.add("active");
+    }
 
     // Update content
     document
       .querySelectorAll(".tab-content")
       .forEach((content) => content.classList.remove("active"));
-    document.getElementById(`${tabName}-tab`).classList.add("active");
+    const tabContent = document.getElementById(`${tabName}-tab`);
+    if (tabContent) {
+      tabContent.classList.add("active");
+    }
 
     // Load tab-specific data
     switch (tabName) {
@@ -293,7 +444,7 @@ class AIWebEngineEditor {
       this.scriptsData = scripts;
       console.log("[Editor] Loaded scripts:", scripts);
 
-      scripts.forEach((script) => {
+      scripts.forEach((/** @type {any} */ script) => {
         const scriptUri = script.uri || script.name;
         this.scriptSecurityProfiles[scriptUri] = {
           privileged: !!script.privileged,
@@ -307,17 +458,20 @@ class AIWebEngineEditor {
       this.renderScripts();
       this.renderScriptSecurity(this.currentScript);
     } catch (error) {
-      this.showStatus("Error loading scripts: " + error.message, "error");
+      const err = /** @type {Error} */ (error);
+      this.showStatus("Error loading scripts: " + err.message, "error");
     }
   }
 
   renderScripts() {
     const scriptsList = document.getElementById("scripts-list");
+    if (!scriptsList) return;
+
     scriptsList.innerHTML = "";
 
     const filteredScripts = this.getFilteredScripts();
 
-    filteredScripts.forEach((script) => {
+    filteredScripts.forEach((/** @type {any} */ script) => {
       const scriptUri = script.uri || script.name;
       const scriptElement = document.createElement("div");
       scriptElement.innerHTML = this.templates["script-item"]({
@@ -331,13 +485,17 @@ class AIWebEngineEditor {
         ownerCount: script.ownerCount || 0,
       });
 
-      scriptElement
-        .querySelector(".script-item")
-        .addEventListener("click", () => {
+      const scriptItem = scriptElement.querySelector(".script-item");
+      if (scriptItem) {
+        scriptItem.addEventListener("click", () => {
           this.loadScript(scriptUri);
         });
+      }
 
-      scriptsList.appendChild(scriptElement.firstElementChild);
+      const firstChild = scriptElement.firstElementChild;
+      if (firstChild) {
+        scriptsList.appendChild(firstChild);
+      }
     });
   }
 
@@ -355,11 +513,17 @@ class AIWebEngineEditor {
     }
   }
 
+  /**
+   * @param {string} filter
+   */
   filterScripts(filter) {
     this.currentFilter = filter;
     this.renderScripts();
   }
 
+  /**
+   * @param {string} scriptName
+   */
   async loadScript(scriptName) {
     console.log("[Editor] loadScript() called for:", scriptName);
     try {
@@ -370,7 +534,7 @@ class AIWebEngineEditor {
       console.log("[Editor] Script content length:", content.length);
 
       this.currentScript = scriptName;
-      document.getElementById("current-script-name").textContent = scriptName;
+      this.setText("current-script-name", scriptName);
 
       if (this.monacoEditor) {
         console.log("[Editor] Setting Monaco editor value...");
@@ -382,15 +546,20 @@ class AIWebEngineEditor {
 
       // Update active state in list
       document.querySelectorAll(".script-item").forEach((item) => {
-        item.classList.toggle("active", item.dataset.script === scriptName);
+        const htmlItem = /** @type {HTMLElement} */ (item);
+        htmlItem.classList.toggle(
+          "active",
+          htmlItem.dataset.script === scriptName,
+        );
       });
 
-      document.getElementById("delete-script-btn").disabled = false;
+      this.setDisabled("delete-script-btn", false);
 
       this.renderScriptSecurity(scriptName);
       this.renderScriptOwnership(scriptName);
     } catch (error) {
-      this.showStatus("Error loading script: " + error.message, "error");
+      const err = /** @type {Error} */ (error);
+      this.showStatus("Error loading script: " + err.message, "error");
     }
   }
 
@@ -430,7 +599,8 @@ function init(context) {
         this.showStatus("Script created successfully", "success");
       })
       .catch((error) => {
-        this.showStatus("Error creating script: " + error.message, "error");
+        const err = /** @type {Error} */ (error);
+        this.showStatus("Error creating script: " + err.message, "error");
       });
   }
 
@@ -449,7 +619,8 @@ function init(context) {
         this.updateSaveButton();
       })
       .catch((error) => {
-        this.showStatus("Error saving script: " + error.message, "error");
+        const err = /** @type {Error} */ (error);
+        this.showStatus("Error saving script: " + err.message, "error");
       });
   }
 
@@ -465,9 +636,8 @@ function init(context) {
     })
       .then(() => {
         this.currentScript = null;
-        document.getElementById("current-script-name").textContent =
-          "No script selected";
-        document.getElementById("delete-script-btn").disabled = true;
+        this.setText("current-script-name", "No script selected");
+        this.setDisabled("delete-script-btn", true);
 
         if (this.monacoEditor) {
           this.monacoEditor.setValue("// Select a script to edit");
@@ -478,22 +648,22 @@ function init(context) {
         this.showStatus("Script deleted successfully", "success");
       })
       .catch((error) => {
-        this.showStatus("Error deleting script: " + error.message, "error");
+        const err = /** @type {Error} */ (error);
+        this.showStatus("Error deleting script: " + err.message, "error");
       });
   }
 
   updateSaveButton() {
-    const saveBtn = document.getElementById("save-script-btn");
-    if (this.currentScript && this.monacoEditor) {
-      saveBtn.disabled = false;
-    } else {
-      saveBtn.disabled = true;
-    }
+    const hasScript = this.currentScript && this.monacoEditor;
+    this.setDisabled("save-script-btn", !hasScript);
   }
 
+  /**
+   * @param {string | null} scriptName
+   */
   renderScriptSecurity(scriptName) {
-    const badge = document.getElementById("script-privileged-badge");
-    const toggleBtn = document.getElementById("toggle-privileged-btn");
+    const badge = this.getElement("script-privileged-badge");
+    const toggleBtn = this.getButton("toggle-privileged-btn");
 
     if (!badge || !toggleBtn) {
       return;
@@ -571,13 +741,19 @@ function init(context) {
       this.renderScriptSecurity(this.currentScript);
       this.loadScripts();
     } catch (error) {
-      this.showStatus("Error updating privilege: " + error.message, "error");
+      const err = /** @type {Error} */ (error);
+      this.showStatus("Error updating privilege: " + err.message, "error");
     }
   }
 
+  /**
+   * @param {string | null} scriptName
+   */
   renderScriptOwnership(scriptName) {
     const ownersList = document.getElementById("script-owners-list");
-    const manageBtn = document.getElementById("manage-owners-btn");
+    const manageBtn = /** @type {HTMLButtonElement | null} */ (
+      document.getElementById("manage-owners-btn")
+    );
 
     if (!ownersList || !manageBtn) {
       return;
@@ -665,19 +841,26 @@ function init(context) {
     // Remove owner buttons
     modal.querySelectorAll(".owner-remove-btn").forEach((btn) => {
       btn.addEventListener("click", async (e) => {
-        const owner = e.target.dataset.owner;
-        await this.removeScriptOwner(owner);
-        modal.remove();
-        await this.loadScripts();
-        this.renderScriptOwnership(this.currentScript);
+        const target = /** @type {HTMLElement} */ (e.target);
+        const owner = target.dataset.owner;
+        if (owner) {
+          await this.removeScriptOwner(owner);
+          modal.remove();
+          await this.loadScripts();
+          this.renderScriptOwnership(this.currentScript);
+        }
       });
     });
 
     // Add owner button
-    modal
-      .querySelector("#add-owner-btn")
-      .addEventListener("click", async () => {
-        const newOwner = modal.querySelector("#new-owner-input").value.trim();
+    const addOwnerBtn = modal.querySelector("#add-owner-btn");
+    const newOwnerInput = /** @type {HTMLInputElement | null} */ (
+      modal.querySelector("#new-owner-input")
+    );
+
+    if (addOwnerBtn && newOwnerInput) {
+      addOwnerBtn.addEventListener("click", async () => {
+        const newOwner = newOwnerInput.value.trim();
         if (newOwner) {
           await this.addScriptOwner(newOwner);
           modal.remove();
@@ -685,8 +868,12 @@ function init(context) {
           this.renderScriptOwnership(this.currentScript);
         }
       });
+    }
   }
 
+  /**
+   * @param {string} ownerId
+   */
   async addScriptOwner(ownerId) {
     if (!this.currentScript) return;
 
@@ -708,10 +895,14 @@ function init(context) {
         );
       }
     } catch (error) {
-      this.showStatus("Error adding owner: " + error.message, "error");
+      const err = /** @type {Error} */ (error);
+      this.showStatus("Error adding owner: " + err.message, "error");
     }
   }
 
+  /**
+   * @param {string} ownerId
+   */
   async removeScriptOwner(ownerId) {
     if (!this.currentScript) return;
 
@@ -733,7 +924,8 @@ function init(context) {
         );
       }
     } catch (error) {
-      this.showStatus("Error removing owner: " + error.message, "error");
+      const err = /** @type {Error} */ (error);
+      this.showStatus("Error removing owner: " + err.message, "error");
     }
   }
 
@@ -744,34 +936,44 @@ function init(context) {
       const data = await response.json();
 
       const assetsList = document.getElementById("assets-list");
+      if (!assetsList) return;
+
       assetsList.innerHTML = "";
 
-      data.assets.forEach((asset) => {
-        const assetElement = document.createElement("div");
-        const assetUri = asset.uri || asset.path;
-        const isText = this.isTextAsset(assetUri);
+      data.assets.forEach(
+        /** @param {any} asset */
+        (asset) => {
+          const assetElement = document.createElement("div");
+          const assetUri = asset.uri || asset.path;
+          const isText = this.isTextAsset(assetUri);
 
-        assetElement.innerHTML = this.templates["asset-item"]({
-          uri: assetUri,
-          displayName: asset.displayName || assetUri,
-          size: this.formatBytes(asset.size),
-          type: asset.type,
-          isText: isText,
-          icon: this.getFileIcon(asset.type, isText),
-          active: this.currentAsset === assetUri,
-        });
+          assetElement.innerHTML = this.templates["asset-item"]({
+            uri: assetUri,
+            displayName: asset.displayName || assetUri,
+            size: this.formatBytes(asset.size),
+            type: asset.type,
+            isText: isText,
+            icon: this.getFileIcon(asset.type, isText),
+            active: this.currentAsset === assetUri,
+          });
 
-        // Add click listener to select asset
-        const item = assetElement.firstElementChild;
-        item.addEventListener("click", () => this.selectAsset(assetUri));
-
-        assetsList.appendChild(item);
-      });
+          // Add click listener to select asset
+          const item = assetElement.firstElementChild;
+          if (item) {
+            item.addEventListener("click", () => this.selectAsset(assetUri));
+            assetsList.appendChild(item);
+          }
+        },
+      );
     } catch (error) {
-      this.showStatus("Error loading assets: " + error.message, "error");
+      const err = /** @type {Error} */ (error);
+      this.showStatus("Error loading assets: " + err.message, "error");
     }
   }
 
+  /**
+   * @param {string} path
+   */
   isTextAsset(path) {
     const textExtensions = [
       ".css",
@@ -781,6 +983,7 @@ function init(context) {
       ".md",
       ".txt",
       ".js",
+      ".ts",
       ".xml",
       ".csv",
       ".yaml",
@@ -795,8 +998,12 @@ function init(context) {
     return textExtensions.includes(ext);
   }
 
+  /**
+   * @param {string} path
+   */
   getLanguageMode(path) {
     const ext = path.substring(path.lastIndexOf(".")).toLowerCase();
+    /** @type {Record<string, string>} */
     const languageMap = {
       ".css": "css",
       ".svg": "xml",
@@ -805,6 +1012,7 @@ function init(context) {
       ".md": "markdown",
       ".txt": "plaintext",
       ".js": "javascript",
+      ".ts": "typescript",
       ".xml": "xml",
       ".yaml": "yaml",
       ".yml": "yaml",
@@ -817,6 +1025,9 @@ function init(context) {
     return languageMap[ext] || "plaintext";
   }
 
+  /**
+   * @param {string} path
+   */
   async selectAsset(path) {
     this.currentAsset = path;
 
@@ -830,9 +1041,9 @@ function init(context) {
     }
 
     // Update toolbar
-    document.getElementById("current-asset-name").textContent = path;
-    document.getElementById("save-asset-btn").disabled = false;
-    document.getElementById("delete-asset-btn").disabled = false;
+    this.setText("current-asset-name", path);
+    this.setDisabled("save-asset-btn", false);
+    this.setDisabled("delete-asset-btn", false);
 
     const isText = this.isTextAsset(path);
 
@@ -844,56 +1055,73 @@ function init(context) {
 
         this.monacoAssetEditor.setValue(content);
         const language = this.getLanguageMode(path);
+        // @ts-ignore - monaco is loaded via AMD
+        // @ts-ignore - monaco is loaded via AMD
         monaco.editor.setModelLanguage(
           this.monacoAssetEditor.getModel(),
           language,
         );
 
         // Show editor, hide binary info
-        document.getElementById("monaco-asset-editor").style.display = "block";
-        document.getElementById("binary-asset-info").style.display = "none";
-        document.getElementById("no-asset-selected").style.display = "none";
-        document.getElementById("save-asset-btn").disabled = false;
+        this.setDisplay("monaco-asset-editor", "block");
+        this.setDisplay("binary-asset-info", "none");
+        this.setDisplay("no-asset-selected", "none");
+        this.setDisabled("save-asset-btn", false);
       } catch (error) {
-        this.showStatus("Error loading asset: " + error.message, "error");
+        const err = /** @type {Error} */ (error);
+        this.showStatus("Error loading asset: " + err.message, "error");
       }
     } else {
       // Binary asset - show info panel
       this.showBinaryAssetInfo(path);
-      document.getElementById("save-asset-btn").disabled = true;
+      this.setDisabled("save-asset-btn", true);
     }
   }
 
+  /**
+   * @param {string} path
+   */
   showBinaryAssetInfo(path) {
     const filename = path.split("/").pop();
     const ext = path.substring(path.lastIndexOf(".")).toLowerCase();
 
     // Hide editor, show binary info
-    document.getElementById("monaco-asset-editor").style.display = "none";
-    document.getElementById("no-asset-selected").style.display = "none";
-    document.getElementById("binary-asset-info").style.display = "block";
+    this.setDisplay("monaco-asset-editor", "none");
+    this.setDisplay("no-asset-selected", "none");
+    this.setDisplay("binary-asset-info", "block");
 
     const detailsDiv = document.getElementById("binary-asset-details");
-    detailsDiv.innerHTML = `
-      <p><strong>File:</strong> ${filename}</p>
-      <p><strong>Path:</strong> ${path}</p>
-      <p><strong>Type:</strong> Binary file</p>
-      <div class="binary-actions">
-        <button class="btn btn-secondary" onclick="window.editor.downloadAsset('${path}')">Download</button>
-      </div>
-    `;
-
-    const previewDiv = document.getElementById("binary-asset-preview");
-    previewDiv.innerHTML = "";
-
-    // Show preview for images
-    const imageExtensions = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"];
-    if (imageExtensions.includes(ext)) {
-      previewDiv.innerHTML = `
-        <div class="image-preview">
-          <img src="/api/assets/${path}" alt="${filename}" style="max-width: 100%; max-height: 400px;">
+    if (detailsDiv) {
+      detailsDiv.innerHTML = `
+        <p><strong>File:</strong> ${filename}</p>
+        <p><strong>Path:</strong> ${path}</p>
+        <p><strong>Type:</strong> Binary file</p>
+        <div class="binary-actions">
+          <button class="btn btn-secondary" onclick="window.editor.downloadAsset('${path}')">Download</button>
         </div>
       `;
+    }
+
+    const previewDiv = document.getElementById("binary-asset-preview");
+    if (previewDiv) {
+      previewDiv.innerHTML = "";
+
+      // Show preview for images
+      const imageExtensions = [
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".webp",
+        ".svg",
+      ];
+      if (imageExtensions.includes(ext)) {
+        previewDiv.innerHTML = `
+          <div class="image-preview">
+            <img src="/api/assets/${path}" alt="${filename}" style="max-width: 100%; max-height: 400px;">
+          </div>
+        `;
+      }
     }
   }
 
@@ -915,14 +1143,16 @@ function init(context) {
     this.currentAsset = path;
     this.monacoAssetEditor.setValue("");
     const language = this.getLanguageMode(path);
+    // @ts-ignore - monaco is loaded via AMD
+    // @ts-ignore - monaco is loaded via AMD
     monaco.editor.setModelLanguage(this.monacoAssetEditor.getModel(), language);
 
-    document.getElementById("current-asset-name").textContent = path + " (new)";
-    document.getElementById("monaco-asset-editor").style.display = "block";
-    document.getElementById("binary-asset-info").style.display = "none";
-    document.getElementById("no-asset-selected").style.display = "none";
-    document.getElementById("save-asset-btn").disabled = false;
-    document.getElementById("delete-asset-btn").disabled = true;
+    this.setText("current-asset-name", path + " (new)");
+    this.setDisplay("monaco-asset-editor", "block");
+    this.setDisplay("binary-asset-info", "none");
+    this.setDisplay("no-asset-selected", "none");
+    this.setDisabled("save-asset-btn", false);
+    this.setDisabled("delete-asset-btn", true);
 
     this.showStatus("Create your asset and click Save", "info");
   }
@@ -940,6 +1170,7 @@ function init(context) {
       const ext = this.currentAsset
         .substring(this.currentAsset.lastIndexOf("."))
         .toLowerCase();
+      /** @type {Record<string, string>} */
       const mimeTypes = {
         ".css": "text/css",
         ".svg": "image/svg+xml",
@@ -973,14 +1204,14 @@ function init(context) {
       this.showStatus("Asset saved successfully", "success");
 
       // Update the display name to remove (new) if it was there
-      document.getElementById("current-asset-name").textContent =
-        this.currentAsset;
-      document.getElementById("delete-asset-btn").disabled = false;
+      this.setText("current-asset-name", this.currentAsset);
+      this.setDisabled("delete-asset-btn", false);
 
       // Reload assets list
       this.loadAssets();
     } catch (error) {
-      this.showStatus("Error saving asset: " + error.message, "error");
+      const err = /** @type {Error} */ (error);
+      this.showStatus("Error saving asset: " + err.message, "error");
     }
   }
 
@@ -1006,33 +1237,43 @@ function init(context) {
 
       // Clear editor
       this.currentAsset = null;
-      document.getElementById("current-asset-name").textContent =
-        "No asset selected";
-      document.getElementById("monaco-asset-editor").style.display = "none";
-      document.getElementById("binary-asset-info").style.display = "none";
-      document.getElementById("no-asset-selected").style.display = "block";
-      document.getElementById("save-asset-btn").disabled = true;
-      document.getElementById("delete-asset-btn").disabled = true;
+      this.setText("current-asset-name", "No asset selected");
+      this.setDisplay("monaco-asset-editor", "none");
+      this.setDisplay("binary-asset-info", "none");
+      this.setDisplay("no-asset-selected", "block");
+      this.setDisabled("save-asset-btn", true);
+      this.setDisabled("delete-asset-btn", true);
 
       // Reload assets list
       this.loadAssets();
     } catch (error) {
-      this.showStatus("Error deleting asset: " + error.message, "error");
+      const err = /** @type {Error} */ (error);
+      this.showStatus("Error deleting asset: " + err.message, "error");
     }
   }
 
   updateAssetSaveButton() {
-    const saveBtn = document.getElementById("save-asset-btn");
-    if (this.currentAsset && this.isTextAsset(this.currentAsset)) {
+    const saveBtn = /** @type {HTMLButtonElement | null} */ (
+      document.getElementById("save-asset-btn")
+    );
+    if (saveBtn && this.currentAsset && this.isTextAsset(this.currentAsset)) {
       saveBtn.disabled = false;
       saveBtn.textContent = "Save *";
     }
   }
 
   triggerAssetUpload() {
-    document.getElementById("asset-upload").click();
+    const uploadInput = /** @type {HTMLInputElement | null} */ (
+      document.getElementById("asset-upload")
+    );
+    if (uploadInput) {
+      uploadInput.click();
+    }
   }
 
+  /**
+   * @param {FileList} files
+   */
   async uploadAssets(files) {
     for (const file of files) {
       try {
@@ -1053,8 +1294,9 @@ function init(context) {
 
         this.showStatus(`Uploaded ${file.name}`, "success");
       } catch (error) {
+        const err = /** @type {Error} */ (error);
         this.showStatus(
-          `Error uploading ${file.name}: ${error.message}`,
+          `Error uploading ${file.name}: ${err.message}`,
           "error",
         );
       }
@@ -1063,8 +1305,13 @@ function init(context) {
     this.loadAssets();
   }
 
+  /**
+   * @param {string} path
+   */
   downloadAsset(path) {
     const filename = path.split("/").pop();
+    if (!filename) return;
+
     const isIco = filename.toLowerCase().endsWith(".ico");
 
     console.log(`Downloading asset: ${path} (isIco: ${isIco})`);
@@ -1092,8 +1339,9 @@ function init(context) {
           this.showStatus(`Downloaded ${filename}`, "success");
         })
         .catch((error) => {
+          const err = /** @type {Error} */ (error);
           console.error("ICO download failed:", error);
-          this.showStatus(`Download failed: ${error.message}`, "error");
+          this.showStatus(`Download failed: ${err.message}`, "error");
           // Fallback to window.open
           window.open(`/api/assets/${path}`, "_blank");
         });
@@ -1110,6 +1358,7 @@ function init(context) {
       const logs = await response.json();
 
       const logsContent = document.getElementById("logs-content");
+      if (!logsContent) return;
 
       // Remember if user was at the bottom before refresh
       const wasAtBottom = this.isScrolledToBottom(logsContent);
@@ -1117,22 +1366,29 @@ function init(context) {
       logsContent.innerHTML = "";
 
       // Reverse logs so newest appear at bottom
-      logs.reverse().forEach((log) => {
-        const logElement = document.createElement("div");
-        logElement.innerHTML = this.templates["log-entry"]({
-          time: new Date(log.timestamp).toLocaleTimeString(),
-          level: log.level || "info",
-          message: this.escapeHtml(log.message),
-        });
-        logsContent.appendChild(logElement.firstElementChild);
-      });
+      logs.reverse().forEach(
+        /** @param {any} log */
+        (log) => {
+          const logElement = document.createElement("div");
+          logElement.innerHTML = this.templates["log-entry"]({
+            time: new Date(log.timestamp).toLocaleTimeString(),
+            level: log.level || "info",
+            message: this.escapeHtml(log.message),
+          });
+          const firstChild = logElement.firstElementChild;
+          if (firstChild) {
+            logsContent.appendChild(firstChild);
+          }
+        },
+      );
 
       // Only auto-scroll if user was already at the bottom
       if (wasAtBottom) {
         logsContent.scrollTop = logsContent.scrollHeight;
       }
     } catch (error) {
-      this.showStatus("Error loading logs: " + error.message, "error");
+      const err = /** @type {Error} */ (error);
+      this.showStatus("Error loading logs: " + err.message, "error");
     }
   }
 
@@ -1150,6 +1406,10 @@ function init(context) {
   }
 
   // Helper method to check if element is scrolled to bottom
+  /**
+   * @param {HTMLElement} element
+   * @returns {boolean}
+   */
   isScrolledToBottom(element) {
     // Consider "at bottom" if within 50px of the bottom
     // This accounts for rounding errors and makes it easier to stay "at bottom"
@@ -1169,6 +1429,7 @@ function init(context) {
         // Refresh logs after successful prune
         await this.loadLogs();
       } else {
+        /** @type {any} */
         let body = {};
         try {
           body = await response.json();
@@ -1181,7 +1442,8 @@ function init(context) {
         );
       }
     } catch (error) {
-      this.showStatus("Error pruning logs: " + error.message, "error");
+      const err = /** @type {Error} */ (error);
+      this.showStatus("Error pruning logs: " + err.message, "error");
     }
   }
 
@@ -1192,6 +1454,8 @@ function init(context) {
       const routes = await response.json();
 
       const routesList = document.getElementById("routes-list");
+      if (!routesList) return;
+
       routesList.innerHTML = "";
 
       if (routes.length === 0) {
@@ -1200,24 +1464,33 @@ function init(context) {
         return;
       }
 
-      routes.forEach((route) => {
-        const routeElement = document.createElement("div");
-        routeElement.innerHTML = this.templates["route-item"]({
-          method: route.method,
-          path: route.path,
-          handler: route.handler,
-        });
+      routes.forEach(
+        /** @param {any} route */
+        (route) => {
+          const routeElement = document.createElement("div");
+          routeElement.innerHTML = this.templates["route-item"]({
+            method: route.method,
+            path: route.path,
+            handler: route.handler,
+          });
 
-        // Add event listener for test button
-        const testBtn = routeElement.querySelector(".test-btn");
-        testBtn.addEventListener("click", () => {
-          this.testRoute(route.path, route.method);
-        });
+          // Add event listener for test button
+          const testBtn = routeElement.querySelector(".test-btn");
+          if (testBtn) {
+            testBtn.addEventListener("click", () => {
+              this.testRoute(route.path, route.method);
+            });
+          }
 
-        routesList.appendChild(routeElement.firstElementChild);
-      });
+          const firstChild = routeElement.firstElementChild;
+          if (firstChild) {
+            routesList.appendChild(firstChild);
+          }
+        },
+      );
     } catch (error) {
-      this.showStatus("Error loading routes: " + error.message, "error");
+      const err = /** @type {Error} */ (error);
+      this.showStatus("Error loading routes: " + err.message, "error");
     }
   }
 
@@ -1232,10 +1505,15 @@ function init(context) {
         alert(`Response: ${data}`);
       })
       .catch((error) => {
-        alert(`Error: ${error.message}`);
+        const err = /** @type {Error} */ (error);
+        alert(`Error: ${err.message}`);
       });
   }
 
+  /**
+   * @param {string} path
+   * @param {string} method
+   */
   testRoute(path, method) {
     const testUrl = prompt(`Test ${method} ${path}:`, path);
     if (!testUrl) return;
@@ -1248,7 +1526,8 @@ function init(context) {
         alert(`Response from ${method} ${path}:\n${data}`);
       })
       .catch((error) => {
-        alert(`Error testing ${method} ${path}: ${error.message}`);
+        const err = /** @type {Error} */ (error);
+        alert(`Error testing ${method} ${path}: ${err.message}`);
       });
   }
 
@@ -1256,8 +1535,14 @@ function init(context) {
     this.loadScripts();
   }
 
+  /**
+   * @param {string} message
+   * @param {string} [type]
+   */
   showStatus(message, type = "info") {
     const statusElement = document.getElementById("status-message");
+    if (!statusElement) return;
+
     statusElement.textContent = message;
     statusElement.className = `status-${type}`;
 
@@ -1268,16 +1553,31 @@ function init(context) {
     }, 5000);
   }
 
+  /**
+   * @param {File} file
+   * @returns {Promise<string>}
+   */
   fileToBase64(file) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.readAsDataURL(file);
-      reader.onload = () => resolve(reader.result.split(",")[1]);
+      reader.onload = () => {
+        const result = reader.result;
+        if (typeof result === "string") {
+          resolve(result.split(",")[1]);
+        } else {
+          reject(new Error("FileReader result is not a string"));
+        }
+      };
       reader.onerror = (error) => reject(error);
     });
   }
 
   // UTF-8 safe base64 encoding for text content
+  /**
+   * @param {string} text
+   * @returns {string}
+   */
   textToBase64(text) {
     // Convert text to UTF-8 bytes using TextEncoder
     const encoder = new TextEncoder();
@@ -1293,6 +1593,10 @@ function init(context) {
     return btoa(binaryString);
   }
 
+  /**
+   * @param {number} bytes
+   * @returns {string}
+   */
   formatBytes(bytes) {
     if (bytes === 0) return "0 Bytes";
     const k = 1024;
@@ -1301,6 +1605,11 @@ function init(context) {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
   }
 
+  /**
+   * @param {string} type
+   * @param {boolean} isText
+   * @returns {string}
+   */
   getFileIcon(type, isText) {
     // If isText is provided, use that to determine icon
     if (isText !== undefined) {
@@ -1336,6 +1645,8 @@ function init(context) {
     const aiAssistant = document.querySelector(".ai-assistant");
     const toggleBtn = document.getElementById("toggle-ai-assistant");
 
+    if (!aiAssistant || !toggleBtn) return;
+
     aiAssistant.classList.toggle("collapsed");
 
     if (aiAssistant.classList.contains("collapsed")) {
@@ -1346,9 +1657,15 @@ function init(context) {
   }
 
   async submitAIPrompt() {
-    const promptInput = document.getElementById("ai-prompt");
+    const promptInput = /** @type {HTMLInputElement | null} */ (
+      document.getElementById("ai-prompt")
+    );
     const responseDiv = document.getElementById("ai-response");
-    const submitBtn = document.getElementById("submit-prompt-btn");
+    const submitBtn = /** @type {HTMLButtonElement | null} */ (
+      document.getElementById("submit-prompt-btn")
+    );
+
+    if (!promptInput || !responseDiv || !submitBtn) return;
 
     const prompt = promptInput.value.trim();
 
@@ -1430,10 +1747,11 @@ function init(context) {
 
       this.showStatus("AI response received", "success");
     } catch (error) {
+      const err = /** @type {Error} */ (error);
       responseDiv.classList.remove("loading");
       responseDiv.innerHTML = `
         <p style="color: var(--danger-color);">
-          <strong>Error:</strong> ${this.escapeHtml(error.message)}
+          <strong>Error:</strong> ${this.escapeHtml(err.message)}
         </p>
       `;
       this.showStatus("Failed to get AI response", "error");
@@ -1444,8 +1762,15 @@ function init(context) {
     }
   }
 
+  /**
+   * @param {string} responseText
+   * @param {string} prompt
+   * @param {boolean} [truncated]
+   */
   displayPlainAIResponse(responseText, prompt, truncated = false) {
     const responseDiv = document.getElementById("ai-response");
+    if (!responseDiv) return;
+
     responseDiv.classList.remove("loading");
 
     const truncationWarning = truncated
@@ -1469,8 +1794,15 @@ function init(context) {
     `;
   }
 
+  /**
+   * @param {any} parsed
+   * @param {string} prompt
+   * @param {boolean} [truncated]
+   */
   handleStructuredAIResponse(parsed, prompt, truncated = false) {
     const responseDiv = document.getElementById("ai-response");
+    if (!responseDiv) return;
+
     responseDiv.classList.remove("loading");
 
     const actionType = parsed.type;
@@ -1622,6 +1954,14 @@ function init(context) {
     }
   }
 
+  /**
+   * @param {string} name
+   * @param {string} originalCode
+   * @param {string} newCode
+   * @param {string} explanation
+   * @param {string} action
+   * @param {string} contentType
+   */
   async showDiffModal(
     name,
     originalCode,
@@ -1633,6 +1973,8 @@ function init(context) {
     const modal = document.getElementById("diff-modal");
     const title = document.getElementById("diff-modal-title");
     const explanationDiv = document.getElementById("diff-explanation");
+
+    if (!modal || !title || !explanationDiv) return;
 
     // Set title based on action and type
     const typeLabel = contentType === "asset" ? "Asset" : "Script";
@@ -1665,8 +2007,15 @@ function init(context) {
     };
   }
 
+  /**
+   * @param {string} originalCode
+   * @param {string} newCode
+   * @param {string} [language]
+   * @returns {Promise<void>}
+   */
   async createDiffEditor(originalCode, newCode, language = "javascript") {
     const container = document.getElementById("monaco-diff-editor");
+    if (!container) return Promise.resolve();
 
     // Clear any existing content
     container.innerHTML = "";
@@ -1676,6 +2025,7 @@ function init(context) {
         this.monacoDiffEditor.dispose();
       }
 
+      // @ts-ignore - monaco is loaded via AMD
       this.monacoDiffEditor = monaco.editor.createDiffEditor(container, {
         theme: "vs-dark",
         readOnly: true,
@@ -1684,10 +2034,12 @@ function init(context) {
         fontSize: 13,
       });
 
+      // @ts-ignore - monaco is loaded via AMD
       const original = monaco.editor.createModel(
         originalCode || "// New file",
         language,
       );
+      // @ts-ignore - monaco is loaded via AMD
       const modified = monaco.editor.createModel(newCode, language);
 
       this.monacoDiffEditor.setModel({
@@ -1701,6 +2053,8 @@ function init(context) {
 
   closeDiffModal() {
     const modal = document.getElementById("diff-modal");
+    if (!modal) return;
+
     modal.style.display = "none";
 
     if (this.monacoDiffEditor) {
@@ -1725,6 +2079,7 @@ function init(context) {
 
           // Determine MIME type from extension
           const ext = name.substring(name.lastIndexOf(".")).toLowerCase();
+          /** @type {Record<string, string>} */
           const mimeTypes = {
             ".css": "text/css",
             ".svg": "image/svg+xml",
@@ -1774,23 +2129,23 @@ function init(context) {
           });
 
           // Update toolbar
-          document.getElementById("current-asset-name").textContent = name;
-          document.getElementById("save-asset-btn").disabled = false;
-          document.getElementById("delete-asset-btn").disabled = false;
+          this.setText("current-asset-name", name);
+          this.setDisabled("save-asset-btn", false);
+          this.setDisabled("delete-asset-btn", false);
 
           // Set content directly from newCode
           this.monacoAssetEditor.setValue(newCode);
           const language = this.getLanguageMode(name);
+          // @ts-ignore - monaco is loaded via AMD
           monaco.editor.setModelLanguage(
             this.monacoAssetEditor.getModel(),
             language,
           );
 
           // Show editor
-          document.getElementById("monaco-asset-editor").style.display =
-            "block";
-          document.getElementById("binary-asset-info").style.display = "none";
-          document.getElementById("no-asset-selected").style.display = "none";
+          this.setDisplay("monaco-asset-editor", "block");
+          this.setDisplay("binary-asset-info", "none");
+          this.setDisplay("no-asset-selected", "none");
 
           // Wait a bit for the list to reload, then update the active item
           setTimeout(() => {
@@ -1826,10 +2181,15 @@ function init(context) {
 
       this.closeDiffModal();
     } catch (error) {
-      this.showStatus(`Error applying changes: ${error.message}`, "error");
+      const err = /** @type {Error} */ (error);
+      this.showStatus(`Error applying changes: ${err.message}`, "error");
     }
   }
 
+  /**
+   * @param {string} assetPath
+   * @param {string} explanation
+   */
   confirmDeleteAsset(assetPath, explanation) {
     if (
       confirm(`${explanation}\n\nAre you sure you want to delete ${assetPath}?`)
@@ -1843,21 +2203,23 @@ function init(context) {
 
           if (this.currentAsset === assetPath) {
             this.currentAsset = null;
-            document.getElementById("current-asset-name").textContent =
-              "No asset selected";
-            document.getElementById("monaco-asset-editor").style.display =
-              "none";
-            document.getElementById("binary-asset-info").style.display = "none";
-            document.getElementById("no-asset-selected").style.display =
-              "block";
+            this.setText("current-asset-name", "No asset selected");
+            this.setDisplay("monaco-asset-editor", "none");
+            this.setDisplay("binary-asset-info", "none");
+            this.setDisplay("no-asset-selected", "block");
           }
         })
         .catch((error) => {
-          this.showStatus("Error deleting asset: " + error.message, "error");
+          const err = /** @type {Error} */ (error);
+          this.showStatus("Error deleting asset: " + err.message, "error");
         });
     }
   }
 
+  /**
+   * @param {string} scriptName
+   * @param {string} explanation
+   */
   confirmDeleteScript(scriptName, explanation) {
     if (
       confirm(
@@ -1874,25 +2236,33 @@ function init(context) {
 
           if (this.currentScript === scriptName) {
             this.currentScript = null;
-            document.getElementById("current-script-name").textContent =
-              "No script selected";
+            this.setText("current-script-name", "No script selected");
             if (this.monacoEditor) {
               this.monacoEditor.setValue("// Select a script to edit");
             }
           }
         })
         .catch((error) => {
-          this.showStatus("Error deleting script: " + error.message, "error");
+          const err = /** @type {Error} */ (error);
+          this.showStatus("Error deleting script: " + err.message, "error");
         });
     }
   }
 
   clearAIPrompt() {
-    const promptInput = document.getElementById("ai-prompt");
-    promptInput.value = "";
-    promptInput.focus();
+    const promptInput = /** @type {HTMLInputElement | null} */ (
+      document.getElementById("ai-prompt")
+    );
+    if (promptInput) {
+      promptInput.value = "";
+      promptInput.focus();
+    }
   }
 
+  /**
+   * @param {string} text
+   * @returns {string}
+   */
   escapeHtml(text) {
     const div = document.createElement("div");
     div.textContent = text;
@@ -1904,6 +2274,7 @@ function init(context) {
 function initEditor() {
   console.log("[Editor] initEditor() called, DOM ready");
   console.log("[Editor] Creating AIWebEngineEditor instance...");
+  // @ts-ignore - window.editor is expected by onclick handlers in HTML
   window.editor = new AIWebEngineEditor();
 }
 
