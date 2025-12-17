@@ -59,14 +59,9 @@ function uploadTestAsset(context) {
     const jsB64 = btoa(jsContent);
 
     // Upload assets using new system (asset names only, no paths)
-    assetStorage.upsertAsset("test-styles.css", cssB64, "text/css", null);
-    assetStorage.upsertAsset("test-image.svg", svgB64, "image/svg+xml", null);
-    assetStorage.upsertAsset(
-      "test-script.js",
-      jsB64,
-      "application/javascript",
-      null,
-    );
+    assetStorage.upsertAsset("test-styles.css", "text/css", cssB64);
+    assetStorage.upsertAsset("test-image.svg", "image/svg+xml", svgB64);
+    assetStorage.upsertAsset("test-script.js", "application/javascript", jsB64);
 
     console.log("Test assets uploaded successfully");
 

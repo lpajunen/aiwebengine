@@ -17,22 +17,22 @@
  */
 
 function init() {
-  log("Database Schema Management Test Script initialized");
+  console.log("Database Schema Management Test Script initialized");
 
   // Register test routes
-  routeRegistry.register("GET", "/test/db/create", "testCreateTable");
-  routeRegistry.register("GET", "/test/db/columns", "testAddColumns");
-  routeRegistry.register("GET", "/test/db/references", "testForeignKeys");
-  routeRegistry.register("GET", "/test/db/drop-column", "testDropColumn");
-  routeRegistry.register("GET", "/test/db/drop", "testDropTable");
-  routeRegistry.register("GET", "/test/db/full", "testFullWorkflow");
+  routeRegistry.registerRoute("/test/db/create", "testCreateTable", "GET");
+  routeRegistry.registerRoute("/test/db/columns", "testAddColumns", "GET");
+  routeRegistry.registerRoute("/test/db/references", "testForeignKeys", "GET");
+  routeRegistry.registerRoute("/test/db/drop-column", "testDropColumn", "GET");
+  routeRegistry.registerRoute("/test/db/drop", "testDropTable", "GET");
+  routeRegistry.registerRoute("/test/db/full", "testFullWorkflow", "GET");
 }
 
 /**
  * Test 1: Create a table
  */
 function testCreateTable(context) {
-  log("Testing table creation...");
+  console.log("Testing table creation...");
 
   // Create a users table
   const result = database.createTable("users");
@@ -50,7 +50,7 @@ function testCreateTable(context) {
     };
   }
 
-  log(
+  console.log(
     "Created table: " +
       data.tableName +
       " (physical: " +
@@ -74,7 +74,7 @@ function testCreateTable(context) {
  * Test 2: Add columns of different types
  */
 function testAddColumns(context) {
-  log("Testing column addition...");
+  console.log("Testing column addition...");
 
   const results = [];
 
@@ -120,7 +120,7 @@ function testAddColumns(context) {
   const allSuccess = results.every((r) => r.result.success);
 
   if (!allSuccess) {
-    log("Some column additions failed");
+    console.log("Some column additions failed");
   }
 
   return {
@@ -138,7 +138,7 @@ function testAddColumns(context) {
  * Test 3: Create foreign key references
  */
 function testForeignKeys(context) {
-  log("Testing foreign key creation...");
+  console.log("Testing foreign key creation...");
 
   // Create two tables
   database.createTable("authors");
@@ -165,7 +165,7 @@ function testForeignKeys(context) {
     };
   }
 
-  log(
+  console.log(
     "Created foreign key: " + data.foreignKey + ", nullable: " + data.nullable,
   );
 
@@ -185,7 +185,7 @@ function testForeignKeys(context) {
  * Test 4: Drop a column
  */
 function testDropColumn(context) {
-  log("Testing column drop...");
+  console.log("Testing column drop...");
 
   // Create a table and add a column
   database.createTable("temp_table_col");
@@ -207,7 +207,7 @@ function testDropColumn(context) {
     };
   }
 
-  log(
+  console.log(
     "Dropped column: " +
       data.columnName +
       " from " +
@@ -236,7 +236,7 @@ function testDropColumn(context) {
  * Test 5: Drop a table
  */
 function testDropTable(context) {
-  log("Testing table drop...");
+  console.log("Testing table drop...");
 
   // Create and then drop a table
   database.createTable("temp_table");
@@ -256,7 +256,9 @@ function testDropTable(context) {
     };
   }
 
-  log("Dropped table: " + data.tableName + ", existed: " + data.dropped);
+  console.log(
+    "Dropped table: " + data.tableName + ", existed: " + data.dropped,
+  );
 
   return {
     status: 200,
@@ -274,7 +276,7 @@ function testDropTable(context) {
  * Test 6: Full workflow test
  */
 function testFullWorkflow(context) {
-  log("Testing full database schema workflow...");
+  console.log("Testing full database schema workflow...");
 
   const steps = [];
 
@@ -345,7 +347,7 @@ function testFullWorkflow(context) {
     });
 
     database.addIntegerColumn("orders", "customer_id", false, null);
-    const fkResult = database.createReference(
+    const fkResult = database.addReferenceColumn(
       "orders",
       "customer_id",
       "customers",
@@ -366,7 +368,9 @@ function testFullWorkflow(context) {
 
     const allSuccess = steps.every((s) => s.success);
 
-    log("Full workflow test completed. All steps successful: " + allSuccess);
+    console.log(
+      "Full workflow test completed. All steps successful: " + allSuccess,
+    );
 
     return {
       status: 200,
@@ -385,7 +389,7 @@ function testFullWorkflow(context) {
       contentType: "application/json",
     };
   } catch (error) {
-    log("Error in full workflow: " + error.toString());
+    console.log("Error in full workflow: " + error.toString());
 
     return {
       status: 500,

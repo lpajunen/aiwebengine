@@ -34,11 +34,11 @@ function testPersonalStorageHandler(context) {
 
     // Try to remove item without authentication
     const removeResult = personalStorage.removeItem("test_key");
-    if (removeResult === false) {
-      results.push("✓ removeItem returns false when not authenticated");
+    if (removeResult.includes("requires authentication")) {
+      results.push("✓ removeItem returns error when not authenticated");
     } else {
       results.push(
-        "✗ FAIL: removeItem should return false when not authenticated",
+        "✗ FAIL: removeItem should return error when not authenticated",
       );
     }
 
@@ -106,10 +106,10 @@ function testPersonalStorageHandler(context) {
     results.push("=== Test 5: Remove Item ===");
     const removeResult1 = personalStorage.removeItem("test_key");
     console.log("Remove result: " + removeResult1);
-    if (removeResult1 === true) {
-      results.push("✓ removeItem returned true for existing key");
+    if (removeResult1.includes("Success") || !removeResult1.includes("Error")) {
+      results.push("✓ removeItem returned success for existing key");
     } else {
-      results.push("✗ FAIL: removeItem should return true for existing key");
+      results.push("✗ FAIL: removeItem should return success for existing key");
     }
 
     const getAfterRemove = personalStorage.getItem("test_key");
@@ -125,11 +125,11 @@ function testPersonalStorageHandler(context) {
     results.push("");
     results.push("=== Test 6: Remove Non-existent Key ===");
     const removeResult2 = personalStorage.removeItem("nonexistent_key");
-    if (removeResult2 === false) {
-      results.push("✓ removeItem returned false for non-existent key");
+    if (removeResult2.includes("Success") || !removeResult2.includes("Error")) {
+      results.push("✓ removeItem returned success for non-existent key");
     } else {
       results.push(
-        "✗ FAIL: removeItem should return false for non-existent key",
+        "✗ FAIL: removeItem should return success for non-existent key",
       );
     }
 

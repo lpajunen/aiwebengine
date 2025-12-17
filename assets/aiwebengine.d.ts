@@ -165,11 +165,13 @@ interface RouteRegistry {
   /**
    * Register a Server-Sent Events (SSE) stream endpoint
    * @param path - URL path for the stream (must start with /)
+   * @param customizationFunction - Optional name of a function that returns connection filter criteria
    * @returns Registration result message
    * @example
    * routeRegistry.registerStreamRoute("/events/notifications");
+   * routeRegistry.registerStreamRoute("/events/chat", "chatCustomizer");
    */
-  registerStreamRoute(path: string): string;
+  registerStreamRoute(path: string, customizationFunction?: string): string;
 
   /**
    * Register a static asset route
@@ -349,39 +351,38 @@ interface PersonalStorage {
   /**
    * Get a value from personal storage for the authenticated user
    * @param key - Storage key
-   * @returns Stored value or null if not found
-   * @throws If user is not authenticated
+   * @returns Stored value or error message string
    * @example
-   * const preferences = personalStorage.getItem("theme") || "light";
+   * const preferences = personalStorage.getItem("theme");
    */
-  getItem(key: string): string | null;
+  getItem(key: string): string;
 
   /**
    * Set a value in personal storage for the authenticated user
    * @param key - Storage key
    * @param value - Value to store
-   * @throws If user is not authenticated
+   * @returns Success or error message
    * @example
-   * personalStorage.setItem("theme", "dark");
+   * const result = personalStorage.setItem("theme", "dark");
    */
-  setItem(key: string, value: string): void;
+  setItem(key: string, value: string): string;
 
   /**
    * Remove a key from personal storage for the authenticated user
    * @param key - Storage key
-   * @throws If user is not authenticated
+   * @returns Success or error message
    * @example
-   * personalStorage.removeItem("oldPreference");
+   * const result = personalStorage.removeItem("oldPreference");
    */
-  removeItem(key: string): void;
+  removeItem(key: string): string;
 
   /**
    * Clear all data from personal storage for the authenticated user
-   * @throws If user is not authenticated
+   * @returns Success or error message
    * @example
-   * personalStorage.clear();
+   * const result = personalStorage.clear();
    */
-  clear(): void;
+  clear(): string;
 }
 
 /**
@@ -956,43 +957,49 @@ interface Database {
 interface Console {
   /**
    * Write a log message
-   * @param message - Message to log
+   * @param message - Message to log (multiple arguments will be concatenated)
+   * @param optionalParams - Additional parameters to log
    * @example
-   * console.log("Request received: " + req.path);
+   * console.log("Request received:", req.path);
+   * console.log("User:", user.id, user.name);
    */
-  log(message: string): void;
+  log(message?: any, ...optionalParams: any[]): void;
 
   /**
    * Write an info log message
    * @param message - Info message to log
+   * @param optionalParams - Additional parameters to log
    * @example
-   * console.info("User logged in");
+   * console.info("User logged in:", userId);
    */
-  info(message: string): void;
+  info(message?: any, ...optionalParams: any[]): void;
 
   /**
    * Write a warning log message
    * @param message - Warning message to log
+   * @param optionalParams - Additional parameters to log
    * @example
-   * console.warn("Deprecated API usage detected");
+   * console.warn("Deprecated API usage detected:", apiName);
    */
-  warn(message: string): void;
+  warn(message?: any, ...optionalParams: any[]): void;
 
   /**
    * Write an error log message
    * @param message - Error message to log
+   * @param optionalParams - Additional parameters to log
    * @example
-   * console.error("Failed to process request: " + error);
+   * console.error("Failed to process request:", error);
    */
-  error(message: string): void;
+  error(message?: any, ...optionalParams: any[]): void;
 
   /**
    * Write a debug log message
    * @param message - Debug message to log
+   * @param optionalParams - Additional parameters to log
    * @example
-   * console.debug("Processing item: " + item.id);
+   * console.debug("Processing item:", item.id);
    */
-  debug(message: string): void;
+  debug(message?: any, ...optionalParams: any[]): void;
 
   /**
    * List all log entries
@@ -1086,6 +1093,67 @@ interface UserStorage {
 }
 
 // ============================================================================
+// Message Dispatcher API
+// ============================================================================
+
+/**
+ * Message dispatcher for inter-script communication
+ */
+interface MessageDispatcher {
+  /**
+   * Register a listener for a message type
+   * @param messageType - Type of message to listen for (e.g., "user.created")
+   * @param handlerName - Name of the handler function to call
+   * @returns Registration result message
+   * @throws If messageType or handlerName is empty
+   * @example
+   * dispatcher.registerListener("user.created", "handleUserCreated");
+   */
+  registerListener(messageType: string, handlerName: string): string;
+
+  /**
+   * Send a message to all listeners of a message type
+   * @param messageType - Type of message to send
+   * @param messageData - Optional data to send with the message (will be JSON serialized)
+   * @returns Send result message with delivery count
+   * @example
+   * dispatcher.sendMessage("user.created", { userId: "123", email: "user@example.com" });
+   */
+  sendMessage(messageType: string, messageData?: any): string;
+}
+
+// ============================================================================
+// Conversion Functions API
+// ============================================================================
+
+/**
+ * Conversion utilities for data transformation
+ */
+interface Convert {
+  /**
+   * Convert markdown string to HTML
+   * @param markdown - Markdown content to convert
+   * @returns HTML string
+   * @example
+   * const html = convert.markdown_to_html("# Hello\n\nThis is **bold**");
+   */
+  markdown_to_html(markdown: string): string;
+
+  /**
+   * Render a Handlebars template with data
+   * @param template - Handlebars template string
+   * @param dataJson - JSON string with template data
+   * @returns Rendered template string
+   * @example
+   * const output = convert.render_handlebars_template(
+   *   "Hello {{name}}!",
+   *   JSON.stringify({ name: "World" })
+   * );
+   */
+  render_handlebars_template(template: string, dataJson: string): string;
+}
+
+// ============================================================================
 // Global Objects
 // ============================================================================
 
@@ -1099,6 +1167,26 @@ declare var mcpRegistry: McpRegistry;
 declare var database: Database;
 declare var console: Console;
 declare var userStorage: UserStorage;
+declare var dispatcher: MessageDispatcher;
+declare var convert: Convert;
+
+/**
+ * Base64 encode a string
+ * @param data - String to encode
+ * @returns Base64-encoded string
+ * @example
+ * const encoded = btoa("Hello World");
+ */
+declare function btoa(data: string): string;
+
+/**
+ * Base64 decode a string
+ * @param data - Base64-encoded string to decode
+ * @returns Decoded string
+ * @example
+ * const decoded = atob(encoded);
+ */
+declare function atob(data: string): string;
 
 /**
  * Check database health status

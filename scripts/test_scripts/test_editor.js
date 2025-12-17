@@ -33,11 +33,11 @@ function testEditorAPI(context) {
 
     // Test 3: List logs
     testResults.push("Testing log listing...");
-    const logs =
-      typeof logStorage !== "undefined" &&
-      typeof logStorage.listLogs === "function"
-        ? logStorage.listLogs()
-        : [];
+    const logsJson =
+      typeof console !== "undefined" && typeof console.listLogs === "function"
+        ? console.listLogs()
+        : "[]";
+    const logs = JSON.parse(logsJson);
     testResults.push(`Found ${logs.length} log entries`);
 
     // Test 4: Check if editor files exist
@@ -45,13 +45,13 @@ function testEditorAPI(context) {
     // Note: editor.html is not a public asset - it's served via /editor endpoint
     const editorCss =
       typeof assetStorage !== "undefined" &&
-      typeof assetStorage.getAsset === "function"
-        ? assetStorage.getAsset("/editor.css")
+      typeof assetStorage.fetchAsset === "function"
+        ? assetStorage.fetchAsset("editor.css")
         : null;
     const editorJs =
       typeof assetStorage !== "undefined" &&
-      typeof assetStorage.getAsset === "function"
-        ? assetStorage.getAsset("/editor.js")
+      typeof assetStorage.fetchAsset === "function"
+        ? assetStorage.fetchAsset("editor.js")
         : null;
 
     testResults.push(`Editor CSS: ${editorCss !== null ? "Found" : "Missing"}`);
