@@ -1045,7 +1045,7 @@ function blogRouter(context) {
   }
 
   // Unknown path
-  return Response.error(404, "Not found");
+  return ResponseBuilder.error(404, "Not found");
 }
 
 function listPosts(context) {
@@ -1080,7 +1080,7 @@ function listPosts(context) {
   // Load template and render
   const template = sharedStorage.getItem("blog:template:list");
   if (!template) {
-    return Response.error(500, "Template not found");
+    return ResponseBuilder.error(500, "Template not found");
   }
 
   const data = { posts: posts };
@@ -1091,10 +1091,10 @@ function listPosts(context) {
 
   if (html.startsWith("Error:")) {
     console.error(`Template rendering failed: ${html}`);
-    return Response.error(500, "Template error");
+    return ResponseBuilder.error(500, "Template error");
   }
 
-  return Response.html(html);
+  return ResponseBuilder.html(html);
 }
 
 function showPost(context, slug) {

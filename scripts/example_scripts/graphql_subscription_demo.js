@@ -75,11 +75,11 @@ function triggerMessageHandler(context) {
 
   broadcastLiveMessage(message);
 
-  return Response.json({ success: true, message: "Message broadcasted" });
+  return ResponseBuilder.json({ success: true, message: "Message broadcasted" });
 }
 
 function subscriptionDemoPage(context) {
-  return Response.html(`
+  return ResponseBuilder.html(`
         <!DOCTYPE html>
         <html lang="en">
         <head>

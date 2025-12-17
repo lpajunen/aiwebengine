@@ -4,7 +4,7 @@
 // This example demonstrates real-time script updates using GraphQL subscriptions
 
 function scriptUpdatesDemoPage(context) {
-  return Response.html(`
+  return ResponseBuilder.html(`
 <!DOCTYPE html>
 <html lang="en">
 <head>

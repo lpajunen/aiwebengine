@@ -523,7 +523,7 @@ function scriptInitStatusQuery(context) {
   const req = getRequest(context);
   const args = getArgs(context);
   try {
-    const status = getScriptInitStatus(args.uri);
+    const status = scriptStorage.getScriptInitStatus(args.uri);
     if (status) {
       return status; // Already JSON string
     } else {

@@ -14,15 +14,15 @@ function asset_handler(context) {
         const assetMetadata = JSON.parse(assetsJson);
         // Extract just the names for backwards compatibility
         const assetNames = assetMetadata.map((a) => a.name);
-        return Response.json({ assets: assetNames, metadata: assetMetadata });
+        return ResponseBuilder.json({ assets: assetNames, metadata: assetMetadata });
       } else if (path.startsWith("/assets/")) {
         // Fetch specific asset
         const publicPath = path.substring("/assets/".length);
         const assetJson = assetStorage.fetchAsset("/" + publicPath);
         if (assetJson !== "null") {
-          return Response.json(JSON.parse(assetJson));
+          return ResponseBuilder.json(JSON.parse(assetJson));
         } else {
-          return Response.error(404, "Asset not found");
+          return ResponseBuilder.error(404, "Asset not found");
         }
       }
     } else if (method === "POST") {
@@ -32,13 +32,12 @@ function asset_handler(context) {
         if (body.publicPath && body.mimetype && body.content) {
           assetStorage.upsertAsset(
             body.publicPath,
-            body.content,
             body.mimetype,
-            null,
+            body.content,
           );
-          return Response.json({ message: "Asset created/updated" }, 201);
+          return ResponseBuilder.json({ message: "Asset created/updated" }, 201);
         } else {
-          return Response.error(
+          return ResponseBuilder.error(
             400,
             "Missing required fields: publicPath, mimetype, content",
           );
@@ -50,17 +49,17 @@ function asset_handler(context) {
         const publicPath = path.substring("/assets/".length);
         const deleted = assetStorage.deleteAsset("/" + publicPath);
         if (deleted) {
-          return Response.json({ message: "Asset deleted" });
+          return ResponseBuilder.json({ message: "Asset deleted" });
         } else {
-          return Response.error(404, "Asset not found");
+          return ResponseBuilder.error(404, "Asset not found");
         }
       }
     }
 
-    return Response.error(400, "Invalid request");
+    return ResponseBuilder.error(400, "Invalid request");
   } catch (e) {
     console.log("Asset handler error: " + String(e));
-    return Response.error(500, String(e));
+    return ResponseBuilder.error(500, String(e));
   }
 }
 

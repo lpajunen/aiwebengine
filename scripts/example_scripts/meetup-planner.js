@@ -124,7 +124,7 @@ function meetup_handler(context) {
 </body>
 </html>`;
 
-  return Response.html(html);
+  return ResponseBuilder.html(html);
 }
 
 function meetup_dashboard_handler(context) {
@@ -134,7 +134,7 @@ function meetup_dashboard_handler(context) {
   if (!req.auth || !req.auth.isAuthenticated) {
     const currentPath = encodeURIComponent(req.path || "/meetup/dashboard");
     const loginUrl = "/auth/login?redirect=" + currentPath;
-    return Response.redirect(loginUrl);
+    return ResponseBuilder.redirect(loginUrl);
   }
 
   const user = req.auth.user;
@@ -353,18 +353,18 @@ function meetup_dashboard_handler(context) {
 </body>
 </html>`;
 
-  return Response.html(html);
+  return ResponseBuilder.html(html);
 }
 
 function create_meetup_handler(context) {
   const req = context.request || {};
 
   if (!req.auth || !req.auth.isAuthenticated) {
-    return Response.error(401, "Unauthorized");
+    return ResponseBuilder.error(401, "Unauthorized");
   }
 
   if (req.method !== "POST") {
-    return Response.error(405, "Method not allowed");
+    return ResponseBuilder.error(405, "Method not allowed");
   }
 
   try {
@@ -372,7 +372,7 @@ function create_meetup_handler(context) {
     const { name, description } = body;
 
     if (!name || !description) {
-      return Response.error(400, "Name and description required");
+      return ResponseBuilder.error(400, "Name and description required");
     }
 
     const user = req.auth.user;
@@ -408,10 +408,10 @@ function create_meetup_handler(context) {
       console.error("Error storing meetup key in storage:", error);
     }
 
-    return Response.json({ id: meetupId }, 201);
+    return ResponseBuilder.json({ id: meetupId }, 201);
   } catch (error) {
     console.error("Error creating meetup:", error);
-    return Response.error(500, "Internal server error");
+    return ResponseBuilder.error(500, "Internal server error");
   }
 }
 
@@ -421,19 +421,19 @@ function join_meetup_handler(context) {
   const meetupId = path.split("/meetup/join/")[1];
 
   if (!meetupId) {
-    return Response.error(404, "Meetup not found");
+    return ResponseBuilder.error(404, "Meetup not found");
   }
 
   const meetup = getMeetupById(meetupId);
   if (!meetup) {
-    return Response.error(404, "Meetup not found");
+    return ResponseBuilder.error(404, "Meetup not found");
   }
 
   // Require authentication
   if (!req.auth || !req.auth.isAuthenticated) {
     const currentPath = encodeURIComponent(req.path);
     const loginUrl = "/auth/login?redirect=" + currentPath;
-    return Response.redirect(loginUrl);
+    return ResponseBuilder.redirect(loginUrl);
   }
 
   const user = req.auth.user;
@@ -681,7 +681,7 @@ function join_meetup_handler(context) {
 </body>
 </html>`;
 
-  return Response.html(html);
+  return ResponseBuilder.html(html);
 }
 
 function update_response_handler(context) {
@@ -690,11 +690,11 @@ function update_response_handler(context) {
   const meetupId = path.split("/meetup/")[1]?.split("/response")[0];
 
   if (!meetupId || req.method !== "POST") {
-    return Response.error(400, "Bad request");
+    return ResponseBuilder.error(400, "Bad request");
   }
 
   if (!req.auth || !req.auth.isAuthenticated) {
-    return Response.error(401, "Unauthorized");
+    return ResponseBuilder.error(401, "Unauthorized");
   }
 
   try {
@@ -702,23 +702,23 @@ function update_response_handler(context) {
     const { response } = body;
 
     if (!["agree", "disagree"].includes(response)) {
-      return Response.error(400, "Invalid response");
+      return ResponseBuilder.error(400, "Invalid response");
     }
 
     const user = req.auth.user;
     const meetup = getMeetupById(meetupId);
 
     if (!meetup || !meetup.members || !meetup.members[user.id]) {
-      return Response.error(404, "Meetup or membership not found");
+      return ResponseBuilder.error(404, "Meetup or membership not found");
     }
 
     meetup.members[user.id].response = response;
     saveMeetup(meetup);
 
-    return Response.json({ success: true });
+    return ResponseBuilder.json({ success: true });
   } catch (error) {
     console.error("Error updating response:", error);
-    return Response.error(500, "Internal server error");
+    return ResponseBuilder.error(500, "Internal server error");
   }
 }
 
