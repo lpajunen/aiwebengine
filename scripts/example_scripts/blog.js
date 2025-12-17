@@ -1,6 +1,13 @@
+/// <reference path="https://your-engine.com/api/types/v0.1.0/aiwebengine.d.ts" />
+
 // Example blog script demonstrating aiwebengine capabilities
 // This script registers a /blog endpoint that serves a sample blog post
 
+/**
+ * Blog handler - serves the main blog page
+ * @param {HandlerContext} context - Request context
+ * @returns {HttpResponse} HTML response
+ */
 function blog_handler(context) {
   const html = `<!DOCTYPE html>
 <html lang="en">

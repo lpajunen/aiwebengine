@@ -1,6 +1,13 @@
+/// <reference path="https://your-engine.com/api/types/v0.1.0/aiwebengine.d.ts" />
+
 // Example feedback script demonstrating form handling
 // This script registers a /feedback endpoint with GET (form) and POST (submission) handlers
 
+/**
+ * Feedback form handler - displays the feedback form
+ * @param {HandlerContext} context - Request context
+ * @returns {HttpResponse} HTML response with feedback form
+ */
 function feedback_form_handler(context) {
   const html = `<!DOCTYPE html>
 <html lang="en">

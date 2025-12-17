@@ -1,0 +1,684 @@
+/**
+ * TypeScript type definitions for aiwebengine JavaScript API
+ * @version 0.1.0
+ * 
+ * Add this reference to your scripts for IDE autocomplete and type checking:
+ * /// <reference path="https://your-engine.com/api/types/v0.1.0/aiwebengine.d.ts" />
+ */
+
+// ============================================================================
+// HTTP Request and Response Types
+// ============================================================================
+
+/**
+ * HTTP request object passed in context
+ */
+interface HttpRequest {
+  /** Request path (e.g., "/blog/post/123") */
+  path: string;
+  
+  /** HTTP method (GET, POST, PUT, DELETE, etc.) */
+  method: string;
+  
+  /** Request headers as key-value pairs */
+  headers: Record<string, string>;
+  
+  /** URL query parameters as key-value pairs */
+  query: Record<string, string>;
+  
+  /** Route parameters from path patterns (e.g., {id: "123"}) */
+  params: Record<string, string>;
+  
+  /** Form data from POST requests as key-value pairs */
+  form: Record<string, string>;
+  
+  /** Raw request body as string */
+  body: string;
+  
+  /** Authentication context (available when user is authenticated) */
+  auth?: AuthContext;
+}
+
+/**
+ * Authentication context available in request.auth when user is authenticated
+ */
+interface AuthContext {
+  /** User ID */
+  userId: string;
+  
+  /** User email address */
+  email: string;
+  
+  /** User display name */
+  name: string;
+  
+  /** Authentication provider (google, microsoft, apple) */
+  provider: string;
+  
+  /** Whether user has admin privileges */
+  isAdmin: boolean;
+  
+  /** Whether user has premium status */
+  isPremium: boolean;
+}
+
+/**
+ * HTTP response object returned from handlers
+ */
+interface HttpResponse {
+  /** HTTP status code (200, 404, 500, etc.) */
+  status: number;
+  
+  /** Response body as string (mutually exclusive with bodyBase64) */
+  body?: string;
+  
+  /** Response body as base64-encoded string (for binary data) */
+  bodyBase64?: string;
+  
+  /** Content-Type header value */
+  contentType?: string;
+  
+  /** Additional response headers */
+  headers?: Record<string, string>;
+}
+
+/**
+ * Context object passed to all handler functions
+ */
+interface HandlerContext {
+  /** HTTP request information (for HTTP route handlers) */
+  request?: HttpRequest;
+  
+  /** GraphQL or function arguments (for GraphQL resolvers) */
+  args?: Record<string, any>;
+  
+  /** Handler invocation type */
+  invocationType?: "httpRoute" | "graphqlQuery" | "graphqlMutation" | "graphqlSubscription" | "scheduledJob" | "mcpTool";
+  
+  /** Additional metadata */
+  metadata?: Record<string, any>;
+}
+
+// ============================================================================
+// Route Registry API
+// ============================================================================
+
+/**
+ * Route registry for HTTP endpoints and streaming
+ */
+interface RouteRegistry {
+  /**
+   * Register an HTTP route handler
+   * @param path - URL path pattern (e.g., "/blog/post/:id")
+   * @param handlerName - Name of the handler function to call
+   * @param method - HTTP method (GET, POST, PUT, DELETE, etc.)
+   * @returns Registration result message
+   * @example
+   * routeRegistry.registerRoute("/api/users", "listUsers", "GET");
+   */
+  registerRoute(path: string, handlerName: string, method: string): string;
+  
+  /**
+   * Register a Server-Sent Events (SSE) stream endpoint
+   * @param path - URL path for the stream (must start with /)
+   * @returns Registration result message
+   * @example
+   * routeRegistry.registerStreamRoute("/events/notifications");
+   */
+  registerStreamRoute(path: string): string;
+  
+  /**
+   * Register a static asset route
+   * @param httpPath - HTTP path where asset will be served (e.g., "/styles/main.css")
+   * @param assetName - Name of the asset in the asset storage (e.g., "main.css")
+   * @returns Registration result message
+   * @example
+   * routeRegistry.registerAssetRoute("/styles/main.css", "main.css");
+   */
+  registerAssetRoute(httpPath: string, assetName: string): string;
+  
+  /**
+   * Broadcast a message to all connections on a stream
+   * @param path - Stream path
+   * @param data - Data to send (will be JSON serialized)
+   * @returns Broadcast result message
+   * @example
+   * routeRegistry.sendStreamMessage("/events/notifications", { 
+   *   type: "alert", 
+   *   message: "New update available" 
+   * });
+   */
+  sendStreamMessage(path: string, data: any): string;
+  
+  /**
+   * Send a message to filtered connections based on metadata
+   * @param path - Stream path
+   * @param data - Data to send (will be JSON serialized)
+   * @param filterJson - JSON filter criteria for connection metadata
+   * @returns Broadcast result message
+   * @example
+   * routeRegistry.sendStreamMessageFiltered(
+   *   "/events/notifications",
+   *   { message: "Admin alert" },
+   *   JSON.stringify({ role: "admin" })
+   * );
+   */
+  sendStreamMessageFiltered(path: string, data: any, filterJson: string): string;
+  
+  /**
+   * List all registered routes
+   * @returns JSON string array of registered routes
+   * @example
+   * const routes = JSON.parse(routeRegistry.listRoutes());
+   */
+  listRoutes(): string;
+  
+  /**
+   * List all registered streams
+   * @returns JSON string array of registered streams
+   * @example
+   * const streams = JSON.parse(routeRegistry.listStreams());
+   */
+  listStreams(): string;
+}
+
+// ============================================================================
+// Asset Storage API
+// ============================================================================
+
+/**
+ * Asset metadata
+ */
+interface AssetMetadata {
+  /** Asset URI/name */
+  uri: string;
+  
+  /** Display name */
+  name: string;
+  
+  /** MIME type */
+  mimetype: string;
+  
+  /** Size in bytes */
+  size: number;
+  
+  /** Creation timestamp */
+  created_at: string;
+  
+  /** Last update timestamp */
+  updated_at: string;
+}
+
+/**
+ * Asset storage for managing static files
+ */
+interface AssetStorage {
+  /**
+   * List all assets with metadata
+   * @returns JSON string array of asset metadata
+   * @example
+   * const assetsJson = assetStorage.listAssets();
+   * const assets = JSON.parse(assetsJson);
+   */
+  listAssets(): string;
+  
+  /**
+   * Fetch an asset's content
+   * @param name - Asset name/URI
+   * @returns Base64-encoded asset content or error message
+   * @example
+   * const content = assetStorage.fetchAsset("logo.svg");
+   */
+  fetchAsset(name: string): string;
+  
+  /**
+   * Create or update an asset
+   * @param name - Asset name/URI
+   * @param mimetype - MIME type (e.g., "image/png", "text/css")
+   * @param contentBase64 - Base64-encoded content
+   * @returns Operation result message
+   * @example
+   * assetStorage.upsertAsset("logo.svg", "image/svg+xml", base64Content);
+   */
+  upsertAsset(name: string, mimetype: string, contentBase64: string): string;
+  
+  /**
+   * Delete an asset
+   * @param name - Asset name/URI
+   * @returns Operation result message
+   * @example
+   * assetStorage.deleteAsset("old-logo.svg");
+   */
+  deleteAsset(name: string): string;
+}
+
+// ============================================================================
+// Storage APIs
+// ============================================================================
+
+/**
+ * Shared storage (script-scoped, persistent key-value store)
+ */
+interface SharedStorage {
+  /**
+   * Get a value from shared storage
+   * @param key - Storage key
+   * @returns Stored value or null if not found
+   * @example
+   * const counter = sharedStorage.get("pageViews") || "0";
+   */
+  get(key: string): string | null;
+  
+  /**
+   * Set a value in shared storage
+   * @param key - Storage key
+   * @param value - Value to store
+   * @example
+   * sharedStorage.set("pageViews", "42");
+   */
+  set(key: string, value: string): void;
+  
+  /**
+   * Delete a key from shared storage
+   * @param key - Storage key
+   * @example
+   * sharedStorage.delete("oldData");
+   */
+  delete(key: string): void;
+  
+  /**
+   * Clear all data from shared storage
+   * @example
+   * sharedStorage.clear();
+   */
+  clear(): void;
+}
+
+/**
+ * Personal storage (user-scoped, requires authentication)
+ */
+interface PersonalStorage {
+  /**
+   * Get a value from personal storage for the authenticated user
+   * @param key - Storage key
+   * @returns Stored value or null if not found
+   * @throws If user is not authenticated
+   * @example
+   * const preferences = personalStorage.get("theme") || "light";
+   */
+  get(key: string): string | null;
+  
+  /**
+   * Set a value in personal storage for the authenticated user
+   * @param key - Storage key
+   * @param value - Value to store
+   * @throws If user is not authenticated
+   * @example
+   * personalStorage.set("theme", "dark");
+   */
+  set(key: string, value: string): void;
+  
+  /**
+   * Delete a key from personal storage for the authenticated user
+   * @param key - Storage key
+   * @throws If user is not authenticated
+   * @example
+   * personalStorage.delete("oldPreference");
+   */
+  delete(key: string): void;
+  
+  /**
+   * Clear all data from personal storage for the authenticated user
+   * @throws If user is not authenticated
+   * @example
+   * personalStorage.clear();
+   */
+  clear(): void;
+}
+
+// ============================================================================
+// GraphQL Registry API
+// ============================================================================
+
+/**
+ * GraphQL schema and resolver registration
+ */
+interface GraphQLRegistry {
+  /**
+   * Register a GraphQL query
+   * @param name - Query name
+   * @param schema - GraphQL schema definition
+   * @param resolverName - Name of the resolver function
+   * @returns Registration result message
+   * @example
+   * graphQLRegistry.registerQuery(
+   *   "getUser",
+   *   "getUser(id: ID!): User",
+   *   "getUserResolver"
+   * );
+   */
+  registerQuery(name: string, schema: string, resolverName: string): string;
+  
+  /**
+   * Register a GraphQL mutation
+   * @param name - Mutation name
+   * @param schema - GraphQL schema definition
+   * @param resolverName - Name of the resolver function
+   * @returns Registration result message
+   * @example
+   * graphQLRegistry.registerMutation(
+   *   "createUser",
+   *   "createUser(name: String!, email: String!): User",
+   *   "createUserResolver"
+   * );
+   */
+  registerMutation(name: string, schema: string, resolverName: string): string;
+  
+  /**
+   * Register a GraphQL subscription
+   * @param name - Subscription name
+   * @param schema - GraphQL schema definition
+   * @param resolverName - Name of the resolver function
+   * @returns Registration result message
+   * @example
+   * graphQLRegistry.registerSubscription(
+   *   "messageAdded",
+   *   "messageAdded(chatId: ID!): Message",
+   *   "messageAddedResolver"
+   * );
+   */
+  registerSubscription(name: string, schema: string, resolverName: string): string;
+  
+  /**
+   * Register a GraphQL type definition
+   * @param typeDef - GraphQL type definition
+   * @returns Registration result message
+   * @example
+   * graphQLRegistry.registerType(`
+   *   type User {
+   *     id: ID!
+   *     name: String!
+   *     email: String!
+   *   }
+   * `);
+   */
+  registerType(typeDef: string): string;
+  
+  /**
+   * Execute a GraphQL query internally
+   * @param query - GraphQL query string
+   * @param variables - Query variables (optional)
+   * @returns JSON string with query results
+   * @example
+   * const result = graphQLRegistry.executeGraphQL(
+   *   "query { getUser(id: \"123\") { name } }",
+   *   "{}"
+   * );
+   */
+  executeGraphQL(query: string, variables?: string): string;
+}
+
+// ============================================================================
+// Authentication API
+// ============================================================================
+
+/**
+ * Authentication helper functions
+ */
+interface Authentication {
+  /**
+   * Check if current request is authenticated
+   * @param context - Handler context
+   * @returns true if authenticated, false otherwise
+   * @example
+   * if (Authentication.isAuthenticated(context)) {
+   *   // Handle authenticated request
+   * }
+   */
+  isAuthenticated(context: HandlerContext): boolean;
+  
+  /**
+   * Get the authenticated user's ID
+   * @param context - Handler context
+   * @returns User ID or null if not authenticated
+   * @example
+   * const userId = Authentication.getUserId(context);
+   */
+  getUserId(context: HandlerContext): string | null;
+  
+  /**
+   * Get the authenticated user's email
+   * @param context - Handler context
+   * @returns Email or null if not authenticated
+   * @example
+   * const email = Authentication.getEmail(context);
+   */
+  getEmail(context: HandlerContext): string | null;
+  
+  /**
+   * Get the authenticated user's name
+   * @param context - Handler context
+   * @returns Name or null if not authenticated
+   * @example
+   * const name = Authentication.getName(context);
+   */
+  getName(context: HandlerContext): string | null;
+  
+  /**
+   * Get the authentication provider
+   * @param context - Handler context
+   * @returns Provider name (google, microsoft, apple) or null if not authenticated
+   * @example
+   * const provider = Authentication.getProvider(context);
+   */
+  getProvider(context: HandlerContext): string | null;
+  
+  /**
+   * Check if user has admin privileges
+   * @param context - Handler context
+   * @returns true if user is admin, false otherwise
+   * @example
+   * if (Authentication.isAdmin(context)) {
+   *   // Admin-only functionality
+   * }
+   */
+  isAdmin(context: HandlerContext): boolean;
+  
+  /**
+   * Check if user has premium status
+   * @param context - Handler context
+   * @returns true if user is premium, false otherwise
+   * @example
+   * if (Authentication.isPremium(context)) {
+   *   // Premium features
+   * }
+   */
+  isPremium(context: HandlerContext): boolean;
+  
+  /**
+   * Require authentication, throw error if not authenticated
+   * @param context - Handler context
+   * @throws If user is not authenticated
+   * @example
+   * Authentication.requireAuth(context);
+   * // Continue with authenticated-only code
+   */
+  requireAuth(context: HandlerContext): void;
+}
+
+// ============================================================================
+// HTTP Fetch API
+// ============================================================================
+
+/**
+ * Fetch options
+ */
+interface FetchOptions {
+  /** HTTP method (default: GET) */
+  method?: string;
+  
+  /** Request headers */
+  headers?: Record<string, string>;
+  
+  /** Request body */
+  body?: string;
+  
+  /** Timeout in milliseconds (default: 30000) */
+  timeout?: number;
+}
+
+/**
+ * Fetch response
+ */
+interface FetchResponse {
+  /** HTTP status code */
+  status: number;
+  
+  /** Response body as string */
+  body: string;
+  
+  /** Response headers */
+  headers: Record<string, string>;
+}
+
+/**
+ * HTTP client with secret injection support
+ * @param url - URL to fetch (supports {{SECRET_NAME}} syntax for secret injection)
+ * @param options - Fetch options
+ * @returns Fetch response as JSON string
+ * @example
+ * // Simple GET request
+ * const response = fetch("https://api.example.com/data");
+ * const data = JSON.parse(response);
+ * 
+ * // POST with secret injection
+ * const response = fetch("https://api.example.com/endpoint", {
+ *   method: "POST",
+ *   headers: { 
+ *     "Authorization": "Bearer {{API_TOKEN}}",
+ *     "Content-Type": "application/json"
+ *   },
+ *   body: JSON.stringify({ key: "value" })
+ * });
+ */
+declare function fetch(url: string, options?: FetchOptions): string;
+
+// ============================================================================
+// Console API
+// ============================================================================
+
+/**
+ * Console logging interface
+ */
+interface Console {
+  /**
+   * Write a log message
+   * @param message - Message to log
+   * @example
+   * console.log("Request received: " + req.path);
+   */
+  log(message: string): void;
+  
+  /**
+   * Write an error log message
+   * @param message - Error message to log
+   * @example
+   * console.error("Failed to process request: " + error);
+   */
+  error(message: string): void;
+}
+
+// ============================================================================
+// Response Builder Helpers
+// ============================================================================
+
+/**
+ * Response builder utility functions
+ */
+interface ResponseBuilder {
+  /**
+   * Create a JSON response
+   * @param data - Data to serialize as JSON
+   * @param status - HTTP status code (default: 200)
+   * @returns HTTP response object
+   * @example
+   * return Response.json({ message: "Success", data: results });
+   */
+  json(data: any, status?: number): HttpResponse;
+  
+  /**
+   * Create a plain text response
+   * @param text - Text content
+   * @param status - HTTP status code (default: 200)
+   * @returns HTTP response object
+   * @example
+   * return Response.text("Hello, World!");
+   */
+  text(text: string, status?: number): HttpResponse;
+  
+  /**
+   * Create an HTML response
+   * @param html - HTML content
+   * @param status - HTTP status code (default: 200)
+   * @returns HTTP response object
+   * @example
+   * return Response.html("<h1>Welcome</h1>");
+   */
+  html(html: string, status?: number): HttpResponse;
+  
+  /**
+   * Create an error response
+   * @param message - Error message
+   * @param status - HTTP status code (default: 500)
+   * @returns HTTP response object
+   * @example
+   * return Response.error("Not found", 404);
+   */
+  error(message: string, status?: number): HttpResponse;
+  
+  /**
+   * Create a 204 No Content response
+   * @returns HTTP response object
+   * @example
+   * return Response.noContent();
+   */
+  noContent(): HttpResponse;
+  
+  /**
+   * Create a 302 redirect response
+   * @param location - Redirect URL
+   * @returns HTTP response object
+   * @example
+   * return Response.redirect("/login");
+   */
+  redirect(location: string): HttpResponse;
+}
+
+// ============================================================================
+// Global Objects
+// ============================================================================
+
+declare const routeRegistry: RouteRegistry;
+declare const assetStorage: AssetStorage;
+declare const sharedStorage: SharedStorage;
+declare const personalStorage: PersonalStorage;
+declare const graphQLRegistry: GraphQLRegistry;
+declare const Authentication: Authentication;
+declare const console: Console;
+declare const Response: ResponseBuilder;
+
+// ============================================================================
+// Helper Functions (if exposed globally)
+// ============================================================================
+
+/**
+ * Get request object from context (convenience helper)
+ * @param context - Handler context
+ * @returns Request object
+ * @example
+ * function myHandler(context) {
+ *   const req = getRequest(context);
+ *   return Response.text("Path: " + req.path);
+ * }
+ */
+declare function getRequest(context: HandlerContext): HttpRequest;

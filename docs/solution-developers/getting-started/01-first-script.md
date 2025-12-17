@@ -431,4 +431,72 @@ init();
 - **Examples**: [Code Examples](../examples/index.md)
 - **Community**: GitHub Issues
 
+## IDE Support with TypeScript Definitions
+
+For better development experience with autocomplete and type checking in your IDE (VS Code, WebStorm, etc.), add this reference comment at the top of your scripts:
+
+```javascript
+/// <reference path="https://your-engine.com/api/types/v0.1.0/aiwebengine.d.ts" />
+```
+
+Replace `your-engine.com` with your actual engine URL (e.g., `localhost:8080` for local development).
+
+### Benefits
+
+- **Autocomplete**: Get suggestions for all available APIs as you type
+- **Type checking**: Catch errors before runtime
+- **Documentation**: See inline documentation for all functions and parameters
+- **Better refactoring**: Safely rename variables and functions
+
+### Example with Type Support
+
+```javascript
+/// <reference path="http://localhost:8080/api/types/v0.1.0/aiwebengine.d.ts" />
+
+/**
+ * @param {HandlerContext} context
+ * @returns {HttpResponse}
+ */
+function helloHandler(context) {
+  const req = context.request;
+
+  // IDE now provides autocomplete for req.query, req.method, etc.
+  const name = req.query.name || "World";
+
+  // IDE knows about Response.text() and its parameters
+  return Response.text(`Hello, ${name}!`);
+}
+
+function init() {
+  // Autocomplete for routeRegistry methods
+  routeRegistry.registerRoute("/hello", "helloHandler", "GET");
+}
+
+init();
+```
+
+### Optional: Configure jsconfig.json
+
+For persistent type checking across all your scripts, create a `jsconfig.json` file in your scripts directory:
+
+```json
+{
+  "compilerOptions": {
+    "checkJs": true,
+    "target": "ES2020",
+    "lib": ["ES2020"]
+  },
+  "include": ["*.js"],
+  "exclude": ["node_modules"]
+}
+```
+
+Then configure VS Code to use the type definitions globally by adding to your workspace settings (`.vscode/settings.json`):
+
+```json
+{
+  "js/ts.implicitProjectConfig.checkJs": true
+}
+```
+
 Congratulations on creating your first script! 🎉

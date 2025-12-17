@@ -3572,6 +3572,17 @@ fn get_static_assets() -> HashMap<String, Asset> {
     };
     m.insert("favicon.ico".to_string(), favicon);
 
+    let aiwebengine_dts_content = include_bytes!("../assets/aiwebengine.d.ts").to_vec();
+    let aiwebengine_dts = Asset {
+        uri: "aiwebengine.d.ts".to_string(),
+        name: Some("TypeScript Type Definitions".to_string()),
+        mimetype: "text/plain".to_string(),
+        content: aiwebengine_dts_content,
+        created_at: now,
+        updated_at: now,
+    };
+    m.insert("aiwebengine.d.ts".to_string(), aiwebengine_dts);
+
     m
 }
 

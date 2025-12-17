@@ -1915,6 +1915,33 @@ async fn setup_routes(
             axum::routing::get(health_cluster_handler),
         );
 
+    // Add TypeScript type definitions endpoint (no authentication required)
+    let version = env!("CARGO_PKG_VERSION");
+    let type_defs_path = format!("/api/types/v{}/aiwebengine.d.ts", version);
+    app = app.route(
+        &type_defs_path,
+        axum::routing::get(|| async {
+            if let Some(asset) = repository::fetch_asset("aiwebengine.d.ts") {
+                let mut response = asset.content.into_response();
+                response.headers_mut().insert(
+                    axum::http::header::CONTENT_TYPE,
+                    axum::http::HeaderValue::from_static("text/plain; charset=utf-8"),
+                );
+                response.headers_mut().insert(
+                    axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
+                    axum::http::HeaderValue::from_static("*"),
+                );
+                response.headers_mut().insert(
+                    axum::http::header::CACHE_CONTROL,
+                    axum::http::HeaderValue::from_static("public, max-age=3600"),
+                );
+                response
+            } else {
+                (StatusCode::NOT_FOUND, "Type definitions not found").into_response()
+            }
+        }),
+    );
+
     // Add documentation routes
     app = app.route(
         "/engine/docs",

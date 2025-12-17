@@ -1,6 +1,13 @@
+/// <reference path="https://your-engine.com/api/types/v0.1.0/aiwebengine.d.ts" />
+
 // Example script demonstrating the fetch() API
 // This script shows how to make HTTP requests to external APIs
 
+/**
+ * Initialize fetch example routes
+ * @param {HandlerContext} context - Initialization context
+ * @returns {{success: boolean}} Initialization result
+ */
 function init(context) {
   console.log("Initializing fetch_example.js");
   routeRegistry.registerRoute("/fetch/example", "fetchExample", "GET");
