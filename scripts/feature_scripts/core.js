@@ -1182,7 +1182,7 @@ function init(context) {
       "scriptUpdatesCustomizer",
     );
 
-    // Register GraphQL subscription (external - used by UI clients)
+    // Register GraphQL subscription (authenticated - used by UI clients)
     graphQLRegistry.registerSubscription(
       "scriptUpdates",
       "type ScriptUpdate { type: String!, uri: String!, action: String!, timestamp: String!, contentLength: Int, previousExists: Boolean, via: String } type Subscription { scriptUpdates: ScriptUpdate! }",
@@ -1190,7 +1190,7 @@ function init(context) {
       "external",
     );
 
-    // Register GraphQL queries (external - used by clients and tests)
+    // Register GraphQL queries (authenticated - used by clients and tests)
     graphQLRegistry.registerQuery(
       "scripts",
       "type ScriptInfo { uri: String!, chars: Int!, owners: [String!]! } type Query { scripts: [ScriptInfo!]! }",
@@ -1216,7 +1216,7 @@ function init(context) {
       "external",
     );
 
-    // Register GraphQL mutations (external - used by clients and tests)
+    // Register GraphQL mutations (authenticated - used by clients and tests)
     graphQLRegistry.registerMutation(
       "upsertScript",
       "type UpsertScriptResponse { message: String!, uri: String!, chars: Int!, success: Boolean! } type Mutation { upsertScript(uri: String!, content: String!): UpsertScriptResponse! }",

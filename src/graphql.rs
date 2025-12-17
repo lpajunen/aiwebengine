@@ -11,10 +11,10 @@ use crate::js_engine::{GraphqlOperationKind, GraphqlResolverExecutionParams};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperationVisibility {
     /// Only callable from within the same script
-    ScriptInternal,
+    Internal,
     /// Callable from any script, but not externally via HTTP
-    EngineInternal,
-    /// Accessible via external HTTP/WebSocket endpoints
+    Engine,
+    /// Accessible via external HTTP/WebSocket endpoints (requires authentication)
     External,
 }
 
@@ -23,11 +23,11 @@ impl FromStr for OperationVisibility {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "script-internal" => Ok(Self::ScriptInternal),
-            "engine-internal" => Ok(Self::EngineInternal),
+            "internal" => Ok(Self::Internal),
+            "engine" => Ok(Self::Engine),
             "external" => Ok(Self::External),
             _ => Err(format!(
-                "Invalid visibility: '{}'. Must be 'script-internal', 'engine-internal', or 'external'",
+                "Invalid visibility: '{}'. Must be 'internal', 'engine', or 'external'",
                 s
             )),
         }
@@ -634,7 +634,7 @@ pub fn build_schema_with_context(
             SchemaContext::External => op.visibility == OperationVisibility::External,
             SchemaContext::Internal => {
                 op.visibility == OperationVisibility::External
-                    || op.visibility == OperationVisibility::EngineInternal
+                    || op.visibility == OperationVisibility::Engine
             }
             SchemaContext::Debug => {
                 // For debug context, only include operations from the specified script

@@ -1020,15 +1020,16 @@ eventSource.onerror = function (event) {
 
 aiwebengine provides comprehensive GraphQL support through the `graphQLRegistry` object, which contains all GraphQL-related functions for registering operations and executing queries directly from your JavaScript scripts.
 
-### graphQLRegistry.registerQuery(name, schema, resolverName)
+### graphQLRegistry.registerQuery(name, sdl, resolverFunction, visibility)
 
 Registers a GraphQL query that can be executed through the GraphQL endpoint.
 
 **Parameters:**
 
 - `name` (string): Name of the query (e.g., `"users"`, `"getPosts"`)
-- `schema` (string): GraphQL schema definition in SDL format
-- `resolverName` (string): Name of your JavaScript resolver function
+- `sdl` (string): GraphQL SDL (Schema Definition Language) for the query
+- `resolverFunction` (string): Name of your JavaScript resolver function
+- `visibility` (string): Visibility level - `"internal"` (script-only), `"engine"` (all scripts), or `"external"` (authenticated API access)
 
 **Example:**
 
@@ -1053,6 +1054,7 @@ graphQLRegistry.registerQuery(
     users: [User!]!
   }`,
   "getUsers",
+  "external",
 );
 ```
 
@@ -1082,18 +1084,20 @@ graphQLRegistry.registerQuery(
     user(id: Int!): User
   }`,
   "getUserById",
+  "external",
 );
 ```
 
-### graphQLRegistry.registerMutation(name, schema, resolverName)
+### graphQLRegistry.registerMutation(name, sdl, resolverFunction, visibility)
 
 Registers a GraphQL mutation for modifying data.
 
 **Parameters:**
 
 - `name` (string): Name of the mutation
-- `schema` (string): GraphQL schema definition in SDL format
-- `resolverName` (string): Name of your JavaScript resolver function
+- `sdl` (string): GraphQL SDL (Schema Definition Language) for the mutation
+- `resolverFunction` (string): Name of your JavaScript resolver function
+- `visibility` (string): Visibility level - `"internal"` (script-only), `"engine"` (all scripts), or `"external"` (authenticated API access)
 
 **Example:**
 
@@ -1126,18 +1130,20 @@ graphQLRegistry.registerMutation(
     createUser(name: String!, email: String!): User!
   }`,
   "createUser",
+  "external",
 );
 ```
 
-### graphQLRegistry.registerSubscription(name, schema, resolverName)
+### graphQLRegistry.registerSubscription(name, sdl, resolverFunction, visibility)
 
 Registers a GraphQL subscription for real-time data streaming.
 
 **Parameters:**
 
 - `name` (string): Name of the subscription
-- `schema` (string): GraphQL schema definition in SDL format
-- `resolverName` (string): Name of your JavaScript resolver function
+- `sdl` (string): GraphQL SDL (Schema Definition Language) for the subscription
+- `resolverFunction` (string): Name of your JavaScript resolver function
+- `visibility` (string): Visibility level - `"internal"` (script-only), `"engine"` (all scripts), or `"external"` (authenticated API access)
 
 **Example:**
 
@@ -1163,6 +1169,7 @@ graphQLRegistry.registerSubscription(
     userActivity: ActivityEvent!
   }`,
   "onUserActivity",
+  "external",
 );
 ```
 
@@ -1199,6 +1206,51 @@ function logUserAction(req) {
 }
 
 routeRegistry.registerRoute("/log-action", "logUserAction", "POST");
+```
+
+### graphQLRegistry.sendSubscriptionMessageFiltered(subscriptionName, data, filterJson)
+
+Sends a message to filtered clients subscribed to a specific GraphQL subscription based on connection metadata.
+
+**Parameters:**
+
+- `subscriptionName` (string): Name of the subscription to send to
+- `data` (string): JSON string containing the message data
+- `filterJson` (string, optional): JSON string with filter criteria for connection metadata
+
+**Example:**
+
+```javascript
+function broadcastAdminMessage(req) {
+  const { message } = req.form;
+
+  // Send to all admin connections only
+  const messageData = JSON.stringify({
+    type: "admin_notification",
+    message: message,
+    timestamp: new Date().toISOString(),
+  });
+
+  const filter = JSON.stringify({ role: "admin" });
+
+  graphQLRegistry.sendSubscriptionMessageFiltered(
+    "adminNotifications",
+    messageData,
+    filter,
+  );
+
+  return {
+    status: 200,
+    body: "Admin notification sent",
+    contentType: "text/plain; charset=UTF-8",
+  };
+}
+
+routeRegistry.registerRoute(
+  "/admin/broadcast",
+  "broadcastAdminMessage",
+  "POST",
+);
 ```
 
 ### graphQLRegistry.executeGraphQL(query, variables)

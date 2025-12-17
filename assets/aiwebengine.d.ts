@@ -530,50 +530,67 @@ interface GraphQLRegistry {
   /**
    * Register a GraphQL query
    * @param name - Query name
-   * @param schema - GraphQL schema definition
-   * @param resolverName - Name of the resolver function
+   * @param sdl - GraphQL SDL (Schema Definition Language) for the query
+   * @param resolverFunction - Name of the resolver function
+   * @param visibility - Visibility level: "internal" (script-only), "engine" (all scripts), or "external" (authenticated API access)
    * @returns Registration result message
    * @example
    * graphQLRegistry.registerQuery(
    *   "getUser",
    *   "getUser(id: ID!): User",
-   *   "getUserResolver"
+   *   "getUserResolver",
+   *   "external"
    * );
    */
-  registerQuery(name: string, schema: string, resolverName: string): string;
+  registerQuery(
+    name: string,
+    sdl: string,
+    resolverFunction: string,
+    visibility: string,
+  ): string;
 
   /**
    * Register a GraphQL mutation
    * @param name - Mutation name
-   * @param schema - GraphQL schema definition
-   * @param resolverName - Name of the resolver function
+   * @param sdl - GraphQL SDL (Schema Definition Language) for the mutation
+   * @param resolverFunction - Name of the resolver function
+   * @param visibility - Visibility level: "internal" (script-only), "engine" (all scripts), or "external" (authenticated API access)
    * @returns Registration result message
    * @example
    * graphQLRegistry.registerMutation(
    *   "createUser",
    *   "createUser(name: String!, email: String!): User",
-   *   "createUserResolver"
+   *   "createUserResolver",
+   *   "external"
    * );
    */
-  registerMutation(name: string, schema: string, resolverName: string): string;
+  registerMutation(
+    name: string,
+    sdl: string,
+    resolverFunction: string,
+    visibility: string,
+  ): string;
 
   /**
    * Register a GraphQL subscription
    * @param name - Subscription name
-   * @param schema - GraphQL schema definition
-   * @param resolverName - Name of the resolver function
+   * @param sdl - GraphQL SDL (Schema Definition Language) for the subscription
+   * @param resolverFunction - Name of the resolver function
+   * @param visibility - Visibility level: "internal" (script-only), "engine" (all scripts), or "external" (authenticated API access)
    * @returns Registration result message
    * @example
    * graphQLRegistry.registerSubscription(
    *   "messageAdded",
    *   "messageAdded(chatId: ID!): Message",
-   *   "messageAddedResolver"
+   *   "messageAddedResolver",
+   *   "external"
    * );
    */
   registerSubscription(
     name: string,
-    schema: string,
-    resolverName: string,
+    sdl: string,
+    resolverFunction: string,
+    visibility: string,
   ): string;
 
   /**
@@ -588,6 +605,38 @@ interface GraphQLRegistry {
    * );
    */
   executeGraphQL(query: string, variables?: string): string;
+
+  /**
+   * Send a message to all connections subscribed to a GraphQL subscription
+   * @param subscriptionName - Name of the subscription
+   * @param message - Message to send (will be JSON serialized)
+   * @returns Send result message
+   * @example
+   * graphQLRegistry.sendSubscriptionMessage(
+   *   "messageAdded",
+   *   JSON.stringify({ id: "123", text: "Hello" })
+   * );
+   */
+  sendSubscriptionMessage(subscriptionName: string, message: string): string;
+
+  /**
+   * Send a message to filtered connections based on metadata
+   * @param subscriptionName - Name of the subscription
+   * @param message - Message to send (will be JSON serialized)
+   * @param filterJson - JSON filter criteria for connection metadata (optional)
+   * @returns Send result message
+   * @example
+   * graphQLRegistry.sendSubscriptionMessageFiltered(
+   *   "messageAdded",
+   *   JSON.stringify({ id: "123", text: "Admin message" }),
+   *   JSON.stringify({ role: "admin" })
+   * );
+   */
+  sendSubscriptionMessageFiltered(
+    subscriptionName: string,
+    message: string,
+    filterJson?: string,
+  ): string;
 }
 
 // ============================================================================
