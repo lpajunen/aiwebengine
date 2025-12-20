@@ -1,4 +1,4 @@
-/// <reference path="../../assets/aiwebengine.d.ts" />
+/// <reference path="../../assets/aiwebengine-priv.d.ts" />
 
 // User Management Interface for Administrators
 // Provides UI and API for managing user roles

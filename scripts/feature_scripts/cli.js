@@ -1,4 +1,4 @@
-/// <reference path="../../assets/aiwebengine.d.ts" />
+/// <reference path="../../assets/aiwebengine-priv.d.ts" />
 
 // asset management script: demonstrates asset CRUD operations
 function asset_handler(context) {

@@ -1,4 +1,4 @@
-/// <reference path="../../assets/aiwebengine.d.ts" />
+/// <reference path="../../assets/aiwebengine-priv.d.ts" />
 
 // Insufficient Permissions Page
 // This page is displayed when a user is authenticated but doesn't have the required role
