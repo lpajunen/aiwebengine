@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// OAuth 2.0 Authorization Server Metadata (RFC 8414 Section 2)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AuthorizationServerMetadata {
     /// The authorization server's issuer identifier (URL)
     pub issuer: String,
@@ -138,13 +138,21 @@ impl MetadataConfig {
 
 /// Axum handler for OAuth 2.0 authorization server metadata endpoint
 /// GET /.well-known/oauth-authorization-server
+#[utoipa::path(
+    get,
+    path = "/.well-known/oauth-authorization-server",
+    tags = ["Authentication"],
+    responses(
+        (status = 200, description = "OAuth 2.0 authorization server metadata (RFC 8414)", body = AuthorizationServerMetadata),
+    )
+)]
 pub async fn metadata_handler(State(config): State<Arc<MetadataConfig>>) -> impl IntoResponse {
     let metadata = config.to_metadata();
     (StatusCode::OK, Json(metadata))
 }
 
 /// OAuth 2.0 Protected Resource Metadata (RFC 8414 Section 5)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ProtectedResourceMetadata {
     /// The protected resource's identifier
     pub resource: String,
@@ -163,6 +171,14 @@ pub struct ProtectedResourceMetadata {
 }
 
 /// Handler for /.well-known/oauth-protected-resource
+#[utoipa::path(
+    get,
+    path = "/.well-known/oauth-protected-resource",
+    tags = ["Authentication"],
+    responses(
+        (status = 200, description = "OAuth 2.0 protected resource metadata (RFC 8414)", body = ProtectedResourceMetadata),
+    )
+)]
 pub async fn protected_resource_metadata_handler(
     State(config): State<Arc<MetadataConfig>>,
 ) -> impl IntoResponse {

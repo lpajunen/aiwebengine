@@ -67,6 +67,9 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
         auth::routes::auth_status,
         auth::routes::oauth2_authorize,
         auth::routes::oauth2_token,
+        auth::metadata::metadata_handler,
+        auth::metadata::protected_resource_metadata_handler,
+        auth::client_registration::register_client_handler,
     ),
     components(
         schemas(
@@ -91,6 +94,11 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
             openapi_schemas::UnauthorizedErrorResponse,
             auth::routes::AuthorizeParams,
             auth::routes::TokenParams,
+            auth::metadata::AuthorizationServerMetadata,
+            auth::metadata::ProtectedResourceMetadata,
+            auth::client_registration::ClientRegistrationRequest,
+            auth::client_registration::ClientRegistrationResponse,
+            auth::client_registration::RegisteredClientMetadata,
         )
     ),
     modifiers(&SecurityAddon),

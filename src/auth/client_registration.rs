@@ -16,7 +16,7 @@ use uuid::Uuid;
 use crate::auth::error::AuthError;
 
 /// Client metadata submitted during registration (RFC 7591 Section 2)
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub struct ClientRegistrationRequest {
     /// Array of redirection URIs for use in redirect-based flows
     #[serde(default)]
@@ -60,7 +60,7 @@ pub struct ClientRegistrationRequest {
 }
 
 /// Successful client registration response (RFC 7591 Section 3.2.1)
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct ClientRegistrationResponse {
     /// Unique client identifier
     pub client_id: String,
@@ -77,7 +77,7 @@ pub struct ClientRegistrationResponse {
 }
 
 /// Registered client metadata (returned in response)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RegisteredClientMetadata {
     pub redirect_uris: Vec<String>,
     pub client_name: Option<String>,
@@ -290,6 +290,16 @@ impl ClientRegistrationManager {
 
 /// Axum handler for client registration endpoint
 /// POST /oauth2/register
+#[utoipa::path(
+    post,
+    path = "/oauth2/register",
+    tags = ["Authentication"],
+    request_body = ClientRegistrationRequest,
+    responses(
+        (status = 200, description = "Client successfully registered", body = ClientRegistrationResponse),
+        (status = 400, description = "Invalid client metadata"),
+    )
+)]
 pub async fn register_client_handler(
     State(manager): State<Arc<ClientRegistrationManager>>,
     Json(request): Json<ClientRegistrationRequest>,
