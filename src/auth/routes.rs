@@ -137,6 +137,17 @@ pub struct LoginPageParams {
 }
 
 /// Login page handler - displays available providers
+#[utoipa::path(
+    get,
+    path = "/auth/login",
+    tags = ["Authentication"],
+    params(
+        ("redirect" = Option<String>, Query, description = "Redirect URL after successful login")
+    ),
+    responses(
+        (status = 200, description = "Login page HTML", content_type = "text/html"),
+    )
+)]
 async fn login_page(
     State(auth_manager): State<Arc<AuthManager>>,
     Query(params): Query<LoginPageParams>,
@@ -360,6 +371,14 @@ async fn logout(
 }
 
 /// Status endpoint - check authentication status
+#[utoipa::path(
+    get,
+    path = "/auth/status",
+    tags = ["Authentication"],
+    responses(
+        (status = 200, description = "Authentication status", body = crate::openapi_schemas::AuthStatusResponse),
+    )
+)]
 async fn auth_status(
     State(auth_manager): State<Arc<AuthManager>>,
     headers: HeaderMap,

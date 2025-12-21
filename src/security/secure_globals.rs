@@ -2732,16 +2732,28 @@ impl SecureGlobalContext {
                     return Ok("{\"error\": \"Insufficient permissions\"}".to_string());
                 }
 
-                // Get all script metadata
+                // Get Rust-generated OpenAPI spec (includes health, GraphQL, MCP, auth endpoints)
+                let rust_spec_str = crate::get_rust_openapi_spec();
+                let mut rust_spec: serde_json::Value = match serde_json::from_str(&rust_spec_str) {
+                    Ok(spec) => spec,
+                    Err(e) => {
+                        return Ok(format!(
+                            "{{\"error\": \"Failed to parse Rust OpenAPI spec: {}\"}}",
+                            e
+                        ));
+                    }
+                };
+
+                // Get JavaScript-registered routes from script metadata
                 match repository::get_all_script_metadata() {
                     Ok(metadata_list) => {
-                        let mut paths = serde_json::Map::new();
+                        let mut js_paths = serde_json::Map::new();
 
                         for metadata in metadata_list {
                             if metadata.initialized && !metadata.registrations.is_empty() {
                                 for ((path, method), route_meta) in metadata.registrations {
                                     // Get or create path item
-                                    let path_item = paths
+                                    let path_item = js_paths
                                         .entry(path.clone())
                                         .or_insert_with(|| serde_json::json!({}));
 
@@ -2794,6 +2806,10 @@ impl SecureGlobalContext {
                                         "x-script-uri".to_string(),
                                         serde_json::json!(metadata.uri),
                                     );
+                                    operation.insert(
+                                        "x-source".to_string(),
+                                        serde_json::json!("javascript"),
+                                    );
 
                                     path_obj.insert(
                                         method.to_lowercase(),
@@ -2803,32 +2819,65 @@ impl SecureGlobalContext {
                             }
                         }
 
-                        // Build complete OpenAPI spec
-                        let spec = serde_json::json!({
-                            "openapi": "3.0.0",
-                            "info": {
-                                "title": "aiwebengine API",
-                                "version": "1.0.0",
-                                "description": "Auto-generated API documentation from script route registrations"
-                            },
-                            "servers": [
-                                {
-                                    "url": "/",
-                                    "description": "Current server"
+                        // Merge JavaScript paths into Rust spec
+                        if let Some(rust_paths) = rust_spec["paths"].as_object_mut() {
+                            for (path, operations) in js_paths {
+                                // If path exists in both, merge operations
+                                if let Some(existing) = rust_paths.get_mut(&path) {
+                                    if let (Some(existing_obj), Some(new_ops)) =
+                                        (existing.as_object_mut(), operations.as_object())
+                                    {
+                                        for (method, operation) in new_ops {
+                                            existing_obj.insert(method.clone(), operation.clone());
+                                        }
+                                    }
+                                } else {
+                                    // Path doesn't exist in Rust spec, add it
+                                    rust_paths.insert(path, operations);
                                 }
-                            ],
-                            "paths": paths
-                        });
+                            }
+                        }
 
-                        match serde_json::to_string_pretty(&spec) {
+                        // Collect all unique tags
+                        let mut all_tags = std::collections::HashSet::new();
+                        if let Some(paths) = rust_spec["paths"].as_object() {
+                            for operations in paths.values() {
+                                if let Some(ops) = operations.as_object() {
+                                    for operation in ops.values() {
+                                        if let Some(tags) = operation["tags"].as_array() {
+                                            for tag in tags {
+                                                if let Some(tag_str) = tag.as_str() {
+                                                    all_tags.insert(tag_str.to_string());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Update tags in the spec if there are new ones from JavaScript
+                        if let Some(existing_tags) = rust_spec["tags"].as_array() {
+                            for tag_obj in existing_tags {
+                                if let Some(name) = tag_obj["name"].as_str() {
+                                    all_tags.insert(name.to_string());
+                                }
+                            }
+                        }
+
+                        // Serialize the merged spec
+                        match serde_json::to_string_pretty(&rust_spec) {
                             Ok(json) => Ok(json),
                             Err(e) => Ok(format!(
-                                "{{\"error\": \"Failed to serialize OpenAPI spec: {}\"}}",
+                                "{{\"error\": \"Failed to serialize merged OpenAPI spec: {}\"}}",
                                 e
                             )),
                         }
                     }
-                    Err(e) => Ok(format!("{{\"error\": \"Failed to fetch routes: {}\"}}", e)),
+                    Err(e) => Ok(format!(
+                        "{{\"error\": \"Failed to fetch JavaScript routes: {}\"}}",
+                        e
+                    )),
                 }
             },
         )?;

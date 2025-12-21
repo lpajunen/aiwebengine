@@ -25,6 +25,7 @@ pub mod js_engine;
 pub mod mcp;
 pub mod middleware;
 pub mod notifications;
+pub mod openapi_schemas;
 pub mod parsers;
 pub mod repository;
 pub mod safe_helpers;
@@ -47,6 +48,339 @@ use security::UserContext;
 
 // Re-export the unified error type
 pub use error::{AppError, AppResult};
+
+// OpenAPI documentation setup
+use utoipa::Modify;
+use utoipa::OpenApi;
+use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecurityScheme};
+
+/// OpenAPI documentation for all Rust-implemented endpoints
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        health_handler,
+        health_cluster_handler,
+    ),
+    components(
+        schemas(
+            openapi_schemas::HealthResponse,
+            openapi_schemas::ClusterHealthResponse,
+            openapi_schemas::DatabaseStatus,
+            openapi_schemas::ScriptStatus,
+            openapi_schemas::SystemInfo,
+            openapi_schemas::GraphQLRequest,
+            openapi_schemas::GraphQLResponse,
+            openapi_schemas::GraphQLError,
+            openapi_schemas::McpRpcRequest,
+            openapi_schemas::McpRpcResponse,
+            openapi_schemas::McpRpcError,
+            openapi_schemas::ToolDescriptor,
+            openapi_schemas::McpToolsListResponse,
+            openapi_schemas::McpToolsList,
+            openapi_schemas::OAuth2TokenResponse,
+            openapi_schemas::AuthStatusResponse,
+            openapi_schemas::ErrorResponse,
+            openapi_schemas::ValidationErrorResponse,
+            openapi_schemas::UnauthorizedErrorResponse,
+        )
+    ),
+    modifiers(&SecurityAddon),
+    tags(
+        (name = "Health", description = "Health check and monitoring endpoints"),
+        (name = "GraphQL", description = "GraphQL API endpoints for queries, mutations, and subscriptions"),
+        (name = "MCP", description = "Model Context Protocol (JSON-RPC 2.0) endpoints for AI tool integration"),
+        (name = "Authentication", description = "OAuth2 authentication and authorization endpoints"),
+    )
+)]
+struct ApiDoc;
+
+/// Security scheme definitions for OAuth2 and Bearer token authentication
+struct SecurityAddon;
+
+impl Modify for SecurityAddon {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        use utoipa::openapi::security::{AuthorizationCode, Flow, Scopes};
+
+        if let Some(components) = openapi.components.as_mut() {
+            // OAuth2 Authorization Code Flow with PKCE
+            let auth_code_flow =
+                AuthorizationCode::new("/oauth2/authorize", "/oauth2/token", Scopes::new());
+
+            let oauth2 = OAuth2::new([Flow::AuthorizationCode(auth_code_flow)]);
+
+            components.add_security_scheme("oauth2", SecurityScheme::OAuth2(oauth2));
+
+            // Bearer token authentication (for direct access token usage)
+            components.add_security_scheme(
+                "bearerAuth",
+                SecurityScheme::Http(
+                    HttpBuilder::new()
+                        .scheme(HttpAuthScheme::Bearer)
+                        .bearer_format("JWT")
+                        .description(Some("OAuth2 access token"))
+                        .build(),
+                ),
+            );
+        }
+    }
+}
+
+/// Returns the Rust-generated OpenAPI specification as JSON string
+/// This will be merged with JavaScript-generated routes in the runtime
+pub fn get_rust_openapi_spec() -> String {
+    lazy_static::lazy_static! {
+        static ref OPENAPI_SPEC: String = {
+            let openapi = ApiDoc::openapi();
+
+            // Serialize to JSON Value for easier manipulation
+            let mut spec_value = serde_json::to_value(&openapi)
+                .unwrap_or_else(|e| {
+                    error!("Failed to serialize OpenAPI to JSON: {}", e);
+                    serde_json::json!({})
+                });
+
+            // Add manual path definitions that can't be annotated (closures)
+            if let Some(paths) = spec_value["paths"].as_object_mut() {
+                // GraphQL POST endpoint
+                paths.insert("/graphql".to_string(), serde_json::json!({
+                    "get": {
+                        "tags": ["GraphQL"],
+                        "summary": "Execute GraphQL query via GET",
+                        "description": "HTTP GET endpoint for executing read-only GraphQL queries using query parameters.",
+                        "parameters": [
+                            {
+                                "name": "query",
+                                "in": "query",
+                                "required": true,
+                                "schema": {"type": "string"},
+                                "description": "GraphQL query string"
+                            },
+                            {
+                                "name": "variables",
+                                "in": "query",
+                                "schema": {"type": "string"},
+                                "description": "JSON-encoded variables"
+                            },
+                            {
+                                "name": "operationName",
+                                "in": "query",
+                                "schema": {"type": "string"},
+                                "description": "Operation name if query contains multiple operations"
+                            }
+                        ],
+                        "responses": {
+                            "200": {
+                                "description": "GraphQL response",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/GraphQLResponse"}
+                                    }
+                                }
+                            },
+                            "401": {
+                                "description": "Authentication required",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/UnauthorizedErrorResponse"}
+                                    }
+                                }
+                            }
+                        },
+                        "security": [{"oauth2": []}]
+                    },
+                    "post": {
+                        "tags": ["GraphQL"],
+                        "summary": "Execute GraphQL query or mutation",
+                        "description": "HTTP endpoint for executing GraphQL queries and mutations. Use /graphql/ws for subscriptions via WebSocket or /graphql/sse for subscriptions via Server-Sent Events.",
+                        "requestBody": {
+                            "required": true,
+                            "content": {
+                                "application/json": {
+                                    "schema": {"$ref": "#/components/schemas/GraphQLRequest"}
+                                }
+                            }
+                        },
+                        "responses": {
+                            "200": {
+                                "description": "GraphQL response with data or errors",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/GraphQLResponse"}
+                                    }
+                                }
+                            },
+                            "400": {
+                                "description": "Invalid request",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ValidationErrorResponse"}
+                                    }
+                                }
+                            },
+                            "401": {
+                                "description": "Authentication required",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/UnauthorizedErrorResponse"}
+                                    }
+                                }
+                            }
+                        },
+                        "security": [{"oauth2": []}]
+                    }
+                }));
+
+                // GraphQL WebSocket endpoint
+                paths.insert("/graphql/ws".to_string(), serde_json::json!({
+                    "get": {
+                        "tags": ["GraphQL"],
+                        "summary": "GraphQL WebSocket subscriptions",
+                        "description": "WebSocket endpoint for GraphQL subscriptions using the graphql-ws protocol. Allows real-time data streaming.",
+                        "x-protocol": "graphql-ws",
+                        "x-transport": "websocket",
+                        "responses": {
+                            "101": {
+                                "description": "Switching Protocols - WebSocket connection established"
+                            },
+                            "401": {
+                                "description": "Authentication required"
+                            }
+                        },
+                        "security": [{"oauth2": []}]
+                    }
+                }));
+
+                // GraphQL SSE endpoint
+                paths.insert("/graphql/sse".to_string(), serde_json::json!({
+                    "get": {
+                        "tags": ["GraphQL"],
+                        "summary": "GraphQL Server-Sent Events subscriptions",
+                        "description": "Server-Sent Events endpoint for GraphQL subscriptions. Allows real-time data streaming over HTTP.",
+                        "x-protocol": "text/event-stream",
+                        "x-transport": "sse",
+                        "parameters": [
+                            {
+                                "name": "query",
+                                "in": "query",
+                                "required": true,
+                                "schema": {"type": "string"},
+                                "description": "GraphQL subscription query"
+                            }
+                        ],
+                        "responses": {
+                            "200": {
+                                "description": "Event stream with GraphQL subscription data",
+                                "headers": {
+                                    "Content-Type": {
+                                        "schema": {"type": "string"}
+                                    }
+                                }
+                            },
+                            "401": {
+                                "description": "Authentication required"
+                            }
+                        },
+                        "security": [{"oauth2": []}]
+                    }
+                }));
+
+                // MCP endpoint
+                paths.insert("/mcp".to_string(), serde_json::json!({
+                    "post": {
+                        "tags": ["MCP"],
+                        "summary": "Model Context Protocol endpoint",
+                        "description": "JSON-RPC 2.0 endpoint implementing the Model Context Protocol for AI tool integration. Supports methods: initialize, notifications/initialized, tools/list, tools/call, prompts/list, prompts/get, completion/complete.",
+                        "requestBody": {
+                            "required": true,
+                            "content": {
+                                "application/json": {
+                                    "schema": {"$ref": "#/components/schemas/McpRpcRequest"}
+                                }
+                            }
+                        },
+                        "responses": {
+                            "200": {
+                                "description": "JSON-RPC response",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/McpRpcResponse"}
+                                    }
+                                }
+                            },
+                            "400": {
+                                "description": "Invalid JSON-RPC request",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ValidationErrorResponse"}
+                                    }
+                                }
+                            },
+                            "401": {
+                                "description": "Authentication required (Bearer token)",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/UnauthorizedErrorResponse"}
+                                    }
+                                }
+                            }
+                        },
+                        "security": [{"bearerAuth": []}]
+                    }
+                }));
+
+                // GraphiQL UI
+                paths.insert("/engine/graphql".to_string(), serde_json::json!({
+                    "get": {
+                        "tags": ["GraphQL"],
+                        "summary": "GraphiQL interactive editor",
+                        "description": "Interactive GraphQL editor (GraphiQL) for exploring the API and running queries",
+                        "responses": {
+                            "200": {
+                                "description": "GraphiQL HTML page",
+                                "content": {
+                                    "text/html": {}
+                                }
+                            },
+                            "401": {
+                                "description": "Authentication required"
+                            }
+                        },
+                        "security": [{"oauth2": []}]
+                    }
+                }));
+
+                // Swagger UI
+                paths.insert("/engine/swagger".to_string(), serde_json::json!({
+                    "get": {
+                        "tags": ["Documentation"],
+                        "summary": "Swagger UI",
+                        "description": "Interactive API documentation using Swagger UI",
+                        "responses": {
+                            "200": {
+                                "description": "Swagger UI HTML page",
+                                "content": {
+                                    "text/html": {}
+                                }
+                            },
+                            "401": {
+                                "description": "Authentication required"
+                            }
+                        },
+                        "security": [{"oauth2": []}]
+                    }
+                }));
+            }
+
+            serde_json::to_string_pretty(&spec_value)
+                .unwrap_or_else(|e| {
+                    error!("Failed to serialize OpenAPI spec: {}", e);
+                    "{}".to_string()
+                })
+        };
+    }
+
+    OPENAPI_SPEC.clone()
+}
 
 /// Parses a query string into a HashMap of key-value pairs
 fn parse_query_string(query: &str) -> HashMap<String, String> {
@@ -992,6 +1326,14 @@ pub async fn start_server_with_config(
 }
 
 /// Health check endpoint - returns basic instance status
+#[utoipa::path(
+    get,
+    path = "/health",
+    tags = ["Health"],
+    responses(
+        (status = 200, description = "Service is healthy", body = crate::openapi_schemas::HealthResponse),
+    )
+)]
 async fn health_handler() -> impl IntoResponse {
     let server_id = notifications::get_server_id().unwrap_or_else(|| "unknown".to_string());
 
@@ -1004,6 +1346,14 @@ async fn health_handler() -> impl IntoResponse {
 }
 
 /// Cluster health endpoint - returns detailed cluster status
+#[utoipa::path(
+    get,
+    path = "/health/cluster",
+    tags = ["Health"],
+    responses(
+        (status = 200, description = "Detailed cluster health information", body = crate::openapi_schemas::ClusterHealthResponse),
+    )
+)]
 async fn health_cluster_handler() -> impl IntoResponse {
     let server_id = notifications::get_server_id().unwrap_or_else(|| "unknown".to_string());
 

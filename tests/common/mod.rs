@@ -55,6 +55,7 @@ impl TestServer {
     }
 
     /// Shutdown the server gracefully
+    #[allow(dead_code)]
     pub async fn shutdown(mut self) {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
@@ -99,6 +100,7 @@ impl TestContext {
     }
 
     /// Cleanup all servers
+    #[allow(dead_code)]
     pub async fn cleanup(&self) -> anyhow::Result<()> {
         let mut servers = self.servers.lock().await;
         for server in servers.drain(..) {
