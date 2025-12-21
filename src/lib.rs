@@ -60,6 +60,13 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
     paths(
         health_handler,
         health_cluster_handler,
+        auth::routes::login_page,
+        auth::routes::start_login,
+        auth::routes::oauth_callback,
+        auth::routes::logout,
+        auth::routes::auth_status,
+        auth::routes::oauth2_authorize,
+        auth::routes::oauth2_token,
     ),
     components(
         schemas(
@@ -82,6 +89,8 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
             openapi_schemas::ErrorResponse,
             openapi_schemas::ValidationErrorResponse,
             openapi_schemas::UnauthorizedErrorResponse,
+            auth::routes::AuthorizeParams,
+            auth::routes::TokenParams,
         )
     ),
     modifiers(&SecurityAddon),

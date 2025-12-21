@@ -148,7 +148,7 @@ pub struct LoginPageParams {
         (status = 200, description = "Login page HTML", content_type = "text/html"),
     )
 )]
-async fn login_page(
+pub async fn login_page(
     State(auth_manager): State<Arc<AuthManager>>,
     Query(params): Query<LoginPageParams>,
 ) -> Html<String> {
@@ -212,7 +212,20 @@ async fn login_page(
 }
 
 /// Start OAuth2 login flow - redirects to provider
-async fn start_login(
+#[utoipa::path(
+    get,
+    path = "/auth/login/{provider}",
+    tags = ["Authentication"],
+    params(
+        ("provider" = String, Path, description = "OAuth provider name (google, microsoft, apple)"),
+        ("redirect" = Option<String>, Query, description = "Redirect URL after successful login")
+    ),
+    responses(
+        (status = 302, description = "Redirect to OAuth provider for authentication"),
+        (status = 400, description = "Invalid request", body = crate::openapi_schemas::ErrorResponse),
+    )
+)]
+pub async fn start_login(
     State(auth_manager): State<Arc<AuthManager>>,
     Path(provider): Path<String>,
     Query(params): Query<LoginParams>,
@@ -246,7 +259,23 @@ async fn start_login(
 }
 
 /// Handle OAuth2 callback from provider
-async fn oauth_callback(
+#[utoipa::path(
+    get,
+    path = "/auth/callback/{provider}",
+    tags = ["Authentication"],
+    params(
+        ("provider" = String, Path, description = "OAuth provider name (google, microsoft, apple)"),
+        ("code" = Option<String>, Query, description = "Authorization code from provider"),
+        ("state" = Option<String>, Query, description = "CSRF state token"),
+        ("error" = Option<String>, Query, description = "Error from provider"),
+        ("error_description" = Option<String>, Query, description = "Error description from provider")
+    ),
+    responses(
+        (status = 302, description = "Redirect to original requested page with session cookie set"),
+        (status = 400, description = "Invalid callback parameters", body = crate::openapi_schemas::ErrorResponse),
+    )
+)]
+pub async fn oauth_callback(
     State(auth_manager): State<Arc<AuthManager>>,
     Path(provider): Path<String>,
     Query(params): Query<OAuthCallbackParams>,
@@ -318,7 +347,19 @@ async fn oauth_callback(
 }
 
 /// Logout handler - destroys session
-async fn logout(
+#[utoipa::path(
+    get,
+    path = "/auth/logout",
+    tags = ["Authentication"],
+    params(
+        ("redirect" = Option<String>, Query, description = "Redirect URL after logout")
+    ),
+    responses(
+        (status = 302, description = "Redirect to specified location with session cleared"),
+        (status = 400, description = "Invalid request", body = crate::openapi_schemas::ErrorResponse),
+    )
+)]
+pub async fn logout(
     State(auth_manager): State<Arc<AuthManager>>,
     Query(params): Query<LogoutParams>,
     headers: HeaderMap,
@@ -379,7 +420,7 @@ async fn logout(
         (status = 200, description = "Authentication status", body = crate::openapi_schemas::AuthStatusResponse),
     )
 )]
-async fn auth_status(
+pub async fn auth_status(
     State(auth_manager): State<Arc<AuthManager>>,
     headers: HeaderMap,
 ) -> Json<AuthResponse> {
@@ -429,7 +470,7 @@ async fn auth_status(
 }
 
 /// OAuth 2.0 authorization request parameters (RFC 6749)
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct AuthorizeParams {
     /// Client identifier
     response_type: String,
@@ -464,7 +505,27 @@ pub struct AuthorizeParams {
 
 /// OAuth 2.0 authorization endpoint
 /// This endpoint handles authorization requests from OAuth clients
-async fn oauth2_authorize(
+#[utoipa::path(
+    get,
+    path = "/oauth2/authorize",
+    tags = ["Authentication"],
+    params(
+        ("response_type" = String, Query, description = "Must be 'code' for authorization code flow"),
+        ("client_id" = String, Query, description = "Client identifier"),
+        ("redirect_uri" = Option<String>, Query, description = "Redirection URI where the response will be sent"),
+        ("scope" = Option<String>, Query, description = "Requested scope"),
+        ("state" = Option<String>, Query, description = "Opaque value for CSRF protection"),
+        ("code_challenge" = Option<String>, Query, description = "PKCE code challenge (RFC 7636)"),
+        ("code_challenge_method" = Option<String>, Query, description = "PKCE code challenge method (S256 or plain)"),
+        ("resource" = Option<String>, Query, description = "Resource indicator (RFC 8707)")
+    ),
+    responses(
+        (status = 200, description = "Authorization granted, returns HTML with redirect to client", content_type = "text/html"),
+        (status = 302, description = "Redirect to login if not authenticated"),
+        (status = 400, description = "Invalid authorization request", body = crate::openapi_schemas::ErrorResponse),
+    )
+)]
+pub async fn oauth2_authorize(
     State(oauth2_state): State<OAuth2State>,
     Query(params): Query<AuthorizeParams>,
     req: axum::extract::Request,
@@ -673,7 +734,7 @@ async fn oauth2_authorize(
 }
 
 /// OAuth 2.0 token request parameters (RFC 6749)
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct TokenParams {
     /// Grant type
     grant_type: String,
@@ -715,7 +776,18 @@ pub struct TokenResponse {
 
 /// OAuth 2.0 token endpoint
 /// This endpoint issues access tokens in exchange for authorization codes
-async fn oauth2_token(
+#[utoipa::path(
+    post,
+    path = "/oauth2/token",
+    tags = ["Authentication"],
+    request_body(content = TokenParams, content_type = "application/x-www-form-urlencoded"),
+    responses(
+        (status = 200, description = "Access token issued successfully", body = crate::openapi_schemas::OAuth2TokenResponse),
+        (status = 400, description = "Invalid token request", body = crate::openapi_schemas::ErrorResponse),
+        (status = 500, description = "Server error", body = crate::openapi_schemas::ErrorResponse),
+    )
+)]
+pub async fn oauth2_token(
     State(oauth2_state): State<OAuth2State>,
     headers: HeaderMap,
     axum::Form(params): axum::Form<TokenParams>,
