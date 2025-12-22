@@ -12,6 +12,8 @@ API access: script-internal, engine-internal, and external. Script-internal APIs
 
 External API access: public, authenticated, role based. There are engine provided roles such as editor and adinistrator. Scripts can provide additional roles for authenticated users. When API endpoint required authentication, there can be a handler that checks user roles before proceeding.
 
+Scripts can be privileged or restricted. Privileged scripts have access to all engine-internal APIs. Restricted scripts have access only to selected engine-internal APIs.
+
 Editor and administrator can force all script APIs to be external for debugging and testing purposes. This done only per script basis.
 
 ## Overview
