@@ -4,6 +4,16 @@ AI and Web Engine for JavaScript based Solutions - Secure Platform for Building 
 
 Excels when developing solutions using generative AI technologies.
 
+Code first approach. Then provide tools for verification and testing.
+Verify code by providing automatic API descriptions such as OpenAPI, GraphQL schema, and MCP tool list.
+Test code by providing automatic test case generation and execution environment.
+
+API access: script-internal, engine-internal, and external. Script-internal APIs are available only to the script itself. Engine-internal APIs are available to all scripts running in the same engine instance. External APIs are available to outside world.
+
+External API access: public, authenticated, role based. There are engine provided roles such as editor and adinistrator. Scripts can provide additional roles for authenticated users. When API endpoint required authentication, there can be a handler that checks user roles before proceeding.
+
+Editor and administrator can force all script APIs to be external for debugging and testing purposes. This done only per script basis.
+
 ## Overview
 
 **aiwebengine** (AI Web Engine) is an open-source project designed to facilitate the development of web-based solutions using JavaScript by providing a secure sandbox for executing untrusted code. It is an application engine for software written in the AI era. The engine implements core protocols and features needed for building websites, GraphQL APIs, web applications, and AI tools with minimal overhead. The solution developers can focus on writing JavaScript scripts to implement their business logic, while the engine handles the underlying infrastructure and common functionalities.
