@@ -40,10 +40,10 @@ impl TransactionState {
     }
 
     fn check_timeout(&self) -> Result<(), String> {
-        if let Some(deadline) = self.deadline {
-            if Instant::now() > deadline {
-                return Err("Transaction timeout exceeded".to_string());
-            }
+        if let Some(deadline) = self.deadline
+            && Instant::now() > deadline
+        {
+            return Err("Transaction timeout exceeded".to_string());
         }
         Ok(())
     }
@@ -55,16 +55,16 @@ impl TransactionState {
 
 // Thread-local storage for the current transaction
 thread_local! {
-    static CURRENT_TRANSACTION: RefCell<Option<TransactionState>> = RefCell::new(None);
+    static CURRENT_TRANSACTION: RefCell<Option<TransactionState>> = const { RefCell::new(None) };
 }
 
 /// Get the current transaction state (if any)
 pub fn get_current_transaction_active() -> bool {
-    CURRENT_TRANSACTION.with(|tx| tx.borrow().as_ref().map_or(false, |t| t.is_active()))
+    CURRENT_TRANSACTION.with(|tx| tx.borrow().as_ref().is_some_and(|t| t.is_active()))
 }
 
 /// Get a raw pointer to the current transaction for use in synchronous repository functions
-/// 
+///
 /// # Safety
 /// This is only safe to use within the same thread and within the transaction's lifetime.
 /// The transaction must not be moved or dropped while the pointer is in use.

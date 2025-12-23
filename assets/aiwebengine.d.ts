@@ -986,7 +986,7 @@ interface Database {
    *   console.error("Failed to start transaction:", result.error);
    *   return ResponseBuilder.error(500, "Transaction error");
    * }
-   * 
+   *
    * // Perform database operations...
    * // Transaction auto-commits on normal return or auto-rollbacks on exception
    */
@@ -1026,7 +1026,7 @@ interface Database {
    * // Auto-generated savepoint
    * const sp = JSON.parse(database.createSavepoint());
    * console.log("Savepoint:", sp.savepoint); // "sp_1"
-   * 
+   *
    * // Named savepoint
    * database.createSavepoint("checkpoint_before_insert");
    */
@@ -1038,7 +1038,7 @@ interface Database {
    * @returns JSON string with result: {success: boolean, message: string} or {error: string}
    * @example
    * const sp = JSON.parse(database.createSavepoint("before_update"));
-   * 
+   *
    * try {
    *   database.update("users", userId, JSON.stringify({status: "active"}));
    * } catch (error) {
@@ -1054,9 +1054,9 @@ interface Database {
    * @returns JSON string with result: {success: boolean, message: string} or {error: string}
    * @example
    * const sp = JSON.parse(database.createSavepoint("checkpoint"));
-   * 
+   *
    * // Perform operations...
-   * 
+   *
    * // Release savepoint (changes become permanent in transaction)
    * database.releaseSavepoint(sp.savepoint);
    */

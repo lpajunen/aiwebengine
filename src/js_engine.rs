@@ -1421,12 +1421,11 @@ pub fn execute_graphql_resolver(params: GraphqlResolverExecutionParams) -> Resul
 
         let result_value = resolver_func
             .call::<_, rquickjs::Value>((handler_context,))
-            .map_err(|e| {
+            .inspect_err(|_e| {
                 // Auto-rollback on exception if transaction is active
                 if crate::database::get_current_transaction_active() {
                     let _ = crate::database::Database::rollback_transaction();
                 }
-                e
             })?;
 
         // Auto-commit on success if transaction is active
@@ -1628,12 +1627,11 @@ pub fn execute_mcp_tool_handler(
 
         let result_value = handler_func
             .call::<_, rquickjs::Value>((handler_context,))
-            .map_err(|e| {
+            .inspect_err(|_e| {
                 // Auto-rollback on exception if transaction is active
                 if crate::database::get_current_transaction_active() {
                     let _ = crate::database::Database::rollback_transaction();
                 }
-                e
             })?;
 
         // Auto-commit on success if transaction is active
@@ -1767,13 +1765,13 @@ pub fn execute_stream_customization_function(
                 })?;
 
             // Call the function with req object
-            let result_value: rquickjs::Value =
-                customization_func.call((handler_context,)).map_err(|e| {
+            let result_value: rquickjs::Value = customization_func
+                .call((handler_context,))
+                .inspect_err(|_e| {
                     // Auto-rollback on exception if transaction is active
                     if crate::database::get_current_transaction_active() {
                         let _ = crate::database::Database::rollback_transaction();
                     }
-                    e
                 })?;
 
             // Auto-commit on success if transaction is active
