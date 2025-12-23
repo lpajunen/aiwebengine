@@ -413,6 +413,7 @@ cargo test --lib database::tests
 ```
 
 These tests verify:
+
 - Transaction state management
 - Timeout handling
 - Error conditions (no database, no transaction, etc.)
@@ -420,28 +421,30 @@ These tests verify:
 
 ### Integration Tests
 
-Three integration tests require a live PostgreSQL connection and are marked as `#[ignore]` by default:
+Three integration tests require a live PostgreSQL connection but will gracefully skip if DATABASE_URL is not available:
 
 ```bash
-# Run all integration tests
-DATABASE_URL="postgresql://user:pass@localhost/testdb" \
-  cargo test --lib database::tests -- --ignored
+# Run all database tests (integration tests skip without DATABASE_URL)
+cargo test --lib database::tests
 
-# Run tests sequentially (if needed)
+# Run with DATABASE_URL to execute integration tests
 DATABASE_URL="postgresql://user:pass@localhost/testdb" \
-  cargo test --lib database::tests -- --ignored --test-threads=1
+  cargo test --lib database::tests
 
-# Or run a specific integration test
+# Run a specific integration test with verbose output
 DATABASE_URL="postgresql://user:pass@localhost/testdb" \
-  cargo test --lib database::tests::test_full_transaction_lifecycle -- --ignored --nocapture
+  cargo test --lib database::tests::test_full_transaction_lifecycle -- --nocapture
 ```
 
 **Tests included:**
+
 - `test_full_transaction_lifecycle`: Begin transaction, create savepoint, release savepoint, commit
 - `test_transaction_rollback_lifecycle`: Begin transaction, rollback (instead of commit)
 - `test_nested_savepoints`: Test multiple savepoints and rollback to earlier savepoint
 
 **Technical details:**
+
+- Tests automatically skip if DATABASE_URL environment variable is not set
 - Tests use `tokio::task::spawn_blocking` to simulate handler execution environment
 - Each test creates its own database pool with increased connection limits (10 connections, 5-second timeout)
 - Tests share a global database instance via `OnceLock` (first test initializes, others reuse)

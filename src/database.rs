@@ -808,7 +808,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Requires DATABASE_URL and live PostgreSQL connection
     async fn test_full_transaction_lifecycle() {
         // Integration test for complete transaction lifecycle
         let database_url = match std::env::var("DATABASE_URL") {
@@ -830,7 +829,7 @@ mod tests {
             Ok(pool) => {
                 let db = Database::from_pool(pool);
                 let db_arc = Arc::new(db);
-                
+
                 // Try to initialize global database (may already be set by another test)
                 let _ = initialize_global_database(db_arc.clone());
 
@@ -878,7 +877,8 @@ mod tests {
                     }
 
                     Ok(())
-                }).await;
+                })
+                .await;
 
                 match test_result {
                     Ok(Ok(())) => {
@@ -902,7 +902,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Requires DATABASE_URL and live PostgreSQL connection
     async fn test_transaction_rollback_lifecycle() {
         // Test rollback instead of commit
         let database_url = match std::env::var("DATABASE_URL") {
@@ -949,7 +948,8 @@ mod tests {
                     }
 
                     Ok(())
-                }).await;
+                })
+                .await;
 
                 match test_result {
                     Ok(Ok(())) => {
@@ -973,7 +973,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Requires DATABASE_URL and live PostgreSQL connection
     async fn test_nested_savepoints() {
         // Test multiple savepoints in a transaction
         let database_url = match std::env::var("DATABASE_URL") {
@@ -1039,7 +1038,8 @@ mod tests {
                     }
 
                     Ok(())
-                }).await;
+                })
+                .await;
 
                 match test_result {
                     Ok(Ok(())) => {
