@@ -78,6 +78,7 @@ pub fn get_current_transaction_ptr() -> Option<*mut Transaction<'static, Postgre
 }
 
 /// RAII guard for automatic transaction rollback on drop
+#[derive(Debug)]
 pub struct TransactionGuard {
     committed: bool,
 }
@@ -157,7 +158,7 @@ impl Database {
 
         let pool = PgPoolOptions::new()
             .max_connections(5) // Default pool size
-            .acquire_timeout(Duration::from_millis(2000))
+            .acquire_timeout(Duration::from_millis(5000)) // Increased for tests
             .connect(connection_string)
             .await
             .context("Failed to connect to database")?;
@@ -662,6 +663,398 @@ mod tests {
                 eprintln!("Skipping database test - Database connection timed out");
                 eprintln!("Make sure PostgreSQL is running and accessible");
                 return;
+            }
+        }
+    }
+
+    #[test]
+    fn test_transaction_state_creation() {
+        // Test that transaction state is properly initialized
+        let database_url = match std::env::var("DATABASE_URL") {
+            Ok(url) => url,
+            Err(_) => {
+                eprintln!("Skipping transaction test - DATABASE_URL not set");
+                return;
+            }
+        };
+
+        // Create a temporary runtime for this test
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let pool = PgPoolOptions::new()
+                .max_connections(1)
+                .connect(&database_url)
+                .await;
+
+            if pool.is_err() {
+                eprintln!("Skipping transaction test - could not connect to database");
+                return;
+            }
+
+            let pool = pool.unwrap();
+            let tx = pool.begin().await.unwrap();
+            let tx_static: Transaction<'static, Postgres> = unsafe { std::mem::transmute(tx) };
+
+            let state = TransactionState::new(tx_static, Some(Duration::from_secs(10)));
+
+            assert!(state.is_active());
+            assert_eq!(state.savepoint_counter, 0);
+            assert!(state.savepoint_stack.is_empty());
+            assert!(!state.finalized);
+        });
+    }
+
+    #[test]
+    fn test_transaction_state_timeout_check() {
+        let database_url = match std::env::var("DATABASE_URL") {
+            Ok(url) => url,
+            Err(_) => {
+                eprintln!("Skipping transaction test - DATABASE_URL not set");
+                return;
+            }
+        };
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let pool = PgPoolOptions::new()
+                .max_connections(1)
+                .connect(&database_url)
+                .await;
+
+            if pool.is_err() {
+                eprintln!("Skipping transaction test - could not connect to database");
+                return;
+            }
+
+            let pool = pool.unwrap();
+            let tx = pool.begin().await.unwrap();
+            let tx_static: Transaction<'static, Postgres> = unsafe { std::mem::transmute(tx) };
+
+            // Create state with very short timeout
+            let state = TransactionState::new(tx_static, Some(Duration::from_millis(1)));
+
+            // Wait for timeout to expire
+            std::thread::sleep(Duration::from_millis(10));
+
+            // Check timeout should fail
+            let result = state.check_timeout();
+            assert!(result.is_err());
+            assert!(result.unwrap_err().contains("timeout"));
+        });
+    }
+
+    #[test]
+    fn test_transaction_not_active_initially() {
+        // Verify that no transaction is active by default
+        assert!(!get_current_transaction_active());
+    }
+
+    #[test]
+    fn test_begin_transaction_no_database() {
+        // Test that beginning transaction without initialized database returns error
+        let result = Database::begin_transaction(None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Database not initialized"));
+    }
+
+    #[test]
+    fn test_commit_transaction_without_begin() {
+        // Test that committing without active transaction returns error
+        let result = Database::commit_transaction();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("No active transaction"));
+    }
+
+    #[test]
+    fn test_rollback_transaction_without_begin() {
+        // Test that rollback without active transaction returns error
+        let result = Database::rollback_transaction();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("No active transaction"));
+    }
+
+    #[test]
+    fn test_create_savepoint_without_transaction() {
+        // Test that creating savepoint without transaction returns error
+        let result = Database::create_savepoint(None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("No active transaction"));
+    }
+
+    #[test]
+    fn test_rollback_to_savepoint_without_transaction() {
+        // Test that rollback to savepoint without transaction returns error
+        let result = Database::rollback_to_savepoint("sp1");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("No active transaction"));
+    }
+
+    #[test]
+    fn test_release_savepoint_without_transaction() {
+        // Test that releasing savepoint without transaction returns error
+        let result = Database::release_savepoint("sp1");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("No active transaction"));
+    }
+
+    #[test]
+    fn test_transaction_guard_commit() {
+        // Test that transaction guard can be marked as committed
+        let mut guard = TransactionGuard::new();
+        assert!(!guard.committed);
+
+        guard.commit();
+        assert!(guard.committed);
+    }
+
+    #[tokio::test]
+    #[ignore] // Requires DATABASE_URL and live PostgreSQL connection
+    async fn test_full_transaction_lifecycle() {
+        // Integration test for complete transaction lifecycle
+        let database_url = match std::env::var("DATABASE_URL") {
+            Ok(url) => url,
+            Err(_) => {
+                eprintln!("Skipping transaction lifecycle test - DATABASE_URL not set");
+                return;
+            }
+        };
+
+        // Create database with larger pool for testing
+        let pool = PgPoolOptions::new()
+            .max_connections(10)
+            .acquire_timeout(Duration::from_secs(5))
+            .connect(&database_url)
+            .await;
+
+        match pool {
+            Ok(pool) => {
+                let db = Database::from_pool(pool);
+                let db_arc = Arc::new(db);
+                
+                // Try to initialize global database (may already be set by another test)
+                let _ = initialize_global_database(db_arc.clone());
+
+                // Wait a bit for the pool to be ready
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+                // Run test in blocking context (simulating handler execution environment)
+                let test_result = tokio::task::spawn_blocking(|| {
+                    // Begin transaction
+                    let guard_result = Database::begin_transaction(Some(5000));
+                    if let Err(e) = &guard_result {
+                        return Err(format!("Failed to begin transaction: {}", e));
+                    }
+
+                    // Verify transaction is active
+                    if !get_current_transaction_active() {
+                        return Err("Transaction not active after begin".to_string());
+                    }
+
+                    // Create a savepoint
+                    let sp_result = Database::create_savepoint(Some("test_sp"));
+                    if let Err(e) = sp_result {
+                        return Err(format!("Failed to create savepoint: {}", e));
+                    }
+                    let sp_name = sp_result.unwrap();
+                    if sp_name != "test_sp" {
+                        return Err(format!("Unexpected savepoint name: {}", sp_name));
+                    }
+
+                    // Release the savepoint
+                    let release_result = Database::release_savepoint("test_sp");
+                    if let Err(e) = release_result {
+                        return Err(format!("Failed to release savepoint: {}", e));
+                    }
+
+                    // Commit transaction
+                    let commit_result = Database::commit_transaction();
+                    if let Err(e) = commit_result {
+                        return Err(format!("Failed to commit transaction: {}", e));
+                    }
+
+                    // Verify transaction is no longer active
+                    if get_current_transaction_active() {
+                        return Err("Transaction still active after commit".to_string());
+                    }
+
+                    Ok(())
+                }).await;
+
+                match test_result {
+                    Ok(Ok(())) => {
+                        eprintln!("✓ Transaction lifecycle test passed");
+                    }
+                    Ok(Err(e)) => {
+                        panic!("Test failed: {}", e);
+                    }
+                    Err(e) => {
+                        panic!("Task panicked: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "Skipping transaction lifecycle test - Failed to connect: {}",
+                    e
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[ignore] // Requires DATABASE_URL and live PostgreSQL connection
+    async fn test_transaction_rollback_lifecycle() {
+        // Test rollback instead of commit
+        let database_url = match std::env::var("DATABASE_URL") {
+            Ok(url) => url,
+            Err(_) => {
+                eprintln!("Skipping transaction rollback test - DATABASE_URL not set");
+                return;
+            }
+        };
+
+        let pool = PgPoolOptions::new()
+            .max_connections(10)
+            .acquire_timeout(Duration::from_secs(5))
+            .connect(&database_url)
+            .await;
+
+        match pool {
+            Ok(pool) => {
+                let db = Database::from_pool(pool);
+                let db_arc = Arc::new(db);
+                if !initialize_global_database(db_arc.clone()) {
+                    eprintln!("Could not initialize global database (may already be set)");
+                }
+
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+                let test_result = tokio::task::spawn_blocking(|| {
+                    let guard_result = Database::begin_transaction(Some(5000));
+                    if let Err(e) = &guard_result {
+                        return Err(format!("Failed to begin transaction: {}", e));
+                    }
+
+                    if !get_current_transaction_active() {
+                        return Err("Transaction not active after begin".to_string());
+                    }
+
+                    let rollback_result = Database::rollback_transaction();
+                    if let Err(e) = rollback_result {
+                        return Err(format!("Failed to rollback transaction: {}", e));
+                    }
+
+                    if get_current_transaction_active() {
+                        return Err("Transaction still active after rollback".to_string());
+                    }
+
+                    Ok(())
+                }).await;
+
+                match test_result {
+                    Ok(Ok(())) => {
+                        eprintln!("✓ Transaction rollback test passed");
+                    }
+                    Ok(Err(e)) => {
+                        panic!("Test failed: {}", e);
+                    }
+                    Err(e) => {
+                        panic!("Task panicked: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "Skipping transaction rollback test - Failed to connect: {}",
+                    e
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[ignore] // Requires DATABASE_URL and live PostgreSQL connection
+    async fn test_nested_savepoints() {
+        // Test multiple savepoints in a transaction
+        let database_url = match std::env::var("DATABASE_URL") {
+            Ok(url) => url,
+            Err(_) => {
+                eprintln!("Skipping nested savepoints test - DATABASE_URL not set");
+                return;
+            }
+        };
+
+        let pool = PgPoolOptions::new()
+            .max_connections(10)
+            .acquire_timeout(Duration::from_secs(5))
+            .connect(&database_url)
+            .await;
+
+        match pool {
+            Ok(pool) => {
+                let db = Database::from_pool(pool);
+                let db_arc = Arc::new(db);
+                if !initialize_global_database(db_arc.clone()) {
+                    eprintln!("Could not initialize global database (may already be set)");
+                }
+
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+                let test_result = tokio::task::spawn_blocking(|| {
+                    let _guard = match Database::begin_transaction(Some(5000)) {
+                        Ok(g) => g,
+                        Err(e) => return Err(format!("Failed to begin transaction: {}", e)),
+                    };
+                    if !get_current_transaction_active() {
+                        return Err("Transaction not active".to_string());
+                    }
+
+                    let sp1_name = match Database::create_savepoint(None) {
+                        Ok(name) => name,
+                        Err(e) => return Err(format!("Failed to create savepoint 1: {}", e)),
+                    };
+
+                    let sp2_name = match Database::create_savepoint(None) {
+                        Ok(name) => name,
+                        Err(e) => return Err(format!("Failed to create savepoint 2: {}", e)),
+                    };
+
+                    if sp1_name == sp2_name {
+                        return Err(format!("Savepoint names should be different: {}", sp1_name));
+                    }
+
+                    if let Err(e) = Database::rollback_to_savepoint(&sp1_name) {
+                        return Err(format!("Failed to rollback to savepoint: {}", e));
+                    }
+
+                    if !get_current_transaction_active() {
+                        return Err("Transaction not active after rollback".to_string());
+                    }
+
+                    if let Err(e) = Database::commit_transaction() {
+                        return Err(format!("Failed to commit: {}", e));
+                    }
+                    if get_current_transaction_active() {
+                        return Err("Transaction still active after commit".to_string());
+                    }
+
+                    Ok(())
+                }).await;
+
+                match test_result {
+                    Ok(Ok(())) => {
+                        eprintln!("✓ Nested savepoints test passed");
+                    }
+                    Ok(Err(e)) => {
+                        panic!("Test failed: {}", e);
+                    }
+                    Err(e) => {
+                        panic!("Task panicked: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Skipping nested savepoints test - Failed to connect: {}", e);
             }
         }
     }

@@ -402,6 +402,51 @@ database.rollbackToSavepoint(sp.savepoint); // OK
 database.rollbackToSavepoint(sp.savepoint); // Error: Already rolled back
 ```
 
+## Testing
+
+### Unit Tests
+
+The transaction implementation includes 14 unit tests that run without requiring a database connection:
+
+```bash
+cargo test --lib database::tests
+```
+
+These tests verify:
+- Transaction state management
+- Timeout handling
+- Error conditions (no database, no transaction, etc.)
+- TransactionGuard RAII behavior
+
+### Integration Tests
+
+Three integration tests require a live PostgreSQL connection and are marked as `#[ignore]` by default:
+
+```bash
+# Run all integration tests
+DATABASE_URL="postgresql://user:pass@localhost/testdb" \
+  cargo test --lib database::tests -- --ignored
+
+# Run tests sequentially (if needed)
+DATABASE_URL="postgresql://user:pass@localhost/testdb" \
+  cargo test --lib database::tests -- --ignored --test-threads=1
+
+# Or run a specific integration test
+DATABASE_URL="postgresql://user:pass@localhost/testdb" \
+  cargo test --lib database::tests::test_full_transaction_lifecycle -- --ignored --nocapture
+```
+
+**Tests included:**
+- `test_full_transaction_lifecycle`: Begin transaction, create savepoint, release savepoint, commit
+- `test_transaction_rollback_lifecycle`: Begin transaction, rollback (instead of commit)
+- `test_nested_savepoints`: Test multiple savepoints and rollback to earlier savepoint
+
+**Technical details:**
+- Tests use `tokio::task::spawn_blocking` to simulate handler execution environment
+- Each test creates its own database pool with increased connection limits (10 connections, 5-second timeout)
+- Tests share a global database instance via `OnceLock` (first test initializes, others reuse)
+- Transaction guards (`TransactionGuard`) must be stored to prevent automatic rollback on drop
+
 ## See Also
 
 - [Database Schema Management](./DATABASE_SCHEMA.md)
