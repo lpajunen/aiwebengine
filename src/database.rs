@@ -63,6 +63,20 @@ pub fn get_current_transaction_active() -> bool {
     CURRENT_TRANSACTION.with(|tx| tx.borrow().as_ref().map_or(false, |t| t.is_active()))
 }
 
+/// Get a raw pointer to the current transaction for use in synchronous repository functions
+/// 
+/// # Safety
+/// This is only safe to use within the same thread and within the transaction's lifetime.
+/// The transaction must not be moved or dropped while the pointer is in use.
+/// This is intended for use in repository functions called from within handler execution.
+pub fn get_current_transaction_ptr() -> Option<*mut Transaction<'static, Postgres>> {
+    CURRENT_TRANSACTION.with(|tx| {
+        tx.borrow_mut()
+            .as_mut()
+            .and_then(|state| state.transaction.as_mut().map(|t| t as *mut _))
+    })
+}
+
 /// RAII guard for automatic transaction rollback on drop
 pub struct TransactionGuard {
     committed: bool,

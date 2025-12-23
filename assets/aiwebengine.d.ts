@@ -971,6 +971,96 @@ interface Database {
    * // And mutations like: createUser, updateUser, deleteUser
    */
   generateGraphQLForTable(tableName: string, options?: string): string;
+
+  // Transaction Management
+
+  /**
+   * Begin a new database transaction or create a savepoint if already in a transaction.
+   * Transactions auto-commit on normal handler exit and auto-rollback on exceptions.
+   * @param timeout_ms - Optional timeout in milliseconds (prevents long-running transactions)
+   * @returns JSON string with result: {success: boolean, message: string} or {error: string}
+   * @example
+   * // Start transaction with 5 second timeout
+   * const result = JSON.parse(database.beginTransaction(5000));
+   * if (result.error) {
+   *   console.error("Failed to start transaction:", result.error);
+   *   return ResponseBuilder.error(500, "Transaction error");
+   * }
+   * 
+   * // Perform database operations...
+   * // Transaction auto-commits on normal return or auto-rollbacks on exception
+   */
+  beginTransaction(timeout_ms?: number): string;
+
+  /**
+   * Commit the current transaction or release the most recent savepoint.
+   * Note: Transactions auto-commit on handler success, so explicit commit is optional.
+   * @returns JSON string with result: {success: boolean, message: string} or {error: string}
+   * @example
+   * const result = JSON.parse(database.commitTransaction());
+   * if (result.error) {
+   *   console.error("Failed to commit:", result.error);
+   * }
+   */
+  commitTransaction(): string;
+
+  /**
+   * Rollback the current transaction or to the most recent savepoint.
+   * Note: Transactions auto-rollback on exceptions, so explicit rollback is optional.
+   * @returns JSON string with result: {success: boolean, message: string} or {error: string}
+   * @example
+   * // Explicitly rollback on validation failure
+   * if (!isValid(data)) {
+   *   database.rollbackTransaction();
+   *   return ResponseBuilder.error(400, "Invalid data");
+   * }
+   */
+  rollbackTransaction(): string;
+
+  /**
+   * Create a named or auto-generated savepoint for nested transaction control.
+   * Savepoints allow partial rollback within a transaction.
+   * @param name - Optional savepoint name. If omitted, generates name like "sp_1", "sp_2", etc.
+   * @returns JSON string with result: {success: boolean, savepoint: string} or {error: string}
+   * @example
+   * // Auto-generated savepoint
+   * const sp = JSON.parse(database.createSavepoint());
+   * console.log("Savepoint:", sp.savepoint); // "sp_1"
+   * 
+   * // Named savepoint
+   * database.createSavepoint("checkpoint_before_insert");
+   */
+  createSavepoint(name?: string): string;
+
+  /**
+   * Rollback to a specific savepoint without ending the transaction.
+   * @param name - Savepoint name to rollback to
+   * @returns JSON string with result: {success: boolean, message: string} or {error: string}
+   * @example
+   * const sp = JSON.parse(database.createSavepoint("before_update"));
+   * 
+   * try {
+   *   database.update("users", userId, JSON.stringify({status: "active"}));
+   * } catch (error) {
+   *   // Rollback just this update, keep other changes
+   *   database.rollbackToSavepoint(sp.savepoint);
+   * }
+   */
+  rollbackToSavepoint(name: string): string;
+
+  /**
+   * Release a savepoint, making its changes permanent within the transaction scope.
+   * @param name - Savepoint name to release
+   * @returns JSON string with result: {success: boolean, message: string} or {error: string}
+   * @example
+   * const sp = JSON.parse(database.createSavepoint("checkpoint"));
+   * 
+   * // Perform operations...
+   * 
+   * // Release savepoint (changes become permanent in transaction)
+   * database.releaseSavepoint(sp.savepoint);
+   */
+  releaseSavepoint(name: string): string;
 }
 
 // ============================================================================

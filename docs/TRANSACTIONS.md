@@ -320,9 +320,51 @@ Transactions hold a database connection for their lifetime. With default pool si
 - Use appropriate timeouts
 - Monitor connection pool metrics in production
 
-### Future Integration
+### Repository Operation Support
 
-Currently, transaction state is available but repository operations don't yet use it automatically. A future update will refactor repository methods to use the active transaction when available, making all operations (personalStorage, sharedStorage, etc.) transaction-aware automatically.
+**Current Status**: Transaction infrastructure is in place, but individual repository operations (like `personalStorage.setItem()`, `sharedStorage.setItem()`) don't yet automatically participate in transactions.
+
+**Manual Transaction Use**: You can use transactions to wrap multiple database operations:
+
+```javascript
+export function atomicUpdate(req) {
+  database.beginTransaction();
+  
+  // These operations will each use separate connections from the pool
+  // They are not yet automatically using the active transaction
+  personalStorage.setItem("key1", "value1");
+  personalStorage.setItem("key2", "value2");
+  
+  // But the automatic commit/rollback still works at the handler level
+  return { status: 200, body: "Updated" };
+}
+```
+
+**Future Enhancement**: A future update will refactor repository methods to automatically use the active transaction when available. This will make operations like `personalStorage.setItem()`, `sharedStorage.setItem()`, and database query/insert/update methods fully transaction-aware without code changes.
+
+**Workaround**: For now, if you need true atomic operations, you can:
+1. Use raw SQL queries within transactions (if you have database access)
+2. Structure your handlers to use transactions for critical sections only
+3. Rely on the automatic rollback on exception to prevent partial state
+
+### Integration with Raw SQL
+
+If your handlers execute raw SQL (via future database query APIs), those operations will automatically use the active transaction:
+
+```javascript
+export function transferWithSQL(req) {
+  const { from, to, amount } = JSON.parse(req.body);
+  
+  database.beginTransaction();
+  
+  // Future API - raw SQL will use the active transaction
+  // database.query("UPDATE accounts SET balance = balance - $1 WHERE id = $2", [amount, from]);
+  // database.query("UPDATE accounts SET balance = balance + $1 WHERE id = $2", [amount, to]);
+  
+  // Auto-commits on success
+  return { status: 200, body: "Transfer complete" };
+}
+```
 
 ## Troubleshooting
 
