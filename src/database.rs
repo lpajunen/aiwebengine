@@ -1,10 +1,91 @@
 use anyhow::{Context, Result};
 use sqlx::postgres::{PgPool, PgPoolOptions};
+use sqlx::{Postgres, Transaction};
+use std::cell::RefCell;
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
 use crate::config::RepositoryConfig;
+
+/// Transaction state stored in thread-local storage
+pub struct TransactionState {
+    /// The active PostgreSQL transaction
+    transaction: Option<Transaction<'static, Postgres>>,
+    /// Stack of active savepoint names
+    savepoint_stack: Vec<String>,
+    /// Counter for generating unique savepoint names
+    savepoint_counter: usize,
+    /// Timeout deadline for the transaction
+    deadline: Option<Instant>,
+    /// Transaction start time
+    _start_time: Instant,
+    /// Whether the transaction has been finalized (committed or rolled back)
+    finalized: bool,
+}
+
+impl TransactionState {
+    fn new(transaction: Transaction<'static, Postgres>, timeout: Option<Duration>) -> Self {
+        let start_time = Instant::now();
+        let deadline = timeout.map(|d| start_time + d);
+
+        Self {
+            transaction: Some(transaction),
+            savepoint_stack: Vec::new(),
+            savepoint_counter: 0,
+            deadline,
+            _start_time: start_time,
+            finalized: false,
+        }
+    }
+
+    fn check_timeout(&self) -> Result<(), String> {
+        if let Some(deadline) = self.deadline {
+            if Instant::now() > deadline {
+                return Err("Transaction timeout exceeded".to_string());
+            }
+        }
+        Ok(())
+    }
+
+    fn is_active(&self) -> bool {
+        self.transaction.is_some() && !self.finalized
+    }
+}
+
+// Thread-local storage for the current transaction
+thread_local! {
+    static CURRENT_TRANSACTION: RefCell<Option<TransactionState>> = RefCell::new(None);
+}
+
+/// Get the current transaction state (if any)
+pub fn get_current_transaction_active() -> bool {
+    CURRENT_TRANSACTION.with(|tx| tx.borrow().as_ref().map_or(false, |t| t.is_active()))
+}
+
+/// RAII guard for automatic transaction rollback on drop
+pub struct TransactionGuard {
+    committed: bool,
+}
+
+impl TransactionGuard {
+    fn new() -> Self {
+        Self { committed: false }
+    }
+
+    pub fn commit(&mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for TransactionGuard {
+    fn drop(&mut self) {
+        if !self.committed {
+            // Attempt to rollback on drop (panic or early return)
+            let _ = Database::rollback_transaction();
+        }
+    }
+}
 
 /// Global database instance
 ///
@@ -145,6 +226,350 @@ impl Database {
         info!("Closing database connection pool...");
         self.pool.close().await;
         info!("Database connection pool closed");
+    }
+
+    /// Begin a new database transaction
+    ///
+    /// If a transaction is already active, this will create a savepoint instead.
+    /// Returns a TransactionGuard for automatic rollback on drop.
+    pub fn begin_transaction(timeout_ms: Option<u64>) -> Result<TransactionGuard, String> {
+        // Helper to run async code in blocking context
+        fn run_blocking<F, R>(future: F) -> R
+        where
+            F: std::future::Future<Output = R>,
+        {
+            match tokio::runtime::Handle::try_current() {
+                Ok(handle) => tokio::task::block_in_place(move || handle.block_on(future)),
+                Err(_) => tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Failed to create temporary runtime")
+                    .block_on(future),
+            }
+        }
+
+        CURRENT_TRANSACTION.with(|tx_cell| {
+            let mut tx_option = tx_cell.borrow_mut();
+
+            if let Some(ref mut state) = *tx_option {
+                // Transaction already active - create a savepoint
+                state.check_timeout()?;
+
+                state.savepoint_counter += 1;
+                let savepoint_name = format!("sp_{}", state.savepoint_counter);
+
+                let tx_ref = state
+                    .transaction
+                    .as_mut()
+                    .ok_or("Transaction not available")?;
+
+                // Execute SAVEPOINT command
+                run_blocking(async {
+                    sqlx::query(&format!("SAVEPOINT {}", savepoint_name))
+                        .execute(&mut **tx_ref)
+                        .await
+                        .map_err(|e| format!("Failed to create savepoint: {}", e))?;
+                    Ok::<(), String>(())
+                })?;
+
+                state.savepoint_stack.push(savepoint_name);
+                Ok(TransactionGuard::new())
+            } else {
+                // No active transaction - start a new one
+                let db = get_global_database().ok_or("Database not initialized")?;
+
+                let pool = db.pool.clone();
+
+                let tx = run_blocking(async {
+                    pool.begin()
+                        .await
+                        .map_err(|e| format!("Failed to begin transaction: {}", e))
+                })?;
+
+                // Convert to 'static lifetime by leaking (will be properly cleaned up on commit/rollback)
+                let tx_static: Transaction<'static, Postgres> = unsafe { std::mem::transmute(tx) };
+
+                let timeout = timeout_ms.map(Duration::from_millis);
+                *tx_option = Some(TransactionState::new(tx_static, timeout));
+
+                Ok(TransactionGuard::new())
+            }
+        })
+    }
+
+    /// Commit the current transaction
+    ///
+    /// If savepoints are active, this will release the most recent savepoint.
+    /// Otherwise, it commits the entire transaction.
+    pub fn commit_transaction() -> Result<(), String> {
+        fn run_blocking<F, R>(future: F) -> R
+        where
+            F: std::future::Future<Output = R>,
+        {
+            match tokio::runtime::Handle::try_current() {
+                Ok(handle) => tokio::task::block_in_place(move || handle.block_on(future)),
+                Err(_) => tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Failed to create temporary runtime")
+                    .block_on(future),
+            }
+        }
+
+        CURRENT_TRANSACTION.with(|tx_cell| {
+            let mut tx_option = tx_cell.borrow_mut();
+
+            let state = tx_option
+                .as_mut()
+                .ok_or("No active transaction to commit")?;
+
+            state.check_timeout()?;
+
+            if let Some(savepoint_name) = state.savepoint_stack.pop() {
+                // Release the savepoint
+                let tx_ref = state
+                    .transaction
+                    .as_mut()
+                    .ok_or("Transaction not available")?;
+
+                run_blocking(async {
+                    sqlx::query(&format!("RELEASE SAVEPOINT {}", savepoint_name))
+                        .execute(&mut **tx_ref)
+                        .await
+                        .map_err(|e| format!("Failed to release savepoint: {}", e))?;
+                    Ok::<(), String>(())
+                })?;
+            } else {
+                // Commit the entire transaction
+                let tx = state
+                    .transaction
+                    .take()
+                    .ok_or("Transaction not available")?;
+
+                run_blocking(async {
+                    tx.commit()
+                        .await
+                        .map_err(|e| format!("Failed to commit transaction: {}", e))?;
+                    Ok::<(), String>(())
+                })?;
+
+                state.finalized = true;
+                *tx_option = None;
+            }
+
+            Ok(())
+        })
+    }
+
+    /// Rollback the current transaction
+    ///
+    /// If savepoints are active, this will rollback to the most recent savepoint.
+    /// Otherwise, it rolls back the entire transaction.
+    pub fn rollback_transaction() -> Result<(), String> {
+        fn run_blocking<F, R>(future: F) -> R
+        where
+            F: std::future::Future<Output = R>,
+        {
+            match tokio::runtime::Handle::try_current() {
+                Ok(handle) => tokio::task::block_in_place(move || handle.block_on(future)),
+                Err(_) => tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Failed to create temporary runtime")
+                    .block_on(future),
+            }
+        }
+
+        CURRENT_TRANSACTION.with(|tx_cell| {
+            let mut tx_option = tx_cell.borrow_mut();
+
+            let state = tx_option
+                .as_mut()
+                .ok_or("No active transaction to rollback")?;
+
+            if let Some(savepoint_name) = state.savepoint_stack.pop() {
+                // Rollback to the savepoint
+                let tx_ref = state
+                    .transaction
+                    .as_mut()
+                    .ok_or("Transaction not available")?;
+
+                run_blocking(async {
+                    sqlx::query(&format!("ROLLBACK TO SAVEPOINT {}", savepoint_name))
+                        .execute(&mut **tx_ref)
+                        .await
+                        .map_err(|e| format!("Failed to rollback to savepoint: {}", e))?;
+                    Ok::<(), String>(())
+                })?;
+            } else {
+                // Rollback the entire transaction
+                let tx = state
+                    .transaction
+                    .take()
+                    .ok_or("Transaction not available")?;
+
+                run_blocking(async {
+                    tx.rollback()
+                        .await
+                        .map_err(|e| format!("Failed to rollback transaction: {}", e))?;
+                    Ok::<(), String>(())
+                })?;
+
+                state.finalized = true;
+                *tx_option = None;
+            }
+
+            Ok(())
+        })
+    }
+
+    /// Create a named savepoint
+    pub fn create_savepoint(name: Option<&str>) -> Result<String, String> {
+        fn run_blocking<F, R>(future: F) -> R
+        where
+            F: std::future::Future<Output = R>,
+        {
+            match tokio::runtime::Handle::try_current() {
+                Ok(handle) => tokio::task::block_in_place(move || handle.block_on(future)),
+                Err(_) => tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Failed to create temporary runtime")
+                    .block_on(future),
+            }
+        }
+
+        CURRENT_TRANSACTION.with(|tx_cell| {
+            let mut tx_option = tx_cell.borrow_mut();
+
+            let state = tx_option.as_mut().ok_or("No active transaction")?;
+
+            state.check_timeout()?;
+
+            let savepoint_name = if let Some(n) = name {
+                if state.savepoint_stack.contains(&n.to_string()) {
+                    return Err(format!("Savepoint already exists: {}", n));
+                }
+                n.to_string()
+            } else {
+                state.savepoint_counter += 1;
+                format!("sp_{}", state.savepoint_counter)
+            };
+
+            let tx_ref = state
+                .transaction
+                .as_mut()
+                .ok_or("Transaction not available")?;
+
+            run_blocking(async {
+                sqlx::query(&format!("SAVEPOINT {}", savepoint_name))
+                    .execute(&mut **tx_ref)
+                    .await
+                    .map_err(|e| format!("Failed to create savepoint: {}", e))?;
+                Ok::<(), String>(())
+            })?;
+
+            state.savepoint_stack.push(savepoint_name.clone());
+            Ok(savepoint_name)
+        })
+    }
+
+    /// Rollback to a named savepoint
+    pub fn rollback_to_savepoint(name: &str) -> Result<(), String> {
+        fn run_blocking<F, R>(future: F) -> R
+        where
+            F: std::future::Future<Output = R>,
+        {
+            match tokio::runtime::Handle::try_current() {
+                Ok(handle) => tokio::task::block_in_place(move || handle.block_on(future)),
+                Err(_) => tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Failed to create temporary runtime")
+                    .block_on(future),
+            }
+        }
+
+        CURRENT_TRANSACTION.with(|tx_cell| {
+            let mut tx_option = tx_cell.borrow_mut();
+
+            let state = tx_option.as_mut().ok_or("No active transaction")?;
+
+            state.check_timeout()?;
+
+            if !state.savepoint_stack.contains(&name.to_string()) {
+                return Err(format!("Savepoint not found: {}", name));
+            }
+
+            let tx_ref = state
+                .transaction
+                .as_mut()
+                .ok_or("Transaction not available")?;
+
+            run_blocking(async {
+                sqlx::query(&format!("ROLLBACK TO SAVEPOINT {}", name))
+                    .execute(&mut **tx_ref)
+                    .await
+                    .map_err(|e| format!("Failed to rollback to savepoint: {}", e))?;
+                Ok::<(), String>(())
+            })?;
+
+            // Remove this savepoint and all after it from the stack
+            if let Some(pos) = state.savepoint_stack.iter().position(|s| s == name) {
+                state.savepoint_stack.truncate(pos);
+            }
+
+            Ok(())
+        })
+    }
+
+    /// Release a named savepoint
+    pub fn release_savepoint(name: &str) -> Result<(), String> {
+        fn run_blocking<F, R>(future: F) -> R
+        where
+            F: std::future::Future<Output = R>,
+        {
+            match tokio::runtime::Handle::try_current() {
+                Ok(handle) => tokio::task::block_in_place(move || handle.block_on(future)),
+                Err(_) => tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Failed to create temporary runtime")
+                    .block_on(future),
+            }
+        }
+
+        CURRENT_TRANSACTION.with(|tx_cell| {
+            let mut tx_option = tx_cell.borrow_mut();
+
+            let state = tx_option.as_mut().ok_or("No active transaction")?;
+
+            state.check_timeout()?;
+
+            if !state.savepoint_stack.contains(&name.to_string()) {
+                return Err(format!("Savepoint not found: {}", name));
+            }
+
+            let tx_ref = state
+                .transaction
+                .as_mut()
+                .ok_or("Transaction not available")?;
+
+            run_blocking(async {
+                sqlx::query(&format!("RELEASE SAVEPOINT {}", name))
+                    .execute(&mut **tx_ref)
+                    .await
+                    .map_err(|e| format!("Failed to release savepoint: {}", e))?;
+                Ok::<(), String>(())
+            })?;
+
+            // Remove this savepoint and all after it from the stack
+            if let Some(pos) = state.savepoint_stack.iter().position(|s| s == name) {
+                state.savepoint_stack.truncate(pos);
+            }
+
+            Ok(())
+        })
     }
 }
 

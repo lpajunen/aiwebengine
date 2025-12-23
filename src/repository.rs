@@ -7,6 +7,28 @@ use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::SystemTime;
 use tracing::{debug, error, info, warn};
 
+// TODO: Transaction Integration
+// All database operations in this file currently use &PgPool directly.
+// To support transactions, these should be refactored to accept a generic Executor:
+//
+// Example pattern:
+//   async fn db_get_script<'e, E>(executor: E, uri: &str) -> AppResult<Option<String>>
+//   where
+//       E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+//   {
+//       sqlx::query("SELECT content FROM scripts WHERE uri = $1")
+//           .bind(uri)
+//           .fetch_optional(executor)
+//           .await?
+//   }
+//
+// This would allow operations to work with both:
+// - Direct pool access: db_get_script(&pool, uri)
+// - Within transaction: db_get_script(&mut tx, uri)
+//
+// The synchronous wrappers (run_blocking) would check thread-local transaction
+// state and pass the appropriate executor.
+
 /// Built-in scripts that must remain privileged by default
 pub const PRIVILEGED_BOOTSTRAP_SCRIPTS: &[&str] = &[
     "https://example.com/core",

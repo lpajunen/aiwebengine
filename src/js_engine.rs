@@ -1038,11 +1038,21 @@ pub fn execute_script_for_request_secure(
         // Set context as a global variable so personalStorage and other APIs can access it
         global.set("context", handler_context.clone()).map_err(|e| format!("set context global: {}", e))?;
 
-        // Call the handler function
+        // Call the handler function with automatic transaction handling
         let result: Value = func.call::<_, Value>((handler_context,)).map_err(|e| {
             let details = extract_error_details(&ctx, &e);
+            // Auto-rollback on exception if transaction is active
+            if crate::database::get_current_transaction_active() {
+                let _ = crate::database::Database::rollback_transaction();
+            }
             format!("call handler: {}", details)
         })?;
+
+        // Auto-commit on success if transaction is active
+        if crate::database::get_current_transaction_active() {
+            crate::database::Database::commit_transaction()
+                .map_err(|e| format!("transaction commit failed: {}", e))?;
+        }
 
         // Parse the response
         if let Some(response_obj) = result.as_object() {
@@ -1302,8 +1312,18 @@ pub fn execute_scheduled_handler(
 
         func.call::<_, Value>((handler_context,)).map_err(|e| {
             let details = extract_error_details(&ctx, &e);
+            // Auto-rollback on exception if transaction is active
+            if crate::database::get_current_transaction_active() {
+                let _ = crate::database::Database::rollback_transaction();
+            }
             format!("call handler: {}", details)
         })?;
+
+        // Auto-commit on success if transaction is active
+        if crate::database::get_current_transaction_active() {
+            crate::database::Database::commit_transaction()
+                .map_err(|e| format!("transaction commit failed: {}", e))?;
+        }
 
         Ok(())
     });
@@ -1399,7 +1419,22 @@ pub fn execute_graphql_resolver(params: GraphqlResolverExecutionParams) -> Resul
         let global = ctx.globals();
         global.set("context", handler_context.clone())?;
 
-        let result_value = resolver_func.call::<_, rquickjs::Value>((handler_context,))?;
+        let result_value = resolver_func
+            .call::<_, rquickjs::Value>((handler_context,))
+            .map_err(|e| {
+                // Auto-rollback on exception if transaction is active
+                if crate::database::get_current_transaction_active() {
+                    let _ = crate::database::Database::rollback_transaction();
+                }
+                e
+            })?;
+
+        // Auto-commit on success if transaction is active
+        if crate::database::get_current_transaction_active() {
+            crate::database::Database::commit_transaction().map_err(|e| {
+                rquickjs::Error::new_from_js("Transaction", Box::leak(e.into_boxed_str()))
+            })?;
+        }
 
         // Convert the result to a JSON string
         let result_string: String = if result_value.is_string() {
@@ -1591,7 +1626,22 @@ pub fn execute_mcp_tool_handler(
         let global = ctx.globals();
         global.set("context", handler_context.clone())?;
 
-        let result_value = handler_func.call::<_, rquickjs::Value>((handler_context,))?;
+        let result_value = handler_func
+            .call::<_, rquickjs::Value>((handler_context,))
+            .map_err(|e| {
+                // Auto-rollback on exception if transaction is active
+                if crate::database::get_current_transaction_active() {
+                    let _ = crate::database::Database::rollback_transaction();
+                }
+                e
+            })?;
+
+        // Auto-commit on success if transaction is active
+        if crate::database::get_current_transaction_active() {
+            crate::database::Database::commit_transaction().map_err(|e| {
+                rquickjs::Error::new_from_js("Transaction", Box::leak(e.into_boxed_str()))
+            })?;
+        }
 
         // Convert the result to a JSON string
         let result_string: String = if result_value.is_string() {
@@ -1717,7 +1767,21 @@ pub fn execute_stream_customization_function(
                 })?;
 
             // Call the function with req object
-            let result_value: rquickjs::Value = customization_func.call((handler_context,))?;
+            let result_value: rquickjs::Value =
+                customization_func.call((handler_context,)).map_err(|e| {
+                    // Auto-rollback on exception if transaction is active
+                    if crate::database::get_current_transaction_active() {
+                        let _ = crate::database::Database::rollback_transaction();
+                    }
+                    e
+                })?;
+
+            // Auto-commit on success if transaction is active
+            if crate::database::get_current_transaction_active() {
+                crate::database::Database::commit_transaction().map_err(|e| {
+                    rquickjs::Error::new_from_js("Transaction", Box::leak(e.into_boxed_str()))
+                })?;
+            }
 
             // Convert result to HashMap
             let mut filter_criteria = std::collections::HashMap::new();

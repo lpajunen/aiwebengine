@@ -3695,6 +3695,97 @@ impl SecureGlobalContext {
         )?;
         database_obj.set("generateGraphQLForTable", generate_graphql)?;
 
+        // Transaction management functions
+
+        // database.beginTransaction(timeoutMs?) - Start a new transaction or savepoint
+        let begin_transaction = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, timeout_ms: Opt<u64>| -> JsResult<String> {
+                match crate::database::Database::begin_transaction(timeout_ms.0) {
+                    Ok(_guard) => {
+                        // Note: The guard is not stored here - it's managed internally
+                        // Auto-commit/rollback happens at handler boundaries
+                        Ok("{\"success\": true, \"message\": \"Transaction started\"}".to_string())
+                    }
+                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                }
+            },
+        )?;
+        database_obj.set("beginTransaction", begin_transaction)?;
+
+        // database.commitTransaction() - Commit the current transaction or release savepoint
+        let commit_transaction = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
+                match crate::database::Database::commit_transaction() {
+                    Ok(()) => Ok(
+                        "{\"success\": true, \"message\": \"Transaction committed\"}".to_string(),
+                    ),
+                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                }
+            },
+        )?;
+        database_obj.set("commitTransaction", commit_transaction)?;
+
+        // database.rollbackTransaction() - Rollback the current transaction or to savepoint
+        let rollback_transaction = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
+                match crate::database::Database::rollback_transaction() {
+                    Ok(()) => Ok(
+                        "{\"success\": true, \"message\": \"Transaction rolled back\"}".to_string(),
+                    ),
+                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                }
+            },
+        )?;
+        database_obj.set("rollbackTransaction", rollback_transaction)?;
+
+        // database.createSavepoint(name?) - Create a named or auto-generated savepoint
+        let create_savepoint = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, name: Opt<String>| -> JsResult<String> {
+                match crate::database::Database::create_savepoint(name.0.as_deref()) {
+                    Ok(savepoint_name) => Ok(format!(
+                        "{{\"success\": true, \"savepoint\": \"{}\"}}",
+                        savepoint_name
+                    )),
+                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                }
+            },
+        )?;
+        database_obj.set("createSavepoint", create_savepoint)?;
+
+        // database.rollbackToSavepoint(name) - Rollback to a named savepoint
+        let rollback_to_savepoint = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, name: String| -> JsResult<String> {
+                match crate::database::Database::rollback_to_savepoint(&name) {
+                    Ok(()) => Ok(format!(
+                        "{{\"success\": true, \"message\": \"Rolled back to savepoint: {}\"}}",
+                        name
+                    )),
+                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                }
+            },
+        )?;
+        database_obj.set("rollbackToSavepoint", rollback_to_savepoint)?;
+
+        // database.releaseSavepoint(name) - Release a named savepoint
+        let release_savepoint = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, name: String| -> JsResult<String> {
+                match crate::database::Database::release_savepoint(&name) {
+                    Ok(()) => Ok(format!(
+                        "{{\"success\": true, \"message\": \"Released savepoint: {}\"}}",
+                        name
+                    )),
+                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                }
+            },
+        )?;
+        database_obj.set("releaseSavepoint", release_savepoint)?;
+
         // Set the database object on the global scope
         global.set("database", database_obj)?;
 
