@@ -880,7 +880,7 @@ async fn db_get_all_script_owners(pool: &PgPool) -> AppResult<HashMap<String, Ve
 
 /// Database-backed set shared storage item
 async fn db_set_shared_storage_item(
-    pool: &PgPool,
+    mut executor: crate::database::TransactionExecutor<'_>,
     script_uri: &str,
     key: &str,
     value: &str,
@@ -888,19 +888,38 @@ async fn db_set_shared_storage_item(
     let now = chrono::Utc::now();
 
     // Try to update existing item
-    let update_result = sqlx::query(
-        r#"
-        UPDATE shared_storage
-        SET value = $1, updated_at = $2
-        WHERE script_uri = $3 AND key = $4
-        "#,
-    )
-    .bind(value)
-    .bind(now)
-    .bind(script_uri)
-    .bind(key)
-    .execute(pool)
-    .await
+    let update_result = match executor {
+        crate::database::TransactionExecutor::Transaction(ref mut tx) => {
+            sqlx::query(
+                r#"
+                UPDATE shared_storage
+                SET value = $1, updated_at = $2
+                WHERE script_uri = $3 AND key = $4
+                "#,
+            )
+            .bind(value)
+            .bind(now)
+            .bind(script_uri)
+            .bind(key)
+            .execute(&mut ***tx)
+            .await
+        }
+        crate::database::TransactionExecutor::Pool(pool) => {
+            sqlx::query(
+                r#"
+                UPDATE shared_storage
+                SET value = $1, updated_at = $2
+                WHERE script_uri = $3 AND key = $4
+                "#,
+            )
+            .bind(value)
+            .bind(now)
+            .bind(script_uri)
+            .bind(key)
+            .execute(pool)
+            .await
+        }
+    }
     .map_err(|e| {
         error!("Database error updating shared storage: {}", e);
         AppError::Database {
@@ -918,18 +937,36 @@ async fn db_set_shared_storage_item(
     }
 
     // Item doesn't exist, create new one
-    sqlx::query(
-        r#"
-        INSERT INTO shared_storage (script_uri, key, value, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $4)
-        "#,
-    )
-    .bind(script_uri)
-    .bind(key)
-    .bind(value)
-    .bind(now)
-    .execute(pool)
-    .await
+    match executor {
+        crate::database::TransactionExecutor::Transaction(ref mut tx) => {
+            sqlx::query(
+                r#"
+                INSERT INTO shared_storage (script_uri, key, value, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $4)
+                "#,
+            )
+            .bind(script_uri)
+            .bind(key)
+            .bind(value)
+            .bind(now)
+            .execute(&mut ***tx)
+            .await
+        }
+        crate::database::TransactionExecutor::Pool(pool) => {
+            sqlx::query(
+                r#"
+                INSERT INTO shared_storage (script_uri, key, value, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $4)
+                "#,
+            )
+            .bind(script_uri)
+            .bind(key)
+            .bind(value)
+            .bind(now)
+            .execute(pool)
+            .await
+        }
+    }
     .map_err(|e| {
         error!("Database error creating shared storage item: {}", e);
         AppError::Database {
@@ -946,11 +983,14 @@ async fn db_set_shared_storage_item(
 }
 
 /// Database-backed get shared storage item
-async fn db_get_shared_storage_item(
-    pool: &PgPool,
+async fn db_get_shared_storage_item<'e, E>(
+    executor: E,
     script_uri: &str,
     key: &str,
-) -> AppResult<Option<String>> {
+) -> AppResult<Option<String>>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     let row = sqlx::query(
         r#"
         SELECT value FROM shared_storage WHERE script_uri = $1 AND key = $2
@@ -958,7 +998,7 @@ async fn db_get_shared_storage_item(
     )
     .bind(script_uri)
     .bind(key)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await
     .map_err(|e| {
         error!("Database error getting shared storage item: {}", e);
@@ -983,11 +1023,14 @@ async fn db_get_shared_storage_item(
 }
 
 /// Database-backed remove shared storage item
-async fn db_remove_shared_storage_item(
-    pool: &PgPool,
+async fn db_remove_shared_storage_item<'e, E>(
+    executor: E,
     script_uri: &str,
     key: &str,
-) -> AppResult<bool> {
+) -> AppResult<bool>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     let result = sqlx::query(
         r#"
         DELETE FROM shared_storage WHERE script_uri = $1 AND key = $2
@@ -995,7 +1038,7 @@ async fn db_remove_shared_storage_item(
     )
     .bind(script_uri)
     .bind(key)
-    .execute(pool)
+    .execute(executor)
     .await
     .map_err(|e| {
         error!("Database error removing shared storage item: {}", e);
@@ -1022,14 +1065,17 @@ async fn db_remove_shared_storage_item(
 }
 
 /// Database-backed clear all shared storage for a script
-async fn db_clear_shared_storage(pool: &PgPool, script_uri: &str) -> AppResult<()> {
+async fn db_clear_shared_storage<'e, E>(executor: E, script_uri: &str) -> AppResult<()>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     sqlx::query(
         r#"
         DELETE FROM shared_storage WHERE script_uri = $1
         "#,
     )
     .bind(script_uri)
-    .execute(pool)
+    .execute(executor)
     .await
     .map_err(|e| {
         error!("Database error clearing shared storage: {}", e);
@@ -1048,7 +1094,7 @@ async fn db_clear_shared_storage(pool: &PgPool, script_uri: &str) -> AppResult<(
 
 /// Database-backed set personal storage item
 async fn db_set_personal_storage_item(
-    pool: &PgPool,
+    mut executor: crate::database::TransactionExecutor<'_>,
     script_uri: &str,
     user_id: &str,
     key: &str,
@@ -1057,20 +1103,40 @@ async fn db_set_personal_storage_item(
     let now = chrono::Utc::now();
 
     // Try to update existing item
-    let update_result = sqlx::query(
-        r#"
-        UPDATE personal_storage
-        SET value = $1, updated_at = $2
-        WHERE script_uri = $3 AND user_id = $4 AND key = $5
-        "#,
-    )
-    .bind(value)
-    .bind(now)
-    .bind(script_uri)
-    .bind(user_id)
-    .bind(key)
-    .execute(pool)
-    .await
+    let update_result = match executor {
+        crate::database::TransactionExecutor::Transaction(ref mut tx) => {
+            sqlx::query(
+                r#"
+                UPDATE personal_storage
+                SET value = $1, updated_at = $2
+                WHERE script_uri = $3 AND user_id = $4 AND key = $5
+                "#,
+            )
+            .bind(value)
+            .bind(now)
+            .bind(script_uri)
+            .bind(user_id)
+            .bind(key)
+            .execute(&mut ***tx)
+            .await
+        }
+        crate::database::TransactionExecutor::Pool(pool) => {
+            sqlx::query(
+                r#"
+                UPDATE personal_storage
+                SET value = $1, updated_at = $2
+                WHERE script_uri = $3 AND user_id = $4 AND key = $5
+                "#,
+            )
+            .bind(value)
+            .bind(now)
+            .bind(script_uri)
+            .bind(user_id)
+            .bind(key)
+            .execute(pool)
+            .await
+        }
+    }
     .map_err(|e| {
         error!("Database error updating personal storage: {}", e);
         AppError::Database {
@@ -1088,19 +1154,38 @@ async fn db_set_personal_storage_item(
     }
 
     // Item doesn't exist, create new one
-    sqlx::query(
-        r#"
-        INSERT INTO personal_storage (script_uri, user_id, key, value, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $5)
-        "#,
-    )
-    .bind(script_uri)
-    .bind(user_id)
-    .bind(key)
-    .bind(value)
-    .bind(now)
-    .execute(pool)
-    .await
+    match executor {
+        crate::database::TransactionExecutor::Transaction(ref mut tx) => {
+            sqlx::query(
+                r#"
+                INSERT INTO personal_storage (script_uri, user_id, key, value, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $5)
+                "#,
+            )
+            .bind(script_uri)
+            .bind(user_id)
+            .bind(key)
+            .bind(value)
+            .bind(now)
+            .execute(&mut ***tx)
+            .await
+        }
+        crate::database::TransactionExecutor::Pool(pool) => {
+            sqlx::query(
+                r#"
+                INSERT INTO personal_storage (script_uri, user_id, key, value, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $5)
+                "#,
+            )
+            .bind(script_uri)
+            .bind(user_id)
+            .bind(key)
+            .bind(value)
+            .bind(now)
+            .execute(pool)
+            .await
+        }
+    }
     .map_err(|e| {
         error!("Database error inserting personal storage item: {}", e);
         AppError::Database {
@@ -1117,12 +1202,15 @@ async fn db_set_personal_storage_item(
 }
 
 /// Database-backed get personal storage item
-async fn db_get_personal_storage_item(
-    pool: &PgPool,
+async fn db_get_personal_storage_item<'e, E>(
+    executor: E,
     script_uri: &str,
     user_id: &str,
     key: &str,
-) -> AppResult<Option<String>> {
+) -> AppResult<Option<String>>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     let row = sqlx::query(
         r#"
         SELECT value FROM personal_storage WHERE script_uri = $1 AND user_id = $2 AND key = $3
@@ -1131,7 +1219,7 @@ async fn db_get_personal_storage_item(
     .bind(script_uri)
     .bind(user_id)
     .bind(key)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await
     .map_err(|e| {
         error!("Database error getting personal storage item: {}", e);
@@ -1156,12 +1244,15 @@ async fn db_get_personal_storage_item(
 }
 
 /// Database-backed remove personal storage item
-async fn db_remove_personal_storage_item(
-    pool: &PgPool,
+async fn db_remove_personal_storage_item<'e, E>(
+    executor: E,
     script_uri: &str,
     user_id: &str,
     key: &str,
-) -> AppResult<bool> {
+) -> AppResult<bool>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     let result = sqlx::query(
         r#"
         DELETE FROM personal_storage WHERE script_uri = $1 AND user_id = $2 AND key = $3
@@ -1170,7 +1261,7 @@ async fn db_remove_personal_storage_item(
     .bind(script_uri)
     .bind(user_id)
     .bind(key)
-    .execute(pool)
+    .execute(executor)
     .await
     .map_err(|e| {
         error!("Database error removing personal storage item: {}", e);
@@ -1197,11 +1288,14 @@ async fn db_remove_personal_storage_item(
 }
 
 /// Database-backed clear all personal storage for a script and user
-async fn db_clear_personal_storage(
-    pool: &PgPool,
+async fn db_clear_personal_storage<'e, E>(
+    executor: E,
     script_uri: &str,
     user_id: &str,
-) -> AppResult<()> {
+) -> AppResult<()>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     sqlx::query(
         r#"
         DELETE FROM personal_storage WHERE script_uri = $1 AND user_id = $2
@@ -1209,7 +1303,7 @@ async fn db_clear_personal_storage(
     )
     .bind(script_uri)
     .bind(user_id)
-    .execute(pool)
+    .execute(executor)
     .await
     .map_err(|e| {
         error!("Database error clearing personal storage: {}", e);
@@ -4250,19 +4344,44 @@ impl Repository for PostgresRepository {
     }
 
     async fn get_shared_storage(&self, script_uri: &str, key: &str) -> AppResult<Option<String>> {
-        db_get_shared_storage_item(&self.pool, script_uri, key).await
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_get_shared_storage_item(&mut **tx, script_uri, key).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_get_shared_storage_item(pool, script_uri, key).await
+            }
+        }
     }
 
     async fn set_shared_storage(&self, script_uri: &str, key: &str, value: &str) -> AppResult<()> {
-        db_set_shared_storage_item(&self.pool, script_uri, key, value).await
+        let executor = crate::database::get_current_executor(&self.pool);
+        db_set_shared_storage_item(executor, script_uri, key, value).await
     }
 
     async fn remove_shared_storage(&self, script_uri: &str, key: &str) -> AppResult<bool> {
-        db_remove_shared_storage_item(&self.pool, script_uri, key).await
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_remove_shared_storage_item(&mut **tx, script_uri, key).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_remove_shared_storage_item(pool, script_uri, key).await
+            }
+        }
     }
 
     async fn clear_shared_storage(&self, script_uri: &str) -> AppResult<()> {
-        db_clear_shared_storage(&self.pool, script_uri).await
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_clear_shared_storage(&mut **tx, script_uri).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_clear_shared_storage(pool, script_uri).await
+            }
+        }
     }
 
     async fn get_personal_storage(
@@ -4271,7 +4390,15 @@ impl Repository for PostgresRepository {
         user_id: &str,
         key: &str,
     ) -> AppResult<Option<String>> {
-        db_get_personal_storage_item(&self.pool, script_uri, user_id, key).await
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_get_personal_storage_item(&mut **tx, script_uri, user_id, key).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_get_personal_storage_item(pool, script_uri, user_id, key).await
+            }
+        }
     }
 
     async fn set_personal_storage(
@@ -4281,7 +4408,8 @@ impl Repository for PostgresRepository {
         key: &str,
         value: &str,
     ) -> AppResult<()> {
-        db_set_personal_storage_item(&self.pool, script_uri, user_id, key, value).await
+        let executor = crate::database::get_current_executor(&self.pool);
+        db_set_personal_storage_item(executor, script_uri, user_id, key, value).await
     }
 
     async fn remove_personal_storage(
@@ -4290,11 +4418,27 @@ impl Repository for PostgresRepository {
         user_id: &str,
         key: &str,
     ) -> AppResult<bool> {
-        db_remove_personal_storage_item(&self.pool, script_uri, user_id, key).await
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_remove_personal_storage_item(&mut **tx, script_uri, user_id, key).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_remove_personal_storage_item(pool, script_uri, user_id, key).await
+            }
+        }
     }
 
     async fn clear_personal_storage(&self, script_uri: &str, user_id: &str) -> AppResult<()> {
-        db_clear_personal_storage(&self.pool, script_uri, user_id).await
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_clear_personal_storage(&mut **tx, script_uri, user_id).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_clear_personal_storage(pool, script_uri, user_id).await
+            }
+        }
     }
 
     async fn get_script_privileged(&self, uri: &str) -> AppResult<Option<bool>> {

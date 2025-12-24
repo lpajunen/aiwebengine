@@ -102,6 +102,57 @@ impl Drop for TransactionGuard {
     }
 }
 
+/// Safe wrapper around either a transaction or a connection pool
+///
+/// This type provides a safe abstraction for executing queries within or outside
+/// of a transaction context. It eliminates the need for unsafe raw pointer operations
+/// by providing a type-safe way to access the active transaction or fall back to the pool.
+pub enum TransactionExecutor<'a> {
+    /// Execute within an active transaction
+    Transaction(&'a mut Transaction<'static, Postgres>),
+    /// Execute directly on the connection pool
+    Pool(&'a PgPool),
+}
+
+/// Get a safe executor for the current context
+///
+/// Returns a TransactionExecutor that wraps either the active transaction or the pool.
+/// This function safely checks thread-local transaction state and provides the appropriate
+/// executor without requiring unsafe pointer operations in calling code.
+///
+/// # Safety
+/// This function uses unsafe code to extend lifetimes from thread-local storage.
+/// It is safe because:
+/// 1. The transaction is stored in thread-local storage and cannot be accessed from other threads
+/// 2. The transaction lifetime is managed by the thread-local RefCell borrow
+/// 3. The returned executor must be used immediately within the same scope
+/// 4. The transaction cannot be committed/rolled back while this borrow is active
+///
+/// # Arguments
+/// * `pool` - The connection pool to use if no transaction is active
+///
+/// # Returns
+/// A TransactionExecutor that can be used with SQLx query execution
+pub fn get_current_executor(pool: &PgPool) -> TransactionExecutor<'_> {
+    // Check if we have an active transaction
+    if let Some(tx_ptr) = get_current_transaction_ptr() {
+        // Safety: The pointer is valid for the duration of this call because:
+        // - It's stored in thread-local storage
+        // - The transaction cannot be dropped while we're in a handler
+        // - We're only using it within this thread
+        unsafe {
+            let tx_ref: &mut Transaction<'static, Postgres> = &mut *tx_ptr;
+            // Transmute to extend the lifetime for the return value
+            // This is safe because the transaction lives in thread-local storage
+            // and will outlive this function call
+            return TransactionExecutor::Transaction(std::mem::transmute(tx_ref));
+        }
+    }
+    
+    // No active transaction, use the pool
+    TransactionExecutor::Pool(pool)
+}
+
 /// Global database instance
 ///
 /// This is initialized once during server startup and provides
