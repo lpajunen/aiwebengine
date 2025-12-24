@@ -454,10 +454,9 @@ async fn send_script_notification(
 
 /// Database-backed upsert script
 async fn db_upsert_script(
-    pool: &PgPool,
+    mut executor: crate::database::TransactionExecutor<'_>,
     uri: &str,
     content: &str,
-    server_id: &str,
 ) -> AppResult<()> {
     let now = chrono::Utc::now();
 
@@ -465,19 +464,38 @@ async fn db_upsert_script(
     let name = uri.rsplit('/').next().unwrap_or(uri);
 
     // Try to update existing script
-    let update_result = sqlx::query(
-        r#"
-        UPDATE scripts
-        SET content = $1, updated_at = $2, name = COALESCE(name, $4)
-        WHERE uri = $3
-        "#,
-    )
-    .bind(content)
-    .bind(now)
-    .bind(uri)
-    .bind(name)
-    .execute(pool)
-    .await
+    let update_result = match executor {
+        crate::database::TransactionExecutor::Transaction(ref mut tx) => {
+            sqlx::query(
+                r#"
+                UPDATE scripts
+                SET content = $1, updated_at = $2, name = COALESCE(name, $4)
+                WHERE uri = $3
+                "#,
+            )
+            .bind(content)
+            .bind(now)
+            .bind(uri)
+            .bind(name)
+            .execute(&mut ***tx)
+            .await
+        }
+        crate::database::TransactionExecutor::Pool(pool) => {
+            sqlx::query(
+                r#"
+                UPDATE scripts
+                SET content = $1, updated_at = $2, name = COALESCE(name, $4)
+                WHERE uri = $3
+                "#,
+            )
+            .bind(content)
+            .bind(now)
+            .bind(uri)
+            .bind(name)
+            .execute(pool)
+            .await
+        }
+    }
     .map_err(|e| {
         error!("Database error updating script: {}", e);
         AppError::Database {
@@ -488,24 +506,40 @@ async fn db_upsert_script(
 
     if update_result.rows_affected() > 0 {
         debug!("Updated existing script in database: {}", uri);
-        // Send notification about script upsert
-        send_script_notification(pool, uri, "upserted", server_id).await?;
         return Ok(());
     }
 
     // Script doesn't exist, create new one
-    sqlx::query(
-        r#"
-        INSERT INTO scripts (uri, content, name, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $4)
-        "#,
-    )
-    .bind(uri)
-    .bind(content)
-    .bind(name)
-    .bind(now)
-    .execute(pool)
-    .await
+    match executor {
+        crate::database::TransactionExecutor::Transaction(ref mut tx) => {
+            sqlx::query(
+                r#"
+                INSERT INTO scripts (uri, content, name, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $4)
+                "#,
+            )
+            .bind(uri)
+            .bind(content)
+            .bind(name)
+            .bind(now)
+            .execute(&mut ***tx)
+            .await
+        }
+        crate::database::TransactionExecutor::Pool(pool) => {
+            sqlx::query(
+                r#"
+                INSERT INTO scripts (uri, content, name, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $4)
+                "#,
+            )
+            .bind(uri)
+            .bind(content)
+            .bind(name)
+            .bind(now)
+            .execute(pool)
+            .await
+        }
+    }
     .map_err(|e| {
         error!("Database error creating script: {}", e);
         AppError::Database {
@@ -515,20 +549,21 @@ async fn db_upsert_script(
     })?;
 
     debug!("Created new script in database: {}", uri);
-    // Send notification about script upsert
-    send_script_notification(pool, uri, "upserted", server_id).await?;
     Ok(())
 }
 
 /// Database-backed get script
-async fn db_get_script(pool: &PgPool, uri: &str) -> AppResult<Option<String>> {
+async fn db_get_script<'e, E>(executor: E, uri: &str) -> AppResult<Option<String>>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     let row = sqlx::query(
         r#"
         SELECT content FROM scripts WHERE uri = $1
         "#,
     )
     .bind(uri)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await
     .map_err(|e| {
         error!("Database error getting script: {}", e);
@@ -553,13 +588,16 @@ async fn db_get_script(pool: &PgPool, uri: &str) -> AppResult<Option<String>> {
 }
 
 /// Database-backed list all scripts
-async fn db_list_scripts(pool: &PgPool) -> AppResult<HashMap<String, String>> {
+async fn db_list_scripts<'e, E>(executor: E) -> AppResult<HashMap<String, String>>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     let rows = sqlx::query(
         r#"
         SELECT uri, content FROM scripts ORDER BY uri
         "#,
     )
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await
     .map_err(|e| {
         error!("Database error listing scripts: {}", e);
@@ -592,17 +630,17 @@ async fn db_list_scripts(pool: &PgPool) -> AppResult<HashMap<String, String>> {
 }
 
 /// Database-backed delete script
-async fn db_delete_script(pool: &PgPool, uri: &str, server_id: &str) -> AppResult<bool> {
-    // First, drop all script-owned tables
-    let _ = db_drop_all_script_tables(pool, uri).await;
-
+async fn db_delete_script<'e, E>(executor: E, uri: &str) -> AppResult<bool>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     let result = sqlx::query(
         r#"
         DELETE FROM scripts WHERE uri = $1
         "#,
     )
     .bind(uri)
-    .execute(pool)
+    .execute(executor)
     .await
     .map_err(|e| {
         error!("Database error deleting script: {}", e);
@@ -615,8 +653,6 @@ async fn db_delete_script(pool: &PgPool, uri: &str, server_id: &str) -> AppResul
     let existed = result.rows_affected() > 0;
     if existed {
         debug!("Deleted script from database: {}", uri);
-        // Send notification about script deletion
-        send_script_notification(pool, uri, "deleted", server_id).await?;
     } else {
         debug!("Script not found in database for deletion: {}", uri);
     }
@@ -625,14 +661,17 @@ async fn db_delete_script(pool: &PgPool, uri: &str, server_id: &str) -> AppResul
 }
 
 /// Database-backed getter for script privilege flag
-async fn db_get_script_privileged(pool: &PgPool, uri: &str) -> AppResult<Option<bool>> {
+async fn db_get_script_privileged<'e, E>(executor: E, uri: &str) -> AppResult<Option<bool>>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     let row = sqlx::query(
         r#"
         SELECT privileged FROM scripts WHERE uri = $1
         "#,
     )
     .bind(uri)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await
     .map_err(|e| {
         error!("Database error getting script privilege: {}", e);
@@ -657,7 +696,10 @@ async fn db_get_script_privileged(pool: &PgPool, uri: &str) -> AppResult<Option<
 }
 
 /// Database-backed setter for script privilege flag
-async fn db_set_script_privileged(pool: &PgPool, uri: &str, privileged: bool) -> AppResult<()> {
+async fn db_set_script_privileged<'e, E>(executor: E, uri: &str, privileged: bool) -> AppResult<()>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     sqlx::query(
         r#"
         UPDATE scripts SET privileged = $1, updated_at = $2 WHERE uri = $3
@@ -666,7 +708,7 @@ async fn db_set_script_privileged(pool: &PgPool, uri: &str, privileged: bool) ->
     .bind(privileged)
     .bind(chrono::Utc::now())
     .bind(uri)
-    .execute(pool)
+    .execute(executor)
     .await
     .map_err(|e| {
         error!("Database error updating script privilege: {}", e);
@@ -680,7 +722,10 @@ async fn db_set_script_privileged(pool: &PgPool, uri: &str, privileged: bool) ->
 }
 
 /// Database-backed add script owner
-async fn db_add_script_owner(pool: &PgPool, uri: &str, user_id: &str) -> AppResult<()> {
+async fn db_add_script_owner<'e, E>(executor: E, uri: &str, user_id: &str) -> AppResult<()>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     // Insert ownership record (ignore if already exists)
     sqlx::query(
         r#"
@@ -691,7 +736,7 @@ async fn db_add_script_owner(pool: &PgPool, uri: &str, user_id: &str) -> AppResu
     )
     .bind(uri)
     .bind(user_id)
-    .execute(pool)
+    .execute(executor)
     .await
     .map_err(|e| {
         error!("Database error adding script owner: {}", e);
@@ -706,7 +751,10 @@ async fn db_add_script_owner(pool: &PgPool, uri: &str, user_id: &str) -> AppResu
 }
 
 /// Database-backed remove script owner
-async fn db_remove_script_owner(pool: &PgPool, uri: &str, user_id: &str) -> AppResult<bool> {
+async fn db_remove_script_owner<'e, E>(executor: E, uri: &str, user_id: &str) -> AppResult<bool>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     let result = sqlx::query(
         r#"
         DELETE FROM script_owners WHERE script_uri = $1 AND user_id = $2
@@ -714,7 +762,7 @@ async fn db_remove_script_owner(pool: &PgPool, uri: &str, user_id: &str) -> AppR
     )
     .bind(uri)
     .bind(user_id)
-    .execute(pool)
+    .execute(executor)
     .await
     .map_err(|e| {
         error!("Database error removing script owner: {}", e);
@@ -735,7 +783,10 @@ async fn db_remove_script_owner(pool: &PgPool, uri: &str, user_id: &str) -> AppR
 }
 
 /// Database-backed get script owners
-async fn db_get_script_owners(pool: &PgPool, uri: &str) -> AppResult<Vec<String>> {
+async fn db_get_script_owners<'e, E>(executor: E, uri: &str) -> AppResult<Vec<String>>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     let rows = sqlx::query(
         r#"
         SELECT user_id
@@ -745,7 +796,7 @@ async fn db_get_script_owners(pool: &PgPool, uri: &str) -> AppResult<Vec<String>
         "#,
     )
     .bind(uri)
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await
     .map_err(|e| {
         error!("Database error getting script owners: {}", e);
@@ -772,7 +823,10 @@ async fn db_get_script_owners(pool: &PgPool, uri: &str) -> AppResult<Vec<String>
 }
 
 /// Database-backed check if user owns script
-async fn db_user_owns_script(pool: &PgPool, uri: &str, user_id: &str) -> AppResult<bool> {
+async fn db_user_owns_script<'e, E>(executor: E, uri: &str, user_id: &str) -> AppResult<bool>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     let row = sqlx::query(
         r#"
         SELECT EXISTS(
@@ -784,7 +838,7 @@ async fn db_user_owns_script(pool: &PgPool, uri: &str, user_id: &str) -> AppResu
     )
     .bind(uri)
     .bind(user_id)
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await
     .map_err(|e| {
         error!("Database error checking script ownership: {}", e);
@@ -806,7 +860,10 @@ async fn db_user_owns_script(pool: &PgPool, uri: &str, user_id: &str) -> AppResu
 }
 
 /// Database-backed count script owners
-async fn db_count_script_owners(pool: &PgPool, uri: &str) -> AppResult<i64> {
+async fn db_count_script_owners<'e, E>(executor: E, uri: &str) -> AppResult<i64>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     let row = sqlx::query(
         r#"
         SELECT COUNT(*) as count
@@ -815,7 +872,7 @@ async fn db_count_script_owners(pool: &PgPool, uri: &str) -> AppResult<i64> {
         "#,
     )
     .bind(uri)
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await
     .map_err(|e| {
         error!("Database error counting script owners: {}", e);
@@ -837,7 +894,10 @@ async fn db_count_script_owners(pool: &PgPool, uri: &str) -> AppResult<i64> {
 }
 
 /// Database-backed get all script owners (returns HashMap of uri -> owners)
-async fn db_get_all_script_owners(pool: &PgPool) -> AppResult<HashMap<String, Vec<String>>> {
+async fn db_get_all_script_owners<'e, E>(executor: E) -> AppResult<HashMap<String, Vec<String>>>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     let rows = sqlx::query(
         r#"
         SELECT script_uri, user_id
@@ -845,7 +905,7 @@ async fn db_get_all_script_owners(pool: &PgPool) -> AppResult<HashMap<String, Ve
         ORDER BY script_uri, created_at ASC
         "#,
     )
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await
     .map_err(|e| {
         error!("Database error getting all script owners: {}", e);
@@ -1321,12 +1381,15 @@ where
 }
 
 /// Database-backed insert log message
-async fn db_insert_log_message(
-    pool: &PgPool,
+async fn db_insert_log_message<'e, E>(
+    executor: E,
     script_uri: &str,
     message: &str,
     log_level: &str,
-) -> AppResult<()> {
+) -> AppResult<()>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     sqlx::query(
         r#"
         INSERT INTO logs (script_uri, message, log_level, created_at)
@@ -1336,7 +1399,7 @@ async fn db_insert_log_message(
     .bind(script_uri)
     .bind(message)
     .bind(log_level)
-    .execute(pool)
+    .execute(executor)
     .await
     .map_err(|e| {
         error!("Database error inserting log message: {}", e);
@@ -1354,7 +1417,10 @@ async fn db_insert_log_message(
 }
 
 /// Database-backed fetch log messages for a script
-async fn db_fetch_log_messages(pool: &PgPool, script_uri: &str) -> AppResult<Vec<LogEntry>> {
+async fn db_fetch_log_messages<'e, E>(executor: E, script_uri: &str) -> AppResult<Vec<LogEntry>>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     let rows = sqlx::query(
         r#"
         SELECT message, log_level, created_at FROM logs
@@ -1363,7 +1429,7 @@ async fn db_fetch_log_messages(pool: &PgPool, script_uri: &str) -> AppResult<Vec
         "#,
     )
     .bind(script_uri)
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await
     .map_err(|e| {
         error!("Database error fetching log messages: {}", e);
@@ -1396,14 +1462,17 @@ async fn db_fetch_log_messages(pool: &PgPool, script_uri: &str) -> AppResult<Vec
 }
 
 /// Database-backed fetch all log messages
-async fn db_fetch_all_log_messages(pool: &PgPool) -> AppResult<Vec<LogEntry>> {
+async fn db_fetch_all_log_messages<'e, E>(executor: E) -> AppResult<Vec<LogEntry>>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     let rows = sqlx::query(
         r#"
         SELECT message, log_level, created_at FROM logs
         ORDER BY created_at DESC
         "#,
     )
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await
     .map_err(|e| {
         error!("Database error fetching all log messages: {}", e);
@@ -1436,14 +1505,17 @@ async fn db_fetch_all_log_messages(pool: &PgPool) -> AppResult<Vec<LogEntry>> {
 }
 
 /// Database-backed clear log messages for a script
-async fn db_clear_log_messages(pool: &PgPool, script_uri: &str) -> AppResult<()> {
+async fn db_clear_log_messages<'e, E>(executor: E, script_uri: &str) -> AppResult<()>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     sqlx::query(
         r#"
         DELETE FROM logs WHERE script_uri = $1
         "#,
     )
     .bind(script_uri)
-    .execute(pool)
+    .execute(executor)
     .await
     .map_err(|e| {
         error!("Database error clearing log messages: {}", e);
@@ -1461,7 +1533,10 @@ async fn db_clear_log_messages(pool: &PgPool, script_uri: &str) -> AppResult<()>
 }
 
 /// Database-backed prune log messages (keep only latest 20 per script)
-async fn db_prune_log_messages(pool: &PgPool) -> AppResult<()> {
+async fn db_prune_log_messages<'e, E>(executor: E) -> AppResult<()>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     // For each script_uri, keep only the 20 most recent messages
     sqlx::query(
         r#"
@@ -1476,7 +1551,7 @@ async fn db_prune_log_messages(pool: &PgPool) -> AppResult<()> {
         )
         "#,
     )
-    .execute(pool)
+    .execute(executor)
     .await
     .map_err(|e| {
         error!("Database error pruning log messages: {}", e);
@@ -1491,23 +1566,45 @@ async fn db_prune_log_messages(pool: &PgPool) -> AppResult<()> {
 }
 
 /// Database-backed upsert asset
-async fn db_upsert_asset(pool: &PgPool, asset: &Asset) -> AppResult<()> {
+async fn db_upsert_asset(
+    mut executor: crate::database::TransactionExecutor<'_>,
+    asset: &Asset,
+) -> AppResult<()> {
     let now = chrono::Utc::now();
 
     // Try to update existing asset
-    let update_result = sqlx::query(
-        r#"
-        UPDATE assets
-        SET mimetype = $1, content = $2, updated_at = $3
-        WHERE uri = $4
-        "#,
-    )
-    .bind(&asset.mimetype)
-    .bind(&asset.content)
-    .bind(now)
-    .bind(&asset.uri)
-    .execute(pool)
-    .await
+    let update_result = match executor {
+        crate::database::TransactionExecutor::Transaction(ref mut tx) => {
+            sqlx::query(
+                r#"
+                UPDATE assets
+                SET mimetype = $1, content = $2, updated_at = $3
+                WHERE uri = $4
+                "#,
+            )
+            .bind(&asset.mimetype)
+            .bind(&asset.content)
+            .bind(now)
+            .bind(&asset.uri)
+            .execute(&mut ***tx)
+            .await
+        }
+        crate::database::TransactionExecutor::Pool(pool) => {
+            sqlx::query(
+                r#"
+                UPDATE assets
+                SET mimetype = $1, content = $2, updated_at = $3
+                WHERE uri = $4
+                "#,
+            )
+            .bind(&asset.mimetype)
+            .bind(&asset.content)
+            .bind(now)
+            .bind(&asset.uri)
+            .execute(pool)
+            .await
+        }
+    }
     .map_err(|e| {
         error!("Database error updating asset: {}", e);
         AppError::Database {
@@ -1522,19 +1619,38 @@ async fn db_upsert_asset(pool: &PgPool, asset: &Asset) -> AppResult<()> {
     }
 
     // Asset doesn't exist, create new one
-    sqlx::query(
-        r#"
-        INSERT INTO assets (uri, mimetype, content, name, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $5)
-        "#,
-    )
-    .bind(&asset.uri)
-    .bind(&asset.mimetype)
-    .bind(&asset.content)
-    .bind(&asset.name)
-    .bind(now)
-    .execute(pool)
-    .await
+    match executor {
+        crate::database::TransactionExecutor::Transaction(ref mut tx) => {
+            sqlx::query(
+                r#"
+                INSERT INTO assets (uri, mimetype, content, name, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $5)
+                "#,
+            )
+            .bind(&asset.uri)
+            .bind(&asset.mimetype)
+            .bind(&asset.content)
+            .bind(&asset.name)
+            .bind(now)
+            .execute(&mut ***tx)
+            .await
+        }
+        crate::database::TransactionExecutor::Pool(pool) => {
+            sqlx::query(
+                r#"
+                INSERT INTO assets (uri, mimetype, content, name, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $5)
+                "#,
+            )
+            .bind(&asset.uri)
+            .bind(&asset.mimetype)
+            .bind(&asset.content)
+            .bind(&asset.name)
+            .bind(now)
+            .execute(pool)
+            .await
+        }
+    }
     .map_err(|e| {
         error!("Database error creating asset: {}", e);
         AppError::Database {
@@ -1548,14 +1664,17 @@ async fn db_upsert_asset(pool: &PgPool, asset: &Asset) -> AppResult<()> {
 }
 
 /// Database-backed get asset by URI
-async fn db_get_asset(pool: &PgPool, uri: &str) -> AppResult<Option<Asset>> {
+async fn db_get_asset<'e, E>(executor: E, uri: &str) -> AppResult<Option<Asset>>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     let row = sqlx::query(
         r#"
         SELECT uri, mimetype, content, name, created_at, updated_at FROM assets WHERE uri = $1
         "#,
     )
     .bind(uri)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await
     .map_err(|e| {
         error!("Database error getting asset: {}", e);
@@ -1616,13 +1735,16 @@ async fn db_get_asset(pool: &PgPool, uri: &str) -> AppResult<Option<Asset>> {
 }
 
 /// Database-backed list all assets
-async fn db_list_assets(pool: &PgPool) -> AppResult<HashMap<String, Asset>> {
+async fn db_list_assets<'e, E>(executor: E) -> AppResult<HashMap<String, Asset>>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     let rows = sqlx::query(
         r#"
         SELECT uri, mimetype, content, name, created_at, updated_at FROM assets ORDER BY uri
         "#,
     )
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await
     .map_err(|e| {
         error!("Database error listing assets: {}", e);
@@ -1687,14 +1809,17 @@ async fn db_list_assets(pool: &PgPool) -> AppResult<HashMap<String, Asset>> {
 }
 
 /// Database-backed delete asset
-async fn db_delete_asset(pool: &PgPool, uri: &str) -> AppResult<bool> {
+async fn db_delete_asset<'e, E>(executor: E, uri: &str) -> AppResult<bool>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
     let result = sqlx::query(
         r#"
         DELETE FROM assets WHERE uri = $1
         "#,
     )
     .bind(uri)
-    .execute(pool)
+    .execute(executor)
     .await
     .map_err(|e| {
         error!("Database error deleting asset: {}", e);
@@ -3353,7 +3478,13 @@ pub fn bootstrap_scripts() -> AppResult<()> {
                     // Update if content differs
                     if existing_content != code {
                         info!("Updating bootstrap script in database: {}", uri);
-                        if let Err(e) = db_upsert_script(pool, uri, code, "").await {
+                        if let Err(e) = db_upsert_script(
+                            crate::database::TransactionExecutor::Pool(pool),
+                            uri,
+                            code,
+                        )
+                        .await
+                        {
                             error!("Failed to update bootstrap script {}: {}", uri, e);
                             return Err(e);
                         }
@@ -3362,7 +3493,13 @@ pub fn bootstrap_scripts() -> AppResult<()> {
 
                 if !exists {
                     // Insert the script
-                    if let Err(e) = db_upsert_script(pool, uri, code, "").await {
+                    if let Err(e) = db_upsert_script(
+                        crate::database::TransactionExecutor::Pool(pool),
+                        uri,
+                        code,
+                    )
+                    .await
+                    {
                         error!("Failed to bootstrap script {}: {}", uri, e);
                         return Err(e);
                     } else {
@@ -4164,15 +4301,32 @@ impl PostgresRepository {
 #[async_trait]
 impl Repository for PostgresRepository {
     async fn get_script(&self, uri: &str) -> AppResult<Option<String>> {
-        db_get_script(&self.pool, uri).await
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_get_script(&mut **tx, uri).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => db_get_script(pool, uri).await,
+        }
     }
 
     async fn list_scripts(&self) -> AppResult<HashMap<String, String>> {
-        db_list_scripts(&self.pool).await
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_list_scripts(&mut **tx).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => db_list_scripts(pool).await,
+        }
     }
 
     async fn upsert_script(&self, uri: &str, content: &str) -> AppResult<()> {
-        db_upsert_script(&self.pool, uri, content, &self.server_id).await?;
+        let executor = crate::database::get_current_executor(&self.pool);
+        db_upsert_script(executor, uri, content).await?;
+
+        // Send notification after successful upsert
+        send_script_notification(&self.pool, uri, "upserted", &self.server_id).await?;
+
         // Invalidate cache
         if let Ok(mut guard) = safe_lock_scripts() {
             guard.remove(uri);
@@ -4181,9 +4335,26 @@ impl Repository for PostgresRepository {
     }
 
     async fn delete_script(&self, uri: &str) -> AppResult<bool> {
-        let result = db_delete_script(&self.pool, uri, &self.server_id).await?;
-        if result && let Ok(mut guard) = safe_lock_scripts() {
-            guard.remove(uri);
+        // First, drop all script-owned tables (outside transaction)
+        let _ = db_drop_all_script_tables(&self.pool, uri).await;
+
+        // Delete the script (within transaction if active)
+        let executor = crate::database::get_current_executor(&self.pool);
+        let result = match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_delete_script(&mut **tx, uri).await?
+            }
+            crate::database::TransactionExecutor::Pool(pool) => db_delete_script(pool, uri).await?,
+        };
+
+        if result {
+            // Send notification after successful deletion
+            send_script_notification(&self.pool, uri, "deleted", &self.server_id).await?;
+
+            // Update in-memory cache
+            if let Ok(mut guard) = safe_lock_scripts() {
+                guard.remove(uri);
+            }
         }
         Ok(result)
     }
@@ -4207,7 +4378,15 @@ impl Repository for PostgresRepository {
             .await?
             .unwrap_or(default_privileged_for(uri));
 
-        let owners = db_get_script_owners(&self.pool, uri).await?;
+        let executor = crate::database::get_current_executor(&self.pool);
+        let owners = match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_get_script_owners(&mut **tx, uri).await?
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_get_script_owners(pool, uri).await?
+            }
+        };
 
         let mut metadata = ScriptMetadata::new(uri.to_string(), content);
         metadata.privileged = privileged;
@@ -4226,7 +4405,15 @@ impl Repository for PostgresRepository {
         let db_scripts = self.list_scripts().await?;
 
         // Fetch all owners in one query
-        let all_owners = db_get_all_script_owners(&self.pool).await?;
+        let executor = crate::database::get_current_executor(&self.pool);
+        let all_owners = match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_get_all_script_owners(&mut **tx).await?
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_get_all_script_owners(pool).await?
+            }
+        };
 
         let mut metadata_list = Vec::new();
 
@@ -4308,39 +4495,96 @@ impl Repository for PostgresRepository {
     }
 
     async fn get_asset(&self, uri: &str) -> AppResult<Option<Asset>> {
-        db_get_asset(&self.pool, uri).await
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_get_asset(&mut **tx, uri).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => db_get_asset(pool, uri).await,
+        }
     }
 
     async fn list_assets(&self) -> AppResult<HashMap<String, Asset>> {
-        db_list_assets(&self.pool).await
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_list_assets(&mut **tx).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => db_list_assets(pool).await,
+        }
     }
 
     async fn upsert_asset(&self, asset: Asset) -> AppResult<()> {
-        db_upsert_asset(&self.pool, &asset).await
+        let executor = crate::database::get_current_executor(&self.pool);
+        db_upsert_asset(executor, &asset).await
     }
 
     async fn delete_asset(&self, uri: &str) -> AppResult<bool> {
-        db_delete_asset(&self.pool, uri).await
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_delete_asset(&mut **tx, uri).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => db_delete_asset(pool, uri).await,
+        }
     }
 
     async fn insert_log(&self, script_uri: &str, message: &str, level: &str) -> AppResult<()> {
-        db_insert_log_message(&self.pool, script_uri, message, level).await
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_insert_log_message(&mut **tx, script_uri, message, level).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_insert_log_message(pool, script_uri, message, level).await
+            }
+        }
     }
 
     async fn fetch_logs(&self, script_uri: &str) -> AppResult<Vec<LogEntry>> {
-        db_fetch_log_messages(&self.pool, script_uri).await
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_fetch_log_messages(&mut **tx, script_uri).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_fetch_log_messages(pool, script_uri).await
+            }
+        }
     }
 
     async fn fetch_all_logs(&self) -> AppResult<Vec<LogEntry>> {
-        db_fetch_all_log_messages(&self.pool).await
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_fetch_all_log_messages(&mut **tx).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_fetch_all_log_messages(pool).await
+            }
+        }
     }
 
     async fn clear_logs(&self, script_uri: &str) -> AppResult<()> {
-        db_clear_log_messages(&self.pool, script_uri).await
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_clear_log_messages(&mut **tx, script_uri).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_clear_log_messages(pool, script_uri).await
+            }
+        }
     }
 
     async fn prune_logs(&self) -> AppResult<()> {
-        db_prune_log_messages(&self.pool).await
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_prune_log_messages(&mut **tx).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => db_prune_log_messages(pool).await,
+        }
     }
 
     async fn get_shared_storage(&self, script_uri: &str, key: &str) -> AppResult<Option<String>> {
@@ -4442,31 +4686,87 @@ impl Repository for PostgresRepository {
     }
 
     async fn get_script_privileged(&self, uri: &str) -> AppResult<Option<bool>> {
-        db_get_script_privileged(&self.pool, uri).await
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_get_script_privileged(&mut **tx, uri).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_get_script_privileged(pool, uri).await
+            }
+        }
     }
 
     async fn set_script_privileged(&self, uri: &str, privileged: bool) -> AppResult<()> {
-        db_set_script_privileged(&self.pool, uri, privileged).await
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_set_script_privileged(&mut **tx, uri, privileged).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_set_script_privileged(pool, uri, privileged).await
+            }
+        }
     }
 
     async fn add_script_owner(&self, uri: &str, user_id: &str) -> AppResult<()> {
-        db_add_script_owner(&self.pool, uri, user_id).await
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_add_script_owner(&mut **tx, uri, user_id).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_add_script_owner(pool, uri, user_id).await
+            }
+        }
     }
 
     async fn remove_script_owner(&self, uri: &str, user_id: &str) -> AppResult<bool> {
-        db_remove_script_owner(&self.pool, uri, user_id).await
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_remove_script_owner(&mut **tx, uri, user_id).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_remove_script_owner(pool, uri, user_id).await
+            }
+        }
     }
 
     async fn get_script_owners(&self, uri: &str) -> AppResult<Vec<String>> {
-        db_get_script_owners(&self.pool, uri).await
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_get_script_owners(&mut **tx, uri).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_get_script_owners(pool, uri).await
+            }
+        }
     }
 
     async fn user_owns_script(&self, uri: &str, user_id: &str) -> AppResult<bool> {
-        db_user_owns_script(&self.pool, uri, user_id).await
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_user_owns_script(&mut **tx, uri, user_id).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_user_owns_script(pool, uri, user_id).await
+            }
+        }
     }
 
     async fn count_script_owners(&self, uri: &str) -> AppResult<i64> {
-        db_count_script_owners(&self.pool, uri).await
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_count_script_owners(&mut **tx, uri).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_count_script_owners(pool, uri).await
+            }
+        }
     }
 
     async fn create_script_table(

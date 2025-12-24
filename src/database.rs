@@ -145,10 +145,13 @@ pub fn get_current_executor(pool: &PgPool) -> TransactionExecutor<'_> {
             // Transmute to extend the lifetime for the return value
             // This is safe because the transaction lives in thread-local storage
             // and will outlive this function call
-            return TransactionExecutor::Transaction(std::mem::transmute(tx_ref));
+            return TransactionExecutor::Transaction(std::mem::transmute::<
+                &mut Transaction<'static, Postgres>,
+                &mut Transaction<'static, Postgres>,
+            >(tx_ref));
         }
     }
-    
+
     // No active transaction, use the pool
     TransactionExecutor::Pool(pool)
 }
