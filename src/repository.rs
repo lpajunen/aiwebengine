@@ -3836,6 +3836,17 @@ fn get_static_assets() -> HashMap<String, Asset> {
     };
     m.insert("aiwebengine.d.ts".to_string(), aiwebengine_dts);
 
+    let aiwebengine_priv_dts_content = include_bytes!("../assets/aiwebengine-priv.d.ts").to_vec();
+    let aiwebengine_priv_dts = Asset {
+        uri: "aiwebengine-priv.d.ts".to_string(),
+        name: Some("TypeScript Private Type Definitions".to_string()),
+        mimetype: "text/plain".to_string(),
+        content: aiwebengine_priv_dts_content,
+        created_at: now,
+        updated_at: now,
+    };
+    m.insert("aiwebengine-priv.d.ts".to_string(), aiwebengine_priv_dts);
+
     m
 }
 
