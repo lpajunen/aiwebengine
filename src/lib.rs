@@ -386,6 +386,81 @@ pub fn get_rust_openapi_spec() -> String {
                         "security": [{"oauth2": []}]
                     }
                 }));
+
+                // TypeScript type definitions
+                let version = env!("CARGO_PKG_VERSION");
+                let type_defs_path = format!("/api/types/v{}/aiwebengine.d.ts", version);
+                paths.insert(type_defs_path.clone(), serde_json::json!({
+                    "get": {
+                        "tags": ["Documentation"],
+                        "summary": "TypeScript type definitions",
+                        "description": "TypeScript type definitions for the AIWebEngine public API",
+                        "responses": {
+                            "200": {
+                                "description": "TypeScript type definitions file",
+                                "content": {
+                                    "text/plain": {}
+                                }
+                            },
+                            "404": {
+                                "description": "Type definitions not found"
+                            }
+                        }
+                    }
+                }));
+
+                let type_defs_priv_path = format!("/api/types/v{}/aiwebengine-priv.d.ts", version);
+                paths.insert(type_defs_priv_path.clone(), serde_json::json!({
+                    "get": {
+                        "tags": ["Documentation"],
+                        "summary": "TypeScript private type definitions",
+                        "description": "TypeScript type definitions for the AIWebEngine private/internal API",
+                        "responses": {
+                            "200": {
+                                "description": "TypeScript type definitions file",
+                                "content": {
+                                    "text/plain": {}
+                                }
+                            },
+                            "404": {
+                                "description": "Type definitions not found"
+                            }
+                        }
+                    }
+                }));
+
+                // Documentation pages
+                paths.insert("/engine/docs".to_string(), serde_json::json!({
+                    "get": {
+                        "tags": ["Documentation"],
+                        "summary": "Engine documentation",
+                        "description": "Main documentation page for AIWebEngine",
+                        "responses": {
+                            "200": {
+                                "description": "Documentation HTML page",
+                                "content": {
+                                    "text/html": {}
+                                }
+                            }
+                        }
+                    }
+                }));
+
+                paths.insert("/engine/docs/".to_string(), serde_json::json!({
+                    "get": {
+                        "tags": ["Documentation"],
+                        "summary": "Engine documentation home",
+                        "description": "Documentation home page for AIWebEngine",
+                        "responses": {
+                            "200": {
+                                "description": "Documentation HTML page",
+                                "content": {
+                                    "text/html": {}
+                                }
+                            }
+                        }
+                    }
+                }));
             }
 
             serde_json::to_string_pretty(&spec_value)
@@ -2289,6 +2364,32 @@ async fn setup_routes(
         &type_defs_path,
         axum::routing::get(|| async {
             if let Some(asset) = repository::fetch_asset("aiwebengine.d.ts") {
+                let mut response = asset.content.into_response();
+                response.headers_mut().insert(
+                    axum::http::header::CONTENT_TYPE,
+                    axum::http::HeaderValue::from_static("text/plain; charset=utf-8"),
+                );
+                response.headers_mut().insert(
+                    axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
+                    axum::http::HeaderValue::from_static("*"),
+                );
+                response.headers_mut().insert(
+                    axum::http::header::CACHE_CONTROL,
+                    axum::http::HeaderValue::from_static("public, max-age=3600"),
+                );
+                response
+            } else {
+                (StatusCode::NOT_FOUND, "Type definitions not found").into_response()
+            }
+        }),
+    );
+
+    // Add TypeScript private type definitions endpoint (no authentication required)
+    let type_defs_priv_path = format!("/api/types/v{}/aiwebengine-priv.d.ts", version);
+    app = app.route(
+        &type_defs_priv_path,
+        axum::routing::get(|| async {
+            if let Some(asset) = repository::fetch_asset("aiwebengine-priv.d.ts") {
                 let mut response = asset.content.into_response();
                 response.headers_mut().insert(
                     axum::http::header::CONTENT_TYPE,
