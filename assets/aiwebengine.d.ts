@@ -1061,6 +1061,15 @@ interface Database {
    * database.releaseSavepoint(sp.savepoint);
    */
   releaseSavepoint(name: string): string;
+
+  /**
+   * Check database health status
+   * @returns Health status message
+   * @example
+   * const health = database.checkDatabaseHealth();
+   * console.log(health);
+   */
+  checkDatabaseHealth(): string;
 }
 
 // ============================================================================
@@ -1237,15 +1246,6 @@ declare function btoa(data: string): string;
  * const decoded = atob(encoded);
  */
 declare function atob(data: string): string;
-
-/**
- * Check database health status
- * @returns Health status message
- * @example
- * const health = checkDatabaseHealth();
- * console.log(health);
- */
-declare function checkDatabaseHealth(): string;
 
 // ============================================================================
 // Response Builder Helpers

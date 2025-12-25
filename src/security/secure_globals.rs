@@ -3014,18 +3014,6 @@ impl SecureGlobalContext {
         let script_uri_owned = script_uri.to_string();
         let user_context = self.user_context.clone();
 
-        // Create the checkDatabaseHealth function
-        let check_db_health = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
-                // Call the database health check
-                let result = crate::database::Database::check_health_sync();
-                Ok(result)
-            },
-        )?;
-
-        global.set("checkDatabaseHealth", check_db_health)?;
-
         // Create the database namespace object for schema management
         let database_obj = rquickjs::Object::new(ctx.clone())?;
 
@@ -3785,6 +3773,17 @@ impl SecureGlobalContext {
             },
         )?;
         database_obj.set("releaseSavepoint", release_savepoint)?;
+
+        // database.checkDatabaseHealth() - Check database health status
+        let check_db_health = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
+                // Call the database health check
+                let result = crate::database::Database::check_health_sync();
+                Ok(result)
+            },
+        )?;
+        database_obj.set("checkDatabaseHealth", check_db_health)?;
 
         // Set the database object on the global scope
         global.set("database", database_obj)?;

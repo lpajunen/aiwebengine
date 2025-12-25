@@ -1115,7 +1115,7 @@ The engine provides an impressive array of JavaScript APIs with excellent securi
 
 - ✅ `convert.markdown_to_html()`
 - ✅ `convert.render_handlebars_template()`
-- ✅ `checkDatabaseHealth()`
+- ✅ `database.checkDatabaseHealth()`
 
 ---
 

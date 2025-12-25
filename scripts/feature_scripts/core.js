@@ -22,7 +22,7 @@ function health_check(context) {
   // Call Rust function to check database health
   var databaseHealth;
   try {
-    var dbHealthJson = checkDatabaseHealth();
+    var dbHealthJson = database.checkDatabaseHealth();
     databaseHealth = JSON.parse(dbHealthJson);
   } catch (error) {
     databaseHealth = {
