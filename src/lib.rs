@@ -345,48 +345,6 @@ pub fn get_rust_openapi_spec() -> String {
                     }
                 }));
 
-                // GraphiQL UI
-                paths.insert("/engine/graphql".to_string(), serde_json::json!({
-                    "get": {
-                        "tags": ["GraphQL"],
-                        "summary": "GraphiQL interactive editor",
-                        "description": "Interactive GraphQL editor (GraphiQL) for exploring the API and running queries",
-                        "responses": {
-                            "200": {
-                                "description": "GraphiQL HTML page",
-                                "content": {
-                                    "text/html": {}
-                                }
-                            },
-                            "401": {
-                                "description": "Authentication required"
-                            }
-                        },
-                        "security": [{"oauth2": []}]
-                    }
-                }));
-
-                // Swagger UI
-                paths.insert("/engine/swagger".to_string(), serde_json::json!({
-                    "get": {
-                        "tags": ["Documentation"],
-                        "summary": "Swagger UI",
-                        "description": "Interactive API documentation using Swagger UI",
-                        "responses": {
-                            "200": {
-                                "description": "Swagger UI HTML page",
-                                "content": {
-                                    "text/html": {}
-                                }
-                            },
-                            "401": {
-                                "description": "Authentication required"
-                            }
-                        },
-                        "security": [{"oauth2": []}]
-                    }
-                }));
-
                 // TypeScript type definitions
                 let version = env!("CARGO_PKG_VERSION");
                 let type_defs_path = format!("/api/types/v{}/aiwebengine.d.ts", version);
