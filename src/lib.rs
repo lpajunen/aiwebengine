@@ -1565,45 +1565,6 @@ async fn setup_routes(
     auth_manager: Option<&Arc<auth::AuthManager>>,
     pool: Option<sqlx::PgPool>,
 ) -> Router {
-    // GraphQL GET handler - serves GraphiQL (requires authentication when auth is enabled)
-    let graphql_get_handler = move |req: axum::http::Request<axum::body::Body>| {
-        async move {
-            // Check for authentication when auth is enabled
-            if auth_enabled && req.extensions().get::<auth::AuthUser>().is_none() {
-                return safe_helpers::json_response(
-                    StatusCode::UNAUTHORIZED,
-                    &serde_json::json!({"error": "Authentication required"}),
-                );
-            }
-
-            let graphiql_html = async_graphql::http::GraphiQLSource::build()
-                .endpoint("/graphql")
-                .subscription_endpoint("/graphql/ws")
-                .title("aiwebengine GraphQL Editor")
-                .finish();
-
-            let mut full_html = graphiql_html;
-            full_html.push_str(graphiql_navigation_script());
-
-            axum::response::Html(full_html).into_response()
-        }
-    };
-
-    // Swagger UI GET handler - serves Swagger UI for OpenAPI spec
-    let swagger_ui_handler = move |req: axum::http::Request<axum::body::Body>| {
-        async move {
-            // Check for authentication when auth is enabled
-            if auth_enabled && req.extensions().get::<auth::AuthUser>().is_none() {
-                return safe_helpers::json_response(
-                    StatusCode::UNAUTHORIZED,
-                    &serde_json::json!({"error": "Authentication required"}),
-                );
-            }
-
-            axum::response::Html(swagger_ui_base_html()).into_response()
-        }
-    };
-
     // GraphQL handler - executes queries (supports GET and POST)
     let graphql_post_handler = |req: axum::http::Request<axum::body::Body>| async move {
         // Extract authentication context before consuming the request
@@ -2267,18 +2228,6 @@ async fn setup_routes(
     if let Some(auth_mgr) = auth_manager {
         info!("✅ Authentication ENABLED - mounting auth routes and middleware");
 
-        // GraphQL endpoints with require_editor_or_admin_middleware
-        let auth_mgr_for_graphql = Arc::clone(auth_mgr);
-        let graphql_router = Router::new()
-            .route("/engine/graphql", axum::routing::get(graphql_get_handler))
-            .route("/engine/swagger", axum::routing::get(swagger_ui_handler))
-            .layer(axum::middleware::from_fn_with_state(
-                auth_mgr_for_graphql,
-                auth::require_editor_or_admin_middleware,
-            ));
-
-        app = app.merge(graphql_router);
-
         // GraphQL API endpoints (queries, mutations, subscriptions) - REQUIRES authentication
         let auth_mgr_for_graphql_api = Arc::clone(auth_mgr);
         let graphql_api_router = Router::new()
@@ -2336,8 +2285,6 @@ async fn setup_routes(
 
         // GraphQL endpoints without authentication
         app = app
-            .route("/engine/graphql", axum::routing::get(graphql_get_handler))
-            .route("/engine/swagger", axum::routing::get(swagger_ui_handler))
             .route(
                 "/graphql",
                 axum::routing::get(graphql_post_handler).post(graphql_post_handler),
@@ -2827,104 +2774,9 @@ pub async fn start_server_without_shutdown_with_config(config: config::Config) -
     let (_tx, rx) = tokio::sync::oneshot::channel::<()>();
     start_server_with_config(config, rx).await
 }
-
 // ============================================================================
 // Helper Functions for Refactored Route Setup and Request Handling
 // ============================================================================
-
-/// Returns the navigation script HTML for GraphiQL
-fn graphiql_navigation_script() -> &'static str {
-    r#"<script>
-document.addEventListener('DOMContentLoaded', function() {
-    setTimeout(function() {
-        const nav = document.createElement('div');
-        nav.id = 'aiwebengine-nav';
-        nav.style.cssText = 'position: absolute; top: 10px; right: 10px; z-index: 1000; display: flex; gap: 8px;';
-        
-        const editorLink = document.createElement('a');
-        editorLink.href = '/engine/editor';
-        editorLink.textContent = 'Editor';
-        editorLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
-        
-        const docsLink = document.createElement('a');
-        docsLink.href = '/engine/docs';
-        docsLink.textContent = 'Docs';
-        docsLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
-        
-        const swaggerLink = document.createElement('a');
-        swaggerLink.href = '/engine/swagger';
-        swaggerLink.textContent = 'API Docs';
-        swaggerLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
-        
-        nav.appendChild(editorLink);
-        nav.appendChild(docsLink);
-        nav.appendChild(swaggerLink);
-        document.body.appendChild(nav);
-        
-        const style = document.createElement('style');
-        style.textContent = '#aiwebengine-nav a:hover { background: #e5e7eb !important; border-color: #9ca3af !important; }';
-        document.head.appendChild(style);
-    }, 2000);
-});
-</script>"#
-}
-
-/// Returns the base Swagger UI HTML (navigation added separately)
-fn swagger_ui_base_html() -> &'static str {
-    r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>aiwebengine API Documentation</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css" />
-    <style>
-        body { margin: 0; padding: 0; }
-        #swagger-ui { max-width: 1460px; margin: 0 auto; }
-    </style>
-</head>
-<body>
-    <div id="swagger-ui"></div>
-    <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-standalone-preset.js"></script>
-    <script>
-        window.onload = function() {
-            SwaggerUIBundle({
-                url: '/engine/openapi.json',
-                dom_id: '#swagger-ui',
-                deepLinking: true,
-                presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],
-                layout: "StandaloneLayout"
-            });
-            setTimeout(function() {
-                const nav = document.createElement('div');
-                nav.id = 'aiwebengine-nav';
-                nav.style.cssText = 'position: fixed; top: 10px; right: 10px; z-index: 1000; display: flex; gap: 8px;';
-                const editorLink = document.createElement('a');
-                editorLink.href = '/engine/editor';
-                editorLink.textContent = 'Editor';
-                editorLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
-                const graphqlLink = document.createElement('a');
-                graphqlLink.href = '/engine/graphql';
-                graphqlLink.textContent = 'GraphQL';
-                graphqlLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
-                const docsLink = document.createElement('a');
-                docsLink.href = '/engine/docs';
-                docsLink.textContent = 'Docs';
-                docsLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
-                nav.appendChild(editorLink);
-                nav.appendChild(graphqlLink);
-                nav.appendChild(docsLink);
-                document.body.appendChild(nav);
-                const style = document.createElement('style');
-                style.textContent = '#aiwebengine-nav a:hover { background: #e5e7eb !important; border-color: #9ca3af !important; }';
-                document.head.appendChild(style);
-            }, 1000);
-        };
-    </script>
-</body>
-</html>"#
-}
 
 /// Try to serve an asset if the path matches a registered asset
 fn try_serve_asset(path: &str, method: &str) -> Option<Response> {

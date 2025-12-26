@@ -451,16 +451,22 @@ async fn test_form_data() {
 async fn test_graphql_endpoints() {
     let context = TestContext::new();
 
-    // Load the GraphQL test script
-    let _ = repository::upsert_script(
-        "https://example.com/graphql_test",
-        include_str!("../scripts/test_scripts/graphql_test.js"),
-    );
-
     // Load the core script to get script management GraphQL operations
     let _ = repository::upsert_script(
         "https://example.com/core",
         include_str!("../scripts/feature_scripts/core.js"),
+    );
+
+    // Load the editor script to get /engine/graphql and /engine/swagger endpoints
+    let _ = repository::upsert_script(
+        "https://example.com/editor",
+        include_str!("../scripts/feature_scripts/editor.js"),
+    );
+
+    // Load the GraphQL test script
+    let _ = repository::upsert_script(
+        "https://example.com/graphql_test",
+        include_str!("../scripts/test_scripts/graphql_test.js"),
     );
 
     // Start server

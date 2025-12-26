@@ -316,6 +316,161 @@ function serveEditor(context) {
   };
 }
 
+// Serve GraphiQL interface
+function serveGraphiQL(context) {
+  const req = getRequest(context);
+
+  // Serve GraphiQL using CDN
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>aiwebengine GraphiQL Editor</title>
+    <link rel="stylesheet" href="https://unpkg.com/graphiql@3/graphiql.min.css" />
+    <style>
+        body { margin: 0; padding: 0; height: 100vh; }
+        #graphiql { height: 100vh; }
+    </style>
+</head>
+<body>
+    <div id="graphiql">Loading...</div>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/graphiql@3/graphiql.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Create a simple fetcher function for GraphQL queries
+            const fetcher = function(graphQLParams) {
+                return fetch('/graphql', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(graphQLParams),
+                }).then(function(response) {
+                    return response.json();
+                });
+            };
+
+            const root = ReactDOM.createRoot(document.getElementById('graphiql'));
+            root.render(React.createElement(GraphiQL, { fetcher: fetcher }));
+
+            // Add navigation
+            setTimeout(function() {
+                const nav = document.createElement('div');
+                nav.id = 'aiwebengine-nav';
+                nav.style.cssText = 'position: fixed; top: 10px; right: 10px; z-index: 1000; display: flex; gap: 8px;';
+                
+                const editorLink = document.createElement('a');
+                editorLink.href = '/engine/editor';
+                editorLink.textContent = 'Editor';
+                editorLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
+                
+                const docsLink = document.createElement('a');
+                docsLink.href = '/engine/docs';
+                docsLink.textContent = 'Docs';
+                docsLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
+                
+                const swaggerLink = document.createElement('a');
+                swaggerLink.href = '/engine/swagger';
+                swaggerLink.textContent = 'API Docs';
+                swaggerLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
+                
+                nav.appendChild(editorLink);
+                nav.appendChild(docsLink);
+                nav.appendChild(swaggerLink);
+                document.body.appendChild(nav);
+                
+                const style = document.createElement('style');
+                style.textContent = '#aiwebengine-nav a:hover { background: #e5e7eb !important; border-color: #9ca3af !important; }';
+                document.head.appendChild(style);
+            }, 1000);
+        });
+    </script>
+</body>
+</html>`;
+
+  return {
+    status: 200,
+    body: html,
+    contentType: "text/html; charset=UTF-8",
+  };
+}
+
+// Serve Swagger UI interface
+function serveSwaggerUI(context) {
+  const req = getRequest(context);
+
+  // Serve Swagger UI using CDN
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>aiwebengine API Documentation</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css" />
+    <style>
+        body { margin: 0; padding: 0; }
+        #swagger-ui { max-width: 1460px; margin: 0 auto; }
+    </style>
+</head>
+<body>
+    <div id="swagger-ui"></div>
+    <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-standalone-preset.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            SwaggerUIBundle({
+                url: '/engine/openapi.json',
+                dom_id: '#swagger-ui',
+                deepLinking: true,
+                presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],
+                layout: "StandaloneLayout"
+            });
+
+            // Add navigation
+            setTimeout(function() {
+                const nav = document.createElement('div');
+                nav.id = 'aiwebengine-nav';
+                nav.style.cssText = 'position: fixed; top: 10px; right: 10px; z-index: 1000; display: flex; gap: 8px;';
+                
+                const editorLink = document.createElement('a');
+                editorLink.href = '/engine/editor';
+                editorLink.textContent = 'Editor';
+                editorLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
+                
+                const graphqlLink = document.createElement('a');
+                graphqlLink.href = '/engine/graphql';
+                graphqlLink.textContent = 'GraphQL';
+                graphqlLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
+                
+                const docsLink = document.createElement('a');
+                docsLink.href = '/engine/docs';
+                docsLink.textContent = 'Docs';
+                docsLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
+                
+                nav.appendChild(editorLink);
+                nav.appendChild(graphqlLink);
+                nav.appendChild(docsLink);
+                document.body.appendChild(nav);
+                
+                const style = document.createElement('style');
+                style.textContent = '#aiwebengine-nav a:hover { background: #e5e7eb !important; border-color: #9ca3af !important; }';
+                document.head.appendChild(style);
+            }, 1000);
+        });
+    </script>
+</body>
+</html>`;
+
+  return {
+    status: 200,
+    body: html,
+    contentType: "text/html; charset=UTF-8",
+  };
+}
+
 // API: List all scripts
 function apiListScripts(context) {
   const req = getRequest(context);
@@ -1911,6 +2066,8 @@ Remember: You are creating JavaScript scripts that run on the SERVER and handle 
 function init(context) {
   console.log("Initializing editor.js at " + new Date().toISOString());
   routeRegistry.registerRoute("/engine/editor", "serveEditor", "GET");
+  routeRegistry.registerRoute("/engine/graphql", "serveGraphiQL", "GET");
+  routeRegistry.registerRoute("/engine/swagger", "serveSwaggerUI", "GET");
   routeRegistry.registerRoute("/api/scripts", "apiListScripts", "GET");
   routeRegistry.registerRoute("/api/scripts/*", "apiGetScript", "GET");
   routeRegistry.registerRoute("/api/scripts/*", "apiSaveScript", "POST");
