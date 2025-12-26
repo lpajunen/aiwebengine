@@ -338,19 +338,124 @@ function serveGraphiQL(context) {
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/graphiql@3/graphiql.min.js"></script>
+    <script src="https://unpkg.com/graphql-ws@5/umd/graphql-ws.min.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', function() {
-            // Create a simple fetcher function for GraphQL queries
-            const fetcher = function(graphQLParams) {
-                return fetch('/graphql', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify(graphQLParams),
-                }).then(function(response) {
-                    return response.json();
-                });
+            // Create WebSocket client for subscriptions
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = wsProtocol + '//' + window.location.host + '/graphql/ws';
+            
+            let wsClient = null;
+            
+            // Helper function to detect if query is a subscription
+            function isSubscriptionOperation(query) {
+                if (!query) return false;
+                // Remove all comment lines and normalize whitespace
+                const normalized = query
+                    .split('\\n')
+                    .map(line => line.trim())
+                    .filter(line => !line.startsWith('#')) // Remove comment lines
+                    .join(' ')
+                    .replace(/\\s+/g, ' ') // Normalize whitespace
+                    .trim();
+                // Check if it contains subscription operation
+                return /^subscription[\\s{]/.test(normalized) || /\\bsubscription\\s+\\w+\\s*\\{/.test(normalized);
+            }
+            
+            // Create a fetcher that handles both HTTP and WebSocket
+            const fetcher = function(graphQLParams, fetcherOpts) {
+                // Check if this is a subscription
+                const isSubscription = isSubscriptionOperation(graphQLParams.query);
+                
+                if (isSubscription) {
+                    // Use WebSocket for subscriptions - return an async iterable
+                    if (!wsClient) {
+                        wsClient = graphqlWs.createClient({
+                            url: wsUrl,
+                        });
+                    }
+                    
+                    // Return an async iterable that GraphiQL expects
+                    return {
+                        [Symbol.asyncIterator]: function() {
+                            const values = [];
+                            let resolve = null;
+                            let reject = null;
+                            let done = false;
+                            
+                            const unsubscribe = wsClient.subscribe(
+                                {
+                                    query: graphQLParams.query,
+                                    variables: graphQLParams.variables,
+                                    operationName: graphQLParams.operationName,
+                                },
+                                {
+                                    next: function(data) {
+                                        if (resolve) {
+                                            resolve({ value: data, done: false });
+                                            resolve = null;
+                                        } else {
+                                            values.push(data);
+                                        }
+                                    },
+                                    error: function(error) {
+                                        if (reject) {
+                                            reject(error);
+                                        }
+                                        done = true;
+                                    },
+                                    complete: function() {
+                                        done = true;
+                                        if (resolve) {
+                                            resolve({ done: true });
+                                        }
+                                    }
+                                }
+                            );
+                            
+                            if (fetcherOpts && fetcherOpts.signal) {
+                                fetcherOpts.signal.addEventListener('abort', function() {
+                                    unsubscribe();
+                                    done = true;
+                                    if (resolve) {
+                                        resolve({ done: true });
+                                    }
+                                });
+                            }
+                            
+                            return {
+                                next: function() {
+                                    if (values.length > 0) {
+                                        return Promise.resolve({ value: values.shift(), done: false });
+                                    }
+                                    if (done) {
+                                        return Promise.resolve({ done: true });
+                                    }
+                                    return new Promise(function(res, rej) {
+                                        resolve = res;
+                                        reject = rej;
+                                    });
+                                },
+                                return: function() {
+                                    unsubscribe();
+                                    return Promise.resolve({ done: true });
+                                }
+                            };
+                        }
+                    };
+                } else {
+                    // Use HTTP for queries and mutations
+                    return fetch('/graphql', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify(graphQLParams),
+                        signal: fetcherOpts ? fetcherOpts.signal : undefined,
+                    }).then(function(response) {
+                        return response.json();
+                    });
+                }
             };
 
             const root = ReactDOM.createRoot(document.getElementById('graphiql'));
@@ -687,6 +792,25 @@ function apiSaveScript(context) {
           console.log(
             "Broadcasted script update from editor: " + action + " " + fullUri,
           );
+
+          // Also send to GraphQL subscription
+          if (
+            typeof graphQLRegistry !== "undefined" &&
+            typeof graphQLRegistry.sendSubscriptionMessage === "function"
+          ) {
+            try {
+              graphQLRegistry.sendSubscriptionMessage(
+                "scriptUpdates",
+                JSON.stringify(message),
+              );
+              console.log("Sent update to GraphQL subscription: scriptUpdates");
+            } catch (graphqlError) {
+              console.log(
+                "Failed to send to GraphQL subscription: " +
+                  graphqlError.message,
+              );
+            }
+          }
         } catch (broadcastError) {
           console.log(
             "Failed to broadcast script update from editor: " +
@@ -754,6 +878,27 @@ function apiDeleteScript(context) {
               JSON.stringify(message),
             );
             console.log("Broadcasted script deletion from editor: " + fullUri);
+
+            // Also send to GraphQL subscription
+            if (
+              typeof graphQLRegistry !== "undefined" &&
+              typeof graphQLRegistry.sendSubscriptionMessage === "function"
+            ) {
+              try {
+                graphQLRegistry.sendSubscriptionMessage(
+                  "scriptUpdates",
+                  JSON.stringify(message),
+                );
+                console.log(
+                  "Sent deletion to GraphQL subscription: scriptUpdates",
+                );
+              } catch (graphqlError) {
+                console.log(
+                  "Failed to send to GraphQL subscription: " +
+                    graphqlError.message,
+                );
+              }
+            }
           } catch (broadcastError) {
             console.log(
               "Failed to broadcast script deletion from editor: " +
