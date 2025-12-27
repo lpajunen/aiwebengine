@@ -2819,6 +2819,90 @@ impl SecureGlobalContext {
                             }
                         }
 
+                        // Add asset routes from the asset registry
+                        let asset_registrations =
+                            crate::asset_registry::get_global_registry().get_all_registrations();
+
+                        for (path, registration) in asset_registrations {
+                            // Determine MIME type based on file extension
+                            let extension = path.rsplit('.').next().unwrap_or("");
+                            let mime_type = match extension {
+                                "css" => "text/css",
+                                "js" => "application/javascript",
+                                "svg" => "image/svg+xml",
+                                "png" => "image/png",
+                                "jpg" | "jpeg" => "image/jpeg",
+                                "gif" => "image/gif",
+                                "ico" => "image/x-icon",
+                                "html" => "text/html",
+                                "json" => "application/json",
+                                "xml" => "application/xml",
+                                "pdf" => "application/pdf",
+                                "woff" | "woff2" => "font/woff2",
+                                "ttf" => "font/ttf",
+                                _ => "application/octet-stream",
+                            };
+
+                            let mut asset_operation = serde_json::Map::new();
+                            asset_operation.insert(
+                                "summary".to_string(),
+                                serde_json::json!(format!(
+                                    "Static asset: {}",
+                                    registration.asset_name
+                                )),
+                            );
+                            asset_operation.insert(
+                                "description".to_string(),
+                                serde_json::json!(format!(
+                                    "Serves static asset '{}' registered by script '{}'",
+                                    registration.asset_name, registration.script_uri
+                                )),
+                            );
+                            asset_operation
+                                .insert("tags".to_string(), serde_json::json!(["Assets"]));
+                            asset_operation.insert(
+                                "responses".to_string(),
+                                serde_json::json!({
+                                    "200": {
+                                        "description": "Asset content",
+                                        "content": {
+                                            mime_type: {
+                                                "schema": {
+                                                    "type": "string",
+                                                    "format": "binary"
+                                                }
+                                            }
+                                        }
+                                    },
+                                    "404": {
+                                        "description": "Asset not found"
+                                    }
+                                }),
+                            );
+                            asset_operation.insert(
+                                "x-asset-name".to_string(),
+                                serde_json::json!(registration.asset_name),
+                            );
+                            asset_operation.insert(
+                                "x-script-uri".to_string(),
+                                serde_json::json!(registration.script_uri),
+                            );
+                            asset_operation.insert(
+                                "x-source".to_string(),
+                                serde_json::json!("asset-registry"),
+                            );
+
+                            // Add to js_paths so it gets merged
+                            let path_entry = js_paths
+                                .entry(path)
+                                .or_insert_with(|| serde_json::json!({}));
+
+                            if let Some(path_obj) = path_entry.as_object_mut() {
+                                path_obj
+                                    .insert("get".to_string(), serde_json::json!(asset_operation));
+                            }
+                        }
+
                         // Merge JavaScript paths into Rust spec
                         if let Some(rust_paths) = rust_spec["paths"].as_object_mut() {
                             for (path, operations) in js_paths {

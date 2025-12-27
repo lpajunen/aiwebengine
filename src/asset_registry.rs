@@ -142,6 +142,23 @@ impl AssetRegistry {
         }
     }
 
+    /// Get all asset path registrations with their details
+    pub fn get_all_registrations(&self) -> Vec<(String, AssetPathRegistration)> {
+        match self.paths.lock() {
+            Ok(paths) => paths
+                .iter()
+                .map(|(path, reg)| (path.clone(), reg.clone()))
+                .collect(),
+            Err(e) => {
+                warn!(
+                    "Failed to lock asset registry for getting all registrations: {}",
+                    e
+                );
+                Vec::new()
+            }
+        }
+    }
+
     /// Clear all registrations (typically used for testing or reinitialization)
     pub fn clear(&self) {
         match self.paths.lock() {
@@ -229,5 +246,38 @@ mod tests {
 
         let script2_paths = registry.get_paths_for_script("script2");
         assert_eq!(script2_paths.len(), 1);
+    }
+
+    #[test]
+    fn test_get_all_registrations() {
+        let registry = AssetRegistry::new();
+
+        registry
+            .register_path("/logo.svg", "logo.svg", "script1")
+            .unwrap();
+        registry
+            .register_path("/favicon.ico", "favicon.ico", "script1")
+            .unwrap();
+        registry
+            .register_path("/app.css", "app.css", "script2")
+            .unwrap();
+
+        let all_registrations = registry.get_all_registrations();
+        assert_eq!(all_registrations.len(), 3);
+
+        // Verify the registrations contain expected data
+        let logo_reg = all_registrations
+            .iter()
+            .find(|(path, _)| path == "/logo.svg")
+            .unwrap();
+        assert_eq!(logo_reg.1.asset_name, "logo.svg");
+        assert_eq!(logo_reg.1.script_uri, "script1");
+
+        let css_reg = all_registrations
+            .iter()
+            .find(|(path, _)| path == "/app.css")
+            .unwrap();
+        assert_eq!(css_reg.1.asset_name, "app.css");
+        assert_eq!(css_reg.1.script_uri, "script2");
     }
 }
