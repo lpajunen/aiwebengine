@@ -9,7 +9,7 @@ axum = { version = "0.8.4", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tower-http = { version = "0.6", features = ["cors"] }
-rquickjs = "0.10.0"
+rquickjs = "0.11.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 anyhow = "1.0"
@@ -77,4 +77,4 @@ lto = "thin"
 [dev-dependencies]
 tokio-test = "0.4"
 mockall = "0.14.0"
-jsonschema = "0.37.4"
+jsonschema = "0.38.1"
