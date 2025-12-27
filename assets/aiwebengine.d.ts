@@ -78,6 +78,20 @@ interface HttpRequest {
   /** Raw request body as string */
   body: string;
 
+  /** Uploaded files from multipart form data */
+  files: Array<{
+    /** Form field name */
+    field: string;
+    /** Original filename (if provided) */
+    filename?: string;
+    /** MIME content type (if provided) */
+    contentType?: string;
+    /** Base64-encoded file data */
+    data: string;
+    /** File size in bytes */
+    size: number;
+  }>;
+
   /** Authentication context (available when user is authenticated) */
   auth?: AuthContext;
 }

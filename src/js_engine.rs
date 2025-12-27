@@ -119,6 +119,8 @@ pub struct RequestExecutionParams {
     pub auth_context: Option<crate::auth::JsAuthContext>,
     /// Route parameters extracted from path patterns like /users/:id
     pub route_params: Option<HashMap<String, String>>,
+    /// Uploaded files from multipart form data
+    pub uploaded_files: Option<Vec<crate::parsers::UploadedFile>>,
 }
 
 /// Kinds of handler invocations supported by the runtime.
@@ -160,6 +162,8 @@ pub struct JsRequestContext {
     pub body: Option<String>,
     /// Route parameters extracted from path patterns like /users/:id
     pub route_params: HashMap<String, String>,
+    /// Uploaded files from multipart form data
+    pub uploaded_files: Vec<crate::parsers::UploadedFile>,
 }
 
 /// Builder that assembles the single context object passed to all handlers.
@@ -271,6 +275,26 @@ impl JsHandlerContextBuilder {
             route_obj.set(key.as_str(), value.as_str())?;
         }
         request_obj.set("params", route_obj)?;
+
+        // Uploaded files (base64-encoded data)
+        let files_array = rquickjs::Array::new(ctx.clone())?;
+        for (idx, file) in request.uploaded_files.iter().enumerate() {
+            let file_obj = rquickjs::Object::new(ctx.clone())?;
+            file_obj.set("field", file.field_name.as_str())?;
+            if let Some(ref filename) = file.filename {
+                file_obj.set("filename", filename.as_str())?;
+            }
+            if let Some(ref content_type) = file.content_type {
+                file_obj.set("contentType", content_type.as_str())?;
+            }
+            // Encode file data as base64 for JavaScript
+            let base64_data =
+                base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &file.data);
+            file_obj.set("data", base64_data)?;
+            file_obj.set("size", file.size as u32)?;
+            files_array.set(idx, file_obj)?;
+        }
+        request_obj.set("files", files_array)?;
 
         // Body
         if let Some(body) = &request.body {
@@ -1021,6 +1045,7 @@ pub fn execute_script_for_request_secure(
             form_data: params.form_data.clone().unwrap_or_default(),
             body: params.raw_body.clone(),
             route_params: params.route_params.clone().unwrap_or_default(),
+            uploaded_files: params.uploaded_files.clone().unwrap_or_default(),
         };
 
         let mut context_builder = JsHandlerContextBuilder::new(HandlerInvocationKind::HttpRoute)
@@ -1201,6 +1226,7 @@ pub fn execute_script_for_request(
                 form_data: form_data.cloned().unwrap_or_default(),
                 body: raw_body.clone(),
                 route_params: HashMap::new(),
+                uploaded_files: Vec::new(),
             };
 
             let mut context_builder =
@@ -1391,6 +1417,7 @@ pub fn execute_graphql_resolver(params: GraphqlResolverExecutionParams) -> Resul
             form_data: HashMap::new(),
             body: None,
             route_params: HashMap::new(),
+            uploaded_files: Vec::new(),
         };
 
         let mut context_builder =
@@ -1606,6 +1633,7 @@ pub fn execute_mcp_tool_handler(
             form_data: HashMap::new(),
             body: None,
             route_params: HashMap::new(),
+            uploaded_files: Vec::new(),
         };
 
         let context_builder = JsHandlerContextBuilder::new(HandlerInvocationKind::McpTool)
@@ -1729,6 +1757,7 @@ pub fn execute_stream_customization_function(
                 form_data: HashMap::new(),
                 body: None,
                 route_params: HashMap::new(),
+                uploaded_files: Vec::new(),
             };
 
             let mut context_builder =
@@ -2649,6 +2678,7 @@ mod tests {
             user_context: UserContext::admin("test".to_string()),
             route_params: None,
             auth_context: None,
+            uploaded_files: None,
         };
         let result = execute_script_for_request_secure(params);
 
@@ -2682,6 +2712,7 @@ mod tests {
             user_context: UserContext::admin("test".to_string()),
             route_params: None,
             auth_context: None,
+            uploaded_files: None,
         };
         let result = execute_script_for_request_secure(params);
 
@@ -2716,6 +2747,7 @@ mod tests {
             user_context: UserContext::admin("test".to_string()),
             route_params: None,
             auth_context: None,
+            uploaded_files: None,
         };
         let result = execute_script_for_request_secure(params);
 
@@ -2755,6 +2787,7 @@ This is **bold** text.`;
             user_context: UserContext::admin("test".to_string()),
             route_params: None,
             auth_context: None,
+            uploaded_files: None,
         };
         let result = execute_script_for_request_secure(params);
 
@@ -2801,6 +2834,7 @@ This is **bold** text.`;
             user_context: UserContext::admin("test".to_string()),
             route_params: None,
             auth_context: None,
+            uploaded_files: None,
         };
         let result = execute_script_for_request_secure(params);
 
@@ -2844,6 +2878,7 @@ This is **bold** text.`;
             user_context: UserContext::admin("test".to_string()),
             route_params: None,
             auth_context: None,
+            uploaded_files: None,
         };
         let result = execute_script_for_request_secure(params);
 
@@ -2887,6 +2922,7 @@ This is **bold** text.`;
             user_context: UserContext::admin("test".to_string()),
             route_params: None,
             auth_context: None,
+            uploaded_files: None,
         };
         let result = execute_script_for_request_secure(params);
 
@@ -2934,6 +2970,7 @@ This is **bold** text.`;
             user_context: UserContext::admin("test".to_string()),
             route_params: None,
             auth_context: None,
+            uploaded_files: None,
         };
         let result = execute_script_for_request_secure(params);
 
@@ -2995,6 +3032,7 @@ function hello() {
             user_context: UserContext::admin("test".to_string()),
             route_params: None,
             auth_context: None,
+            uploaded_files: None,
         };
         let result = execute_script_for_request_secure(params);
 
@@ -3078,6 +3116,7 @@ function hello() {
             headers: HashMap::new(),
             user_context: UserContext::admin("test".to_string()),
             auth_context: None,
+            uploaded_files: None,
             route_params: None,
         };
 
@@ -3136,6 +3175,7 @@ function hello() {
             headers: HashMap::new(),
             user_context: UserContext::admin("test".to_string()),
             auth_context: None,
+            uploaded_files: None,
             route_params: None,
         };
 
@@ -3182,6 +3222,7 @@ function hello() {
             headers: HashMap::new(),
             user_context: UserContext::admin("test".to_string()),
             auth_context: None,
+            uploaded_files: None,
             route_params: None,
         };
 
@@ -3232,6 +3273,7 @@ function hello() {
             headers: HashMap::new(),
             user_context: UserContext::admin("test".to_string()),
             auth_context: None,
+            uploaded_files: None,
             route_params: Some(HashMap::from([
                 ("userId".to_string(), "123".to_string()),
                 ("postId".to_string(), "456".to_string()),
@@ -3331,6 +3373,7 @@ function hello() {
             headers: HashMap::new(),
             user_context: UserContext::admin("test".to_string()),
             auth_context: None,
+            uploaded_files: None,
             route_params: Some(HashMap::from([("userId".to_string(), "123".to_string())])),
         };
 

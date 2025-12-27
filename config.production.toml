@@ -67,6 +67,8 @@ storage_type = "postgresql"
 max_script_size_bytes = 1048576
 # Maximum asset size in bytes (10 MB)
 max_asset_size_bytes = 10485760
+# Maximum upload file size in bytes (10 MB)
+max_upload_size_bytes = 10485760
 # Maximum number of log messages per script
 max_log_messages_per_script = 1000
 # Log message retention time in hours (7 days)

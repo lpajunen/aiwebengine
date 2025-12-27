@@ -2336,18 +2336,32 @@ async fn setup_routes(
     let auth_enabled_for_path = auth_enabled;
     let script_timeout_for_home = script_timeout_ms;
     let script_timeout_for_path = script_timeout_ms;
+    let max_upload_for_home = config.repository.max_upload_size_bytes;
+    let max_upload_for_path = config.repository.max_upload_size_bytes;
 
     app = app
         .route(
             "/",
             any(move |req: Request<Body>| async move {
-                handle_dynamic_request(req, script_timeout_for_home, auth_enabled_for_home).await
+                handle_dynamic_request(
+                    req,
+                    script_timeout_for_home,
+                    auth_enabled_for_home,
+                    max_upload_for_home,
+                )
+                .await
             }),
         )
         .route(
             "/{*path}",
             any(move |req: Request<Body>| async move {
-                handle_dynamic_request(req, script_timeout_for_path, auth_enabled_for_path).await
+                handle_dynamic_request(
+                    req,
+                    script_timeout_for_path,
+                    auth_enabled_for_path,
+                    max_upload_for_path,
+                )
+                .await
             }),
         );
 
@@ -2372,6 +2386,7 @@ async fn handle_dynamic_request(
     req: Request<Body>,
     script_timeout_ms: u64,
     _auth_enabled: bool,
+    max_upload_size: usize,
 ) -> impl IntoResponse {
     let path = req.uri().path().to_string();
     let request_method = req.method().to_string();
@@ -2502,16 +2517,26 @@ async fn handle_dynamic_request(
         })
         .unwrap_or(false);
 
-    let form_data = if is_form_data {
+    let (form_data, uploaded_files) = if is_form_data {
         // Parse form data from the bytes
         let body = Body::from(body_bytes.clone());
-        if let Some(ct) = content_type.as_ref() {
-            parse_form_data(Some(ct), body).await.unwrap_or_default()
-        } else {
-            parse_form_data(None, body).await.unwrap_or_default()
+        match parse_form_data(content_type.as_deref(), body, max_upload_size).await {
+            Ok((fields, files)) => (fields, files),
+            Err(status) => {
+                // Return error response for form parsing failures
+                let error_message = match status {
+                    StatusCode::PAYLOAD_TOO_LARGE => "File upload exceeds maximum size limit",
+                    _ => "Failed to parse form data",
+                };
+                return Response::builder()
+                    .status(status)
+                    .header("content-type", "text/plain")
+                    .body(Body::from(error_message))
+                    .unwrap();
+            }
         }
     } else {
-        HashMap::new()
+        (HashMap::new(), Vec::new())
     };
 
     let path_clone = path.clone();
@@ -2555,6 +2580,7 @@ async fn handle_dynamic_request(
             user_context, // Use the properly constructed user_context
             auth_context: Some(auth_context),
             route_params: Some(route_params.clone()),
+            uploaded_files: Some(uploaded_files.clone()),
         };
 
         js_engine::execute_script_for_request_secure(params)

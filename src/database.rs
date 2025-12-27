@@ -684,6 +684,7 @@ mod tests {
             max_log_messages_per_script: 100,
             log_retention_hours: 24,
             auto_prune_logs: true,
+            max_upload_size_bytes: 10 * 1024 * 1024,
         };
 
         // Try to connect with a short timeout to avoid hanging

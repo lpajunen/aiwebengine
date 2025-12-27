@@ -98,6 +98,7 @@ dependencies = [
  "mime",
  "mime_guess",
  "mockall",
+ "multer",
  "notify",
  "oauth2",
  "openidconnect",

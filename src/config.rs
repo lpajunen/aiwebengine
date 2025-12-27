@@ -185,6 +185,9 @@ pub struct RepositoryConfig {
 
     /// Enable automatic log pruning
     pub auto_prune_logs: bool,
+
+    /// Maximum upload file size in bytes
+    pub max_upload_size_bytes: usize,
 }
 
 /// Security configuration
@@ -344,6 +347,7 @@ impl Default for RepositoryConfig {
             max_log_messages_per_script: 100,
             log_retention_hours: 24,
             auto_prune_logs: true,
+            max_upload_size_bytes: 10 * 1024 * 1024, // 10MB
         }
     }
 }
