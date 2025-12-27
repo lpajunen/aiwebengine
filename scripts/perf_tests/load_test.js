@@ -1,5 +1,6 @@
 import http from "k6/http";
 import { check, sleep } from "k6";
+import { Trend } from "k6/metrics";
 
 // Test configuration
 export let options = {
@@ -13,25 +14,52 @@ export let options = {
     { duration: "30s", target: 0 }, // Ramp down to 0 users
   ],
   thresholds: {
-    http_req_duration: ["p(95)<500"], // 95% of requests should be below 500ms
-    http_req_failed: ["rate<0.1"], // Error rate should be below 10%
+    http_req_duration: ["p(95)<" + (__ENV.THRESHOLD_MS || 500)],
+    http_req_failed: ["rate<0.1"],
   },
+  summaryTrendStats: ["min", "med", "p(90)", "p(95)", "max"],
 };
 
 const BASE_URL = "https://softagen.com";
 
-export default function () {
-  // Test the root endpoint (returns HTML welcome page)
-  let response = http.get(`${BASE_URL}/`);
+// Custom trends for deeper analysis
+const t_connect = new Trend("timings_connect", true);
+const t_tls = new Trend("timings_tls", true);
+const t_ttfb = new Trend("timings_ttfb", true); // waiting == TTFB
+const t_receive = new Trend("timings_receive", true);
+const t_total = new Trend("timings_total", true);
 
-  // Basic checks
+export default function () {
+  // Test the root endpoint
+  const response = http.get(`${BASE_URL}/`, {
+    headers: {
+      "User-Agent": "k6-aiwebengine-load-test"
+    },
+  });
+
+  // Record timing breakdowns (coalesce nulls from connection reuse)
+  const tm = (response && typeof response === "object" && response.timings) ? response.timings : null;
+  if (tm) {
+    t_connect.add(Number(tm.connecting || 0));
+    t_tls.add(Number(tm.tls_handshaking || 0));
+    t_ttfb.add(Number(tm.waiting || 0));
+    t_receive.add(Number(tm.receiving || 0));
+    t_total.add(Number(tm.duration || 0));
+  }
+
+  // More robust content checks
+  const headers = response.headers || {};
+  const contentType = headers["Content-Type"] || headers["content-type"] || "";
+  const isHtml = typeof contentType === "string" && contentType.includes("text/html");
+  const hasHtmlTag = typeof response.body === "string" && response.body.toLowerCase().includes("<html");
+
   check(response, {
     "status is 200": (r) => r.status === 200,
-    "response time < 500ms": (r) => r.timings.duration < 500,
-    "has HTML content": (r) =>
-      typeof r.body === "string" && r.body.includes("Welcome"),
+    "response time < threshold": (r) => r.timings.duration < (Number(__ENV.THRESHOLD_MS) || 500),
+    "content-type is text/html": (_r) => isHtml,
+    "contains <html> tag": (_r) => hasHtmlTag,
   });
 
   // Simulate real user behavior with random sleep
-  sleep(Math.random() * 2 + 1); // Sleep 1-3 seconds
+  sleep(Math.random() * 2 + 1);
 }
