@@ -72,7 +72,7 @@ perf-test:
 	@echo "Running performance test against production server..."
 	@echo "This will test https://softagen.com with up to 100 concurrent users"
 	@echo "Test duration: 6 minutes"
-	docker run --rm -v $(PWD)/scripts/perf_tests:/scripts grafana/k6 run /scripts/load_test.js
+	DOCKER_HOST='' docker run --rm -v "$(CURDIR)/scripts/perf_tests:/scripts" -w /scripts grafana/k6 run load_test.js
 
 # Run clippy linter with warnings as errors
 lint:
