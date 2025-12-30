@@ -1,6 +1,6 @@
 # aiwebengine
 
-AI and Web Engine for JavaScript based Solutions - Secure Platform for Building Websites, APIs, Web Apps, and AI Tools
+AI and Web Engine for JavaScript based Solutions - Secure and Scalable Platform for Building Websites, APIs, Web Apps, and AI Tools
 
 Excels when developing solutions using generative AI technologies.
 
