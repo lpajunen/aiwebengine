@@ -218,6 +218,7 @@ pub struct Asset {
     pub content: Vec<u8>,
     pub created_at: std::time::SystemTime,
     pub updated_at: std::time::SystemTime,
+    pub script_uri: String,
 }
 
 // ============================================================================
@@ -1578,12 +1579,13 @@ async fn db_upsert_asset(
             sqlx::query(
                 r#"
                 UPDATE assets
-                SET mimetype = $1, content = $2, updated_at = $3
-                WHERE uri = $4
+                SET mimetype = $1, content = $2, script_uri = $3, updated_at = $4
+                WHERE uri = $5
                 "#,
             )
             .bind(&asset.mimetype)
             .bind(&asset.content)
+            .bind(&asset.script_uri)
             .bind(now)
             .bind(&asset.uri)
             .execute(&mut ***tx)
@@ -1593,12 +1595,13 @@ async fn db_upsert_asset(
             sqlx::query(
                 r#"
                 UPDATE assets
-                SET mimetype = $1, content = $2, updated_at = $3
-                WHERE uri = $4
+                SET mimetype = $1, content = $2, script_uri = $3, updated_at = $4
+                WHERE uri = $5
                 "#,
             )
             .bind(&asset.mimetype)
             .bind(&asset.content)
+            .bind(&asset.script_uri)
             .bind(now)
             .bind(&asset.uri)
             .execute(pool)
@@ -1623,14 +1626,15 @@ async fn db_upsert_asset(
         crate::database::TransactionExecutor::Transaction(ref mut tx) => {
             sqlx::query(
                 r#"
-                INSERT INTO assets (uri, mimetype, content, name, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $5, $5)
+                INSERT INTO assets (uri, mimetype, content, name, script_uri, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $6)
                 "#,
             )
             .bind(&asset.uri)
             .bind(&asset.mimetype)
             .bind(&asset.content)
             .bind(&asset.name)
+            .bind(&asset.script_uri)
             .bind(now)
             .execute(&mut ***tx)
             .await
@@ -1638,14 +1642,15 @@ async fn db_upsert_asset(
         crate::database::TransactionExecutor::Pool(pool) => {
             sqlx::query(
                 r#"
-                INSERT INTO assets (uri, mimetype, content, name, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $5, $5)
+                INSERT INTO assets (uri, mimetype, content, name, script_uri, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $6)
                 "#,
             )
             .bind(&asset.uri)
             .bind(&asset.mimetype)
             .bind(&asset.content)
             .bind(&asset.name)
+            .bind(&asset.script_uri)
             .bind(now)
             .execute(pool)
             .await
@@ -1670,7 +1675,7 @@ where
 {
     let row = sqlx::query(
         r#"
-        SELECT uri, mimetype, content, name, created_at, updated_at FROM assets WHERE uri = $1
+        SELECT uri, mimetype, content, name, script_uri, created_at, updated_at FROM assets WHERE uri = $1
         "#,
     )
     .bind(uri)
@@ -1721,6 +1726,13 @@ where
             }
         })?;
         let name: Option<String> = row.try_get("name").ok();
+        let script_uri: String = row.try_get("script_uri").map_err(|e| {
+            error!("Database error getting script_uri: {}", e);
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
+        })?;
         Ok(Some(Asset {
             uri,
             name,
@@ -1728,6 +1740,7 @@ where
             content,
             created_at: created_at.into(),
             updated_at: updated_at.into(),
+            script_uri,
         }))
     } else {
         Ok(None)
@@ -1741,7 +1754,7 @@ where
 {
     let rows = sqlx::query(
         r#"
-        SELECT uri, mimetype, content, name, created_at, updated_at FROM assets ORDER BY uri
+        SELECT uri, mimetype, content, name, script_uri, created_at, updated_at FROM assets ORDER BY uri
         "#,
     )
     .fetch_all(executor)
@@ -1792,6 +1805,13 @@ where
             }
         })?;
         let name: Option<String> = row.try_get("name").ok();
+        let script_uri: String = row.try_get("script_uri").map_err(|e| {
+            error!("Database error getting script_uri: {}", e);
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
+        })?;
         assets.insert(
             uri.clone(),
             Asset {
@@ -1801,6 +1821,7 @@ where
                 content,
                 created_at: created_at.into(),
                 updated_at: updated_at.into(),
+                script_uri,
             },
         );
     }
@@ -3773,6 +3794,7 @@ fn get_static_assets() -> HashMap<String, Asset> {
         content: logo_content,
         created_at: now,
         updated_at: now,
+        script_uri: "https://example.com/core".to_string(),
     };
     m.insert("logo.svg".to_string(), logo);
 
@@ -3789,6 +3811,7 @@ fn get_static_assets() -> HashMap<String, Asset> {
         content: editor_css_content,
         created_at: now,
         updated_at: now,
+        script_uri: "https://example.com/core".to_string(),
     };
     m.insert("editor.css".to_string(), editor_css);
 
@@ -3800,6 +3823,7 @@ fn get_static_assets() -> HashMap<String, Asset> {
         content: engine_css_content,
         created_at: now,
         updated_at: now,
+        script_uri: "https://example.com/core".to_string(),
     };
     m.insert("engine.css".to_string(), engine_css);
 
@@ -3811,6 +3835,7 @@ fn get_static_assets() -> HashMap<String, Asset> {
         content: editor_js_content,
         created_at: now,
         updated_at: now,
+        script_uri: "https://example.com/core".to_string(),
     };
     m.insert("editor.js".to_string(), editor_js);
 
@@ -3822,6 +3847,7 @@ fn get_static_assets() -> HashMap<String, Asset> {
         content: favicon_content,
         created_at: now,
         updated_at: now,
+        script_uri: "https://example.com/core".to_string(),
     };
     m.insert("favicon.ico".to_string(), favicon);
 
@@ -3833,6 +3859,7 @@ fn get_static_assets() -> HashMap<String, Asset> {
         content: aiwebengine_dts_content,
         created_at: now,
         updated_at: now,
+        script_uri: "https://example.com/core".to_string(),
     };
     m.insert("aiwebengine.d.ts".to_string(), aiwebengine_dts);
 
@@ -3844,6 +3871,7 @@ fn get_static_assets() -> HashMap<String, Asset> {
         content: aiwebengine_priv_dts_content,
         created_at: now,
         updated_at: now,
+        script_uri: "https://example.com/core".to_string(),
     };
     m.insert("aiwebengine-priv.d.ts".to_string(), aiwebengine_priv_dts);
 

@@ -33,12 +33,15 @@ export default function () {
   // Test the root endpoint
   const response = http.get(`${BASE_URL}/`, {
     headers: {
-      "User-Agent": "k6-aiwebengine-load-test"
+      "User-Agent": "k6-aiwebengine-load-test",
     },
   });
 
   // Record timing breakdowns (coalesce nulls from connection reuse)
-  const tm = (response && typeof response === "object" && response.timings) ? response.timings : null;
+  const tm =
+    response && typeof response === "object" && response.timings
+      ? response.timings
+      : null;
   if (tm) {
     t_connect.add(Number(tm.connecting || 0));
     t_tls.add(Number(tm.tls_handshaking || 0));
@@ -50,12 +53,16 @@ export default function () {
   // More robust content checks
   const headers = response.headers || {};
   const contentType = headers["Content-Type"] || headers["content-type"] || "";
-  const isHtml = typeof contentType === "string" && contentType.includes("text/html");
-  const hasHtmlTag = typeof response.body === "string" && response.body.toLowerCase().includes("<html");
+  const isHtml =
+    typeof contentType === "string" && contentType.includes("text/html");
+  const hasHtmlTag =
+    typeof response.body === "string" &&
+    response.body.toLowerCase().includes("<html");
 
   check(response, {
     "status is 200": (r) => r.status === 200,
-    "response time < threshold": (r) => r.timings.duration < (Number(__ENV.THRESHOLD_MS) || 500),
+    "response time < threshold": (r) =>
+      r.timings.duration < (Number(__ENV.THRESHOLD_MS) || 500),
     "content-type is text/html": (_r) => isHtml,
     "contains <html> tag": (_r) => hasHtmlTag,
   });

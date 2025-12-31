@@ -1120,6 +1120,7 @@ impl SecureGlobalContext {
                     content,
                     created_at: now,
                     updated_at: now,
+                    script_uri: "https://example.com/core".to_string(), // TODO: After UI and JavaScript API change, set based on related script
                 };
                 match repository::upsert_asset(asset) {
                     Ok(_) => Ok(format!("Asset '{}' upserted successfully", uri)),

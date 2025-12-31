@@ -255,6 +255,7 @@ async fn test_asset_management(storage_type: &str) {
         content: test_content.clone(),
         created_at: now,
         updated_at: now,
+        script_uri: "https://example.com/core".to_string(),
     };
     let _ = repository::upsert_asset(test_asset);
 
