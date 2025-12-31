@@ -3961,10 +3961,10 @@ pub fn fetch_asset(script_uri: &str, uri: &str) -> Option<Asset> {
     }
 
     // Check static assets if script_uri is core
-    if script_uri == "https://example.com/core" {
-        if let Some(asset) = get_static_assets().get(uri) {
-            return Some(asset.clone());
-        }
+    if script_uri == "https://example.com/core"
+        && let Some(asset) = get_static_assets().get(uri)
+    {
+        return Some(asset.clone());
     }
 
     None
@@ -5084,18 +5084,18 @@ impl Repository for MemoryRepository {
 
     async fn get_asset(&self, script_uri: &str, uri: &str) -> AppResult<Option<Asset>> {
         // Check static assets first (only if script_uri matches core)
-        if script_uri == "https://example.com/core" {
-            if let Some(asset) = get_static_assets().get(uri) {
-                return Ok(Some(asset.clone()));
-            }
+        if script_uri == "https://example.com/core"
+            && let Some(asset) = get_static_assets().get(uri)
+        {
+            return Ok(Some(asset.clone()));
         }
 
         // Then check dynamic assets
         let guard = safe_lock_assets()?;
-        if let Some(asset) = guard.get(uri) {
-            if asset.script_uri == script_uri {
-                return Ok(Some(asset.clone()));
-            }
+        if let Some(asset) = guard.get(uri)
+            && asset.script_uri == script_uri
+        {
+            return Ok(Some(asset.clone()));
         }
         Ok(None)
     }
@@ -5125,11 +5125,11 @@ impl Repository for MemoryRepository {
 
     async fn delete_asset(&self, script_uri: &str, uri: &str) -> AppResult<bool> {
         let mut guard = safe_lock_assets()?;
-        if let Some(asset) = guard.get(uri) {
-            if asset.script_uri == script_uri {
-                guard.remove(uri);
-                return Ok(true);
-            }
+        if let Some(asset) = guard.get(uri)
+            && asset.script_uri == script_uri
+        {
+            guard.remove(uri);
+            return Ok(true);
         }
         Ok(false)
     }
