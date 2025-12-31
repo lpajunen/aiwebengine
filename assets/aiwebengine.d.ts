@@ -300,11 +300,12 @@ interface AssetMetadata {
 }
 
 /**
- * Asset storage for managing static files
+ * Asset storage for managing static files (script-scoped)
+ * Each script can only access and manage its own assets.
  */
 interface AssetStorage {
   /**
-   * List all assets with metadata
+   * List all assets owned by this script with metadata
    * @returns JSON string array of asset metadata
    * @example
    * const assetsJson = assetStorage.listAssets();
@@ -313,7 +314,7 @@ interface AssetStorage {
   listAssets(): string;
 
   /**
-   * Fetch an asset's content
+   * Fetch an asset's content owned by this script
    * @param name - Asset name/URI
    * @returns Base64-encoded asset content or error message
    * @example
@@ -322,7 +323,7 @@ interface AssetStorage {
   fetchAsset(name: string): string;
 
   /**
-   * Create or update an asset
+   * Create or update an asset owned by this script
    * @param name - Asset name/URI
    * @param mimetype - MIME type (e.g., "image/png", "text/css")
    * @param contentBase64 - Base64-encoded content
@@ -333,7 +334,7 @@ interface AssetStorage {
   upsertAsset(name: string, mimetype: string, contentBase64: string): string;
 
   /**
-   * Delete an asset
+   * Delete an asset owned by this script
    * @param name - Asset name/URI
    * @returns Operation result message
    * @example

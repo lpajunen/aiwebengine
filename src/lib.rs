@@ -2268,7 +2268,9 @@ async fn setup_routes(
     app = app.route(
         &type_defs_path,
         axum::routing::get(|| async {
-            if let Some(asset) = repository::fetch_asset("aiwebengine.d.ts") {
+            if let Some(asset) =
+                repository::fetch_asset("https://example.com/core", "aiwebengine.d.ts")
+            {
                 let mut response = asset.content.into_response();
                 response.headers_mut().insert(
                     axum::http::header::CONTENT_TYPE,
@@ -2294,7 +2296,9 @@ async fn setup_routes(
     app = app.route(
         &type_defs_priv_path,
         axum::routing::get(|| async {
-            if let Some(asset) = repository::fetch_asset("aiwebengine-priv.d.ts") {
+            if let Some(asset) =
+                repository::fetch_asset("https://example.com/core", "aiwebengine-priv.d.ts")
+            {
                 let mut response = asset.content.into_response();
                 response.headers_mut().insert(
                     axum::http::header::CONTENT_TYPE,
@@ -2770,7 +2774,7 @@ fn try_serve_asset(path: &str, method: &str) -> Option<Response> {
 
     let asset_name = asset_registry::get_global_registry().get_asset_name(path)?;
 
-    if let Some(asset) = repository::fetch_asset(&asset_name) {
+    if let Some(asset) = repository::fetch_asset("https://example.com/core", &asset_name) {
         let mut response = asset.content.into_response();
         response.headers_mut().insert(
             axum::http::header::CONTENT_TYPE,

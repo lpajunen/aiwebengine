@@ -962,12 +962,14 @@ impl SecureGlobalContext {
         let secure_ops = self.secure_ops.clone();
         let auditor = self.auditor.clone();
         let script_uri_owned = script_uri.to_string();
+        let script_uri_remaining = script_uri_owned.clone(); // Clone for remaining functions
 
         // Create assetStorage object
         let asset_storage = rquickjs::Object::new(ctx.clone())?;
 
         // Secure listAssets function
         let user_ctx_list = user_context.clone();
+        let script_uri_list = script_uri_owned.clone();
         let list_assets = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
@@ -984,7 +986,7 @@ impl SecureGlobalContext {
                     "Secure listAssets called"
                 );
 
-                let assets = repository::fetch_assets();
+                let assets = repository::fetch_assets(&script_uri_list);
 
                 // Build JSON array of asset metadata (matching listScripts pattern)
                 let assets_json: Vec<serde_json::Value> = assets
@@ -1020,6 +1022,7 @@ impl SecureGlobalContext {
 
         // Secure fetchAsset function
         let user_ctx_fetch = user_context.clone();
+        let script_uri_fetch = script_uri_remaining.clone();
         let fetch_asset = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>, uri: String| -> JsResult<String> {
@@ -1036,7 +1039,7 @@ impl SecureGlobalContext {
                     "Secure fetchAsset called"
                 );
 
-                match repository::fetch_asset(&uri) {
+                match repository::fetch_asset(&script_uri_fetch, &uri) {
                     Some(asset) => {
                         // Convert bytes to base64 for safe JavaScript transfer
                         Ok(base64::engine::general_purpose::STANDARD.encode(asset.content))
@@ -1120,7 +1123,7 @@ impl SecureGlobalContext {
                     content,
                     created_at: now,
                     updated_at: now,
-                    script_uri: "https://example.com/core".to_string(), // TODO: After UI and JavaScript API change, set based on related script
+                    script_uri: script_uri_owned.clone(),
                 };
                 match repository::upsert_asset(asset) {
                     Ok(_) => Ok(format!("Asset '{}' upserted successfully", uri)),
@@ -1133,6 +1136,7 @@ impl SecureGlobalContext {
         // Secure deleteAsset function
         let user_ctx_delete_asset = user_context.clone();
         let auditor_delete_asset = auditor.clone();
+        let script_uri_delete_asset = script_uri_remaining.clone();
         let delete_asset = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>, uri: String| -> JsResult<String> {
@@ -1181,7 +1185,7 @@ impl SecureGlobalContext {
                     "Secure deleteAsset called"
                 );
 
-                match repository::delete_asset(&uri) {
+                match repository::delete_asset(&script_uri_delete_asset, &uri) {
                     true => Ok(format!("Asset '{}' deleted successfully", uri)),
                     false => Ok(format!("Asset '{}' not found", uri)),
                 }
@@ -3016,7 +3020,7 @@ impl SecureGlobalContext {
                     return Ok(Vec::new());
                 }
 
-                let assets = repository::fetch_assets();
+                let assets = repository::fetch_assets("https://example.com/core");
                 let asset_names: Vec<String> = assets.keys().cloned().collect();
                 Ok(asset_names)
             },
@@ -4782,7 +4786,7 @@ impl SecureGlobalContext {
 
                     // Execute the handler in a new context
                     match execute_message_handler(
-                        &listener.script_uri,
+                        listener.script_uri.clone(),
                         &script_content,
                         &listener.handler_name,
                         &message_type,
@@ -4823,7 +4827,7 @@ impl SecureGlobalContext {
 
 /// Execute a message handler function in a script
 fn execute_message_handler(
-    script_uri: &str,
+    script_uri: String,
     script_content: &str,
     handler_name: &str,
     message_type: &str,
@@ -4852,7 +4856,7 @@ fn execute_message_handler(
 
         let secure_context = SecureGlobalContext::new_with_config(user_context, security_config);
         secure_context
-            .setup_secure_functions(&ctx, script_uri, None)
+            .setup_secure_functions(&ctx, &script_uri, None)
             .map_err(|e| format!("Failed to setup secure functions: {}", e))?;
 
         // Evaluate the script

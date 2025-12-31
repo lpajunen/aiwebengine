@@ -1669,15 +1669,16 @@ async fn db_upsert_asset(
 }
 
 /// Database-backed get asset by URI
-async fn db_get_asset<'e, E>(executor: E, uri: &str) -> AppResult<Option<Asset>>
+async fn db_get_asset<'e, E>(executor: E, script_uri: &str, uri: &str) -> AppResult<Option<Asset>>
 where
     E: sqlx::Executor<'e, Database = sqlx::Postgres>,
 {
     let row = sqlx::query(
         r#"
-        SELECT uri, mimetype, content, name, script_uri, created_at, updated_at FROM assets WHERE uri = $1
+        SELECT uri, mimetype, content, name, script_uri, created_at, updated_at FROM assets WHERE script_uri = $1 AND uri = $2
         "#,
     )
+    .bind(script_uri)
     .bind(uri)
     .fetch_optional(executor)
     .await
@@ -1747,16 +1748,17 @@ where
     }
 }
 
-/// Database-backed list all assets
-async fn db_list_assets<'e, E>(executor: E) -> AppResult<HashMap<String, Asset>>
+/// Database-backed list all assets for a script
+async fn db_list_assets<'e, E>(executor: E, script_uri: &str) -> AppResult<HashMap<String, Asset>>
 where
     E: sqlx::Executor<'e, Database = sqlx::Postgres>,
 {
     let rows = sqlx::query(
         r#"
-        SELECT uri, mimetype, content, name, script_uri, created_at, updated_at FROM assets ORDER BY uri
+        SELECT uri, mimetype, content, name, script_uri, created_at, updated_at FROM assets WHERE script_uri = $1 ORDER BY uri
         "#,
     )
+    .bind(script_uri)
     .fetch_all(executor)
     .await
     .map_err(|e| {
@@ -1830,15 +1832,16 @@ where
 }
 
 /// Database-backed delete asset
-async fn db_delete_asset<'e, E>(executor: E, uri: &str) -> AppResult<bool>
+async fn db_delete_asset<'e, E>(executor: E, script_uri: &str, uri: &str) -> AppResult<bool>
 where
     E: sqlx::Executor<'e, Database = sqlx::Postgres>,
 {
     let result = sqlx::query(
         r#"
-        DELETE FROM assets WHERE uri = $1
+        DELETE FROM assets WHERE script_uri = $1 AND uri = $2
         "#,
     )
+    .bind(script_uri)
     .bind(uri)
     .execute(executor)
     .await
@@ -3915,14 +3918,18 @@ fn get_static_scripts() -> HashMap<String, String> {
 }
 
 /// Fetch assets with error handling (static + dynamic)
-pub fn fetch_assets() -> HashMap<String, Asset> {
+pub fn fetch_assets(script_uri: &str) -> HashMap<String, Asset> {
     let repo = get_repository();
 
-    let result = run_blocking(async { repo.list_assets().await });
+    let result = run_blocking(async { repo.list_assets(script_uri).await });
 
     match result {
         Ok(assets) => {
-            debug!("Loaded {} assets from repository", assets.len());
+            debug!(
+                "Loaded {} assets from repository for script {}",
+                assets.len(),
+                script_uri
+            );
             assets
         }
         Err(e) => {
@@ -3933,11 +3940,11 @@ pub fn fetch_assets() -> HashMap<String, Asset> {
 }
 
 /// Fetch single asset by URI with error handling (dynamic first, then static)
-pub fn fetch_asset(uri: &str) -> Option<Asset> {
+pub fn fetch_asset(script_uri: &str, uri: &str) -> Option<Asset> {
     let repo = get_repository();
 
     // Try repository first (DB or Memory)
-    let result = run_blocking(async { repo.get_asset(uri).await });
+    let result = run_blocking(async { repo.get_asset(script_uri, uri).await });
 
     match result {
         Ok(Some(asset)) => {
@@ -3945,7 +3952,7 @@ pub fn fetch_asset(uri: &str) -> Option<Asset> {
             return Some(asset);
         }
         Ok(None) => {
-            // Not in repository, check static assets
+            // Not in repository, check static assets if script_uri is core
         }
         Err(e) => {
             warn!("Repository asset fetch failed for {}: {}", uri, e);
@@ -3953,9 +3960,11 @@ pub fn fetch_asset(uri: &str) -> Option<Asset> {
         }
     }
 
-    // Check static assets
-    if let Some(asset) = get_static_assets().get(uri) {
-        return Some(asset.clone());
+    // Check static assets if script_uri is core
+    if script_uri == "https://example.com/core" {
+        if let Some(asset) = get_static_assets().get(uri) {
+            return Some(asset.clone());
+        }
     }
 
     None
@@ -3983,9 +3992,9 @@ pub fn upsert_asset(asset: Asset) -> AppResult<()> {
 }
 
 /// Delete asset with error handling  
-pub fn delete_asset(uri: &str) -> bool {
+pub fn delete_asset(script_uri: &str, uri: &str) -> bool {
     let repo = get_repository();
-    let result = run_blocking(async { repo.delete_asset(uri).await });
+    let result = run_blocking(async { repo.delete_asset(script_uri, uri).await });
 
     match result {
         Ok(existed) => existed,
@@ -4197,10 +4206,10 @@ pub trait Repository: Send + Sync {
     ) -> AppResult<()>;
 
     // Asset operations
-    async fn get_asset(&self, uri: &str) -> AppResult<Option<Asset>>;
-    async fn list_assets(&self) -> AppResult<HashMap<String, Asset>>;
+    async fn get_asset(&self, script_uri: &str, uri: &str) -> AppResult<Option<Asset>>;
+    async fn list_assets(&self, script_uri: &str) -> AppResult<HashMap<String, Asset>>;
     async fn upsert_asset(&self, asset: Asset) -> AppResult<()>;
-    async fn delete_asset(&self, uri: &str) -> AppResult<bool>;
+    async fn delete_asset(&self, script_uri: &str, uri: &str) -> AppResult<bool>;
 
     // Log operations
     async fn insert_log(&self, script_uri: &str, message: &str, level: &str) -> AppResult<()>;
@@ -4533,23 +4542,27 @@ impl Repository for PostgresRepository {
         Ok(())
     }
 
-    async fn get_asset(&self, uri: &str) -> AppResult<Option<Asset>> {
+    async fn get_asset(&self, script_uri: &str, uri: &str) -> AppResult<Option<Asset>> {
         let executor = crate::database::get_current_executor(&self.pool);
         match executor {
             crate::database::TransactionExecutor::Transaction(tx) => {
-                db_get_asset(&mut **tx, uri).await
+                db_get_asset(&mut **tx, script_uri, uri).await
             }
-            crate::database::TransactionExecutor::Pool(pool) => db_get_asset(pool, uri).await,
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_get_asset(pool, script_uri, uri).await
+            }
         }
     }
 
-    async fn list_assets(&self) -> AppResult<HashMap<String, Asset>> {
+    async fn list_assets(&self, script_uri: &str) -> AppResult<HashMap<String, Asset>> {
         let executor = crate::database::get_current_executor(&self.pool);
         match executor {
             crate::database::TransactionExecutor::Transaction(tx) => {
-                db_list_assets(&mut **tx).await
+                db_list_assets(&mut **tx, script_uri).await
             }
-            crate::database::TransactionExecutor::Pool(pool) => db_list_assets(pool).await,
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_list_assets(pool, script_uri).await
+            }
         }
     }
 
@@ -4558,13 +4571,15 @@ impl Repository for PostgresRepository {
         db_upsert_asset(executor, &asset).await
     }
 
-    async fn delete_asset(&self, uri: &str) -> AppResult<bool> {
+    async fn delete_asset(&self, script_uri: &str, uri: &str) -> AppResult<bool> {
         let executor = crate::database::get_current_executor(&self.pool);
         match executor {
             crate::database::TransactionExecutor::Transaction(tx) => {
-                db_delete_asset(&mut **tx, uri).await
+                db_delete_asset(&mut **tx, script_uri, uri).await
             }
-            crate::database::TransactionExecutor::Pool(pool) => db_delete_asset(pool, uri).await,
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_delete_asset(pool, script_uri, uri).await
+            }
         }
     }
 
@@ -5067,23 +5082,38 @@ impl Repository for MemoryRepository {
         Ok(())
     }
 
-    async fn get_asset(&self, uri: &str) -> AppResult<Option<Asset>> {
-        // Check static assets first
-        if let Some(asset) = get_static_assets().get(uri) {
-            return Ok(Some(asset.clone()));
+    async fn get_asset(&self, script_uri: &str, uri: &str) -> AppResult<Option<Asset>> {
+        // Check static assets first (only if script_uri matches core)
+        if script_uri == "https://example.com/core" {
+            if let Some(asset) = get_static_assets().get(uri) {
+                return Ok(Some(asset.clone()));
+            }
         }
 
         // Then check dynamic assets
         let guard = safe_lock_assets()?;
-        Ok(guard.get(uri).cloned())
+        if let Some(asset) = guard.get(uri) {
+            if asset.script_uri == script_uri {
+                return Ok(Some(asset.clone()));
+            }
+        }
+        Ok(None)
     }
 
-    async fn list_assets(&self) -> AppResult<HashMap<String, Asset>> {
-        let mut assets = get_static_assets();
+    async fn list_assets(&self, script_uri: &str) -> AppResult<HashMap<String, Asset>> {
+        let mut assets = HashMap::new();
 
+        // Add static assets if script_uri matches core
+        if script_uri == "https://example.com/core" {
+            assets.extend(get_static_assets());
+        }
+
+        // Add dynamic assets that match script_uri
         let guard = safe_lock_assets()?;
         for (uri, asset) in guard.iter() {
-            assets.insert(uri.clone(), asset.clone());
+            if asset.script_uri == script_uri {
+                assets.insert(uri.clone(), asset.clone());
+            }
         }
 
         Ok(assets)
@@ -5093,9 +5123,15 @@ impl Repository for MemoryRepository {
         upsert_asset_in_memory(&asset)
     }
 
-    async fn delete_asset(&self, uri: &str) -> AppResult<bool> {
+    async fn delete_asset(&self, script_uri: &str, uri: &str) -> AppResult<bool> {
         let mut guard = safe_lock_assets()?;
-        Ok(guard.remove(uri).is_some())
+        if let Some(asset) = guard.get(uri) {
+            if asset.script_uri == script_uri {
+                guard.remove(uri);
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     async fn insert_log(&self, script_uri: &str, message: &str, _level: &str) -> AppResult<()> {
@@ -5544,17 +5580,17 @@ impl Repository for UnifiedRepository {
         }
     }
 
-    async fn get_asset(&self, uri: &str) -> AppResult<Option<Asset>> {
+    async fn get_asset(&self, script_uri: &str, uri: &str) -> AppResult<Option<Asset>> {
         match self {
-            Self::Postgres(repo) => repo.get_asset(uri).await,
-            Self::Memory(repo) => repo.get_asset(uri).await,
+            Self::Postgres(repo) => repo.get_asset(script_uri, uri).await,
+            Self::Memory(repo) => repo.get_asset(script_uri, uri).await,
         }
     }
 
-    async fn list_assets(&self) -> AppResult<HashMap<String, Asset>> {
+    async fn list_assets(&self, script_uri: &str) -> AppResult<HashMap<String, Asset>> {
         match self {
-            Self::Postgres(repo) => repo.list_assets().await,
-            Self::Memory(repo) => repo.list_assets().await,
+            Self::Postgres(repo) => repo.list_assets(script_uri).await,
+            Self::Memory(repo) => repo.list_assets(script_uri).await,
         }
     }
 
@@ -5565,10 +5601,10 @@ impl Repository for UnifiedRepository {
         }
     }
 
-    async fn delete_asset(&self, uri: &str) -> AppResult<bool> {
+    async fn delete_asset(&self, script_uri: &str, uri: &str) -> AppResult<bool> {
         match self {
-            Self::Postgres(repo) => repo.delete_asset(uri).await,
-            Self::Memory(repo) => repo.delete_asset(uri).await,
+            Self::Postgres(repo) => repo.delete_asset(script_uri, uri).await,
+            Self::Memory(repo) => repo.delete_asset(script_uri, uri).await,
         }
     }
 

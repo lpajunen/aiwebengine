@@ -234,7 +234,7 @@ async fn test_asset_management(storage_type: &str) {
     wait_for_server(port, 20).await.expect("Server not ready");
 
     // Test static asset
-    let asset = repository::fetch_asset("logo.svg");
+    let asset = repository::fetch_asset("https://example.com/core", "logo.svg");
     assert!(asset.is_some());
     let asset = asset.unwrap();
     assert_eq!(asset.uri, "logo.svg");
@@ -242,7 +242,7 @@ async fn test_asset_management(storage_type: &str) {
     assert!(!asset.content.is_empty());
 
     // Test listing assets
-    let assets = repository::fetch_assets();
+    let assets = repository::fetch_assets("https://example.com/core");
     assert!(assets.contains_key("logo.svg"));
 
     // Test upsert and fetch dynamic asset
@@ -259,7 +259,7 @@ async fn test_asset_management(storage_type: &str) {
     };
     let _ = repository::upsert_asset(test_asset);
 
-    let fetched = repository::fetch_asset("test.txt");
+    let fetched = repository::fetch_asset("https://example.com/core", "test.txt");
     assert!(fetched.is_some());
     let fetched = fetched.unwrap();
     assert_eq!(fetched.uri, "test.txt");
@@ -267,11 +267,11 @@ async fn test_asset_management(storage_type: &str) {
     assert_eq!(fetched.content, test_content);
 
     // Test delete
-    let deleted = repository::delete_asset("test.txt");
+    let deleted = repository::delete_asset("https://example.com/core", "test.txt");
     assert!(deleted);
 
     // Verify it's gone
-    let fetched_after_delete = repository::fetch_asset("test.txt");
+    let fetched_after_delete = repository::fetch_asset("https://example.com/core", "test.txt");
     assert!(fetched_after_delete.is_none());
 
     context.cleanup().await.expect("Failed to cleanup");

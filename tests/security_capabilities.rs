@@ -527,14 +527,15 @@ async fn test_asset_upload_repository_integration() {
     assert!(op_result.success, "Asset upload should succeed");
 
     // Verify the asset was actually stored
-    let stored_asset = aiwebengine::repository::fetch_asset("test_asset.txt");
+    let stored_asset =
+        aiwebengine::repository::fetch_asset("https://example.com/core", "test_asset.txt");
     assert!(stored_asset.is_some(), "Asset should be in repository");
     let asset = stored_asset.unwrap();
     assert_eq!(asset.content, content);
     assert_eq!(asset.mimetype, "text/plain");
 
     // Cleanup
-    aiwebengine::repository::delete_asset("test_asset.txt");
+    aiwebengine::repository::delete_asset("https://example.com/core", "test_asset.txt");
 }
 
 // ============================================================================
