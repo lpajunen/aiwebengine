@@ -22,6 +22,7 @@ use aiwebengine::security::{
     Capability, InputValidator, RateLimitKey, RateLimiter, SecureOperations, UpsertScriptRequest,
     UserContext,
 };
+use base64::{Engine, engine::general_purpose};
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::sync::OnceCell;
@@ -696,4 +697,42 @@ async fn test_capability_enforcement() {
         result.success,
         "Script should execute despite capability failures"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_asset_upsert_sets_script_uri() {
+    setup_env().await;
+    let user_context = create_user_with_capabilities("test_user", vec![Capability::WriteAssets]);
+
+    let script_uri = "/test_asset_script_uri";
+    let asset_name = "test_asset.txt";
+    let asset_content_b64 = general_purpose::STANDARD.encode("test content");
+
+    let script_content = format!(
+        r#"
+        // Upsert an asset
+        assetStorage.upsertAsset("{}", "text/plain", "{}");
+    "#,
+        asset_name, asset_content_b64
+    );
+
+    let result = execute_script_secure(script_uri, &script_content, user_context);
+
+    assert!(
+        result.success,
+        "Script execution should succeed: {}",
+        result.error.unwrap_or_default()
+    );
+
+    // Check that the asset was created with the correct script_uri
+    let asset = aiwebengine::repository::fetch_asset(script_uri, asset_name);
+    assert!(asset.is_some(), "Asset should exist");
+    let asset = asset.unwrap();
+    assert_eq!(
+        asset.script_uri, script_uri,
+        "script_uri should match the executing script URI"
+    );
+    assert_eq!(asset.uri, asset_name);
+    assert_eq!(asset.mimetype, "text/plain");
+    assert_eq!(String::from_utf8(asset.content).unwrap(), "test content");
 }

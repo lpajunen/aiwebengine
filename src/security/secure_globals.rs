@@ -1059,9 +1059,9 @@ impl SecureGlobalContext {
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>,
                   uri: String,
-                  content_b64: String,
                   mimetype: String,
-                  name: Option<String>|
+                  content_b64: String,
+                  name: Opt<String>|
                   -> JsResult<String> {
                 // Decode base64 content
                 let content = match base64::engine::general_purpose::STANDARD.decode(&content_b64) {
@@ -1118,7 +1118,7 @@ impl SecureGlobalContext {
                 let now = std::time::SystemTime::now();
                 let asset = repository::Asset {
                     uri: uri.clone(),
-                    name: name.or_else(|| Some(uri.clone())),
+                    name: name.0.or_else(|| Some(uri.clone())),
                     mimetype,
                     content,
                     created_at: now,
