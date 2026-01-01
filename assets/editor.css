@@ -98,13 +98,14 @@ body {
   padding: 10px 20px;
   background-color: var(--darker-bg);
   border-bottom: 1px solid var(--border-color);
-  height: 50px;
+  min-height: 50px;
 }
 
 .unified-header h1 {
   font-size: 18px;
   font-weight: 600;
   color: var(--text-color);
+  line-height: 1;
 }
 
 .header-right {

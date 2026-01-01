@@ -363,7 +363,7 @@ function serveGraphiQL(context) {
             padding: 10px 20px;
             background-color: #252526;
             border-bottom: 1px solid #3e3e42;
-            height: 50px;
+            min-height: 50px;
             flex-shrink: 0;
         }
         .unified-header h1 {
@@ -371,6 +371,7 @@ function serveGraphiQL(context) {
             font-weight: 600;
             color: #cccccc;
             margin: 0;
+            line-height: 1;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
         }
         .unified-nav {
@@ -595,7 +596,7 @@ function serveSwaggerUI(context) {
             padding: 10px 20px;
             background-color: #252526;
             border-bottom: 1px solid #3e3e42;
-            height: 50px;
+            min-height: 50px;
             flex-shrink: 0;
         }
         .unified-header h1 {
@@ -603,6 +604,7 @@ function serveSwaggerUI(context) {
             font-weight: 600;
             color: #cccccc;
             margin: 0;
+            line-height: 1;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
         }
         .unified-nav {

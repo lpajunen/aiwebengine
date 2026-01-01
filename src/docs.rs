@@ -43,7 +43,7 @@ pub fn markdown_to_html(markdown: &str, title: &str) -> String {
             padding: 10px 20px;
             background-color: #252526;
             border-bottom: 1px solid #3e3e42;
-            height: 50px;
+            min-height: 50px;
             flex-shrink: 0;
         }}
 
@@ -52,6 +52,7 @@ pub fn markdown_to_html(markdown: &str, title: &str) -> String {
             font-weight: 600;
             color: #cccccc;
             margin: 0;
+            line-height: 1;
         }}
 
         .unified-nav {{
