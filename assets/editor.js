@@ -223,7 +223,10 @@ class AIWebEngineEditor {
         <div class="route-item">
           <div class="route-method ${data.method}">${data.method}</div>
           <div class="route-path">${data.path}</div>
-          <div class="route-handler">${data.handler}</div>
+          <div class="route-handler">
+            <div class="handler-function">${data.handler}</div>
+            <div class="handler-script">${data.script_uri || ""}</div>
+          </div>
           <div class="route-actions">
             <button class="btn btn-small btn-secondary test-btn" data-path="${data.path}" data-method="${data.method}">Test</button>
           </div>
@@ -1539,6 +1542,7 @@ function init(context) {
             method: route.method,
             path: route.path,
             handler: route.handler,
+            script_uri: route.script_uri,
           });
 
           // Add event listener for test button

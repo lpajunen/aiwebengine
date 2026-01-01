@@ -631,7 +631,20 @@ body {
 .route-handler {
   color: var(--text-muted);
   font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.handler-function {
   font-style: italic;
+  color: var(--text-color);
+}
+
+.handler-script {
+  font-size: 11px;
+  color: var(--text-muted);
+  opacity: 0.8;
 }
 
 .route-actions {
