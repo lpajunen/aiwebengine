@@ -1193,6 +1193,236 @@ impl SecureGlobalContext {
         )?;
         asset_storage.set("deleteAsset", delete_asset)?;
 
+        // ====================================================================
+        // Privileged URI-specific asset methods (for cross-script management)
+        // ====================================================================
+
+        // Secure listAssetsForUri function (privileged scripts only)
+        let user_ctx_list_uri = user_context.clone();
+        let list_assets_for_uri = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, uri: String| -> JsResult<String> {
+                // Check capability
+                if let Err(_e) =
+                    user_ctx_list_uri.require_capability(&crate::security::Capability::ReadAssets)
+                {
+                    // Return empty array JSON if no permission
+                    return Ok("[]".to_string());
+                }
+
+                debug!(
+                    user_id = ?user_ctx_list_uri.user_id,
+                    uri = %uri,
+                    "Secure listAssetsForUri called"
+                );
+
+                let assets = repository::fetch_assets(&uri);
+
+                // Build JSON array of asset metadata (matching listAssets pattern)
+                let assets_json: Vec<serde_json::Value> = assets
+                    .values()
+                    .map(|asset| {
+                        serde_json::json!({
+                            "uri": asset.uri,
+                            "name": asset.name,
+                            "size": asset.content.len(),
+                            "mimetype": asset.mimetype,
+                            "createdAt": asset.created_at
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as f64,
+                            "updatedAt": asset.updated_at
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as f64,
+                        })
+                    })
+                    .collect();
+
+                match serde_json::to_string(&assets_json) {
+                    Ok(json) => Ok(json),
+                    Err(e) => {
+                        error!("Failed to serialize assets to JSON: {}", e);
+                        Ok("[]".to_string())
+                    }
+                }
+            },
+        )?;
+        asset_storage.set("listAssetsForUri", list_assets_for_uri)?;
+
+        // Secure fetchAssetForUri function (privileged scripts only)
+        let user_ctx_fetch_uri = user_context.clone();
+        let fetch_asset_for_uri = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, uri: String, asset_name: String| -> JsResult<String> {
+                // Check capability
+                if let Err(e) =
+                    user_ctx_fetch_uri.require_capability(&crate::security::Capability::ReadAssets)
+                {
+                    return Ok(format!("Error: {}", e));
+                }
+
+                debug!(
+                    user_id = ?user_ctx_fetch_uri.user_id,
+                    uri = %uri,
+                    asset_name = %asset_name,
+                    "Secure fetchAssetForUri called"
+                );
+
+                match repository::fetch_asset(&uri, &asset_name) {
+                    Some(asset) => {
+                        // Convert bytes to base64 for safe JavaScript transfer
+                        Ok(base64::engine::general_purpose::STANDARD.encode(asset.content))
+                    }
+                    None => Ok(format!("Asset '{}' not found", asset_name)),
+                }
+            },
+        )?;
+        asset_storage.set("fetchAssetForUri", fetch_asset_for_uri)?;
+
+        // Secure upsertAssetForUri function (privileged scripts only)
+        let user_ctx_upsert_uri = user_context.clone();
+        let auditor_upsert_uri = auditor.clone();
+        let upsert_asset_for_uri = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  uri: String,
+                  asset_name: String,
+                  mimetype: String,
+                  content_b64: String|
+                  -> JsResult<String> {
+                // Decode base64 content
+                let content = match base64::engine::general_purpose::STANDARD.decode(&content_b64) {
+                    Ok(c) => c,
+                    Err(e) => return Ok(format!("Error decoding base64 content: {}", e)),
+                };
+
+                // Check capability
+                if let Err(e) = user_ctx_upsert_uri
+                    .require_capability(&crate::security::Capability::WriteAssets)
+                {
+                    return Ok(format!("Access denied: {}", e));
+                }
+
+                // Validate asset URI (inline validation since we can't call async)
+                if asset_name.is_empty() || asset_name.len() > 255 {
+                    return Ok("Invalid asset URI: must be 1-255 characters".to_string());
+                }
+                if asset_name.contains("..") || asset_name.contains('\\') {
+                    return Ok("Invalid asset URI: path traversal not allowed".to_string());
+                }
+
+                // Validate content size (10MB limit)
+                if content.len() > 10 * 1024 * 1024 {
+                    return Ok("Asset too large (max 10MB)".to_string());
+                }
+
+                // Log the operation attempt using spawn to avoid runtime conflicts
+                let auditor_clone = auditor_upsert_uri.clone();
+                let user_id = user_ctx_upsert_uri.user_id.clone();
+                let uri_clone = uri.clone();
+                let asset_name_clone = asset_name.clone();
+                let content_len = content.len();
+                let mimetype_clone = mimetype.clone();
+                tokio::task::spawn(async move {
+                    let _ = auditor_clone
+                        .log_event(
+                            crate::security::SecurityEvent::new(
+                                SecurityEventType::SystemSecurityEvent,
+                                SecuritySeverity::Medium,
+                                user_id,
+                            )
+                            .with_resource("asset".to_string())
+                            .with_action("upsert_for_uri".to_string())
+                            .with_detail("uri", &asset_name_clone)
+                            .with_detail("script_uri", &uri_clone)
+                            .with_detail("content_size", content_len.to_string())
+                            .with_detail("mimetype", &mimetype_clone),
+                        )
+                        .await;
+                });
+
+                // Call repository directly (sync operation)
+                let now = std::time::SystemTime::now();
+                let asset = repository::Asset {
+                    uri: asset_name.clone(),
+                    name: Some(asset_name.clone()),
+                    mimetype,
+                    content,
+                    created_at: now,
+                    updated_at: now,
+                    script_uri: uri.clone(),
+                };
+                match repository::upsert_asset(asset) {
+                    Ok(_) => Ok(format!("Asset '{}' upserted successfully", asset_name)),
+                    Err(e) => Ok(format!("Error upserting asset: {}", e)),
+                }
+            },
+        )?;
+        asset_storage.set("upsertAssetForUri", upsert_asset_for_uri)?;
+
+        // Secure deleteAssetForUri function (privileged scripts only)
+        let user_ctx_delete_uri = user_context.clone();
+        let auditor_delete_uri = auditor.clone();
+        let delete_asset_for_uri = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, uri: String, asset_name: String| -> JsResult<String> {
+                // Check capability
+                if let Err(e) = user_ctx_delete_uri
+                    .require_capability(&crate::security::Capability::DeleteAssets)
+                {
+                    // Use spawn for fire-and-forget audit logging to avoid runtime conflicts
+                    let auditor_clone = auditor_delete_uri.clone();
+                    let user_id = user_ctx_delete_uri.user_id.clone();
+                    tokio::task::spawn(async move {
+                        let _ = auditor_clone
+                            .log_authz_failure(
+                                user_id,
+                                "asset".to_string(),
+                                "delete_for_uri".to_string(),
+                                "DeleteAssets".to_string(),
+                            )
+                            .await;
+                    });
+                    return Ok(format!("Error: {}", e));
+                }
+
+                // Log the operation attempt using spawn to avoid runtime conflicts
+                let auditor_clone = auditor_delete_uri.clone();
+                let user_id = user_ctx_delete_uri.user_id.clone();
+                let uri_clone = uri.clone();
+                let asset_name_clone = asset_name.clone();
+                tokio::task::spawn(async move {
+                    let _ = auditor_clone
+                        .log_event(
+                            crate::security::SecurityEvent::new(
+                                SecurityEventType::SystemSecurityEvent,
+                                SecuritySeverity::High,
+                                user_id,
+                            )
+                            .with_resource("asset".to_string())
+                            .with_action("delete_for_uri".to_string())
+                            .with_detail("uri", &asset_name_clone)
+                            .with_detail("script_uri", &uri_clone),
+                        )
+                        .await;
+                });
+
+                debug!(
+                    user_id = ?user_ctx_delete_uri.user_id,
+                    uri = %uri,
+                    asset_name = %asset_name,
+                    "Secure deleteAssetForUri called"
+                );
+
+                match repository::delete_asset(&uri, &asset_name) {
+                    true => Ok(format!("Asset '{}' deleted successfully", asset_name)),
+                    false => Ok(format!("Asset '{}' not found", asset_name)),
+                }
+            },
+        )?;
+        asset_storage.set("deleteAssetForUri", delete_asset_for_uri)?;
+
         // Set the assetStorage object on the global scope
         global.set("assetStorage", asset_storage)?;
         Ok(())

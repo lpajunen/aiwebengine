@@ -269,6 +269,19 @@ class AIWebEngineEditor {
       });
     }
 
+    // Asset management - script selector
+    const assetsScriptSelect = this.getSelect("assets-script-select");
+    if (assetsScriptSelect) {
+      assetsScriptSelect.addEventListener("change", (e) => {
+        const target = /** @type {HTMLSelectElement} */ (e.target);
+        if (target) {
+          this.selectedAssetScript = target.value;
+          this.currentAsset = null; // Clear current asset when switching scripts
+          this.loadAssets();
+        }
+      });
+    }
+
     // Asset management
     this.addListener("new-asset-btn", "click", () => this.createNewAsset());
     this.addListener("upload-asset-btn", "click", () =>
@@ -932,13 +945,28 @@ function init(context) {
   // Asset Management
   async loadAssets() {
     try {
-      const response = await fetch("/api/assets");
-      const data = await response.json();
-
       const assetsList = document.getElementById("assets-list");
       if (!assetsList) return;
 
+      // Check if a script is selected
+      if (!this.selectedAssetScript) {
+        assetsList.innerHTML =
+          '<div class="no-selection"><p>Select a script to view its assets</p></div>';
+        return;
+      }
+
+      // Build URL with script URI parameter
+      const url = `/api/assets?uri=${encodeURIComponent(this.selectedAssetScript)}`;
+      const response = await fetch(url);
+      const data = await response.json();
+
       assetsList.innerHTML = "";
+
+      if (data.assets.length === 0) {
+        assetsList.innerHTML =
+          '<div class="no-selection"><p>No assets found for this script</p></div>';
+        return;
+      }
 
       data.assets.forEach(
         /** @param {any} asset */
@@ -1050,7 +1078,13 @@ function init(context) {
     if (isText) {
       // Load text asset in Monaco editor
       try {
-        const response = await fetch(`/api/assets/${path}`);
+        // Build URL with script URI parameter if selected
+        let url = `/api/assets/${path}`;
+        if (this.selectedAssetScript) {
+          url += `?uri=${encodeURIComponent(this.selectedAssetScript)}`;
+        }
+
+        const response = await fetch(url);
         const content = await response.text();
 
         this.monacoAssetEditor.setValue(content);
@@ -1159,6 +1193,10 @@ function init(context) {
 
   async saveCurrentAsset() {
     if (!this.currentAsset) return;
+    if (!this.selectedAssetScript) {
+      this.showStatus("No script selected for asset", "error");
+      return;
+    }
 
     const content = this.monacoAssetEditor.getValue();
 
@@ -1185,7 +1223,10 @@ function init(context) {
       };
       const mimetype = mimeTypes[ext] || "text/plain";
 
-      const response = await fetch("/api/assets", {
+      // Build URL with script URI parameter
+      const url = `/api/assets?uri=${encodeURIComponent(this.selectedAssetScript)}`;
+
+      const response = await fetch(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1217,12 +1258,19 @@ function init(context) {
 
   async deleteCurrentAsset() {
     if (!this.currentAsset) return;
+    if (!this.selectedAssetScript) {
+      this.showStatus("No script selected for asset", "error");
+      return;
+    }
 
     if (!confirm(`Are you sure you want to delete ${this.currentAsset}?`))
       return;
 
     try {
-      const response = await fetch(`/api/assets/${this.currentAsset}`, {
+      // Build URL with script URI parameter
+      const url = `/api/assets/${this.currentAsset}?uri=${encodeURIComponent(this.selectedAssetScript)}`;
+
+      const response = await fetch(url, {
         method: "DELETE",
       });
 
@@ -1533,6 +1581,52 @@ function init(context) {
 
   loadInitialData() {
     this.loadScripts();
+    this.populateAssetsScriptSelector();
+  }
+
+  async populateAssetsScriptSelector() {
+    try {
+      const response = await fetch("/api/scripts");
+      const data = await response.json();
+
+      const selector = this.getSelect("assets-script-select");
+      if (!selector) return;
+
+      // Clear existing options except the first placeholder
+      selector.innerHTML = '<option value="">Select a script...</option>';
+
+      // Check if user has admin privileges (can see all scripts)
+      const isAdmin = data.permissions && data.permissions.canTogglePrivileged;
+
+      // Filter scripts based on permissions
+      let filteredScripts = data.scripts;
+      if (!isAdmin) {
+        // Non-admin users only see scripts they own
+        filteredScripts = data.scripts.filter((script) => script.isOwner);
+      }
+
+      // Add scripts to selector
+      filteredScripts.forEach((script) => {
+        const option = document.createElement("option");
+        option.value = script.uri;
+        const badge = script.privileged ? " [P]" : " [R]";
+        option.textContent = script.displayName + badge;
+        selector.appendChild(option);
+      });
+
+      // If current script is set and available, select it
+      if (
+        this.currentScript &&
+        filteredScripts.some((s) => s.uri === this.currentScript)
+      ) {
+        selector.value = this.currentScript;
+        this.selectedAssetScript = this.currentScript;
+        this.loadAssets();
+      }
+    } catch (error) {
+      const err = /** @type {Error} */ (error);
+      console.error("Error populating assets script selector:", err.message);
+    }
   }
 
   /**

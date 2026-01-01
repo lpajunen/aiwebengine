@@ -343,6 +343,11 @@ body {
   gap: 5px;
 }
 
+.assets-filter {
+  padding: 10px 15px;
+  border-bottom: 1px solid var(--border-color);
+}
+
 .assets-list {
   flex: 1;
   overflow-y: auto;

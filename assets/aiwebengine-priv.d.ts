@@ -210,6 +210,71 @@ interface Console {
 }
 
 // ============================================================================
+// Asset Storage API (Privileged Scripts Only)
+// ============================================================================
+
+/**
+ * AssetStorage interface extensions for privileged scripts
+ * Requires ReadAssets/WriteAssets/DeleteAssets capabilities
+ */
+interface AssetStorage {
+  /**
+   * List assets for a specific script URI (requires ReadAssets capability)
+   * @param uri - Script URI to list assets for
+   * @returns JSON string array of asset metadata
+   * @example
+   * const assetsJson = assetStorage.listAssetsForUri("my-script");
+   * const assets = JSON.parse(assetsJson);
+   * assets.forEach(asset => {
+   *   console.log(`${asset.name}: ${asset.size} bytes`);
+   * });
+   */
+  listAssetsForUri(uri: string): string;
+
+  /**
+   * Fetch an asset from a specific script URI (requires ReadAssets capability)
+   * @param uri - Script URI that owns the asset
+   * @param name - Asset name/identifier
+   * @returns Base64-encoded asset content or error message
+   * @example
+   * const content = assetStorage.fetchAssetForUri("my-script", "logo.svg");
+   * if (!content.startsWith("Error:")) {
+   *   const decoded = atob(content);
+   *   console.log("Asset content:", decoded);
+   * }
+   */
+  fetchAssetForUri(uri: string, name: string): string;
+
+  /**
+   * Create or update an asset for a specific script URI (requires WriteAssets capability)
+   * @param uri - Script URI that will own the asset
+   * @param name - Asset name/identifier
+   * @param mimetype - MIME type (e.g., "image/svg+xml", "text/css")
+   * @param contentBase64 - Base64-encoded asset content
+   * @returns Success message or error message
+   * @example
+   * const base64Content = btoa("<svg>...</svg>");
+   * assetStorage.upsertAssetForUri("my-script", "logo.svg", "image/svg+xml", base64Content);
+   */
+  upsertAssetForUri(
+    uri: string,
+    name: string,
+    mimetype: string,
+    contentBase64: string,
+  ): string;
+
+  /**
+   * Delete an asset from a specific script URI (requires DeleteAssets capability)
+   * @param uri - Script URI that owns the asset
+   * @param name - Asset name/identifier to delete
+   * @returns Success message or error message
+   * @example
+   * assetStorage.deleteAssetForUri("my-script", "old-logo.svg");
+   */
+  deleteAssetForUri(uri: string, name: string): string;
+}
+
+// ============================================================================
 // Global Objects (Privileged Scripts Only)
 // ============================================================================
 

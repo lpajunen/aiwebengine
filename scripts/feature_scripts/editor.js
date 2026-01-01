@@ -187,6 +187,11 @@ function serveEditor(context) {
                                 <button id="upload-asset-btn" class="btn btn-primary btn-small">Upload</button>
                             </div>
                         </div>
+                        <div class="assets-filter">
+                            <select id="assets-script-select" class="filter-select">
+                                <option value="">Select a script...</option>
+                            </select>
+                        </div>
                         <div id="assets-list" class="assets-list">
                             <!-- Assets will be loaded here -->
                         </div>
@@ -1269,11 +1274,25 @@ function apiPruneLogs(context) {
 function apiGetAssets(context) {
   const req = getRequest(context);
   try {
-    const assetsJson =
-      typeof assetStorage !== "undefined" &&
-      typeof assetStorage.listAssets === "function"
-        ? assetStorage.listAssets()
-        : "[]";
+    // Check if a script URI is provided in query parameters
+    const scriptUri = req.query && req.query.uri ? req.query.uri : null;
+
+    let assetsJson = "[]";
+    if (scriptUri) {
+      // Use privileged listAssetsForUri if a specific script is requested
+      assetsJson =
+        typeof assetStorage !== "undefined" &&
+        typeof assetStorage.listAssetsForUri === "function"
+          ? assetStorage.listAssetsForUri(scriptUri)
+          : "[]";
+    } else {
+      // Fall back to current script's assets
+      assetsJson =
+        typeof assetStorage !== "undefined" &&
+        typeof assetStorage.listAssets === "function"
+          ? assetStorage.listAssets()
+          : "[]";
+    }
 
     const assetMetadata = JSON.parse(assetsJson);
 
@@ -1310,6 +1329,9 @@ function apiGetAssets(context) {
 function apiGetAsset(context) {
   const req = getRequest(context);
   try {
+    // Check if a script URI is provided in query parameters
+    const scriptUri = req.query && req.query.uri ? req.query.uri : null;
+
     // Extract the asset path from the URL
     let assetPath = req.path.replace("/api/assets", "");
 
@@ -1322,13 +1344,22 @@ function apiGetAsset(context) {
       assetName = assetName.substring(1);
     }
 
-    if (
-      typeof assetStorage !== "undefined" &&
-      typeof assetStorage.fetchAsset === "function"
-    ) {
-      const assetData = assetStorage.fetchAsset(assetName);
+    if (typeof assetStorage !== "undefined") {
+      let assetData;
 
-      if (assetData && !assetData.startsWith("Asset '")) {
+      if (scriptUri && typeof assetStorage.fetchAssetForUri === "function") {
+        // Use privileged fetchAssetForUri for cross-script access
+        assetData = assetStorage.fetchAssetForUri(scriptUri, assetName);
+      } else if (typeof assetStorage.fetchAsset === "function") {
+        // Fall back to current script's asset
+        assetData = assetStorage.fetchAsset(assetName);
+      }
+
+      if (
+        assetData &&
+        !assetData.startsWith("Asset '") &&
+        !assetData.startsWith("Error:")
+      ) {
         // fetchAsset returns base64 encoded content
         // Return it directly in the bodyBase64 field for proper binary handling
         const mimetype = getMimeTypeFromPath(assetPath);
@@ -1430,6 +1461,9 @@ function getMimeTypeFromPath(path) {
 function apiSaveAsset(context) {
   const req = getRequest(context);
   try {
+    // Check if a script URI is provided in query parameters
+    const scriptUri = req.query && req.query.uri ? req.query.uri : null;
+
     const body = JSON.parse(req.body || "{}");
     const { publicPath, mimetype, content } = body;
 
@@ -1452,14 +1486,41 @@ function apiSaveAsset(context) {
         publicPath +
         "' -> asset name '" +
         assetName +
-        "'",
+        "'" +
+        (scriptUri ? " for script '" + scriptUri + "'" : ""),
     );
 
-    if (
-      typeof assetStorage !== "undefined" &&
-      typeof assetStorage.upsertAsset === "function"
-    ) {
-      assetStorage.upsertAsset(assetName, mimetype, content);
+    if (typeof assetStorage !== "undefined") {
+      let result;
+
+      if (scriptUri && typeof assetStorage.upsertAssetForUri === "function") {
+        // Use privileged upsertAssetForUri for cross-script access
+        result = assetStorage.upsertAssetForUri(
+          scriptUri,
+          assetName,
+          mimetype,
+          content,
+        );
+      } else if (typeof assetStorage.upsertAsset === "function") {
+        // Fall back to current script's asset
+        result = assetStorage.upsertAsset(assetName, mimetype, content);
+      } else {
+        return {
+          status: 500,
+          body: JSON.stringify({ error: "upsertAsset function not available" }),
+          contentType: "application/json",
+        };
+      }
+
+      // Check if result indicates an error
+      if (result && result.startsWith("Error:")) {
+        return {
+          status: 500,
+          body: JSON.stringify({ error: result }),
+          contentType: "application/json",
+        };
+      }
+
       return {
         status: 200,
         body: JSON.stringify({ message: "Asset saved successfully" }),
@@ -1468,7 +1529,7 @@ function apiSaveAsset(context) {
     } else {
       return {
         status: 500,
-        body: JSON.stringify({ error: "upsertAsset function not available" }),
+        body: JSON.stringify({ error: "assetStorage not available" }),
         contentType: "application/json",
       };
     }
@@ -1485,6 +1546,9 @@ function apiSaveAsset(context) {
 function apiDeleteAsset(context) {
   const req = getRequest(context);
   try {
+    // Check if a script URI is provided in query parameters
+    const scriptUri = req.query && req.query.uri ? req.query.uri : null;
+
     // Extract the asset path from the URL
     let assetPath = req.path.replace("/api/assets", "");
 
@@ -1497,17 +1561,36 @@ function apiDeleteAsset(context) {
       assetName = assetName.substring(1);
     }
 
-    console.log("apiDeleteAsset: attempting to delete asset: " + assetName);
+    console.log(
+      "apiDeleteAsset: attempting to delete asset: " +
+        assetName +
+        (scriptUri ? " from script '" + scriptUri + "'" : ""),
+    );
 
-    if (
-      typeof assetStorage !== "undefined" &&
-      typeof assetStorage.deleteAsset === "function"
-    ) {
-      const deleted = assetStorage.deleteAsset(assetName);
+    if (typeof assetStorage !== "undefined") {
+      let deleted;
+
+      if (scriptUri && typeof assetStorage.deleteAssetForUri === "function") {
+        // Use privileged deleteAssetForUri for cross-script access
+        deleted = assetStorage.deleteAssetForUri(scriptUri, assetName);
+      } else if (typeof assetStorage.deleteAsset === "function") {
+        // Fall back to current script's asset
+        deleted = assetStorage.deleteAsset(assetName);
+      } else {
+        console.log("apiDeleteAsset: deleteAsset function not available");
+        return {
+          status: 500,
+          body: JSON.stringify({
+            error: "deleteAsset function not available",
+          }),
+          contentType: "application/json",
+        };
+      }
 
       console.log("apiDeleteAsset: deleteAsset returned: " + deleted);
 
-      if (deleted) {
+      // Check if result indicates success (starts with "Asset" and contains "deleted")
+      if (deleted && deleted.includes("deleted successfully")) {
         console.log("apiDeleteAsset: successfully deleted asset: " + assetName);
         return {
           status: 200,
@@ -1530,11 +1613,11 @@ function apiDeleteAsset(context) {
         };
       }
     } else {
-      console.log("apiDeleteAsset: deleteAsset function not available");
+      console.log("apiDeleteAsset: assetStorage not available");
       return {
         status: 500,
         body: JSON.stringify({
-          error: "deleteAsset function not available",
+          error: "assetStorage not available",
         }),
         contentType: "application/json",
       };
