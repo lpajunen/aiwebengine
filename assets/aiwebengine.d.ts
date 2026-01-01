@@ -1093,6 +1093,8 @@ interface Database {
 
 /**
  * Console logging interface
+ * Note: Privileged scripts have additional methods available (listLogs, listLogsForUri, pruneLogs)
+ * defined in aiwebengine-priv.d.ts
  */
 interface Console {
   /**
@@ -1140,31 +1142,6 @@ interface Console {
    * console.debug("Processing item:", item.id);
    */
   debug(message?: any, ...optionalParams: any[]): void;
-
-  /**
-   * List all log entries
-   * @returns JSON string array of log entries
-   * @example
-   * const logs = JSON.parse(console.listLogs());
-   */
-  listLogs(): string;
-
-  /**
-   * List log entries for a specific script URI
-   * @param uri - Script URI to filter logs
-   * @returns JSON string array of log entries
-   * @example
-   * const logs = JSON.parse(console.listLogsForUri("my-script"));
-   */
-  listLogsForUri(uri: string): string;
-
-  /**
-   * Prune old log entries
-   * @returns Prune operation result message
-   * @example
-   * console.pruneLogs();
-   */
-  pruneLogs(): string;
 }
 
 // ============================================================================

@@ -170,6 +170,46 @@ interface SchedulerService {
 }
 
 // ============================================================================
+// Console API (Privileged Scripts Only)
+// ============================================================================
+
+/**
+ * Console logging interface extensions for privileged scripts
+ * Requires ViewLogs capability (admin-level access)
+ */
+interface Console {
+  /**
+   * List all log entries (requires ViewLogs capability)
+   * @returns JSON string array of log entries
+   * @example
+   * const logs = JSON.parse(console.listLogs());
+   * logs.forEach(log => {
+   *   console.log(`${log.timestamp} [${log.level}] ${log.message}`);
+   * });
+   */
+  listLogs(): string;
+
+  /**
+   * List log entries for a specific script URI (requires ViewLogs capability)
+   * @param uri - Script URI to filter logs
+   * @returns JSON string array of log entries
+   * @example
+   * const logs = JSON.parse(console.listLogsForUri("my-script"));
+   * console.log(`Found ${logs.length} log entries for my-script`);
+   */
+  listLogsForUri(uri: string): string;
+
+  /**
+   * Prune old log entries (requires ViewLogs capability)
+   * @returns Prune operation result message
+   * @example
+   * const result = console.pruneLogs();
+   * console.log(result); // "Pruned 150 old log entries"
+   */
+  pruneLogs(): string;
+}
+
+// ============================================================================
 // Global Objects (Privileged Scripts Only)
 // ============================================================================
 
