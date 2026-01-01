@@ -2486,6 +2486,19 @@ impl SecureGlobalContext {
                     return Ok("Invalid asset name: path characters not allowed".to_string());
                 }
 
+                // Verify the asset exists and belongs to this script
+                match repository::fetch_asset(&script_uri_asset, &asset_name) {
+                    Some(_) => {
+                        // Asset exists and belongs to this script, proceed
+                    }
+                    None => {
+                        return Ok(format!(
+                            "Asset '{}' not found or not owned by script '{}'",
+                            asset_name, script_uri_asset
+                        ));
+                    }
+                }
+
                 // Register the path in the global asset registry
                 match crate::asset_registry::get_global_registry().register_path(
                     &path,
