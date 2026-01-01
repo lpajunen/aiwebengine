@@ -1172,6 +1172,11 @@ function init(context) {
   }
 
   createNewAsset() {
+    if (!this.selectedAssetScript) {
+      this.showStatus("Please select a script first", "error");
+      return;
+    }
+
     const filename = prompt("Enter asset filename (e.g., styles/custom.css):");
     if (!filename) return;
 
@@ -1329,12 +1334,20 @@ function init(context) {
    * @param {FileList} files
    */
   async uploadAssets(files) {
+    if (!this.selectedAssetScript) {
+      this.showStatus("Please select a script first", "error");
+      return;
+    }
+
     for (const file of files) {
       try {
         const base64 = await this.fileToBase64(file);
         const publicPath = `/${file.name}`;
 
-        await fetch("/api/assets", {
+        // Build URL with script URI parameter
+        const url = `/api/assets?uri=${encodeURIComponent(this.selectedAssetScript)}`;
+
+        await fetch(url, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
