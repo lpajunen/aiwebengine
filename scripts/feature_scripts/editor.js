@@ -101,10 +101,10 @@ function serveEditor(context) {
                 <h1>aiwebengine</h1>
             </div>
             <nav class="unified-nav">
+                <a href="/engine/docs" title="Documentation">📚 Documentation</a>
                 <a href="/engine/editor" title="Code Editor">✏️ Editor</a>
-                <a href="/engine/graphql" title="GraphQL API">🔗 GraphQL</a>
-                <a href="/engine/docs" title="Documentation">📚 Docs</a>
-                <a href="/engine/swagger" title="REST API">📖 API Docs</a>
+                <a href="/engine/graphql" title="GraphQL API">🔗 GraphiQL</a>
+                <a href="/engine/swagger" title="REST API">📖 Swagger</a>
             </nav>
         </header>
 
@@ -411,10 +411,10 @@ function serveGraphiQL(context) {
             <h1>aiwebengine</h1>
         </div>
         <nav class="unified-nav">
+            <a href="/engine/docs" title="Documentation">📚 Documentation</a>
             <a href="/engine/editor" title="Code Editor">✏️ Editor</a>
-            <a href="/engine/graphql" title="GraphQL API">🔗 GraphQL</a>
-            <a href="/engine/docs" title="Documentation">📚 Docs</a>
-            <a href="/engine/swagger" title="REST API">📖 API Docs</a>
+            <a href="/engine/graphql" title="GraphQL API">🔗 GraphiQL</a>
+            <a href="/engine/swagger" title="REST API">📖 Swagger</a>
         </nav>
     </header>
     <div id="graphiql">Loading...</div>
@@ -646,10 +646,10 @@ function serveSwaggerUI(context) {
             <h1>aiwebengine</h1>
         </div>
         <nav class="unified-nav">
+            <a href="/engine/docs" title="Documentation">📚 Documentation</a>
             <a href="/engine/editor" title="Code Editor">✏️ Editor</a>
-            <a href="/engine/graphql" title="GraphQL API">🔗 GraphQL</a>
-            <a href="/engine/docs" title="Documentation">📚 Docs</a>
-            <a href="/engine/swagger" title="REST API">📖 API Docs</a>
+            <a href="/engine/graphql" title="GraphQL API">🔗 GraphiQL</a>
+            <a href="/engine/swagger" title="REST API">📖 Swagger</a>
         </nav>
     </header>
     <div id="swagger-ui"></div>
