@@ -277,6 +277,8 @@ class AIWebEngineEditor {
         if (target) {
           this.selectedAssetScript = target.value;
           this.currentAsset = null; // Clear current asset when switching scripts
+          // Reset the asset editor view
+          this.clearAssetEditor();
           this.loadAssets();
         }
       });
@@ -943,6 +945,16 @@ function init(context) {
   }
 
   // Asset Management
+  clearAssetEditor() {
+    this.currentAsset = null;
+    this.setText("current-asset-name", "No asset selected");
+    this.setDisplay("monaco-asset-editor", "none");
+    this.setDisplay("binary-asset-info", "none");
+    this.setDisplay("no-asset-selected", "block");
+    this.setDisabled("save-asset-btn", true);
+    this.setDisabled("delete-asset-btn", true);
+  }
+
   async loadAssets() {
     try {
       const assetsList = document.getElementById("assets-list");
@@ -1283,14 +1295,8 @@ function init(context) {
 
       this.showStatus("Asset deleted successfully", "success");
 
-      // Clear editor
-      this.currentAsset = null;
-      this.setText("current-asset-name", "No asset selected");
-      this.setDisplay("monaco-asset-editor", "none");
-      this.setDisplay("binary-asset-info", "none");
-      this.setDisplay("no-asset-selected", "block");
-      this.setDisabled("save-asset-btn", true);
-      this.setDisabled("delete-asset-btn", true);
+      // Clear editor using the helper method
+      this.clearAssetEditor();
 
       // Reload assets list
       this.loadAssets();
@@ -1602,22 +1608,28 @@ function init(context) {
       let filteredScripts = data.scripts;
       if (!isAdmin) {
         // Non-admin users only see scripts they own
-        filteredScripts = data.scripts.filter((script) => script.isOwner);
+        filteredScripts = data.scripts.filter(
+          /** @param {any} script */ (script) => script.isOwner,
+        );
       }
 
       // Add scripts to selector
-      filteredScripts.forEach((script) => {
-        const option = document.createElement("option");
-        option.value = script.uri;
-        const badge = script.privileged ? " [P]" : " [R]";
-        option.textContent = script.displayName + badge;
-        selector.appendChild(option);
-      });
+      filteredScripts.forEach(
+        /** @param {any} script */ (script) => {
+          const option = document.createElement("option");
+          option.value = script.uri;
+          const badge = script.privileged ? " [P]" : " [R]";
+          option.textContent = script.displayName + badge;
+          selector.appendChild(option);
+        },
+      );
 
       // If current script is set and available, select it
       if (
         this.currentScript &&
-        filteredScripts.some((s) => s.uri === this.currentScript)
+        filteredScripts.some(
+          /** @param {any} s */ (s) => s.uri === this.currentScript,
+        )
       ) {
         selector.value = this.currentScript;
         this.selectedAssetScript = this.currentScript;
