@@ -20,52 +20,78 @@ pub fn markdown_to_html(markdown: &str, title: &str) -> String {
     <style>
         /* Documentation-specific overrides */
         body {{
-            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-            padding: 2rem 0;
-        }}
-
-        .docs-container {{
-            max-width: 900px;
-            margin: 0 auto;
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            border-radius: var(--border-radius-lg);
-            box-shadow: var(--shadow-lg);
+            background-color: #1e1e1e;
+            padding: 0;
+            margin: 0;
+            height: 100vh;
             overflow: hidden;
         }}
 
-        .docs-header {{
-            background: var(--bg-secondary);
-            padding: 1.5rem 2rem;
-            border-bottom: 1px solid var(--border-color);
-        }}
-
-        .docs-nav {{
-            background: rgba(255, 255, 255, 0.9);
-            padding: 1rem 2rem;
-            border-bottom: 1px solid var(--border-color);
+        .docs-container {{
             display: flex;
-            gap: 1rem;
-            flex-wrap: wrap;
+            flex-direction: column;
+            height: 100vh;
+            background: #1e1e1e;
+            overflow: hidden;
         }}
 
-        .docs-nav a {{
-            color: var(--primary-color);
+        /* Unified header styles inherited from editor.css */
+        .unified-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 20px;
+            background-color: #252526;
+            border-bottom: 1px solid #3e3e42;
+            height: 50px;
+            flex-shrink: 0;
+        }}
+
+        .unified-header h1 {{
+            font-size: 18px;
+            font-weight: 600;
+            color: #cccccc;
+            margin: 0;
+        }}
+
+        .unified-nav {{
+            display: flex;
+            gap: 5px;
+        }}
+
+        .unified-nav a {{
+            color: #999999;
             text-decoration: none;
-            font-weight: 500;
-            padding: 0.5rem 1rem;
-            border-radius: var(--border-radius);
-            transition: var(--transition);
+            font-size: 12px;
+            padding: 6px 12px;
+            border-radius: 4px;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 4px;
         }}
 
-        .docs-nav a:hover {{
-            background: var(--bg-secondary);
-            color: var(--primary-color);
+        .unified-nav a:hover {{
+            background-color: #37373d;
+            color: #007acc;
+        }}
+
+        .unified-nav a.active {{
+            background-color: #007acc;
+            color: white;
+            font-weight: 600;
+            border-left: 3px solid #007acc;
         }}
 
         .docs-content {{
+            flex: 1;
+            overflow-y: auto;
             padding: 2rem;
             line-height: 1.7;
+            max-width: 900px;
+            margin: 0 auto;
+            width: 100%;
+            background: #252526;
         }}
 
         /* Markdown content styling */
@@ -75,21 +101,21 @@ pub fn markdown_to_html(markdown: &str, title: &str) -> String {
         .docs-content h4,
         .docs-content h5,
         .docs-content h6 {{
-            color: var(--text-color);
+            color: #ffffff;
             margin-top: 2rem;
             margin-bottom: 1rem;
             font-weight: 600;
         }}
 
         .docs-content h1 {{
-            border-bottom: 3px solid var(--primary-color);
+            border-bottom: 3px solid #007acc;
             padding-bottom: 0.5rem;
             margin-top: 0;
             font-size: 2.25rem;
         }}
 
         .docs-content h2 {{
-            border-bottom: 2px solid var(--primary-color);
+            border-bottom: 2px solid #007acc;
             padding-bottom: 0.25rem;
             font-size: 1.875rem;
         }}
@@ -99,20 +125,20 @@ pub fn markdown_to_html(markdown: &str, title: &str) -> String {
         }}
 
         .docs-content code {{
-            background: var(--bg-secondary);
+            background: #2d2d30;
             padding: 0.125rem 0.375rem;
-            border-radius: var(--border-radius-sm);
+            border-radius: 4px;
             font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
             font-size: 0.875em;
-            color: var(--text-color);
+            color: #d4d4d4;
         }}
 
         .docs-content pre {{
-            background: var(--bg-secondary);
+            background: #1e1e1e;
             padding: 1rem;
-            border-radius: var(--border-radius);
+            border-radius: 4px;
             overflow-x: auto;
-            border: 1px solid var(--border-color);
+            border: 1px solid #3e3e42;
             margin: 1rem 0;
         }}
 
@@ -120,61 +146,63 @@ pub fn markdown_to_html(markdown: &str, title: &str) -> String {
             background: none;
             padding: 0;
             font-size: 0.875em;
+            color: #d4d4d4;
         }}
 
         .docs-content blockquote {{
-            border-left: 4px solid var(--primary-color);
+            border-left: 4px solid #007acc;
             padding-left: 1rem;
             margin: 1.5rem 0;
-            color: var(--text-muted);
+            color: #999999;
             font-style: italic;
-            background: var(--bg-secondary);
+            background: #2d2d30;
             padding: 1rem 1rem 1rem 1.5rem;
-            border-radius: 0 var(--border-radius) var(--border-radius) 0;
+            border-radius: 0 4px 4px 0;
         }}
 
         .docs-content table {{
             border-collapse: collapse;
             width: 100%;
             margin: 1.5rem 0;
-            background: var(--bg-color);
-            border-radius: var(--border-radius);
+            background: #1e1e1e;
+            border-radius: 4px;
             overflow: hidden;
-            box-shadow: var(--shadow);
         }}
 
         .docs-content th,
         .docs-content td {{
-            border: 1px solid var(--border-color);
+            border: 1px solid #3e3e42;
             padding: 0.75rem;
             text-align: left;
+            color: #cccccc;
         }}
 
         .docs-content th {{
-            background: var(--bg-secondary);
+            background: #2d2d30;
             font-weight: 600;
-            color: var(--text-color);
+            color: #ffffff;
         }}
 
         .docs-content tr:nth-child(even) {{
-            background: rgba(0, 0, 0, 0.02);
+            background: rgba(255, 255, 255, 0.03);
         }}
 
         .docs-content a {{
-            color: var(--primary-color);
+            color: #007acc;
             text-decoration: none;
-            transition: var(--transition);
+            transition: all 0.2s ease;
         }}
 
         .docs-content a:hover {{
             text-decoration: underline;
-            color: var(--primary-color);
+            color: #4daafc;
         }}
 
         .docs-content ul,
         .docs-content ol {{
             padding-left: 1.5rem;
             margin: 1rem 0;
+            color: #cccccc;
         }}
 
         .docs-content li {{
@@ -183,49 +211,57 @@ pub fn markdown_to_html(markdown: &str, title: &str) -> String {
 
         .docs-content p {{
             margin-bottom: 1rem;
+            color: #cccccc;
         }}
 
         /* Responsive adjustments */
         @media (max-width: 768px) {{
-            .docs-container {{
-                margin: 1rem;
-                max-width: none;
-            }}
-
             .docs-content {{
                 padding: 1rem;
             }}
 
-            .docs-nav {{
-                padding: 0.75rem 1rem;
+            .unified-nav {{
+                gap: 3px;
             }}
 
-            .docs-nav a {{
-                padding: 0.375rem 0.75rem;
-                font-size: 0.875rem;
+            .unified-nav a {{
+                padding: 4px 8px;
+                font-size: 11px;
             }}
         }}
     </style>
 </head>
 <body>
     <div class="docs-container">
-        <header class="docs-header">
-            <h1>{}</h1>
+        <header class="unified-header">
+            <div class="header-left">
+                <h1>aiwebengine</h1>
+            </div>
+            <nav class="unified-nav">
+                <a href="/engine/editor" title="Code Editor">✏️ Editor</a>
+                <a href="/engine/graphql" title="GraphQL API">🔗 GraphQL</a>
+                <a href="/engine/docs" title="Documentation">📚 Docs</a>
+                <a href="/engine/swagger" title="REST API">📖 API Docs</a>
+            </nav>
         </header>
-        <nav class="docs-nav">
-            <a href="/engine/docs/">📚 Documentation Home</a>
-            <a href="/">🏠 Home</a>
-            <a href="/engine/editor">✏️ Editor</a>
-            <a href="/engine/graphql">🔗 GraphQL API</a>
-            <a href="/engine/swagger">📖 API Docs</a>
-        </nav>
         <main class="docs-content">
             {}
         </main>
     </div>
+    <script>
+        (function() {{
+            const path = window.location.pathname;
+            document.querySelectorAll('.unified-nav a').forEach(function(link) {{
+                const linkPath = new URL(link.href, window.location.origin).pathname;
+                if (path.startsWith(linkPath)) {{
+                    link.classList.add('active');
+                }}
+            }});
+        }})();
+    </script>
 </body>
 </html>"#,
-        title, title, html_output
+        title, html_output
     )
 }
 

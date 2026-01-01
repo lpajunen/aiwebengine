@@ -95,16 +95,17 @@ function serveEditor(context) {
 </head>
 <body>
     <div class="editor-container">
-        <!-- Header -->
-        <header class="editor-header">
+        <!-- Unified Header -->
+        <header class="unified-header">
             <div class="header-left">
-                <h1>aiwebengine Editor</h1>
+                <h1>aiwebengine</h1>
             </div>
-            <div class="header-right">
-                <a href="/engine/docs" class="header-link" title="View Documentation">📚 Docs</a>
-                <a href="/engine/graphql" class="header-link" title="GraphQL Editor">🔗 GraphQL</a>
-                <span id="server-status" class="status-indicator">● Connected</span>
-            </div>
+            <nav class="unified-nav">
+                <a href="/engine/editor" title="Code Editor">✏️ Editor</a>
+                <a href="/engine/graphql" title="GraphQL API">🔗 GraphQL</a>
+                <a href="/engine/docs" title="Documentation">📚 Docs</a>
+                <a href="/engine/swagger" title="REST API">📖 API Docs</a>
+            </nav>
         </header>
 
         <!-- Navigation -->
@@ -311,6 +312,19 @@ function serveEditor(context) {
     
     <!-- Main JavaScript -->
     <script src="/editor.js"></script>
+    
+    <!-- Active state detection for unified navigation -->
+    <script>
+        (function() {
+            const path = window.location.pathname;
+            document.querySelectorAll('.unified-nav a').forEach(function(link) {
+                const linkPath = new URL(link.href, window.location.origin).pathname;
+                if (path.startsWith(linkPath)) {
+                    link.classList.add('active');
+                }
+            });
+        })();
+    </script>
 </body>
 </html>`;
 
@@ -334,11 +348,75 @@ function serveGraphiQL(context) {
     <title>aiwebengine GraphiQL Editor</title>
     <link rel="stylesheet" href="https://unpkg.com/graphiql@3/graphiql.min.css" />
     <style>
-        body { margin: 0; padding: 0; height: 100vh; }
-        #graphiql { height: 100vh; }
+        body { 
+            margin: 0; 
+            padding: 0; 
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            background: #1e1e1e;
+        }
+        .unified-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 20px;
+            background-color: #252526;
+            border-bottom: 1px solid #3e3e42;
+            height: 50px;
+            flex-shrink: 0;
+        }
+        .unified-header h1 {
+            font-size: 18px;
+            font-weight: 600;
+            color: #cccccc;
+            margin: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .unified-nav {
+            display: flex;
+            gap: 5px;
+        }
+        .unified-nav a {
+            color: #999999;
+            text-decoration: none;
+            font-size: 12px;
+            padding: 6px 12px;
+            border-radius: 4px;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .unified-nav a:hover {
+            background-color: #37373d;
+            color: #007acc;
+        }
+        .unified-nav a.active {
+            background-color: #007acc;
+            color: white;
+            font-weight: 600;
+            border-left: 3px solid #007acc;
+        }
+        #graphiql { 
+            flex: 1;
+            height: calc(100vh - 50px);
+        }
     </style>
 </head>
 <body>
+    <header class="unified-header">
+        <div class="header-left">
+            <h1>aiwebengine</h1>
+        </div>
+        <nav class="unified-nav">
+            <a href="/engine/editor" title="Code Editor">✏️ Editor</a>
+            <a href="/engine/graphql" title="GraphQL API">🔗 GraphQL</a>
+            <a href="/engine/docs" title="Documentation">📚 Docs</a>
+            <a href="/engine/swagger" title="REST API">📖 API Docs</a>
+        </nav>
+    </header>
     <div id="graphiql">Loading...</div>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -464,38 +542,19 @@ function serveGraphiQL(context) {
             };
 
             const root = ReactDOM.createRoot(document.getElementById('graphiql'));
-            root.render(React.createElement(GraphiQL, { fetcher: fetcher }));
+            root.render(React.createElement(GraphiQL, { 
+                fetcher: fetcher,
+                defaultTheme: 'dark'
+            }));
 
-            // Add navigation
-            setTimeout(function() {
-                const nav = document.createElement('div');
-                nav.id = 'aiwebengine-nav';
-                nav.style.cssText = 'position: fixed; top: 10px; right: 10px; z-index: 1000; display: flex; gap: 8px;';
-                
-                const editorLink = document.createElement('a');
-                editorLink.href = '/engine/editor';
-                editorLink.textContent = 'Editor';
-                editorLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
-                
-                const docsLink = document.createElement('a');
-                docsLink.href = '/engine/docs';
-                docsLink.textContent = 'Docs';
-                docsLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
-                
-                const swaggerLink = document.createElement('a');
-                swaggerLink.href = '/engine/swagger';
-                swaggerLink.textContent = 'API Docs';
-                swaggerLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
-                
-                nav.appendChild(editorLink);
-                nav.appendChild(docsLink);
-                nav.appendChild(swaggerLink);
-                document.body.appendChild(nav);
-                
-                const style = document.createElement('style');
-                style.textContent = '#aiwebengine-nav a:hover { background: #e5e7eb !important; border-color: #9ca3af !important; }';
-                document.head.appendChild(style);
-            }, 1000);
+            // Active state detection for unified navigation
+            const path = window.location.pathname;
+            document.querySelectorAll('.unified-nav a').forEach(function(link) {
+                const linkPath = new URL(link.href, window.location.origin).pathname;
+                if (path.startsWith(linkPath)) {
+                    link.classList.add('active');
+                }
+            });
         });
     </script>
 </body>
@@ -521,11 +580,78 @@ function serveSwaggerUI(context) {
     <title>aiwebengine API Documentation</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css" />
     <style>
-        body { margin: 0; padding: 0; }
-        #swagger-ui { max-width: 1460px; margin: 0 auto; }
+        body { 
+            margin: 0; 
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            background: #1e1e1e;
+        }
+        .unified-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 20px;
+            background-color: #252526;
+            border-bottom: 1px solid #3e3e42;
+            height: 50px;
+            flex-shrink: 0;
+        }
+        .unified-header h1 {
+            font-size: 18px;
+            font-weight: 600;
+            color: #cccccc;
+            margin: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .unified-nav {
+            display: flex;
+            gap: 5px;
+        }
+        .unified-nav a {
+            color: #999999;
+            text-decoration: none;
+            font-size: 12px;
+            padding: 6px 12px;
+            border-radius: 4px;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        .unified-nav a:hover {
+            background-color: #37373d;
+            color: #007acc;
+        }
+        .unified-nav a.active {
+            background-color: #007acc;
+            color: white;
+            font-weight: 600;
+            border-left: 3px solid #007acc;
+        }
+        #swagger-ui { 
+            flex: 1;
+            overflow-y: auto;
+            max-width: 1460px; 
+            margin: 0 auto;
+            width: 100%;
+        }
     </style>
 </head>
 <body>
+    <header class="unified-header">
+        <div class="header-left">
+            <h1>aiwebengine</h1>
+        </div>
+        <nav class="unified-nav">
+            <a href="/engine/editor" title="Code Editor">✏️ Editor</a>
+            <a href="/engine/graphql" title="GraphQL API">🔗 GraphQL</a>
+            <a href="/engine/docs" title="Documentation">📚 Docs</a>
+            <a href="/engine/swagger" title="REST API">📖 API Docs</a>
+        </nav>
+    </header>
     <div id="swagger-ui"></div>
     <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-standalone-preset.js"></script>
@@ -536,39 +662,18 @@ function serveSwaggerUI(context) {
                 dom_id: '#swagger-ui',
                 deepLinking: true,
                 presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],
-                layout: "StandaloneLayout"
+                layout: "StandaloneLayout",
+                theme: "dark"
             });
 
-            // Add navigation
-            setTimeout(function() {
-                const nav = document.createElement('div');
-                nav.id = 'aiwebengine-nav';
-                nav.style.cssText = 'position: fixed; top: 10px; right: 10px; z-index: 1000; display: flex; gap: 8px;';
-                
-                const editorLink = document.createElement('a');
-                editorLink.href = '/engine/editor';
-                editorLink.textContent = 'Editor';
-                editorLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
-                
-                const graphqlLink = document.createElement('a');
-                graphqlLink.href = '/engine/graphql';
-                graphqlLink.textContent = 'GraphQL';
-                graphqlLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
-                
-                const docsLink = document.createElement('a');
-                docsLink.href = '/engine/docs';
-                docsLink.textContent = 'Docs';
-                docsLink.style.cssText = 'background: #f6f7f9; border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 12px; font-size: 12px; color: #374151; text-decoration: none;';
-                
-                nav.appendChild(editorLink);
-                nav.appendChild(graphqlLink);
-                nav.appendChild(docsLink);
-                document.body.appendChild(nav);
-                
-                const style = document.createElement('style');
-                style.textContent = '#aiwebengine-nav a:hover { background: #e5e7eb !important; border-color: #9ca3af !important; }';
-                document.head.appendChild(style);
-            }, 1000);
+            // Active state detection for unified navigation
+            const path = window.location.pathname;
+            document.querySelectorAll('.unified-nav a').forEach(function(link) {
+                const linkPath = new URL(link.href, window.location.origin).pathname;
+                if (path.startsWith(linkPath)) {
+                    link.classList.add('active');
+                }
+            });
         });
     </script>
 </body>

@@ -90,6 +90,58 @@ body {
   background-color: var(--hover-bg);
 }
 
+/* Unified Navigation for all components */
+.unified-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 20px;
+  background-color: var(--darker-bg);
+  border-bottom: 1px solid var(--border-color);
+  height: 50px;
+}
+
+.unified-header h1 {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.unified-nav {
+  display: flex;
+  gap: 5px;
+}
+
+.unified-nav a {
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: var(--border-radius);
+  transition: var(--transition);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.unified-nav a:hover {
+  background-color: var(--hover-bg);
+  color: var(--primary-color);
+}
+
+.unified-nav a.active {
+  background-color: var(--active-bg);
+  color: white;
+  font-weight: 600;
+  border-left: 3px solid var(--primary-color);
+}
+
 /* Navigation */
 .editor-nav {
   display: flex;
