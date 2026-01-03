@@ -94,7 +94,7 @@ async fn test_js_registered_route_returns_expected() {
         .expect("Location header should be present");
 
     assert_eq!(
-        location, "/engine/docs",
+        location, "/engine/installed",
         "Expected redirect to /engine/docs, got: {}",
         location
     );

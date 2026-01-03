@@ -3463,20 +3463,12 @@ pub fn bootstrap_scripts() -> AppResult<()> {
                 include_str!("../scripts/feature_scripts/cli.js"),
             ),
             (
-                "https://example.com/editor",
-                include_str!("../scripts/feature_scripts/editor.js"),
-            ),
-            (
                 "https://example.com/admin",
                 include_str!("../scripts/feature_scripts/admin.js"),
             ),
             (
                 "https://example.com/auth",
                 include_str!("../scripts/feature_scripts/auth.js"),
-            ),
-            (
-                "https://example.com/docs",
-                include_str!("../scripts/feature_scripts/docs.js"),
             ),
         ];
 
@@ -3806,23 +3798,6 @@ fn get_static_assets() -> HashMap<String, Asset> {
     };
     m.insert("logo.svg".to_string(), logo);
 
-    // Editor assets
-    // Note: editor.html is NOT registered as a public asset
-    // It's served exclusively through the /editor route in editor.js
-    // This simplifies the API surface and provides a single entry point
-
-    let editor_css_content = include_bytes!("../assets/editor.css").to_vec();
-    let editor_css = Asset {
-        uri: "editor.css".to_string(),
-        name: Some("Editor Styles".to_string()),
-        mimetype: "text/css".to_string(),
-        content: editor_css_content,
-        created_at: now,
-        updated_at: now,
-        script_uri: "https://example.com/editor".to_string(),
-    };
-    m.insert("editor.css".to_string(), editor_css);
-
     let engine_css_content = include_bytes!("../assets/engine.css").to_vec();
     let engine_css = Asset {
         uri: "engine.css".to_string(),
@@ -3834,18 +3809,6 @@ fn get_static_assets() -> HashMap<String, Asset> {
         script_uri: "https://example.com/core".to_string(),
     };
     m.insert("engine.css".to_string(), engine_css);
-
-    let editor_js_content = include_bytes!("../assets/editor.js").to_vec();
-    let editor_js = Asset {
-        uri: "editor.js".to_string(),
-        name: Some("Editor Script".to_string()),
-        mimetype: "application/javascript".to_string(),
-        content: editor_js_content,
-        created_at: now,
-        updated_at: now,
-        script_uri: "https://example.com/editor".to_string(),
-    };
-    m.insert("editor.js".to_string(), editor_js);
 
     let favicon_content = include_bytes!("../assets/favicon.ico").to_vec();
     let favicon = Asset {
@@ -3883,382 +3846,6 @@ fn get_static_assets() -> HashMap<String, Asset> {
     };
     m.insert("aiwebengine-priv.d.ts".to_string(), aiwebengine_priv_dts);
 
-    // Documentation assets
-    let docs_readme = include_bytes!("../assets/docs/README.md").to_vec();
-    m.insert(
-        "docs/README.md".to_string(),
-        Asset {
-            uri: "docs/README.md".to_string(),
-            name: Some("Documentation Index".to_string()),
-            mimetype: "text/markdown".to_string(),
-            content: docs_readme,
-            created_at: now,
-            updated_at: now,
-            script_uri: "https://example.com/docs".to_string(),
-        },
-    );
-
-    let getting_started_01 =
-        include_bytes!("../assets/docs/getting-started/01-first-script.md").to_vec();
-    m.insert(
-        "docs/getting-started/01-first-script.md".to_string(),
-        Asset {
-            uri: "docs/getting-started/01-first-script.md".to_string(),
-            name: Some("First Script Guide".to_string()),
-            mimetype: "text/markdown".to_string(),
-            content: getting_started_01,
-            created_at: now,
-            updated_at: now,
-            script_uri: "https://example.com/docs".to_string(),
-        },
-    );
-
-    let getting_started_02 =
-        include_bytes!("../assets/docs/getting-started/02-working-with-editor.md").to_vec();
-    m.insert(
-        "docs/getting-started/02-working-with-editor.md".to_string(),
-        Asset {
-            uri: "docs/getting-started/02-working-with-editor.md".to_string(),
-            name: Some("Working with Editor Guide".to_string()),
-            mimetype: "text/markdown".to_string(),
-            content: getting_started_02,
-            created_at: now,
-            updated_at: now,
-            script_uri: "https://example.com/docs".to_string(),
-        },
-    );
-
-    let getting_started_03 =
-        include_bytes!("../assets/docs/getting-started/03-deployment-workflow.md").to_vec();
-    m.insert(
-        "docs/getting-started/03-deployment-workflow.md".to_string(),
-        Asset {
-            uri: "docs/getting-started/03-deployment-workflow.md".to_string(),
-            name: Some("Deployment Workflow Guide".to_string()),
-            mimetype: "text/markdown".to_string(),
-            content: getting_started_03,
-            created_at: now,
-            updated_at: now,
-            script_uri: "https://example.com/docs".to_string(),
-        },
-    );
-
-    let guides_ai_development = include_bytes!("../assets/docs/guides/ai-development.md").to_vec();
-    m.insert(
-        "docs/guides/ai-development.md".to_string(),
-        Asset {
-            uri: "docs/guides/ai-development.md".to_string(),
-            name: Some("AI Development Guide".to_string()),
-            mimetype: "text/markdown".to_string(),
-            content: guides_ai_development,
-            created_at: now,
-            updated_at: now,
-            script_uri: "https://example.com/docs".to_string(),
-        },
-    );
-
-    let guides_asset_registration =
-        include_bytes!("../assets/docs/guides/asset-registration.md").to_vec();
-    m.insert(
-        "docs/guides/asset-registration.md".to_string(),
-        Asset {
-            uri: "docs/guides/asset-registration.md".to_string(),
-            name: Some("Asset Registration Guide".to_string()),
-            mimetype: "text/markdown".to_string(),
-            content: guides_asset_registration,
-            created_at: now,
-            updated_at: now,
-            script_uri: "https://example.com/docs".to_string(),
-        },
-    );
-
-    let guides_assets = include_bytes!("../assets/docs/guides/assets.md").to_vec();
-    m.insert(
-        "docs/guides/assets.md".to_string(),
-        Asset {
-            uri: "docs/guides/assets.md".to_string(),
-            name: Some("Assets Guide".to_string()),
-            mimetype: "text/markdown".to_string(),
-            content: guides_assets,
-            created_at: now,
-            updated_at: now,
-            script_uri: "https://example.com/docs".to_string(),
-        },
-    );
-
-    let guides_graphql_subscriptions =
-        include_bytes!("../assets/docs/guides/graphql-subscriptions.md").to_vec();
-    m.insert(
-        "docs/guides/graphql-subscriptions.md".to_string(),
-        Asset {
-            uri: "docs/guides/graphql-subscriptions.md".to_string(),
-            name: Some("GraphQL Subscriptions Guide".to_string()),
-            mimetype: "text/markdown".to_string(),
-            content: guides_graphql_subscriptions,
-            created_at: now,
-            updated_at: now,
-            script_uri: "https://example.com/docs".to_string(),
-        },
-    );
-
-    let guides_logging = include_bytes!("../assets/docs/guides/logging.md").to_vec();
-    m.insert(
-        "docs/guides/logging.md".to_string(),
-        Asset {
-            uri: "docs/guides/logging.md".to_string(),
-            name: Some("Logging Guide".to_string()),
-            mimetype: "text/markdown".to_string(),
-            content: guides_logging,
-            created_at: now,
-            updated_at: now,
-            script_uri: "https://example.com/docs".to_string(),
-        },
-    );
-
-    let guides_mcp_prompts = include_bytes!("../assets/docs/guides/mcp-prompts.md").to_vec();
-    m.insert(
-        "docs/guides/mcp-prompts.md".to_string(),
-        Asset {
-            uri: "docs/guides/mcp-prompts.md".to_string(),
-            name: Some("MCP Prompts Guide".to_string()),
-            mimetype: "text/markdown".to_string(),
-            content: guides_mcp_prompts,
-            created_at: now,
-            updated_at: now,
-            script_uri: "https://example.com/docs".to_string(),
-        },
-    );
-
-    let guides_mcp_tools = include_bytes!("../assets/docs/guides/mcp-tools.md").to_vec();
-    m.insert(
-        "docs/guides/mcp-tools.md".to_string(),
-        Asset {
-            uri: "docs/guides/mcp-tools.md".to_string(),
-            name: Some("MCP Tools Guide".to_string()),
-            mimetype: "text/markdown".to_string(),
-            content: guides_mcp_tools,
-            created_at: now,
-            updated_at: now,
-            script_uri: "https://example.com/docs".to_string(),
-        },
-    );
-
-    let guides_scripts = include_bytes!("../assets/docs/guides/scripts.md").to_vec();
-    m.insert(
-        "docs/guides/scripts.md".to_string(),
-        Asset {
-            uri: "docs/guides/scripts.md".to_string(),
-            name: Some("Scripts Guide".to_string()),
-            mimetype: "text/markdown".to_string(),
-            content: guides_scripts,
-            created_at: now,
-            updated_at: now,
-            script_uri: "https://example.com/docs".to_string(),
-        },
-    );
-
-    let guides_streaming = include_bytes!("../assets/docs/guides/streaming.md").to_vec();
-    m.insert(
-        "docs/guides/streaming.md".to_string(),
-        Asset {
-            uri: "docs/guides/streaming.md".to_string(),
-            name: Some("Streaming Guide".to_string()),
-            mimetype: "text/markdown".to_string(),
-            content: guides_streaming,
-            created_at: now,
-            updated_at: now,
-            script_uri: "https://example.com/docs".to_string(),
-        },
-    );
-
-    let examples_index = include_bytes!("../assets/docs/examples/index.md").to_vec();
-    m.insert(
-        "docs/examples/index.md".to_string(),
-        Asset {
-            uri: "docs/examples/index.md".to_string(),
-            name: Some("Examples Index".to_string()),
-            mimetype: "text/markdown".to_string(),
-            content: examples_index,
-            created_at: now,
-            updated_at: now,
-            script_uri: "https://example.com/docs".to_string(),
-        },
-    );
-
-    let examples_basic_api = include_bytes!("../assets/docs/examples/basic-api.md").to_vec();
-    m.insert(
-        "docs/examples/basic-api.md".to_string(),
-        Asset {
-            uri: "docs/examples/basic-api.md".to_string(),
-            name: Some("Basic API Example".to_string()),
-            mimetype: "text/markdown".to_string(),
-            content: examples_basic_api,
-            created_at: now,
-            updated_at: now,
-            script_uri: "https://example.com/docs".to_string(),
-        },
-    );
-
-    let examples_forms_and_data =
-        include_bytes!("../assets/docs/examples/forms-and-data.md").to_vec();
-    m.insert(
-        "docs/examples/forms-and-data.md".to_string(),
-        Asset {
-            uri: "docs/examples/forms-and-data.md".to_string(),
-            name: Some("Forms and Data Example".to_string()),
-            mimetype: "text/markdown".to_string(),
-            content: examples_forms_and_data,
-            created_at: now,
-            updated_at: now,
-            script_uri: "https://example.com/docs".to_string(),
-        },
-    );
-
-    let examples_real_time_features =
-        include_bytes!("../assets/docs/examples/real-time-features.md").to_vec();
-    m.insert(
-        "docs/examples/real-time-features.md".to_string(),
-        Asset {
-            uri: "docs/examples/real-time-features.md".to_string(),
-            name: Some("Real-Time Features Example".to_string()),
-            mimetype: "text/markdown".to_string(),
-            content: examples_real_time_features,
-            created_at: now,
-            updated_at: now,
-            script_uri: "https://example.com/docs".to_string(),
-        },
-    );
-
-    let examples_ai_integration =
-        include_bytes!("../assets/docs/examples/ai-integration.md").to_vec();
-    m.insert(
-        "docs/examples/ai-integration.md".to_string(),
-        Asset {
-            uri: "docs/examples/ai-integration.md".to_string(),
-            name: Some("AI Integration Example".to_string()),
-            mimetype: "text/markdown".to_string(),
-            content: examples_ai_integration,
-            created_at: now,
-            updated_at: now,
-            script_uri: "https://example.com/docs".to_string(),
-        },
-    );
-
-    let examples_message_passing =
-        include_bytes!("../assets/docs/examples/message-passing.md").to_vec();
-    m.insert(
-        "docs/examples/message-passing.md".to_string(),
-        Asset {
-            uri: "docs/examples/message-passing.md".to_string(),
-            name: Some("Message Passing Example".to_string()),
-            mimetype: "text/markdown".to_string(),
-            content: examples_message_passing,
-            created_at: now,
-            updated_at: now,
-            script_uri: "https://example.com/docs".to_string(),
-        },
-    );
-
-    let examples_deployer = include_bytes!("../assets/docs/examples/deployer.md").to_vec();
-    m.insert(
-        "docs/examples/deployer.md".to_string(),
-        Asset {
-            uri: "docs/examples/deployer.md".to_string(),
-            name: Some("Deployer Example".to_string()),
-            mimetype: "text/markdown".to_string(),
-            content: examples_deployer,
-            created_at: now,
-            updated_at: now,
-            script_uri: "https://example.com/docs".to_string(),
-        },
-    );
-
-    let tools_editor = include_bytes!("../assets/docs/tools/editor.md").to_vec();
-    m.insert(
-        "docs/tools/editor.md".to_string(),
-        Asset {
-            uri: "docs/tools/editor.md".to_string(),
-            name: Some("Editor Tool Documentation".to_string()),
-            mimetype: "text/markdown".to_string(),
-            content: tools_editor,
-            created_at: now,
-            updated_at: now,
-            script_uri: "https://example.com/docs".to_string(),
-        },
-    );
-
-    let tools_deployer = include_bytes!("../assets/docs/tools/deployer.md").to_vec();
-    m.insert(
-        "docs/tools/deployer.md".to_string(),
-        Asset {
-            uri: "docs/tools/deployer.md".to_string(),
-            name: Some("Deployer Tool Documentation".to_string()),
-            mimetype: "text/markdown".to_string(),
-            content: tools_deployer,
-            created_at: now,
-            updated_at: now,
-            script_uri: "https://example.com/docs".to_string(),
-        },
-    );
-
-    let tools_external = include_bytes!("../assets/docs/tools/external-tools.md").to_vec();
-    m.insert(
-        "docs/tools/external-tools.md".to_string(),
-        Asset {
-            uri: "docs/tools/external-tools.md".to_string(),
-            name: Some("External Tools Documentation".to_string()),
-            mimetype: "text/markdown".to_string(),
-            content: tools_external,
-            created_at: now,
-            updated_at: now,
-            script_uri: "https://example.com/docs".to_string(),
-        },
-    );
-
-    let reference_javascript_apis =
-        include_bytes!("../assets/docs/reference/javascript-apis.md").to_vec();
-    m.insert(
-        "docs/reference/javascript-apis.md".to_string(),
-        Asset {
-            uri: "docs/reference/javascript-apis.md".to_string(),
-            name: Some("JavaScript APIs Reference".to_string()),
-            mimetype: "text/markdown".to_string(),
-            content: reference_javascript_apis,
-            created_at: now,
-            updated_at: now,
-            script_uri: "https://example.com/docs".to_string(),
-        },
-    );
-
-    let reference_auth_api = include_bytes!("../assets/docs/reference/auth-api.md").to_vec();
-    m.insert(
-        "docs/reference/auth-api.md".to_string(),
-        Asset {
-            uri: "docs/reference/auth-api.md".to_string(),
-            name: Some("Auth API Reference".to_string()),
-            mimetype: "text/markdown".to_string(),
-            content: reference_auth_api,
-            created_at: now,
-            updated_at: now,
-            script_uri: "https://example.com/docs".to_string(),
-        },
-    );
-
-    let reference_conversion_api =
-        include_bytes!("../assets/docs/reference/conversion-api.md").to_vec();
-    m.insert(
-        "docs/reference/conversion-api.md".to_string(),
-        Asset {
-            uri: "docs/reference/conversion-api.md".to_string(),
-            name: Some("Conversion API Reference".to_string()),
-            mimetype: "text/markdown".to_string(),
-            content: reference_conversion_api,
-            created_at: now,
-            updated_at: now,
-            script_uri: "https://example.com/docs".to_string(),
-        },
-    );
-
     m
 }
 
@@ -4268,17 +3855,13 @@ fn get_static_scripts() -> HashMap<String, String> {
 
     let core = include_str!("../scripts/feature_scripts/core.js");
     let cli = include_str!("../scripts/feature_scripts/cli.js");
-    let editor = include_str!("../scripts/feature_scripts/editor.js");
     let admin = include_str!("../scripts/feature_scripts/admin.js");
     let auth = include_str!("../scripts/feature_scripts/auth.js");
-    let docs = include_str!("../scripts/feature_scripts/docs.js");
 
     m.insert("https://example.com/core".to_string(), core.to_string());
     m.insert("https://example.com/cli".to_string(), cli.to_string());
-    m.insert("https://example.com/editor".to_string(), editor.to_string());
     m.insert("https://example.com/admin".to_string(), admin.to_string());
     m.insert("https://example.com/auth".to_string(), auth.to_string());
-    m.insert("https://example.com/docs".to_string(), docs.to_string());
 
     // Include test scripts when appropriate
     let include_test_scripts =

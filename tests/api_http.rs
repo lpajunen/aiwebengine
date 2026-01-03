@@ -457,12 +457,6 @@ async fn test_graphql_endpoints() {
         include_str!("../scripts/feature_scripts/core.js"),
     );
 
-    // Load the editor script to get /engine/graphql and /engine/swagger endpoints
-    let _ = repository::upsert_script(
-        "https://example.com/editor",
-        include_str!("../scripts/feature_scripts/editor.js"),
-    );
-
     // Load the GraphQL test script
     let _ = repository::upsert_script(
         "https://example.com/graphql_test",
@@ -477,24 +471,6 @@ async fn test_graphql_endpoints() {
     wait_for_server(port, 20).await.expect("Server not ready");
 
     let client = reqwest::Client::new();
-
-    // Test GraphiQL GET endpoint
-    let graphiql_response = client
-        .get(format!("http://127.0.0.1:{}/engine/graphql", port))
-        .send()
-        .await
-        .expect("GraphiQL request failed");
-
-    assert_eq!(graphiql_response.status(), 200);
-
-    let graphiql_body = graphiql_response
-        .text()
-        .await
-        .expect("Failed to read GraphiQL response");
-
-    // Check that GraphiQL HTML contains expected elements
-    assert!(graphiql_body.contains("GraphiQL"));
-    assert!(graphiql_body.contains("/graphql"));
 
     // Test GraphQL POST endpoint with introspection query
     let introspection_query = r#"{__schema{queryType{name fields{name type{name kind}}}}}"#;

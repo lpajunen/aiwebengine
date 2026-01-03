@@ -168,8 +168,6 @@ async fn test_openapi_contains_rust_endpoints() {
         "/graphql/ws",
         "/graphql/sse",
         "/mcp",
-        "/engine/graphql",
-        "/engine/swagger",
     ];
 
     for endpoint in required_endpoints {

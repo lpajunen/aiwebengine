@@ -40,9 +40,6 @@ pub mod user_repository;
 // Authentication module (Phase 1 - Core Infrastructure)
 pub mod auth;
 
-// Documentation module
-pub mod docs;
-
 use repository::Repository;
 use security::UserContext;
 
@@ -2406,10 +2403,10 @@ async fn handle_dynamic_request(
                 ));
             } else if path == "/" && request_method == "GET" {
                 info!(
-                    "[{}] 🔄 Redirecting root path to /engine/docs for bootstrapping",
+                    "[{}] 🔄 Redirecting root path to /engine/installed for bootstrapping",
                     request_id
                 );
-                return Redirect::temporary("/engine/docs").into_response();
+                return Redirect::temporary("/engine/installed").into_response();
             } else {
                 warn!(
                     "[{}] ⚠️  Route not found: {} {} (no handler registered for this path)",
@@ -2873,36 +2870,7 @@ mod tests {
             include_str!("../scripts/test_scripts/test_editor_api.js"),
         );
 
-        // Test that the editor script can be executed without errors and has init()
-        let result = js_engine::execute_script(
-            "https://example.com/editor",
-            include_str!("../scripts/feature_scripts/editor.js"),
-        );
-        assert!(
-            result.success,
-            "Editor script should execute successfully: {:?}",
-            result.error
-        );
-
-        // Test that calling init() on editor script captures registrations
-        let init_context =
-            crate::script_init::InitContext::new("https://example.com/editor".to_string(), false);
-        let editor_registrations = js_engine::call_init_if_exists(
-            "https://example.com/editor",
-            include_str!("../scripts/feature_scripts/editor.js"),
-            init_context,
-        )
-        .expect("Editor script init() should succeed");
-        assert!(
-            editor_registrations.is_some(),
-            "Editor script should have init() function"
-        );
-        assert!(
-            !editor_registrations.unwrap().is_empty(),
-            "Editor script should register routes in init()"
-        );
-
-        // Test that the test_editor script can be executed without errors
+        // Test that test_editor script can be executed without errors
         let test_editor_result = js_engine::execute_script(
             "https://example.com/test_editor",
             include_str!("../scripts/test_scripts/test_editor.js"),
