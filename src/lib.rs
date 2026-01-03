@@ -387,38 +387,12 @@ pub fn get_rust_openapi_spec() -> String {
                     }
                 }));
 
-                // Documentation pages
-                paths.insert("/engine/docs".to_string(), serde_json::json!({
-                    "get": {
-                        "tags": ["Documentation"],
-                        "summary": "Engine documentation",
-                        "description": "Main documentation page for AIWebEngine",
-                        "responses": {
-                            "200": {
-                                "description": "Documentation HTML page",
-                                "content": {
-                                    "text/html": {}
-                                }
-                            }
-                        }
-                    }
-                }));
-
-                paths.insert("/engine/docs/".to_string(), serde_json::json!({
-                    "get": {
-                        "tags": ["Documentation"],
-                        "summary": "Engine documentation home",
-                        "description": "Documentation home page for AIWebEngine",
-                        "responses": {
-                            "200": {
-                                "description": "Documentation HTML page",
-                                "content": {
-                                    "text/html": {}
-                                }
-                            }
-                        }
-                    }
-                }));
+                // Documentation routes are now handled by docs.js feature script
+                // OpenAPI spec is automatically generated from route registrations
+                // So these static entries are no longer needed:
+                // - /engine/docs (redirect)
+                // - /engine/docs/ (main page)
+                // - /engine/docs/* (wildcard)
             }
 
             serde_json::to_string_pretty(&spec_value)
@@ -2319,21 +2293,22 @@ async fn setup_routes(
         }),
     );
 
-    // Add documentation routes
-    app = app.route(
-        "/engine/docs",
-        axum::routing::get(|axum::extract::Path(()): axum::extract::Path<()>| async {
-            axum::response::Redirect::permanent("/engine/docs/").into_response()
-        }),
-    );
-    app = app.route(
-        "/engine/docs/",
-        axum::routing::get(docs::handle_docs_request),
-    );
-    app = app.route(
-        "/engine/docs/{*path}",
-        axum::routing::get(docs::handle_docs_request),
-    );
+    // Documentation routes are now handled by docs.js feature script
+    // Commented out to avoid conflicts with JavaScript implementation
+    // app = app.route(
+    //     "/engine/docs",
+    //     axum::routing::get(|axum::extract::Path(()): axum::extract::Path<()>| async {
+    //         axum::response::Redirect::permanent("/engine/docs/").into_response()
+    //     }),
+    // );
+    // app = app.route(
+    //     "/engine/docs/",
+    //     axum::routing::get(docs::handle_docs_request),
+    // );
+    // app = app.route(
+    //     "/engine/docs/{*path}",
+    //     axum::routing::get(docs::handle_docs_request),
+    // );
 
     // Add catch-all dynamic routes
     let auth_enabled_for_home = auth_enabled;
