@@ -101,6 +101,17 @@ impl AssetRegistry {
         }
     }
 
+    /// Get the full asset registration (asset name and script URI) for a given HTTP path
+    pub fn get_asset_registration(&self, path: &str) -> Option<AssetPathRegistration> {
+        match self.paths.lock() {
+            Ok(paths) => paths.get(path).cloned(),
+            Err(e) => {
+                warn!("Failed to lock asset registry for lookup: {}", e);
+                None
+            }
+        }
+    }
+
     /// Check if a path is registered
     pub fn is_path_registered(&self, path: &str) -> bool {
         match self.paths.lock() {

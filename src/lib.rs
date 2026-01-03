@@ -2744,9 +2744,10 @@ fn try_serve_asset(path: &str, method: &str) -> Option<Response> {
         return None;
     }
 
-    let asset_name = asset_registry::get_global_registry().get_asset_name(path)?;
+    let registration = asset_registry::get_global_registry().get_asset_registration(path)?;
 
-    if let Some(asset) = repository::fetch_asset("https://example.com/core", &asset_name) {
+    if let Some(asset) = repository::fetch_asset(&registration.script_uri, &registration.asset_name)
+    {
         let mut response = asset.content.into_response();
         response.headers_mut().insert(
             axum::http::header::CONTENT_TYPE,
@@ -2758,8 +2759,8 @@ fn try_serve_asset(path: &str, method: &str) -> Option<Response> {
     }
 
     warn!(
-        "Asset '{}' registered for path '{}' but not found in repository",
-        asset_name, path
+        "Asset '{}' registered for path '{}' from script '{}' but not found in repository",
+        registration.asset_name, path, registration.script_uri
     );
     None
 }
