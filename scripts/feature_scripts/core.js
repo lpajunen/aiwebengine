@@ -1128,8 +1128,6 @@ function init(context) {
     // Register public asset paths
     routeRegistry.registerAssetRoute("/logo.svg", "logo.svg");
     routeRegistry.registerAssetRoute("/favicon.ico", "favicon.ico");
-    routeRegistry.registerAssetRoute("/editor.css", "editor.css");
-    routeRegistry.registerAssetRoute("/editor.js", "editor.js");
     routeRegistry.registerAssetRoute("/engine.css", "engine.css");
 
     // Register HTTP endpoints with OpenAPI metadata
@@ -1401,7 +1399,7 @@ function init(context) {
       success: true,
       message: "Core script initialized successfully",
       registeredEndpoints: 8,
-      registeredAssets: 5,
+      registeredAssets: 3,
       registeredGraphQLOperations: 8,
       registeredMcpTools: 7,
     };

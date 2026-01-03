@@ -3819,7 +3819,7 @@ fn get_static_assets() -> HashMap<String, Asset> {
         content: editor_css_content,
         created_at: now,
         updated_at: now,
-        script_uri: "https://example.com/core".to_string(),
+        script_uri: "https://example.com/editor".to_string(),
     };
     m.insert("editor.css".to_string(), editor_css);
 
@@ -3843,7 +3843,7 @@ fn get_static_assets() -> HashMap<String, Asset> {
         content: editor_js_content,
         created_at: now,
         updated_at: now,
-        script_uri: "https://example.com/core".to_string(),
+        script_uri: "https://example.com/editor".to_string(),
     };
     m.insert("editor.js".to_string(), editor_js);
 

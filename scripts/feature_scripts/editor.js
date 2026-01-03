@@ -2400,6 +2400,11 @@ Remember: You are creating JavaScript scripts that run on the SERVER and handle 
 // Initialization function
 function init(context) {
   console.log("Initializing editor.js at " + new Date().toISOString());
+
+  // Register editor assets
+  routeRegistry.registerAssetRoute("/editor.css", "editor.css");
+  routeRegistry.registerAssetRoute("/editor.js", "editor.js");
+
   routeRegistry.registerRoute("/engine/editor", "serveEditor", "GET");
   routeRegistry.registerRoute("/engine/graphql", "serveGraphiQL", "GET");
   routeRegistry.registerRoute("/engine/swagger", "serveSwaggerUI", "GET");

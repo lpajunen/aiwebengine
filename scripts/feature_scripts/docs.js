@@ -44,46 +44,49 @@ function decodeBase64(base64) {
   let i = 0;
   while (i < buffer.length) {
     const byte1 = buffer[i++];
-    
+
     // Single-byte character (0xxxxxxx)
     if (byte1 < 0x80) {
       result += String.fromCharCode(byte1);
     }
     // Two-byte character (110xxxxx 10xxxxxx)
-    else if (byte1 >= 0xC0 && byte1 < 0xE0 && i < buffer.length) {
+    else if (byte1 >= 0xc0 && byte1 < 0xe0 && i < buffer.length) {
       const byte2 = buffer[i++];
-      const codePoint = ((byte1 & 0x1F) << 6) | (byte2 & 0x3F);
+      const codePoint = ((byte1 & 0x1f) << 6) | (byte2 & 0x3f);
       result += String.fromCharCode(codePoint);
     }
     // Three-byte character (1110xxxx 10xxxxxx 10xxxxxx)
-    else if (byte1 >= 0xE0 && byte1 < 0xF0 && i + 1 < buffer.length) {
+    else if (byte1 >= 0xe0 && byte1 < 0xf0 && i + 1 < buffer.length) {
       const byte2 = buffer[i++];
       const byte3 = buffer[i++];
-      const codePoint = ((byte1 & 0x0F) << 12) | ((byte2 & 0x3F) << 6) | (byte3 & 0x3F);
+      const codePoint =
+        ((byte1 & 0x0f) << 12) | ((byte2 & 0x3f) << 6) | (byte3 & 0x3f);
       result += String.fromCharCode(codePoint);
     }
     // Four-byte character (11110xxx 10xxxxxx 10xxxxxx 10xxxxxx) - for emojis
-    else if (byte1 >= 0xF0 && byte1 < 0xF8 && i + 2 < buffer.length) {
+    else if (byte1 >= 0xf0 && byte1 < 0xf8 && i + 2 < buffer.length) {
       const byte2 = buffer[i++];
       const byte3 = buffer[i++];
       const byte4 = buffer[i++];
-      let codePoint = ((byte1 & 0x07) << 18) | ((byte2 & 0x3F) << 12) | 
-                      ((byte3 & 0x3F) << 6) | (byte4 & 0x3F);
+      let codePoint =
+        ((byte1 & 0x07) << 18) |
+        ((byte2 & 0x3f) << 12) |
+        ((byte3 & 0x3f) << 6) |
+        (byte4 & 0x3f);
       // Convert to UTF-16 surrogate pair for characters above U+FFFF
-      if (codePoint > 0xFFFF) {
+      if (codePoint > 0xffff) {
         codePoint -= 0x10000;
-        result += String.fromCharCode(0xD800 + (codePoint >> 10));
-        result += String.fromCharCode(0xDC00 + (codePoint & 0x3FF));
+        result += String.fromCharCode(0xd800 + (codePoint >> 10));
+        result += String.fromCharCode(0xdc00 + (codePoint & 0x3ff));
       } else {
         result += String.fromCharCode(codePoint);
       }
-    }
-    else {
+    } else {
       // Invalid UTF-8 sequence, skip byte
       console.error("[docs.js] Invalid UTF-8 byte: " + byte1.toString(16));
     }
   }
-  
+
   return result;
 }
 
