@@ -54,6 +54,62 @@ function health_check(context) {
   };
 }
 
+// Installation confirmation page
+function installed_page(context) {
+  return {
+    status: 200,
+    body: `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>aiwebengine Installed</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    }
+    .container {
+      text-align: center;
+      background: white;
+      padding: 3rem 4rem;
+      border-radius: 1rem;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    }
+    h1 {
+      color: #333;
+      margin: 0 0 1rem 0;
+      font-size: 2.5rem;
+    }
+    p {
+      color: #666;
+      font-size: 1.2rem;
+      margin: 0;
+    }
+    .emoji {
+      font-size: 4rem;
+      margin-bottom: 1rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="emoji">🎉</div>
+    <h1>Thanks for installing aiwebengine!</h1>
+    <p>Your server is up and running.</p>
+  </div>
+</body>
+</html>`,
+    contentType: "text/html",
+  };
+}
+
 // GraphQL subscription resolver for script updates
 // NEW: Returns filter criteria (empty object = broadcast to all connections)
 function scriptUpdatesResolver(context) {
@@ -1136,6 +1192,11 @@ function init(context) {
       description:
         "Returns system health status including database connectivity",
       tags: ["Monitoring"],
+    });
+    routeRegistry.registerRoute("/engine/installed", "installed_page", "GET", {
+      summary: "Installation confirmation",
+      description: "Shows a confirmation page for successful installation",
+      tags: ["Engine"],
     });
     routeRegistry.registerRoute(
       "/upsert_script",
