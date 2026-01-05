@@ -284,7 +284,7 @@ fetch("/graphql/sse?channelId=123", {
 
 #### 1. Documentation
 
-Add to docs/solution-developers/:
+Add to engine documentation:
 
 ````markdown
 ## GraphQL Subscriptions
@@ -1027,8 +1027,6 @@ These improvements are sourced from real implementation experience building prod
 ## Related Documents
 
 - [Chat Application Example](../../scripts/example_scripts/chat_app.js) - Real-world implementation
-- [GraphQL API Documentation](../solution-developers/graphql-api.md) - Current API docs
-- [Authentication Guide](../solution-developers/authentication.md) - Auth patterns
 - [Script Ownership Implementation](../engine-contributors/script-ownership.md) - Recent feature
 
 ---

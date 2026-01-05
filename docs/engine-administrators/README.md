@@ -11,8 +11,6 @@ You're an **Engine Administrator** if you:
 - Monitor system health and performance
 - Handle backups, updates, and maintenance
 
-> **Note:** If you're building applications _using_ aiwebengine, see [Solution Developer Documentation](../solution-developers/).
-
 ## Quick Links
 
 | I want to...                       | Go to                                                                |
@@ -120,8 +118,7 @@ Each environment has optimized settings for its use case. See [02-CONFIGURATION.
 ### Documentation
 
 - 📚 [Complete Documentation Index](../INDEX.md)
-- 👥 [Solution Developer Docs](../solution-developers/)
-- 🛠️ [Engine Contributor Docs](../engine-contributors/)
+- ️ [Engine Contributor Docs](../engine-contributors/)
 
 ### Common Issues
 

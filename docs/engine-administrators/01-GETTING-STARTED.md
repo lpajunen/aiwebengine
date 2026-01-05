@@ -419,8 +419,8 @@ When using Docker:
 Now that your instance is running:
 
 1. **Explore the Management UI:** `http://localhost:3000/engine/admin`
-2. **Write JavaScript scripts:** See [Solution Developer Documentation](../solution-developers/)
-3. **Try the editor:** `http://localhost:3000/editor` (if enabled)
+2. **Write JavaScript scripts:** Use the web editor at `http://localhost:3000/editor`
+3. **Try example scripts:** Explore the built-in examples and templates
 
 ### Configure for Your Needs
 

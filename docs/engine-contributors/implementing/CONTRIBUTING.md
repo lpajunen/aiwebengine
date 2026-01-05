@@ -193,7 +193,6 @@ mod tests {
 - [ ] **Code documentation** - Doc comments on public functions/types
 - [ ] **Feature guide** - Update relevant file in `features/` or `improvements/`
 - [ ] **ROADMAP.md** - Mark tasks complete, update status
-- [ ] **User documentation** - If user-facing, update `docs/solution-developers/`
 - [ ] **Administrator documentation** - If deployment-related, update `docs/engine-administrators/`
 - [ ] **CHANGELOG.md** - Add entry describing your change
 - [ ] **Example scripts** - If adding JavaScript APIs, create examples in `scripts/example_scripts/`
@@ -300,7 +299,6 @@ Implements OAuth2 authentication with Google, Microsoft, and Apple providers as 
 
 - [x] Updated features/authentication.md
 - [x] Updated ROADMAP.md
-- [x] Added user documentation to docs/solution-developers/
 - [x] Created example scripts in scripts/example_scripts/
 - [x] Updated CHANGELOG.md
 
@@ -434,7 +432,6 @@ Your contribution must meet these gates before merging:
 ### Gate 5: Documentation
 
 - [ ] Public APIs documented with examples
-- [ ] User-facing changes documented in docs/solution-developers/
 - [ ] Feature/improvement guide updated
 - [ ] ROADMAP.md updated
 - [ ] CHANGELOG.md updated

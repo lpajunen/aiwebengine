@@ -509,13 +509,13 @@ pub fn create_session(&self, user_id: &str) -> Result<Session, SessionError> {
 
 **Update for user-facing features:**
 
-- `docs/solution-developers/` - For JavaScript developers
 - `docs/engine-administrators/` - For deployment/operations
+- Include examples in the web editor or example scripts
 
 **Example for authentication:**
 
 ```markdown
-<!-- docs/solution-developers/guides/authentication.md -->
+<!-- docs/engine-administrators/authentication.md -->
 
 # Using Authentication in Your Scripts
 

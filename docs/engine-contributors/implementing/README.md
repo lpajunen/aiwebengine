@@ -223,7 +223,6 @@ Found outdated information? Want to improve these docs?
 
 - **Planning Documentation:** [docs/engine-contributors/planning/](../planning/) - Requirements, use cases, architecture decisions
 - **Administrator Documentation:** [docs/engine-administrators/](../../engine-administrators/) - Deployment and operations
-- **Developer Documentation:** [docs/solution-developers/](../../solution-developers/) - Building applications on aiwebengine
 - **Archive:** [archive/implementing/](../../../archive/implementing/) - Completed implementation notes
 
 ---

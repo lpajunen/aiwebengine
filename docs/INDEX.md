@@ -37,59 +37,7 @@ routeRegistry.registerRoute("/hello", "helloHandler", "GET");
 
 ## 📖 Documentation by Role
 
-### 👥 Solution Developers
-
-**Building websites, APIs, web applications, and AI tools on aiwebengine.**
-
-#### Getting Started
-
-| Document                                                                             | Description                               |
-| ------------------------------------------------------------------------------------ | ----------------------------------------- |
-| [Solution Developer Guide](solution-developers/README.md)                            | Main navigation hub and quick start guide |
-| [Your First Script](solution-developers/getting-started/01-first-script.md)          | Create your first "Hello World" script    |
-| [Working with Editor](solution-developers/getting-started/02-working-with-editor.md) | Use the web-based editor                  |
-| [Deployment Workflow](solution-developers/getting-started/03-deployment-workflow.md) | Deploy scripts to aiwebengine             |
-
-#### Development Guides
-
-| Document                                                                     | Description                                |
-| ---------------------------------------------------------------------------- | ------------------------------------------ |
-| [Script Development](solution-developers/guides/scripts.md)                  | Complete guide to writing scripts          |
-| [Asset Management](solution-developers/guides/assets.md)                     | Manage CSS, JS, images, and other assets   |
-| [Logging & Debugging](solution-developers/guides/logging.md)                 | Write logs and debug your scripts          |
-| [AI-Assisted Development](solution-developers/guides/ai-development.md)      | Use AI to generate and improve scripts     |
-| [Streaming](solution-developers/guides/streaming.md)                         | Server-sent events and streaming responses |
-| [GraphQL Subscriptions](solution-developers/guides/graphql-subscriptions.md) | Real-time GraphQL subscription support     |
-
-#### Tools
-
-| Document                                                      | Description                     |
-| ------------------------------------------------------------- | ------------------------------- |
-| [Web Editor](solution-developers/tools/editor.md)             | Comprehensive web editor guide  |
-| [External Tools](solution-developers/tools/external-tools.md) | VS Code, Git, CI/CD integration |
-
-#### API Reference
-
-| Document                                                            | Description                                |
-| ------------------------------------------------------------------- | ------------------------------------------ |
-| [JavaScript APIs](solution-developers/reference/javascript-apis.md) | Complete API reference for scripts         |
-| [Authentication API](solution-developers/reference/auth-api.md)     | User authentication and authorization APIs |
-
-#### Examples
-
-| Document                                                                 | Description                                |
-| ------------------------------------------------------------------------ | ------------------------------------------ |
-| [Basic API Examples](solution-developers/examples/basic-api.md)          | RESTful API patterns and CRUD operations   |
-| [Forms & Data Handling](solution-developers/examples/forms-and-data.md)  | Form submissions, validation, file uploads |
-| [Real-Time Features](solution-developers/examples/real-time-features.md) | Chat, notifications, live updates          |
-| [AI Integration](solution-developers/examples/ai-integration.md)         | AI-powered content generation and chatbots |
-| [Example Scripts Index](solution-developers/examples/index.md)           | Guide to all example scripts               |
-
-**📁 Location**: `docs/solution-developers/`
-
----
-
-### 🔧 Engine Administrators
+### Engine Administrators
 
 **Deploying, configuring, and managing aiwebengine instances.**
 
@@ -152,35 +100,11 @@ routeRegistry.registerRoute("/hello", "helloHandler", "GET");
 
 ### I Want To
 
-**Build my first script**
-→ Start with [Your First Script](solution-developers/getting-started/01-first-script.md)
-
-**Build a web application**
-→ Follow [Solution Developer Guide](solution-developers/README.md) and [Script Development](solution-developers/guides/scripts.md)
-
-**Create real-time features**
-→ Read [Real-Time Features Examples](solution-developers/examples/real-time-features.md) and [Streaming Guide](solution-developers/guides/streaming.md)
-
-**Build APIs**
-→ Check [Basic API Examples](solution-developers/examples/basic-api.md)
-
-**Handle forms and data**
-→ See [Forms & Data Handling](solution-developers/examples/forms-and-data.md)
-
-**Integrate AI features**
-→ Follow [AI Integration Examples](solution-developers/examples/ai-integration.md) and [AI-Assisted Development](solution-developers/guides/ai-development.md)
-
 **Deploy to production**
 → Follow [Running Environments](engine-administrators/03-RUNNING-ENVIRONMENTS.md)
 
 **Set up OAuth and user management**
 → See [Secrets and Security](engine-administrators/04-SECRETS-AND-SECURITY.md)
-
-**Understand available APIs**
-→ Check [JavaScript APIs](solution-developers/reference/javascript-apis.md)
-
-**Use the web editor**
-→ Read [Web Editor Guide](solution-developers/tools/editor.md)
 
 **Troubleshoot issues**
 → Visit [Troubleshooting Guide](engine-administrators/06-TROUBLESHOOTING.md)
@@ -195,37 +119,6 @@ routeRegistry.registerRoute("/hello", "helloHandler", "GET");
 ```text
 docs/
 ├── INDEX.md (this file)              # Main documentation index
-│
-├── solution-developers/              # For building ON aiwebengine
-│   ├── README.md                     # Main navigation hub and quick start
-│   │
-│   ├── getting-started/              # Tutorials for beginners
-│   │   ├── 01-first-script.md        # Your first "Hello World" script
-│   │   ├── 02-working-with-editor.md # Using the web editor
-│   │   └── 03-deployment-workflow.md # Deploying your scripts
-│   │
-│   ├── guides/                       # Comprehensive topic guides
-│   │   ├── scripts.md                # Script development guide
-│   │   ├── assets.md                 # Asset management
-│   │   ├── logging.md                # Logging and debugging
-│   │   ├── ai-development.md         # AI-assisted development
-│   │   ├── streaming.md              # Real-time streaming
-│   │   └── graphql-subscriptions.md  # GraphQL subscriptions
-│   │
-│   ├── tools/                        # Development tools
-│   │   ├── editor.md                 # Web editor comprehensive guide
-│   │   └── external-tools.md         # VS Code, Git, CI/CD
-│   │
-│   ├── reference/                    # API reference documentation
-│   │   ├── javascript-apis.md        # Complete JavaScript API reference
-│   │   └── auth-api.md               # Authentication APIs
-│   │
-│   └── examples/                     # Practical examples
-│       ├── index.md                  # Example scripts index
-│       ├── basic-api.md              # REST API patterns
-│       ├── forms-and-data.md         # Form handling examples
-│       ├── real-time-features.md     # Chat, notifications, streaming
-│       └── ai-integration.md         # AI-powered features
 │
 ├── engine-administrators/            # For deploying aiwebengine
 │   ├── README.md                     # Administrator overview
@@ -272,10 +165,9 @@ These documents provide historical context but are no longer actively maintained
 ### Scenario 1: First-Time Local Development
 
 1. Read [Getting Started](engine-administrators/01-GETTING-STARTED.md) to set up aiwebengine
-2. Follow [Your First Script](solution-developers/getting-started/01-first-script.md) to create your first script
-3. Learn [Working with Editor](solution-developers/getting-started/02-working-with-editor.md) for browser-based development
-4. Check [Basic API Examples](solution-developers/examples/basic-api.md) for code patterns
-5. Use [JavaScript APIs](solution-developers/reference/javascript-apis.md) as reference
+2. Explore the web editor at `http://localhost:3000/editor`
+3. Create your first script using the built-in examples
+4. Review the documentation for available JavaScript APIs
 
 ### Scenario 2: Production Deployment
 
@@ -287,16 +179,16 @@ These documents provide historical context but are no longer actively maintained
 
 ### Scenario 3: Building a Real-Time Application
 
-1. Start with [Your First Script](solution-developers/getting-started/01-first-script.md)
-2. Learn [Streaming](solution-developers/guides/streaming.md) for SSE features
-3. Explore [Real-Time Features Examples](solution-developers/examples/real-time-features.md) for chat, notifications, dashboards
-4. Optionally add [GraphQL Subscriptions](solution-developers/guides/graphql-subscriptions.md)
+1. Start by creating a basic script in the web editor
+2. Explore the example scripts for streaming and real-time features
+3. Use Server-Sent Events (SSE) for live updates
+4. Optionally add GraphQL subscriptions for bidirectional communication
 
 ### Scenario 4: Adding AI Features
 
-1. Review [AI Integration Examples](solution-developers/examples/ai-integration.md)
-2. Follow [AI-Assisted Development](solution-developers/guides/ai-development.md) for using the built-in AI assistant
-3. Set up API keys in [Secrets and Security](engine-administrators/04-SECRETS-AND-SECURITY.md)
+1. Use the built-in AI assistant in the web editor
+2. Set up API keys in [Secrets and Security](engine-administrators/04-SECRETS-AND-SECURITY.md)
+3. Explore AI integration examples in the example scripts
 
 ---
 

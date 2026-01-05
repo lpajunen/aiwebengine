@@ -99,7 +99,6 @@ The project roadmap includes planned enhancements such as:
 Comprehensive documentation is available for all user roles:
 
 - **📚 [Documentation Index](docs/INDEX.md)** - Complete guide to all documentation
-- **👥 Solution Developers** - [Getting Started Guide](docs/solution-developers/APP_DEVELOPMENT.md)
 - **🔧 Engine Administrators** - [Getting Started](docs/engine-administrators/01-GETTING-STARTED.md) | [Configuration](docs/engine-administrators/02-CONFIGURATION.md) | [Running Environments](docs/engine-administrators/03-RUNNING-ENVIRONMENTS.md) | [Quick Reference](docs/engine-administrators/QUICK-REFERENCE.md)
 - **🛠️ Engine Contributors** - [Requirements](docs/engine-contributors/planning/REQUIREMENTS.md) | [Development Roadmap](docs/engine-contributors/implementing/TODO.md)
 
