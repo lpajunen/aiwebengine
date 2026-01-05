@@ -65,7 +65,7 @@ These are the most critical use cases that the engine MUST support excellently t
 
 1. Developer describes desired application to AI in natural language
 2. AI generates JavaScript handler code using aiwebengine APIs
-3. Developer deploys script via editor or deployer tool
+3. Developer deploys script via editor
 4. Engine validates script syntax and security constraints
 5. Engine provides clear error messages if validation fails
 6. AI helps developer fix issues based on engine feedback

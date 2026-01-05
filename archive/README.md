@@ -97,7 +97,7 @@ Want to add real-time features? Here's how to create a live notification system:
 
 ## Documentation Sections
 
-- **[Local Development](engine-administrators/local-development.md)**: Setting up your development environment and using the deployer tool
+- **[Local Development](engine-administrators/local-development.md)**: Setting up your development environment
 - **[Remote Development](engine-administrators/remote-development.md)**: Using the built-in web editor for script management
 - **[JavaScript APIs](solution-developers/javascript-apis.md)**: Complete reference for available JavaScript functions and objects
 - **[Real-Time Streaming](solution-developers/streaming.md)**: Guide to building live, interactive applications with Server-Sent Events

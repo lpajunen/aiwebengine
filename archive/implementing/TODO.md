@@ -74,7 +74,7 @@ This document outlines development ideas, enhancements, and features for aiweben
 - [ ] Fix integration test suite configuration and execution
 - [ ] Add comprehensive unit tests (target >85% coverage)
 - [ ] Add 15+ unit tests for `graphql.rs` module
-- [ ] Add tests for untested binaries (main.rs, deployer.rs, server.rs)
+- [ ] Add tests for untested binaries (main.rs, server.rs)
 - [ ] Implement property-based testing for core functions
 - [ ] Add load testing and performance benchmarks
 - [ ] Set up test coverage reporting and CI/CD integration

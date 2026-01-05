@@ -592,7 +592,6 @@ Confusing routing for developers.
   - /engine/admin for admin operations
     - user management
   - /engine/docs for docs and api reference
-  - /engine/cli/... for external cli (deployer) tool operations
   - /engine/api/... for engine related api endpoints
 - /graphql/... for GraphQL related endpoints
   - implement GraphQL queries, mutations, subscriptions

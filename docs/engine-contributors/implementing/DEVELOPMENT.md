@@ -122,8 +122,7 @@ src/
 ├── graphql.rs          // GraphQL schema and resolvers
 ├── repository.rs       // Data storage
 └── bin/
-    ├── server.rs       // Server binary
-    └── deployer.rs     // Deployment tools
+    └── server.rs       // Server binary
 ```
 
 #### Function Organization

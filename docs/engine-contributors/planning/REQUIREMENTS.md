@@ -1823,7 +1823,6 @@ The engine SHOULD support:
 
 The project SHOULD provide:
 
-- Deployer tool for script management
 - Testing utilities
 - Debugging helpers
 - Development scripts

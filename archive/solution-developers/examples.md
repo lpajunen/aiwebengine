@@ -5,7 +5,6 @@ This page showcases practical examples of aiwebengine scripts that demonstrate c
 ## Example Resources
 
 - **[Example Scripts Reference](examples/index.md)** - Complete guide to all available example scripts
-- **[Deployer Tool Guide](examples/deployer.md)** - Learn how to use the deployer for rapid development
 - **[Example Scripts Source Code](../../../scripts/example_scripts/)** - View the actual script files
 
 ## Getting Started with Examples
@@ -23,14 +22,6 @@ This page showcases practical examples of aiwebengine scripts that demonstrate c
    - Create a new script
    - Copy-paste example code
    - Save and test
-
-3. **Or use the deployer tool**:
-
-   ```bash
-   cargo run --bin deployer \
-     --uri "https://example.com/blog" \
-     --file "scripts/example_scripts/blog.js"
-   ```
 
 ## Available Examples
 
@@ -612,5 +603,4 @@ register("/trigger-status", "triggerStatusUpdate", "POST");
 ## Next Steps
 
 - Learn the [JavaScript APIs](../javascript-apis.md) for available functions
-- Set up [local development](../local-development.md) with the deployer
 - Try the [remote editor](../remote-development.md) for quick prototyping

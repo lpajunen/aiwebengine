@@ -26,7 +26,6 @@ ENV SQLX_OFFLINE=true
 RUN mkdir -p src/bin && \
     echo "fn main() {}" > src/lib.rs && \
     echo "fn main() {}" > src/bin/server.rs && \
-    echo "fn main() {}" > src/bin/deployer.rs && \
     cargo build --release && \
     rm -rf src
 

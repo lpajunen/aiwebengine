@@ -26,14 +26,12 @@ solution-developers/
 │   └── graphql-subscriptions.md     # Moved from root
 ├── tools/                            # Development tools
 │   ├── editor.md                    # ~600 lines
-│   ├── deployer.md                  # ~650 lines
 │   └── external-tools.md            # ~850 lines
 ├── reference/                        # API documentation
 │   ├── javascript-apis.md           # Moved from root
 │   └── auth-api.md                  # Moved from AUTH_JS_API.md
 └── examples/                         # Practical examples
     ├── index.md                     # Existing
-    ├── deployer.md                  # Existing
     ├── basic-api.md                 # ~650 lines - NEW
     ├── forms-and-data.md            # ~800 lines - NEW
     ├── real-time-features.md        # ~750 lines - NEW
@@ -59,10 +57,9 @@ solution-developers/
 - **streaming.md**: Moved and enhanced
 - **graphql-subscriptions.md**: Moved and enhanced
 
-#### Tools (3 files - all new)
+#### Tools (2 files)
 
 - **editor.md**: Comprehensive web editor guide
-- **deployer.md**: CLI deployment tool documentation
 - **external-tools.md**: VS Code, Git, CI/CD integration
 
 #### Reference (2 files - moved)
@@ -241,7 +238,6 @@ Created comprehensive **archive/solution-developers/README.md** explaining:
 
 1. Guide's "Quick Reference" section
 2. Or reference/javascript-apis.md
-3. Or tools/deployer.md
 
 ## Documentation Quality
 
@@ -313,7 +309,6 @@ Created comprehensive **archive/solution-developers/README.md** explaining:
 ### Tools Documented
 
 - Web Editor (Monaco-based)
-- Deployer CLI
 - VS Code integration
 - Git integration
 - GitHub Actions
@@ -400,14 +395,13 @@ The documentation is now:
 7. solution-developers/guides/logging.md
 8. solution-developers/guides/ai-development.md
 9. solution-developers/tools/editor.md
-10. solution-developers/tools/deployer.md
-11. solution-developers/tools/external-tools.md
-12. solution-developers/examples/basic-api.md
-13. solution-developers/examples/forms-and-data.md
-14. solution-developers/examples/real-time-features.md
-15. solution-developers/examples/ai-integration.md
-16. archive/solution-developers/README.md
-17. DOCUMENTATION_RESTRUCTURE_COMPLETE.md (this file)
+10. solution-developers/tools/external-tools.md
+11. solution-developers/examples/basic-api.md
+12. solution-developers/examples/forms-and-data.md
+13. solution-developers/examples/real-time-features.md
+14. solution-developers/examples/ai-integration.md
+15. archive/solution-developers/README.md
+16. DOCUMENTATION_RESTRUCTURE_COMPLETE.md (this file)
 
 ### Modified (1 file)
 

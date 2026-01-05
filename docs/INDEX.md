@@ -66,7 +66,6 @@ routeRegistry.registerRoute("/hello", "helloHandler", "GET");
 | Document                                                      | Description                     |
 | ------------------------------------------------------------- | ------------------------------- |
 | [Web Editor](solution-developers/tools/editor.md)             | Comprehensive web editor guide  |
-| [Deployer CLI](solution-developers/tools/deployer.md)         | Command-line deployment tool    |
 | [External Tools](solution-developers/tools/external-tools.md) | VS Code, Git, CI/CD integration |
 
 #### API Reference
@@ -183,9 +182,6 @@ routeRegistry.registerRoute("/hello", "helloHandler", "GET");
 **Use the web editor**
 → Read [Web Editor Guide](solution-developers/tools/editor.md)
 
-**Deploy with CLI**
-→ Use [Deployer CLI](solution-developers/tools/deployer.md)
-
 **Troubleshoot issues**
 → Visit [Troubleshooting Guide](engine-administrators/06-TROUBLESHOOTING.md)
 
@@ -218,7 +214,6 @@ docs/
 │   │
 │   ├── tools/                        # Development tools
 │   │   ├── editor.md                 # Web editor comprehensive guide
-│   │   ├── deployer.md               # Deployer CLI tool
 │   │   └── external-tools.md         # VS Code, Git, CI/CD
 │   │
 │   ├── reference/                    # API reference documentation
@@ -227,7 +222,6 @@ docs/
 │   │
 │   └── examples/                     # Practical examples
 │       ├── index.md                  # Example scripts index
-│       ├── deployer.md               # Deployer tool usage
 │       ├── basic-api.md              # REST API patterns
 │       ├── forms-and-data.md         # Form handling examples
 │       ├── real-time-features.md     # Chat, notifications, streaming

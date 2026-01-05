@@ -82,7 +82,6 @@ solution-developers/
 │
 ├── tools/                            # Tool guides
 │   ├── editor.md
-│   ├── deployer.md
 │   └── external-tools.md
 │
 ├── reference/                        # API docs

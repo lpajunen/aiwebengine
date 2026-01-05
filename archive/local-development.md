@@ -1,6 +1,6 @@
 # Local Development
 
-This guide covers setting up your local development environment for aiwebengine, including writing JavaScript scripts and using the deployer tool for efficient development workflows.
+This guide covers setting up your local development environment for aiwebengine, including writing JavaScript scripts.
 
 ## Prerequisites
 
@@ -94,65 +94,6 @@ register("/api/users", "getUsersHandler", "GET");
 
 // POST /api/users
 register("/api/users", "createUserHandler", "POST");
-```
-
-## Using the Deployer Tool
-
-The deployer tool streamlines script development by automatically uploading scripts to a running server and watching for changes.
-
-### Building the Deployer
-
-```bash
-cargo build --release --bin deployer
-```
-
-### Basic Usage
-
-```bash
-# Deploy a script once
-cargo run --bin deployer --uri "https://example.com/my-script" --file "my-script.js"
-
-# Deploy and watch for changes
-cargo run --bin deployer --uri "https://example.com/my-script" --file "my-script.js" --watch
-```
-
-### Command Line Options
-
-- `-u, --uri <URI>`: Script URI (required)
-- `-f, --file <FILE>`: Path to JavaScript file (required)
-- `-s, --server <SERVER>`: Server URL (default: `http://localhost:3000`)
-- `-w, --watch`: Watch for file changes (default: true)
-
-### Development Workflow
-
-1. **Start the server** in one terminal:
-
-   ```bash
-   cargo run --bin server
-   ```
-
-2. **Start the deployer** in another terminal:
-
-   ```bash
-   cargo run --bin deployer \
-     --uri "https://example.com/my-feature" \
-     --file "src/my-feature.js" \
-     --watch
-   ```
-
-3. **Edit your script** - changes are automatically deployed on save
-
-4. **Test your endpoint** at `http://localhost:3000/my-feature`
-
-### Custom Server Configuration
-
-For servers on different ports or hosts:
-
-```bash
-cargo run --bin deployer \
-  --server "http://localhost:8080" \
-  --uri "https://example.com/test" \
-  --file "test.js"
 ```
 
 ## Built-in Functions
@@ -285,7 +226,6 @@ export SECRET_DATABASE_PASSWORD="dev-password"
 
 - Use `writeLog()` to output debug information
 - Check server logs for errors
-- The deployer provides feedback on deployment success/failure
 
 ## Testing Streaming Endpoints
 
@@ -344,11 +284,7 @@ register("/send-test", "sendTestMessage", "POST");
 
 ### Testing with Browser
 
-1. **Deploy the streaming script**:
-
-   ```bash
-   cargo run --bin deployer --uri "test-stream" --file "stream-test.js" --watch
-   ```
+1. **Deploy the streaming script** via the web editor or copy to scripts directory
 
 2. **Open the test page** in your browser:
 
