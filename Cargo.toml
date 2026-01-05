@@ -2,7 +2,6 @@
 name = "aiwebengine"
 version = "0.1.0"
 edition = "2024"
-default-run = "server"
 
 [dependencies]
 axum = { version = "0.8.4", features = ["ws"] }

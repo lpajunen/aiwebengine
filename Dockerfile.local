@@ -45,4 +45,4 @@ ENTRYPOINT ["/usr/local/bin/docker-entrypoint-local.sh"]
 
 # Default command: watch for changes and rebuild
 # Pass the config file explicitly to the server binary
-CMD ["cargo", "watch", "-x", "run --bin server -- -c /app/config.local.toml"]
+CMD ["cargo", "watch", "-x", "run -- -c /app/config.local.toml"]

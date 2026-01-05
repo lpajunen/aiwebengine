@@ -51,7 +51,7 @@ deps:
 
 # Run development server with auto-reload
 dev:
-	cargo watch -x 'run --bin server'
+	cargo watch -x 'run'
 
 # Run development server locally (with localhost OAuth redirect)
 dev-local:
