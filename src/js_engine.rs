@@ -9,6 +9,7 @@ use tracing::{debug, error, info, warn};
 use crate::repository;
 use crate::scheduler::ScheduledInvocation;
 use crate::security::UserContext;
+use crate::transpiler;
 
 // Use the enhanced secure globals implementation
 use crate::security::secure_globals::{GlobalSecurityConfig, SecureGlobalContext};
@@ -16,12 +17,9 @@ use crate::security::secure_globals::{GlobalSecurityConfig, SecureGlobalContext}
 // Type alias for route registrations map
 type RouteRegistrations = repository::RouteRegistrations;
 
-/// TODO: Transpilation stub - currently disabled due to SWC/OXC API compatibility issues
-/// TypeScript/JSX/TSX transpilation will be re-enabled once dependencies are stable
-fn transpile_if_needed(_uri: &str, content: &str) -> Result<String, String> {
-    // For now, just pass through the content without transpilation
-    // JSX factory functions (h, Fragment) are still available for manual use
-    Ok(content.to_string())
+/// Transpile TypeScript/JSX/TSX to JavaScript if needed
+fn transpile_if_needed(uri: &str, content: &str) -> Result<String, String> {
+    transpiler::transpile_if_needed(uri, content).map_err(|e| format!("Transpilation error: {}", e))
 }
 
 /// Extract detailed error information from a rquickjs::Error
@@ -908,11 +906,11 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                                 None, // No auth context during script registration
                                 None, // No secrets manager yet
                             )?;
-                            
+
                             // Transpile if needed (TypeScript/JSX/TSX)
                             let executable_code = transpile_if_needed(&uri_owned, content)
                                 .map_err(|_e| rquickjs::Error::Exception)?;
-                            
+
                             // Execute the script
                             ctx.eval::<(), _>(executable_code.as_str())?;
                             Ok(())
@@ -1573,8 +1571,10 @@ pub fn execute_mcp_prompt_handler(
             .ok_or_else(|| rquickjs::Error::new_from_js("Script", "not found"))?;
 
         // Transpile if needed (TypeScript/JSX/TSX)
-        let executable_code = transpile_if_needed(&script_uri_owned, &script_content)
-            .map_err(|e| rquickjs::Error::new_from_js("transpile", Box::leak(e.into_boxed_str())))?;
+        let executable_code =
+            transpile_if_needed(&script_uri_owned, &script_content).map_err(|e| {
+                rquickjs::Error::new_from_js("transpile", Box::leak(e.into_boxed_str()))
+            })?;
 
         // Execute the script
         ctx.eval::<(), _>(executable_code.as_str())?;
@@ -1658,8 +1658,10 @@ pub fn execute_mcp_tool_handler(
             .ok_or_else(|| rquickjs::Error::new_from_js("Script", "not found"))?;
 
         // Transpile if needed (TypeScript/JSX/TSX)
-        let executable_code = transpile_if_needed(&script_uri_owned, &script_content)
-            .map_err(|e| rquickjs::Error::new_from_js("transpile", Box::leak(e.into_boxed_str())))?;
+        let executable_code =
+            transpile_if_needed(&script_uri_owned, &script_content).map_err(|e| {
+                rquickjs::Error::new_from_js("transpile", Box::leak(e.into_boxed_str()))
+            })?;
 
         // Execute the script
         ctx.eval::<(), _>(executable_code.as_str())?;
@@ -1792,8 +1794,10 @@ pub fn execute_stream_customization_function(
                 .ok_or_else(|| rquickjs::Error::new_from_js("Script", "not found"))?;
 
             // Transpile if needed (TypeScript/JSX/TSX)
-            let executable_code = transpile_if_needed(&script_uri_owned, &script_content)
-                .map_err(|e| rquickjs::Error::new_from_js("transpile", Box::leak(e.into_boxed_str())))?;
+            let executable_code =
+                transpile_if_needed(&script_uri_owned, &script_content).map_err(|e| {
+                    rquickjs::Error::new_from_js("transpile", Box::leak(e.into_boxed_str()))
+                })?;
 
             ctx.eval::<(), _>(executable_code.as_str())?;
 

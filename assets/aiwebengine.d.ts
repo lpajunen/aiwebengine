@@ -1525,9 +1525,27 @@ declare namespace JSX {
   }
 
   interface InputAttributes extends HtmlAttributes {
-    type?: "text" | "password" | "email" | "number" | "tel" | "url" | "search" | 
-           "date" | "time" | "datetime-local" | "month" | "week" | "color" |
-           "file" | "checkbox" | "radio" | "submit" | "reset" | "button" | "hidden";
+    type?:
+      | "text"
+      | "password"
+      | "email"
+      | "number"
+      | "tel"
+      | "url"
+      | "search"
+      | "date"
+      | "time"
+      | "datetime-local"
+      | "month"
+      | "week"
+      | "color"
+      | "file"
+      | "checkbox"
+      | "radio"
+      | "submit"
+      | "reset"
+      | "button"
+      | "hidden";
     name?: string;
     value?: string | number;
     placeholder?: string;
@@ -1559,7 +1577,10 @@ declare namespace JSX {
   interface FormAttributes extends HtmlAttributes {
     action?: string;
     method?: "get" | "post";
-    enctype?: "application/x-www-form-urlencoded" | "multipart/form-data" | "text/plain";
+    enctype?:
+      | "application/x-www-form-urlencoded"
+      | "multipart/form-data"
+      | "text/plain";
     target?: "_blank" | "_self" | "_parent" | "_top";
     autocomplete?: "on" | "off";
     novalidate?: boolean;
