@@ -1304,3 +1304,483 @@ declare var ResponseBuilder: {
    */
   redirect(location: string): HttpResponse;
 };
+
+// ============================================================================
+// JSX Support for Server-Side HTML Generation
+// ============================================================================
+
+/**
+ * JSX factory function for creating HTML elements
+ * @param tag - HTML tag name or component function
+ * @param props - Element attributes and properties
+ * @param children - Child elements
+ * @returns HTML string
+ * @example
+ * const element = <div className="container">Hello</div>;
+ */
+declare function h(
+  tag: string | Function,
+  props: Record<string, any> | null,
+  ...children: any[]
+): string;
+
+/**
+ * Fragment component for grouping elements without a wrapper
+ * @param props - Props (typically null or contains children)
+ * @param children - Child elements
+ * @returns HTML string
+ * @example
+ * const list = <>
+ *   <li>Item 1</li>
+ *   <li>Item 2</li>
+ * </>;
+ */
+declare function Fragment(
+  props: { children?: any } | null,
+  ...children: any[]
+): string;
+
+/**
+ * JSX namespace for TypeScript JSX type checking
+ */
+declare namespace JSX {
+  /**
+   * JSX elements are rendered as HTML strings
+   */
+  type Element = string;
+
+  /**
+   * Intrinsic HTML elements with their attributes
+   */
+  interface IntrinsicElements {
+    // Document metadata
+    html: HtmlAttributes;
+    head: HtmlAttributes;
+    title: HtmlAttributes;
+    meta: MetaAttributes;
+    link: LinkAttributes;
+    style: StyleAttributes;
+    script: ScriptAttributes;
+    base: BaseAttributes;
+
+    // Content sectioning
+    body: HtmlAttributes;
+    header: HtmlAttributes;
+    nav: HtmlAttributes;
+    main: HtmlAttributes;
+    section: HtmlAttributes;
+    article: HtmlAttributes;
+    aside: HtmlAttributes;
+    footer: HtmlAttributes;
+    h1: HtmlAttributes;
+    h2: HtmlAttributes;
+    h3: HtmlAttributes;
+    h4: HtmlAttributes;
+    h5: HtmlAttributes;
+    h6: HtmlAttributes;
+
+    // Text content
+    div: HtmlAttributes;
+    p: HtmlAttributes;
+    span: HtmlAttributes;
+    pre: HtmlAttributes;
+    blockquote: HtmlAttributes;
+    ul: HtmlAttributes;
+    ol: HtmlAttributes;
+    li: HtmlAttributes;
+    dl: HtmlAttributes;
+    dt: HtmlAttributes;
+    dd: HtmlAttributes;
+    hr: HtmlAttributes;
+    br: HtmlAttributes;
+
+    // Inline text semantics
+    a: AnchorAttributes;
+    abbr: HtmlAttributes;
+    b: HtmlAttributes;
+    strong: HtmlAttributes;
+    em: HtmlAttributes;
+    i: HtmlAttributes;
+    code: HtmlAttributes;
+    kbd: HtmlAttributes;
+    mark: HtmlAttributes;
+    q: HtmlAttributes;
+    s: HtmlAttributes;
+    small: HtmlAttributes;
+    sub: HtmlAttributes;
+    sup: HtmlAttributes;
+    time: TimeAttributes;
+    u: HtmlAttributes;
+    var: HtmlAttributes;
+
+    // Image and multimedia
+    img: ImageAttributes;
+    audio: AudioAttributes;
+    video: VideoAttributes;
+    source: SourceAttributes;
+    track: TrackAttributes;
+    canvas: CanvasAttributes;
+    picture: HtmlAttributes;
+
+    // Embedded content
+    iframe: IframeAttributes;
+    embed: EmbedAttributes;
+    object: ObjectAttributes;
+    param: ParamAttributes;
+
+    // Forms
+    form: FormAttributes;
+    input: InputAttributes;
+    textarea: TextareaAttributes;
+    button: ButtonAttributes;
+    select: SelectAttributes;
+    option: OptionAttributes;
+    optgroup: OptgroupAttributes;
+    label: LabelAttributes;
+    fieldset: FieldsetAttributes;
+    legend: HtmlAttributes;
+    datalist: HtmlAttributes;
+    output: OutputAttributes;
+    progress: ProgressAttributes;
+    meter: MeterAttributes;
+
+    // Tables
+    table: TableAttributes;
+    thead: HtmlAttributes;
+    tbody: HtmlAttributes;
+    tfoot: HtmlAttributes;
+    tr: HtmlAttributes;
+    th: ThAttributes;
+    td: TdAttributes;
+    col: ColAttributes;
+    colgroup: ColgroupAttributes;
+    caption: HtmlAttributes;
+
+    // Interactive elements
+    details: DetailsAttributes;
+    summary: HtmlAttributes;
+    dialog: DialogAttributes;
+    menu: MenuAttributes;
+  }
+
+  /**
+   * Common HTML attributes shared by all elements
+   */
+  interface HtmlAttributes {
+    // Global attributes
+    id?: string;
+    className?: string;
+    class?: string;
+    style?: string | Record<string, string>;
+    title?: string;
+    lang?: string;
+    dir?: "ltr" | "rtl" | "auto";
+    hidden?: boolean;
+    tabIndex?: number;
+    accessKey?: string;
+    contentEditable?: boolean | "true" | "false";
+    draggable?: boolean;
+    spellCheck?: boolean;
+    translate?: "yes" | "no";
+
+    // ARIA attributes
+    role?: string;
+    "aria-label"?: string;
+    "aria-labelledby"?: string;
+    "aria-describedby"?: string;
+    "aria-hidden"?: boolean;
+    "aria-expanded"?: boolean;
+    "aria-selected"?: boolean;
+    "aria-checked"?: boolean;
+    "aria-disabled"?: boolean;
+    "aria-readonly"?: boolean;
+    "aria-required"?: boolean;
+    "aria-invalid"?: boolean;
+    "aria-live"?: "polite" | "assertive" | "off";
+
+    // Data attributes
+    [key: `data-${string}`]: string | number | boolean;
+
+    // Children
+    children?: any;
+  }
+
+  interface AnchorAttributes extends HtmlAttributes {
+    href?: string;
+    target?: "_blank" | "_self" | "_parent" | "_top";
+    rel?: string;
+    download?: string | boolean;
+    hreflang?: string;
+    type?: string;
+  }
+
+  interface ImageAttributes extends HtmlAttributes {
+    src?: string;
+    alt?: string;
+    width?: number | string;
+    height?: number | string;
+    loading?: "lazy" | "eager";
+    decoding?: "async" | "sync" | "auto";
+    crossOrigin?: "anonymous" | "use-credentials";
+  }
+
+  interface InputAttributes extends HtmlAttributes {
+    type?: "text" | "password" | "email" | "number" | "tel" | "url" | "search" | 
+           "date" | "time" | "datetime-local" | "month" | "week" | "color" |
+           "file" | "checkbox" | "radio" | "submit" | "reset" | "button" | "hidden";
+    name?: string;
+    value?: string | number;
+    placeholder?: string;
+    required?: boolean;
+    disabled?: boolean;
+    readonly?: boolean;
+    checked?: boolean;
+    min?: number | string;
+    max?: number | string;
+    step?: number | string;
+    minLength?: number;
+    maxLength?: number;
+    pattern?: string;
+    autocomplete?: string;
+    autofocus?: boolean;
+    multiple?: boolean;
+    accept?: string;
+  }
+
+  interface ButtonAttributes extends HtmlAttributes {
+    type?: "button" | "submit" | "reset";
+    name?: string;
+    value?: string;
+    disabled?: boolean;
+    autofocus?: boolean;
+    form?: string;
+  }
+
+  interface FormAttributes extends HtmlAttributes {
+    action?: string;
+    method?: "get" | "post";
+    enctype?: "application/x-www-form-urlencoded" | "multipart/form-data" | "text/plain";
+    target?: "_blank" | "_self" | "_parent" | "_top";
+    autocomplete?: "on" | "off";
+    novalidate?: boolean;
+  }
+
+  interface TextareaAttributes extends HtmlAttributes {
+    name?: string;
+    value?: string;
+    placeholder?: string;
+    rows?: number;
+    cols?: number;
+    required?: boolean;
+    disabled?: boolean;
+    readonly?: boolean;
+    minLength?: number;
+    maxLength?: number;
+    wrap?: "hard" | "soft";
+    autofocus?: boolean;
+  }
+
+  interface SelectAttributes extends HtmlAttributes {
+    name?: string;
+    value?: string;
+    required?: boolean;
+    disabled?: boolean;
+    multiple?: boolean;
+    size?: number;
+    autofocus?: boolean;
+  }
+
+  interface OptionAttributes extends HtmlAttributes {
+    value?: string;
+    selected?: boolean;
+    disabled?: boolean;
+    label?: string;
+  }
+
+  interface LabelAttributes extends HtmlAttributes {
+    for?: string;
+    form?: string;
+  }
+
+  interface TableAttributes extends HtmlAttributes {
+    border?: number | string;
+    cellPadding?: number | string;
+    cellSpacing?: number | string;
+  }
+
+  interface ThAttributes extends HtmlAttributes {
+    scope?: "row" | "col" | "rowgroup" | "colgroup";
+    colspan?: number;
+    rowspan?: number;
+    headers?: string;
+  }
+
+  interface TdAttributes extends HtmlAttributes {
+    colspan?: number;
+    rowspan?: number;
+    headers?: string;
+  }
+
+  interface ColAttributes extends HtmlAttributes {
+    span?: number;
+  }
+
+  interface ColgroupAttributes extends HtmlAttributes {
+    span?: number;
+  }
+
+  interface MetaAttributes extends HtmlAttributes {
+    name?: string;
+    content?: string;
+    charset?: string;
+    httpEquiv?: string;
+  }
+
+  interface LinkAttributes extends HtmlAttributes {
+    href?: string;
+    rel?: string;
+    type?: string;
+    media?: string;
+    as?: string;
+    crossOrigin?: "anonymous" | "use-credentials";
+  }
+
+  interface StyleAttributes extends HtmlAttributes {
+    type?: string;
+    media?: string;
+  }
+
+  interface ScriptAttributes extends HtmlAttributes {
+    src?: string;
+    type?: string;
+    async?: boolean;
+    defer?: boolean;
+    crossOrigin?: "anonymous" | "use-credentials";
+    integrity?: string;
+    nomodule?: boolean;
+  }
+
+  interface BaseAttributes extends HtmlAttributes {
+    href?: string;
+    target?: string;
+  }
+
+  interface AudioAttributes extends HtmlAttributes {
+    src?: string;
+    autoplay?: boolean;
+    controls?: boolean;
+    loop?: boolean;
+    muted?: boolean;
+    preload?: "none" | "metadata" | "auto";
+  }
+
+  interface VideoAttributes extends AudioAttributes {
+    width?: number | string;
+    height?: number | string;
+    poster?: string;
+  }
+
+  interface SourceAttributes extends HtmlAttributes {
+    src?: string;
+    type?: string;
+    media?: string;
+  }
+
+  interface TrackAttributes extends HtmlAttributes {
+    src?: string;
+    kind?: "subtitles" | "captions" | "descriptions" | "chapters" | "metadata";
+    srclang?: string;
+    label?: string;
+    default?: boolean;
+  }
+
+  interface CanvasAttributes extends HtmlAttributes {
+    width?: number | string;
+    height?: number | string;
+  }
+
+  interface IframeAttributes extends HtmlAttributes {
+    src?: string;
+    srcdoc?: string;
+    width?: number | string;
+    height?: number | string;
+    name?: string;
+    sandbox?: string;
+    allow?: string;
+    loading?: "lazy" | "eager";
+  }
+
+  interface EmbedAttributes extends HtmlAttributes {
+    src?: string;
+    type?: string;
+    width?: number | string;
+    height?: number | string;
+  }
+
+  interface ObjectAttributes extends HtmlAttributes {
+    data?: string;
+    type?: string;
+    width?: number | string;
+    height?: number | string;
+    name?: string;
+  }
+
+  interface ParamAttributes extends HtmlAttributes {
+    name?: string;
+    value?: string;
+  }
+
+  interface TimeAttributes extends HtmlAttributes {
+    datetime?: string;
+  }
+
+  interface FieldsetAttributes extends HtmlAttributes {
+    disabled?: boolean;
+    form?: string;
+    name?: string;
+  }
+
+  interface OptgroupAttributes extends HtmlAttributes {
+    disabled?: boolean;
+    label?: string;
+  }
+
+  interface OutputAttributes extends HtmlAttributes {
+    for?: string;
+    form?: string;
+    name?: string;
+  }
+
+  interface ProgressAttributes extends HtmlAttributes {
+    value?: number;
+    max?: number;
+  }
+
+  interface MeterAttributes extends HtmlAttributes {
+    value?: number;
+    min?: number;
+    max?: number;
+    low?: number;
+    high?: number;
+    optimum?: number;
+  }
+
+  interface DetailsAttributes extends HtmlAttributes {
+    open?: boolean;
+  }
+
+  interface DialogAttributes extends HtmlAttributes {
+    open?: boolean;
+  }
+
+  interface MenuAttributes extends HtmlAttributes {
+    type?: "context" | "toolbar";
+  }
+
+  /**
+   * Allows components to specify which prop contains children
+   */
+  interface ElementChildrenAttribute {
+    children: {};
+  }
+}

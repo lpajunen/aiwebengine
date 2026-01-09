@@ -16,6 +16,14 @@ use crate::security::secure_globals::{GlobalSecurityConfig, SecureGlobalContext}
 // Type alias for route registrations map
 type RouteRegistrations = repository::RouteRegistrations;
 
+/// TODO: Transpilation stub - currently disabled due to SWC/OXC API compatibility issues
+/// TypeScript/JSX/TSX transpilation will be re-enabled once dependencies are stable
+fn transpile_if_needed(_uri: &str, content: &str) -> Result<String, String> {
+    // For now, just pass through the content without transpilation
+    // JSX factory functions (h, Fragment) are still available for manual use
+    Ok(content.to_string())
+}
+
 /// Extract detailed error information from a rquickjs::Error
 ///
 /// QuickJS errors often include line numbers and column information in their
@@ -778,8 +786,21 @@ pub fn execute_script_secure(
                         None, // No secrets manager yet
                     )?;
 
+                    // Transpile if needed (TypeScript/JSX/TSX)
+                    let executable_code = match transpile_if_needed(&uri_owned, content) {
+                        Ok(code) => code,
+                        Err(e) => {
+                            let error_msg = format!("Transpilation failed: {}", e);
+                            if let Ok(mut error_ref) = error_details_clone.try_borrow_mut() {
+                                *error_ref = Some(error_msg.clone());
+                            }
+                            let static_msg: &'static str = Box::leak(error_msg.into_boxed_str());
+                            return Err(rquickjs::Error::new_from_js("transpilation", static_msg));
+                        }
+                    };
+
                     // Execute the script
-                    let eval_result = ctx.eval::<(), _>(content);
+                    let eval_result = ctx.eval::<(), _>(executable_code.as_str());
 
                     // If there was an error, capture detailed information
                     if let Err(ref e) = eval_result {
@@ -886,8 +907,14 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                                 Some(register_impl),
                                 None, // No auth context during script registration
                                 None, // No secrets manager yet
-                            )?; // Execute the script
-                            ctx.eval::<(), _>(content)?;
+                            )?;
+                            
+                            // Transpile if needed (TypeScript/JSX/TSX)
+                            let executable_code = transpile_if_needed(&uri_owned, content)
+                                .map_err(|_e| rquickjs::Error::Exception)?;
+                            
+                            // Execute the script
+                            ctx.eval::<(), _>(executable_code.as_str())?;
                             Ok(())
                         });
 
@@ -1021,9 +1048,12 @@ pub fn execute_script_for_request_secure(
     let owner_script = repository::fetch_script(&params.script_uri)
         .ok_or_else(|| format!("no script for uri {}", params.script_uri))?;
 
+    // Transpile if needed (TypeScript/JSX/TSX)
+    let executable_code = transpile_if_needed(&params.script_uri, &owner_script)?;
+
     // Evaluate the script and capture detailed error information if it fails
     ctx.with(|ctx| -> Result<(), String> {
-        let result = ctx.eval::<(), _>(owner_script.as_str());
+        let result = ctx.eval::<(), _>(executable_code.as_str());
         if let Err(ref e) = result {
             let details = extract_error_details(&ctx, e);
             return Err(format!("owner eval: {}", details));
@@ -1208,7 +1238,10 @@ pub fn execute_script_for_request(
     let owner_script = repository::fetch_script(script_uri)
         .ok_or_else(|| format!("no script for uri {}", script_uri))?;
 
-    ctx.with(|ctx| ctx.eval::<(), _>(owner_script.as_str()))
+    // Transpile if needed (TypeScript/JSX/TSX)
+    let executable_code = transpile_if_needed(script_uri, &owner_script)?;
+
+    ctx.with(|ctx| ctx.eval::<(), _>(executable_code.as_str()))
         .map_err(|e| format!("owner eval: {}", e))?;
 
     let (status, body, content_type) =
@@ -1304,8 +1337,11 @@ pub fn execute_scheduled_handler(
     let owner_script = repository::fetch_script(script_uri)
         .ok_or_else(|| format!("no script for uri {}", script_uri))?;
 
+    // Transpile if needed (TypeScript/JSX/TSX)
+    let executable_code = transpile_if_needed(script_uri, &owner_script)?;
+
     ctx.with(|ctx| {
-        ctx.eval::<(), _>(owner_script.as_str()).map_err(|e| {
+        ctx.eval::<(), _>(executable_code.as_str()).map_err(|e| {
             let details = extract_error_details(&ctx, &e);
             format!("script eval: {}", details)
         })
@@ -1536,8 +1572,12 @@ pub fn execute_mcp_prompt_handler(
         let script_content = repository::fetch_script(&script_uri_owned)
             .ok_or_else(|| rquickjs::Error::new_from_js("Script", "not found"))?;
 
+        // Transpile if needed (TypeScript/JSX/TSX)
+        let executable_code = transpile_if_needed(&script_uri_owned, &script_content)
+            .map_err(|e| rquickjs::Error::new_from_js("transpile", Box::leak(e.into_boxed_str())))?;
+
         // Execute the script
-        ctx.eval::<(), _>(script_content.as_str())?;
+        ctx.eval::<(), _>(executable_code.as_str())?;
 
         // Get the handler function
         let handler_result: rquickjs::Value = ctx.globals().get(&handler_function_owned)?;
@@ -1617,8 +1657,12 @@ pub fn execute_mcp_tool_handler(
         let script_content = repository::fetch_script(&script_uri_owned)
             .ok_or_else(|| rquickjs::Error::new_from_js("Script", "not found"))?;
 
+        // Transpile if needed (TypeScript/JSX/TSX)
+        let executable_code = transpile_if_needed(&script_uri_owned, &script_content)
+            .map_err(|e| rquickjs::Error::new_from_js("transpile", Box::leak(e.into_boxed_str())))?;
+
         // Execute the script
-        ctx.eval::<(), _>(script_content.as_str())?;
+        ctx.eval::<(), _>(executable_code.as_str())?;
 
         let handler_result: rquickjs::Value = ctx.globals().get(&handler_function_owned)?;
         let handler_func = handler_result
@@ -1747,7 +1791,11 @@ pub fn execute_stream_customization_function(
             let script_content = repository::fetch_script(&script_uri_owned)
                 .ok_or_else(|| rquickjs::Error::new_from_js("Script", "not found"))?;
 
-            ctx.eval::<(), _>(script_content.as_str())?;
+            // Transpile if needed (TypeScript/JSX/TSX)
+            let executable_code = transpile_if_needed(&script_uri_owned, &script_content)
+                .map_err(|e| rquickjs::Error::new_from_js("transpile", Box::leak(e.into_boxed_str())))?;
+
+            ctx.eval::<(), _>(executable_code.as_str())?;
 
             let request_context = JsRequestContext {
                 path: Some(path_owned.clone()),
@@ -1932,8 +1980,21 @@ pub fn call_init_if_exists(
             }
             setup_result?;
 
+            // Transpile if needed (TypeScript/JSX/TSX)
+            let executable_code = match transpile_if_needed(script_uri, script_content) {
+                Ok(code) => code,
+                Err(e) => {
+                    let error_msg = format!("Transpilation failed: {}", e);
+                    if let Ok(mut error_ref) = error_details_clone.try_borrow_mut() {
+                        *error_ref = Some(error_msg.clone());
+                    }
+                    let static_msg: &'static str = Box::leak(error_msg.into_boxed_str());
+                    return Err(rquickjs::Error::new_from_js("transpilation", static_msg));
+                }
+            };
+
             // Execute the script to define functions
-            let eval_result = ctx.eval::<(), _>(script_content);
+            let eval_result = ctx.eval::<(), _>(executable_code.as_str());
             if let Err(ref e) = eval_result {
                 let details = extract_error_details(&ctx, e);
                 if let Ok(mut error_ref) = error_details_clone.try_borrow_mut() {

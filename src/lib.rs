@@ -36,6 +36,8 @@ pub mod security;
 pub mod stream_manager;
 pub mod stream_registry;
 pub mod user_repository;
+// TODO: TypeScript/JSX transpilation - currently disabled due to API compatibility issues
+// pub mod transpiler;
 
 // Authentication module (Phase 1 - Core Infrastructure)
 pub mod auth;

@@ -198,6 +198,8 @@ impl ScriptMetadata {
         self.init_error = None;
         // Clear cached registrations when content changes
         self.registrations.clear();
+        // TODO: Invalidate transpilation cache when transpiler is re-enabled
+        // crate::transpiler::invalidate_transpilation_cache(&self.uri);
     }
 }
 
