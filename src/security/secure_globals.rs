@@ -5159,184 +5159,98 @@ fn ensure_scheduler_privileged(script_uri: &str) -> Result<(), String> {
 impl SecureGlobalContext {
     /// Setup JSX factory functions for server-side HTML generation
     fn setup_jsx_functions(&self, ctx: &rquickjs::Ctx<'_>) -> JsResult<()> {
-        let global = ctx.globals();
-
-        // Setup the h() function for JSX element creation
-        let h_fn = Function::new(
-            ctx.clone(),
-            |_ctx: rquickjs::Ctx<'_>,
-             tag: String,
-             props: rquickjs::Value,
-             children: rquickjs::Value|
-             -> JsResult<String> {
-                // Handle function components (not implemented for now - just error)
-                // For now, only support string tags (HTML elements)
-
+        // Define the h() function and Fragment in JavaScript to properly handle variadic arguments
+        // This approach is more compatible with how JSX transpilation works
+        ctx.eval::<(), _>(
+            r#"
+            globalThis.h = function(tag, props, ...children) {
                 // Build attributes string from props
-                let attrs_str = if props.is_null() || props.is_undefined() {
-                    String::new()
-                } else if let Some(props_obj) = props.as_object() {
-                    let mut attrs = Vec::new();
-
-                    for key_str in props_obj.keys::<String>().flatten() {
-                        // Skip special props
-                        if key_str == "children" {
-                            continue;
-                        }
-
-                        // Validate attribute name (basic XSS protection)
-                        if !is_valid_attribute_name(&key_str) {
-                            continue;
-                        }
-
-                        // Sanitize dangerous event handlers
-                        if is_dangerous_attribute(&key_str) {
-                            continue;
-                        }
-
-                        // Get attribute value
-                        if let Ok(val) = props_obj.get::<&str, rquickjs::Value>(&key_str) {
-                            let val_str = if val.is_string() {
-                                val.as_string()
-                                    .and_then(|s| s.to_string().ok())
-                                    .unwrap_or_default()
-                            } else if val.is_bool() {
-                                if val.as_bool().unwrap_or(false) {
-                                    // Boolean true attribute
-                                    attrs.push(format!(" {}", key_str));
-                                    continue;
-                                } else {
-                                    // Boolean false - skip attribute
-                                    continue;
-                                }
-                            } else {
-                                format!("{:?}", val)
-                            };
-
+                let attrsStr = '';
+                if (props && typeof props === 'object' && !Array.isArray(props)) {
+                    for (const key in props) {
+                        if (key === 'children') continue;
+                        
+                        // Basic attribute validation (prevent XSS)
+                        if (!/^[a-zA-Z][a-zA-Z0-9\-]*$/.test(key)) continue;
+                        
+                        // Skip dangerous event handlers
+                        if (/^on/i.test(key)) continue;
+                        
+                        const value = props[key];
+                        if (typeof value === 'boolean') {
+                            if (value) {
+                                attrsStr += ' ' + key;
+                            }
+                        } else {
                             // HTML escape the attribute value
-                            let escaped = html_escape::encode_double_quoted_attribute(&val_str);
-                            attrs.push(format!(" {}=\"{}\"", key_str, escaped));
+                            const escaped = String(value)
+                                .replace(/&/g, '&amp;')
+                                .replace(/"/g, '&quot;')
+                                .replace(/'/g, '&#x27;')
+                                .replace(/</g, '&lt;')
+                                .replace(/>/g, '&gt;');
+                            attrsStr += ' ' + key + '="' + escaped + '"';
                         }
                     }
-
-                    attrs.join("")
-                } else {
-                    String::new()
-                };
-
-                // Process children
-                let children_html = stringify_children(&_ctx, children)?;
-
-                // Self-closing tags
-                if is_self_closing_tag(&tag) {
-                    return Ok(format!("<{}{}/>", tag, attrs_str));
                 }
-
+                
+                // Process children
+                const processChildren = (items) => {
+                    return items.map(child => {
+                        if (child === null || child === undefined) return '';
+                        if (typeof child === 'string') {
+                            // HTML escape text content
+                            return child
+                                .replace(/&/g, '&amp;')
+                                .replace(/</g, '&lt;')
+                                .replace(/>/g, '&gt;')
+                                .replace(/"/g, '&quot;')
+                                .replace(/'/g, '&#x27;');
+                        }
+                        if (Array.isArray(child)) {
+                            return processChildren(child);
+                        }
+                        return String(child);
+                    }).join('');
+                };
+                
+                const childrenHtml = processChildren(children);
+                
+                // Self-closing tags
+                const selfClosing = ['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 
+                    'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'];
+                if (selfClosing.includes(tag)) {
+                    return '<' + tag + attrsStr + '/>';
+                }
+                
                 // Regular tags with children
-                Ok(format!("<{}{}>{}</{}>", tag, attrs_str, children_html, tag))
-            },
-        )?;
-
-        global.set("h", h_fn)?;
-
-        // Setup the Fragment function
-        let fragment_fn = Function::new(
-            ctx.clone(),
-            |_ctx: rquickjs::Ctx<'_>,
-             _props: rquickjs::Value,
-             children: rquickjs::Value|
-             -> JsResult<String> {
+                return '<' + tag + attrsStr + '>' + childrenHtml + '</' + tag + '>';
+            };
+            
+            globalThis.Fragment = function(props, ...children) {
                 // Fragment just returns children without a wrapper
-                stringify_children(&_ctx, children)
-            },
+                const processChildren = (items) => {
+                    return items.map(child => {
+                        if (child === null || child === undefined) return '';
+                        if (typeof child === 'string') {
+                            return child
+                                .replace(/&/g, '&amp;')
+                                .replace(/</g, '&lt;')
+                                .replace(/>/g, '&gt;')
+                                .replace(/"/g, '&quot;')
+                                .replace(/'/g, '&#x27;');
+                        }
+                        if (Array.isArray(child)) {
+                            return processChildren(child);
+                        }
+                        return String(child);
+                    }).join('');
+                };
+                return processChildren(children);
+            };
+            "#,
         )?;
-
-        global.set("Fragment", fragment_fn)?;
 
         Ok(())
     }
-}
-
-/// Validate attribute name to prevent XSS
-fn is_valid_attribute_name(name: &str) -> bool {
-    // Allow alphanumeric, dash, and underscore
-    name.chars()
-        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-}
-
-/// Check if attribute is dangerous (event handlers, javascript: URLs)
-fn is_dangerous_attribute(name: &str) -> bool {
-    let lower = name.to_lowercase();
-    lower.starts_with("on") // onclick, onload, onerror, etc.
-}
-
-/// Check if tag is self-closing
-fn is_self_closing_tag(tag: &str) -> bool {
-    matches!(
-        tag,
-        "area"
-            | "base"
-            | "br"
-            | "col"
-            | "embed"
-            | "hr"
-            | "img"
-            | "input"
-            | "link"
-            | "meta"
-            | "param"
-            | "source"
-            | "track"
-            | "wbr"
-    )
-}
-
-/// Convert children to HTML string
-fn stringify_children(ctx: &rquickjs::Ctx<'_>, children: rquickjs::Value) -> JsResult<String> {
-    if children.is_null() || children.is_undefined() {
-        return Ok(String::new());
-    }
-
-    if let Some(arr) = children.as_array() {
-        let mut result = String::new();
-        let len = arr.len();
-        for i in 0..len {
-            if let Ok(child) = arr.get::<rquickjs::Value>(i) {
-                result.push_str(&child_to_string(ctx, child)?);
-            }
-        }
-        Ok(result)
-    } else {
-        child_to_string(ctx, children)
-    }
-}
-
-/// Convert a single child value to HTML string
-fn child_to_string(_ctx: &rquickjs::Ctx<'_>, child: rquickjs::Value) -> JsResult<String> {
-    if child.is_null() || child.is_undefined() {
-        return Ok(String::new());
-    }
-
-    if child.is_string()
-        && let Some(s) = child.as_string()
-        && let Ok(text) = s.to_string()
-    {
-        // HTML escape text content
-        return Ok(html_escape::encode_text(&text).to_string());
-    }
-
-    if child.is_number()
-        && let Some(n) = child.as_number()
-    {
-        return Ok(n.to_string());
-    }
-
-    if child.is_bool()
-        && let Some(b) = child.as_bool()
-    {
-        return Ok(b.to_string());
-    }
-
-    // For other types (objects, arrays), convert to debug string
-    Ok(format!("{:?}", child))
 }
