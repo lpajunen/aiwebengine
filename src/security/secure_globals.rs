@@ -5163,7 +5163,35 @@ impl SecureGlobalContext {
         // This approach is more compatible with how JSX transpilation works
         ctx.eval::<(), _>(
             r#"
+            // Helper to mark HTML as safe (already escaped)
+            function SafeHTML(html) {
+                this.__html = html;
+                this.__safe = true;
+            }
+            SafeHTML.prototype.toString = function() {
+                return this.__html;
+            };
+            SafeHTML.prototype.valueOf = function() {
+                return this.__html;
+            };
+            // Make it JSON-serializable
+            SafeHTML.prototype.toJSON = function() {
+                return this.__html;
+            };
+            
             globalThis.h = function(tag, props, ...children) {
+                // Handle function components (React-style components)
+                if (typeof tag === 'function') {
+                    // Merge children into props if they exist
+                    const componentProps = props || {};
+                    if (children.length > 0) {
+                        componentProps.children = children.length === 1 ? children[0] : children;
+                    }
+                    // Call the component function and return its result
+                    return tag(componentProps);
+                }
+                
+                // Handle HTML elements (string tags)
                 // Build attributes string from props
                 let attrsStr = '';
                 if (props && typeof props === 'object' && !Array.isArray(props)) {
@@ -5198,8 +5226,19 @@ impl SecureGlobalContext {
                 const processChildren = (items) => {
                     return items.map(child => {
                         if (child === null || child === undefined) return '';
+                        
+                        // Check if it's safe HTML (from another h() call)
+                        if (child && typeof child === 'object' && child.__safe) {
+                            return child.__html;
+                        }
+                        
+                        // Check if it's already a SafeHTML result (happens with component returns)
+                        if (child instanceof SafeHTML) {
+                            return child.__html;
+                        }
+                        
                         if (typeof child === 'string') {
-                            // HTML escape text content
+                            // HTML escape text content (this is raw text from JSX)
                             return child
                                 .replace(/&/g, '&amp;')
                                 .replace(/</g, '&lt;')
@@ -5220,11 +5259,11 @@ impl SecureGlobalContext {
                 const selfClosing = ['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 
                     'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'];
                 if (selfClosing.includes(tag)) {
-                    return '<' + tag + attrsStr + '/>';
+                    return new SafeHTML('<' + tag + attrsStr + '/>');
                 }
                 
-                // Regular tags with children
-                return '<' + tag + attrsStr + '>' + childrenHtml + '</' + tag + '>';
+                // Regular tags with children - return as SafeHTML to prevent double-escaping
+                return new SafeHTML('<' + tag + attrsStr + '>' + childrenHtml + '</' + tag + '>');
             };
             
             globalThis.Fragment = function(props, ...children) {
@@ -5232,6 +5271,15 @@ impl SecureGlobalContext {
                 const processChildren = (items) => {
                     return items.map(child => {
                         if (child === null || child === undefined) return '';
+                        
+                        // Check if it's safe HTML
+                        if (child && typeof child === 'object' && child.__safe) {
+                            return child.__html;
+                        }
+                        if (child instanceof SafeHTML) {
+                            return child.__html;
+                        }
+                        
                         if (typeof child === 'string') {
                             return child
                                 .replace(/&/g, '&amp;')
@@ -5246,7 +5294,7 @@ impl SecureGlobalContext {
                         return String(child);
                     }).join('');
                 };
-                return processChildren(children);
+                return new SafeHTML(processChildren(children));
             };
             "#,
         )?;

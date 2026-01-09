@@ -1121,10 +1121,32 @@ pub fn execute_script_for_request_secure(
                     .map_err(|e| format!("failed to decode bodyBase64: {}", e))?;
                 (decoded, true)
             } else {
-                // Fall back to string body
-                let body_string: String = response_obj
+                // Fall back to string body - handle both strings and SafeHTML objects
+                let body_value: rquickjs::Value = response_obj
                     .get("body")
                     .map_err(|e| format!("missing body or bodyBase64: {}", e))?;
+
+                let body_string: String = if body_value.is_string() {
+                    // Direct string value
+                    body_value.as_string()
+                        .and_then(|s| s.to_string().ok())
+                        .ok_or_else(|| "Failed to convert body to string".to_string())?
+                } else if let Some(obj) = body_value.as_object() {
+                    // Check if it's a SafeHTML object with __html property
+                    if let Ok(html) = obj.get::<_, String>("__html") {
+                        html
+                    } else {
+                        // Try calling toString() on the object
+                        if let Ok(to_string_fn) = obj.get::<_, rquickjs::Function>("toString") {
+                            to_string_fn.call::<_, String>(()).map_err(|e| format!("Failed to call toString: {}", e))?
+                        } else {
+                            return Err("Body must be a string or have a toString() method".to_string());
+                        }
+                    }
+                } else {
+                    return Err("Body must be a string or object with __html property".to_string());
+                };
+
                 (body_string.into_bytes(), false)
             };
 
