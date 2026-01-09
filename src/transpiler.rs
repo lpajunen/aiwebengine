@@ -3,7 +3,9 @@ use crate::repository::insert_log_message;
 use oxc::allocator::Allocator;
 use oxc::codegen::{Codegen, CodegenOptions};
 use oxc::parser::Parser;
+use oxc::semantic::SemanticBuilder;
 use oxc::span::SourceType;
+use oxc::transformer::{JsxOptions, JsxRuntime, TransformOptions, Transformer};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -113,19 +115,28 @@ fn transpile(uri: &str, content: &str) -> AppResult<String> {
         });
     }
 
-    let program = ret.program;
+    let mut program = ret.program;
 
-    // TypeScript transpilation: oxc codegen automatically strips type annotations
-    // This works for .ts files without any additional transformation needed
+    // Semantic analysis is required for the transformer
+    let semantic_ret = SemanticBuilder::new().build(&program);
 
-    // JSX transpilation status:
-    // - The oxc 0.107.0 Transformer API requires complex semantic analysis setup
-    // - For now, JSX syntax will pass through to the output unchanged
-    // - Users should use the h() and Fragment() factory functions directly
-    // - Example: const elem = h('div', {className: 'test'}, 'Hello');
-    //
-    // TODO: Implement full JSX→h() transformation when oxc API stabilizes
-    // This requires: SemanticBuilder → Transformer::build_with_symbols_and_scopes
+    // Extract scoping for the transformer
+    let scoping = semantic_ret.semantic.into_scoping();
+
+    // Configure the transformer
+    let transform_options = TransformOptions {
+        jsx: JsxOptions {
+            runtime: JsxRuntime::Classic,
+            pragma: Some("h".to_string()),
+            pragma_frag: Some("Fragment".to_string()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    // Run the transformer
+    Transformer::new(&allocator, std::path::Path::new(uri), &transform_options)
+        .build_with_scoping(scoping, &mut program);
 
     // Generate JavaScript code
     let printed = Codegen::new()
@@ -200,11 +211,20 @@ mod tests {
         let result = transpile_if_needed(uri, content);
         assert!(result.is_ok());
         let js_code = result.unwrap();
-        eprintln!("Transpiled output:\n{}", js_code);
+
+        // Use println to see output in failed test logs if run with --nocapture
+        println!("Transpiled output:\n{}", js_code);
+
+        // Basic check: variable names preserved
         assert!(js_code.contains("greeting"));
-        // Note: oxc codegen in 0.107.0 does not strip TypeScript types by default
-        // This is expected behavior - full transformation requires semantic analysis
-        // For now, we accept that types may still be present in output
+        assert!(js_code.contains("user"));
+
+        // Type stripping check
+        assert!(!js_code.contains(": string"), "Types should be stripped");
+        assert!(
+            !js_code.contains("interface User"),
+            "Interfaces should be stripped"
+        );
     }
 
     #[test]
@@ -217,10 +237,37 @@ mod tests {
         let result = transpile_if_needed(uri, content);
         assert!(result.is_ok());
         let js_code = result.unwrap();
-        // Note: JSX transformation is not yet implemented in oxc 0.107.0
-        // For now, JSX syntax passes through unchanged
-        // Users should use h() function directly
-        assert!(js_code.contains("element"));
+        println!("Transpiled JSX output:\n{}", js_code);
+
+        // Verify JSX transformation to h() calls
+        assert!(js_code.contains("h(\"div\""));
+        assert!(js_code.contains("className: \"test\""));
+        assert!(!js_code.contains("<div"), "JSX tags should be transformed");
+    }
+
+    #[test]
+    fn test_transpile_tsx() {
+        let uri = "component.tsx";
+        let content = r#"
+            interface Props {
+                name: string;
+            }
+            const Component = (props: Props) => <div className="component">Hello {props.name}</div>;
+        "#;
+
+        let result = transpile_if_needed(uri, content);
+        assert!(result.is_ok());
+        let js_code = result.unwrap();
+        println!("Transpiled TSX output:\n{}", js_code);
+
+        // Verify Type stripping
+        assert!(!js_code.contains("interface Props"));
+        assert!(!js_code.contains(": Props"));
+
+        // Verify JSX transformation
+        assert!(js_code.contains("h(\"div\""));
+        assert!(js_code.contains("className: \"component\""));
+        assert!(!js_code.contains("<div"));
     }
 
     #[test]
