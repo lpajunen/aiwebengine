@@ -4,6 +4,8 @@ AI and Web Engine for JavaScript based Solutions - Secure and Scalable Platform 
 
 Excels when developing solutions using generative AI technologies.
 
+Supports JavaScript/TypeScript as the primary programming language. Also supports JSX/TSX for building user interfaces.
+
 Code first approach. Then provide tools for verification and testing.
 Verify code by providing automatic API descriptions such as OpenAPI, GraphQL schema, and MCP tool list.
 Test code by providing automatic test case generation and execution environment.
@@ -14,7 +16,11 @@ External API access: public, authenticated, role based. There are engine provide
 
 Scripts can be privileged or restricted. Privileged scripts have access to all engine-internal APIs. Restricted scripts have access only to selected engine-internal APIs.
 
-Editor and administrator can force all script APIs to be external for debugging and testing purposes. This done only per script basis.
+Users with editor and administrator roles can force all script APIs to be external for debugging and testing purposes. This done only per script basis.
+
+Engine supports user authentication and authorization. Engine supports user role and permission management. Engine supports script management and deployment. Engine supports logging and monitoring. (In the future, it could be possible to separate user authentication and authorization to a separate service if some cloud environment is used and they provide such capabilities. In that case, the engine would focus on script management and deployment, logging and monitoring, and API access control.)
+
+Solution development support is separate to own repositories. There are tools for creating, testing, and deploying solutions. In addition, there are documentation and examples for solution developers.
 
 ## Overview
 
