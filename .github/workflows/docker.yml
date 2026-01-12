@@ -75,11 +75,11 @@ jobs:
           # Optionally load image into Docker for local testing
           load: true
 
-      - name: Build staging image (no push)
+      - name: Build staging image (no push, uses production Dockerfile)
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile.staging
+          file: ./Dockerfile
           push: false
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:staging
           cache-from: type=gha

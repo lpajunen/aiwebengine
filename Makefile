@@ -127,10 +127,10 @@ docker-build-local:
 	docker build -f Dockerfile.local -t aiwebengine:dev .
 	@echo "✓ Local/development Docker image built successfully!"
 
-# Build staging Docker image
+# Build staging Docker image (uses production Dockerfile)
 docker-build-staging:
 	@echo "Building staging Docker image..."
-	docker build -f Dockerfile.staging -t aiwebengine:staging .
+	docker build -t aiwebengine:staging .
 	@echo "✓ Staging Docker image built successfully!"
 
 # Start local/development environment with Docker Compose

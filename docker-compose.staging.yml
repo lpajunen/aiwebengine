@@ -28,7 +28,7 @@ services:
   aiwebengine:
     build:
       context: .
-      dockerfile: Dockerfile.staging
+      dockerfile: Dockerfile
     container_name: aiwebengine-staging
     restart: unless-stopped
     # Expose port only to internal network (not to host)
