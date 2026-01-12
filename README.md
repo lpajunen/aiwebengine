@@ -150,9 +150,11 @@ For detailed Docker deployment instructions, see [docs/engine-administrators/03-
 
 ### Development
 
-For local development, you have two options:
+For local development, you have multiple options depending on your needs:
 
 #### Option 1: Cargo Run (`http://localhost:3000`)
+
+Simplest option for quick development without Docker:
 
 ```bash
 # Set up local configuration
@@ -168,22 +170,57 @@ make dev-local
 # Or manually: source .env && APP_AUTH__PROVIDERS__GOOGLE__REDIRECT_URI=http://localhost:3000/auth/callback/google cargo run
 ```
 
-#### Option 2: Docker Local (`https://local.softagen.com`)
+#### Option 2: Docker with Localhost (`https://localhost`)
+
+Works offline, no DNS setup required:
 
 ```bash
 # Set up environment
 cp .env.example .env
-# Edit .env with your credentials
+# Edit .env with your credentials (DIGITALOCEAN_TOKEN not required)
 
 # Run with Docker Compose
-make docker-local
+make docker-localhost
+# Access at: https://localhost
+# Note: Accept self-signed certificate warning in browser
+```
+
+#### Option 3: Docker with DNS Domain (`https://local.softagen.com`)
+
+Uses Let's Encrypt for real SSL certificate (requires DNS token):
+
+```bash
+# Set up environment
+cp .env.example .env
+# Edit .env and add: DIGITALOCEAN_TOKEN=your_token_here
+
+# Check DNS configuration
+make check-dns
+
+# Run with Docker Compose
+make docker-dns
 # Access at: https://local.softagen.com
 ```
 
-**Important for Google OAuth**: Add both redirect URIs to your Google Cloud Console:
+#### Option 4: /etc/hosts Method (DNS name without external DNS)
 
-- `http://localhost:3000/auth/callback/google` (for cargo run)
-- `https://local.softagen.com/auth/callback/google` (for Docker)
+Use DNS names locally without Let's Encrypt:
+
+```bash
+# Add to /etc/hosts
+sudo sh -c 'echo "127.0.0.1 local.softagen.com" >> /etc/hosts'
+
+# Run without DNS token (uses self-signed cert)
+make docker-localhost
+# Access at: https://local.softagen.com
+# Note: Accept self-signed certificate warning in browser
+```
+
+**Important for Google OAuth**: Add redirect URIs to your Google Cloud Console based on which option you use:
+
+- Option 1: `http://localhost:3000/auth/callback/google`
+- Option 2: `https://localhost/auth/callback/google`
+- Option 3/4: `https://local.softagen.com/auth/callback/google`
 
 See [docs/engine-administrators/02-CONFIGURATION.md](docs/engine-administrators/02-CONFIGURATION.md) for detailed configuration options.
 

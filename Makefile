@@ -10,6 +10,9 @@ help:
 	@echo "  make deps      - Install development tools (cargo-watch, cargo-nextest, cargo-llvm-cov)"
 	@echo "  make dev       - Run development server with auto-reload"
 	@echo "  make dev-local - Run development server with localhost OAuth (http://localhost:3000)"
+	@echo "  make docker-localhost - Start Docker with localhost only (no DNS setup required)"
+	@echo "  make docker-dns       - Start Docker with DNS domain (requires DIGITALOCEAN_TOKEN)"
+	@echo "  make check-dns        - Check if DNS domain configuration is available"
 	@echo "  make test      - Run all tests with cargo-nextest"
 	@echo "  make test-simple - Run all tests with cargo test"
 	@echo "  make perf-test   - Run performance/load test against production server"
@@ -137,6 +140,31 @@ docker-build-staging:
 docker-local:
 	@echo "Starting local/development environment..."
 	docker-compose -f docker-compose.local.yml up
+
+# Start with localhost only (no DNS setup needed)
+docker-localhost:
+	@echo "Starting local development with localhost only..."
+	@echo "Access at: https://localhost"
+	@echo "Note: You may need to accept self-signed certificate warning"
+	@unset DIGITALOCEAN_TOKEN; \
+	unset DNS_DOMAIN; \
+	docker-compose -f docker-compose.local.yml up
+
+# Start with DNS domain (requires DIGITALOCEAN_TOKEN)
+docker-dns:
+	@echo "Starting local development with DNS domain..."
+	@if [ -z "$$DIGITALOCEAN_TOKEN" ]; then \
+		echo "❌ ERROR: DIGITALOCEAN_TOKEN not set"; \
+		echo "   Set it in .env file or export: export DIGITALOCEAN_TOKEN=your_token"; \
+		exit 1; \
+	fi
+	@export DNS_DOMAIN=local.softagen.com; \
+	echo "Access at: https://$$DNS_DOMAIN"; \
+	docker-compose -f docker-compose.local.yml up
+
+# Check DNS domain availability
+check-dns:
+	@bash scripts/check-dns.sh
 
 # Start local/development environment in background
 docker-local-bg:

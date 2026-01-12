@@ -1,13 +1,37 @@
-# Caddyfile for local development with Let's Encrypt DNS-01 challenge
-# Uses DigitalOcean DNS for domain validation
+# Caddyfile for local development
+# Supports both localhost (offline) and optional DNS domain (with Let's Encrypt)
 
 # Global options
 {
-    # Email for Let's Encrypt notifications
+    # Email for Let's Encrypt notifications (only used if DNS domain is configured)
     email lpajunen@gmail.com
     
     # Use production Let's Encrypt (comment out to use staging for testing)
     # acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+# Shared configuration snippet
+(common_config) {
+    # Reverse proxy with load balancing to both aiwebengine instances
+    reverse_proxy aiwebengine-dev-1:3000 aiwebengine-dev-2:3000 {
+        # Load balancing policy
+        lb_policy round_robin
+        
+        # Health checks
+        health_uri /health
+        health_interval 10s
+        health_timeout 5s
+        health_status 2xx
+    }
+    
+    # Enable gzip compression
+    encode gzip
+    
+    # Access logging
+    log {
+        output stdout
+        format console
+    }
 }
 
 # HTTP to HTTPS redirect
@@ -15,57 +39,22 @@
     redir https://{host}{uri} permanent
 }
 
-# localhost - use self-signed certificate (Let's Encrypt doesn't support localhost)
-localhost {
+# localhost and aliases - use self-signed certificate (works offline)
+# Add any of these to /etc/hosts to use DNS names without external DNS:
+#   127.0.0.1 local.softagen.com
+#   127.0.0.1 dev.aiwebengine.local
+localhost, 127.0.0.1, local.test {
     tls internal
-    
-    # Reverse proxy with load balancing to both aiwebengine instances
-    reverse_proxy aiwebengine-dev-1:3000 aiwebengine-dev-2:3000 {
-        # Load balancing policy
-        lb_policy round_robin
-        
-        # Health checks
-        health_uri /health
-        health_interval 10s
-        health_timeout 5s
-        health_status 2xx
-    }
-    
-    # Enable gzip compression
-    encode gzip
-    
-    # Access logging
-    log {
-        output stdout
-        format console
-    }
+    import common_config
 }
 
-# Public domain - use Let's Encrypt with DNS-01 challenge
-local.softagen.com {
+# Optional: Public DNS domain - use Let's Encrypt with DNS-01 challenge
+# Only activates if DIGITALOCEAN_TOKEN is set and DNS_DOMAIN is defined
+# To use: export DNS_DOMAIN=local.softagen.com
+{$DNS_DOMAIN:} {
     # Let's Encrypt with DNS-01 challenge using DigitalOcean
     tls {
         dns digitalocean {env.DIGITALOCEAN_TOKEN}
     }
-    
-    # Reverse proxy with load balancing to both aiwebengine instances
-    reverse_proxy aiwebengine-dev-1:3000 aiwebengine-dev-2:3000 {
-        # Load balancing policy
-        lb_policy round_robin
-        
-        # Health checks
-        health_uri /health
-        health_interval 10s
-        health_timeout 5s
-        health_status 2xx
-    }
-    
-    # Enable gzip compression
-    encode gzip
-    
-    # Access logging
-    log {
-        output stdout
-        format console
-    }
+    import common_config
 }

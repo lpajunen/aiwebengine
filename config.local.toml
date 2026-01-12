@@ -81,6 +81,14 @@ auto_prune_logs = true
 # Relaxed security for development
 enable_cors = true
 # Allow all origins in development
+# For stricter control in development, you can specify:
+# cors_allowed_origins = [
+#     "http://localhost:3000",
+#     "https://localhost",
+#     "https://local.softagen.com",
+#     "https://dev.aiwebengine.local",
+#     "https://127.0.0.1"
+# ]
 cors_allowed_origins = ["*"]
 # CSRF protection (disabled in development)
 enable_csrf = false
