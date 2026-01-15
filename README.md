@@ -1,5 +1,10 @@
 # aiwebengine
 
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![Rust Edition](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org)
+[![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](https://github.com/lpajunen/aiwebengine/releases)
+[![Language](https://img.shields.io/badge/language-Rust%20%7C%20JavaScript-red.svg)](https://github.com/lpajunen/aiwebengine)
+
 AI and Web Engine for JavaScript based Solutions - Secure and Scalable Platform for Building Websites, APIs, Web Apps, and AI Tools
 
 Excels when developing solutions using generative AI technologies.

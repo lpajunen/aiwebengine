@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: GitHub Discussions
+    url: https://github.com/lpajunen/aiwebengine/discussions
+    about: Ask questions, share ideas, and discuss with the community
+  - name: Documentation
+    url: https://github.com/lpajunen/aiwebengine/tree/main/docs
+    about: Read the documentation for setup guides and references
+  - name: Security Vulnerability
+    url: https://github.com/lpajunen/aiwebengine/security/policy
+    about: Report security vulnerabilities privately to lpajunen@gmail.com
