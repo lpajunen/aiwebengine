@@ -1,8 +1,0 @@
-{
-  "servers": {
-    "softagen-mcp": {
-      "type": "http",
-      "url": "https://softagen.com/mcp"
-    }
-  }
-}

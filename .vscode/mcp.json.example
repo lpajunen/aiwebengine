@@ -1,0 +1,8 @@
+{
+  "servers": {
+    "aiwebengine-mcp": {
+      "type": "http",
+      "url": "https://example.com/mcp"
+    }
+  }
+}

@@ -3,6 +3,7 @@ node_modules/
 config.toml
 .env
 .env-prod
+.vscode/mcp.json
 aiwebengine_latest.tar
 
 # Caddy data (certificates and configuration)
