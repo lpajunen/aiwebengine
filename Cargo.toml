@@ -44,7 +44,7 @@ pulldown-cmark = "0.13.0"
 handlebars = "6.0"
 
 # TypeScript/JSX transpilation
-oxc = { version = "0.107.0", features = ["full"] }
+oxc = { version = "0.108.0", features = ["full"] }
 
 # Security and encryption (Phase 0.5)
 aes-gcm = "0.10"
@@ -79,7 +79,7 @@ lto = "thin"
 [dev-dependencies]
 tokio-test = "0.4"
 mockall = "0.14.0"
-jsonschema = "0.38.1"
+jsonschema = "0.40.0"
 
 # Build-time dependencies (for capturing build metadata)
 [build-dependencies]
