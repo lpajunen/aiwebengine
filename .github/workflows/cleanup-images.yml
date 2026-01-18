@@ -18,6 +18,7 @@ jobs:
 
     steps:
       - name: Delete old sha-tagged images
+        continue-on-error: true
         uses: actions/delete-package-versions@v5
         with:
           package-name: 'aiwebengine'
