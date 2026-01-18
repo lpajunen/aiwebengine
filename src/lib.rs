@@ -1363,6 +1363,12 @@ async fn health_handler() -> impl IntoResponse {
         "status": "healthy",
         "instance_id": server_id,
         "timestamp": chrono::Utc::now().to_rfc3339(),
+        "version": {
+            "cargo": env!("CARGO_PKG_VERSION"),
+            "git_commit": option_env!("VERGEN_GIT_SHA").unwrap_or(""),
+            "git_commit_timestamp": option_env!("VERGEN_GIT_COMMIT_TIMESTAMP").unwrap_or(""),
+            "build_timestamp": option_env!("VERGEN_BUILD_TIMESTAMP").unwrap_or("")
+        },
         "checks": {}
     }))
 }
@@ -1419,6 +1425,12 @@ async fn health_cluster_handler() -> impl IntoResponse {
         "status": "healthy",
         "instance_id": server_id,
         "timestamp": chrono::Utc::now().to_rfc3339(),
+        "version": {
+            "cargo": env!("CARGO_PKG_VERSION"),
+            "git_commit": option_env!("VERGEN_GIT_SHA").unwrap_or(""),
+            "git_commit_timestamp": option_env!("VERGEN_GIT_COMMIT_TIMESTAMP").unwrap_or(""),
+            "build_timestamp": option_env!("VERGEN_BUILD_TIMESTAMP").unwrap_or("")
+        },
         "database": pool_stats,
         "notification_listener": listener_status,
         "scheduler": {

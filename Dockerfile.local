@@ -25,6 +25,11 @@ RUN mkdir -p /app/target && \
     mkdir -p /usr/local/cargo/registry /usr/local/cargo/git && \
     chown -R aiwebengine:aiwebengine /usr/local/cargo
 
+# Note: .git directory should be mounted from host for build metadata
+# This allows the build to capture git commit information for version reporting.
+# If .git is not available, the build will succeed but version metadata will
+# show empty strings for git information.
+
 # Copy entrypoint script
 COPY docker-entrypoint-local.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint-local.sh

@@ -37,6 +37,14 @@ COPY assets ./assets
 COPY docs ./docs
 COPY tests ./tests
 
+# Copy .git directory for build metadata (git commit hash)
+# Note: If building from a source tarball without .git, the build will
+# succeed but version metadata will show empty strings for git information.
+COPY .git ./.git
+
+# Copy build script for capturing build metadata
+COPY build.rs ./build.rs
+
 # Build the actual application
 RUN touch src/lib.rs src/main.rs && \
     cargo build --release

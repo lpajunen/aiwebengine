@@ -80,3 +80,7 @@ lto = "thin"
 tokio-test = "0.4"
 mockall = "0.14.0"
 jsonschema = "0.38.1"
+
+# Build-time dependencies (for capturing build metadata)
+[build-dependencies]
+vergen = { version = "9.0", features = ["git", "gitcl"] }

@@ -38,6 +38,29 @@ pub struct UnauthorizedErrorResponse {
 // Health Check Schemas
 // ============================================================================
 
+/// Build and version metadata
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[schema(example = json!({
+    "cargo": "0.1.0",
+    "git_commit": "abc123def456",
+    "git_commit_timestamp": "2026-01-18T10:30:00+00:00",
+    "build_timestamp": "2026-01-18T10:35:00+00:00"
+}))]
+pub struct BuildVersion {
+    /// Cargo package version from Cargo.toml
+    #[schema(example = "0.1.0")]
+    pub cargo: String,
+    /// Git commit hash (short SHA) - empty if git unavailable
+    #[schema(example = "abc123def456")]
+    pub git_commit: String,
+    /// Git commit timestamp in ISO 8601 format - empty if git unavailable
+    #[schema(example = "2026-01-18T10:30:00+00:00")]
+    pub git_commit_timestamp: String,
+    /// Build timestamp in ISO 8601 format - empty if unavailable
+    #[schema(example = "2026-01-18T10:35:00+00:00")]
+    pub build_timestamp: String,
+}
+
 /// Health check response
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct HealthResponse {
@@ -45,10 +68,10 @@ pub struct HealthResponse {
     pub status: String,
     /// Current timestamp
     pub timestamp: String,
+    /// Build and version information
+    pub version: BuildVersion,
     /// Database connection status
     pub database: String,
-    /// Service version
-    pub version: String,
 }
 
 /// Detailed cluster health response
@@ -58,6 +81,8 @@ pub struct ClusterHealthResponse {
     pub status: String,
     /// Current timestamp
     pub timestamp: String,
+    /// Build and version information
+    pub version: BuildVersion,
     /// Database pool status
     pub database: DatabaseStatus,
     /// Script engine status
