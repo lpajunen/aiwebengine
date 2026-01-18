@@ -53,6 +53,13 @@ jobs:
             # Tag main branch as latest
             type=raw,value=latest,enable={{is_default_branch}}
 
+      - name: Capture git metadata for build
+        id: git-meta
+        run: |
+          echo "sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "commit_timestamp=$(git log -1 --format=%cI)" >> $GITHUB_OUTPUT
+          echo "build_timestamp=$(date -u +%Y-%m-%dT%H:%M:%S%z)" >> $GITHUB_OUTPUT
+
       - name: Build and push production Docker image
         uses: docker/build-push-action@v5
         with:
@@ -64,6 +71,10 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            GIT_SHA=${{ steps.git-meta.outputs.sha }}
+            GIT_COMMIT_TIMESTAMP=${{ steps.git-meta.outputs.commit_timestamp }}
+            BUILD_TIMESTAMP=${{ steps.git-meta.outputs.build_timestamp }}
 
   security-scan:
     needs: build-and-test

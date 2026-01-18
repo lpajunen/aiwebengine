@@ -37,15 +37,22 @@ COPY assets ./assets
 COPY docs ./docs
 COPY tests ./tests
 
-# Copy .git directory for build metadata (git commit hash)
-# Note: If building from a source tarball without .git, the build will
-# succeed but version metadata will show empty strings for git information.
-COPY .git ./.git
-
 # Copy build script for capturing build metadata
 COPY build.rs ./build.rs
 
+# Accept build arguments for git metadata (set during docker build)
+# These are used by build.rs when .git directory is not available
+ARG GIT_SHA=""
+ARG GIT_COMMIT_TIMESTAMP=""
+ARG BUILD_TIMESTAMP=""
+
+# Set as environment variables for build.rs to use
+ENV VERGEN_GIT_SHA=${GIT_SHA}
+ENV VERGEN_GIT_COMMIT_TIMESTAMP=${GIT_COMMIT_TIMESTAMP}
+ENV VERGEN_BUILD_TIMESTAMP=${BUILD_TIMESTAMP}
+
 # Build the actual application
+# Git metadata will be captured from ENV vars if .git directory is not present
 RUN touch src/lib.rs src/main.rs && \
     cargo build --release
 
