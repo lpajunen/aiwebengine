@@ -2,13 +2,14 @@
 # This Dockerfile creates a minimal production image with the aiwebengine server
 
 # Build stage
-FROM rustlang/rust:nightly-slim AS builder
+FROM rust:bookworm AS builder
 
-# Install build dependencies
+# Install build dependencies and nightly toolchain
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && rustup default nightly
 
 # Create app directory
 WORKDIR /app

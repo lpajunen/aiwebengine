@@ -1,7 +1,7 @@
 # Development Dockerfile for aiwebengine
 # This Dockerfile is optimized for development with hot-reload capabilities
 
-FROM rustlang/rust:nightly-slim
+FROM rust:bookworm
 
 # Install development dependencies
 RUN apt-get update && apt-get install -y \
@@ -12,8 +12,9 @@ RUN apt-get update && apt-get install -y \
     gosu \
     && rm -rf /var/lib/apt/lists/*
 
-# Install cargo-watch for hot-reload
-RUN cargo install cargo-watch
+# Install nightly toolchain and cargo-watch
+RUN rustup default nightly && \
+    cargo install cargo-watch
 
 # Create non-root user for development
 RUN useradd -m -u 1000 -s /bin/bash aiwebengine
