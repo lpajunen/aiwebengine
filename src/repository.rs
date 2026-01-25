@@ -462,12 +462,18 @@ async fn db_upsert_script(
     uri: &str,
     content: &str,
 ) -> AppResult<()> {
+    debug!(
+        "db_upsert_script called: uri={}, content_len={}",
+        uri,
+        content.len()
+    );
     let now = chrono::Utc::now();
 
     // Extract name from URI (last segment after /)
     let name = uri.rsplit('/').next().unwrap_or(uri);
 
     // Try to update existing script
+    debug!("Attempting to UPDATE script: uri={}", uri);
     let update_result = match executor {
         crate::database::TransactionExecutor::Transaction(ref mut tx) => {
             sqlx::query(
@@ -508,12 +514,25 @@ async fn db_upsert_script(
         }
     })?;
 
-    if update_result.rows_affected() > 0 {
-        debug!("Updated existing script in database: {}", uri);
+    let rows_affected = update_result.rows_affected();
+    debug!(
+        "UPDATE result: uri={}, rows_affected={}",
+        uri, rows_affected
+    );
+
+    if rows_affected > 0 {
+        debug!(
+            "✓ Successfully updated existing script in database: {}",
+            uri
+        );
         return Ok(());
     }
 
     // Script doesn't exist, create new one
+    debug!(
+        "Script not found for update, attempting INSERT: uri={}",
+        uri
+    );
     match executor {
         crate::database::TransactionExecutor::Transaction(ref mut tx) => {
             sqlx::query(
@@ -552,7 +571,7 @@ async fn db_upsert_script(
         }
     })?;
 
-    debug!("Created new script in database: {}", uri);
+    debug!("✓ Successfully created new script in database: {}", uri);
     Ok(())
 }
 

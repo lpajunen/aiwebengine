@@ -229,17 +229,22 @@ function upsert_script_handler(context) {
     const action = existingScript ? "updated" : "inserted";
 
     // Call the upsertScript function
-    const success =
+    const result =
       typeof scriptStorage !== "undefined" &&
       typeof scriptStorage.upsertScript === "function"
         ? scriptStorage.upsertScript(uri, content)
-        : false;
+        : "Error: scriptStorage.upsertScript not available";
 
-    if (!success) {
+    // Check if the result indicates an error
+    // The Rust function returns a string for both success and errors
+    // Error messages start with "Error:"
+    if (!result || result.startsWith("Error:")) {
+      console.error(`Script upsert failed: ${result}`);
       return {
         status: 500,
         body: JSON.stringify({
           error: "Failed to upsert script",
+          details: result || "Unknown error",
           timestamp: new Date().toISOString(),
         }),
         contentType: "application/json",
@@ -636,18 +641,21 @@ function upsertScriptMutation(context) {
         : null;
     const action = existingScript ? "updated" : "inserted";
 
-    const success =
+    const result =
       typeof scriptStorage !== "undefined" &&
       typeof scriptStorage.upsertScript === "function"
         ? scriptStorage.upsertScript(args.uri, args.content)
-        : false;
+        : "Error: scriptStorage.upsertScript not available";
 
-    if (!success) {
+    // Check if the result indicates an error (Rust returns string for both success and errors)
+    if (!result || result.startsWith("Error:")) {
+      console.error(`Script upsert failed via GraphQL: ${result}`);
       return JSON.stringify({
         message: "Failed to upsert script",
         uri: args.uri,
         chars: 0,
         success: false,
+        error: result || "Unknown error",
       });
     }
 
@@ -891,15 +899,17 @@ function writeFileHandler(context) {
         : null;
     const action = existingScript ? "updated" : "created";
 
-    const success =
+    const result =
       typeof scriptStorage !== "undefined" &&
       typeof scriptStorage.upsertScript === "function"
         ? scriptStorage.upsertScript(uri, content)
-        : false;
+        : "Error: scriptStorage.upsertScript not available";
 
-    if (!success) {
+    // Check if the result indicates an error (Rust returns string for both success and errors)
+    if (!result || result.startsWith("Error:")) {
+      console.error(`MCP write_file failed: ${result}`);
       return JSON.stringify({
-        error: "Failed to write file",
+        error: `Failed to write file: ${result || "Unknown error"}`,
       });
     }
 
@@ -950,15 +960,17 @@ function createFileHandler(context) {
       });
     }
 
-    const success =
+    const result =
       typeof scriptStorage !== "undefined" &&
       typeof scriptStorage.upsertScript === "function"
         ? scriptStorage.upsertScript(uri, content)
-        : false;
+        : "Error: scriptStorage.upsertScript not available";
 
-    if (!success) {
+    // Check if the result indicates an error (Rust returns string for both success and errors)
+    if (!result || result.startsWith("Error:")) {
+      console.error(`MCP create_file failed: ${result}`);
       return JSON.stringify({
-        error: "Failed to create file",
+        error: `Failed to create file: ${result || "Unknown error"}`,
       });
     }
 

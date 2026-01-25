@@ -794,7 +794,22 @@ impl SecureGlobalContext {
                         false
                     };
 
+                    debug!(
+                        script_name = %script_name,
+                        user_id = ?user_ctx_upsert.user_id,
+                        is_admin = is_admin,
+                        user_owns = user_owns,
+                        "Checking script update permissions for existing script"
+                    );
+
                     if !is_admin && !user_owns {
+                        warn!(
+                            script_name = %script_name,
+                            user_id = ?user_ctx_upsert.user_id,
+                            is_admin = is_admin,
+                            user_owns = user_owns,
+                            "Permission denied: user is neither admin nor owner"
+                        );
                         return Ok(format!(
                             "Error: Permission denied. You must be an administrator or owner to modify script '{}'",
                             script_name
