@@ -6,7 +6,7 @@ function asset_handler(context) {
   try {
     const path = req.path;
     const method = req.method;
-    const queryParams = req.queryParams || {};
+    const queryParams = req.query || {};
 
     // Validate required script parameter
     const scriptUri = queryParams.script;
