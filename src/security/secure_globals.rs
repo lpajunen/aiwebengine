@@ -1220,10 +1220,18 @@ impl SecureGlobalContext {
         let list_assets_for_uri = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>, uri: String| -> JsResult<String> {
-                // Check capability
-                if let Err(_e) =
-                    user_ctx_list_uri.require_capability(&crate::security::Capability::ReadAssets)
-                {
+                // Check capability OR script ownership OR admin status
+                let has_capability =
+                    user_ctx_list_uri.has_capability(&crate::security::Capability::ReadAssets);
+                let is_admin =
+                    user_ctx_list_uri.has_capability(&crate::security::Capability::DeleteScripts);
+                let owns_script = if let Some(user_id) = &user_ctx_list_uri.user_id {
+                    repository::user_owns_script(&uri, user_id).unwrap_or(false)
+                } else {
+                    false
+                };
+
+                if !has_capability && !owns_script && !is_admin {
                     // Return empty array JSON if no permission
                     return Ok("[]".to_string());
                 }
@@ -1273,11 +1281,19 @@ impl SecureGlobalContext {
         let fetch_asset_for_uri = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>, uri: String, asset_name: String| -> JsResult<String> {
-                // Check capability
-                if let Err(e) =
-                    user_ctx_fetch_uri.require_capability(&crate::security::Capability::ReadAssets)
-                {
-                    return Ok(format!("Error: {}", e));
+                // Check capability OR script ownership OR admin status
+                let has_capability =
+                    user_ctx_fetch_uri.has_capability(&crate::security::Capability::ReadAssets);
+                let is_admin =
+                    user_ctx_fetch_uri.has_capability(&crate::security::Capability::DeleteScripts);
+                let owns_script = if let Some(user_id) = &user_ctx_fetch_uri.user_id {
+                    repository::user_owns_script(&uri, user_id).unwrap_or(false)
+                } else {
+                    false
+                };
+
+                if !has_capability && !owns_script && !is_admin {
+                    return Ok("Error: Access denied".to_string());
                 }
 
                 debug!(
@@ -1315,11 +1331,19 @@ impl SecureGlobalContext {
                     Err(e) => return Ok(format!("Error decoding base64 content: {}", e)),
                 };
 
-                // Check capability
-                if let Err(e) = user_ctx_upsert_uri
-                    .require_capability(&crate::security::Capability::WriteAssets)
-                {
-                    return Ok(format!("Access denied: {}", e));
+                // Check capability OR script ownership OR admin status
+                let has_capability =
+                    user_ctx_upsert_uri.has_capability(&crate::security::Capability::WriteAssets);
+                let is_admin =
+                    user_ctx_upsert_uri.has_capability(&crate::security::Capability::DeleteScripts);
+                let owns_script = if let Some(user_id) = &user_ctx_upsert_uri.user_id {
+                    repository::user_owns_script(&uri, user_id).unwrap_or(false)
+                } else {
+                    false
+                };
+
+                if !has_capability && !owns_script && !is_admin {
+                    return Ok("Access denied".to_string());
                 }
 
                 // Validate asset URI (inline validation since we can't call async)
@@ -1385,10 +1409,18 @@ impl SecureGlobalContext {
         let delete_asset_for_uri = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>, uri: String, asset_name: String| -> JsResult<String> {
-                // Check capability
-                if let Err(e) = user_ctx_delete_uri
-                    .require_capability(&crate::security::Capability::DeleteAssets)
-                {
+                // Check capability OR script ownership OR admin status
+                let has_capability =
+                    user_ctx_delete_uri.has_capability(&crate::security::Capability::DeleteAssets);
+                let is_admin =
+                    user_ctx_delete_uri.has_capability(&crate::security::Capability::DeleteScripts);
+                let owns_script = if let Some(user_id) = &user_ctx_delete_uri.user_id {
+                    repository::user_owns_script(&uri, user_id).unwrap_or(false)
+                } else {
+                    false
+                };
+
+                if !has_capability && !owns_script && !is_admin {
                     // Use spawn for fire-and-forget audit logging to avoid runtime conflicts
                     let auditor_clone = auditor_delete_uri.clone();
                     let user_id = user_ctx_delete_uri.user_id.clone();
@@ -1402,7 +1434,7 @@ impl SecureGlobalContext {
                             )
                             .await;
                     });
-                    return Ok(format!("Error: {}", e));
+                    return Ok("Error: Access denied".to_string());
                 }
 
                 // Log the operation attempt using spawn to avoid runtime conflicts

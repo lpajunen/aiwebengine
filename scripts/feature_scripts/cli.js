@@ -1,64 +1,122 @@
 /// <reference path="../../assets/aiwebengine-priv.d.ts" />
 
-// asset management script: demonstrates asset CRUD operations
+// asset management script: manages assets for other scripts
 function asset_handler(context) {
   const req = context.request || {};
   try {
     const path = req.path;
     const method = req.method;
+    const queryParams = req.queryParams || {};
+
+    // Validate required script parameter
+    const scriptUri = queryParams.script;
+    if (!scriptUri) {
+      return ResponseBuilder.error(400, "Missing required parameter: script");
+    }
 
     if (method === "GET") {
       if (path === "/assets") {
-        // List all assets
-        const assetsJson = assetStorage.listAssets();
-        const assetMetadata = JSON.parse(assetsJson);
-        // Extract just the names for backwards compatibility
-        const assetNames = assetMetadata.map((a) => a.name);
-        return ResponseBuilder.json({
-          assets: assetNames,
-          metadata: assetMetadata,
-        });
-      } else if (path.startsWith("/assets/")) {
-        // Fetch specific asset
-        const publicPath = path.substring("/assets/".length);
-        const assetJson = assetStorage.fetchAsset("/" + publicPath);
-        if (assetJson !== "null") {
-          return ResponseBuilder.json(JSON.parse(assetJson));
+        const assetUri = queryParams.asset;
+
+        if (assetUri) {
+          // Fetch specific asset
+          const assetContent = assetStorage.fetchAssetForUri(
+            scriptUri,
+            assetUri,
+          );
+          if (
+            assetContent &&
+            !assetContent.startsWith("Error:") &&
+            assetContent !== "Asset '" + assetUri + "' not found"
+          ) {
+            return ResponseBuilder.json({
+              script: scriptUri,
+              asset: assetUri,
+              content: assetContent,
+            });
+          } else {
+            return ResponseBuilder.error(
+              404,
+              assetContent || "Asset not found",
+            );
+          }
         } else {
-          return ResponseBuilder.error(404, "Asset not found");
+          // List all assets for the script
+          const assetsJson = assetStorage.listAssetsForUri(scriptUri);
+          const assetMetadata = JSON.parse(assetsJson);
+          return ResponseBuilder.json({
+            script: scriptUri,
+            assets: assetMetadata,
+          });
         }
       }
     } else if (method === "POST") {
       if (path === "/assets") {
         // Create/update asset
         const body = JSON.parse(req.body || "{}");
-        if (body.publicPath && body.mimetype && body.content) {
-          assetStorage.upsertAsset(
-            body.publicPath,
+        const assetUri = body.asset || queryParams.asset;
+
+        if (!assetUri) {
+          return ResponseBuilder.error(
+            400,
+            "Missing required parameter: asset",
+          );
+        }
+
+        if (body.mimetype && body.content) {
+          const result = assetStorage.upsertAssetForUri(
+            scriptUri,
+            assetUri,
             body.mimetype,
             body.content,
           );
+
+          if (
+            (result && result.startsWith("Error")) ||
+            result.startsWith("Access denied")
+          ) {
+            return ResponseBuilder.error(403, result);
+          }
+
           return ResponseBuilder.json(
-            { message: "Asset created/updated" },
+            {
+              message: result || "Asset created/updated",
+              script: scriptUri,
+              asset: assetUri,
+            },
             201,
           );
         } else {
           return ResponseBuilder.error(
             400,
-            "Missing required fields: publicPath, mimetype, content",
+            "Missing required fields: mimetype, content",
           );
         }
       }
     } else if (method === "DELETE") {
-      if (path.startsWith("/assets/")) {
-        // Delete asset
-        const publicPath = path.substring("/assets/".length);
-        const deleted = assetStorage.deleteAsset("/" + publicPath);
-        if (deleted) {
-          return ResponseBuilder.json({ message: "Asset deleted" });
-        } else {
-          return ResponseBuilder.error(404, "Asset not found");
+      if (path === "/assets") {
+        const assetUri = queryParams.asset;
+
+        if (!assetUri) {
+          return ResponseBuilder.error(
+            400,
+            "Missing required parameter: asset",
+          );
         }
+
+        const result = assetStorage.deleteAssetForUri(scriptUri, assetUri);
+
+        if (result && result.startsWith("Error:")) {
+          return ResponseBuilder.error(403, result);
+        } else if (result && result.includes("not found")) {
+          return ResponseBuilder.error(404, result);
+        }
+
+        return ResponseBuilder.json({
+          message: result || "Asset deleted",
+          script: scriptUri,
+          asset: assetUri,
+        });
       }
     }
 
@@ -75,18 +133,17 @@ function init(context) {
     console.log(`Initializing cli.js script at ${new Date().toISOString()}`);
     console.log(`Init context: ${JSON.stringify(context)}`);
 
-    // Register the routes
+    // Register the routes - now using query parameters for script and asset
     routeRegistry.registerRoute("/assets", "asset_handler", "GET");
     routeRegistry.registerRoute("/assets", "asset_handler", "POST");
-    routeRegistry.registerRoute("/assets/*", "asset_handler", "GET");
-    routeRegistry.registerRoute("/assets/*", "asset_handler", "DELETE");
+    routeRegistry.registerRoute("/assets", "asset_handler", "DELETE");
 
     console.log("Asset management script initialized successfully");
 
     return {
       success: true,
       message: "Asset management script initialized successfully",
-      registeredEndpoints: 4,
+      registeredEndpoints: 3,
     };
   } catch (error) {
     console.log(
