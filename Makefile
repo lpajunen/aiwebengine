@@ -82,7 +82,7 @@ lint:
 	cargo clippy --all-targets -- -D warnings
 
 # Format all code
-format:
+format: format-markdown format-javascript
 	cargo fmt --all
 
 # Check formatting without modifying files

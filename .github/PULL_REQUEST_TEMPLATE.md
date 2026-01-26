@@ -81,9 +81,7 @@ Closes #
 
 **Breaking Changes:**
 
--
-
-**Migration Guide:**
+- **Migration Guide:**
 
 -
 

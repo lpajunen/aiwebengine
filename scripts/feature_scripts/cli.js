@@ -134,9 +134,41 @@ function init(context) {
     console.log(`Init context: ${JSON.stringify(context)}`);
 
     // Register the routes - now using query parameters for script and asset
-    routeRegistry.registerRoute("/assets", "asset_handler", "GET");
-    routeRegistry.registerRoute("/assets", "asset_handler", "POST");
-    routeRegistry.registerRoute("/assets", "asset_handler", "DELETE");
+    routeRegistry.registerRoute("/assets", "asset_handler", "GET", {
+      summary: "List or fetch assets for a script",
+      description:
+        "Lists all assets for a script or fetches a specific asset. " +
+        "Requires user to own the script, have ReadAssets capability, or be an administrator. " +
+        "Query parameters: " +
+        "- script (required): URI of the script whose assets to manage (e.g., 'https://example.com/myscript'). " +
+        "- asset (optional): URI/path of the specific asset to fetch (e.g., '/images/logo.png'). If omitted, returns list of all assets.",
+      tags: ["Assets"],
+    });
+
+    routeRegistry.registerRoute("/assets", "asset_handler", "POST", {
+      summary: "Create or update an asset",
+      description:
+        "Creates or updates an asset for a script. " +
+        "Requires user to own the script, have WriteAssets capability, or be an administrator. " +
+        "Query parameters: " +
+        "- script (required): URI of the script that will own this asset. " +
+        "Request body (JSON): " +
+        "- asset (required, string): URI/path of the asset (e.g., '/images/logo.png'). " +
+        "- mimetype (required, string): MIME type of the asset (e.g., 'image/png', 'text/css'). " +
+        "- content (required, string): Base64-encoded content of the asset (max 10MB).",
+      tags: ["Assets"],
+    });
+
+    routeRegistry.registerRoute("/assets", "asset_handler", "DELETE", {
+      summary: "Delete an asset",
+      description:
+        "Deletes an asset from a script. " +
+        "Requires user to own the script, have DeleteAssets capability, or be an administrator. " +
+        "Query parameters: " +
+        "- script (required): URI of the script that owns the asset. " +
+        "- asset (required): URI/path of the asset to delete (e.g., '/images/logo.png').",
+      tags: ["Assets"],
+    });
 
     console.log("Asset management script initialized successfully");
 
