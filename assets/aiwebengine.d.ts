@@ -172,7 +172,7 @@ interface RouteRegistry {
    * @param path - URL path pattern (e.g., "/blog/post/:id")
    * @param handlerName - Name of the handler function to call
    * @param method - HTTP method (GET, POST, PUT, DELETE, etc.)
-   * @param metadata - Optional OpenAPI metadata (summary, description, tags)
+   * @param metadata - Optional OpenAPI metadata (summary, description, tags, parameters, requestBody)
    * @returns Registration result message
    * @example
    * routeRegistry.registerRoute("/api/users", "listUsers", "GET");
@@ -190,6 +190,8 @@ interface RouteRegistry {
       summary?: string;
       description?: string;
       tags?: string[];
+      parameters?: string; // JSON string of OpenAPI parameters array
+      requestBody?: string; // JSON string of OpenAPI requestBody object
     },
   ): string;
 

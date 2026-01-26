@@ -138,36 +138,96 @@ function init(context) {
       summary: "List or fetch assets for a script",
       description:
         "Lists all assets for a script or fetches a specific asset. " +
-        "Requires user to own the script, have ReadAssets capability, or be an administrator. " +
-        "Query parameters: " +
-        "- script (required): URI of the script whose assets to manage (e.g., 'https://example.com/myscript'). " +
-        "- asset (optional): URI/path of the specific asset to fetch (e.g., '/images/logo.png'). If omitted, returns list of all assets.",
+        "Requires user to own the script, have ReadAssets capability, or be an administrator.",
       tags: ["Assets"],
+      parameters: JSON.stringify([
+        {
+          name: "script",
+          in: "query",
+          required: true,
+          schema: { type: "string" },
+          description:
+            "URI of the script whose assets to manage (e.g., 'https://example.com/myscript')",
+        },
+        {
+          name: "asset",
+          in: "query",
+          required: false,
+          schema: { type: "string" },
+          description:
+            "URI/path of the specific asset to fetch (e.g., '/images/logo.png'). If omitted, returns list of all assets.",
+        },
+      ]),
     });
 
     routeRegistry.registerRoute("/assets", "asset_handler", "POST", {
       summary: "Create or update an asset",
       description:
         "Creates or updates an asset for a script. " +
-        "Requires user to own the script, have WriteAssets capability, or be an administrator. " +
-        "Query parameters: " +
-        "- script (required): URI of the script that will own this asset. " +
-        "Request body (JSON): " +
-        "- asset (required, string): URI/path of the asset (e.g., '/images/logo.png'). " +
-        "- mimetype (required, string): MIME type of the asset (e.g., 'image/png', 'text/css'). " +
-        "- content (required, string): Base64-encoded content of the asset (max 10MB).",
+        "Requires user to own the script, have WriteAssets capability, or be an administrator.",
       tags: ["Assets"],
+      parameters: JSON.stringify([
+        {
+          name: "script",
+          in: "query",
+          required: true,
+          schema: { type: "string" },
+          description: "URI of the script that will own this asset",
+        },
+      ]),
+      requestBody: JSON.stringify({
+        required: true,
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              required: ["asset", "mimetype", "content"],
+              properties: {
+                asset: {
+                  type: "string",
+                  description:
+                    "URI/path of the asset (e.g., '/images/logo.png')",
+                },
+                mimetype: {
+                  type: "string",
+                  description:
+                    "MIME type of the asset (e.g., 'image/png', 'text/css')",
+                },
+                content: {
+                  type: "string",
+                  format: "byte",
+                  description: "Base64-encoded content of the asset (max 10MB)",
+                },
+              },
+            },
+          },
+        },
+      }),
     });
 
     routeRegistry.registerRoute("/assets", "asset_handler", "DELETE", {
       summary: "Delete an asset",
       description:
         "Deletes an asset from a script. " +
-        "Requires user to own the script, have DeleteAssets capability, or be an administrator. " +
-        "Query parameters: " +
-        "- script (required): URI of the script that owns the asset. " +
-        "- asset (required): URI/path of the asset to delete (e.g., '/images/logo.png').",
+        "Requires user to own the script, have DeleteAssets capability, or be an administrator.",
       tags: ["Assets"],
+      parameters: JSON.stringify([
+        {
+          name: "script",
+          in: "query",
+          required: true,
+          schema: { type: "string" },
+          description: "URI of the script that owns the asset",
+        },
+        {
+          name: "asset",
+          in: "query",
+          required: true,
+          schema: { type: "string" },
+          description:
+            "URI/path of the asset to delete (e.g., '/images/logo.png')",
+        },
+      ]),
     });
 
     console.log("Asset management script initialized successfully");

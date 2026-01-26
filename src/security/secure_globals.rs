@@ -2542,6 +2542,22 @@ impl SecureGlobalContext {
                             }
                             route_meta.tags = tags;
                         }
+                        // Extract parameters
+                        if let Ok(Some(params_json)) =
+                            meta_obj.get::<_, Option<String>>("parameters")
+                            && let Ok(params_value) =
+                                serde_json::from_str::<serde_json::Value>(&params_json)
+                        {
+                            route_meta.parameters = Some(params_value);
+                        }
+                        // Extract requestBody
+                        if let Ok(Some(body_json)) =
+                            meta_obj.get::<_, Option<String>>("requestBody")
+                            && let Ok(body_value) =
+                                serde_json::from_str::<serde_json::Value>(&body_json)
+                        {
+                            route_meta.request_body = Some(body_value);
+                        }
                     }
 
                     let method_ref = method.as_deref();
@@ -3083,6 +3099,16 @@ impl SecureGlobalContext {
                                     } else {
                                         operation
                                             .insert("tags".to_string(), serde_json::json!(["API"]));
+                                    }
+
+                                    // Add parameters if present
+                                    if let Some(params) = &route_meta.parameters {
+                                        operation.insert("parameters".to_string(), params.clone());
+                                    }
+
+                                    // Add requestBody if present
+                                    if let Some(body) = &route_meta.request_body {
+                                        operation.insert("requestBody".to_string(), body.clone());
                                     }
 
                                     // Default response

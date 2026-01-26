@@ -95,6 +95,10 @@ pub struct RouteMetadata {
     pub description: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "requestBody")]
+    pub request_body: Option<serde_json::Value>,
 }
 
 impl RouteMetadata {
@@ -104,6 +108,8 @@ impl RouteMetadata {
             summary: None,
             description: None,
             tags: Vec::new(),
+            parameters: None,
+            request_body: None,
         }
     }
 }
