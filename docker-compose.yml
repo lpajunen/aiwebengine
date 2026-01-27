@@ -37,7 +37,7 @@ services:
     # build:
     #   context: .
     #   dockerfile: Dockerfile
-    image: aiwebengine:latest
+    image: ghcr.io/lpajunen/aiwebengine:latest # aiwebengine:latest
     container_name: aiwebengine-1
     restart: unless-stopped
     # Expose port only to internal network (not to host)
@@ -97,7 +97,7 @@ services:
 
   # Production deployment - Instance 2
   aiwebengine-2:
-    image: aiwebengine:latest
+    image: ghcr.io/lpajunen/aiwebengine:latest # aiwebengine:latest
     container_name: aiwebengine-2
     restart: unless-stopped
     # Expose port only to internal network (not to host)
