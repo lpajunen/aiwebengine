@@ -44,7 +44,7 @@ pulldown-cmark = "0.13.0"
 handlebars = "6.0"
 
 # TypeScript/JSX transpilation
-oxc = { version = "0.110.0", features = ["full"] }
+oxc = { version = "0.111.0", features = ["full"] }
 
 # Security and encryption (Phase 0.5)
 aes-gcm = "0.10"
