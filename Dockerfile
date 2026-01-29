@@ -60,10 +60,12 @@ RUN touch src/lib.rs src/main.rs && \
 # Runtime stage
 FROM debian:bookworm-slim
 
-# Install runtime dependencies
+# Install runtime dependencies and security updates
+# CVE-2025-15467: Upgrade OpenSSL to 3.0.18-1deb12u2 or later
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
+    && apt-get upgrade -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
