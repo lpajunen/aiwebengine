@@ -1343,7 +1343,7 @@ impl SecureGlobalContext {
                 };
 
                 if !has_capability && !owns_script && !is_admin {
-                    return Ok("Access denied".to_string());
+                    return Ok("Error: Access denied".to_string());
                 }
 
                 // Validate asset URI (inline validation since we can't call async)
@@ -2566,15 +2566,50 @@ impl SecureGlobalContext {
             )?;
             route_registry.set("registerRoute", register_route)?;
         } else {
-            // No-op register function
+            // No-op register function with privilege check
+            let script_uri_for_noop = script_uri_owned.clone();
+            let user_ctx_noop = user_context.clone();
             let reg_noop = Function::new(
                 ctx.clone(),
-                |_c: rquickjs::Ctx<'_>,
-                 _p: String,
-                 _h: String,
-                 _m: Option<String>,
-                 _meta: Opt<rquickjs::Object>|
-                 -> Result<(), rquickjs::Error> { Ok(()) },
+                move |_c: rquickjs::Ctx<'_>,
+                      _p: String,
+                      _h: String,
+                      _m: Option<String>,
+                      _meta: Opt<rquickjs::Object>|
+                      -> Result<(), rquickjs::Error> {
+                    // Check if script is privileged OR user has admin privileges
+                    let script_privileged =
+                        match repository::is_script_privileged(&script_uri_for_noop) {
+                            Ok(true) => true,
+                            Ok(false) => false,
+                            Err(e) => {
+                                return Err(rquickjs::Error::new_from_js_message(
+                                    "routeRegistry.registerRoute",
+                                    "privilege_lookup_failed",
+                                    &format!(
+                                        "Unable to verify privileges for '{}': {}",
+                                        script_uri_for_noop, e
+                                    ),
+                                ));
+                            }
+                        };
+
+                    let user_is_admin =
+                        user_ctx_noop.has_capability(&crate::security::Capability::DeleteScripts);
+
+                    if !script_privileged && !user_is_admin {
+                        return Err(rquickjs::Error::new_from_js_message(
+                            "routeRegistry.registerRoute",
+                            "permission_denied",
+                            &format!(
+                                "Script '{}' is not privileged to register HTTP routes",
+                                script_uri_for_noop
+                            ),
+                        ));
+                    }
+
+                    Ok(())
+                },
             )?;
             route_registry.set("registerRoute", reg_noop)?;
         }
@@ -2605,9 +2640,13 @@ impl SecureGlobalContext {
                     Ok(true) => true,
                     Ok(false) => false,
                     Err(e) => {
-                        return Ok(format!(
-                            "Stream route '{}' denied: privilege lookup failed ({})",
-                            path, e
+                        return Err(rquickjs::Error::new_from_js_message(
+                            "routeRegistry.registerStreamRoute",
+                            "privilege_lookup_failed",
+                            &format!(
+                                "Unable to verify privileges for '{}': {}",
+                                script_uri_stream, e
+                            ),
                         ));
                     }
                 };
@@ -2616,9 +2655,13 @@ impl SecureGlobalContext {
                     user_ctx_stream.has_capability(&crate::security::Capability::DeleteScripts);
 
                 if !script_privileged && !user_is_admin {
-                    return Ok(format!(
-                        "Stream route '{}' denied: script '{}' is not privileged",
-                        path, script_uri_stream
+                    return Err(rquickjs::Error::new_from_js_message(
+                        "routeRegistry.registerStreamRoute",
+                        "permission_denied",
+                        &format!(
+                            "Script '{}' is not privileged to register stream routes",
+                            script_uri_stream
+                        ),
                     ));
                 }
 
@@ -2739,9 +2782,13 @@ impl SecureGlobalContext {
                     Ok(true) => true,
                     Ok(false) => false,
                     Err(e) => {
-                        return Ok(format!(
-                            "Asset route '{}' denied: privilege lookup failed ({})",
-                            path, e
+                        return Err(rquickjs::Error::new_from_js_message(
+                            "routeRegistry.registerAssetRoute",
+                            "privilege_lookup_failed",
+                            &format!(
+                                "Unable to verify privileges for '{}': {}",
+                                script_uri_asset, e
+                            ),
                         ));
                     }
                 };
@@ -2750,9 +2797,13 @@ impl SecureGlobalContext {
                     user_ctx_asset.has_capability(&crate::security::Capability::DeleteScripts);
 
                 if !script_privileged && !user_is_admin {
-                    return Ok(format!(
-                        "Asset route '{}' denied: script '{}' is not privileged",
-                        path, script_uri_asset
+                    return Err(rquickjs::Error::new_from_js_message(
+                        "routeRegistry.registerAssetRoute",
+                        "permission_denied",
+                        &format!(
+                            "Script '{}' is not privileged to register asset routes",
+                            script_uri_asset
+                        ),
                     ));
                 }
 
@@ -4854,11 +4905,8 @@ impl SecureGlobalContext {
             move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
                 // Check if user has admin capabilities (DeleteScripts is admin-only)
                 if !user_ctx_list.has_capability(&crate::security::Capability::DeleteScripts) {
-                    return Err(rquickjs::Error::new_from_js_message(
-                        "listUsers",
-                        "permission_denied",
-                        "Administrator privileges required",
-                    ));
+                    // Return empty array instead of throwing error
+                    return Ok("[]".to_string());
                 }
 
                 debug!(

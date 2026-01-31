@@ -158,16 +158,15 @@ async fn test_script_storage_list_scripts_denied_for_non_privileged() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "scriptStorage.getScript returns undefined instead of null without capability"]
 async fn test_script_storage_get_script_denied_for_non_privileged() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![]);
 
     let script = r#"
-        // Without ReadScripts capability, should return null
+        // Without ReadScripts capability, should return undefined
         const content = scriptStorage.getScript("nonexistent_test_script_12345");
-        if (content !== null) {
-            throw new Error("Should return null without capability, got: " + typeof content);
+        if (content !== undefined) {
+            throw new Error("Should return undefined without capability, got: " + typeof content);
         }
     "#;
 
@@ -208,15 +207,14 @@ async fn test_script_storage_delete_denied_for_non_privileged() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "getScriptInitStatus behavior needs investigation"]
 async fn test_script_storage_get_init_status_denied_for_non_privileged() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![]);
 
     let script = r#"
         const status = scriptStorage.getScriptInitStatus("nonexistent_test_script_status_54321");
-        if (status !== null) {
-            throw new Error("Should return null without capability");
+        if (status !== undefined) {
+            throw new Error("Should return undefined without capability");
         }
     "#;
 
@@ -225,15 +223,14 @@ async fn test_script_storage_get_init_status_denied_for_non_privileged() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "getScriptSecurityProfile behavior needs investigation"]
 async fn test_script_storage_get_security_profile_denied_for_non_privileged() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![]);
 
     let script = r#"
         const profile = scriptStorage.getScriptSecurityProfile("nonexistent_test_profile_99999");
-        if (profile !== null) {
-            throw new Error("Should return null without capability");
+        if (profile !== undefined) {
+            throw new Error("Should return undefined without capability");
         }
     "#;
 
@@ -465,7 +462,6 @@ async fn test_console_privileged_methods_available_for_admin() {
 // ============================================================================
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "userStorage.listUsers throws error instead of returning empty array"]
 async fn test_user_storage_list_users_denied_for_non_privileged() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![]);
@@ -574,7 +570,6 @@ async fn test_asset_storage_fetch_for_uri_denied_for_non_privileged() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "assetStorage.upsertAssetForUri behavior needs investigation"]
 async fn test_asset_storage_upsert_for_uri_denied_for_non_privileged() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![]);
@@ -894,10 +889,9 @@ async fn test_console_logging_available_for_all() {
 // ============================================================================
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "Route registration privilege check needs investigation"]
 async fn test_register_route_denied_for_non_privileged_script() {
     setup_env().await;
-    let admin = UserContext::admin("admin".to_string());
+    let user = create_user_with_capabilities("user", vec![Capability::WriteScripts]);
 
     // Create non-privileged script
     repository::upsert_script("test://non-privileged-routes", "").expect("Failed to create script");
@@ -913,7 +907,7 @@ async fn test_register_route_denied_for_non_privileged_script() {
         }
     "#;
 
-    let result = execute_script_secure("test://non-privileged-routes", script, admin);
+    let result = execute_script_secure("test://non-privileged-routes", script, user);
     assert!(
         result.success,
         "Non-privileged script should be denied route registration: {:?}",
@@ -922,10 +916,9 @@ async fn test_register_route_denied_for_non_privileged_script() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "Stream registration privilege check needs investigation"]
 async fn test_register_stream_route_denied_for_non_privileged_script() {
     setup_env().await;
-    let admin = UserContext::admin("admin".to_string());
+    let user = create_user_with_capabilities("user", vec![Capability::ManageStreams]);
 
     repository::upsert_script("test://non-privileged-streams", "")
         .expect("Failed to create script");
@@ -944,7 +937,7 @@ async fn test_register_stream_route_denied_for_non_privileged_script() {
         }
     "#;
 
-    let result = execute_script_secure("test://non-privileged-streams", script, admin);
+    let result = execute_script_secure("test://non-privileged-streams", script, user);
     assert!(
         result.success,
         "Non-privileged script should be denied stream registration: {:?}",
@@ -953,10 +946,9 @@ async fn test_register_stream_route_denied_for_non_privileged_script() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "Asset route registration privilege check needs investigation"]
 async fn test_register_asset_route_denied_for_non_privileged_script() {
     setup_env().await;
-    let admin = UserContext::admin("admin".to_string());
+    let user = create_user_with_capabilities("user", vec![Capability::WriteAssets]);
 
     repository::upsert_script("test://non-privileged-assets", "").expect("Failed to create script");
 
@@ -971,7 +963,7 @@ async fn test_register_asset_route_denied_for_non_privileged_script() {
         }
     "#;
 
-    let result = execute_script_secure("test://non-privileged-assets", script, admin);
+    let result = execute_script_secure("test://non-privileged-assets", script, user);
     assert!(
         result.success,
         "Non-privileged script should be denied asset route registration: {:?}",
