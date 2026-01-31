@@ -247,31 +247,6 @@ interface RouteRegistry {
     data: any,
     filterJson: string,
   ): string;
-
-  /**
-   * List all registered routes
-   * @returns JSON string array of registered routes
-   * @example
-   * const routes = JSON.parse(routeRegistry.listRoutes());
-   */
-  listRoutes(): string;
-
-  /**
-   * List all registered streams
-   * @returns JSON string array of registered streams
-   * @example
-   * const streams = JSON.parse(routeRegistry.listStreams());
-   */
-  listStreams(): string;
-
-  /**
-   * Generate OpenAPI 3.0 specification from registered routes
-   * @returns JSON string with OpenAPI 3.0 specification
-   * @example
-   * const spec = routeRegistry.generateOpenApi();
-   * const openapi = JSON.parse(spec);
-   */
-  generateOpenApi(): string;
 }
 
 // ============================================================================
@@ -426,141 +401,6 @@ interface PersonalStorage {
    * const result = personalStorage.clear();
    */
   clear(): string;
-}
-
-/**
- * Script metadata
- */
-interface ScriptMetadata {
-  /** Script URI */
-  uri: string;
-
-  /** Script name */
-  name: string;
-
-  /** Script size in bytes */
-  size: number;
-
-  /** Created timestamp (milliseconds since epoch) */
-  createdAt: number;
-
-  /** Updated timestamp (milliseconds since epoch) */
-  updatedAt: number;
-
-  /** Whether script has privileged access */
-  privileged: boolean;
-
-  /** Whether script has been initialized */
-  initialized: boolean;
-
-  /** Initialization error message if any */
-  initError?: string;
-}
-
-/**
- * Script storage for managing JavaScript scripts
- */
-interface ScriptStorage {
-  /**
-   * List all scripts with metadata
-   * @returns JSON string array of script metadata
-   * @example
-   * const scripts = JSON.parse(scriptStorage.listScripts());
-   */
-  listScripts(): string;
-
-  /**
-   * Get script content by name
-   * @param scriptName - Script name/URI
-   * @returns Script content or null if not found
-   * @example
-   * const content = scriptStorage.getScript("my-script");
-   */
-  getScript(scriptName: string): string | null;
-
-  /**
-   * Get script initialization status
-   * @param scriptName - Script name/URI
-   * @returns JSON string with init status or null
-   * @example
-   * const status = JSON.parse(scriptStorage.getScriptInitStatus("my-script"));
-   */
-  getScriptInitStatus(scriptName: string): string | null;
-
-  /**
-   * Get script security profile
-   * @param scriptName - Script name/URI
-   * @returns JSON string with security profile or null
-   * @example
-   * const profile = JSON.parse(scriptStorage.getScriptSecurityProfile("my-script"));
-   */
-  getScriptSecurityProfile(scriptName: string): string | null;
-
-  /**
-   * Create or update a script
-   * @param scriptName - Script name/URI
-   * @param content - Script content
-   * @returns Result message
-   * @example
-   * scriptStorage.upsertScript("my-script", "function init() { ... }");
-   */
-  upsertScript(scriptName: string, content: string): string;
-
-  /**
-   * Delete a script (requires ownership or admin privileges)
-   * @param scriptName - Script name/URI
-   * @returns True if deleted, false if failed
-   * @example
-   * scriptStorage.deleteScript("old-script");
-   */
-  deleteScript(scriptName: string): boolean;
-
-  /**
-   * Set privileged status for a script (admin only)
-   * @param scriptName - Script name/URI
-   * @param privileged - Whether script should be privileged
-   * @returns True if successful
-   * @example
-   * scriptStorage.setScriptPrivileged("system-script", true);
-   */
-  setScriptPrivileged(scriptName: string, privileged: boolean): boolean;
-
-  /**
-   * Check if current user can manage script privileges
-   * @returns True if user has admin capability
-   * @example
-   * if (scriptStorage.canManageScriptPrivileges()) { ... }
-   */
-  canManageScriptPrivileges(): boolean;
-
-  /**
-   * Get list of owner user IDs for a script
-   * @param scriptName - Script name/URI
-   * @returns JSON string array of owner user IDs
-   * @example
-   * const owners = JSON.parse(scriptStorage.getScriptOwners("my-script"));
-   */
-  getScriptOwners(scriptName: string): string;
-
-  /**
-   * Add an owner to a script (requires current ownership or admin)
-   * @param scriptName - Script name/URI
-   * @param userId - User ID to add as owner
-   * @returns Result message
-   * @example
-   * scriptStorage.addScriptOwner("my-script", "user123");
-   */
-  addScriptOwner(scriptName: string, userId: string): string;
-
-  /**
-   * Remove an owner from a script (requires current ownership or admin)
-   * @param scriptName - Script name/URI
-   * @param userId - User ID to remove
-   * @returns Result message
-   * @example
-   * scriptStorage.removeScriptOwner("my-script", "user123");
-   */
-  removeScriptOwner(scriptName: string, userId: string): string;
 }
 
 // ============================================================================
@@ -1215,7 +1055,6 @@ declare var routeRegistry: RouteRegistry;
 declare var assetStorage: AssetStorage;
 declare var sharedStorage: SharedStorage;
 declare var personalStorage: PersonalStorage;
-declare var scriptStorage: ScriptStorage;
 declare var graphQLRegistry: GraphQLRegistry;
 declare var mcpRegistry: McpRegistry;
 declare var database: Database;

@@ -210,6 +210,181 @@ interface Console {
 }
 
 // ============================================================================
+// Route Registry API (Privileged Scripts Only)
+// ============================================================================
+
+/**
+ * RouteRegistry interface extensions for privileged scripts
+ * Requires appropriate capabilities for global introspection
+ */
+interface RouteRegistry {
+  /**
+   * List all registered routes (requires ReadScripts capability)
+   * @returns JSON string array of registered routes
+   * @example
+   * const routes = JSON.parse(routeRegistry.listRoutes());
+   */
+  listRoutes(): string;
+
+  /**
+   * List all registered streams (requires ReadScripts capability)
+   * @returns JSON string array of registered streams
+   * @example
+   * const streams = JSON.parse(routeRegistry.listStreams());
+   */
+  listStreams(): string;
+
+  /**
+   * Generate OpenAPI 3.0 specification from registered routes (requires ReadScripts capability)
+   * @returns JSON string with OpenAPI 3.0 specification
+   * @example
+   * const spec = routeRegistry.generateOpenApi();
+   * const openapi = JSON.parse(spec);
+   */
+  generateOpenApi(): string;
+}
+
+// ============================================================================
+// Script Storage API (Privileged Scripts Only)
+// ============================================================================
+
+/**
+ * Script metadata
+ */
+interface ScriptMetadata {
+  /** Script URI */
+  uri: string;
+
+  /** Script name */
+  name: string;
+
+  /** Script size in bytes */
+  size: number;
+
+  /** Created timestamp (milliseconds since epoch) */
+  createdAt: number;
+
+  /** Updated timestamp (milliseconds since epoch) */
+  updatedAt: number;
+
+  /** Whether script has privileged access */
+  privileged: boolean;
+
+  /** Whether script has been initialized */
+  initialized: boolean;
+
+  /** Initialization error message if any */
+  initError?: string;
+}
+
+/**
+ * Script storage for managing JavaScript scripts (privileged scripts only)
+ * Requires appropriate capabilities for cross-script operations
+ */
+interface ScriptStorage {
+  /**
+   * List all scripts with metadata (requires ReadScripts capability)
+   * @returns JSON string array of script metadata
+   * @example
+   * const scripts = JSON.parse(scriptStorage.listScripts());
+   */
+  listScripts(): string;
+
+  /**
+   * Get script content by name (requires ReadScripts capability)
+   * @param scriptName - Script name/URI
+   * @returns Script content or null if not found
+   * @example
+   * const content = scriptStorage.getScript("my-script");
+   */
+  getScript(scriptName: string): string | null;
+
+  /**
+   * Get script initialization status (requires ReadScripts capability)
+   * @param scriptName - Script name/URI
+   * @returns JSON string with init status or null
+   * @example
+   * const status = JSON.parse(scriptStorage.getScriptInitStatus("my-script"));
+   */
+  getScriptInitStatus(scriptName: string): string | null;
+
+  /**
+   * Get script security profile (requires ReadScripts capability)
+   * @param scriptName - Script name/URI
+   * @returns JSON string with security profile or null
+   * @example
+   * const profile = JSON.parse(scriptStorage.getScriptSecurityProfile("my-script"));
+   */
+  getScriptSecurityProfile(scriptName: string): string | null;
+
+  /**
+   * Create or update a script (requires WriteScripts capability)
+   * @param scriptName - Script name/URI
+   * @param content - Script content
+   * @returns Result message
+   * @example
+   * scriptStorage.upsertScript("my-script", "function init() { ... }");
+   */
+  upsertScript(scriptName: string, content: string): string;
+
+  /**
+   * Delete a script (requires ownership or admin privileges)
+   * @param scriptName - Script name/URI
+   * @returns True if deleted, false if failed
+   * @example
+   * scriptStorage.deleteScript("old-script");
+   */
+  deleteScript(scriptName: string): boolean;
+
+  /**
+   * Set privileged status for a script (admin only)
+   * @param scriptName - Script name/URI
+   * @param privileged - Whether script should be privileged
+   * @returns True if successful
+   * @example
+   * scriptStorage.setScriptPrivileged("system-script", true);
+   */
+  setScriptPrivileged(scriptName: string, privileged: boolean): boolean;
+
+  /**
+   * Check if current user can manage script privileges (admin capability check)
+   * @returns True if user has admin capability
+   * @example
+   * if (scriptStorage.canManageScriptPrivileges()) { ... }
+   */
+  canManageScriptPrivileges(): boolean;
+
+  /**
+   * Get list of owner user IDs for a script
+   * @param scriptName - Script name/URI
+   * @returns JSON string array of owner user IDs
+   * @example
+   * const owners = JSON.parse(scriptStorage.getScriptOwners("my-script"));
+   */
+  getScriptOwners(scriptName: string): string;
+
+  /**
+   * Add an owner to a script (requires current ownership or admin)
+   * @param scriptName - Script name/URI
+   * @param userId - User ID to add as owner
+   * @returns Result message
+   * @example
+   * scriptStorage.addScriptOwner("my-script", "user123");
+   */
+  addScriptOwner(scriptName: string, userId: string): string;
+
+  /**
+   * Remove an owner from a script (requires current ownership or admin)
+   * @param scriptName - Script name/URI
+   * @param userId - User ID to remove
+   * @returns Result message
+   * @example
+   * scriptStorage.removeScriptOwner("my-script", "user123");
+   */
+  removeScriptOwner(scriptName: string, userId: string): string;
+}
+
+// ============================================================================
 // Asset Storage API (Privileged Scripts Only)
 // ============================================================================
 
@@ -281,3 +456,4 @@ interface AssetStorage {
 declare var userStorage: UserStorage;
 declare var secretStorage: SecretStorage;
 declare var schedulerService: SchedulerService;
+declare var scriptStorage: ScriptStorage;
