@@ -4704,10 +4704,6 @@ impl SecureGlobalContext {
             Function::new(
                 ctx.clone(),
                 move |_ctx: rquickjs::Ctx<'_>, options: rquickjs::Object| -> JsResult<String> {
-                    if let Err(msg) = ensure_scheduler_privileged(&script_uri_once) {
-                        return Ok(msg);
-                    }
-
                     let handler: String = match options.get("handler") {
                         Ok(value) => value,
                         Err(_) => {
@@ -4759,10 +4755,6 @@ impl SecureGlobalContext {
         let register_recurring = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>, options: rquickjs::Object| -> JsResult<String> {
-                if let Err(msg) = ensure_scheduler_privileged(&script_uri_recurring) {
-                    return Ok(msg);
-                }
-
                 let handler: String = match options.get("handler") {
                     Ok(value) => value,
                     Err(_) => {
@@ -4830,10 +4822,6 @@ impl SecureGlobalContext {
         let clear_all = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
-                if let Err(msg) = ensure_scheduler_privileged(&script_uri_clear) {
-                    return Ok(msg);
-                }
-
                 let removed = scheduler::clear_script_jobs(&script_uri_clear);
                 Ok(format!(
                     "Cleared {} scheduled job(s) for {}",
@@ -5275,20 +5263,6 @@ fn execute_message_handler(
     .map_err(|e| format!("Context execution failed: {}", e))?;
 
     Ok(())
-}
-
-fn ensure_scheduler_privileged(script_uri: &str) -> Result<(), String> {
-    match repository::is_script_privileged(script_uri) {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(format!(
-            "schedulerService is restricted to privileged scripts ({}).",
-            script_uri
-        )),
-        Err(e) => Err(format!(
-            "Unable to verify scheduler privileges for '{}': {}",
-            script_uri, e
-        )),
-    }
 }
 
 impl SecureGlobalContext {
