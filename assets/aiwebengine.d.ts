@@ -1134,6 +1134,24 @@ interface Convert {
    * );
    */
   render_handlebars_template(template: string, dataJson: string): string;
+
+  /**
+   * Base64 encode a string
+   * @param data - String to encode
+   * @returns Base64-encoded string
+   * @example
+   * const encoded = convert.btoa("Hello World");
+   */
+  btoa(data: string): string;
+
+  /**
+   * Base64 decode a string
+   * @param data - Base64-encoded string to decode
+   * @returns Decoded string
+   * @example
+   * const decoded = convert.atob(encoded);
+   */
+  atob(data: string): string;
 }
 
 // ============================================================================
@@ -1152,24 +1170,6 @@ declare var database: Database;
 declare var console: Console;
 declare var dispatcher: MessageDispatcher;
 declare var convert: Convert;
-
-/**
- * Base64 encode a string
- * @param data - String to encode
- * @returns Base64-encoded string
- * @example
- * const encoded = btoa("Hello World");
- */
-declare function btoa(data: string): string;
-
-/**
- * Base64 decode a string
- * @param data - Base64-encoded string to decode
- * @returns Decoded string
- * @example
- * const decoded = atob(encoded);
- */
-declare function atob(data: string): string;
 
 // ============================================================================
 // Response Builder Helpers
