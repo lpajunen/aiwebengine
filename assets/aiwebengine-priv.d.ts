@@ -75,31 +75,12 @@ interface UserStorage {
 }
 
 /**
- * Secret storage API for checking secret availability (privileged scripts only, read-only)
- *
- * SECURITY: Secret values are NEVER exposed to JavaScript. Only existence checks
- * and identifier listing are allowed. Actual secret values are injected by Rust
- * into HTTP requests using the {{secret:identifier}} template syntax.
+ * Secret storage API extensions for privileged scripts
+ * Allows listing all available secret identifiers
  */
 interface SecretStorage {
   /**
-   * Check if a secret exists
-   * @param identifier - Secret identifier to check
-   * @returns true if the secret exists, false otherwise
-   * @example
-   * if (secretStorage.exists("API_KEY")) {
-   *   // Use {{secret:API_KEY}} in fetch headers
-   *   const response = fetch(url, {
-   *     headers: {
-   *       "Authorization": "Bearer {{secret:API_KEY}}"
-   *     }
-   *   });
-   * }
-   */
-  exists(identifier: string): boolean;
-
-  /**
-   * List all available secret identifiers
+   * List all available secret identifiers (privileged scripts only)
    * @returns Array of secret identifier strings
    * @example
    * const secrets = secretStorage.list();

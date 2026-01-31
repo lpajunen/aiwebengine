@@ -404,6 +404,35 @@ interface PersonalStorage {
 }
 
 // ============================================================================
+// Secret Storage API
+// ============================================================================
+
+/**
+ * Secret storage API for checking secret availability (read-only)
+ *
+ * SECURITY: Secret values are NEVER exposed to JavaScript. Only existence checks
+ * are allowed. Actual secret values are injected by Rust into HTTP requests
+ * using the {{SECRET_NAME}} template syntax.
+ */
+interface SecretStorage {
+  /**
+   * Check if a secret exists
+   * @param identifier - Secret identifier to check
+   * @returns true if the secret exists, false otherwise
+   * @example
+   * if (secretStorage.exists("API_KEY")) {
+   *   // Use {{API_KEY}} in fetch headers
+   *   const response = fetch(url, {
+   *     headers: {
+   *       "Authorization": "Bearer {{API_KEY}}"
+   *     }
+   *   });
+   * }
+   */
+  exists(identifier: string): boolean;
+}
+
+// ============================================================================
 // GraphQL Registry API
 // ============================================================================
 
@@ -1055,6 +1084,7 @@ declare var routeRegistry: RouteRegistry;
 declare var assetStorage: AssetStorage;
 declare var sharedStorage: SharedStorage;
 declare var personalStorage: PersonalStorage;
+declare var secretStorage: SecretStorage;
 declare var graphQLRegistry: GraphQLRegistry;
 declare var mcpRegistry: McpRegistry;
 declare var database: Database;
