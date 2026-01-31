@@ -433,6 +433,66 @@ interface SecretStorage {
 }
 
 // ============================================================================
+// Scheduler Service API
+// ============================================================================
+
+/**
+ * Scheduler service for managing scheduled tasks
+ */
+interface SchedulerService {
+  /**
+   * Register a one-time scheduled job
+   * @param options - Job options
+   * @param options.handler - Name of the handler function to call
+   * @param options.runAt - UTC ISO timestamp when to run (e.g., "2025-12-17T15:30:00Z")
+   * @param options.name - Optional job name/key
+   * @returns Result message with job details
+   * @example
+   * const oneHourFromNow = new Date(Date.now() + 3600000).toISOString();
+   * schedulerService.registerOnce({
+   *   handler: "sendReminder",
+   *   runAt: oneHourFromNow,
+   *   name: "reminder-job"
+   * });
+   */
+  registerOnce(options: {
+    handler: string;
+    runAt: string;
+    name?: string;
+  }): string;
+
+  /**
+   * Register a recurring scheduled job
+   * @param options - Job options
+   * @param options.handler - Name of the handler function to call
+   * @param options.intervalMinutes - Interval in minutes (minimum 1)
+   * @param options.name - Optional job name/key
+   * @param options.startAt - Optional UTC ISO timestamp for first run
+   * @returns Result message with job details
+   * @example
+   * schedulerService.registerRecurring({
+   *   handler: "cleanupOldData",
+   *   intervalMinutes: 60,
+   *   name: "cleanup-job"
+   * });
+   */
+  registerRecurring(options: {
+    handler: string;
+    intervalMinutes: number;
+    name?: string;
+    startAt?: string;
+  }): string;
+
+  /**
+   * Clear all scheduled jobs for the current script
+   * @returns Result message with count of cleared jobs
+   * @example
+   * schedulerService.clearAll();
+   */
+  clearAll(): string;
+}
+
+// ============================================================================
 // GraphQL Registry API
 // ============================================================================
 
@@ -1085,6 +1145,7 @@ declare var assetStorage: AssetStorage;
 declare var sharedStorage: SharedStorage;
 declare var personalStorage: PersonalStorage;
 declare var secretStorage: SecretStorage;
+declare var schedulerService: SchedulerService;
 declare var graphQLRegistry: GraphQLRegistry;
 declare var mcpRegistry: McpRegistry;
 declare var database: Database;
