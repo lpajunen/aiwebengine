@@ -1,3 +1,4 @@
+use base64::Engine;
 use handlebars::Handlebars;
 use pulldown_cmark::{Options, Parser, html};
 
@@ -103,6 +104,34 @@ pub fn render_handlebars_template(template: &str, data: &str) -> Result<String, 
         .map_err(|e| format!("Template rendering error: {}", e))?;
 
     Ok(result)
+}
+
+/// Base64 encode a string
+///
+/// # Arguments
+/// * `input` - The string to encode
+///
+/// # Returns
+/// * `Ok(String)` - Base64-encoded string
+/// * `Err(String)` - Error message if encoding fails
+pub fn convert_btoa(input: &str) -> Result<String, String> {
+    Ok(base64::engine::general_purpose::STANDARD.encode(input.as_bytes()))
+}
+
+/// Base64 decode a string
+///
+/// # Arguments
+/// * `input` - The base64-encoded string
+///
+/// # Returns
+/// * `Ok(String)` - Decoded UTF-8 string
+/// * `Err(String)` - Error message if decoding fails
+pub fn convert_atob(input: &str) -> Result<String, String> {
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(input.as_bytes())
+        .map_err(|e| format!("Invalid base64 input: {}", e))?;
+
+    String::from_utf8(decoded).map_err(|e| format!("Decoded data is not valid UTF-8: {}", e))
 }
 
 #[cfg(test)]

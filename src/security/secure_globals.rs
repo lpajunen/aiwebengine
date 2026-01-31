@@ -4245,8 +4245,70 @@ impl SecureGlobalContext {
             },
         )?;
 
+        // convert.btoa(data) - Base64 encode a string (string-only)
+        let btoa = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, input: rquickjs::Value| -> JsResult<String> {
+                let Some(input_str) = input.as_string() else {
+                    return Err(rquickjs::Error::new_from_js_message(
+                        "btoa",
+                        "type_error",
+                        "btoa() expects a string parameter",
+                    ));
+                };
+
+                let input_str = input_str.to_string().map_err(|e| {
+                    rquickjs::Error::new_from_js_message(
+                        "btoa",
+                        "type_error",
+                        &format!("btoa() expects a string parameter: {}", e),
+                    )
+                })?;
+
+                crate::conversion::convert_btoa(&input_str).map_err(|e| {
+                    rquickjs::Error::new_from_js_message(
+                        "btoa",
+                        "invalid_input",
+                        &format!("Invalid input: {}", e),
+                    )
+                })
+            },
+        )?;
+
+        // convert.atob(data) - Base64 decode a string (string-only)
+        let atob = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, input: rquickjs::Value| -> JsResult<String> {
+                let Some(input_str) = input.as_string() else {
+                    return Err(rquickjs::Error::new_from_js_message(
+                        "atob",
+                        "type_error",
+                        "atob() expects a string parameter",
+                    ));
+                };
+
+                let input_str = input_str.to_string().map_err(|e| {
+                    rquickjs::Error::new_from_js_message(
+                        "atob",
+                        "type_error",
+                        &format!("atob() expects a string parameter: {}", e),
+                    )
+                })?;
+
+                crate::conversion::convert_atob(&input_str).map_err(|e| {
+                    rquickjs::Error::new_from_js_message(
+                        "atob",
+                        "invalid_input",
+                        &format!("Invalid input: {}", e),
+                    )
+                })
+            },
+        )?;
+
         convert_obj.set("markdown_to_html", markdown_to_html)?;
         convert_obj.set("render_handlebars_template", render_handlebars_template)?;
+        convert_obj.set("btoa", btoa)?;
+        convert_obj.set("atob", atob)?;
         global.set("convert", convert_obj)?;
 
         debug!(

@@ -780,7 +780,6 @@ async fn test_scheduler_register_recurring_denied_for_non_privileged_script() {
 // ============================================================================
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "convert.btoa not yet implemented in Rust"]
 async fn test_convert_btoa_available_for_all() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![]);
@@ -807,7 +806,6 @@ async fn test_convert_btoa_available_for_all() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "convert.atob not yet implemented in Rust"]
 async fn test_convert_atob_available_for_all() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![]);
