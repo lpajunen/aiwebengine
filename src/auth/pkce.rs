@@ -4,7 +4,6 @@
 /// Provides code_verifier generation and code_challenge calculation
 use crate::auth::error::AuthError;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use rand::Rng;
 use sha2::{Digest, Sha256};
 
 /// Generate a cryptographically random code_verifier
@@ -16,14 +15,14 @@ use sha2::{Digest, Sha256};
 /// # Returns
 /// A random 43-128 character string suitable for use as a PKCE code_verifier
 pub fn generate_code_verifier() -> String {
-    let mut rng = rand::rng();
-    let length = rng.random_range(43..=128);
+    // Generate length between 43 and 128
+    let length = 43 + (rand::random::<u8>() % 86) as usize;
 
     (0..length)
         .map(|_| {
             // Use unreserved characters: A-Z, a-z, 0-9, -, ., _, ~
             let chars = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
-            chars[rng.random_range(0..chars.len())] as char
+            chars[rand::random::<u8>() as usize % chars.len()] as char
         })
         .collect()
 }

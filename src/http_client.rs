@@ -78,7 +78,13 @@ impl HttpClient {
     /// Make an HTTP request with the Fetch API interface
     ///
     /// Supports secret injection via `{{secret:identifier}}` template syntax in headers.
-    pub fn fetch(&self, url: String, options: FetchOptions) -> Result<FetchResponse, HttpError> {
+    /// Validates secret access based on target URL and script URI constraints.
+    pub fn fetch(
+        &self,
+        url: String,
+        options: FetchOptions,
+        script_uri: Option<&str>,
+    ) -> Result<FetchResponse, HttpError> {
         // Validate URL
         let parsed_url = if self.allow_private {
             Self::validate_url_test(&url)?
@@ -91,7 +97,7 @@ impl HttpClient {
             .map_err(|_| HttpError::InvalidMethod(options.method.clone()))?;
 
         // Process headers and inject secrets
-        let headers = self.process_headers(options.headers, &url)?;
+        let headers = self.process_headers(options.headers, &url, script_uri)?;
 
         // Build request
         let timeout = options
@@ -204,11 +210,12 @@ impl HttpClient {
         }
     }
 
-    /// Process headers and inject secrets
+    /// Process headers and inject secrets with constraint validation
     fn process_headers(
         &self,
         headers: Option<HashMap<String, String>>,
         url: &str,
+        script_uri: Option<&str>,
     ) -> Result<HeaderMap, HttpError> {
         let mut header_map = HeaderMap::new();
 
@@ -227,15 +234,34 @@ impl HttpClient {
                     let secrets_manager =
                         get_global_secrets_manager().ok_or(HttpError::SecretsNotInitialized)?;
 
-                    // Look up secret
+                    // Look up secret with constraint validation
                     let secret_value = secrets_manager
-                        .get(secret_id)
-                        .ok_or_else(|| HttpError::SecretNotFound(secret_id.to_string()))?;
+                        .get_with_constraints(secret_id, url, script_uri)
+                        .map_err(|e| match e {
+                            crate::secrets::SecretAccessError::NotFound(id) => {
+                                HttpError::SecretNotFound(id)
+                            }
+                            crate::secrets::SecretAccessError::UrlConstraintViolation {
+                                secret_id,
+                                attempted_url,
+                            } => HttpError::SecretUrlConstraintViolation {
+                                secret_id,
+                                attempted_url,
+                            },
+                            crate::secrets::SecretAccessError::ScriptConstraintViolation {
+                                secret_id,
+                                script_uri,
+                            } => HttpError::SecretScriptConstraintViolation {
+                                secret_id,
+                                script_uri,
+                            },
+                        })?;
 
                     // Audit log (identifier only, never value)
                     info!(
                         secret_id = secret_id,
                         url = url,
+                        script_uri = ?script_uri,
                         "Secret accessed in fetch request"
                     );
 
@@ -397,6 +423,18 @@ pub enum HttpError {
 
     #[error("Secret not found: {0}")]
     SecretNotFound(String),
+
+    #[error("Secret '{secret_id}' not allowed for URL: {attempted_url}")]
+    SecretUrlConstraintViolation {
+        secret_id: String,
+        attempted_url: String,
+    },
+
+    #[error("Secret '{secret_id}' not allowed for script: {script_uri}")]
+    SecretScriptConstraintViolation {
+        secret_id: String,
+        script_uri: String,
+    },
 
     #[error("Secrets manager not initialized")]
     SecretsNotInitialized,

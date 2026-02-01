@@ -11,6 +11,8 @@
 //! 4. All secret access is logged for audit trail (identifier only, never values)
 //! 5. Secrets are automatically redacted from logs and error messages
 
+use globset::{Glob, GlobMatcher};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
 use tracing::{debug, info, warn};
@@ -37,13 +39,24 @@ pub fn initialize_global_secrets_manager(manager: Arc<SecretsManager>) -> bool {
     GLOBAL_SECRETS_MANAGER.set(manager).is_ok()
 }
 
+/// Secret entry with access control constraints
+#[derive(Clone)]
+struct SecretEntry {
+    /// The actual secret value
+    value: String,
+    /// Allowed URL pattern (glob) - None means unrestricted
+    allowed_url_pattern: Option<GlobMatcher>,
+    /// Allowed script URI pattern (glob) - None means unrestricted
+    allowed_script_pattern: Option<GlobMatcher>,
+}
+
 /// Thread-safe secrets manager
 ///
 /// Stores secrets in memory with read-write lock for concurrent access.
 /// Secrets can be loaded from configuration files or environment variables.
 #[derive(Clone)]
 pub struct SecretsManager {
-    secrets: Arc<RwLock<HashMap<String, String>>>,
+    secrets: Arc<RwLock<HashMap<String, SecretEntry>>>,
 }
 
 impl SecretsManager {
@@ -56,27 +69,34 @@ impl SecretsManager {
 
     /// Load secrets from environment variables
     ///
-    /// Looks for environment variables prefixed with `SECRET_`.
-    /// For example: `SECRET_ANTHROPIC_API_KEY` becomes `anthropic_api_key`
+    /// Supports two formats:
+    /// 1. Simple: `SECRET_ANTHROPIC_API_KEY` becomes `anthropic_api_key` (unrestricted)
+    /// 2. With constraints: `SECRET_NAME__ALLOW_<url_pattern>__SCRIPT_<script_pattern>`
     ///
     /// # Example
     ///
     /// ```bash
+    /// # Unrestricted (backward compatible)
     /// export SECRET_ANTHROPIC_API_KEY="sk-ant-api03-..."
-    /// export SECRET_SENDGRID_API_KEY="SG.xyz..."
+    ///
+    /// # With URL and script constraints
+    /// export SECRET_GITHUB_TOKEN__ALLOW_https://api.github.com/*__SCRIPT_/scripts/integrations/*="ghp_..."
     /// ```
     pub fn load_from_env(&self) {
         let mut count = 0;
 
         for (key, value) in std::env::vars() {
-            if key.starts_with("SECRET_") {
-                // Convert SECRET_ANTHROPIC_API_KEY to anthropic_api_key
-                let secret_id = key.strip_prefix("SECRET_").unwrap().to_lowercase();
-
-                if !value.is_empty() {
-                    self.set(secret_id.clone(), value);
-                    count += 1;
-                    info!(secret_id = %secret_id, "Loaded secret from environment");
+            if key.starts_with("SECRET_") && !value.is_empty() {
+                match Self::parse_secret_env_var(&key, &value) {
+                    Ok((secret_id, entry)) => {
+                        let mut secrets = self.secrets.write().unwrap();
+                        secrets.insert(secret_id.clone(), entry);
+                        count += 1;
+                        info!(secret_id = %secret_id, "Loaded secret from environment");
+                    }
+                    Err(e) => {
+                        warn!(key = %key, error = %e, "Failed to parse secret environment variable");
+                    }
                 }
             }
         }
@@ -88,7 +108,58 @@ impl SecretsManager {
         }
     }
 
+    /// Parse secret environment variable into identifier and entry
+    fn parse_secret_env_var(key: &str, value: &str) -> Result<(String, SecretEntry), String> {
+        let without_prefix = key.strip_prefix("SECRET_").unwrap();
+
+        // Check if this uses the new format with __ALLOW_ and __SCRIPT_
+        if let Some(allow_pos) = without_prefix.find("__ALLOW_") {
+            // New format: SECRET_NAME__ALLOW_<url_pattern>__SCRIPT_<script_pattern>
+            let secret_id = without_prefix[..allow_pos].to_lowercase();
+            let after_allow = &without_prefix[allow_pos + 8..]; // Skip "__ALLOW_"
+
+            let script_pos = after_allow
+                .find("__SCRIPT_")
+                .ok_or_else(|| "Missing __SCRIPT_ in secret definition".to_string())?;
+
+            let url_pattern = &after_allow[..script_pos];
+            let script_pattern = &after_allow[script_pos + 9..]; // Skip "__SCRIPT_"
+
+            // Compile glob patterns
+            let url_matcher = Glob::new(url_pattern)
+                .map_err(|e| format!("Invalid URL pattern '{}': {}", url_pattern, e))?
+                .compile_matcher();
+
+            let script_matcher = Glob::new(script_pattern)
+                .map_err(|e| format!("Invalid script pattern '{}': {}", script_pattern, e))?
+                .compile_matcher();
+
+            Ok((
+                secret_id,
+                SecretEntry {
+                    value: value.to_string(),
+                    allowed_url_pattern: Some(url_matcher),
+                    allowed_script_pattern: Some(script_matcher),
+                },
+            ))
+        } else {
+            // Old format: SECRET_NAME (unrestricted, backward compatible)
+            let secret_id = without_prefix.to_lowercase();
+            Ok((
+                secret_id,
+                SecretEntry {
+                    value: value.to_string(),
+                    allowed_url_pattern: None,
+                    allowed_script_pattern: None,
+                },
+            ))
+        }
+    }
+
     /// Load secrets from a HashMap (typically from config file)
+    ///
+    /// Note: Config file secrets are loaded without constraints (unrestricted).
+    /// Use `load_from_toml_file()` for constrained secrets.
     ///
     /// # Arguments
     ///
@@ -108,25 +179,179 @@ impl SecretsManager {
         }
     }
 
-    /// Get a secret value by identifier
+    /// Load constrained secrets from a TOML file
     ///
-    /// Returns `None` if the secret doesn't exist.
+    /// File format:
+    /// ```toml
+    /// [[secret]]
+    /// identifier = "api_key"
+    /// value = "secret_value"
+    /// allowed_url_pattern = "https://api.example.com/*"
+    /// allowed_script_pattern = "/scripts/specific/*"
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the TOML file
+    pub fn load_from_toml_file(&self, path: &std::path::Path) -> Result<usize, String> {
+        if !path.exists() {
+            debug!(path = ?path, "Secrets TOML file does not exist, skipping");
+            return Ok(0);
+        }
+
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read secrets file: {}", e))?;
+
+        let config: SecretsTomlConfig =
+            toml::from_str(&content).map_err(|e| format!("Failed to parse secrets TOML: {}", e))?;
+
+        let mut count = 0;
+        for secret_def in config.secret {
+            match self.load_secret_from_toml(secret_def) {
+                Ok(identifier) => {
+                    count += 1;
+                    info!(secret_id = %identifier, "Loaded constrained secret from TOML");
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to load secret from TOML");
+                }
+            }
+        }
+
+        if count > 0 {
+            info!(count = count, path = ?path, "Loaded constrained secrets from TOML");
+        }
+
+        Ok(count)
+    }
+
+    fn load_secret_from_toml(&self, def: SecretTomlDefinition) -> Result<String, String> {
+        let url_matcher = if let Some(pattern) = def.allowed_url_pattern {
+            Some(
+                Glob::new(&pattern)
+                    .map_err(|e| format!("Invalid URL pattern '{}': {}", pattern, e))?
+                    .compile_matcher(),
+            )
+        } else {
+            None
+        };
+
+        let script_matcher = if let Some(pattern) = def.allowed_script_pattern {
+            Some(
+                Glob::new(&pattern)
+                    .map_err(|e| format!("Invalid script pattern '{}': {}", pattern, e))?
+                    .compile_matcher(),
+            )
+        } else {
+            None
+        };
+
+        let entry = SecretEntry {
+            value: def.value,
+            allowed_url_pattern: url_matcher,
+            allowed_script_pattern: script_matcher,
+        };
+
+        let identifier = def.identifier.to_lowercase();
+        let mut secrets = self.secrets.write().unwrap();
+        secrets.insert(identifier.clone(), entry);
+
+        Ok(identifier)
+    }
+
+    /// Get a secret value by identifier with constraint validation
+    ///
+    /// Returns `None` if the secret doesn't exist or constraints are violated.
     /// This method should only be called from Rust code for injection purposes.
     ///
     /// # Arguments
     ///
     /// * `identifier` - The secret identifier (e.g., "anthropic_api_key")
+    /// * `target_url` - The URL where the secret will be sent (for validation)
+    /// * `script_uri` - The script URI requesting the secret (for validation)
     ///
     /// # Security Note
     ///
     /// This method is NOT exposed to JavaScript. JavaScript can only check
     /// existence via `exists()` or list identifiers via `list_identifiers()`.
-    pub fn get(&self, identifier: &str) -> Option<String> {
+    pub fn get_with_constraints(
+        &self,
+        identifier: &str,
+        target_url: &str,
+        script_uri: Option<&str>,
+    ) -> Result<String, SecretAccessError> {
         let secrets = self.secrets.read().unwrap();
-        secrets.get(identifier).cloned()
+        let entry = secrets
+            .get(identifier)
+            .ok_or_else(|| SecretAccessError::NotFound(identifier.to_string()))?;
+
+        // Normalize URL for case-insensitive matching (lowercase scheme and host)
+        let normalized_url = Self::normalize_url_for_matching(target_url);
+
+        // Check URL constraint
+        if let Some(ref url_matcher) = entry.allowed_url_pattern
+            && !url_matcher.is_match(&normalized_url)
+        {
+            return Err(SecretAccessError::UrlConstraintViolation {
+                secret_id: identifier.to_string(),
+                attempted_url: target_url.to_string(),
+            });
+        }
+
+        // Check script URI constraint
+        if let Some(ref script_matcher) = entry.allowed_script_pattern {
+            let uri = script_uri.ok_or_else(|| SecretAccessError::ScriptConstraintViolation {
+                secret_id: identifier.to_string(),
+                script_uri: "<unknown>".to_string(),
+            })?;
+
+            // Case-sensitive matching for script URIs
+            if !script_matcher.is_match(uri) {
+                return Err(SecretAccessError::ScriptConstraintViolation {
+                    secret_id: identifier.to_string(),
+                    script_uri: uri.to_string(),
+                });
+            }
+        }
+
+        Ok(entry.value.clone())
     }
 
-    /// Set or update a secret
+    /// Get a secret value by identifier (deprecated - use get_with_constraints)
+    ///
+    /// Returns `None` if the secret doesn't exist.
+    /// This method bypasses constraints and should only be used for backward compatibility.
+    ///
+    /// # Deprecated
+    ///
+    /// Use `get_with_constraints()` instead to enforce access control.
+    #[deprecated(since = "0.1.0", note = "Use get_with_constraints for security")]
+    pub fn get(&self, identifier: &str) -> Option<String> {
+        let secrets = self.secrets.read().unwrap();
+        secrets.get(identifier).map(|e| e.value.clone())
+    }
+
+    /// Normalize URL for case-insensitive matching
+    ///
+    /// Lowercases the scheme and host, preserves path case
+    fn normalize_url_for_matching(url: &str) -> String {
+        if let Ok(parsed) = url::Url::parse(url) {
+            let scheme = parsed.scheme().to_lowercase();
+            let host = parsed.host_str().unwrap_or("").to_lowercase();
+            let port = parsed.port().map(|p| format!(":{}", p)).unwrap_or_default();
+            let path = parsed.path();
+            let query = parsed
+                .query()
+                .map(|q| format!("?{}", q))
+                .unwrap_or_default();
+            format!("{scheme}://{host}{port}{path}{query}")
+        } else {
+            // If parsing fails, lowercase the whole URL as fallback
+            url.to_lowercase()
+        }
+    }
+
+    /// Set or update a secret (without constraints)
     ///
     /// # Arguments
     ///
@@ -134,7 +359,14 @@ impl SecretsManager {
     /// * `value` - The secret value
     pub fn set(&self, identifier: String, value: String) {
         let mut secrets = self.secrets.write().unwrap();
-        secrets.insert(identifier, value);
+        secrets.insert(
+            identifier,
+            SecretEntry {
+                value,
+                allowed_url_pattern: None,
+                allowed_script_pattern: None,
+            },
+        );
     }
 
     /// Check if a secret exists
@@ -259,9 +491,9 @@ impl SecretsManager {
         let secrets = self.secrets.read().unwrap();
         let mut result = text.to_string();
 
-        for value in secrets.values() {
-            if value.len() >= 8 {
-                result = result.replace(value, "[REDACTED]");
+        for entry in secrets.values() {
+            if entry.value.len() >= 8 {
+                result = result.replace(&entry.value, "[REDACTED]");
             }
         }
 
@@ -274,6 +506,53 @@ impl Default for SecretsManager {
         Self::new()
     }
 }
+
+/// Errors that can occur when accessing secrets with constraints
+#[derive(Debug, Clone)]
+pub enum SecretAccessError {
+    /// Secret not found
+    NotFound(String),
+    /// URL constraint violated
+    UrlConstraintViolation {
+        secret_id: String,
+        attempted_url: String,
+    },
+    /// Script URI constraint violated
+    ScriptConstraintViolation {
+        secret_id: String,
+        script_uri: String,
+    },
+}
+
+impl std::fmt::Display for SecretAccessError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound(id) => write!(f, "Secret '{}' not found", id),
+            Self::UrlConstraintViolation {
+                secret_id,
+                attempted_url,
+            } => {
+                write!(
+                    f,
+                    "Secret '{}' not allowed for URL: {}",
+                    secret_id, attempted_url
+                )
+            }
+            Self::ScriptConstraintViolation {
+                secret_id,
+                script_uri,
+            } => {
+                write!(
+                    f,
+                    "Secret '{}' not allowed for script: {}",
+                    secret_id, script_uri
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for SecretAccessError {}
 
 #[cfg(test)]
 mod tests {
@@ -290,7 +569,9 @@ mod tests {
         let manager = SecretsManager::new();
         manager.set("test_key".to_string(), "test_value".to_string());
 
-        assert_eq!(manager.get("test_key"), Some("test_value".to_string()));
+        #[allow(deprecated)]
+        let result = manager.get("test_key");
+        assert_eq!(result, Some("test_value".to_string()));
         assert_eq!(manager.count(), 1);
     }
 
@@ -432,4 +713,18 @@ mod tests {
         // Should have all 100 keys
         assert_eq!(manager.count(), 100);
     }
+}
+
+/// TOML configuration structures for constrained secrets
+#[derive(Debug, Deserialize)]
+struct SecretsTomlConfig {
+    secret: Vec<SecretTomlDefinition>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SecretTomlDefinition {
+    identifier: String,
+    value: String,
+    allowed_url_pattern: Option<String>,
+    allowed_script_pattern: Option<String>,
 }

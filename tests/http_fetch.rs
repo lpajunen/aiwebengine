@@ -13,7 +13,7 @@ async fn test_fetch_get_request() {
 
     let result = tokio::task::spawn_blocking(move || {
         let client = HttpClient::new_for_tests().expect("Failed to create client");
-        client.fetch(url, FetchOptions::default())
+        client.fetch(url, FetchOptions::default(), None)
     })
     .await
     .expect("Task panicked");
@@ -52,6 +52,7 @@ async fn test_fetch_post_with_json() {
                 body: Some(body.to_string()),
                 timeout_ms: None,
             },
+            None,
         )
     })
     .await
@@ -90,6 +91,7 @@ async fn test_fetch_custom_headers() {
                 body: None,
                 timeout_ms: None,
             },
+            None,
         )
     })
     .await
@@ -116,6 +118,7 @@ fn test_fetch_blocks_localhost() {
     let result = client.fetch(
         "http://localhost:8080/api".to_string(),
         FetchOptions::default(),
+        None,
     );
 
     assert!(result.is_err(), "Localhost should be blocked");
@@ -130,6 +133,7 @@ fn test_fetch_blocks_private_ip() {
     let result = client.fetch(
         "http://192.168.1.1/api".to_string(),
         FetchOptions::default(),
+        None,
     );
 
     assert!(result.is_err(), "Private IP should be blocked");
@@ -144,6 +148,7 @@ fn test_fetch_blocks_127_0_0_1() {
     let result = client.fetch(
         "http://127.0.0.1:3000/api".to_string(),
         FetchOptions::default(),
+        None,
     );
 
     assert!(result.is_err(), "127.0.0.1 should be blocked");
@@ -158,6 +163,7 @@ fn test_fetch_invalid_url_scheme() {
     let result = client.fetch(
         "ftp://example.com/file".to_string(),
         FetchOptions::default(),
+        None,
     );
 
     assert!(result.is_err(), "FTP scheme should be rejected");
@@ -173,7 +179,11 @@ fn test_fetch_invalid_url_scheme() {
 fn test_fetch_file_scheme_blocked() {
     let client = HttpClient::new().expect("Failed to create client");
 
-    let result = client.fetch("file:///etc/passwd".to_string(), FetchOptions::default());
+    let result = client.fetch(
+        "file:///etc/passwd".to_string(),
+        FetchOptions::default(),
+        None,
+    );
 
     assert!(result.is_err(), "File scheme should be rejected");
 }
@@ -182,7 +192,7 @@ fn test_fetch_file_scheme_blocked() {
 fn test_fetch_invalid_url() {
     let client = HttpClient::new().expect("Failed to create client");
 
-    let result = client.fetch("not-a-valid-url".to_string(), FetchOptions::default());
+    let result = client.fetch("not-a-valid-url".to_string(), FetchOptions::default(), None);
 
     assert!(result.is_err(), "Invalid URL should be rejected");
 }
@@ -196,7 +206,7 @@ async fn test_fetch_404_not_found() {
 
     let result = tokio::task::spawn_blocking(move || {
         let client = HttpClient::new_for_tests().expect("Failed to create client");
-        client.fetch(url, FetchOptions::default())
+        client.fetch(url, FetchOptions::default(), None)
     })
     .await
     .expect("Task panicked");
@@ -231,6 +241,7 @@ async fn test_fetch_different_methods() {
                 body: Some("test data".to_string()),
                 timeout_ms: Some(10000),
             },
+            None,
         );
         assert!(result.is_ok(), "PUT request failed: {:?}", result.err());
         let response = result.unwrap();
@@ -249,6 +260,7 @@ async fn test_fetch_different_methods() {
                 body: None,
                 timeout_ms: Some(10000),
             },
+            None,
         );
         assert!(result.is_ok(), "DELETE request failed: {:?}", result.err());
         let response = result.unwrap();
@@ -267,6 +279,7 @@ async fn test_fetch_different_methods() {
                 body: Some("patch data".to_string()),
                 timeout_ms: Some(10000),
             },
+            None,
         );
         assert!(result.is_ok(), "PATCH request failed: {:?}", result.err());
         let response = result.unwrap();
@@ -291,7 +304,7 @@ async fn test_fetch_response_headers() {
 
     let result = tokio::task::spawn_blocking(move || {
         let client = HttpClient::new_for_tests().expect("Failed to create client");
-        client.fetch(url, FetchOptions::default())
+        client.fetch(url, FetchOptions::default(), None)
     })
     .await
     .expect("Task panicked");
@@ -346,6 +359,7 @@ async fn test_fetch_secret_template_syntax() {
                 body: None,
                 timeout_ms: None,
             },
+            None,
         )
     })
     .await
@@ -404,6 +418,7 @@ async fn test_fetch_missing_secret_error() {
                 body: None,
                 timeout_ms: None,
             },
+            None,
         )
     })
     .await

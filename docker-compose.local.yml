@@ -59,6 +59,9 @@ services:
       - ./logs:/app/logs
       # Persist database
       - ./data:/app/data
+      # Constrained secrets (if using secrets.toml instead of env vars)
+      # Uncomment to use secrets.toml for access-controlled secrets
+      # - ./secrets.toml:/app/secrets.toml:ro
       # Cache cargo registry and target to speed up builds
       - cargo-registry:/usr/local/cargo/registry
       - cargo-git:/usr/local/cargo/git
@@ -89,8 +92,9 @@ services:
       # CSRF & session encryption keys (base64 encoded 32-byte values)
       - APP_SECURITY__CSRF_KEY=${APP_SECURITY__CSRF_KEY:-}
       - APP_SECURITY__SESSION_ENCRYPTION_KEY=${APP_SECURITY__SESSION_ENCRYPTION_KEY:-}
-      # AI
-      - SECRET_ANTHROPIC_API_KEY=${SECRET_ANTHROPIC_API_KEY:-}
+      # Secrets (unconstrained - for constrained secrets use secrets.toml)
+      # Note: Environment variable secrets have no URL/script access control
+      # For production, use secrets.toml with access constraints instead
     networks:
       - aiwebengine-dev-network
     depends_on:
@@ -129,6 +133,9 @@ services:
       - ./logs:/app/logs
       # Persist database
       - ./data:/app/data
+      # Constrained secrets (if using secrets.toml instead of env vars)
+      # Uncomment to use secrets.toml for access-controlled secrets
+      - ./secrets.toml:/app/secrets.toml:ro
       # Cache cargo registry and target to speed up builds
       - cargo-registry:/usr/local/cargo/registry
       - cargo-git:/usr/local/cargo/git
@@ -159,8 +166,9 @@ services:
       # CSRF & session encryption keys (base64 encoded 32-byte values)
       - APP_SECURITY__CSRF_KEY=${APP_SECURITY__CSRF_KEY:-}
       - APP_SECURITY__SESSION_ENCRYPTION_KEY=${APP_SECURITY__SESSION_ENCRYPTION_KEY:-}
-      # AI
-      - SECRET_ANTHROPIC_API_KEY=${SECRET_ANTHROPIC_API_KEY:-}
+      # Secrets (unconstrained - for constrained secrets use secrets.toml)
+      # Note: Environment variable secrets have no URL/script access control
+      # For production, use secrets.toml with access constraints instead
     networks:
       - aiwebengine-dev-network
     depends_on:

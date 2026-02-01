@@ -79,6 +79,7 @@ COPY --from=builder /app/target/release/aiwebengine /usr/local/bin/aiwebengine
 
 # Create necessary directories
 RUN mkdir -p /app/logs /app/scripts /app/assets /app/docs /app/data && \
+    touch /app/secrets.toml && \
     chown -R aiwebengine:aiwebengine /app
 
 # Copy default configuration (use production config as base)

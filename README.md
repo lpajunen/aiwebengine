@@ -5,11 +5,11 @@
 [![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](https://github.com/lpajunen/aiwebengine/releases)
 [![Language](https://img.shields.io/badge/language-Rust%20%7C%20JavaScript-red.svg)](https://github.com/lpajunen/aiwebengine)
 
-AI and Web Engine for JavaScript based Solutions - Secure and Scalable Platform for Building Websites, APIs, Web Apps, and AI Tools
+AI and Web Engine for JavaScript / TypeScript based Solutions - Secure and Scalable Platform for Building Websites, APIs, Web Apps, and AI Tools and agents
 
 Excels when developing solutions using generative AI technologies.
 
-Supports JavaScript/TypeScript as the primary programming language. Also supports JSX/TSX for building user interfaces.
+Supports JavaScript / TypeScript as the primary programming language. Also supports JSX / TSX for building user interfaces.
 
 Code first approach. Then provide tools for verification and testing.
 Verify code by providing automatic API descriptions such as OpenAPI, GraphQL schema, and MCP tool list.

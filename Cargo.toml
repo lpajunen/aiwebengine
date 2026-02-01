@@ -27,24 +27,25 @@ lazy_static = "1.4"
 utoipa = { version = "5.0", features = ["chrono"] }
 clap = { version = "4.0", features = ["derive"] }
 notify = "8.2"
-toml = "0.9"
+toml = "1.0"
 figment = { version = "0.10", features = ["toml", "yaml", "env"] }
 regex = "1.5"
 indexmap = "2.0"
 uuid = { version = "1.0", features = ["v4", "serde"] }
 url = "2.5"
+globset = "0.4"
 futures = "0.3.31"
 async-stream = "0.3.6"
 mime = "0.3"
 mime_guess = "2.0"
 html-escape = "0.2"
 sha2 = "0.10"
-rand = "0.9.2"
+rand = "0.10.0"
 pulldown-cmark = "0.13.0"
 handlebars = "6.0"
 
 # TypeScript/JSX transpilation
-oxc = { version = "0.111.0", features = ["full"] }
+oxc = { version = "0.113.0", features = ["full"] }
 
 # Security and encryption (Phase 0.5)
 aes-gcm = "0.10"
@@ -79,7 +80,7 @@ lto = "thin"
 [dev-dependencies]
 tokio-test = "0.4"
 mockall = "0.14.0"
-jsonschema = "0.40.0"
+jsonschema = "0.41.0"
 
 # Build-time dependencies (for capturing build metadata)
 [build-dependencies]

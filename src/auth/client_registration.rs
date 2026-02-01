@@ -259,11 +259,8 @@ impl ClientRegistrationManager {
 
     /// Generate a cryptographically secure client secret
     fn generate_client_secret(&self) -> String {
-        use rand::Rng;
-        let mut rng = rand::rng();
-
         // Generate 32 random bytes
-        let bytes: Vec<u8> = (0..32).map(|_| rng.random()).collect();
+        let bytes: Vec<u8> = (0..32).map(|_| rand::random::<u8>()).collect();
 
         // Base64 encode
         use base64::{Engine as _, engine::general_purpose::STANDARD};

@@ -53,6 +53,9 @@ services:
       - ./scripts:/app/scripts:ro
       # Migration files (read-only)
       - ./data:/app/data:ro
+      # Constrained secrets (if using secrets.toml instead of env vars)
+      # Uncomment to use secrets.toml for access-controlled secrets
+      - /app/secrets.toml:/app/secrets.toml:ro
     environment:
       - RUST_LOG=info
       # Auth configuration
@@ -81,8 +84,9 @@ services:
       # Repository
       - APP_REPOSITORY__STORAGE_TYPE=postgresql
       - APP_REPOSITORY__DATABASE_URL=postgresql://aiwebengine:${POSTGRES_PASSWORD:-change-this-password}@postgres:5432/aiwebengine
-      # AI
-      - SECRET_ANTHROPIC_API_KEY=${SECRET_ANTHROPIC_API_KEY:-}
+      # Secrets (unconstrained - for constrained secrets use secrets.toml)
+      # Note: Environment variable secrets have no URL/script access control
+      # For production, use secrets.toml with access constraints instead
     networks:
       - aiwebengine-network
     depends_on:
@@ -110,6 +114,9 @@ services:
       - ./scripts:/app/scripts:ro
       # Migration files (read-only)
       - ./data:/app/data:ro
+      # Constrained secrets (if using secrets.toml instead of env vars)
+      # Uncomment to use secrets.toml for access-controlled secrets
+      - /app/secrets.toml:/app/secrets.toml:ro
     environment:
       - RUST_LOG=info
       # Auth configuration
@@ -132,8 +139,9 @@ services:
       # Repository
       - APP_REPOSITORY__STORAGE_TYPE=postgresql
       - APP_REPOSITORY__DATABASE_URL=postgresql://aiwebengine:${POSTGRES_PASSWORD:-change-this-password}@postgres:5432/aiwebengine
-      # AI
-      - SECRET_ANTHROPIC_API_KEY=${SECRET_ANTHROPIC_API_KEY:-}
+      # Secrets (unconstrained - for constrained secrets use secrets.toml)
+      # Note: Environment variable secrets have no URL/script access control
+      # For production, use secrets.toml with access constraints instead
     networks:
       - aiwebengine-network
     depends_on:

@@ -33,10 +33,8 @@ use tracing::{debug, error, info, warn};
 pub const PRIVILEGED_BOOTSTRAP_SCRIPTS: &[&str] = &[
     "https://example.com/core",
     "https://example.com/cli",
-    "https://example.com/editor",
     "https://example.com/admin",
     "https://example.com/auth",
-    "https://example.com/docs",
 ];
 
 /// Helper to run async code in a blocking context, handling different runtime scenarios

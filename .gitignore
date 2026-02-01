@@ -1,8 +1,8 @@
 /target
 node_modules/
 config.toml
-.env
-.env-prod
+.env*
+!.env.example
 .vscode/mcp.json
 aiwebengine_latest.tar
 
@@ -20,3 +20,4 @@ data/
 *.db
 *.db-shm
 *.db-wal
+secrets.toml

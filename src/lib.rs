@@ -23,6 +23,7 @@ pub mod graphql_ws;
 pub mod http_client;
 pub mod js_engine;
 pub mod mcp;
+pub mod mcp_client;
 pub mod middleware;
 pub mod notifications;
 pub mod openapi_schemas;
@@ -522,6 +523,17 @@ fn initialize_secrets(config: &config::Config) -> Arc<secrets::SecretsManager> {
         info!("Total secrets configured: {}", total_secrets);
     } else if env_secrets_count == 0 {
         debug!("No secrets configured from environment or config file");
+    }
+
+    // Load constrained secrets from secrets.toml if it exists
+    let secrets_toml_path = std::path::Path::new("secrets.toml");
+    if let Ok(constrained_count) = secrets_manager.load_from_toml_file(secrets_toml_path)
+        && constrained_count > 0
+    {
+        info!(
+            "Loaded {} constrained secret(s) from secrets.toml",
+            constrained_count
+        );
     }
 
     let secrets_manager = Arc::new(secrets_manager);

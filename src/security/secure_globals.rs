@@ -2458,6 +2458,241 @@ impl SecureGlobalContext {
         mcp_registry.set("registerPrompt", register_prompt)?;
         global.set("mcpRegistry", mcp_registry)?;
 
+        // Setup McpClient class for connecting to external MCP servers
+        self.setup_mcp_client_class(ctx, script_uri)?;
+
+        Ok(())
+    }
+
+    /// Setup McpClient class for external MCP server connections
+    fn setup_mcp_client_class(&self, ctx: &rquickjs::Ctx<'_>, _script_uri: &str) -> JsResult<()> {
+        let global = ctx.globals();
+        // Get the secrets manager - try instance first, then fall back to global
+        let secrets_manager = self
+            .secrets_manager
+            .clone()
+            .or_else(crate::secrets::get_global_secrets_manager);
+
+        // McpClient constructor
+        let mcp_client_constructor = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  server_url: String,
+                  secret_identifier: String|
+                  -> JsResult<String> {
+                // Create MCP client instance (just validate parameters)
+                let _client = crate::mcp_client::McpClient::new(
+                    server_url.clone(),
+                    secret_identifier.clone(),
+                )
+                .map_err(|e| {
+                    rquickjs::Error::new_from_js_message(
+                        "McpClient",
+                        "constructor",
+                        &format!("Failed to create MCP client: {}", e),
+                    )
+                })?;
+
+                // Serialize client to JSON (we'll store server_url and secret_identifier)
+                let client_data = serde_json::json!({
+                    "serverUrl": server_url,
+                    "secretIdentifier": secret_identifier,
+                });
+
+                Ok(serde_json::to_string(&client_data).unwrap())
+            },
+        )?;
+
+        // Create McpClient class object with constructor and prototype
+        let mcp_client_class = rquickjs::Object::new(ctx.clone())?;
+
+        // listTools method
+        let secrets_mgr_list = secrets_manager.clone();
+        let list_tools = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, client_data_json: String| -> JsResult<String> {
+                // Parse client data
+                let client_data: serde_json::Value = serde_json::from_str(&client_data_json)
+                    .map_err(|e| {
+                        rquickjs::Error::new_from_js_message(
+                            "McpClient",
+                            "listTools",
+                            &format!("Invalid client data: {}", e),
+                        )
+                    })?;
+
+                let server_url = client_data["serverUrl"].as_str().ok_or_else(|| {
+                    rquickjs::Error::new_from_js_message(
+                        "McpClient",
+                        "listTools",
+                        "Missing serverUrl in client data",
+                    )
+                })?;
+
+                let secret_identifier =
+                    client_data["secretIdentifier"].as_str().ok_or_else(|| {
+                        rquickjs::Error::new_from_js_message(
+                            "McpClient",
+                            "listTools",
+                            "Missing secretIdentifier in client data",
+                        )
+                    })?;
+
+                // Create client
+                let client = crate::mcp_client::McpClient::new(
+                    server_url.to_string(),
+                    secret_identifier.to_string(),
+                )
+                .map_err(|e| {
+                    rquickjs::Error::new_from_js_message(
+                        "McpClient",
+                        "listTools",
+                        &format!("Failed to create client: {}", e),
+                    )
+                })?;
+
+                // Get secrets manager
+                let secrets = secrets_mgr_list.as_ref().ok_or_else(|| {
+                    rquickjs::Error::new_from_js_message(
+                        "McpClient",
+                        "listTools",
+                        "Secrets manager not available",
+                    )
+                })?;
+
+                // List tools
+                let tools = client.list_tools(secrets).map_err(|e| {
+                    rquickjs::Error::new_from_js_message(
+                        "McpClient",
+                        "listTools",
+                        &format!("Failed to list tools: {}", e),
+                    )
+                })?;
+
+                // Serialize tools to JSON
+                serde_json::to_string(&tools).map_err(|e| {
+                    rquickjs::Error::new_from_js_message(
+                        "McpClient",
+                        "listTools",
+                        &format!("Failed to serialize tools: {}", e),
+                    )
+                })
+            },
+        )?;
+
+        // callTool method
+        let secrets_mgr_call = secrets_manager.clone();
+        let call_tool = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  client_data_json: String,
+                  tool_name: String,
+                  arguments_json: String|
+                  -> JsResult<String> {
+                // Parse client data
+                let client_data: serde_json::Value = serde_json::from_str(&client_data_json)
+                    .map_err(|e| {
+                        rquickjs::Error::new_from_js_message(
+                            "McpClient",
+                            "callTool",
+                            &format!("Invalid client data: {}", e),
+                        )
+                    })?;
+
+                let server_url = client_data["serverUrl"].as_str().ok_or_else(|| {
+                    rquickjs::Error::new_from_js_message(
+                        "McpClient",
+                        "callTool",
+                        "Missing serverUrl in client data",
+                    )
+                })?;
+
+                let secret_identifier =
+                    client_data["secretIdentifier"].as_str().ok_or_else(|| {
+                        rquickjs::Error::new_from_js_message(
+                            "McpClient",
+                            "callTool",
+                            "Missing secretIdentifier in client data",
+                        )
+                    })?;
+
+                // Parse arguments
+                let arguments: serde_json::Value =
+                    serde_json::from_str(&arguments_json).map_err(|e| {
+                        rquickjs::Error::new_from_js_message(
+                            "McpClient",
+                            "callTool",
+                            &format!("Invalid arguments JSON: {}", e),
+                        )
+                    })?;
+
+                // Create client
+                let client = crate::mcp_client::McpClient::new(
+                    server_url.to_string(),
+                    secret_identifier.to_string(),
+                )
+                .map_err(|e| {
+                    rquickjs::Error::new_from_js_message(
+                        "McpClient",
+                        "callTool",
+                        &format!("Failed to create client: {}", e),
+                    )
+                })?;
+
+                // Get secrets manager
+                let secrets = secrets_mgr_call.as_ref().ok_or_else(|| {
+                    rquickjs::Error::new_from_js_message(
+                        "McpClient",
+                        "callTool",
+                        "Secrets manager not available",
+                    )
+                })?;
+
+                // Call tool
+                let result = match client.call_tool(tool_name.clone(), arguments, secrets) {
+                    Ok(res) => res,
+                    Err(e) => {
+                        // For JSON-RPC errors, return them as {error: {...}} objects
+                        if let crate::mcp_client::McpClientError::JsonRpc(code, message) = e {
+                            let error_obj = serde_json::json!({
+                                "error": {
+                                    "code": code,
+                                    "message": message
+                                }
+                            });
+                            return Ok(serde_json::to_string(&error_obj).unwrap());
+                        }
+
+                        // For other errors, throw JavaScript exceptions
+                        return Err(rquickjs::Error::new_from_js_message(
+                            "McpClient",
+                            "callTool",
+                            &format!("Failed to call tool '{}': {}", tool_name, e),
+                        ));
+                    }
+                };
+
+                // Serialize result to JSON
+                serde_json::to_string(&result).map_err(|e| {
+                    rquickjs::Error::new_from_js_message(
+                        "McpClient",
+                        "callTool",
+                        &format!("Failed to serialize result: {}", e),
+                    )
+                })
+            },
+        )?;
+
+        // Set methods on the class
+        mcp_client_class.set("constructor", mcp_client_constructor)?;
+        mcp_client_class.set("_listTools", list_tools)?;
+        mcp_client_class.set("_callTool", call_tool)?;
+
+        // Set the class on global scope
+        global.set("McpClient", mcp_client_class)?;
+
+        debug!("McpClient class initialized for external MCP server connections");
+
         Ok(())
     }
 
@@ -3404,8 +3639,9 @@ impl SecureGlobalContext {
     }
 
     /// Setup fetch() function for HTTP requests with secret injection
-    fn setup_fetch_function(&self, ctx: &rquickjs::Ctx<'_>, _script_uri: &str) -> JsResult<()> {
+    fn setup_fetch_function(&self, ctx: &rquickjs::Ctx<'_>, script_uri: &str) -> JsResult<()> {
         let global = ctx.globals();
+        let script_uri_owned = script_uri.to_string();
 
         // Create the fetch function (synchronous version)
         let fetch_fn = Function::new(
@@ -3428,7 +3664,7 @@ impl SecureGlobalContext {
                     Default::default()
                 };
 
-                tracing::debug!("Fetching URL: {}", url);
+                tracing::debug!("Fetching URL: {} from script: {}", url, script_uri_owned);
 
                 // Create HTTP client
                 let client = crate::http_client::HttpClient::new().map_err(|e| {
@@ -3439,14 +3675,30 @@ impl SecureGlobalContext {
                     )
                 })?;
 
-                // Perform the fetch (synchronous)
-                let response = client.fetch(url.clone(), options).map_err(|e| {
-                    rquickjs::Error::new_from_js_message(
-                        "fetch",
-                        "request_failed",
-                        &format!("Fetch error: {}", e),
-                    )
-                })?;
+                // Perform the fetch (synchronous) with script_uri for constraint validation
+                let response =
+                    client
+                        .fetch(url.clone(), options, Some(&script_uri_owned))
+                        .map_err(|e| {
+                            // Log constraint violations for security monitoring
+                            if matches!(
+                        e,
+                        crate::http_client::HttpError::SecretUrlConstraintViolation { .. }
+                            | crate::http_client::HttpError::SecretScriptConstraintViolation { .. }
+                    ) {
+                                tracing::warn!(
+                                    error = %e,
+                                    url = %url,
+                                    script_uri = %script_uri_owned,
+                                    "Secret access constraint violation"
+                                );
+                            }
+                            rquickjs::Error::new_from_js_message(
+                                "fetch",
+                                "request_failed",
+                                &format!("Fetch error: {}", e),
+                            )
+                        })?;
 
                 // Convert response to JSON string
                 let response_json = serde_json::to_string(&response).map_err(|e| {
