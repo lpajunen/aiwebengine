@@ -339,9 +339,11 @@ pub async fn oauth_callback(
     // Return redirect with cookie
     let response = Redirect::to(redirect_target).into_response();
     let (mut parts, body) = response.into_parts();
-    parts
-        .headers
-        .insert(header::SET_COOKIE, cookie_value.parse().unwrap());
+    let cookie_header = cookie_value.parse().map_err(|_| ErrorResponse {
+        error: "internal_error".to_string(),
+        message: "Invalid cookie header value".to_string(),
+    })?;
+    parts.headers.insert(header::SET_COOKIE, cookie_header);
 
     Ok(Response::from_parts(parts, body))
 }
@@ -404,9 +406,11 @@ pub async fn logout(
     let redirect_url = params.redirect.as_deref().unwrap_or("/");
     let response = Redirect::to(redirect_url).into_response();
     let (mut parts, body) = response.into_parts();
-    parts
-        .headers
-        .insert(header::SET_COOKIE, cookie_value.parse().unwrap());
+    let cookie_header = cookie_value.parse().map_err(|_| ErrorResponse {
+        error: "internal_error".to_string(),
+        message: "Invalid cookie header value".to_string(),
+    })?;
+    parts.headers.insert(header::SET_COOKIE, cookie_header);
 
     Ok(Response::from_parts(parts, body))
 }
@@ -622,11 +626,21 @@ pub async fn oauth2_authorize(
     // For MCP: Generate authorization code and redirect back to client
     // Since we don't have client validation yet, we'll accept any client_id for development
 
-    // Get authenticated user ID
-    let user_id = auth_user
-        .as_ref()
-        .map(|u| u.user_id.clone())
-        .expect("User must be authenticated at this point");
+    // Get authenticated user ID — middleware guarantees authentication before reaching here,
+    // but we handle the None case defensively to avoid panicking.
+    let user_id = match auth_user.as_ref().map(|u| u.user_id.clone()) {
+        Some(id) => id,
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(ErrorResponse {
+                    error: "authentication_required".to_string(),
+                    message: "User must be authenticated".to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
 
     // Generate a random authorization code
     let auth_code = format!("code_{}", uuid::Uuid::new_v4());

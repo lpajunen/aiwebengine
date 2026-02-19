@@ -12,6 +12,34 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # Retry flaky tests
 retries = { backoff = "exponential", count = 2, delay = "1s" }
 
+# ---------------------------------------------------------------------------
+# Serial test group for every binary that starts a TestServer / TestContext.
+#
+# Root cause of flakiness: each integration-test binary is its own process, so
+# the in-process Semaphore in common/mod.rs is not enough — multiple binaries
+# can still run in parallel, races in execute_startup_scripts() reading shared
+# DB state and writing to process-global DYNAMIC_SCRIPTS / GRAPHQL_REGISTRY.
+#
+# max-threads = 1 tells nextest: at most 1 test from this group may be
+# executing at any given moment, across all binaries — effectively serialising
+# the server lifecycle globally.
+# ---------------------------------------------------------------------------
+[test-groups]
+serial-server-tests = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = '''
+  binary(api_http)
+  or binary(dispatcher)
+  or binary(openapi_validation)
+  or binary(repository)
+  or binary(script_error_detection_test)
+  or binary(scripts)
+  or binary(streaming)
+  or binary(test_utils)
+'''
+test-group = 'serial-server-tests'
+
 # Test groups that should run serially
 [[profile.default.overrides]]
 filter = 'test(test_concurrent)'

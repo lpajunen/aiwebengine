@@ -104,7 +104,12 @@ async fn main() -> AppResult<()> {
                 println!("✓ Configuration is valid");
                 println!(
                     "Server would start on: {}",
-                    config.server_address().expect("Invalid server address")
+                    config
+                        .server_address()
+                        .map_err(|e| aiwebengine::AppError::Config {
+                            message: e.to_string(),
+                            source: None,
+                        })?
                 );
                 println!("Log level: {}", config.logging.level);
                 println!(
@@ -136,7 +141,12 @@ async fn main() -> AppResult<()> {
     tracing::info!("Configuration loaded successfully");
     tracing::info!(
         "Server address: {}",
-        config.server_address().expect("Invalid server address")
+        config
+            .server_address()
+            .map_err(|e| aiwebengine::AppError::Config {
+                message: e.to_string(),
+                source: None,
+            })?
     );
     tracing::info!(
         "JavaScript timeout: {}ms",

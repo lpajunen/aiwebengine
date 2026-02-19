@@ -89,7 +89,7 @@ impl SecretsManager {
             if key.starts_with("SECRET_") && !value.is_empty() {
                 match Self::parse_secret_env_var(&key, &value) {
                     Ok((secret_id, entry)) => {
-                        let mut secrets = self.secrets.write().unwrap();
+                        let mut secrets = self.secrets.write().unwrap_or_else(|e| e.into_inner());
                         secrets.insert(secret_id.clone(), entry);
                         count += 1;
                         info!(secret_id = %secret_id, "Loaded secret from environment");
@@ -110,7 +110,7 @@ impl SecretsManager {
 
     /// Parse secret environment variable into identifier and entry
     fn parse_secret_env_var(key: &str, value: &str) -> Result<(String, SecretEntry), String> {
-        let without_prefix = key.strip_prefix("SECRET_").unwrap();
+        let without_prefix = &key["SECRET_".len()..];
 
         // Check if this uses the new format with __ALLOW_ and __SCRIPT_
         if let Some(allow_pos) = without_prefix.find("__ALLOW_") {
@@ -253,7 +253,7 @@ impl SecretsManager {
         };
 
         let identifier = def.identifier.to_lowercase();
-        let mut secrets = self.secrets.write().unwrap();
+        let mut secrets = self.secrets.write().unwrap_or_else(|e| e.into_inner());
         secrets.insert(identifier.clone(), entry);
 
         Ok(identifier)
@@ -280,7 +280,7 @@ impl SecretsManager {
         target_url: &str,
         script_uri: Option<&str>,
     ) -> Result<String, SecretAccessError> {
-        let secrets = self.secrets.read().unwrap();
+        let secrets = self.secrets.read().unwrap_or_else(|e| e.into_inner());
         let entry = secrets
             .get(identifier)
             .ok_or_else(|| SecretAccessError::NotFound(identifier.to_string()))?;
@@ -327,7 +327,7 @@ impl SecretsManager {
     /// Use `get_with_constraints()` instead to enforce access control.
     #[deprecated(since = "0.1.0", note = "Use get_with_constraints for security")]
     pub fn get(&self, identifier: &str) -> Option<String> {
-        let secrets = self.secrets.read().unwrap();
+        let secrets = self.secrets.read().unwrap_or_else(|e| e.into_inner());
         secrets.get(identifier).map(|e| e.value.clone())
     }
 
@@ -358,7 +358,7 @@ impl SecretsManager {
     /// * `identifier` - The secret identifier (e.g., "anthropic_api_key")
     /// * `value` - The secret value
     pub fn set(&self, identifier: String, value: String) {
-        let mut secrets = self.secrets.write().unwrap();
+        let mut secrets = self.secrets.write().unwrap_or_else(|e| e.into_inner());
         secrets.insert(
             identifier,
             SecretEntry {
@@ -379,7 +379,7 @@ impl SecretsManager {
     ///
     /// `true` if the secret exists, `false` otherwise
     pub fn exists(&self, identifier: &str) -> bool {
-        let secrets = self.secrets.read().unwrap();
+        let secrets = self.secrets.read().unwrap_or_else(|e| e.into_inner());
         secrets.contains_key(identifier)
     }
 
@@ -392,7 +392,7 @@ impl SecretsManager {
     ///
     /// Vector of secret identifiers
     pub fn list_identifiers(&self) -> Vec<String> {
-        let secrets = self.secrets.read().unwrap();
+        let secrets = self.secrets.read().unwrap_or_else(|e| e.into_inner());
         secrets.keys().cloned().collect()
     }
 
@@ -406,7 +406,7 @@ impl SecretsManager {
     ///
     /// `true` if the secret was deleted, `false` if it didn't exist
     pub fn delete(&self, identifier: &str) -> bool {
-        let mut secrets = self.secrets.write().unwrap();
+        let mut secrets = self.secrets.write().unwrap_or_else(|e| e.into_inner());
         secrets.remove(identifier).is_some()
     }
 
@@ -416,7 +416,7 @@ impl SecretsManager {
     ///
     /// Number of secrets currently stored
     pub fn count(&self) -> usize {
-        let secrets = self.secrets.read().unwrap();
+        let secrets = self.secrets.read().unwrap_or_else(|e| e.into_inner());
         secrets.len()
     }
 
@@ -426,7 +426,7 @@ impl SecretsManager {
     ///
     /// This removes all secrets from memory. Use with caution.
     pub fn clear(&self) {
-        let mut secrets = self.secrets.write().unwrap();
+        let mut secrets = self.secrets.write().unwrap_or_else(|e| e.into_inner());
         secrets.clear();
         warn!("All secrets cleared from memory");
     }
@@ -488,7 +488,7 @@ impl SecretsManager {
     ///
     /// Text with secrets replaced by `[REDACTED]`
     pub fn redact(&self, text: &str) -> String {
-        let secrets = self.secrets.read().unwrap();
+        let secrets = self.secrets.read().unwrap_or_else(|e| e.into_inner());
         let mut result = text.to_string();
 
         for entry in secrets.values() {

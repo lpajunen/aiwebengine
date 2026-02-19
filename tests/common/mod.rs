@@ -2,11 +2,31 @@ use aiwebengine::{config, start_server_with_config};
 use std::sync::Arc;
 use std::sync::{Once, OnceLock};
 use std::time::Duration;
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, oneshot};
 
 static INIT: Once = Once::new();
 static DB_INIT: Once = Once::new();
 static DB_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+
+/// Global semaphore (capacity = 1) used to serialize integration tests.
+///
+/// Because `execute_startup_scripts()` reads *all* scripts from the shared
+/// database and updates process-global state (`DYNAMIC_SCRIPTS`,
+/// `GRAPHQL_REGISTRY`, per-script metadata), running multiple test servers
+/// concurrently causes race conditions: server A picks up scripts that were
+/// just inserted by test B, producing non-deterministic route registrations.
+///
+/// Holding a single permit for the full lifetime of each `TestServer`
+/// guarantees that only one server is starting, running, and shutting down at
+/// any given time, eliminating those races without requiring per-test database
+/// isolation.
+static TEST_SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
+
+fn get_test_semaphore() -> Arc<Semaphore> {
+    TEST_SEMAPHORE
+        .get_or_init(|| Arc::new(Semaphore::new(1)))
+        .clone()
+}
 
 fn get_db_runtime() -> &'static tokio::runtime::Runtime {
     DB_RUNTIME.get_or_init(|| {
@@ -71,12 +91,23 @@ pub fn should_skip_integration_tests() -> bool {
 pub struct TestServer {
     port: u16,
     shutdown_tx: Option<oneshot::Sender<()>>,
+    /// Held for the server's entire lifetime so no other test server can start.
+    _permit: OwnedSemaphorePermit,
 }
 
 impl TestServer {
-    /// Start a test server with automatic port selection and shutdown support
+    /// Start a test server with automatic port selection and shutdown support.
+    ///
+    /// Acquires the global serialization permit first so that only one server
+    /// is running at a time — avoiding races in `execute_startup_scripts()`.
     #[allow(dead_code)]
     pub async fn start() -> anyhow::Result<Self> {
+        // Serialize: wait until no other test server is running.
+        let permit = get_test_semaphore()
+            .acquire_owned()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to acquire test semaphore: {}", e))?;
+
         let mut test_config = config::Config::test_config_postgres(0);
 
         // Disable auth for tests by default to avoid overhead
@@ -92,6 +123,7 @@ impl TestServer {
         Ok(Self {
             port,
             shutdown_tx: Some(shutdown_tx),
+            _permit: permit,
         })
     }
 

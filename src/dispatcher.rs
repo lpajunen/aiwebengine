@@ -17,7 +17,7 @@ impl MessageListener {
     pub fn new(script_uri: String, handler_name: String) -> Self {
         let registered_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_millis() as u64;
 
         Self {

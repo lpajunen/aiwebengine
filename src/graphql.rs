@@ -2,8 +2,15 @@ use async_graphql::dynamic::*;
 use async_stream;
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use tracing::{debug, error};
+
+/// Static regex for parsing SDL type definitions: `type TypeName { ... }`
+static SDL_TYPE_REGEX: OnceLock<regex::Regex> = OnceLock::new();
+/// Static regex for parsing SDL field definitions: `fieldName: Type`
+static SDL_FIELD_REGEX: OnceLock<regex::Regex> = OnceLock::new();
+/// Static regex for detecting the `type` keyword in SDL fragments
+static SDL_HAS_TYPE_REGEX: OnceLock<regex::Regex> = OnceLock::new();
 
 use crate::js_engine::{GraphqlOperationKind, GraphqlResolverExecutionParams};
 
@@ -393,8 +400,12 @@ fn parse_types_from_sdl(sdl: &str) -> HashMap<String, Object> {
     // Simple regex-based parsing for type definitions
     // This is a basic implementation - a full SDL parser would be more robust
     // Use captures_iter to find all type definitions in the SDL
-    let type_regex = regex::Regex::new(r"type\s+(\w+)\s*\{([^}]+)\}").unwrap();
-    let field_regex = regex::Regex::new(r"(\w+):\s*(\[?\w+!?\]?!?)").unwrap();
+    let type_regex = SDL_TYPE_REGEX.get_or_init(|| {
+        regex::Regex::new(r"type\s+(\w+)\s*\{([^}]+)\}").expect("static SDL type regex")
+    });
+    let field_regex = SDL_FIELD_REGEX.get_or_init(|| {
+        regex::Regex::new(r"(\w+):\s*(\[?\w+!?\]?!?)").expect("static SDL field regex")
+    });
 
     for captures in type_regex.captures_iter(sdl) {
         let type_name = &captures[1];
@@ -456,7 +467,10 @@ fn extract_return_type(sdl: &str, field_name: &str) -> TypeRef {
         r"{}\s*(?:\([^)]*\))?\s*:\s*(\[?\w+!?\]?!?)",
         regex::escape(field_name)
     );
-    if let Some(captures) = regex::Regex::new(&pattern).unwrap().captures(sdl) {
+    let Ok(re) = regex::Regex::new(&pattern) else {
+        return TypeRef::named(TypeRef::STRING);
+    };
+    if let Some(captures) = re.captures(sdl) {
         let type_str = &captures[1];
         debug!("Found type string: '{}'", type_str);
         match type_str {
@@ -474,9 +488,18 @@ fn extract_return_type(sdl: &str, field_name: &str) -> TypeRef {
                 // Check if it's a custom type
                 debug!(
                     "Checking if SDL contains type definitions: {}",
-                    regex::Regex::new(r"type\s+").unwrap().is_match(sdl)
+                    SDL_HAS_TYPE_REGEX
+                        .get_or_init(
+                            || regex::Regex::new(r"type\s+").expect("static SDL has-type regex")
+                        )
+                        .is_match(sdl)
                 );
-                if regex::Regex::new(r"type\s+").unwrap().is_match(sdl) {
+                if SDL_HAS_TYPE_REGEX
+                    .get_or_init(|| {
+                        regex::Regex::new(r"type\s+").expect("static SDL has-type regex")
+                    })
+                    .is_match(sdl)
+                {
                     let clean_type = type_str.trim_matches(|c| c == '[' || c == ']' || c == '!');
                     debug!("Using custom type: '{}'", clean_type);
                     if type_str.ends_with('!') {
@@ -515,7 +538,11 @@ fn extract_arguments(sdl: &str, field_name: &str) -> Vec<(String, TypeRef)> {
     // Pattern to match field with arguments: fieldName(arg1: Type1, arg2: Type2): ReturnType
     let pattern = format!(r"{}\s*\(([^)]*)\)", regex::escape(field_name));
 
-    if let Some(captures) = regex::Regex::new(&pattern).unwrap().captures(sdl) {
+    let Ok(re) = regex::Regex::new(&pattern) else {
+        debug!("No arguments found for field '{}'", field_name);
+        return Vec::new();
+    };
+    if let Some(captures) = re.captures(sdl) {
         let args_str = &captures[1];
         debug!("Found arguments string: '{}'", args_str);
 

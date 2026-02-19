@@ -135,12 +135,9 @@ impl ToolCache {
 
         // Update access order
         self.access_order.retain(|url| url != &server_url);
-        self.access_order.push(server_url);
+        self.access_order.push(server_url.clone());
 
-        debug!(
-            "Cached tools for MCP server: {}",
-            self.access_order.last().unwrap()
-        );
+        debug!("Cached tools for MCP server: {}", server_url);
     }
 }
 

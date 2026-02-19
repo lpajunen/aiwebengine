@@ -872,8 +872,9 @@ fn find_route_handler(
     // Sort by specificity (highest first) and return the most specific match
     if !candidates.is_empty() {
         candidates.sort_by(|a, b| b.0.cmp(&a.0)); // Descending order
-        let (_, uri, handler, params) = candidates.into_iter().next().unwrap();
-        return Some((uri, handler, params));
+        if let Some((_, uri, handler, params)) = candidates.into_iter().next() {
+            return Some((uri, handler, params));
+        }
     }
 
     None
@@ -1533,7 +1534,13 @@ async fn setup_routes(
                 );
             }
 
-            let mut req = async_graphql::Request::new(query.unwrap());
+            let mut req = if let Some(q) = query {
+                async_graphql::Request::new(q)
+            } else {
+                return axum::response::Json(
+                    serde_json::json!({"error": "Missing query parameter"}),
+                );
+            };
             if let Some(vars) = variables {
                 req = req.variables(vars);
             }
@@ -1638,7 +1645,19 @@ async fn setup_routes(
                     });
             }
 
-            let mut req = async_graphql::Request::new(query.unwrap());
+            let mut req = if let Some(q) = query {
+                async_graphql::Request::new(q)
+            } else {
+                error!("GraphQL SSE: Missing query parameter");
+                return axum::response::Response::builder()
+                    .status(400)
+                    .header("content-type", "text/plain")
+                    .body(axum::body::Body::from("Missing query parameter"))
+                    .unwrap_or_else(|err| {
+                        error!("Failed to build error response: {}", err);
+                        axum::response::Response::new(axum::body::Body::from("Bad Request"))
+                    });
+            };
             if let Some(vars) = variables {
                 req = req.variables(vars);
             }
@@ -2500,7 +2519,7 @@ async fn handle_dynamic_request(
                     .status(status)
                     .header("content-type", "text/plain")
                     .body(Body::from(error_message))
-                    .unwrap();
+                    .unwrap_or_else(|_| Response::new(Body::from(error_message)));
             }
         }
     } else {

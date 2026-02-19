@@ -222,13 +222,8 @@ impl HttpClient {
         if let Some(headers) = headers {
             for (key, value) in headers {
                 let final_value = if value.starts_with("{{secret:") && value.ends_with("}}") {
-                    // Extract secret identifier
-                    let secret_id = value
-                        .strip_prefix("{{secret:")
-                        .unwrap()
-                        .strip_suffix("}}")
-                        .unwrap()
-                        .trim();
+                    // Extract secret identifier — guarded by starts_with/ends_with above
+                    let secret_id = value["{{secret:".len()..value.len() - "}}".len()].trim();
 
                     // Get secrets manager
                     let secrets_manager =
