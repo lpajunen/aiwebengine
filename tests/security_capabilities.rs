@@ -35,7 +35,7 @@ static INIT: OnceCell<()> = OnceCell::const_new();
 async fn setup_env() {
     INIT.get_or_init(|| async {
         // Initialize DB first
-        let config = aiwebengine::config::AppConfig::test_config_with_port(0);
+        let config = aiwebengine::config::AppConfig::test_config_postgres(0);
         if let Ok(db) = aiwebengine::database::Database::new(&config.repository).await {
             let db_arc = std::sync::Arc::new(db);
             aiwebengine::database::initialize_global_database(db_arc.clone());
@@ -94,6 +94,7 @@ async fn test_capability_enforcement_allows_authorized_script_write() {
     if should_skip_integration_tests() {
         return;
     }
+    setup_env().await;
     // User with write capabilities SHOULD be able to write scripts
     let user = create_user_with_capabilities("admin_user", vec![Capability::WriteScripts]);
     let ops = SecureOperations::new();
@@ -553,6 +554,7 @@ async fn test_security_operations_repository_integration() {
     if should_skip_integration_tests() {
         return;
     }
+    setup_env().await;
     // This test verifies that SecureOperations actually calls the repository
     let user = create_user_with_capabilities("test_user", vec![Capability::WriteScripts]);
     let ops = SecureOperations::new();
@@ -582,6 +584,7 @@ async fn test_asset_upload_repository_integration() {
     if should_skip_integration_tests() {
         return;
     }
+    setup_env().await;
     let user = create_user_with_capabilities("test_user", vec![Capability::WriteAssets]);
     let ops = SecureOperations::new();
 

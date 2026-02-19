@@ -4909,10 +4909,10 @@ mod tests {
                 return;
             }
 
-            let pool = sqlx::PgPool::connect_lazy(
-                "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-            )
-            .unwrap();
+            let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+                "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine".to_string()
+            });
+            let pool = sqlx::PgPool::connect_lazy(&url).unwrap();
             let db = Arc::new(crate::database::Database::from_pool(pool.clone()));
             crate::database::initialize_global_database(db);
 
@@ -5202,6 +5202,8 @@ mod tests {
 
         let custom_uri = "test://privileged-script";
         let code = "function handler() { return { status: 200 }; }";
+        // Clean up any stale state from a prior run before testing
+        let _ = delete_script(custom_uri);
         upsert_script(custom_uri, code).expect("Should upsert script");
 
         let initial_profile =
@@ -5274,6 +5276,9 @@ mod tests {
         // Test that existing scripts without owners get backfilled
         let script_uri = "test://backfill-script";
         let script_code = "console.log('backfill test');";
+
+        // Clean up any stale state from a prior run
+        let _ = delete_script(script_uri);
 
         // First, create script without owner (simulate old script)
         let result = upsert_script(script_uri, script_code);
@@ -5365,6 +5370,9 @@ mod tests {
         let owner1 = "owner-one";
         let owner2 = "owner-two";
         let script_code = "console.log('multi-owner');";
+
+        // Clean up any stale state from a prior run
+        let _ = delete_script(script_uri);
 
         // Create script with first owner
         upsert_script_with_owner(script_uri, script_code, Some(owner1))

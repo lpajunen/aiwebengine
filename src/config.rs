@@ -460,10 +460,15 @@ impl AppConfig {
         config
     }
 
-    /// Create a test configuration using PostgreSQL (alias for compatibility)
-    /// Requires a running database
+    /// Create a test configuration using PostgreSQL
+    /// Uses DATABASE_URL env var when set, otherwise falls back to the default hardcoded URL.
+    /// Requires a running database.
     pub fn test_config_postgres(port: u16) -> Self {
-        Self::test_config_with_port(port)
+        let mut config = Self::test_config_with_port(port);
+        if let Ok(url) = std::env::var("DATABASE_URL") {
+            config.repository.connection_string = url;
+        }
+        config
     }
 
     /// Load configuration from a specific file

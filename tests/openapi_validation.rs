@@ -419,25 +419,25 @@ async fn test_openapi_javascript_routes_included() {
     let client = reqwest::Client::new();
     let url = format!("http://localhost:{}/engine/openapi.json", port);
 
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .expect("Failed to fetch OpenAPI spec");
+    // JS script init() runs asynchronously after the server becomes ready.
+    // Under parallel test load this can take noticeably longer than 500 ms.
+    // Poll the OpenAPI spec until at least one JavaScript-registered route
+    // appears, or until we hit the deadline (~10 s).
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let response = client
+            .get(&url)
+            .send()
+            .await
+            .expect("Failed to fetch OpenAPI spec");
 
-    let spec: Value = response.json().await.expect("Failed to parse JSON");
-    let paths = spec["paths"]
-        .as_object()
-        .expect("OpenAPI spec should have paths object");
+        let spec: Value = response.json().await.expect("Failed to parse JSON");
+        let paths = spec["paths"]
+            .as_object()
+            .expect("OpenAPI spec should have paths object");
 
-    // Check for JavaScript-registered routes from core.js
-    // These should be present after script initialization
-    let js_endpoints = vec!["/health", "/upsert_script", "/delete_script"];
-
-    for endpoint in js_endpoints {
-        if let Some(path_item) = paths.get(endpoint) {
-            // Check if any operation has x-source: "javascript"
-            let has_js_source = path_item
+        let has_any_js_route = paths.values().any(|path_item| {
+            path_item
                 .as_object()
                 .and_then(|ops| {
                     ops.values().find(|op| {
@@ -447,32 +447,20 @@ async fn test_openapi_javascript_routes_included() {
                             .unwrap_or(false)
                     })
                 })
-                .is_some();
+                .is_some()
+        });
 
-            if has_js_source {
-                // Found at least one JavaScript route, test passes
-                return;
-            }
+        if has_any_js_route {
+            return; // ✓ JavaScript routes are present
         }
+
+        if tokio::time::Instant::now() >= deadline {
+            panic!(
+                "OpenAPI spec should include at least one JavaScript-registered route with \
+                 x-source marker (timed out waiting for JS init to complete)"
+            );
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
-
-    // If we get here, check if any path has x-source: javascript
-    let has_any_js_route = paths.values().any(|path_item| {
-        path_item
-            .as_object()
-            .and_then(|ops| {
-                ops.values().find(|op| {
-                    op.get("x-source")
-                        .and_then(|s| s.as_str())
-                        .map(|s| s == "javascript")
-                        .unwrap_or(false)
-                })
-            })
-            .is_some()
-    });
-
-    assert!(
-        has_any_js_route,
-        "OpenAPI spec should include at least one JavaScript-registered route with x-source marker"
-    );
 }

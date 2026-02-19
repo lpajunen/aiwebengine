@@ -5,9 +5,28 @@ mod admin_script_update_tests {
     use aiwebengine::repository;
     use aiwebengine::security::{Capability, UserContext};
     use std::collections::HashSet;
+    use std::sync::{Arc, Once};
+
+    static DB_INIT: Once = Once::new();
 
     fn should_skip_db_tests() -> bool {
         std::env::var("DATABASE_URL").is_err()
+    }
+
+    fn setup_db() {
+        DB_INIT.call_once(|| {
+            let Ok(url) = std::env::var("DATABASE_URL") else {
+                return;
+            };
+            let pool = sqlx::PgPool::connect_lazy(&url)
+                .expect("Failed to create lazy connection pool from DATABASE_URL");
+            let db = Arc::new(aiwebengine::database::Database::from_pool(pool.clone()));
+            let _ = aiwebengine::database::initialize_global_database(db);
+            let server_id = aiwebengine::notifications::generate_server_id();
+            let _ = aiwebengine::notifications::initialize_server_id(server_id.clone());
+            let repo = aiwebengine::repository::PostgresRepository::new(pool, server_id);
+            let _ = aiwebengine::repository::initialize_repository(repo);
+        });
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -16,6 +35,7 @@ mod admin_script_update_tests {
         if should_skip_db_tests() {
             return;
         }
+        setup_db();
 
         let test_uri = "https://example.com/test-ownerless-script";
         let initial_content = "// Initial content\nfunction init() { return { success: true }; }";
@@ -111,6 +131,7 @@ mod admin_script_update_tests {
         if should_skip_db_tests() {
             return;
         }
+        setup_db();
 
         let test_uri = "https://example.com/test-ownerless-script-2";
         let initial_content = "// Initial content";

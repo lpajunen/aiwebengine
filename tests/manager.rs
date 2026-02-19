@@ -2,9 +2,19 @@
 // This verifies that the admin script loads and initializes correctly
 
 use aiwebengine::{js_engine, repository, security::UserContext};
-use std::sync::Once;
+use std::sync::{Once, OnceLock};
 
 static INIT: Once = Once::new();
+static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+
+fn get_runtime() -> &'static tokio::runtime::Runtime {
+    RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    })
+}
 
 fn should_skip_integration_tests() -> bool {
     std::env::var("DATABASE_URL").is_err()
@@ -15,10 +25,12 @@ fn setup() {
         return;
     }
     INIT.call_once(|| {
-        // Initialize DB first
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let config = aiwebengine::config::AppConfig::test_config_with_port(0);
+        // Run all setup inside the persistent multi-thread runtime so that:
+        // 1. connect_lazy can spawn maintenance tasks
+        // 2. bootstrap_scripts via run_blocking / block_in_place works (multi-thread only)
+        // 3. Subsequent fetch_script calls reuse the same reactor via run_blocking → block_in_place
+        get_runtime().block_on(async {
+            let config = aiwebengine::config::AppConfig::test_config_postgres(0);
             if let Ok(db) = aiwebengine::database::Database::new(&config.repository).await {
                 let db_arc = std::sync::Arc::new(db);
                 aiwebengine::database::initialize_global_database(db_arc.clone());
@@ -28,9 +40,23 @@ fn setup() {
                     db_arc.pool().clone(),
                     "test".to_string(),
                 ));
+
+                // Bootstrap feature scripts. run_blocking inside uses block_in_place
+                // which is valid because we're in a multi-thread runtime.
+                let _ = repository::bootstrap_scripts();
             }
         });
     });
+}
+
+/// Helper: run a closure inside the persistent multi-thread runtime so that
+/// pool I/O futures can be driven by the same reactor they were created with.
+fn run_sync<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    let _guard = get_runtime().enter();
+    tokio::task::block_in_place(f)
 }
 
 #[test]
@@ -40,7 +66,7 @@ fn test_manager_script_loads() {
     }
     setup();
     // Ensure admin script is in the repository
-    let script = repository::fetch_script("https://example.com/admin");
+    let script = run_sync(|| repository::fetch_script("https://example.com/admin"));
     assert!(script.is_some(), "Admin script should be in repository");
 
     let script_content = script.unwrap();
@@ -69,8 +95,8 @@ fn test_manager_script_executes() {
     }
     setup();
     let script_uri = "https://example.com/admin";
-    let script_content =
-        repository::fetch_script(script_uri).expect("Admin script should be in repository");
+    let script_content = run_sync(|| repository::fetch_script(script_uri))
+        .expect("Admin script should be in repository");
 
     // Execute the script with admin user context
     let result = js_engine::execute_script_secure(
@@ -98,11 +124,8 @@ fn test_manager_script_init() {
 
     // Initialize the script
     let init_context = script_init::InitContext::new(script_uri.to_string(), false);
-    let registrations = js_engine::call_init_if_exists(
-        script_uri,
-        &repository::fetch_script(script_uri).unwrap(),
-        init_context,
-    );
+    let script_content = run_sync(|| repository::fetch_script(script_uri)).unwrap();
+    let registrations = js_engine::call_init_if_exists(script_uri, &script_content, init_context);
 
     assert!(
         registrations.is_ok(),

@@ -271,9 +271,41 @@ impl Default for SecureOperations {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Once, OnceLock};
+
+    static DB_INIT: Once = Once::new();
+    static DB_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+
+    fn get_test_runtime() -> &'static tokio::runtime::Runtime {
+        DB_RUNTIME.get_or_init(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+        })
+    }
 
     fn should_skip_db_tests() -> bool {
         std::env::var("DATABASE_URL").is_err()
+    }
+
+    fn setup_db() {
+        DB_INIT.call_once(|| {
+            let Ok(url) = std::env::var("DATABASE_URL") else {
+                return;
+            };
+            // connect_lazy requires a tokio context; use a global runtime that outlives each test.
+            let pool = get_test_runtime().block_on(async {
+                sqlx::PgPool::connect_lazy(&url)
+                    .expect("Failed to create lazy connection pool from DATABASE_URL")
+            });
+            let db = Arc::new(crate::database::Database::from_pool(pool.clone()));
+            let _ = crate::database::initialize_global_database(db);
+            let server_id = crate::notifications::generate_server_id();
+            let _ = crate::notifications::initialize_server_id(server_id.clone());
+            let repo = crate::repository::PostgresRepository::new(pool, server_id);
+            let _ = crate::repository::initialize_repository(repo);
+        });
     }
 
     #[test]
@@ -281,6 +313,7 @@ mod tests {
         if should_skip_db_tests() {
             return;
         }
+        setup_db();
         let ops = SecureOperations::new();
 
         // Create a user with no capabilities at all (custom context)

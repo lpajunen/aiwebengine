@@ -1,14 +1,63 @@
 use aiwebengine::{config, start_server_with_config};
 use std::sync::Arc;
-use std::sync::Once;
+use std::sync::{Once, OnceLock};
 use std::time::Duration;
 use tokio::sync::{Mutex, oneshot};
 
 static INIT: Once = Once::new();
+static DB_INIT: Once = Once::new();
+static DB_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+
+fn get_db_runtime() -> &'static tokio::runtime::Runtime {
+    DB_RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    })
+}
 
 pub fn init_tracing() {
     INIT.call_once(|| {
         tracing_subscriber::fmt().with_env_filter("debug").init();
+    });
+}
+
+/// Initialize test database and repository using DATABASE_URL.
+/// Uses a persistent global runtime so the pool maintenance tasks stay alive.
+/// Safe to call multiple times — only runs once per process.
+#[allow(dead_code)]
+pub fn init_test_db() {
+    DB_INIT.call_once(|| {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            return;
+        };
+
+        /// Inner helper that must be called with an active tokio context.
+        fn do_init(url: String) {
+            // connect_lazy requires a tokio context to spawn maintenance tasks.
+            let pool = sqlx::PgPool::connect_lazy(&url)
+                .expect("Failed to create lazy connection pool from DATABASE_URL");
+            let db = Arc::new(aiwebengine::database::Database::from_pool(pool.clone()));
+            let _ = aiwebengine::database::initialize_global_database(db);
+            let server_id = aiwebengine::notifications::generate_server_id();
+            let _ = aiwebengine::notifications::initialize_server_id(server_id.clone());
+            let repo = aiwebengine::repository::PostgresRepository::new(pool, server_id);
+            let _ = aiwebengine::repository::initialize_repository(repo);
+        }
+
+        match tokio::runtime::Handle::try_current() {
+            Ok(_) => {
+                // Already inside a tokio runtime (e.g. called from #[tokio::test]).
+                // block_in_place lets us run sync setup without blocking the runtime thread.
+                tokio::task::block_in_place(|| do_init(url));
+            }
+            Err(_) => {
+                // No active runtime (e.g. called from plain #[test] or from Lazy init).
+                // Use the global persistent runtime so pool tasks outlive this scope.
+                get_db_runtime().block_on(async { do_init(url) });
+            }
+        }
     });
 }
 
@@ -85,6 +134,7 @@ pub struct TestContext {
 impl TestContext {
     pub fn new() -> Self {
         init_tracing();
+        init_test_db();
         Self {
             servers: Arc::new(Mutex::new(Vec::new())),
         }

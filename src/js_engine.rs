@@ -2155,18 +2155,6 @@ mod tests {
         RUNTIME.get_or_init(|| tokio::runtime::Runtime::new().unwrap())
     }
 
-    // Helper function for tests that need database but don't use shadow execute functions
-    fn setup_test() -> Option<tokio::runtime::EnterGuard<'static>> {
-        // Skip database-dependent tests in offline mode
-        if std::env::var("DATABASE_URL").is_err() {
-            return None;
-        }
-
-        let rt = get_runtime();
-        setup_db();
-        Some(rt.enter())
-    }
-
     // Check if we should skip database-dependent tests
     fn should_skip_db_tests() -> bool {
         std::env::var("DATABASE_URL").is_err()

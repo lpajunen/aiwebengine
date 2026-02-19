@@ -2807,22 +2807,61 @@ fn build_http_response_from_js(js_response: js_engine::JsHttpResponse) -> Respon
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Once;
+    use std::sync::{Once, OnceLock};
 
     static INIT_DB: Once = Once::new();
+    static DB_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+
+    fn get_test_runtime() -> &'static tokio::runtime::Runtime {
+        DB_RUNTIME.get_or_init(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+        })
+    }
 
     fn should_skip_db_tests() -> bool {
         std::env::var("DATABASE_URL").is_err()
     }
 
+    fn do_db_init(url: String) {
+        // Must be called with an active tokio runtime context (either via block_on or block_in_place).
+        // connect_lazy spawns maintenance tasks using the current runtime handle.
+        // bootstrap_scripts() calls run_blocking → block_in_place, which works in multi-thread.
+        let pool = sqlx::PgPool::connect_lazy(&url).unwrap();
+        let db = Arc::new(crate::database::Database::from_pool(pool.clone()));
+        crate::database::initialize_global_database(db);
+        let server_id = crate::notifications::generate_server_id();
+        crate::notifications::initialize_server_id(server_id.clone());
+        let repo = crate::repository::PostgresRepository::new(pool, server_id);
+        crate::repository::initialize_repository(repo);
+        // Bootstrap feature scripts so tests can fetch them.
+        let _ = crate::repository::bootstrap_scripts();
+    }
+
     fn setup_db() {
         INIT_DB.call_once(|| {
-            let pool = sqlx::PgPool::connect_lazy(
-                "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-            )
-            .unwrap();
-            let db = Arc::new(crate::database::Database::from_pool(pool));
-            crate::database::initialize_global_database(db);
+            if std::env::var("DATABASE_URL").is_err() {
+                return;
+            }
+            let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+                "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine".to_string()
+            });
+            match tokio::runtime::Handle::try_current() {
+                Ok(_) => {
+                    // Called from within an active async context (#[tokio::test]).
+                    // Use block_in_place so we can call sync run_blocking helpers inside do_db_init
+                    // without needing to create another runtime. Pool tasks spawn in the current runtime.
+                    tokio::task::block_in_place(|| do_db_init(url));
+                }
+                Err(_) => {
+                    // Plain #[test] – no active runtime. Provide one so connect_lazy and
+                    // bootstrap_scripts can work. block_in_place inside bootstrap_scripts is
+                    // valid because get_test_runtime() is a multi-thread runtime.
+                    get_test_runtime().block_on(async { do_db_init(url) });
+                }
+            }
         });
     }
 
@@ -2899,8 +2938,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_script_crud_operations() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_script_crud_operations() {
         if should_skip_db_tests() {
             return;
         }

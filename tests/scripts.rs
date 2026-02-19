@@ -23,7 +23,7 @@ static INIT: OnceCell<()> = OnceCell::const_new();
 async fn setup_env() {
     INIT.get_or_init(|| async {
         // Initialize DB first
-        let config = aiwebengine::config::AppConfig::test_config_with_port(0);
+        let config = aiwebengine::config::AppConfig::test_config_postgres(0);
         if let Ok(db) = aiwebengine::database::Database::new(&config.repository).await {
             let db_arc = std::sync::Arc::new(db);
             aiwebengine::database::initialize_global_database(db_arc.clone());
@@ -114,6 +114,7 @@ async fn test_core_js_does_not_register_root_path() {
     if should_skip_integration_tests() {
         return;
     }
+    setup_env().await;
     // Ensure core.js does NOT register '/' path (it's handled by Rust redirect)
     let core = repository::fetch_script("https://example.com/core").expect("core script missing");
     assert!(
@@ -184,6 +185,7 @@ async fn js_write_log_and_listlogs() {
     if should_skip_integration_tests() {
         return;
     }
+    setup_env().await;
     // upsert the js_log_test script so it registers its routes
     let _ = repository::upsert_script(
         "https://example.com/js-log-test",
@@ -306,6 +308,7 @@ async fn js_list_logs_for_uri() {
     if should_skip_integration_tests() {
         return;
     }
+    setup_env().await;
     // Insert some test log messages for different URIs
     repository::insert_log_message(
         "https://example.com/js-log-test-uri",
@@ -423,6 +426,7 @@ async fn js_script_mgmt_functions_work() {
     if should_skip_integration_tests() {
         return;
     }
+    setup_env().await;
     // upsert the management test script so it registers /js-mgmt-check and the upsert logic
     let _ = repository::upsert_script(
         "https://example.com/js-mgmt-test",
