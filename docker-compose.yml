@@ -37,7 +37,7 @@ services:
     # build:
     #   context: .
     #   dockerfile: Dockerfile
-    image: ghcr.io/lpajunen/aiwebengine:latest # aiwebengine:latest
+    image: aiwebengine:latest
     container_name: aiwebengine-1
     restart: unless-stopped
     # Expose port only to internal network (not to host)
@@ -82,7 +82,6 @@ services:
       - APP_SECURITY__CSRF_KEY=${APP_SECURITY__CSRF_KEY:-}
       - APP_SECURITY__SESSION_ENCRYPTION_KEY=${APP_SECURITY__SESSION_ENCRYPTION_KEY:-}
       # Repository
-      - APP_REPOSITORY__STORAGE_TYPE=postgresql
       - APP_REPOSITORY__DATABASE_URL=postgresql://aiwebengine:${POSTGRES_PASSWORD:-change-this-password}@postgres:5432/aiwebengine
       # Secrets (unconstrained - for constrained secrets use secrets.toml)
       # Note: Environment variable secrets have no URL/script access control
@@ -101,7 +100,7 @@ services:
 
   # Production deployment - Instance 2
   aiwebengine-2:
-    image: ghcr.io/lpajunen/aiwebengine:latest # aiwebengine:latest
+    image: aiwebengine:latest
     container_name: aiwebengine-2
     restart: unless-stopped
     # Expose port only to internal network (not to host)
@@ -137,7 +136,6 @@ services:
       - APP_SECURITY__CSRF_KEY=${APP_SECURITY__CSRF_KEY:-}
       - APP_SECURITY__SESSION_ENCRYPTION_KEY=${APP_SECURITY__SESSION_ENCRYPTION_KEY:-}
       # Repository
-      - APP_REPOSITORY__STORAGE_TYPE=postgresql
       - APP_REPOSITORY__DATABASE_URL=postgresql://aiwebengine:${POSTGRES_PASSWORD:-change-this-password}@postgres:5432/aiwebengine
       # Secrets (unconstrained - for constrained secrets use secrets.toml)
       # Note: Environment variable secrets have no URL/script access control

@@ -223,7 +223,6 @@ In `config.toml`:
 
 ```toml
 [repository]
-storage_type = "postgresql"
 database_url = "${APP_REPOSITORY__DATABASE_URL}"
 auto_migrate = true  # Auto-run migrations on startup
 max_connections = 5  # Connection pool size
@@ -384,15 +383,3 @@ cargo run
 - **Documentation:** See `docs/engine-administrators/DATABASE-MIGRATIONS.md` for detailed migration guide
 - **Examples:** Check `src/database.rs` for implementation details
 - **SQLx Docs:** https://github.com/launchbadge/sqlx
-
----
-
-## Migration from In-Memory Storage
-
-Currently, the repository uses in-memory storage. The database integration is ready but not yet connected to the repository layer. Future work will:
-
-1. Create database-backed repository implementation
-2. Support dual mode (memory/database)
-3. Migrate existing in-memory data to PostgreSQL
-
-The foundation is ready - migrations are in place and can be run now!

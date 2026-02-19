@@ -77,12 +77,6 @@ impl TestServer {
     /// Start a test server with automatic port selection and shutdown support
     #[allow(dead_code)]
     pub async fn start() -> anyhow::Result<Self> {
-        Self::start_with_storage("postgresql").await
-    }
-
-    /// Start a test server with specific storage type (only PostgreSQL supported now)
-    pub async fn start_with_storage(_storage_type: &str) -> anyhow::Result<Self> {
-        // Only PostgreSQL is supported now
         let mut test_config = config::Config::test_config_postgres(0);
 
         // Disable auth for tests by default to avoid overhead
@@ -143,13 +137,7 @@ impl TestContext {
     /// Start a new server and add it to the context
     #[allow(dead_code)]
     pub async fn start_server(&self) -> anyhow::Result<u16> {
-        self.start_server_with_storage("postgresql").await
-    }
-
-    /// Start a new server with specific storage and add it to the context (only PostgreSQL supported now)
-    #[allow(dead_code)]
-    pub async fn start_server_with_storage(&self, _storage_type: &str) -> anyhow::Result<u16> {
-        let server = TestServer::start_with_storage("postgresql").await?;
+        let server = TestServer::start().await?;
         let port = server.port();
         self.servers.lock().await.push(server);
         Ok(port)

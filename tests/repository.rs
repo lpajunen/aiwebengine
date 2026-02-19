@@ -18,23 +18,13 @@ use tracing::info;
 // ============================================================================
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_dynamic_script_lifecycle_memory() {
-    test_dynamic_script_lifecycle("memory").await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_dynamic_script_lifecycle_postgres() {
-    // Skip if no database connection
+async fn test_dynamic_script_lifecycle() {
     if std::env::var("DATABASE_URL").is_err() {
         return;
     }
-    test_dynamic_script_lifecycle("postgresql").await;
-}
-
-async fn test_dynamic_script_lifecycle(storage_type: &str) {
     let context = TestContext::new();
     let port = context
-        .start_server_with_storage(storage_type)
+        .start_server()
         .await
         .expect("Server failed to start");
     wait_for_server(port, 20).await.expect("Server not ready");
@@ -67,22 +57,13 @@ async fn test_dynamic_script_lifecycle(storage_type: &str) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_upsert_overwrites_existing_script_memory() {
-    test_upsert_overwrites_existing_script("memory").await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_upsert_overwrites_existing_script_postgres() {
+async fn test_upsert_overwrites_existing_script() {
     if std::env::var("DATABASE_URL").is_err() {
         return;
     }
-    test_upsert_overwrites_existing_script("postgresql").await;
-}
-
-async fn test_upsert_overwrites_existing_script(storage_type: &str) {
     let context = TestContext::new();
     let port = context
-        .start_server_with_storage(storage_type)
+        .start_server()
         .await
         .expect("Server failed to start");
     wait_for_server(port, 20).await.expect("Server not ready");
@@ -114,39 +95,29 @@ async fn test_upsert_overwrites_existing_script(storage_type: &str) {
 // ============================================================================
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_insert_and_list_log_messages_memory() {
-    test_insert_and_list_log_messages("memory").await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_insert_and_list_log_messages_postgres() {
+async fn test_insert_and_list_log_messages() {
     if std::env::var("DATABASE_URL").is_err() {
         return;
     }
-    test_insert_and_list_log_messages("postgresql").await;
-}
-
-async fn test_insert_and_list_log_messages(storage_type: &str) {
     let context = TestContext::new();
     let port = context
-        .start_server_with_storage(storage_type)
+        .start_server()
         .await
         .expect("Server failed to start");
     wait_for_server(port, 20).await.expect("Server not ready");
 
-    // Use a unique URI for this test to avoid interference from other tests
-    let test_uri = format!("test_insert_and_list_log_messages_{}", storage_type);
+    let test_uri = "test_insert_and_list_log_messages";
 
     // Clear any existing logs for this URI
-    let _ = repository::clear_log_messages(&test_uri);
+    let _ = repository::clear_log_messages(test_uri);
 
     // Record starting length so test is robust to previous state
-    let start = repository::fetch_log_messages(&test_uri).len();
+    let start = repository::fetch_log_messages(test_uri).len();
 
-    repository::insert_log_message(&test_uri, "log-one", "INFO");
-    repository::insert_log_message(&test_uri, "log-two", "INFO");
+    repository::insert_log_message(test_uri, "log-one", "INFO");
+    repository::insert_log_message(test_uri, "log-two", "INFO");
 
-    let msgs = repository::fetch_log_messages(&test_uri);
+    let msgs = repository::fetch_log_messages(test_uri);
     assert!(
         msgs.len() >= start + 2,
         "expected at least two new messages"
@@ -160,39 +131,29 @@ async fn test_insert_and_list_log_messages(storage_type: &str) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_prune_keeps_latest_20_logs_memory() {
-    test_prune_keeps_latest_20_logs("memory").await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_prune_keeps_latest_20_logs_postgres() {
+async fn test_prune_keeps_latest_20_logs() {
     if std::env::var("DATABASE_URL").is_err() {
         return;
     }
-    test_prune_keeps_latest_20_logs("postgresql").await;
-}
-
-async fn test_prune_keeps_latest_20_logs(storage_type: &str) {
     let context = TestContext::new();
     let port = context
-        .start_server_with_storage(storage_type)
+        .start_server()
         .await
         .expect("Server failed to start");
     wait_for_server(port, 20).await.expect("Server not ready");
 
-    // Use a unique URI for this test to avoid interference from other tests
-    let test_uri = format!("test_prune_keeps_latest_20_logs_{}", storage_type);
+    let test_uri = "test_prune_keeps_latest_20_logs";
 
     // Clear any existing logs for this URI
-    let _ = repository::clear_log_messages(&test_uri);
+    let _ = repository::clear_log_messages(test_uri);
 
     // Insert 25 distinct messages
     for i in 0..25 {
-        repository::insert_log_message(&test_uri, &format!("prune-test-{}", i), "INFO");
+        repository::insert_log_message(test_uri, &format!("prune-test-{}", i), "INFO");
     }
 
     let _ = repository::prune_log_messages();
-    let msgs = repository::fetch_log_messages(&test_uri);
+    let msgs = repository::fetch_log_messages(test_uri);
     assert!(msgs.len() <= 20, "prune should keep at most 20 messages");
 
     // Ensure the latest message is the last one we inserted
@@ -213,22 +174,13 @@ async fn test_prune_keeps_latest_20_logs(storage_type: &str) {
 // ============================================================================
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_asset_management_memory() {
-    test_asset_management("memory").await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_asset_management_postgres() {
+async fn test_asset_management() {
     if std::env::var("DATABASE_URL").is_err() {
         return;
     }
-    test_asset_management("postgresql").await;
-}
-
-async fn test_asset_management(storage_type: &str) {
     let context = TestContext::new();
     let port = context
-        .start_server_with_storage(storage_type)
+        .start_server()
         .await
         .expect("Server failed to start");
     wait_for_server(port, 20).await.expect("Server not ready");

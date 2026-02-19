@@ -2,8 +2,7 @@ use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::sync::OnceLock;
 use std::time::SystemTime;
 use tracing::{debug, error, warn};
 
@@ -175,59 +174,11 @@ impl User {
     }
 }
 
-/// Lookup key for finding users by provider
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
-struct ProviderKey {
-    provider_name: String,
-    provider_user_id: String,
-}
-
-/// In-memory user repository
-static USERS: OnceLock<Mutex<HashMap<String, User>>> = OnceLock::new();
-static USER_PROVIDER_INDEX: OnceLock<Mutex<HashMap<ProviderKey, String>>> = OnceLock::new();
-
-/// Safe mutex access with recovery from poisoned state
-fn safe_lock_users() -> AppResult<std::sync::MutexGuard<'static, HashMap<String, User>>> {
-    let store = USERS.get_or_init(|| Mutex::new(HashMap::new()));
-
-    match store.lock() {
-        Ok(guard) => Ok(guard),
-        Err(PoisonError { .. }) => {
-            warn!("Users mutex was poisoned, recovering with new data");
-            store.lock().map_err(|e| {
-                error!("Failed to recover from poisoned mutex: {}", e);
-                AppError::Internal {
-                    message: format!("Unrecoverable mutex poisoning: {}", e),
-                }
-            })
-        }
-    }
-}
-
-fn safe_lock_provider_index()
--> AppResult<std::sync::MutexGuard<'static, HashMap<ProviderKey, String>>> {
-    let store = USER_PROVIDER_INDEX.get_or_init(|| Mutex::new(HashMap::new()));
-
-    match store.lock() {
-        Ok(guard) => Ok(guard),
-        Err(PoisonError { .. }) => {
-            warn!("User provider index mutex was poisoned, recovering");
-            store.lock().map_err(|e| {
-                error!(
-                    "Failed to recover from poisoned provider index mutex: {}",
-                    e
-                );
-                AppError::Internal {
-                    message: format!("Unrecoverable mutex poisoning: {}", e),
-                }
-            })
-        }
-    }
-}
-
-/// Get database pool if available
-fn get_db_pool() -> Option<std::sync::Arc<crate::database::Database>> {
-    crate::repository::get_db_pool()
+/// Get database pool
+fn get_db_pool() -> AppResult<std::sync::Arc<crate::database::Database>> {
+    crate::repository::get_db_pool().ok_or_else(|| AppError::Internal {
+        message: "Database not initialized".to_string(),
+    })
 }
 
 /// Convert chrono::DateTime to SystemTime
@@ -595,144 +546,30 @@ pub fn upsert_user_with_bootstrap(
         );
     }
 
-    // Try database first
-    if let Some(db) = get_db_pool() {
-        // Use tokio::task::block_in_place to run async code in sync context
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                db_upsert_user(
-                    db.pool(),
-                    &email,
-                    name.as_deref(),
-                    &provider_name,
-                    &provider_user_id,
-                    is_admin,
-                    is_editor,
-                )
-                .await
-            })
-        });
+    let db = get_db_pool()?;
 
-        match result {
-            Ok(user_id) => {
-                // Also update in-memory cache for consistency
-                let _ = upsert_user_in_memory(
-                    email.clone(),
-                    name.clone(),
-                    provider_name.clone(),
-                    provider_user_id.clone(),
-                    bootstrap_admins,
-                );
-                return Ok(user_id);
-            }
-            Err(e) => {
-                warn!("Database upsert failed, falling back to in-memory: {}", e);
-                eprintln!("DEBUG: Database upsert failed: {}", e);
-                // Fall through to in-memory implementation
-            }
-        }
-    }
-
-    eprintln!("DEBUG: Falling back to in-memory upsert");
-    // Fall back to in-memory implementation
-    upsert_user_in_memory(
-        email,
-        name,
-        provider_name,
-        provider_user_id,
-        bootstrap_admins,
-    )
-}
-
-/// In-memory implementation of upsert user (existing logic)
-fn upsert_user_in_memory(
-    email: String,
-    name: Option<String>,
-    provider_name: String,
-    provider_user_id: String,
-    bootstrap_admins: &[String],
-) -> AppResult<String> {
-    let provider_key = ProviderKey {
-        provider_name: provider_name.clone(),
-        provider_user_id: provider_user_id.clone(),
-    };
-
-    // Check if user already exists for this provider
-    let mut provider_index = safe_lock_provider_index()?;
-    let mut users = safe_lock_users()?;
-
-    if let Some(user_id) = provider_index.get(&provider_key) {
-        // User exists - update their information
-        if let Some(user) = users.get_mut(user_id) {
-            user.update_from_auth(email, name, provider_name, provider_user_id);
-            debug!("Updated existing user: {}", user_id);
-            return Ok(user_id.to_owned());
-        } else {
-            // Index is out of sync - clean it up
-            warn!("Provider index out of sync, removing stale entry");
-            provider_index.remove(&provider_key);
-        }
-    }
-
-    // Create new user
-    let mut user = User::new(email.clone(), name, provider_name, provider_user_id);
-
-    // Check if this email is in the bootstrap admins list
-    let email_lower = email.to_lowercase();
-    let is_bootstrap_admin = bootstrap_admins
-        .iter()
-        .any(|admin_email| admin_email.to_lowercase() == email_lower);
-
-    if is_bootstrap_admin {
-        // Automatically grant Administrator role to bootstrap admins
-        user.add_role(UserRole::Administrator);
-        debug!(
-            "Granted Administrator role to bootstrap admin: {} ({})",
-            user.id, email
-        );
-    }
-
-    let user_id = user.id.clone();
-
-    // Store user
-    users.insert(user_id.clone(), user);
-    provider_index.insert(provider_key, user_id.clone());
-
-    debug!("Created new user: {} ({})", user_id, email);
-    Ok(user_id)
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            db_upsert_user(
+                db.pool(),
+                &email,
+                name.as_deref(),
+                &provider_name,
+                &provider_user_id,
+                is_admin,
+                is_editor,
+            )
+            .await
+        })
+    })
 }
 
 /// Get a user by their internal ID
 pub fn get_user(user_id: &str) -> AppResult<User> {
-    // Try database first
-    if let Some(db) = get_db_pool() {
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async { db_get_user(db.pool(), user_id).await })
-        });
-
-        match result {
-            Ok(user) => return Ok(user),
-            Err(AppError::Validation { field, reason })
-                if field == "user_id" && reason.contains("User not found") =>
-            {
-                // User not found in database, fall back to in-memory
-            }
-            Err(e) => {
-                warn!("Database get_user failed, falling back to in-memory: {}", e);
-            }
-        }
-    }
-
-    // Fall back to in-memory
-    let users = safe_lock_users()?;
-    users
-        .get(user_id)
-        .cloned()
-        .ok_or_else(|| AppError::Validation {
-            field: "user_id".to_string(),
-            reason: format!("User not found: {}", user_id),
-        })
+    let db = get_db_pool()?;
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async { db_get_user(db.pool(), user_id).await })
+    })
 }
 
 /// Find a user by provider credentials
@@ -740,39 +577,12 @@ pub fn find_user_by_provider(
     provider_name: &str,
     provider_user_id: &str,
 ) -> AppResult<Option<User>> {
-    // Try database first
-    if let Some(db) = get_db_pool() {
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                db_find_user_by_provider(db.pool(), provider_name, provider_user_id).await
-            })
-        });
-
-        match result {
-            Ok(user) => return Ok(user),
-            Err(e) => {
-                warn!(
-                    "Database find_user_by_provider failed, falling back to in-memory: {}",
-                    e
-                );
-            }
-        }
-    }
-
-    // Fall back to in-memory
-    let provider_key = ProviderKey {
-        provider_name: provider_name.to_string(),
-        provider_user_id: provider_user_id.to_string(),
-    };
-
-    let provider_index = safe_lock_provider_index()?;
-    let users = safe_lock_users()?;
-
-    if let Some(user_id) = provider_index.get(&provider_key) {
-        Ok(users.get(user_id).cloned())
-    } else {
-        Ok(None)
-    }
+    let db = get_db_pool()?;
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            db_find_user_by_provider(db.pool(), provider_name, provider_user_id).await
+        })
+    })
 }
 
 /// Database-backed update user roles
@@ -817,60 +627,6 @@ async fn db_update_user_roles(
 /// Completely replaces the user's role set with the provided roles.
 /// Always ensures at least Authenticated role is present.
 pub fn update_user_roles(user_id: &str, roles: Vec<UserRole>) -> AppResult<()> {
-    // Calculate boolean flags from roles
-    let is_admin = roles.iter().any(|r| matches!(r, UserRole::Administrator));
-    let is_editor = roles.iter().any(|r| matches!(r, UserRole::Editor));
-
-    // Update database first
-    if let Some(db) = get_db_pool() {
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                db_update_user_roles(db.pool(), user_id, is_admin, is_editor).await
-            })
-        });
-
-        match result {
-            Ok(()) => {
-                // Also update in-memory cache for consistency
-                let mut users = safe_lock_users()?;
-                if let Some(user) = users.get_mut(user_id) {
-                    // Ensure Authenticated role is always present
-                    let mut new_roles = roles;
-                    if !new_roles
-                        .iter()
-                        .any(|r| matches!(r, UserRole::Authenticated))
-                    {
-                        new_roles.push(UserRole::Authenticated);
-                    }
-
-                    user.roles = new_roles;
-                    user.updated_at = SystemTime::now();
-                    debug!("Updated roles for user: {}", user_id);
-                    return Ok(());
-                } else {
-                    warn!(
-                        "User {} not found in memory cache after database update",
-                        user_id
-                    );
-                }
-            }
-            Err(e) => {
-                warn!(
-                    "Database update_user_roles failed, falling back to in-memory: {}",
-                    e
-                );
-            }
-        }
-    }
-
-    // Fall back to in-memory only
-    let mut users = safe_lock_users()?;
-
-    let user = users.get_mut(user_id).ok_or_else(|| AppError::Validation {
-        field: "user_id".to_string(),
-        reason: format!("User not found: {}", user_id),
-    })?;
-
     // Ensure Authenticated role is always present
     let mut new_roles = roles;
     if !new_roles
@@ -880,11 +636,17 @@ pub fn update_user_roles(user_id: &str, roles: Vec<UserRole>) -> AppResult<()> {
         new_roles.push(UserRole::Authenticated);
     }
 
-    user.roles = new_roles;
-    user.updated_at = SystemTime::now();
+    // Calculate boolean flags from roles
+    let is_admin = new_roles
+        .iter()
+        .any(|r| matches!(r, UserRole::Administrator));
+    let is_editor = new_roles.iter().any(|r| matches!(r, UserRole::Editor));
 
-    debug!("Updated roles for user (in-memory only): {}", user_id);
-    Ok(())
+    let db = get_db_pool()?;
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current()
+            .block_on(async { db_update_user_roles(db.pool(), user_id, is_admin, is_editor).await })
+    })
 }
 
 /// Add a role to a user
@@ -923,12 +685,11 @@ pub fn remove_user_role(user_id: &str, role: &UserRole) -> AppResult<()> {
 
 /// List all users (for admin purposes)
 pub fn list_users() -> AppResult<Vec<User>> {
-    // Try database first
-    if let Some(db) = get_db_pool() {
-        let result: AppResult<Vec<User>> = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                let pool = db.pool();
-                let rows = sqlx::query(
+    let db = get_db_pool()?;
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            let pool = db.pool();
+            let rows = sqlx::query(
                     r#"
                     SELECT user_id, email, name, provider, provider_user_id, is_admin, is_editor, created_at, updated_at
                     FROM users
@@ -942,34 +703,9 @@ pub fn list_users() -> AppResult<Vec<User>> {
                     AppError::Database { message: format!("Database error: {}", e), source: None }
                 })?;
 
-                let mut users = Vec::new();
-                for row in rows {
-                    let user = convert_row_to_user(&row)?;
-
-                    // Also update in-memory cache for consistency
-                    update_caches_with_user(&user)?;
-
-                    users.push(user);
-                }
-
-                Ok(users)
-            })
-        });
-
-        match result {
-            Ok(users) => return Ok(users),
-            Err(e) => {
-                warn!(
-                    "Database list_users failed, falling back to in-memory: {}",
-                    e
-                );
-            }
-        }
-    }
-
-    // Fall back to in-memory
-    let users = safe_lock_users()?;
-    Ok(users.values().cloned().collect())
+            rows.into_iter().map(|row| convert_row_to_user(&row)).collect()
+        })
+    })
 }
 
 /// Convert a database row into a User object.
@@ -1041,82 +777,73 @@ fn convert_row_to_user(row: &PgRow) -> AppResult<User> {
     })
 }
 
-/// Update the in-memory caches (users and provider index) with a new User value.
-fn update_caches_with_user(user: &User) -> AppResult<()> {
-    let mut users_cache = safe_lock_users()?;
-    let mut provider_index = safe_lock_provider_index()?;
-    users_cache.insert(user.id.clone(), user.clone());
-    provider_index.insert(
-        ProviderKey {
-            provider_name: user.providers[0].provider_name.clone(),
-            provider_user_id: user.providers[0].provider_user_id.clone(),
-        },
-        user.id.clone(),
-    );
-
-    Ok(())
-}
-
 /// Get user count
 pub fn get_user_count() -> AppResult<usize> {
-    let users = safe_lock_users()?;
-    Ok(users.len())
+    let db = get_db_pool()?;
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            let row = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users")
+                .fetch_one(db.pool())
+                .await
+                .map_err(|e| AppError::Database {
+                    message: format!("Database error counting users: {}", e),
+                    source: None,
+                })?;
+            Ok(row as usize)
+        })
+    })
 }
 
 /// Delete a user (for testing/admin purposes)
 pub fn delete_user(user_id: &str) -> AppResult<bool> {
-    let mut users = safe_lock_users()?;
-    let mut provider_index = safe_lock_provider_index()?;
-
-    // Remove user from memory
-    let memory_deleted = if let Some(user) = users.remove(user_id) {
-        // Remove all provider index entries for this user
-        for provider_info in user.providers {
-            let provider_key = ProviderKey {
-                provider_name: provider_info.provider_name,
-                provider_user_id: provider_info.provider_user_id,
-            };
-            provider_index.remove(&provider_key);
-        }
-        true
-    } else {
-        false
-    };
-
-    // Delete from database
-    let db_deleted = if let Some(db) = get_db_pool() {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async { db_delete_user(db.pool(), user_id).await })
-        })?
-    } else {
-        false
-    };
-
-    if memory_deleted || db_deleted {
+    let db = get_db_pool()?;
+    let deleted = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current()
+            .block_on(async { db_delete_user(db.pool(), user_id).await })
+    })?;
+    if deleted {
         debug!("Deleted user: {}", user_id);
-        Ok(true)
-    } else {
-        Ok(false)
     }
+    Ok(deleted)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::OnceLock;
+    use std::sync::{Once, OnceLock};
     use tokio::runtime::Runtime;
 
-    // Use a global mutex to serialize tests that access global state
-    // static crate::repository::GLOBAL_TEST_LOCK: Mutex<()> = Mutex::new(());
-
-    fn should_skip_db_tests() -> bool {
-        std::env::var("DATABASE_URL").is_err()
-    }
+    static DB_INIT: Once = Once::new();
 
     fn get_runtime() -> &'static Runtime {
         static RUNTIME: OnceLock<Runtime> = OnceLock::new();
-        RUNTIME.get_or_init(|| Runtime::new().expect("Failed to create Tokio runtime"))
+        RUNTIME.get_or_init(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to create Tokio runtime")
+        })
+    }
+
+    fn setup_db() {
+        let Ok(url) = std::env::var("DATABASE_URL") else {
+            return;
+        };
+        DB_INIT.call_once(|| {
+            get_runtime().block_on(async {
+                let pool = sqlx::PgPool::connect_lazy(&url).expect("Failed to create pool");
+                let db = std::sync::Arc::new(crate::database::Database::from_pool(pool.clone()));
+                let _ = crate::database::initialize_global_database(db);
+                let server_id = crate::notifications::generate_server_id();
+                let _ = crate::notifications::initialize_server_id(server_id.clone());
+                let repo = crate::repository::PostgresRepository::new(pool, server_id);
+                let _ = crate::repository::initialize_repository(repo);
+            });
+        });
+    }
+
+    fn should_skip_db_tests() -> bool {
+        std::env::var("DATABASE_URL").is_err()
     }
 
     #[test]
@@ -1143,7 +870,7 @@ mod tests {
         if should_skip_db_tests() {
             return;
         }
-        let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
+        setup_db();
         let rt = get_runtime();
 
         rt.block_on(async {
@@ -1166,7 +893,7 @@ mod tests {
         if should_skip_db_tests() {
             return;
         }
-        let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
+        setup_db();
         let rt = get_runtime();
 
         rt.block_on(async {
@@ -1203,7 +930,7 @@ mod tests {
         if should_skip_db_tests() {
             return;
         }
-        let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
+        setup_db();
         let rt = get_runtime();
 
         rt.block_on(async {
@@ -1257,7 +984,7 @@ mod tests {
         if should_skip_db_tests() {
             return;
         }
-        let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
+        setup_db();
         let rt = get_runtime();
 
         rt.block_on(async {
@@ -1279,7 +1006,7 @@ mod tests {
         if should_skip_db_tests() {
             return;
         }
-        let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
+        setup_db();
         let rt = get_runtime();
 
         rt.block_on(async {
@@ -1306,7 +1033,7 @@ mod tests {
         if should_skip_db_tests() {
             return;
         }
-        let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
+        setup_db();
         let rt = get_runtime();
 
         rt.block_on(async {
@@ -1334,7 +1061,7 @@ mod tests {
         if should_skip_db_tests() {
             return;
         }
-        let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
+        setup_db();
         let rt = get_runtime();
 
         rt.block_on(async {
@@ -1367,6 +1094,7 @@ mod tests {
         if should_skip_db_tests() {
             return;
         }
+        setup_db();
         let rt = get_runtime();
         rt.block_on(async {
             // Empty email
@@ -1409,7 +1137,7 @@ mod tests {
         if should_skip_db_tests() {
             return;
         }
-        let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
+        setup_db();
         let rt = get_runtime();
 
         rt.block_on(async {
@@ -1452,7 +1180,7 @@ mod tests {
         if should_skip_db_tests() {
             return;
         }
-        let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
+        setup_db();
         let rt = get_runtime();
 
         rt.block_on(async {

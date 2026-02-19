@@ -276,12 +276,11 @@ impl Database {
                 .to_string(),
             }
         } else {
-            // Database not initialized - this is acceptable when using in-memory storage
-            // Return healthy with a note that database is not configured
+            // Database not initialized - this is an error since PostgreSQL is required
             serde_json::json!({
-                "healthy": true,
-                "database": "not configured (using in-memory storage)",
-                "note": "Database connection not required for in-memory storage mode"
+                "healthy": false,
+                "database": "not configured",
+                "error": "Database connection required but not initialized"
             })
             .to_string()
         }
