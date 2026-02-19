@@ -305,11 +305,10 @@ export APP_JAVASCRIPT__FAIL_STARTUP_ON_INIT_ERROR="true"  # Recommended for prod
 
 ### [repository]
 
-Controls database and script storage.
+Controls database and script storage. PostgreSQL is the only supported storage backend.
 
 ```toml
 [repository]
-storage_type = "postgresql"              # postgresql | memory
 database_url = "postgresql://user:pass@localhost:5432/aiwebengine"
 max_script_size_bytes = 1048576          # Maximum script size (bytes, 1MB)
 max_asset_size_bytes = 10485760          # Maximum asset size (bytes, 10MB)
@@ -634,8 +633,7 @@ Quick lookup for all available settings:
 | `[javascript]`  | `stack_size_bytes`            | integer | 8192-10485760               | `1048576`             |
 | `[javascript]`  | `enable_init_functions`       | boolean | true/false                  | `true`                |
 | `[javascript]`  | `fail_startup_on_init_error`  | boolean | true/false                  | `false`               |
-| `[repository]`  | `storage_type`                | string  | postgresql/memory           | `memory`              |
-| `[repository]`  | `database_url`                | string  | Connection string           | `None`                |
+| `[repository]`  | `database_url`                | string  | Connection string           | (required)            |
 | `[repository]`  | `max_script_size_bytes`       | integer | 1024-10485760               | `1048576`             |
 | `[repository]`  | `max_asset_size_bytes`        | integer | 1024-104857600              | `10485760`            |
 | `[repository]`  | `max_log_messages_per_script` | integer | 1-10000                     | `100`                 |
@@ -685,7 +683,6 @@ port = 3000
 level = "debug"
 
 [repository]
-storage_type = "postgresql"
 database_url = "${APP_REPOSITORY__DATABASE_URL}"
 
 [auth]
@@ -731,7 +728,6 @@ enable_init_functions = true
 fail_startup_on_init_error = true
 
 [repository]
-storage_type = "postgresql"
 database_url = "${APP_REPOSITORY__DATABASE_URL}"
 max_script_size_bytes = 1048576
 max_asset_size_bytes = 10485760

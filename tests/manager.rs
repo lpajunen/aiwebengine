@@ -6,18 +6,28 @@ use std::sync::Once;
 
 static INIT: Once = Once::new();
 
-fn setup() {
-    INIT.call_once(|| {
-        // Initialize Repository to Memory FIRST to ensure we have scripts
-        // This prevents get_repository() from defaulting to Postgres when GLOBAL_DATABASE is set
-        repository::initialize_repository(repository::UnifiedRepository::new_memory());
+fn should_skip_integration_tests() -> bool {
+    std::env::var("DATABASE_URL").is_err()
+}
 
-        // Initialize DB for SecureGlobals
+fn setup() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    INIT.call_once(|| {
+        // Initialize DB first
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let config = aiwebengine::config::AppConfig::test_config_with_port(0);
             if let Ok(db) = aiwebengine::database::Database::new(&config.repository).await {
-                aiwebengine::database::initialize_global_database(std::sync::Arc::new(db));
+                let db_arc = std::sync::Arc::new(db);
+                aiwebengine::database::initialize_global_database(db_arc.clone());
+
+                // Initialize repository with PostgreSQL
+                repository::initialize_repository(repository::PostgresRepository::new(
+                    db_arc.pool().clone(),
+                    "test".to_string(),
+                ));
             }
         });
     });
@@ -25,6 +35,9 @@ fn setup() {
 
 #[test]
 fn test_manager_script_loads() {
+    if should_skip_integration_tests() {
+        return;
+    }
     setup();
     // Ensure admin script is in the repository
     let script = repository::fetch_script("https://example.com/admin");
@@ -51,6 +64,9 @@ fn test_manager_script_loads() {
 
 #[test]
 fn test_manager_script_executes() {
+    if should_skip_integration_tests() {
+        return;
+    }
     setup();
     let script_uri = "https://example.com/admin";
     let script_content =
@@ -72,6 +88,9 @@ fn test_manager_script_executes() {
 
 #[test]
 fn test_manager_script_init() {
+    if should_skip_integration_tests() {
+        return;
+    }
     setup();
     use aiwebengine::script_init;
 

@@ -163,13 +163,10 @@ fn default_enable_init_functions() -> bool {
 /// Repository configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepositoryConfig {
-    /// Repository type (memory, postgresql)
-    pub storage_type: String,
-
-    /// Database connection string (for non-memory storage)
+    /// PostgreSQL database connection string (required)
     /// Specified as 'database_url' in config files and APP_REPOSITORY__DATABASE_URL in env
     #[serde(rename = "database_url")]
-    pub connection_string: Option<String>,
+    pub connection_string: String,
 
     /// Maximum script size in bytes
     pub max_script_size_bytes: usize,
@@ -340,8 +337,8 @@ impl Default for JavaScriptConfig {
 impl Default for RepositoryConfig {
     fn default() -> Self {
         Self {
-            storage_type: "memory".to_string(),
-            connection_string: None,
+            connection_string: "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine"
+                .to_string(),
             max_script_size_bytes: 1024 * 1024,     // 1MB
             max_asset_size_bytes: 10 * 1024 * 1024, // 10MB
             max_log_messages_per_script: 100,
@@ -436,31 +433,8 @@ impl AppConfig {
             .merge(Toml::file("config.toml"));
 
         // Debug: print what we have so far
-        if config_toml_exists && let Ok(partial_config) = figment.clone().extract::<Self>() {
-            eprintln!(
-                "After loading config.toml - storage_type: {}",
-                partial_config.repository.storage_type
-            );
-            eprintln!(
-                "After loading config.toml - connection_string: {:?}",
-                partial_config
-                    .repository
-                    .connection_string
-                    .as_ref()
-                    .map(|s| {
-                        if let Some(at_pos) = s.find('@') {
-                            let before_at = &s[..at_pos];
-                            let after_at = &s[at_pos..];
-                            if let Some(colon_pos) = before_at.rfind(':') {
-                                format!("{}:****{}", &before_at[..colon_pos], after_at)
-                            } else {
-                                s.clone()
-                            }
-                        } else {
-                            s.clone()
-                        }
-                    })
-            );
+        if config_toml_exists && let Ok(_partial_config) = figment.clone().extract::<Self>() {
+            eprintln!("After loading config.toml - connection_string: (***hidden***)");
         }
 
         let config: Self = figment
@@ -469,14 +443,7 @@ impl AppConfig {
             .merge(Env::prefixed("APP_").split("__"))
             .extract()?;
 
-        eprintln!(
-            "Final config - storage_type: {}",
-            config.repository.storage_type
-        );
-        eprintln!(
-            "Final config - connection_string: {:?}",
-            config.repository.connection_string.as_ref().map(|_| "****")
-        );
+        eprintln!("Final config - connection_string: (***hidden***)");
 
         // Validate the configuration
         config.validate()?;
@@ -485,23 +452,18 @@ impl AppConfig {
     }
 
     /// Create a test configuration with a specific port
-    /// Defaults to in-memory storage for fast, isolated testing
+    /// Test configuration with specified port
+    /// Uses PostgreSQL with default test database settings
     pub fn test_config_with_port(port: u16) -> Self {
         let mut config = Self::default();
         config.server.port = port;
-        config.repository.storage_type = "memory".to_string();
-        config.repository.connection_string = None;
         config
     }
 
-    /// Create a test configuration using PostgreSQL
+    /// Create a test configuration using PostgreSQL (alias for compatibility)
     /// Requires a running database
     pub fn test_config_postgres(port: u16) -> Self {
-        let mut config = Self::test_config_with_port(port);
-        config.repository.storage_type = "postgresql".to_string();
-        config.repository.connection_string =
-            Some("postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine".to_string());
-        config
+        Self::test_config_with_port(port)
     }
 
     /// Load configuration from a specific file
@@ -582,18 +544,8 @@ impl AppConfig {
             anyhow::bail!("JavaScript max concurrent executions must be > 0");
         }
 
-        // Validate repository configuration
-        match self.repository.storage_type.as_str() {
-            "memory" | "postgresql" => {}
-            _ => anyhow::bail!(
-                "Invalid storage type: {}. Must be one of: memory, postgresql",
-                self.repository.storage_type
-            ),
-        }
-
-        if self.repository.storage_type != "memory" && self.repository.connection_string.is_none() {
-            anyhow::bail!("Connection string required for non-memory storage types");
-        }
+        // PostgreSQL is the only supported storage backend - no validation needed
+        // Connection string is required and already enforced by type system
 
         // Validate security configuration
         // Note: rate_limit_per_minute of 0 means disabled, which is allowed
@@ -813,26 +765,11 @@ mod tests {
 
     #[test]
     fn test_database_type_validation() {
-        let mut config = AppConfig::default();
+        let config = AppConfig::default();
 
-        // Test memory storage (default)
-        config.repository.storage_type = "memory".to_string();
+        // PostgreSQL is the only supported storage backend
+        // Connection string is required by type system
         assert!(config.validate().is_ok());
-
-        // Test postgresql - requires connection string
-        config.repository.storage_type = "postgresql".to_string();
-        config.repository.connection_string =
-            Some("postgresql://user:pass@localhost/db".to_string());
-        assert!(config.validate().is_ok());
-
-        // Test postgresql without connection string - should fail
-        config.repository.storage_type = "postgresql".to_string();
-        config.repository.connection_string = None;
-        assert!(config.validate().is_err());
-
-        // Test invalid storage type
-        config.repository.storage_type = "mysql".to_string();
-        assert!(config.validate().is_err());
     }
 
     #[test]

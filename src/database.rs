@@ -190,10 +190,7 @@ impl Database {
 
     /// Create a new database connection pool
     pub async fn new(config: &RepositoryConfig) -> Result<Self> {
-        let connection_string = config
-            .connection_string
-            .as_ref()
-            .context("Database connection string is required")?;
+        let connection_string = &config.connection_string;
 
         // Log connection attempt (hide password)
         let safe_conn_string = if let Some(at_pos) = connection_string.find('@') {
@@ -677,8 +674,7 @@ mod tests {
         };
 
         let config = RepositoryConfig {
-            storage_type: "postgresql".to_string(),
-            connection_string: Some(database_url),
+            connection_string: database_url,
             max_script_size_bytes: 1024 * 1024,
             max_asset_size_bytes: 10 * 1024 * 1024,
             max_log_messages_per_script: 100,

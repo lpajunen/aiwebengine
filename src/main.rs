@@ -111,7 +111,7 @@ async fn main() -> AppResult<()> {
                     "JavaScript timeout: {}ms",
                     config.javascript.execution_timeout_ms
                 );
-                println!("Storage type: {}", config.repository.storage_type);
+                println!("Storage: PostgreSQL");
                 return Ok(());
             }
             Err(e) => {
@@ -146,7 +146,7 @@ async fn main() -> AppResult<()> {
         "Max memory per script: {} bytes",
         config.javascript.max_memory_bytes
     );
-    tracing::info!("Storage type: {}", config.repository.storage_type);
+    tracing::info!("Storage: PostgreSQL");
     tracing::info!("CORS enabled: {}", config.security.enable_cors);
     tracing::info!(
         "Rate limiting: {} requests/minute",

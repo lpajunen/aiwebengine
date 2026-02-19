@@ -58,8 +58,7 @@ enable_init_functions = true
 fail_startup_on_init_error = true
 
 [repository]
-# Use PostgreSQL for production scalability
-storage_type = "postgresql"
+# PostgreSQL is the only supported storage backend
 # MUST be set via APP_REPOSITORY__DATABASE_URL environment variable
 # database_url is set via environment variable
 

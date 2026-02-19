@@ -85,7 +85,7 @@ In the context of aiwebengine, a **solution** refers to any website, GraphQL API
 - JavaScript script execution and registration
 - Query parameter and form data parsing
 - Response generation with custom status codes and content types
-- In-memory logging system
+- PostgreSQL-based persistent storage
 - Script repository management
 - Authentication and security middleware
 

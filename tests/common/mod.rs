@@ -12,6 +12,12 @@ pub fn init_tracing() {
     });
 }
 
+/// Check if database is available for integration tests
+#[allow(dead_code)]
+pub fn should_skip_integration_tests() -> bool {
+    std::env::var("DATABASE_URL").is_err()
+}
+
 /// Improved test server with proper shutdown support
 pub struct TestServer {
     port: u16,
@@ -22,16 +28,13 @@ impl TestServer {
     /// Start a test server with automatic port selection and shutdown support
     #[allow(dead_code)]
     pub async fn start() -> anyhow::Result<Self> {
-        Self::start_with_storage("memory").await
+        Self::start_with_storage("postgresql").await
     }
 
-    /// Start a test server with specific storage type
-    pub async fn start_with_storage(storage_type: &str) -> anyhow::Result<Self> {
-        let mut test_config = if storage_type == "postgresql" {
-            config::Config::test_config_postgres(0)
-        } else {
-            config::Config::test_config_with_port(0)
-        };
+    /// Start a test server with specific storage type (only PostgreSQL supported now)
+    pub async fn start_with_storage(_storage_type: &str) -> anyhow::Result<Self> {
+        // Only PostgreSQL is supported now
+        let mut test_config = config::Config::test_config_postgres(0);
 
         // Disable auth for tests by default to avoid overhead
         test_config.auth = None;
@@ -50,6 +53,7 @@ impl TestServer {
     }
 
     /// Get the port the server is running on
+    #[allow(dead_code)]
     pub fn port(&self) -> u16 {
         self.port
     }
@@ -87,13 +91,15 @@ impl TestContext {
     }
 
     /// Start a new server and add it to the context
+    #[allow(dead_code)]
     pub async fn start_server(&self) -> anyhow::Result<u16> {
-        self.start_server_with_storage("memory").await
+        self.start_server_with_storage("postgresql").await
     }
 
-    /// Start a new server with specific storage and add it to the context
-    pub async fn start_server_with_storage(&self, storage_type: &str) -> anyhow::Result<u16> {
-        let server = TestServer::start_with_storage(storage_type).await?;
+    /// Start a new server with specific storage and add it to the context (only PostgreSQL supported now)
+    #[allow(dead_code)]
+    pub async fn start_server_with_storage(&self, _storage_type: &str) -> anyhow::Result<u16> {
+        let server = TestServer::start_with_storage("postgresql").await?;
         let port = server.port();
         self.servers.lock().await.push(server);
         Ok(port)
@@ -117,6 +123,7 @@ impl Default for TestContext {
 }
 
 /// Wait for server to be ready with retries
+#[allow(dead_code)]
 pub async fn wait_for_server(port: u16, max_attempts: u32) -> anyhow::Result<()> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_millis(500))

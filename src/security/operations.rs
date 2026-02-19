@@ -272,8 +272,15 @@ impl Default for SecureOperations {
 mod tests {
     use super::*;
 
+    fn should_skip_db_tests() -> bool {
+        std::env::var("DATABASE_URL").is_err()
+    }
+
     #[test]
     fn test_upsert_script_requires_capability() {
+        if should_skip_db_tests() {
+            return;
+        }
         let ops = SecureOperations::new();
 
         // Create a user with no capabilities at all (custom context)

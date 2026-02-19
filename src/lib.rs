@@ -551,41 +551,14 @@ fn initialize_secrets(config: &config::Config) -> Arc<secrets::SecretsManager> {
 /// Helper: Initialize database and repository
 async fn initialize_database_and_repository(config: &config::Config) -> AppResult<()> {
     info!("Initializing database connection...");
-    info!(
-        "Repository config - storage_type: {}",
-        config.repository.storage_type
-    );
+    info!("Initializing PostgreSQL repository");
 
-    // Handle memory storage explicitly - no database connection needed
-    if config.repository.storage_type == "memory" {
-        info!("Initializing in-memory repository (no database connection required)");
-        let repo = repository::UnifiedRepository::new_memory();
-        if repository::initialize_repository(repo) {
-            info!("Global repository initialized with Memory");
-        } else {
-            warn!("Global repository was already initialized");
-        }
-        return Ok(());
-    }
+    // Log connection string (sanitized)
+    let safe_conn_str = sanitize_connection_string(&config.repository.connection_string);
+    info!("Repository config - database_url: {}", safe_conn_str);
 
-    // For non-memory storage, we require a connection string
-    if let Some(ref conn_str) = config.repository.connection_string {
-        let safe_conn_str = sanitize_connection_string(conn_str);
-        info!("Repository config - connection_string: {}", safe_conn_str);
-    } else {
-        return Err(AppError::ConfigValidation {
-            field: "repository.connection_string".to_string(),
-            reason: "Connection string is required for non-memory storage".to_string(),
-        });
-    }
-
-    // Attempt to initialize database
-    match database::init_database(
-        &config.repository,
-        config.repository.storage_type == "postgresql",
-    )
-    .await
-    {
+    // Initialize database
+    match database::init_database(&config.repository, true).await {
         Ok(db) => {
             let db_arc = Arc::new(db);
             if database::initialize_global_database(db_arc.clone()) {
@@ -603,22 +576,18 @@ async fn initialize_database_and_repository(config: &config::Config) -> AppResul
                 warn!("Server ID was already initialized");
             }
 
-            // Initialize UnifiedRepository with Postgres and server_id
-            let repo =
-                repository::UnifiedRepository::new_postgres(db_arc.pool().clone(), server_id);
+            // Initialize PostgresRepository with pool and server_id
+            let repo = repository::PostgresRepository::new(db_arc.pool().clone(), server_id);
             if repository::initialize_repository(repo) {
-                info!("Global repository initialized with Postgres");
+                info!("Global repository initialized with PostgreSQL");
             } else {
                 warn!("Global repository was already initialized");
             }
         }
         Err(e) => {
-            // Strict failure: Do not fallback to memory if database fails
+            // Strict failure: Do not fallback if database fails
             return Err(AppError::Database {
-                message: format!(
-                    "Database initialization failed: {}. Fatal error for storage_type '{}'.",
-                    e, config.repository.storage_type
-                ),
+                message: format!("Database initialization failed: {}. Fatal error.", e),
                 source: None,
             });
         }
@@ -1139,10 +1108,8 @@ async fn initialize_components(config: &config::Config) -> AppResult<()> {
     // Initialize database connection and repository
     initialize_database_and_repository(config).await?;
 
-    // Start PostgreSQL notification listener if using PostgreSQL storage
-    if config.repository.storage_type == "postgresql"
-        && let Some(db) = database::get_global_database()
-    {
+    // Start PostgreSQL notification listener for script synchronization
+    if let Some(db) = database::get_global_database() {
         info!("Starting PostgreSQL notification listener for script synchronization...");
 
         // Get the server ID that was generated during repository initialization
@@ -2844,6 +2811,10 @@ mod tests {
 
     static INIT_DB: Once = Once::new();
 
+    fn should_skip_db_tests() -> bool {
+        std::env::var("DATABASE_URL").is_err()
+    }
+
     fn setup_db() {
         INIT_DB.call_once(|| {
             let pool = sqlx::PgPool::connect_lazy(
@@ -2930,6 +2901,10 @@ mod tests {
 
     #[test]
     fn test_script_crud_operations() {
+        if should_skip_db_tests() {
+            return;
+        }
+        setup_db();
         // Test script retrieval
         let script_content = repository::fetch_script("https://example.com/core");
         assert!(script_content.is_some(), "Core script should exist");

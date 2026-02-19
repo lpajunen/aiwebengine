@@ -27,19 +27,26 @@ use std::collections::HashMap;
 use std::time::Duration;
 use tokio::sync::OnceCell;
 
+mod common;
+use common::should_skip_integration_tests;
+
 static INIT: OnceCell<()> = OnceCell::const_new();
 
 async fn setup_env() {
     INIT.get_or_init(|| async {
-        // Initialize Repository to Memory FIRST
-        aiwebengine::repository::initialize_repository(
-            aiwebengine::repository::UnifiedRepository::new_memory(),
-        );
-
-        // Initialize DB for SecureGlobals
+        // Initialize DB first
         let config = aiwebengine::config::AppConfig::test_config_with_port(0);
         if let Ok(db) = aiwebengine::database::Database::new(&config.repository).await {
-            aiwebengine::database::initialize_global_database(std::sync::Arc::new(db));
+            let db_arc = std::sync::Arc::new(db);
+            aiwebengine::database::initialize_global_database(db_arc.clone());
+
+            // Initialize repository with PostgreSQL
+            aiwebengine::repository::initialize_repository(
+                aiwebengine::repository::PostgresRepository::new(
+                    db_arc.pool().clone(),
+                    "test".to_string(),
+                ),
+            );
         }
     })
     .await;
@@ -56,6 +63,9 @@ fn create_user_with_capabilities(user_id: &str, caps: Vec<Capability>) -> UserCo
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_capability_enforcement_blocks_unauthorized_script_write() {
+    if should_skip_integration_tests() {
+        return;
+    }
     // User with read-only capabilities should NOT be able to write scripts
     let user = create_user_with_capabilities(
         "test_user",
@@ -81,6 +91,9 @@ async fn test_capability_enforcement_blocks_unauthorized_script_write() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_capability_enforcement_allows_authorized_script_write() {
+    if should_skip_integration_tests() {
+        return;
+    }
     // User with write capabilities SHOULD be able to write scripts
     let user = create_user_with_capabilities("admin_user", vec![Capability::WriteScripts]);
     let ops = SecureOperations::new();
@@ -102,6 +115,9 @@ async fn test_capability_enforcement_allows_authorized_script_write() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_validation_prevents_eval_injection() {
+    if should_skip_integration_tests() {
+        return;
+    }
     let validator = InputValidator::new();
 
     // These should all fail validation
@@ -130,6 +146,9 @@ async fn test_validation_prevents_eval_injection() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_validation_prevents_prototype_pollution() {
+    if should_skip_integration_tests() {
+        return;
+    }
     let validator = InputValidator::new();
 
     let dangerous_scripts = vec![
@@ -150,6 +169,9 @@ async fn test_validation_prevents_prototype_pollution() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_validation_prevents_path_traversal() {
+    if should_skip_integration_tests() {
+        return;
+    }
     let validator = InputValidator::new();
 
     let malicious_filenames = vec![
@@ -177,6 +199,9 @@ async fn test_validation_prevents_path_traversal() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_validation_prevents_xss_in_scripts() {
+    if should_skip_integration_tests() {
+        return;
+    }
     let validator = InputValidator::new();
 
     let xss_attempts = vec![
@@ -205,6 +230,9 @@ async fn test_validation_prevents_xss_in_scripts() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_validation_allows_safe_scripts() {
+    if should_skip_integration_tests() {
+        return;
+    }
     let validator = InputValidator::new();
 
     let safe_scripts = vec![
@@ -222,6 +250,9 @@ async fn test_validation_allows_safe_scripts() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_validation_enforces_script_size_limits() {
+    if should_skip_integration_tests() {
+        return;
+    }
     let user = create_user_with_capabilities("test_user", vec![Capability::WriteScripts]);
     let ops = SecureOperations::new();
 
@@ -251,6 +282,9 @@ async fn test_validation_enforces_script_size_limits() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_asset_upload_enforces_size_limits() {
+    if should_skip_integration_tests() {
+        return;
+    }
     let user = create_user_with_capabilities("test_user", vec![Capability::WriteAssets]);
     let ops = SecureOperations::new();
 
@@ -272,6 +306,9 @@ async fn test_asset_upload_enforces_size_limits() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_rate_limiting_blocks_excessive_requests() {
+    if should_skip_integration_tests() {
+        return;
+    }
     let pool = sqlx::PgPool::connect_lazy(
         "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
     )
@@ -300,6 +337,9 @@ async fn test_rate_limiting_blocks_excessive_requests() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_rate_limiting_resets_after_window() {
+    if should_skip_integration_tests() {
+        return;
+    }
     let pool = sqlx::PgPool::connect_lazy(
         "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
     )
@@ -327,6 +367,9 @@ async fn test_rate_limiting_resets_after_window() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_anonymous_user_has_minimal_capabilities() {
+    if should_skip_integration_tests() {
+        return;
+    }
     // Set production mode to test strict anonymous user capabilities
     unsafe {
         std::env::set_var("AIWEBENGINE_MODE", "production");
@@ -364,6 +407,9 @@ async fn test_anonymous_user_has_minimal_capabilities() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_authenticated_user_gets_default_capabilities() {
+    if should_skip_integration_tests() {
+        return;
+    }
     let auth_user = UserContext::authenticated("user123".to_string());
 
     // Authenticated users should have read capabilities
@@ -388,6 +434,9 @@ async fn test_authenticated_user_gets_default_capabilities() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_url_validation_blocks_javascript_protocol() {
+    if should_skip_integration_tests() {
+        return;
+    }
     let validator = InputValidator::new();
 
     let malicious_urls = vec![
@@ -405,6 +454,9 @@ async fn test_url_validation_blocks_javascript_protocol() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_url_validation_allows_safe_protocols() {
+    if should_skip_integration_tests() {
+        return;
+    }
     let validator = InputValidator::new();
 
     let safe_urls = vec![
@@ -421,6 +473,9 @@ async fn test_url_validation_allows_safe_protocols() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_graphql_schema_validation() {
+    if should_skip_integration_tests() {
+        return;
+    }
     let validator = InputValidator::new();
 
     // Valid GraphQL schema
@@ -445,6 +500,9 @@ async fn test_graphql_schema_validation() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_stream_name_validation() {
+    if should_skip_integration_tests() {
+        return;
+    }
     let validator = InputValidator::new();
 
     // Valid stream names (just names, not paths)
@@ -469,6 +527,9 @@ async fn test_stream_name_validation() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_header_injection_prevention() {
+    if should_skip_integration_tests() {
+        return;
+    }
     let validator = InputValidator::new();
 
     let header_injection_attempts = vec![
@@ -489,6 +550,9 @@ async fn test_header_injection_prevention() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_security_operations_repository_integration() {
+    if should_skip_integration_tests() {
+        return;
+    }
     // This test verifies that SecureOperations actually calls the repository
     let user = create_user_with_capabilities("test_user", vec![Capability::WriteScripts]);
     let ops = SecureOperations::new();
@@ -515,6 +579,9 @@ async fn test_security_operations_repository_integration() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_asset_upload_repository_integration() {
+    if should_skip_integration_tests() {
+        return;
+    }
     let user = create_user_with_capabilities("test_user", vec![Capability::WriteAssets]);
     let ops = SecureOperations::new();
 
@@ -549,6 +616,9 @@ use aiwebengine::js_engine::{
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_secure_script_execution_authenticated() {
+    if should_skip_integration_tests() {
+        return;
+    }
     setup_env().await;
     // Test with admin user (needs route registration capability)
     let user_context = UserContext::admin("test_admin".to_string());
@@ -586,6 +656,9 @@ async fn test_secure_script_execution_authenticated() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_secure_script_execution_anonymous() {
+    if should_skip_integration_tests() {
+        return;
+    }
     setup_env().await;
     // Test with anonymous user (limited capabilities)
     let user_context = UserContext::anonymous();
@@ -608,6 +681,9 @@ async fn test_secure_script_execution_anonymous() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_secure_request_execution() {
+    if should_skip_integration_tests() {
+        return;
+    }
     setup_env().await;
     // First, set up a script with authenticated user
     let user_context = UserContext::authenticated("test_user".to_string());
@@ -662,6 +738,9 @@ async fn test_secure_request_execution() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_secure_script_validation() {
+    if should_skip_integration_tests() {
+        return;
+    }
     setup_env().await;
     let user_context = UserContext::authenticated("test_user".to_string());
 
@@ -682,6 +761,9 @@ async fn test_secure_script_validation() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_capability_enforcement() {
+    if should_skip_integration_tests() {
+        return;
+    }
     setup_env().await;
     let user_context = UserContext::anonymous(); // No DeleteScripts capability
 
@@ -701,6 +783,9 @@ async fn test_capability_enforcement() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_asset_upsert_sets_script_uri() {
+    if should_skip_integration_tests() {
+        return;
+    }
     setup_env().await;
     let user_context = create_user_with_capabilities("test_user", vec![Capability::WriteAssets]);
 

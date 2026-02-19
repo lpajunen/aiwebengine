@@ -10,7 +10,7 @@
 mod common;
 
 use aiwebengine::repository;
-use common::{TestContext, wait_for_server};
+use common::{TestContext, should_skip_integration_tests, wait_for_server};
 
 // ============================================================================
 // Health Endpoint Tests
@@ -18,6 +18,9 @@ use common::{TestContext, wait_for_server};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_health_endpoint() {
+    if should_skip_integration_tests() {
+        return;
+    }
     let context = TestContext::new();
 
     // Load the core script which contains the health endpoint
@@ -66,6 +69,9 @@ async fn test_health_endpoint() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_health_endpoint_content_type() {
+    if should_skip_integration_tests() {
+        return;
+    }
     let context = TestContext::new();
 
     // Load the core script
@@ -105,6 +111,9 @@ async fn test_health_endpoint_content_type() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_logs_endpoint() {
+    if should_skip_integration_tests() {
+        return;
+    }
     let context = TestContext::new();
 
     // Load the core script which contains the script_logs endpoint
@@ -143,6 +152,9 @@ async fn test_script_logs_endpoint() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_different_http_methods() {
+    if should_skip_integration_tests() {
+        return;
+    }
     let context = TestContext::new();
 
     // Dynamically load the method test script
@@ -256,6 +268,9 @@ async fn test_different_http_methods() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_query_parameters() {
+    if should_skip_integration_tests() {
+        return;
+    }
     let context = TestContext::new();
 
     // Dynamically load the query test script
@@ -340,6 +355,9 @@ async fn test_query_parameters() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_form_data() {
+    if should_skip_integration_tests() {
+        return;
+    }
     let context = TestContext::new();
 
     // Dynamically load the form test script
@@ -449,6 +467,9 @@ async fn test_form_data() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_graphql_endpoints() {
+    if should_skip_integration_tests() {
+        return;
+    }
     let context = TestContext::new();
 
     // Load the core script to get script management GraphQL operations
@@ -642,6 +663,9 @@ async fn test_graphql_endpoints() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_graphql_script_mutations() {
+    if should_skip_integration_tests() {
+        return;
+    }
     let context = TestContext::new();
 
     // Clean up any existing test scripts
@@ -809,6 +833,9 @@ async fn test_graphql_script_mutations() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_graphql_registration_clearing() {
+    if should_skip_integration_tests() {
+        return;
+    }
     use aiwebengine::graphql::{
         GRAPHQL_REGISTRY, GraphQLOperation, clear_script_graphql_registrations,
     };

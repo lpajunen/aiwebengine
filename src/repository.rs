@@ -274,10 +274,6 @@ static DYNAMIC_ASSETS: OnceLock<Mutex<HashMap<String, Asset>>> = OnceLock::new()
 static DYNAMIC_SHARED_STORAGE: OnceLock<Mutex<HashMap<String, HashMap<String, String>>>> =
     OnceLock::new();
 
-// Type alias for personal storage: script_uri -> user_id -> key -> value
-type PersonalStorageMap = HashMap<String, HashMap<String, HashMap<String, String>>>;
-
-static DYNAMIC_PERSONAL_STORAGE: OnceLock<Mutex<PersonalStorageMap>> = OnceLock::new();
 static SCRIPT_PRIVILEGE_OVERRIDES: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
 
 /// Safe mutex access with recovery from poisoned state
@@ -357,29 +353,6 @@ fn safe_lock_shared_storage() -> AppResult<SharedStorageGuard<'static>> {
     }
 }
 
-type PersonalStorageGuard<'a> =
-    std::sync::MutexGuard<'a, HashMap<String, HashMap<String, HashMap<String, String>>>>;
-
-fn safe_lock_personal_storage() -> AppResult<PersonalStorageGuard<'static>> {
-    let store = DYNAMIC_PERSONAL_STORAGE.get_or_init(|| Mutex::new(HashMap::new()));
-
-    match store.lock() {
-        Ok(guard) => Ok(guard),
-        Err(PoisonError { .. }) => {
-            warn!("Personal storage mutex was poisoned, recovering with new data");
-            store.lock().map_err(|e| {
-                error!(
-                    "Failed to recover from poisoned personal storage mutex: {}",
-                    e
-                );
-                AppError::Internal {
-                    message: format!("Unrecoverable mutex poisoning: {}", e),
-                }
-            })
-        }
-    }
-}
-
 fn safe_lock_privilege_overrides()
 -> AppResult<std::sync::MutexGuard<'static, HashMap<String, bool>>> {
     let store = SCRIPT_PRIVILEGE_OVERRIDES.get_or_init(|| Mutex::new(HashMap::new()));
@@ -400,17 +373,12 @@ fn safe_lock_privilege_overrides()
 
 /// Get database pool if available
 pub fn get_db_pool() -> Option<std::sync::Arc<crate::database::Database>> {
-    // If repository is explicitly set to Memory, ignore global database
-    if let Some(UnifiedRepository::Memory(_)) = GLOBAL_REPOSITORY.get() {
-        return None;
-    }
-
     if let Some(db) = crate::database::get_global_database() {
         return Some(db);
     }
 
-    // Fallback: try to get pool from GLOBAL_REPOSITORY if it is Postgres
-    if let Some(UnifiedRepository::Postgres(repo)) = GLOBAL_REPOSITORY.get() {
+    // Fallback: try to get pool from GLOBAL_REPOSITORY
+    if let Some(repo) = GLOBAL_REPOSITORY.get() {
         return Some(std::sync::Arc::new(crate::database::Database::from_pool(
             repo.pool.clone(),
         )));
@@ -3437,41 +3405,6 @@ pub fn upsert_script_with_owner(
     Ok(())
 }
 
-/// In-memory implementation of upsert script (existing logic)
-fn upsert_script_in_memory(uri: &str, content: &str) -> AppResult<()> {
-    let mut guard = safe_lock_scripts()?;
-
-    // Check if script already exists
-    if let Some(existing) = guard.get_mut(uri) {
-        // Update existing script
-        existing.update_content(content.to_string());
-        debug!(
-            "Updated script in memory: {} ({} bytes)",
-            uri,
-            content.len()
-        );
-    } else {
-        // Insert new script
-        let metadata = ScriptMetadata::new(uri.to_string(), content.to_string());
-        guard.insert(uri.to_string(), metadata);
-        debug!(
-            "Created new script in memory: {} ({} bytes)",
-            uri,
-            content.len()
-        );
-    }
-
-    Ok(())
-}
-
-/// In-memory implementation of upsert asset
-fn upsert_asset_in_memory(asset: &Asset) -> AppResult<()> {
-    let mut guard = safe_lock_assets()?;
-    guard.insert(asset.uri.clone(), asset.clone());
-    debug!("Upserted asset in memory: {}", asset.uri);
-    Ok(())
-}
-
 /// Bootstrap hardcoded scripts into database on startup
 pub fn bootstrap_scripts() -> AppResult<()> {
     if let Some(db) = get_db_pool() {
@@ -4938,1052 +4871,23 @@ impl Repository for PostgresRepository {
     }
 }
 
-/// In-memory implementation of the Repository trait
-pub struct MemoryRepository;
-
-impl MemoryRepository {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for MemoryRepository {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait]
-impl Repository for MemoryRepository {
-    async fn get_script(&self, uri: &str) -> AppResult<Option<String>> {
-        // Check static scripts first
-        if let Some(script) = get_static_scripts().get(uri) {
-            return Ok(Some(script.clone()));
-        }
-
-        // Then check dynamic scripts
-        let guard = safe_lock_scripts()?;
-        Ok(guard.get(uri).map(|m| m.content.clone()))
-    }
-
-    async fn list_scripts(&self) -> AppResult<HashMap<String, String>> {
-        // Start with static scripts
-        let mut scripts = get_static_scripts();
-
-        // Merge dynamic scripts
-        let guard = safe_lock_scripts()?;
-        for (uri, metadata) in guard.iter() {
-            scripts.insert(uri.clone(), metadata.content.clone());
-        }
-
-        Ok(scripts)
-    }
-
-    async fn upsert_script(&self, uri: &str, content: &str) -> AppResult<()> {
-        upsert_script_in_memory(uri, content)
-    }
-
-    async fn delete_script(&self, uri: &str) -> AppResult<bool> {
-        let mut guard = safe_lock_scripts()?;
-        Ok(guard.remove(uri).is_some())
-    }
-
-    async fn get_script_metadata(&self, uri: &str) -> AppResult<ScriptMetadata> {
-        let guard = safe_lock_scripts()?;
-        guard
-            .get(uri)
-            .cloned()
-            .ok_or_else(|| RepositoryError::ScriptNotFound(uri.to_string()).into())
-    }
-
-    async fn get_all_script_metadata(&self) -> AppResult<Vec<ScriptMetadata>> {
-        let mut metadata_list = Vec::new();
-
-        // Get static scripts
-        for (uri, content) in get_static_scripts() {
-            metadata_list.push(ScriptMetadata::new(uri, content));
-        }
-
-        // Merge dynamic scripts (overwriting static if same URI)
-        {
-            let guard = safe_lock_scripts()?;
-            for (uri, metadata) in guard.iter() {
-                if let Some(existing) = metadata_list.iter_mut().find(|m| m.uri == *uri) {
-                    *existing = metadata.clone();
-                } else {
-                    metadata_list.push(metadata.clone());
-                }
-            }
-        }
-
-        // Apply privilege overrides
-        if let Ok(overrides) = safe_lock_privilege_overrides() {
-            for metadata in &mut metadata_list {
-                if let Some(privileged) = overrides.get(&metadata.uri) {
-                    metadata.privileged = *privileged;
-                }
-            }
-        }
-
-        // Apply default privileges
-        for metadata in &mut metadata_list {
-            let profile = get_script_security_profile(&metadata.uri)?;
-            if profile.privileged != metadata.privileged {
-                metadata.privileged = profile.privileged;
-            }
-        }
-
-        Ok(metadata_list)
-    }
-
-    async fn update_script_init_status(
-        &self,
-        uri: &str,
-        initialized: bool,
-        init_error: Option<String>,
-        registrations: Option<RouteRegistrations>,
-    ) -> AppResult<()> {
-        let mut guard = safe_lock_scripts()?;
-        if let Some(metadata) = guard.get_mut(uri) {
-            metadata.initialized = initialized;
-            metadata.init_error = init_error;
-            if let Some(regs) = registrations {
-                metadata.registrations = regs;
-            }
-            if initialized {
-                metadata.last_init_time = Some(SystemTime::now());
-            }
-        } else {
-            // If it's a static script, it might not be in dynamic scripts map yet
-            if let Some(content) = get_static_scripts().get(uri) {
-                let mut metadata = ScriptMetadata::new(uri.to_string(), content.clone());
-                metadata.initialized = initialized;
-                metadata.init_error = init_error;
-                if let Some(regs) = registrations {
-                    metadata.registrations = regs;
-                }
-                if initialized {
-                    metadata.last_init_time = Some(SystemTime::now());
-                }
-                guard.insert(uri.to_string(), metadata);
-            } else {
-                return Err(RepositoryError::ScriptNotFound(uri.to_string()).into());
-            }
-        }
-        Ok(())
-    }
-
-    async fn get_asset(&self, script_uri: &str, uri: &str) -> AppResult<Option<Asset>> {
-        // Check static assets first (only if script_uri matches core)
-        if script_uri == "https://example.com/core"
-            && let Some(asset) = get_static_assets().get(uri)
-        {
-            return Ok(Some(asset.clone()));
-        }
-
-        // Then check dynamic assets
-        let guard = safe_lock_assets()?;
-        if let Some(asset) = guard.get(uri)
-            && asset.script_uri == script_uri
-        {
-            return Ok(Some(asset.clone()));
-        }
-        Ok(None)
-    }
-
-    async fn list_assets(&self, script_uri: &str) -> AppResult<HashMap<String, Asset>> {
-        let mut assets = HashMap::new();
-
-        // Add static assets if script_uri matches core
-        if script_uri == "https://example.com/core" {
-            assets.extend(get_static_assets());
-        }
-
-        // Add dynamic assets that match script_uri
-        let guard = safe_lock_assets()?;
-        for (uri, asset) in guard.iter() {
-            if asset.script_uri == script_uri {
-                assets.insert(uri.clone(), asset.clone());
-            }
-        }
-
-        Ok(assets)
-    }
-
-    async fn upsert_asset(&self, asset: Asset) -> AppResult<()> {
-        upsert_asset_in_memory(&asset)
-    }
-
-    async fn delete_asset(&self, script_uri: &str, uri: &str) -> AppResult<bool> {
-        let mut guard = safe_lock_assets()?;
-        if let Some(asset) = guard.get(uri)
-            && asset.script_uri == script_uri
-        {
-            guard.remove(uri);
-            return Ok(true);
-        }
-        Ok(false)
-    }
-
-    async fn insert_log(&self, script_uri: &str, message: &str, _level: &str) -> AppResult<()> {
-        let mut guard = safe_lock_logs()?;
-        guard
-            .entry(script_uri.to_string())
-            .or_insert_with(Vec::new)
-            .push(message.to_string());
-        Ok(())
-    }
-
-    async fn fetch_logs(&self, script_uri: &str) -> AppResult<Vec<LogEntry>> {
-        let guard = safe_lock_logs()?;
-        let now = SystemTime::now();
-        Ok(guard
-            .get(script_uri)
-            .map(|messages| {
-                messages
-                    .iter()
-                    .map(|msg| LogEntry::new(msg.clone(), "INFO".to_string(), now))
-                    .collect()
-            })
-            .unwrap_or_default())
-    }
-
-    async fn fetch_all_logs(&self) -> AppResult<Vec<LogEntry>> {
-        let guard = safe_lock_logs()?;
-        let mut all_logs = Vec::new();
-        let now = SystemTime::now();
-        for logs in guard.values() {
-            for message in logs {
-                all_logs.push(LogEntry::new(message.clone(), "INFO".to_string(), now));
-            }
-        }
-        Ok(all_logs)
-    }
-
-    async fn clear_logs(&self, script_uri: &str) -> AppResult<()> {
-        let mut guard = safe_lock_logs()?;
-        guard.remove(script_uri);
-        Ok(())
-    }
-
-    async fn prune_logs(&self) -> AppResult<()> {
-        const LIMIT: usize = 20;
-        let mut guard = safe_lock_logs()?;
-
-        for logs in guard.values_mut() {
-            if logs.len() > LIMIT {
-                let remove = logs.len() - LIMIT;
-                logs.drain(0..remove);
-            }
-        }
-        Ok(())
-    }
-
-    async fn get_shared_storage(&self, script_uri: &str, key: &str) -> AppResult<Option<String>> {
-        let guard = safe_lock_shared_storage()?;
-        Ok(guard.get(script_uri).and_then(|map| map.get(key)).cloned())
-    }
-
-    async fn set_shared_storage(&self, script_uri: &str, key: &str, value: &str) -> AppResult<()> {
-        let mut guard = safe_lock_shared_storage()?;
-        guard
-            .entry(script_uri.to_string())
-            .or_insert_with(HashMap::new)
-            .insert(key.to_string(), value.to_string());
-        Ok(())
-    }
-
-    async fn remove_shared_storage(&self, script_uri: &str, key: &str) -> AppResult<bool> {
-        let mut guard = safe_lock_shared_storage()?;
-        if let Some(map) = guard.get_mut(script_uri) {
-            Ok(map.remove(key).is_some())
-        } else {
-            Ok(false)
-        }
-    }
-
-    async fn clear_shared_storage(&self, script_uri: &str) -> AppResult<()> {
-        let mut guard = safe_lock_shared_storage()?;
-        guard.remove(script_uri);
-        Ok(())
-    }
-
-    async fn get_personal_storage(
-        &self,
-        script_uri: &str,
-        user_id: &str,
-        key: &str,
-    ) -> AppResult<Option<String>> {
-        let guard = safe_lock_personal_storage()?;
-        Ok(guard
-            .get(script_uri)
-            .and_then(|user_map| user_map.get(user_id))
-            .and_then(|key_map| key_map.get(key))
-            .cloned())
-    }
-
-    async fn set_personal_storage(
-        &self,
-        script_uri: &str,
-        user_id: &str,
-        key: &str,
-        value: &str,
-    ) -> AppResult<()> {
-        let mut guard = safe_lock_personal_storage()?;
-        guard
-            .entry(script_uri.to_string())
-            .or_insert_with(HashMap::new)
-            .entry(user_id.to_string())
-            .or_insert_with(HashMap::new)
-            .insert(key.to_string(), value.to_string());
-        Ok(())
-    }
-
-    async fn remove_personal_storage(
-        &self,
-        script_uri: &str,
-        user_id: &str,
-        key: &str,
-    ) -> AppResult<bool> {
-        let mut guard = safe_lock_personal_storage()?;
-        if let Some(user_map) = guard.get_mut(script_uri)
-            && let Some(key_map) = user_map.get_mut(user_id)
-        {
-            Ok(key_map.remove(key).is_some())
-        } else {
-            Ok(false)
-        }
-    }
-
-    async fn clear_personal_storage(&self, script_uri: &str, user_id: &str) -> AppResult<()> {
-        let mut guard = safe_lock_personal_storage()?;
-        if let Some(user_map) = guard.get_mut(script_uri) {
-            user_map.remove(user_id);
-        }
-        Ok(())
-    }
-
-    async fn get_script_privileged(&self, uri: &str) -> AppResult<Option<bool>> {
-        // Check overrides
-        if let Ok(guard) = safe_lock_privilege_overrides()
-            && let Some(value) = guard.get(uri)
-        {
-            return Ok(Some(*value));
-        }
-
-        // Check metadata
-        if let Ok(guard) = safe_lock_scripts()
-            && let Some(metadata) = guard.get(uri)
-        {
-            return Ok(Some(metadata.privileged));
-        }
-
-        Ok(None)
-    }
-
-    async fn set_script_privileged(&self, uri: &str, privileged: bool) -> AppResult<()> {
-        // Update metadata if exists
-        if let Ok(mut guard) = safe_lock_scripts()
-            && let Some(metadata) = guard.get_mut(uri)
-        {
-            metadata.privileged = privileged;
-        }
-
-        // Update override
-        let mut guard = safe_lock_privilege_overrides()?;
-        guard.insert(uri.to_string(), privileged);
-        Ok(())
-    }
-
-    async fn add_script_owner(&self, uri: &str, user_id: &str) -> AppResult<()> {
-        // In memory mode, update the metadata directly
-        let mut guard = safe_lock_scripts()?;
-        if let Some(metadata) = guard.get_mut(uri) {
-            if !metadata.owners.contains(&user_id.to_string()) {
-                metadata.owners.push(user_id.to_string());
-            }
-            Ok(())
-        } else {
-            Err(RepositoryError::ScriptNotFound(uri.to_string()).into())
-        }
-    }
-
-    async fn remove_script_owner(&self, uri: &str, user_id: &str) -> AppResult<bool> {
-        let mut guard = safe_lock_scripts()?;
-        if let Some(metadata) = guard.get_mut(uri) {
-            if let Some(pos) = metadata.owners.iter().position(|id| id == user_id) {
-                metadata.owners.remove(pos);
-                Ok(true)
-            } else {
-                Ok(false)
-            }
-        } else {
-            Ok(false)
-        }
-    }
-
-    async fn get_script_owners(&self, uri: &str) -> AppResult<Vec<String>> {
-        let guard = safe_lock_scripts()?;
-        if let Some(metadata) = guard.get(uri) {
-            Ok(metadata.owners.clone())
-        } else {
-            Ok(Vec::new())
-        }
-    }
-
-    async fn user_owns_script(&self, uri: &str, user_id: &str) -> AppResult<bool> {
-        let guard = safe_lock_scripts()?;
-        if let Some(metadata) = guard.get(uri) {
-            Ok(metadata.owners.contains(&user_id.to_string()))
-        } else {
-            Ok(false)
-        }
-    }
-
-    async fn count_script_owners(&self, uri: &str) -> AppResult<i64> {
-        let guard = safe_lock_scripts()?;
-        if let Some(metadata) = guard.get(uri) {
-            Ok(metadata.owners.len() as i64)
-        } else {
-            Ok(0)
-        }
-    }
-
-    async fn create_script_table(
-        &self,
-        _script_uri: &str,
-        _logical_table_name: &str,
-    ) -> AppResult<String> {
-        Err(AppError::Validation {
-            field: "database".to_string(),
-            reason: "Database schema operations not supported in memory mode".to_string(),
-        })
-    }
-
-    async fn add_column_to_script_table(
-        &self,
-        _script_uri: &str,
-        _logical_table_name: &str,
-        _column_name: &str,
-        _column_type: ColumnType,
-        _nullable: bool,
-        _default_value: Option<&str>,
-    ) -> AppResult<()> {
-        Err(AppError::Validation {
-            field: "database".to_string(),
-            reason: "Database schema operations not supported in memory mode".to_string(),
-        })
-    }
-
-    async fn add_reference_column(
-        &self,
-        _script_uri: &str,
-        _logical_table_name: &str,
-        _column_name: &str,
-        _referenced_logical_table_name: &str,
-        _nullable: bool,
-    ) -> AppResult<()> {
-        Err(AppError::Validation {
-            field: "database".to_string(),
-            reason: "Database schema operations not supported in memory mode".to_string(),
-        })
-    }
-
-    async fn drop_column(
-        &self,
-        _script_uri: &str,
-        _logical_table_name: &str,
-        _column_name: &str,
-    ) -> AppResult<bool> {
-        Err(AppError::Validation {
-            field: "database".to_string(),
-            reason: "Database schema operations not supported in memory mode".to_string(),
-        })
-    }
-
-    async fn drop_script_table(
-        &self,
-        _script_uri: &str,
-        _logical_table_name: &str,
-    ) -> AppResult<bool> {
-        Err(AppError::Validation {
-            field: "database".to_string(),
-            reason: "Database schema operations not supported in memory mode".to_string(),
-        })
-    }
-
-    async fn list_script_tables(&self, _script_uri: &str) -> AppResult<Vec<TableInfo>> {
-        Err(AppError::Validation {
-            field: "database".to_string(),
-            reason: "Database schema operations not supported in memory mode".to_string(),
-        })
-    }
-
-    async fn get_table_schema(
-        &self,
-        _script_uri: &str,
-        _logical_table_name: &str,
-    ) -> AppResult<TableSchema> {
-        Err(AppError::Validation {
-            field: "database".to_string(),
-            reason: "Database schema operations not supported in memory mode".to_string(),
-        })
-    }
-
-    async fn get_foreign_keys(
-        &self,
-        _script_uri: &str,
-        _logical_table_name: &str,
-    ) -> AppResult<Vec<ForeignKeyInfo>> {
-        Err(AppError::Validation {
-            field: "database".to_string(),
-            reason: "Database schema operations not supported in memory mode".to_string(),
-        })
-    }
-
-    async fn query_table(
-        &self,
-        _script_uri: &str,
-        _logical_table_name: &str,
-        _filters: Option<&HashMap<String, serde_json::Value>>,
-        _limit: Option<i64>,
-    ) -> AppResult<Vec<serde_json::Value>> {
-        Err(AppError::Validation {
-            field: "database".to_string(),
-            reason: "Database schema operations not supported in memory mode".to_string(),
-        })
-    }
-
-    async fn insert_row(
-        &self,
-        _script_uri: &str,
-        _logical_table_name: &str,
-        _data: &HashMap<String, serde_json::Value>,
-    ) -> AppResult<serde_json::Value> {
-        Err(AppError::Validation {
-            field: "database".to_string(),
-            reason: "Database schema operations not supported in memory mode".to_string(),
-        })
-    }
-
-    async fn update_row(
-        &self,
-        _script_uri: &str,
-        _logical_table_name: &str,
-        _id: i32,
-        _data: &HashMap<String, serde_json::Value>,
-    ) -> AppResult<serde_json::Value> {
-        Err(AppError::Validation {
-            field: "database".to_string(),
-            reason: "Database schema operations not supported in memory mode".to_string(),
-        })
-    }
-
-    async fn delete_row(
-        &self,
-        _script_uri: &str,
-        _logical_table_name: &str,
-        _id: i32,
-    ) -> AppResult<bool> {
-        Err(AppError::Validation {
-            field: "database".to_string(),
-            reason: "Database schema operations not supported in memory mode".to_string(),
-        })
-    }
-}
-
-/// Unified repository that delegates to either Postgres or Memory implementation
-pub enum UnifiedRepository {
-    Postgres(PostgresRepository),
-    Memory(MemoryRepository),
-}
-
-impl UnifiedRepository {
-    pub fn new_postgres(pool: PgPool, server_id: String) -> Self {
-        Self::Postgres(PostgresRepository::new(pool, server_id))
-    }
-
-    pub fn new_memory() -> Self {
-        Self::Memory(MemoryRepository::new())
-    }
-}
-
-#[async_trait]
-impl Repository for UnifiedRepository {
-    async fn get_script(&self, uri: &str) -> AppResult<Option<String>> {
-        match self {
-            Self::Postgres(repo) => repo.get_script(uri).await,
-            Self::Memory(repo) => repo.get_script(uri).await,
-        }
-    }
-
-    async fn list_scripts(&self) -> AppResult<HashMap<String, String>> {
-        match self {
-            Self::Postgres(repo) => repo.list_scripts().await,
-            Self::Memory(repo) => repo.list_scripts().await,
-        }
-    }
-
-    async fn upsert_script(&self, uri: &str, content: &str) -> AppResult<()> {
-        match self {
-            Self::Postgres(repo) => repo.upsert_script(uri, content).await,
-            Self::Memory(repo) => repo.upsert_script(uri, content).await,
-        }
-    }
-
-    async fn delete_script(&self, uri: &str) -> AppResult<bool> {
-        match self {
-            Self::Postgres(repo) => repo.delete_script(uri).await,
-            Self::Memory(repo) => repo.delete_script(uri).await,
-        }
-    }
-
-    async fn get_script_metadata(&self, uri: &str) -> AppResult<ScriptMetadata> {
-        match self {
-            Self::Postgres(repo) => repo.get_script_metadata(uri).await,
-            Self::Memory(repo) => repo.get_script_metadata(uri).await,
-        }
-    }
-
-    async fn get_all_script_metadata(&self) -> AppResult<Vec<ScriptMetadata>> {
-        match self {
-            Self::Postgres(repo) => repo.get_all_script_metadata().await,
-            Self::Memory(repo) => repo.get_all_script_metadata().await,
-        }
-    }
-
-    async fn update_script_init_status(
-        &self,
-        uri: &str,
-        initialized: bool,
-        init_error: Option<String>,
-        registrations: Option<RouteRegistrations>,
-    ) -> AppResult<()> {
-        match self {
-            Self::Postgres(repo) => {
-                repo.update_script_init_status(uri, initialized, init_error, registrations)
-                    .await
-            }
-            Self::Memory(repo) => {
-                repo.update_script_init_status(uri, initialized, init_error, registrations)
-                    .await
-            }
-        }
-    }
-
-    async fn get_asset(&self, script_uri: &str, uri: &str) -> AppResult<Option<Asset>> {
-        match self {
-            Self::Postgres(repo) => repo.get_asset(script_uri, uri).await,
-            Self::Memory(repo) => repo.get_asset(script_uri, uri).await,
-        }
-    }
-
-    async fn list_assets(&self, script_uri: &str) -> AppResult<HashMap<String, Asset>> {
-        match self {
-            Self::Postgres(repo) => repo.list_assets(script_uri).await,
-            Self::Memory(repo) => repo.list_assets(script_uri).await,
-        }
-    }
-
-    async fn upsert_asset(&self, asset: Asset) -> AppResult<()> {
-        match self {
-            Self::Postgres(repo) => repo.upsert_asset(asset).await,
-            Self::Memory(repo) => repo.upsert_asset(asset).await,
-        }
-    }
-
-    async fn delete_asset(&self, script_uri: &str, uri: &str) -> AppResult<bool> {
-        match self {
-            Self::Postgres(repo) => repo.delete_asset(script_uri, uri).await,
-            Self::Memory(repo) => repo.delete_asset(script_uri, uri).await,
-        }
-    }
-
-    async fn insert_log(&self, script_uri: &str, message: &str, level: &str) -> AppResult<()> {
-        match self {
-            Self::Postgres(repo) => repo.insert_log(script_uri, message, level).await,
-            Self::Memory(repo) => repo.insert_log(script_uri, message, level).await,
-        }
-    }
-
-    async fn fetch_logs(&self, script_uri: &str) -> AppResult<Vec<LogEntry>> {
-        match self {
-            Self::Postgres(repo) => repo.fetch_logs(script_uri).await,
-            Self::Memory(repo) => repo.fetch_logs(script_uri).await,
-        }
-    }
-
-    async fn fetch_all_logs(&self) -> AppResult<Vec<LogEntry>> {
-        match self {
-            Self::Postgres(repo) => repo.fetch_all_logs().await,
-            Self::Memory(repo) => repo.fetch_all_logs().await,
-        }
-    }
-
-    async fn clear_logs(&self, script_uri: &str) -> AppResult<()> {
-        match self {
-            Self::Postgres(repo) => repo.clear_logs(script_uri).await,
-            Self::Memory(repo) => repo.clear_logs(script_uri).await,
-        }
-    }
-
-    async fn prune_logs(&self) -> AppResult<()> {
-        match self {
-            Self::Postgres(repo) => repo.prune_logs().await,
-            Self::Memory(repo) => repo.prune_logs().await,
-        }
-    }
-
-    async fn get_shared_storage(&self, script_uri: &str, key: &str) -> AppResult<Option<String>> {
-        match self {
-            Self::Postgres(repo) => repo.get_shared_storage(script_uri, key).await,
-            Self::Memory(repo) => repo.get_shared_storage(script_uri, key).await,
-        }
-    }
-
-    async fn set_shared_storage(&self, script_uri: &str, key: &str, value: &str) -> AppResult<()> {
-        match self {
-            Self::Postgres(repo) => repo.set_shared_storage(script_uri, key, value).await,
-            Self::Memory(repo) => repo.set_shared_storage(script_uri, key, value).await,
-        }
-    }
-
-    async fn remove_shared_storage(&self, script_uri: &str, key: &str) -> AppResult<bool> {
-        match self {
-            Self::Postgres(repo) => repo.remove_shared_storage(script_uri, key).await,
-            Self::Memory(repo) => repo.remove_shared_storage(script_uri, key).await,
-        }
-    }
-
-    async fn clear_shared_storage(&self, script_uri: &str) -> AppResult<()> {
-        match self {
-            Self::Postgres(repo) => repo.clear_shared_storage(script_uri).await,
-            Self::Memory(repo) => repo.clear_shared_storage(script_uri).await,
-        }
-    }
-
-    async fn get_personal_storage(
-        &self,
-        script_uri: &str,
-        user_id: &str,
-        key: &str,
-    ) -> AppResult<Option<String>> {
-        match self {
-            Self::Postgres(repo) => repo.get_personal_storage(script_uri, user_id, key).await,
-            Self::Memory(repo) => repo.get_personal_storage(script_uri, user_id, key).await,
-        }
-    }
-
-    async fn set_personal_storage(
-        &self,
-        script_uri: &str,
-        user_id: &str,
-        key: &str,
-        value: &str,
-    ) -> AppResult<()> {
-        match self {
-            Self::Postgres(repo) => {
-                repo.set_personal_storage(script_uri, user_id, key, value)
-                    .await
-            }
-            Self::Memory(repo) => {
-                repo.set_personal_storage(script_uri, user_id, key, value)
-                    .await
-            }
-        }
-    }
-
-    async fn remove_personal_storage(
-        &self,
-        script_uri: &str,
-        user_id: &str,
-        key: &str,
-    ) -> AppResult<bool> {
-        match self {
-            Self::Postgres(repo) => repo.remove_personal_storage(script_uri, user_id, key).await,
-            Self::Memory(repo) => repo.remove_personal_storage(script_uri, user_id, key).await,
-        }
-    }
-
-    async fn clear_personal_storage(&self, script_uri: &str, user_id: &str) -> AppResult<()> {
-        match self {
-            Self::Postgres(repo) => repo.clear_personal_storage(script_uri, user_id).await,
-            Self::Memory(repo) => repo.clear_personal_storage(script_uri, user_id).await,
-        }
-    }
-
-    async fn get_script_privileged(&self, uri: &str) -> AppResult<Option<bool>> {
-        match self {
-            Self::Postgres(repo) => repo.get_script_privileged(uri).await,
-            Self::Memory(repo) => repo.get_script_privileged(uri).await,
-        }
-    }
-
-    async fn set_script_privileged(&self, uri: &str, privileged: bool) -> AppResult<()> {
-        match self {
-            Self::Postgres(repo) => repo.set_script_privileged(uri, privileged).await,
-            Self::Memory(repo) => repo.set_script_privileged(uri, privileged).await,
-        }
-    }
-
-    async fn add_script_owner(&self, uri: &str, user_id: &str) -> AppResult<()> {
-        match self {
-            Self::Postgres(repo) => repo.add_script_owner(uri, user_id).await,
-            Self::Memory(repo) => repo.add_script_owner(uri, user_id).await,
-        }
-    }
-
-    async fn remove_script_owner(&self, uri: &str, user_id: &str) -> AppResult<bool> {
-        match self {
-            Self::Postgres(repo) => repo.remove_script_owner(uri, user_id).await,
-            Self::Memory(repo) => repo.remove_script_owner(uri, user_id).await,
-        }
-    }
-
-    async fn get_script_owners(&self, uri: &str) -> AppResult<Vec<String>> {
-        match self {
-            Self::Postgres(repo) => repo.get_script_owners(uri).await,
-            Self::Memory(repo) => repo.get_script_owners(uri).await,
-        }
-    }
-
-    async fn user_owns_script(&self, uri: &str, user_id: &str) -> AppResult<bool> {
-        match self {
-            Self::Postgres(repo) => repo.user_owns_script(uri, user_id).await,
-            Self::Memory(repo) => repo.user_owns_script(uri, user_id).await,
-        }
-    }
-
-    async fn count_script_owners(&self, uri: &str) -> AppResult<i64> {
-        match self {
-            Self::Postgres(repo) => repo.count_script_owners(uri).await,
-            Self::Memory(repo) => repo.count_script_owners(uri).await,
-        }
-    }
-
-    async fn create_script_table(
-        &self,
-        script_uri: &str,
-        logical_table_name: &str,
-    ) -> AppResult<String> {
-        match self {
-            Self::Postgres(repo) => {
-                repo.create_script_table(script_uri, logical_table_name)
-                    .await
-            }
-            Self::Memory(repo) => {
-                repo.create_script_table(script_uri, logical_table_name)
-                    .await
-            }
-        }
-    }
-
-    async fn add_column_to_script_table(
-        &self,
-        script_uri: &str,
-        logical_table_name: &str,
-        column_name: &str,
-        column_type: ColumnType,
-        nullable: bool,
-        default_value: Option<&str>,
-    ) -> AppResult<()> {
-        match self {
-            Self::Postgres(repo) => {
-                repo.add_column_to_script_table(
-                    script_uri,
-                    logical_table_name,
-                    column_name,
-                    column_type,
-                    nullable,
-                    default_value,
-                )
-                .await
-            }
-            Self::Memory(repo) => {
-                repo.add_column_to_script_table(
-                    script_uri,
-                    logical_table_name,
-                    column_name,
-                    column_type,
-                    nullable,
-                    default_value,
-                )
-                .await
-            }
-        }
-    }
-
-    async fn add_reference_column(
-        &self,
-        script_uri: &str,
-        logical_table_name: &str,
-        column_name: &str,
-        referenced_logical_table_name: &str,
-        nullable: bool,
-    ) -> AppResult<()> {
-        match self {
-            Self::Postgres(repo) => {
-                repo.add_reference_column(
-                    script_uri,
-                    logical_table_name,
-                    column_name,
-                    referenced_logical_table_name,
-                    nullable,
-                )
-                .await
-            }
-            Self::Memory(repo) => {
-                repo.add_reference_column(
-                    script_uri,
-                    logical_table_name,
-                    column_name,
-                    referenced_logical_table_name,
-                    nullable,
-                )
-                .await
-            }
-        }
-    }
-
-    async fn drop_column(
-        &self,
-        script_uri: &str,
-        logical_table_name: &str,
-        column_name: &str,
-    ) -> AppResult<bool> {
-        match self {
-            Self::Postgres(repo) => {
-                repo.drop_column(script_uri, logical_table_name, column_name)
-                    .await
-            }
-            Self::Memory(repo) => {
-                repo.drop_column(script_uri, logical_table_name, column_name)
-                    .await
-            }
-        }
-    }
-
-    async fn drop_script_table(
-        &self,
-        script_uri: &str,
-        logical_table_name: &str,
-    ) -> AppResult<bool> {
-        match self {
-            Self::Postgres(repo) => repo.drop_script_table(script_uri, logical_table_name).await,
-            Self::Memory(repo) => repo.drop_script_table(script_uri, logical_table_name).await,
-        }
-    }
-
-    async fn list_script_tables(&self, script_uri: &str) -> AppResult<Vec<TableInfo>> {
-        match self {
-            Self::Postgres(repo) => repo.list_script_tables(script_uri).await,
-            Self::Memory(repo) => repo.list_script_tables(script_uri).await,
-        }
-    }
-
-    async fn get_table_schema(
-        &self,
-        script_uri: &str,
-        logical_table_name: &str,
-    ) -> AppResult<TableSchema> {
-        match self {
-            Self::Postgres(repo) => repo.get_table_schema(script_uri, logical_table_name).await,
-            Self::Memory(repo) => repo.get_table_schema(script_uri, logical_table_name).await,
-        }
-    }
-
-    async fn get_foreign_keys(
-        &self,
-        script_uri: &str,
-        logical_table_name: &str,
-    ) -> AppResult<Vec<ForeignKeyInfo>> {
-        match self {
-            Self::Postgres(repo) => repo.get_foreign_keys(script_uri, logical_table_name).await,
-            Self::Memory(repo) => repo.get_foreign_keys(script_uri, logical_table_name).await,
-        }
-    }
-
-    async fn query_table(
-        &self,
-        script_uri: &str,
-        logical_table_name: &str,
-        filters: Option<&HashMap<String, serde_json::Value>>,
-        limit: Option<i64>,
-    ) -> AppResult<Vec<serde_json::Value>> {
-        match self {
-            Self::Postgres(repo) => {
-                repo.query_table(script_uri, logical_table_name, filters, limit)
-                    .await
-            }
-            Self::Memory(repo) => {
-                repo.query_table(script_uri, logical_table_name, filters, limit)
-                    .await
-            }
-        }
-    }
-
-    async fn insert_row(
-        &self,
-        script_uri: &str,
-        logical_table_name: &str,
-        data: &HashMap<String, serde_json::Value>,
-    ) -> AppResult<serde_json::Value> {
-        match self {
-            Self::Postgres(repo) => repo.insert_row(script_uri, logical_table_name, data).await,
-            Self::Memory(repo) => repo.insert_row(script_uri, logical_table_name, data).await,
-        }
-    }
-
-    async fn update_row(
-        &self,
-        script_uri: &str,
-        logical_table_name: &str,
-        id: i32,
-        data: &HashMap<String, serde_json::Value>,
-    ) -> AppResult<serde_json::Value> {
-        match self {
-            Self::Postgres(repo) => {
-                repo.update_row(script_uri, logical_table_name, id, data)
-                    .await
-            }
-            Self::Memory(repo) => {
-                repo.update_row(script_uri, logical_table_name, id, data)
-                    .await
-            }
-        }
-    }
-
-    async fn delete_row(
-        &self,
-        script_uri: &str,
-        logical_table_name: &str,
-        id: i32,
-    ) -> AppResult<bool> {
-        match self {
-            Self::Postgres(repo) => repo.delete_row(script_uri, logical_table_name, id).await,
-            Self::Memory(repo) => repo.delete_row(script_uri, logical_table_name, id).await,
-        }
-    }
-}
-
 /// Global repository instance
-static GLOBAL_REPOSITORY: OnceLock<UnifiedRepository> = OnceLock::new();
+static GLOBAL_REPOSITORY: OnceLock<PostgresRepository> = OnceLock::new();
 
 /// Initialize the global repository
-pub fn initialize_repository(repo: UnifiedRepository) -> bool {
+pub fn initialize_repository(repo: PostgresRepository) -> bool {
     GLOBAL_REPOSITORY.set(repo).is_ok()
 }
 
 /// Get the global repository
-pub fn get_repository() -> &'static UnifiedRepository {
+pub fn get_repository() -> &'static PostgresRepository {
     GLOBAL_REPOSITORY.get_or_init(|| {
-        if let Some(db) = crate::database::get_global_database() {
-            // Fallback initialization with empty server_id (shouldn't happen in normal flow)
-            warn!("Repository not initialized, using fallback with empty server_id");
-            UnifiedRepository::Postgres(PostgresRepository::new(db.pool().clone(), String::new()))
-        } else {
-            UnifiedRepository::new_memory()
-        }
+        let db = crate::database::get_global_database()
+            .expect("Database must be initialized before repository");
+
+        // Fallback initialization with empty server_id (shouldn't happen in normal flow)
+        warn!("Repository not initialized, using fallback with empty server_id");
+        PostgresRepository::new(db.pool().clone(), String::new())
     })
 }
 
@@ -5993,9 +4897,52 @@ pub static GLOBAL_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Once, OnceLock};
 
-    #[test]
-    fn test_script_operations() {
+    static INIT: Once = Once::new();
+    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+
+    fn setup_db() {
+        INIT.call_once(|| {
+            // Skip if running in offline mode (CI/CD)
+            if std::env::var("DATABASE_URL").is_err() {
+                return;
+            }
+
+            let pool = sqlx::PgPool::connect_lazy(
+                "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+            )
+            .unwrap();
+            let db = Arc::new(crate::database::Database::from_pool(pool.clone()));
+            crate::database::initialize_global_database(db);
+
+            // Generate and initialize server ID
+            let server_id = crate::notifications::generate_server_id();
+            crate::notifications::initialize_server_id(server_id.clone());
+
+            // Initialize PostgresRepository with pool and server_id
+            let repo = crate::repository::PostgresRepository::new(pool, server_id);
+            crate::repository::initialize_repository(repo);
+        });
+    }
+
+    fn get_runtime() -> &'static tokio::runtime::Runtime {
+        RUNTIME.get_or_init(|| tokio::runtime::Runtime::new().unwrap())
+    }
+
+    // Helper to check if we should skip database-dependent tests
+    fn should_skip_db_tests() -> bool {
+        std::env::var("DATABASE_URL").is_err()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_script_operations() {
+        if should_skip_db_tests() {
+            return;
+        }
+        let rt = get_runtime();
+        let _guard = rt.enter();
+        setup_db();
         let uri = "test://example";
         let content = "console.log('test')";
 
@@ -6013,8 +4960,11 @@ mod tests {
 
     #[test]
     fn test_bootstrap_scripts() {
+        if should_skip_db_tests() {
+            return;
+        }
         let _lock = GLOBAL_TEST_LOCK.lock().unwrap();
-        // Test that bootstrap_scripts doesn't crash when no database is configured
+        // Test that bootstrap_scripts doesn't crash when database is available
         let result = bootstrap_scripts();
         assert!(
             result.is_ok(),
@@ -6022,18 +4972,30 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_bootstrap_assets() {
-        // Test that bootstrap_assets doesn't crash when no database is configured
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_bootstrap_assets() {
+        if should_skip_db_tests() {
+            return;
+        }
+        let rt = get_runtime();
+        let _guard = rt.enter();
+        setup_db();
+        // Test that bootstrap_assets doesn't crash when database is available
         let result = bootstrap_assets();
         assert!(
             result.is_ok(),
-            "bootstrap_assets should succeed even without database"
+            "bootstrap_assets should succeed with database"
         );
     }
 
-    #[test]
-    fn test_shared_storage_operations() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_shared_storage_operations() {
+        if should_skip_db_tests() {
+            return;
+        }
+        let rt = get_runtime();
+        let _guard = rt.enter();
+        setup_db();
         let script_uri = "test://storage-script";
         let key = "test_key";
         let value = "test_value";
@@ -6063,8 +5025,14 @@ mod tests {
         assert_eq!(get_shared_storage_item(script_uri, "key2"), None);
     }
 
-    #[test]
-    fn test_shared_storage_validation() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_shared_storage_validation() {
+        if should_skip_db_tests() {
+            return;
+        }
+        let rt = get_runtime();
+        let _guard = rt.enter();
+        setup_db();
         // Test empty script URI
         assert!(set_shared_storage_item("", "key", "value").is_err());
 
@@ -6076,8 +5044,14 @@ mod tests {
         assert!(set_shared_storage_item("test://script", "key", &large_value).is_err());
     }
 
-    #[test]
-    fn test_personal_storage_operations() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_personal_storage_operations() {
+        if should_skip_db_tests() {
+            return;
+        }
+        let rt = get_runtime();
+        let _guard = rt.enter();
+        setup_db();
         let script_uri = "test://personal-storage-script";
         let user_id_1 = "user123";
         let user_id_2 = "user456";
@@ -6132,8 +5106,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_personal_storage_validation() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_personal_storage_validation() {
+        if should_skip_db_tests() {
+            return;
+        }
+        let rt = get_runtime();
+        let _guard = rt.enter();
+        setup_db();
         let script_uri = "test://script";
         let user_id = "user123";
 
@@ -6151,8 +5131,14 @@ mod tests {
         assert!(set_personal_storage_item(script_uri, user_id, "key", &large_value).is_err());
     }
 
-    #[test]
-    fn test_personal_storage_user_isolation() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_personal_storage_user_isolation() {
+        if should_skip_db_tests() {
+            return;
+        }
+        let rt = get_runtime();
+        let _guard = rt.enter();
+        setup_db();
         let script_uri = "test://isolation-test";
         let user1 = "alice";
         let user2 = "bob";
@@ -6185,8 +5171,14 @@ mod tests {
         assert_eq!(get_personal_storage_item(script_uri, user1, "pref"), None);
     }
 
-    #[test]
-    fn test_script_privileged_flag_defaults() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_script_privileged_flag_defaults() {
+        if should_skip_db_tests() {
+            return;
+        }
+        let rt = get_runtime();
+        let _guard = rt.enter();
+        setup_db();
         let _lock = GLOBAL_TEST_LOCK.lock().unwrap();
 
         // Clean up potential pollution from other tests
@@ -6226,8 +5218,14 @@ mod tests {
         assert!(updated_profile.privileged, "Flag update must persist");
     }
 
-    #[test]
-    fn test_script_ownership_assignment() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_script_ownership_assignment() {
+        if should_skip_db_tests() {
+            return;
+        }
+        let rt = get_runtime();
+        let _guard = rt.enter();
+        setup_db();
         // Test that new scripts get assigned an owner
         let script_uri = "test://owned-script";
         let owner_user_id = "test-user-123";
@@ -6265,8 +5263,14 @@ mod tests {
         assert_eq!(count, 1, "Should have exactly 1 owner");
     }
 
-    #[test]
-    fn test_script_ownership_backfill() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_script_ownership_backfill() {
+        if should_skip_db_tests() {
+            return;
+        }
+        let rt = get_runtime();
+        let _guard = rt.enter();
+        setup_db();
         // Test that existing scripts without owners get backfilled
         let script_uri = "test://backfill-script";
         let script_code = "console.log('backfill test');";
@@ -6298,8 +5302,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_script_ownership_no_duplicate() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_script_ownership_no_duplicate() {
+        if should_skip_db_tests() {
+            return;
+        }
+        let rt = get_runtime();
+        let _guard = rt.enter();
+        setup_db();
         // Test that scripts with existing owners don't get duplicates
         let script_uri = "test://no-duplicate-script";
         let owner_user_id = "original-owner";
@@ -6320,8 +5330,14 @@ mod tests {
         assert_eq!(owners[0], owner_user_id, "Owner should be unchanged");
     }
 
-    #[test]
-    fn test_script_ownership_bootstrap_scripts_remain_ownerless() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_script_ownership_bootstrap_scripts_remain_ownerless() {
+        if should_skip_db_tests() {
+            return;
+        }
+        let rt = get_runtime();
+        let _guard = rt.enter();
+        setup_db();
         // Test that bootstrap scripts never get owners assigned
         let bootstrap_uri = "https://example.com/core"; // This is a bootstrap script
         let user_id = "admin-user";
@@ -6336,8 +5352,14 @@ mod tests {
         assert_eq!(owners.len(), 0, "Bootstrap script should have no owners");
     }
 
-    #[test]
-    fn test_script_ownership_add_remove() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_script_ownership_add_remove() {
+        if should_skip_db_tests() {
+            return;
+        }
+        let rt = get_runtime();
+        let _guard = rt.enter();
+        setup_db();
         // Test adding and removing owners
         let script_uri = "test://multi-owner-script";
         let owner1 = "owner-one";
@@ -6374,8 +5396,14 @@ mod tests {
         assert_eq!(owners_after[0], owner2, "Only owner2 should remain");
     }
 
-    #[test]
-    fn test_script_ownership_without_user() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_script_ownership_without_user() {
+        if should_skip_db_tests() {
+            return;
+        }
+        let rt = get_runtime();
+        let _guard = rt.enter();
+        setup_db();
         // Test that scripts created without a user_id don't crash
         let script_uri = "test://no-user-script";
         let script_code = "console.log('no user');";

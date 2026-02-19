@@ -13,7 +13,7 @@ use aiwebengine::js_engine::call_init_if_exists;
 use aiwebengine::repository;
 use aiwebengine::repository::{get_script_metadata, upsert_script};
 use aiwebengine::script_init::{InitContext, ScriptInitializer};
-use common::TestContext;
+use common::{TestContext, should_skip_integration_tests};
 use std::time::Duration;
 use tokio::sync::OnceCell;
 use tokio::time::timeout;
@@ -22,13 +22,17 @@ static INIT: OnceCell<()> = OnceCell::const_new();
 
 async fn setup_env() {
     INIT.get_or_init(|| async {
-        // Initialize Repository to Memory FIRST
-        repository::initialize_repository(repository::UnifiedRepository::new_memory());
-
-        // Initialize DB for SecureGlobals
+        // Initialize DB first
         let config = aiwebengine::config::AppConfig::test_config_with_port(0);
         if let Ok(db) = aiwebengine::database::Database::new(&config.repository).await {
-            aiwebengine::database::initialize_global_database(std::sync::Arc::new(db));
+            let db_arc = std::sync::Arc::new(db);
+            aiwebengine::database::initialize_global_database(db_arc.clone());
+
+            // Initialize repository with PostgreSQL
+            repository::initialize_repository(repository::PostgresRepository::new(
+                db_arc.pool().clone(),
+                "test".to_string(),
+            ));
         }
     })
     .await;
@@ -40,6 +44,9 @@ async fn setup_env() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_js_registered_route_returns_expected() {
+    if should_skip_integration_tests() {
+        return;
+    }
     let context = TestContext::new();
     let port = context
         .start_server()
@@ -104,6 +111,9 @@ async fn test_js_registered_route_returns_expected() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_core_js_does_not_register_root_path() {
+    if should_skip_integration_tests() {
+        return;
+    }
     // Ensure core.js does NOT register '/' path (it's handled by Rust redirect)
     let core = repository::fetch_script("https://example.com/core").expect("core script missing");
     assert!(
@@ -122,6 +132,9 @@ async fn test_core_js_does_not_register_root_path() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_core_script_init_called() {
+    if should_skip_integration_tests() {
+        return;
+    }
     let context = TestContext::new();
 
     let _ = repository::upsert_script(
@@ -168,6 +181,9 @@ async fn test_core_script_init_called() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn js_write_log_and_listlogs() {
+    if should_skip_integration_tests() {
+        return;
+    }
     // upsert the js_log_test script so it registers its routes
     let _ = repository::upsert_script(
         "https://example.com/js-log-test",
@@ -287,6 +303,9 @@ async fn js_write_log_and_listlogs() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn js_list_logs_for_uri() {
+    if should_skip_integration_tests() {
+        return;
+    }
     // Insert some test log messages for different URIs
     repository::insert_log_message(
         "https://example.com/js-log-test-uri",
@@ -401,6 +420,9 @@ async fn js_list_logs_for_uri() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn js_script_mgmt_functions_work() {
+    if should_skip_integration_tests() {
+        return;
+    }
     // upsert the management test script so it registers /js-mgmt-check and the upsert logic
     let _ = repository::upsert_script(
         "https://example.com/js-mgmt-test",
@@ -491,6 +513,9 @@ async fn js_script_mgmt_functions_work() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_upsert_script_endpoint() {
+    if should_skip_integration_tests() {
+        return;
+    }
     // Use the new TestContext pattern for proper server lifecycle management
     let context = common::TestContext::new();
     let port = context
@@ -594,6 +619,9 @@ function init(context) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_delete_script_endpoint() {
+    if should_skip_integration_tests() {
+        return;
+    }
     // Use the new TestContext pattern for proper server lifecycle management
     let context = common::TestContext::new();
     let port = context
@@ -760,6 +788,9 @@ function init(context) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_lifecycle_via_http_api() {
+    if should_skip_integration_tests() {
+        return;
+    }
     // Use the new TestContext pattern for proper server lifecycle management
     let context = common::TestContext::new();
     let port = context
@@ -885,6 +916,9 @@ function init(context) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_read_script_endpoint() {
+    if should_skip_integration_tests() {
+        return;
+    }
     // Use the new TestContext pattern for proper server lifecycle management
     let context = common::TestContext::new();
     let port = context
@@ -1047,6 +1081,9 @@ function init(context) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_init_function_called_successfully() {
+    if should_skip_integration_tests() {
+        return;
+    }
     setup_env().await;
     let script_uri = "test://init-success";
     let script_content = r#"
@@ -1083,6 +1120,9 @@ async fn test_init_function_called_successfully() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_initializer_updates_metadata() {
+    if should_skip_integration_tests() {
+        return;
+    }
     setup_env().await;
     let script_uri = "test://init-metadata";
     let script_content = r#"
@@ -1117,6 +1157,9 @@ async fn test_script_initializer_updates_metadata() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_without_init_function() {
+    if should_skip_integration_tests() {
+        return;
+    }
     setup_env().await;
     let script_uri = "test://no-init";
     let script_content = r#"
@@ -1139,6 +1182,9 @@ async fn test_script_without_init_function() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_init_function_with_error() {
+    if should_skip_integration_tests() {
+        return;
+    }
     setup_env().await;
     let script_uri = "test://init-error";
     let script_content = r#"
@@ -1180,6 +1226,9 @@ async fn test_init_function_with_error() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_initializer_single_script() {
+    if should_skip_integration_tests() {
+        return;
+    }
     setup_env().await;
     let script_uri = "test://initializer-test";
     let script_content = r#"
@@ -1203,6 +1252,9 @@ async fn test_script_initializer_single_script() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_initializer_all_scripts() {
+    if should_skip_integration_tests() {
+        return;
+    }
     setup_env().await;
     // Create multiple test scripts
     let scripts = vec![
@@ -1237,6 +1289,9 @@ async fn test_script_initializer_all_scripts() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_init_context_properties() {
+    if should_skip_integration_tests() {
+        return;
+    }
     setup_env().await;
     let script_uri = "test://context-test";
     let script_content = r#"

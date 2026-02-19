@@ -117,7 +117,8 @@ enable_console = true
 allowed_apis = ["fetch", "database", "logging", "filesystem"]
 
 [repository]
-storage_type = "postgresql"
+[repository]
+database_url = "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine"
 database_url = "${APP_REPOSITORY__DATABASE_URL}"
 auto_migrate = true
 

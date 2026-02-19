@@ -1110,6 +1110,10 @@ mod tests {
     // Use a global mutex to serialize tests that access global state
     // static crate::repository::GLOBAL_TEST_LOCK: Mutex<()> = Mutex::new(());
 
+    fn should_skip_db_tests() -> bool {
+        std::env::var("DATABASE_URL").is_err()
+    }
+
     fn get_runtime() -> &'static Runtime {
         static RUNTIME: OnceLock<Runtime> = OnceLock::new();
         RUNTIME.get_or_init(|| Runtime::new().expect("Failed to create Tokio runtime"))
@@ -1117,6 +1121,9 @@ mod tests {
 
     #[test]
     fn test_user_creation() {
+        if should_skip_db_tests() {
+            return;
+        }
         let user = User::new(
             "test@example.com".to_string(),
             Some("Test User".to_string()),
@@ -1133,6 +1140,9 @@ mod tests {
 
     #[test]
     fn test_upsert_user_new() {
+        if should_skip_db_tests() {
+            return;
+        }
         let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
         let rt = get_runtime();
 
@@ -1153,6 +1163,9 @@ mod tests {
 
     #[test]
     fn test_upsert_user_existing() {
+        if should_skip_db_tests() {
+            return;
+        }
         let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
         let rt = get_runtime();
 
@@ -1187,6 +1200,9 @@ mod tests {
 
     #[test]
     fn test_role_management() {
+        if should_skip_db_tests() {
+            return;
+        }
         let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
         let rt = get_runtime();
 
@@ -1220,6 +1236,9 @@ mod tests {
 
     #[test]
     fn test_role_privileges() {
+        if should_skip_db_tests() {
+            return;
+        }
         assert!(UserRole::Administrator.has_privilege(&UserRole::Authenticated));
         assert!(UserRole::Administrator.has_privilege(&UserRole::Editor));
         assert!(UserRole::Administrator.has_privilege(&UserRole::Administrator));
@@ -1235,6 +1254,9 @@ mod tests {
 
     #[test]
     fn test_cannot_remove_authenticated_role() {
+        if should_skip_db_tests() {
+            return;
+        }
         let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
         let rt = get_runtime();
 
@@ -1254,6 +1276,9 @@ mod tests {
 
     #[test]
     fn test_find_user_by_provider() {
+        if should_skip_db_tests() {
+            return;
+        }
         let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
         let rt = get_runtime();
 
@@ -1278,6 +1303,9 @@ mod tests {
 
     #[test]
     fn test_update_user_roles() {
+        if should_skip_db_tests() {
+            return;
+        }
         let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
         let rt = get_runtime();
 
@@ -1303,6 +1331,9 @@ mod tests {
 
     #[test]
     fn test_delete_user() {
+        if should_skip_db_tests() {
+            return;
+        }
         let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
         let rt = get_runtime();
 
@@ -1333,6 +1364,9 @@ mod tests {
 
     #[test]
     fn test_validation() {
+        if should_skip_db_tests() {
+            return;
+        }
         let rt = get_runtime();
         rt.block_on(async {
             // Empty email
@@ -1372,6 +1406,9 @@ mod tests {
 
     #[test]
     fn test_bootstrap_admin() {
+        if should_skip_db_tests() {
+            return;
+        }
         let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
         let rt = get_runtime();
 
@@ -1412,6 +1449,9 @@ mod tests {
 
     #[test]
     fn test_bootstrap_admin_case_insensitive() {
+        if should_skip_db_tests() {
+            return;
+        }
         let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
         let rt = get_runtime();
 

@@ -150,7 +150,8 @@ Set `auto_migrate = true` in your `config.toml`:
 
 ```toml
 [repository]
-storage_type = "postgresql"
+[repository]
+database_url = "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine"
 database_url = "${APP_REPOSITORY__DATABASE_URL}"
 auto_migrate = true  # Runs migrations on startup
 ```

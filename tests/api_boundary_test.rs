@@ -44,10 +44,16 @@ static INIT: OnceCell<()> = OnceCell::const_new();
 
 async fn setup_env() {
     INIT.get_or_init(|| async {
-        repository::initialize_repository(repository::UnifiedRepository::new_memory());
         let config = aiwebengine::config::AppConfig::test_config_with_port(0);
         if let Ok(db) = database::Database::new(&config.repository).await {
-            database::initialize_global_database(std::sync::Arc::new(db));
+            let db_arc = std::sync::Arc::new(db);
+            database::initialize_global_database(db_arc.clone());
+
+            // Initialize repository with PostgreSQL
+            repository::initialize_repository(repository::PostgresRepository::new(
+                db_arc.pool().clone(),
+                "test".to_string(),
+            ));
         }
     })
     .await;
