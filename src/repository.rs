@@ -269,10 +269,6 @@ pub struct ForeignKeyInfo {
 }
 
 static DYNAMIC_SCRIPTS: OnceLock<Mutex<HashMap<String, ScriptMetadata>>> = OnceLock::new();
-static DYNAMIC_LOGS: OnceLock<Mutex<HashMap<String, Vec<String>>>> = OnceLock::new();
-static DYNAMIC_ASSETS: OnceLock<Mutex<HashMap<String, Asset>>> = OnceLock::new();
-static DYNAMIC_SHARED_STORAGE: OnceLock<Mutex<HashMap<String, HashMap<String, String>>>> =
-    OnceLock::new();
 
 static SCRIPT_PRIVILEGE_OVERRIDES: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
 
@@ -289,62 +285,6 @@ pub fn safe_lock_scripts()
             // In production, you might want to restart the component or use more sophisticated recovery
             store.lock().map_err(|e| {
                 error!("Failed to recover from poisoned mutex: {}", e);
-                AppError::Internal {
-                    message: format!("Unrecoverable mutex poisoning: {}", e),
-                }
-            })
-        }
-    }
-}
-
-fn safe_lock_logs() -> AppResult<std::sync::MutexGuard<'static, HashMap<String, Vec<String>>>> {
-    let store = DYNAMIC_LOGS.get_or_init(|| Mutex::new(HashMap::new()));
-
-    match store.lock() {
-        Ok(guard) => Ok(guard),
-        Err(PoisonError { .. }) => {
-            warn!("Logs mutex was poisoned, recovering with new data");
-            store.lock().map_err(|e| {
-                error!("Failed to recover from poisoned logs mutex: {}", e);
-                AppError::Internal {
-                    message: format!("Unrecoverable mutex poisoning: {}", e),
-                }
-            })
-        }
-    }
-}
-
-fn safe_lock_assets() -> AppResult<std::sync::MutexGuard<'static, HashMap<String, Asset>>> {
-    let store = DYNAMIC_ASSETS.get_or_init(|| Mutex::new(HashMap::new()));
-
-    match store.lock() {
-        Ok(guard) => Ok(guard),
-        Err(PoisonError { .. }) => {
-            warn!("Assets mutex was poisoned, recovering with new data");
-            store.lock().map_err(|e| {
-                error!("Failed to recover from poisoned assets mutex: {}", e);
-                AppError::Internal {
-                    message: format!("Unrecoverable mutex poisoning: {}", e),
-                }
-            })
-        }
-    }
-}
-
-type SharedStorageGuard<'a> = std::sync::MutexGuard<'a, HashMap<String, HashMap<String, String>>>;
-
-fn safe_lock_shared_storage() -> AppResult<SharedStorageGuard<'static>> {
-    let store = DYNAMIC_SHARED_STORAGE.get_or_init(|| Mutex::new(HashMap::new()));
-
-    match store.lock() {
-        Ok(guard) => Ok(guard),
-        Err(PoisonError { .. }) => {
-            warn!("Shared storage mutex was poisoned, recovering with new data");
-            store.lock().map_err(|e| {
-                error!(
-                    "Failed to recover from poisoned shared storage mutex: {}",
-                    e
-                );
                 AppError::Internal {
                     message: format!("Unrecoverable mutex poisoning: {}", e),
                 }
@@ -3944,36 +3884,43 @@ pub fn get_repository_stats() -> HashMap<String, usize> {
     }
 
     // Count assets
-    match safe_lock_assets() {
-        Ok(guard) => {
-            stats.insert("assets".to_string(), guard.len());
-        }
-        Err(_) => {
-            stats.insert("assets".to_string(), 0);
-        }
-    }
+    let asset_count = if let Some(db) = get_db_pool() {
+        run_blocking(async {
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM assets")
+                .fetch_one(db.pool())
+                .await
+                .unwrap_or(0) as usize
+        })
+    } else {
+        0
+    };
+    stats.insert("assets".to_string(), asset_count);
 
     // Count total log entries
-    match safe_lock_logs() {
-        Ok(guard) => {
-            let total_logs: usize = guard.values().map(|v: &Vec<String>| v.len()).sum();
-            stats.insert("log_entries".to_string(), total_logs);
-        }
-        Err(_) => {
-            stats.insert("log_entries".to_string(), 0);
-        }
-    }
+    let log_count = if let Some(db) = get_db_pool() {
+        run_blocking(async {
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM logs")
+                .fetch_one(db.pool())
+                .await
+                .unwrap_or(0) as usize
+        })
+    } else {
+        0
+    };
+    stats.insert("log_entries".to_string(), log_count);
 
     // Count shared storage entries
-    match safe_lock_shared_storage() {
-        Ok(guard) => {
-            let total_entries: usize = guard.values().map(|script_map| script_map.len()).sum();
-            stats.insert("shared_storage_entries".to_string(), total_entries);
-        }
-        Err(_) => {
-            stats.insert("shared_storage_entries".to_string(), 0);
-        }
-    }
+    let shared_storage_count = if let Some(db) = get_db_pool() {
+        run_blocking(async {
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM shared_storage")
+                .fetch_one(db.pool())
+                .await
+                .unwrap_or(0) as usize
+        })
+    } else {
+        0
+    };
+    stats.insert("shared_storage_entries".to_string(), shared_storage_count);
 
     stats
 }
