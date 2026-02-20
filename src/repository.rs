@@ -1315,6 +1315,437 @@ where
     Ok(())
 }
 
+/// Database-backed set script secret item
+async fn db_set_script_secret(
+    mut executor: crate::database::TransactionExecutor<'_>,
+    script_uri: &str,
+    key: &str,
+    value: &str,
+) -> AppResult<()> {
+    let now = chrono::Utc::now();
+
+    // Try to update existing item
+    let update_result = match executor {
+        crate::database::TransactionExecutor::Transaction(ref mut tx) => {
+            sqlx::query(
+                r#"
+                UPDATE script_secrets
+                SET value = $1, updated_at = $2
+                WHERE script_uri = $3 AND key = $4
+                "#,
+            )
+            .bind(value)
+            .bind(now)
+            .bind(script_uri)
+            .bind(key)
+            .execute(&mut ***tx)
+            .await
+        }
+        crate::database::TransactionExecutor::Pool(pool) => {
+            sqlx::query(
+                r#"
+                UPDATE script_secrets
+                SET value = $1, updated_at = $2
+                WHERE script_uri = $3 AND key = $4
+                "#,
+            )
+            .bind(value)
+            .bind(now)
+            .bind(script_uri)
+            .bind(key)
+            .execute(pool)
+            .await
+        }
+    }
+    .map_err(|e| {
+        error!("Database error updating script secret: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    if update_result.rows_affected() > 0 {
+        debug!("Updated script secret in database: {}:{}", script_uri, key);
+        return Ok(());
+    }
+
+    // Item doesn't exist, create new one
+    match executor {
+        crate::database::TransactionExecutor::Transaction(ref mut tx) => {
+            sqlx::query(
+                r#"
+                INSERT INTO script_secrets (script_uri, key, value, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $4)
+                "#,
+            )
+            .bind(script_uri)
+            .bind(key)
+            .bind(value)
+            .bind(now)
+            .execute(&mut ***tx)
+            .await
+        }
+        crate::database::TransactionExecutor::Pool(pool) => {
+            sqlx::query(
+                r#"
+                INSERT INTO script_secrets (script_uri, key, value, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $4)
+                "#,
+            )
+            .bind(script_uri)
+            .bind(key)
+            .bind(value)
+            .bind(now)
+            .execute(pool)
+            .await
+        }
+    }
+    .map_err(|e| {
+        error!("Database error creating script secret: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    debug!(
+        "Created new script secret in database: {}:{}",
+        script_uri, key
+    );
+    Ok(())
+}
+
+/// Database-backed get script secret
+async fn db_get_script_secret<'e, E>(
+    executor: E,
+    script_uri: &str,
+    key: &str,
+) -> AppResult<Option<String>>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    let row = sqlx::query(
+        r#"
+        SELECT value FROM script_secrets WHERE script_uri = $1 AND key = $2
+        "#,
+    )
+    .bind(script_uri)
+    .bind(key)
+    .fetch_optional(executor)
+    .await
+    .map_err(|e| {
+        error!("Database error getting script secret: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    if let Some(row) = row {
+        let value: String = row.try_get("value").map_err(|e| {
+            error!("Database error getting value: {}", e);
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
+        })?;
+        Ok(Some(value))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Database-backed remove script secret
+async fn db_remove_script_secret<'e, E>(executor: E, script_uri: &str, key: &str) -> AppResult<bool>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    let result = sqlx::query(
+        r#"
+        DELETE FROM script_secrets WHERE script_uri = $1 AND key = $2
+        "#,
+    )
+    .bind(script_uri)
+    .bind(key)
+    .execute(executor)
+    .await
+    .map_err(|e| {
+        error!("Database error removing script secret: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    let existed = result.rows_affected() > 0;
+    if existed {
+        debug!(
+            "Removed script secret from database: {}:{}",
+            script_uri, key
+        );
+    } else {
+        debug!(
+            "Script secret not found in database for removal: {}:{}",
+            script_uri, key
+        );
+    }
+
+    Ok(existed)
+}
+
+/// Database-backed clear all script secrets for a script
+async fn db_clear_script_secrets<'e, E>(executor: E, script_uri: &str) -> AppResult<()>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    sqlx::query(
+        r#"
+        DELETE FROM script_secrets WHERE script_uri = $1
+        "#,
+    )
+    .bind(script_uri)
+    .execute(executor)
+    .await
+    .map_err(|e| {
+        error!("Database error clearing script secrets: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    debug!(
+        "Cleared all script secrets from database for script: {}",
+        script_uri
+    );
+    Ok(())
+}
+
+/// Database-backed set user secret item
+async fn db_set_user_secret(
+    mut executor: crate::database::TransactionExecutor<'_>,
+    script_uri: &str,
+    user_id: &str,
+    key: &str,
+    value: &str,
+) -> AppResult<()> {
+    let now = chrono::Utc::now();
+
+    // Try to update existing item
+    let update_result = match executor {
+        crate::database::TransactionExecutor::Transaction(ref mut tx) => {
+            sqlx::query(
+                r#"
+                UPDATE user_secrets
+                SET value = $1, updated_at = $2
+                WHERE script_uri = $3 AND user_id = $4 AND key = $5
+                "#,
+            )
+            .bind(value)
+            .bind(now)
+            .bind(script_uri)
+            .bind(user_id)
+            .bind(key)
+            .execute(&mut ***tx)
+            .await
+        }
+        crate::database::TransactionExecutor::Pool(pool) => {
+            sqlx::query(
+                r#"
+                UPDATE user_secrets
+                SET value = $1, updated_at = $2
+                WHERE script_uri = $3 AND user_id = $4 AND key = $5
+                "#,
+            )
+            .bind(value)
+            .bind(now)
+            .bind(script_uri)
+            .bind(user_id)
+            .bind(key)
+            .execute(pool)
+            .await
+        }
+    }
+    .map_err(|e| {
+        error!("Database error updating user secret: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    if update_result.rows_affected() > 0 {
+        debug!(
+            "Updated user secret in database: {}:{}:{}",
+            script_uri, user_id, key
+        );
+        return Ok(());
+    }
+
+    // Item doesn't exist, create new one
+    match executor {
+        crate::database::TransactionExecutor::Transaction(ref mut tx) => {
+            sqlx::query(
+                r#"
+                INSERT INTO user_secrets (script_uri, user_id, key, value, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $5)
+                "#,
+            )
+            .bind(script_uri)
+            .bind(user_id)
+            .bind(key)
+            .bind(value)
+            .bind(now)
+            .execute(&mut ***tx)
+            .await
+        }
+        crate::database::TransactionExecutor::Pool(pool) => {
+            sqlx::query(
+                r#"
+                INSERT INTO user_secrets (script_uri, user_id, key, value, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $5)
+                "#,
+            )
+            .bind(script_uri)
+            .bind(user_id)
+            .bind(key)
+            .bind(value)
+            .bind(now)
+            .execute(pool)
+            .await
+        }
+    }
+    .map_err(|e| {
+        error!("Database error inserting user secret: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    debug!(
+        "Inserted user secret to database: {}:{}:{}",
+        script_uri, user_id, key
+    );
+    Ok(())
+}
+
+/// Database-backed get user secret
+async fn db_get_user_secret<'e, E>(
+    executor: E,
+    script_uri: &str,
+    user_id: &str,
+    key: &str,
+) -> AppResult<Option<String>>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    let row = sqlx::query(
+        r#"
+        SELECT value FROM user_secrets WHERE script_uri = $1 AND user_id = $2 AND key = $3
+        "#,
+    )
+    .bind(script_uri)
+    .bind(user_id)
+    .bind(key)
+    .fetch_optional(executor)
+    .await
+    .map_err(|e| {
+        error!("Database error getting user secret: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    if let Some(row) = row {
+        let value: String = row.try_get("value").map_err(|e| {
+            error!("Database error getting value: {}", e);
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
+        })?;
+        Ok(Some(value))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Database-backed remove user secret
+async fn db_remove_user_secret<'e, E>(
+    executor: E,
+    script_uri: &str,
+    user_id: &str,
+    key: &str,
+) -> AppResult<bool>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    let result = sqlx::query(
+        r#"
+        DELETE FROM user_secrets WHERE script_uri = $1 AND user_id = $2 AND key = $3
+        "#,
+    )
+    .bind(script_uri)
+    .bind(user_id)
+    .bind(key)
+    .execute(executor)
+    .await
+    .map_err(|e| {
+        error!("Database error removing user secret: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    let existed = result.rows_affected() > 0;
+    if existed {
+        debug!(
+            "Removed user secret from database: {}:{}:{}",
+            script_uri, user_id, key
+        );
+    } else {
+        debug!(
+            "User secret not found in database for removal: {}:{}:{}",
+            script_uri, user_id, key
+        );
+    }
+
+    Ok(existed)
+}
+
+/// Database-backed clear all user secrets for a script and user
+async fn db_clear_user_secrets<'e, E>(executor: E, script_uri: &str, user_id: &str) -> AppResult<()>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    sqlx::query(
+        r#"
+        DELETE FROM user_secrets WHERE script_uri = $1 AND user_id = $2
+        "#,
+    )
+    .bind(script_uri)
+    .bind(user_id)
+    .execute(executor)
+    .await
+    .map_err(|e| {
+        error!("Database error clearing user secrets: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    debug!(
+        "Cleared all user secrets from database for script {} and user {}",
+        script_uri, user_id
+    );
+    Ok(())
+}
+
 /// Database-backed insert log message
 async fn db_insert_log_message<'e, E>(
     executor: E,
@@ -4056,6 +4487,130 @@ pub fn clear_personal_storage(script_uri: &str, user_id: &str) -> AppResult<()> 
     run_blocking(async { repo.clear_personal_storage(script_uri, user_id).await })
 }
 
+/// Set a script secret (key-value pair for a specific script)
+pub fn set_script_secret_item(script_uri: &str, key: &str, value: &str) -> AppResult<()> {
+    if script_uri.trim().is_empty() {
+        return Err(RepositoryError::InvalidData("Script URI cannot be empty".to_string()).into());
+    }
+
+    if key.trim().is_empty() {
+        return Err(RepositoryError::InvalidData("Key cannot be empty".to_string()).into());
+    }
+
+    if value.len() > 1_000_000 {
+        // 1MB limit per value
+        return Err(RepositoryError::InvalidData("Value too large (>1MB)".to_string()).into());
+    }
+
+    let repo = get_repository();
+    run_blocking(async { repo.set_script_secret(script_uri, key, value).await })
+}
+
+/// Get a script secret
+pub fn get_script_secret_item(script_uri: &str, key: &str) -> Option<String> {
+    let repo = get_repository();
+    let result = run_blocking(async { repo.get_script_secret(script_uri, key).await });
+
+    match result {
+        Ok(value) => value,
+        Err(e) => {
+            error!("Failed to get script secret {}:{}: {}", script_uri, key, e);
+            None
+        }
+    }
+}
+
+/// Remove a script secret
+pub fn remove_script_secret_item(script_uri: &str, key: &str) -> bool {
+    let repo = get_repository();
+    let result = run_blocking(async { repo.remove_script_secret(script_uri, key).await });
+
+    match result {
+        Ok(existed) => existed,
+        Err(e) => {
+            error!(
+                "Failed to remove script secret {}:{}: {}",
+                script_uri, key, e
+            );
+            false
+        }
+    }
+}
+
+/// Clear all script secrets for a specific script
+pub fn clear_script_secrets(script_uri: &str) -> AppResult<()> {
+    let repo = get_repository();
+    run_blocking(async { repo.clear_script_secrets(script_uri).await })
+}
+
+/// Set a user secret (key-value pair for a specific script and user)
+pub fn set_user_secret_item(
+    script_uri: &str,
+    user_id: &str,
+    key: &str,
+    value: &str,
+) -> AppResult<()> {
+    if script_uri.trim().is_empty() {
+        return Err(RepositoryError::InvalidData("Script URI cannot be empty".to_string()).into());
+    }
+
+    if user_id.trim().is_empty() {
+        return Err(RepositoryError::InvalidData("User ID cannot be empty".to_string()).into());
+    }
+
+    if key.trim().is_empty() {
+        return Err(RepositoryError::InvalidData("Key cannot be empty".to_string()).into());
+    }
+
+    if value.len() > 1_000_000 {
+        // 1MB limit per value
+        return Err(RepositoryError::InvalidData("Value too large (>1MB)".to_string()).into());
+    }
+
+    let repo = get_repository();
+    run_blocking(async { repo.set_user_secret(script_uri, user_id, key, value).await })
+}
+
+/// Get a user secret
+pub fn get_user_secret_item(script_uri: &str, user_id: &str, key: &str) -> Option<String> {
+    let repo = get_repository();
+    let result = run_blocking(async { repo.get_user_secret(script_uri, user_id, key).await });
+
+    match result {
+        Ok(value) => value,
+        Err(e) => {
+            error!(
+                "Failed to get user secret {}:{}:{}: {}",
+                script_uri, user_id, key, e
+            );
+            None
+        }
+    }
+}
+
+/// Remove a user secret
+pub fn remove_user_secret_item(script_uri: &str, user_id: &str, key: &str) -> bool {
+    let repo = get_repository();
+    let result = run_blocking(async { repo.remove_user_secret(script_uri, user_id, key).await });
+
+    match result {
+        Ok(existed) => existed,
+        Err(e) => {
+            error!(
+                "Failed to remove user secret {}:{}:{}: {}",
+                script_uri, user_id, key, e
+            );
+            false
+        }
+    }
+}
+
+/// Clear all user secrets for a specific script and user
+pub fn clear_user_secrets(script_uri: &str, user_id: &str) -> AppResult<()> {
+    let repo = get_repository();
+    run_blocking(async { repo.clear_user_secrets(script_uri, user_id).await })
+}
+
 use async_trait::async_trait;
 
 /// Abstract repository interface
@@ -4116,6 +4671,34 @@ pub trait Repository: Send + Sync {
         key: &str,
     ) -> AppResult<bool>;
     async fn clear_personal_storage(&self, script_uri: &str, user_id: &str) -> AppResult<()>;
+
+    // Script secrets operations
+    async fn get_script_secret(&self, script_uri: &str, key: &str) -> AppResult<Option<String>>;
+    async fn set_script_secret(&self, script_uri: &str, key: &str, value: &str) -> AppResult<()>;
+    async fn remove_script_secret(&self, script_uri: &str, key: &str) -> AppResult<bool>;
+    async fn clear_script_secrets(&self, script_uri: &str) -> AppResult<()>;
+
+    // User secrets operations
+    async fn get_user_secret(
+        &self,
+        script_uri: &str,
+        user_id: &str,
+        key: &str,
+    ) -> AppResult<Option<String>>;
+    async fn set_user_secret(
+        &self,
+        script_uri: &str,
+        user_id: &str,
+        key: &str,
+        value: &str,
+    ) -> AppResult<()>;
+    async fn remove_user_secret(
+        &self,
+        script_uri: &str,
+        user_id: &str,
+        key: &str,
+    ) -> AppResult<bool>;
+    async fn clear_user_secrets(&self, script_uri: &str, user_id: &str) -> AppResult<()>;
 
     // Security operations
     async fn get_script_privileged(&self, uri: &str) -> AppResult<Option<bool>>;
@@ -4606,6 +5189,104 @@ impl Repository for PostgresRepository {
             }
             crate::database::TransactionExecutor::Pool(pool) => {
                 db_clear_personal_storage(pool, script_uri, user_id).await
+            }
+        }
+    }
+
+    async fn get_script_secret(&self, script_uri: &str, key: &str) -> AppResult<Option<String>> {
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_get_script_secret(&mut **tx, script_uri, key).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_get_script_secret(pool, script_uri, key).await
+            }
+        }
+    }
+
+    async fn set_script_secret(&self, script_uri: &str, key: &str, value: &str) -> AppResult<()> {
+        let executor = crate::database::get_current_executor(&self.pool);
+        db_set_script_secret(executor, script_uri, key, value).await
+    }
+
+    async fn remove_script_secret(&self, script_uri: &str, key: &str) -> AppResult<bool> {
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_remove_script_secret(&mut **tx, script_uri, key).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_remove_script_secret(pool, script_uri, key).await
+            }
+        }
+    }
+
+    async fn clear_script_secrets(&self, script_uri: &str) -> AppResult<()> {
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_clear_script_secrets(&mut **tx, script_uri).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_clear_script_secrets(pool, script_uri).await
+            }
+        }
+    }
+
+    async fn get_user_secret(
+        &self,
+        script_uri: &str,
+        user_id: &str,
+        key: &str,
+    ) -> AppResult<Option<String>> {
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_get_user_secret(&mut **tx, script_uri, user_id, key).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_get_user_secret(pool, script_uri, user_id, key).await
+            }
+        }
+    }
+
+    async fn set_user_secret(
+        &self,
+        script_uri: &str,
+        user_id: &str,
+        key: &str,
+        value: &str,
+    ) -> AppResult<()> {
+        let executor = crate::database::get_current_executor(&self.pool);
+        db_set_user_secret(executor, script_uri, user_id, key, value).await
+    }
+
+    async fn remove_user_secret(
+        &self,
+        script_uri: &str,
+        user_id: &str,
+        key: &str,
+    ) -> AppResult<bool> {
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_remove_user_secret(&mut **tx, script_uri, user_id, key).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_remove_user_secret(pool, script_uri, user_id, key).await
+            }
+        }
+    }
+
+    async fn clear_user_secrets(&self, script_uri: &str, user_id: &str) -> AppResult<()> {
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_clear_user_secrets(&mut **tx, script_uri, user_id).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_clear_user_secrets(pool, script_uri, user_id).await
             }
         }
     }
@@ -5116,6 +5797,208 @@ mod tests {
         assert!(clear_personal_storage(script_uri, user2).is_ok());
         assert_eq!(get_personal_storage_item(script_uri, user2, "pref"), None);
         assert_eq!(get_personal_storage_item(script_uri, user1, "pref"), None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_script_secrets_operations() {
+        if should_skip_db_tests() {
+            return;
+        }
+        let rt = get_runtime();
+        let _guard = rt.enter();
+        setup_db();
+        let script_uri = "test://secrets-script";
+        let key = "api_key";
+        let value = "super_secret_value";
+
+        // Test set item
+        assert!(set_script_secret_item(script_uri, key, value).is_ok());
+
+        // Test get item
+        let retrieved = get_script_secret_item(script_uri, key);
+        assert_eq!(retrieved, Some(value.to_string()));
+
+        // Test overwrite
+        let new_value = "updated_secret";
+        assert!(set_script_secret_item(script_uri, key, new_value).is_ok());
+        let retrieved_updated = get_script_secret_item(script_uri, key);
+        assert_eq!(retrieved_updated, Some(new_value.to_string()));
+
+        // Test remove item
+        assert!(remove_script_secret_item(script_uri, key));
+
+        // Verify item is gone
+        let retrieved_after_remove = get_script_secret_item(script_uri, key);
+        assert_eq!(retrieved_after_remove, None);
+
+        // Test clear secrets
+        assert!(set_script_secret_item(script_uri, "key1", "value1").is_ok());
+        assert!(set_script_secret_item(script_uri, "key2", "value2").is_ok());
+
+        assert!(clear_script_secrets(script_uri).is_ok());
+
+        // Verify both items are gone
+        assert_eq!(get_script_secret_item(script_uri, "key1"), None);
+        assert_eq!(get_script_secret_item(script_uri, "key2"), None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_script_secrets_validation() {
+        if should_skip_db_tests() {
+            return;
+        }
+        let rt = get_runtime();
+        let _guard = rt.enter();
+        setup_db();
+
+        // Test empty script URI
+        assert!(set_script_secret_item("", "key", "value").is_err());
+
+        // Test empty key
+        assert!(set_script_secret_item("test://script", "", "value").is_err());
+
+        // Test oversized value
+        let large_value = "x".repeat(1_000_001);
+        assert!(set_script_secret_item("test://script", "key", &large_value).is_err());
+
+        // Test secrets are scoped per script_uri
+        let script_a = "test://secrets-scope-a";
+        let script_b = "test://secrets-scope-b";
+        assert!(set_script_secret_item(script_a, "scope_key", "value_a").is_ok());
+        assert_eq!(
+            get_script_secret_item(script_b, "scope_key"),
+            None,
+            "Secret from script_a must not be visible in script_b"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_user_secrets_operations() {
+        if should_skip_db_tests() {
+            return;
+        }
+        let rt = get_runtime();
+        let _guard = rt.enter();
+        setup_db();
+        let script_uri = "test://user-secrets-script";
+        let user_id_1 = "user_secrets_123";
+        let user_id_2 = "user_secrets_456";
+        let key = "token";
+        let value1 = "token_for_user1";
+        let value2 = "token_for_user2";
+
+        // Test set item for user 1
+        assert!(set_user_secret_item(script_uri, user_id_1, key, value1).is_ok());
+
+        // Test get item for user 1
+        let retrieved1 = get_user_secret_item(script_uri, user_id_1, key);
+        assert_eq!(retrieved1, Some(value1.to_string()));
+
+        // Test set item for user 2 (same script, same key, different user)
+        assert!(set_user_secret_item(script_uri, user_id_2, key, value2).is_ok());
+
+        // Test get item for user 2
+        let retrieved2 = get_user_secret_item(script_uri, user_id_2, key);
+        assert_eq!(retrieved2, Some(value2.to_string()));
+
+        // Verify user 1's data is still separate
+        let still_user1 = get_user_secret_item(script_uri, user_id_1, key);
+        assert_eq!(still_user1, Some(value1.to_string()));
+
+        // Test overwrite for user 1
+        let updated_value1 = "updated_token_for_user1";
+        assert!(set_user_secret_item(script_uri, user_id_1, key, updated_value1).is_ok());
+        assert_eq!(
+            get_user_secret_item(script_uri, user_id_1, key),
+            Some(updated_value1.to_string())
+        );
+
+        // Test remove item for user 1
+        assert!(remove_user_secret_item(script_uri, user_id_1, key));
+
+        // Verify item is gone for user 1
+        let retrieved_after_remove = get_user_secret_item(script_uri, user_id_1, key);
+        assert_eq!(retrieved_after_remove, None);
+
+        // Verify user 2's data is still there
+        let user2_still_there = get_user_secret_item(script_uri, user_id_2, key);
+        assert_eq!(user2_still_there, Some(value2.to_string()));
+
+        // Test clear for user 2
+        assert!(set_user_secret_item(script_uri, user_id_2, "key1", "value1").is_ok());
+        assert!(set_user_secret_item(script_uri, user_id_2, "key2", "value2").is_ok());
+
+        assert!(clear_user_secrets(script_uri, user_id_2).is_ok());
+
+        // Verify all items are gone for user 2
+        assert_eq!(get_user_secret_item(script_uri, user_id_2, key), None);
+        assert_eq!(get_user_secret_item(script_uri, user_id_2, "key1"), None);
+        assert_eq!(get_user_secret_item(script_uri, user_id_2, "key2"), None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_user_secrets_validation() {
+        if should_skip_db_tests() {
+            return;
+        }
+        let rt = get_runtime();
+        let _guard = rt.enter();
+        setup_db();
+        let script_uri = "test://script";
+        let user_id = "user_sec_123";
+
+        // Test empty script URI
+        assert!(set_user_secret_item("", user_id, "key", "value").is_err());
+
+        // Test empty user ID
+        assert!(set_user_secret_item(script_uri, "", "key", "value").is_err());
+
+        // Test empty key
+        assert!(set_user_secret_item(script_uri, user_id, "", "value").is_err());
+
+        // Test oversized value
+        let large_value = "x".repeat(1_000_001);
+        assert!(set_user_secret_item(script_uri, user_id, "key", &large_value).is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_user_secrets_user_isolation() {
+        if should_skip_db_tests() {
+            return;
+        }
+        let rt = get_runtime();
+        let _guard = rt.enter();
+        setup_db();
+        let script_uri = "test://user-secrets-isolation";
+        let alice = "alice_secrets";
+        let bob = "bob_secrets";
+
+        // Both users set the same key in the same script
+        assert!(set_user_secret_item(script_uri, alice, "api_token", "alice_token").is_ok());
+        assert!(set_user_secret_item(script_uri, bob, "api_token", "bob_token").is_ok());
+
+        // Each user should see only their own value
+        assert_eq!(
+            get_user_secret_item(script_uri, alice, "api_token"),
+            Some("alice_token".to_string())
+        );
+        assert_eq!(
+            get_user_secret_item(script_uri, bob, "api_token"),
+            Some("bob_token".to_string())
+        );
+
+        // Removing alice's secret shouldn't affect bob
+        assert!(remove_user_secret_item(script_uri, alice, "api_token"));
+        assert_eq!(get_user_secret_item(script_uri, alice, "api_token"), None);
+        assert_eq!(
+            get_user_secret_item(script_uri, bob, "api_token"),
+            Some("bob_token".to_string())
+        );
+
+        // Clearing bob's secrets
+        assert!(clear_user_secrets(script_uri, bob).is_ok());
+        assert_eq!(get_user_secret_item(script_uri, bob, "api_token"), None);
+        assert_eq!(get_user_secret_item(script_uri, alice, "api_token"), None);
     }
 
     #[tokio::test(flavor = "multi_thread")]
