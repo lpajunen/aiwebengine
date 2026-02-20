@@ -408,28 +408,53 @@ interface PersonalStorage {
 // ============================================================================
 
 /**
- * Secret storage API for checking secret availability (read-only)
+ * Secret storage API for managing per-user secrets scoped to the current script.
  *
- * SECURITY: Secret values are NEVER exposed to JavaScript. Only existence checks
- * are allowed. Actual secret values are injected by Rust into HTTP requests
- * using the {{SECRET_NAME}} template syntax.
+ * Write operations require an authenticated user.
+ * The `exists` check looks in `user_secrets` first (when authenticated), then falls back to `script_secrets`.
  */
 interface SecretStorage {
   /**
-   * Check if a secret exists
-   * @param identifier - Secret identifier to check
-   * @returns true if the secret exists, false otherwise
+   * Check if a secret exists for the current script.
+   * First checks `user_secrets` for the authenticated user, then falls back to `script_secrets`.
+   * @param key - Secret key to check
+   * @returns true if the secret exists in either table, false otherwise
    * @example
-   * if (secretStorage.exists("API_KEY")) {
-   *   // Use {{API_KEY}} in fetch headers
-   *   const response = fetch(url, {
-   *     headers: {
-   *       "Authorization": "Bearer {{API_KEY}}"
-   *     }
-   *   });
+   * if (secretStorage.exists("API_TOKEN")) {
+   *   // secret is available (user-level or script-level)
    * }
    */
-  exists(identifier: string): boolean;
+  exists(key: string): boolean;
+
+  /**
+   * Store a secret for the authenticated user in the current script.
+   * @param key - Secret key
+   * @param value - Secret value to store (max 1 MB)
+   * @returns Success message or error string if unauthenticated or validation fails
+   * @example
+   * const result = secretStorage.setSecret("API_TOKEN", "abc123");
+   * if (result.startsWith("Error")) {
+   *   console.error(result);
+   * }
+   */
+  setSecret(key: string, value: string): string;
+
+  /**
+   * Remove a single secret for the authenticated user in the current script.
+   * @param key - Secret key to remove
+   * @returns true if the secret existed and was removed, false otherwise
+   * @example
+   * secretStorage.removeSecret("OLD_TOKEN");
+   */
+  removeSecret(key: string): boolean;
+
+  /**
+   * Clear all secrets for the authenticated user in the current script.
+   * @returns Success message or error string if unauthenticated
+   * @example
+   * secretStorage.clear();
+   */
+  clear(): string;
 }
 
 // ============================================================================

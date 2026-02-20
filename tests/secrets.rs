@@ -46,14 +46,14 @@ async fn test_secrets_exists_returns_false_without_manager() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_secrets_list_returns_empty_without_manager() {
     setup_env().await;
-    // Test that secretStorage.list() returns empty array when no secrets manager is provided
+    // Test that secretStorage.listForUri() returns empty array when no secrets are stored
     let script = r#"
-        const result = secretStorage.list();
+        const result = secretStorage.listForUri('test://secrets');
         if (!Array.isArray(result)) {
             throw new Error('Expected array');
         }
         if (result.length !== 0) {
-            throw new Error('Expected empty array when no secrets manager');
+            throw new Error('Expected empty array when no secrets stored');
         }
     "#;
 
@@ -102,8 +102,11 @@ async fn test_secrets_cannot_access_values_directly() {
             // Expected - these should fail
         }
         
-        // Verify only safe methods exist
-        const allowedMethods = ['exists', 'list'];
+        // Verify only expected methods exist
+        const allowedMethods = [
+            'exists', 'setSecret', 'removeSecret', 'clear',
+            'listForUri', 'setSecretForUri', 'removeSecretForUri', 'clearForUri'
+        ];
         const actualMethods = Object.keys(secretStorage).filter(key => typeof secretStorage[key] === 'function');
         
         for (const method of actualMethods) {

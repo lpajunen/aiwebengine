@@ -1478,61 +1478,206 @@ impl SecureGlobalContext {
         Ok(())
     }
 
-    /// Setup secure secrets functions
+    /// Setup secret storage functions
     ///
-    /// Exposes a read-only JavaScript API for secrets management:
-    /// - secretStorage.exists(identifier): boolean - Check if a secret exists
-    /// - secretStorage.list(): string[] - List all secret identifiers
+    /// Exposes a JavaScript API for per-user secret management scoped to the current script.
+    /// All methods require an authenticated user; unauthenticated calls return errors or false.
+    /// Secrets are stored in the user_secrets table keyed by (script_uri, user_id, key).
     ///
-    /// SECURITY: Secret values are NEVER exposed to JavaScript. Only existence checks
-    /// and identifier listing are allowed. Actual secret values are injected by Rust
-    /// into HTTP requests using the {{secret:identifier}} template syntax.
-    fn setup_secrets_functions(&self, ctx: &rquickjs::Ctx<'_>, _script_uri: &str) -> JsResult<()> {
+    /// - secretStorage.exists(key): boolean
+    /// - secretStorage.setSecret(key, value): string
+    /// - secretStorage.removeSecret(key): boolean
+    /// - secretStorage.clear(): string
+    fn setup_secrets_functions(&self, ctx: &rquickjs::Ctx<'_>, script_uri: &str) -> JsResult<()> {
         let global = ctx.globals();
+        let script_uri_owned = script_uri.to_string();
 
-        // Get the secrets manager - try instance first, then fall back to global
-        let secrets_manager = self
-            .secrets_manager
-            .clone()
-            .or_else(crate::secrets::get_global_secrets_manager);
-
-        // Create the secretStorage namespace object
         let secret_storage_obj = rquickjs::Object::new(ctx.clone())?;
 
-        // secretStorage.exists(identifier) - Check if a secret exists
-        let secrets_mgr_exists = secrets_manager.clone();
+        // secretStorage.exists(key) - Check if secret exists in user_secrets or script_secrets
+        let script_uri_exists = script_uri_owned.clone();
         let exists_fn = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, identifier: String| -> JsResult<bool> {
-                if let Some(ref mgr) = secrets_mgr_exists {
-                    Ok(mgr.exists(&identifier))
-                } else {
-                    // No secrets manager available
-                    Ok(false)
+            move |ctx: rquickjs::Ctx<'_>, key: String| -> JsResult<bool> {
+                let globals = ctx.globals();
+                // Check user_secrets first (if authenticated)
+                if let Some(user_id) = get_auth_user_id(&globals)
+                    && crate::repository::get_user_secret_item(&script_uri_exists, &user_id, &key)
+                        .is_some()
+                {
+                    return Ok(true);
                 }
+                // Fall back to script_secrets
+                Ok(crate::repository::get_script_secret_item(&script_uri_exists, &key).is_some())
             },
         )?;
         secret_storage_obj.set("exists", exists_fn)?;
 
-        // secretStorage.list() - List all secret identifiers
-        let secrets_mgr_list = secrets_manager.clone();
-        let list_fn = Function::new(
+        // secretStorage.setSecret(key, value) - Store a secret for current user
+        let script_uri_set = script_uri_owned.clone();
+        let set_secret_fn = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<Vec<String>> {
-                if let Some(ref mgr) = secrets_mgr_list {
-                    Ok(mgr.list_identifiers())
-                } else {
-                    // No secrets manager available
-                    Ok(Vec::new())
+            move |ctx: rquickjs::Ctx<'_>, key: String, value: String| -> JsResult<String> {
+                let globals = ctx.globals();
+                let user_id = match get_auth_user_id(&globals) {
+                    Some(id) => id,
+                    None => {
+                        return Ok(
+                            "Error: Secret storage requires authentication. Please log in."
+                                .to_string(),
+                        );
+                    }
+                };
+                if key.trim().is_empty() {
+                    return Ok("Error: Key cannot be empty".to_string());
+                }
+                if value.len() > 1_000_000 {
+                    return Ok("Error: Value too large (>1MB)".to_string());
+                }
+                match crate::repository::set_user_secret_item(
+                    &script_uri_set,
+                    &user_id,
+                    &key,
+                    &value,
+                ) {
+                    Ok(()) => Ok("Secret set successfully".to_string()),
+                    Err(e) => Ok(format!("Error setting secret: {}", e)),
                 }
             },
         )?;
-        secret_storage_obj.set("list", list_fn)?;
+        secret_storage_obj.set("setSecret", set_secret_fn)?;
 
-        // Set the secretStorage object on the global scope
+        // secretStorage.removeSecret(key) - Remove a single secret for current user
+        let script_uri_remove = script_uri_owned.clone();
+        let remove_secret_fn = Function::new(
+            ctx.clone(),
+            move |ctx: rquickjs::Ctx<'_>, key: String| -> JsResult<bool> {
+                let globals = ctx.globals();
+                let user_id = match get_auth_user_id(&globals) {
+                    Some(id) => id,
+                    None => return Ok(false),
+                };
+                Ok(crate::repository::remove_user_secret_item(
+                    &script_uri_remove,
+                    &user_id,
+                    &key,
+                ))
+            },
+        )?;
+        secret_storage_obj.set("removeSecret", remove_secret_fn)?;
+
+        // secretStorage.clear() - Clear all secrets for current user in this script
+        let script_uri_clear = script_uri_owned.clone();
+        let clear_fn = Function::new(
+            ctx.clone(),
+            move |ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
+                let globals = ctx.globals();
+                let user_id = match get_auth_user_id(&globals) {
+                    Some(id) => id,
+                    None => {
+                        return Ok(
+                            "Error: Secret storage requires authentication. Please log in."
+                                .to_string(),
+                        );
+                    }
+                };
+                match crate::repository::clear_user_secrets(&script_uri_clear, &user_id) {
+                    Ok(()) => Ok("Secrets cleared successfully".to_string()),
+                    Err(e) => Ok(format!("Error clearing secrets: {}", e)),
+                }
+            },
+        )?;
+        secret_storage_obj.set("clear", clear_fn)?;
+
+        // ====================================================================
+        // Privileged URI-specific secret methods (for cross-script management)
+        // ====================================================================
+
+        // secretStorage.listForUri(scriptUri) - List keys for any script (privileged)
+        let user_ctx_list_uri = self.user_context.clone();
+        let list_for_uri_fn = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, target_uri: String| -> JsResult<Vec<String>> {
+                let is_admin =
+                    user_ctx_list_uri.has_capability(&crate::security::Capability::DeleteScripts);
+                if !is_admin {
+                    return Ok(vec![]);
+                }
+                Ok(crate::repository::list_script_secrets(&target_uri).unwrap_or_default())
+            },
+        )?;
+        secret_storage_obj.set("listForUri", list_for_uri_fn)?;
+
+        // secretStorage.setSecretForUri(scriptUri, key, value) - Store for any script (privileged)
+        let user_ctx_set_uri = self.user_context.clone();
+        let set_for_uri_fn = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  target_uri: String,
+                  key: String,
+                  value: String|
+                  -> JsResult<String> {
+                let is_admin =
+                    user_ctx_set_uri.has_capability(&crate::security::Capability::DeleteScripts);
+                if !is_admin {
+                    return Ok("Error: Administrator privileges required".to_string());
+                }
+                if key.trim().is_empty() {
+                    return Ok("Error: Key cannot be empty".to_string());
+                }
+                if value.len() > 1_000_000 {
+                    return Ok("Error: Value too large (>1MB)".to_string());
+                }
+                match crate::repository::set_script_secret_item(&target_uri, &key, &value) {
+                    Ok(()) => Ok("Secret set successfully".to_string()),
+                    Err(e) => Ok(format!("Error setting secret: {}", e)),
+                }
+            },
+        )?;
+        secret_storage_obj.set("setSecretForUri", set_for_uri_fn)?;
+
+        // secretStorage.removeSecretForUri(scriptUri, key) - Remove for any script (privileged)
+        let user_ctx_remove_uri = self.user_context.clone();
+        let remove_for_uri_fn = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, target_uri: String, key: String| -> JsResult<bool> {
+                let is_admin =
+                    user_ctx_remove_uri.has_capability(&crate::security::Capability::DeleteScripts);
+                if !is_admin {
+                    return Ok(false);
+                }
+                Ok(crate::repository::remove_script_secret_item(
+                    &target_uri,
+                    &key,
+                ))
+            },
+        )?;
+        secret_storage_obj.set("removeSecretForUri", remove_for_uri_fn)?;
+
+        // secretStorage.clearForUri(scriptUri) - Clear all for any script (privileged)
+        let user_ctx_clear_uri = self.user_context.clone();
+        let clear_for_uri_fn = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, target_uri: String| -> JsResult<String> {
+                let is_admin =
+                    user_ctx_clear_uri.has_capability(&crate::security::Capability::DeleteScripts);
+                if !is_admin {
+                    return Ok("Error: Administrator privileges required".to_string());
+                }
+                match crate::repository::clear_script_secrets(&target_uri) {
+                    Ok(()) => Ok("Secrets cleared successfully".to_string()),
+                    Err(e) => Ok(format!("Error clearing secrets: {}", e)),
+                }
+            },
+        )?;
+        secret_storage_obj.set("clearForUri", clear_for_uri_fn)?;
+
         global.set("secretStorage", secret_storage_obj)?;
 
-        debug!("secretStorage JavaScript API initialized (read-only interface)");
+        debug!(
+            "secretStorage JavaScript API initialized for script: {}",
+            script_uri
+        );
 
         Ok(())
     }
@@ -5492,6 +5637,20 @@ impl SecureGlobalContext {
         debug!("Dispatcher functions initialized");
         Ok(())
     }
+}
+
+/// Extract the authenticated user_id from JavaScript `context.request.auth`.
+/// Returns `None` if context is missing, request is missing, auth is missing,
+/// or the user is not authenticated.
+fn get_auth_user_id(globals: &rquickjs::Object<'_>) -> Option<String> {
+    let context_obj: rquickjs::Object = globals.get("context").ok()?;
+    let request_obj: rquickjs::Object = context_obj.get("request").ok()?;
+    let auth_obj: rquickjs::Object = request_obj.get("auth").ok()?;
+    let is_authenticated: bool = auth_obj.get("isAuthenticated").unwrap_or_default();
+    if !is_authenticated {
+        return None;
+    }
+    auth_obj.get("userId").ok().flatten()
 }
 
 /// Execute a message handler function in a script

@@ -76,17 +76,48 @@ interface UserStorage {
 
 /**
  * Secret storage API extensions for privileged scripts
- * Allows listing all available secret identifiers
+ * Allows managing secrets scoped to any script URI
  */
 interface SecretStorage {
   /**
-   * List all available secret identifiers (privileged scripts only)
-   * @returns Array of secret identifier strings
+   * List all secret keys stored for a given script URI (privileged scripts only)
+   * @param scriptUri - The URI of the script whose secret keys to list
+   * @returns Array of key strings
    * @example
-   * const secrets = secretStorage.list();
-   * console.log("Available secrets:", secrets.join(", "));
+   * const keys = secretStorage.listForUri("my-script");
+   * console.log("Stored keys:", keys.join(", "));
    */
-  list(): string[];
+  listForUri(scriptUri: string): string[];
+
+  /**
+   * Store a secret for a given script URI (privileged scripts only)
+   * @param scriptUri - The URI of the script to store the secret for
+   * @param key - Secret key
+   * @param value - Secret value
+   * @returns Status message string
+   * @example
+   * secretStorage.setSecretForUri("my-script", "api-key", "abc123");
+   */
+  setSecretForUri(scriptUri: string, key: string, value: string): string;
+
+  /**
+   * Remove a secret for a given script URI (privileged scripts only)
+   * @param scriptUri - The URI of the script to remove the secret from
+   * @param key - Secret key to remove
+   * @returns true if the secret was removed, false if it did not exist
+   * @example
+   * const removed = secretStorage.removeSecretForUri("my-script", "api-key");
+   */
+  removeSecretForUri(scriptUri: string, key: string): boolean;
+
+  /**
+   * Clear all secrets for a given script URI (privileged scripts only)
+   * @param scriptUri - The URI of the script whose secrets to clear
+   * @returns Status message string
+   * @example
+   * secretStorage.clearForUri("my-script");
+   */
+  clearForUri(scriptUri: string): string;
 }
 
 // ============================================================================

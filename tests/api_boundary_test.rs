@@ -362,7 +362,7 @@ async fn test_secret_storage_list_denied_for_non_privileged() {
     let user = create_user_with_capabilities("user", vec![]);
 
     let script = r#"
-        const secrets = secretStorage.list();
+        const secrets = secretStorage.listForUri("test://api-test");
         if (secrets.length > 0) {
             throw new Error("Should deny access");
         }
@@ -378,8 +378,11 @@ async fn test_secret_storage_list_available_for_admin() {
     let admin = UserContext::admin("admin".to_string());
 
     let script = r#"
-        const secrets = secretStorage.list();
+        const secrets = secretStorage.listForUri("test://api-test-admin");
         // Should not throw error, returns array
+        if (!Array.isArray(secrets)) {
+            throw new Error('Expected array from listForUri');
+        }
     "#;
 
     let result = execute_script_secure("test://api-test-admin", script, admin);

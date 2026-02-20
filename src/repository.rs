@@ -1522,6 +1522,35 @@ where
     Ok(())
 }
 
+/// Database-backed list script secret keys for a script
+async fn db_list_script_secrets<'e, E>(executor: E, script_uri: &str) -> AppResult<Vec<String>>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    let rows = sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT key FROM script_secrets WHERE script_uri = $1 ORDER BY key ASC
+        "#,
+    )
+    .bind(script_uri)
+    .fetch_all(executor)
+    .await
+    .map_err(|e| {
+        error!("Database error listing script secret keys: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    debug!(
+        "Listed {} script secret keys from database for script: {}",
+        rows.len(),
+        script_uri
+    );
+    Ok(rows)
+}
+
 /// Database-backed set user secret item
 async fn db_set_user_secret(
     mut executor: crate::database::TransactionExecutor<'_>,
@@ -4546,6 +4575,12 @@ pub fn clear_script_secrets(script_uri: &str) -> AppResult<()> {
     run_blocking(async { repo.clear_script_secrets(script_uri).await })
 }
 
+/// List all secret keys for a specific script
+pub fn list_script_secrets(script_uri: &str) -> AppResult<Vec<String>> {
+    let repo = get_repository();
+    run_blocking(async { repo.list_script_secrets(script_uri).await })
+}
+
 /// Set a user secret (key-value pair for a specific script and user)
 pub fn set_user_secret_item(
     script_uri: &str,
@@ -4686,6 +4721,7 @@ pub trait Repository: Send + Sync {
     async fn set_script_secret(&self, script_uri: &str, key: &str, value: &str) -> AppResult<()>;
     async fn remove_script_secret(&self, script_uri: &str, key: &str) -> AppResult<bool>;
     async fn clear_script_secrets(&self, script_uri: &str) -> AppResult<()>;
+    async fn list_script_secrets(&self, script_uri: &str) -> AppResult<Vec<String>>;
 
     // User secrets operations
     async fn get_user_secret(
@@ -5248,6 +5284,18 @@ impl Repository for PostgresRepository {
             }
             crate::database::TransactionExecutor::Pool(pool) => {
                 db_clear_script_secrets(pool, script_uri).await
+            }
+        }
+    }
+
+    async fn list_script_secrets(&self, script_uri: &str) -> AppResult<Vec<String>> {
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_list_script_secrets(&mut **tx, script_uri).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_list_script_secrets(pool, script_uri).await
             }
         }
     }
