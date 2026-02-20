@@ -2824,7 +2824,7 @@ mod tests {
     }
 
     #[test]
-    fn test_shared_storage_validation() {
+    fn test_script_properties_validation() {
         if should_skip_db_tests() {
             return;
         }

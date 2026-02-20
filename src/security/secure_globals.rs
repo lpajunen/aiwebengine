@@ -140,10 +140,10 @@ impl SecureGlobalContext {
         self.setup_conversion_functions(ctx, script_uri)?;
 
         // Setup script storage functions
-        self.setup_shared_storage_functions(ctx, script_uri)?;
+        self.setup_script_properties_functions(ctx, script_uri)?;
 
         // Setup personal storage functions
-        self.setup_personal_storage_functions(ctx, script_uri)?;
+        self.setup_user_properties_functions(ctx, script_uri)?;
 
         // Always setup GraphQL functions, but they will be no-ops if disabled
         self.setup_graphql_functions(ctx, script_uri)?;
@@ -4622,7 +4622,7 @@ impl SecureGlobalContext {
     }
 
     /// Setup secure script storage functions
-    fn setup_shared_storage_functions(
+    fn setup_script_properties_functions(
         &self,
         ctx: &rquickjs::Ctx<'_>,
         script_uri: &str,
@@ -4631,7 +4631,7 @@ impl SecureGlobalContext {
         let script_uri_owned = script_uri.to_string();
 
         // Create the sharedStorage namespace object
-        let shared_storage_obj = rquickjs::Object::new(ctx.clone())?;
+        let script_properties_obj = rquickjs::Object::new(ctx.clone())?;
 
         // sharedStorage.getItem(key) - Get a storage item
         let script_uri_get = script_uri_owned.clone();
@@ -4642,13 +4642,13 @@ impl SecureGlobalContext {
                     "sharedStorage.getItem called for script {} with key: {}",
                     script_uri_get, key
                 );
-                Ok(crate::repository::get_shared_storage_item(
+                Ok(crate::repository::get_script_properties_item(
                     &script_uri_get,
                     &key,
                 ))
             },
         )?;
-        shared_storage_obj.set("getItem", get_item)?;
+        script_properties_obj.set("getItem", get_item)?;
 
         // sharedStorage.setItem(key, value) - Set a storage item
         let script_uri_set = script_uri_owned.clone();
@@ -4669,13 +4669,13 @@ impl SecureGlobalContext {
                     return Ok("Error: Value too large (>1MB)".to_string());
                 }
 
-                match crate::repository::set_shared_storage_item(&script_uri_set, &key, &value) {
+                match crate::repository::set_script_properties_item(&script_uri_set, &key, &value) {
                     Ok(()) => Ok("Item set successfully".to_string()),
                     Err(e) => Ok(format!("Error setting item: {}", e)),
                 }
             },
         )?;
-        shared_storage_obj.set("setItem", set_item)?;
+        script_properties_obj.set("setItem", set_item)?;
 
         // sharedStorage.removeItem(key) - Remove a storage item
         let script_uri_remove = script_uri_owned.clone();
@@ -4686,13 +4686,13 @@ impl SecureGlobalContext {
                     "sharedStorage.removeItem called for script {} with key: {}",
                     script_uri_remove, key
                 );
-                Ok(crate::repository::remove_shared_storage_item(
+                Ok(crate::repository::remove_script_properties_item(
                     &script_uri_remove,
                     &key,
                 ))
             },
         )?;
-        shared_storage_obj.set("removeItem", remove_item)?;
+        script_properties_obj.set("removeItem", remove_item)?;
 
         // sharedStorage.clear() - Clear all items for this script
         let script_uri_clear = script_uri_owned.clone();
@@ -4700,16 +4700,16 @@ impl SecureGlobalContext {
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
                 debug!("sharedStorage.clear called for script {}", script_uri_clear);
-                match crate::repository::clear_shared_storage(&script_uri_clear) {
+                match crate::repository::clear_script_properties(&script_uri_clear) {
                     Ok(()) => Ok("Storage cleared successfully".to_string()),
                     Err(e) => Ok(format!("Error clearing storage: {}", e)),
                 }
             },
         )?;
-        shared_storage_obj.set("clear", clear_storage)?;
+        script_properties_obj.set("clear", clear_storage)?;
 
         // Set the sharedStorage object on the global scope
-        global.set("sharedStorage", shared_storage_obj)?;
+        global.set("sharedStorage", script_properties_obj)?;
 
         debug!(
             "sharedStorage JavaScript API initialized for script: {}",
@@ -4719,7 +4719,7 @@ impl SecureGlobalContext {
         Ok(())
     }
 
-    fn setup_personal_storage_functions(
+    fn setup_user_properties_functions(
         &self,
         ctx: &rquickjs::Ctx<'_>,
         script_uri: &str,
@@ -4728,7 +4728,7 @@ impl SecureGlobalContext {
         let script_uri_owned = script_uri.to_string();
 
         // Create the personalStorage namespace object
-        let personal_storage_obj = rquickjs::Object::new(ctx.clone())?;
+        let user_properties_obj = rquickjs::Object::new(ctx.clone())?;
 
         // personalStorage.getItem(key) - Get a storage item for current user
         let script_uri_get = script_uri_owned.clone();
@@ -4777,14 +4777,14 @@ impl SecureGlobalContext {
                     _ => return Ok(None),
                 };
 
-                Ok(crate::repository::get_personal_storage_item(
+                Ok(crate::repository::get_user_properties_item(
                     &script_uri_get,
                     &user_id,
                     &key,
                 ))
             },
         )?;
-        personal_storage_obj.set("getItem", get_item)?;
+        user_properties_obj.set("getItem", get_item)?;
 
         // personalStorage.setItem(key, value) - Set a storage item for current user
         let script_uri_set = script_uri_owned.clone();
@@ -4854,7 +4854,7 @@ impl SecureGlobalContext {
                         return Ok("Error: Value too large (>1MB)".to_string());
                     }
 
-                    match crate::repository::set_personal_storage_item(
+                    match crate::repository::set_user_properties_item(
                         &script_uri_set,
                         &user_id,
                         &key,
@@ -4865,7 +4865,7 @@ impl SecureGlobalContext {
                     }
                 },
             )?;
-        personal_storage_obj.set("setItem", set_item)?;
+        user_properties_obj.set("setItem", set_item)?;
 
         // personalStorage.removeItem(key) - Remove a storage item for current user
         let script_uri_remove = script_uri_owned.clone();
@@ -4905,14 +4905,14 @@ impl SecureGlobalContext {
                     _ => return Ok(false),
                 };
 
-                Ok(crate::repository::remove_personal_storage_item(
+                Ok(crate::repository::remove_user_properties_item(
                     &script_uri_remove,
                     &user_id,
                     &key,
                 ))
             },
         )?;
-        personal_storage_obj.set("removeItem", remove_item)?;
+        user_properties_obj.set("removeItem", remove_item)?;
 
         // personalStorage.clear() - Clear all items for current user
         let script_uri_clear = script_uri_owned.clone();
@@ -4973,16 +4973,16 @@ impl SecureGlobalContext {
                             ),
                         };
 
-                    match crate::repository::clear_personal_storage(&script_uri_clear, &user_id) {
+                    match crate::repository::clear_user_properties(&script_uri_clear, &user_id) {
                         Ok(()) => Ok("Storage cleared successfully".to_string()),
                         Err(e) => Ok(format!("Error clearing storage: {}", e)),
                     }
                 },
             )?;
-        personal_storage_obj.set("clear", clear_storage)?;
+        user_properties_obj.set("clear", clear_storage)?;
 
         // Set the personalStorage object on the global scope
-        global.set("personalStorage", personal_storage_obj)?;
+        global.set("personalStorage", user_properties_obj)?;
 
         debug!(
             "personalStorage JavaScript API initialized for script: {}",

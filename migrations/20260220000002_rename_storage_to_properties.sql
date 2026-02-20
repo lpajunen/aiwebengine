@@ -1,0 +1,13 @@
+-- Rename shared_storage table to script_properties
+ALTER TABLE shared_storage RENAME TO script_properties;
+ALTER INDEX idx_shared_storage_script_uri RENAME TO idx_script_properties_script_uri;
+ALTER INDEX idx_shared_storage_key RENAME TO idx_script_properties_key;
+ALTER INDEX idx_shared_storage_script_uri_key RENAME TO idx_script_properties_script_uri_key;
+ALTER INDEX idx_shared_storage_updated_at RENAME TO idx_script_properties_updated_at;
+
+-- Rename personal_storage table to user_properties
+ALTER TABLE personal_storage RENAME TO user_properties;
+ALTER INDEX idx_personal_storage_script_uri_user_id RENAME TO idx_user_properties_script_uri_user_id;
+ALTER INDEX idx_personal_storage_key RENAME TO idx_user_properties_key;
+ALTER INDEX idx_personal_storage_script_uri_user_id_key RENAME TO idx_user_properties_script_uri_user_id_key;
+ALTER INDEX idx_personal_storage_updated_at RENAME TO idx_user_properties_updated_at;

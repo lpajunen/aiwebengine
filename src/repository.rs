@@ -874,7 +874,7 @@ where
 }
 
 /// Database-backed set shared storage item
-async fn db_set_shared_storage_item(
+async fn db_set_script_properties_item(
     mut executor: crate::database::TransactionExecutor<'_>,
     script_uri: &str,
     key: &str,
@@ -887,7 +887,7 @@ async fn db_set_shared_storage_item(
         crate::database::TransactionExecutor::Transaction(ref mut tx) => {
             sqlx::query(
                 r#"
-                UPDATE shared_storage
+                UPDATE script_properties
                 SET value = $1, updated_at = $2
                 WHERE script_uri = $3 AND key = $4
                 "#,
@@ -902,7 +902,7 @@ async fn db_set_shared_storage_item(
         crate::database::TransactionExecutor::Pool(pool) => {
             sqlx::query(
                 r#"
-                UPDATE shared_storage
+                UPDATE script_properties
                 SET value = $1, updated_at = $2
                 WHERE script_uri = $3 AND key = $4
                 "#,
@@ -936,7 +936,7 @@ async fn db_set_shared_storage_item(
         crate::database::TransactionExecutor::Transaction(ref mut tx) => {
             sqlx::query(
                 r#"
-                INSERT INTO shared_storage (script_uri, key, value, created_at, updated_at)
+                INSERT INTO script_properties (script_uri, key, value, created_at, updated_at)
                 VALUES ($1, $2, $3, $4, $4)
                 "#,
             )
@@ -950,7 +950,7 @@ async fn db_set_shared_storage_item(
         crate::database::TransactionExecutor::Pool(pool) => {
             sqlx::query(
                 r#"
-                INSERT INTO shared_storage (script_uri, key, value, created_at, updated_at)
+                INSERT INTO script_properties (script_uri, key, value, created_at, updated_at)
                 VALUES ($1, $2, $3, $4, $4)
                 "#,
             )
@@ -978,7 +978,7 @@ async fn db_set_shared_storage_item(
 }
 
 /// Database-backed get shared storage item
-async fn db_get_shared_storage_item<'e, E>(
+async fn db_get_script_properties_item<'e, E>(
     executor: E,
     script_uri: &str,
     key: &str,
@@ -988,7 +988,7 @@ where
 {
     let row = sqlx::query(
         r#"
-        SELECT value FROM shared_storage WHERE script_uri = $1 AND key = $2
+        SELECT value FROM script_properties WHERE script_uri = $1 AND key = $2
         "#,
     )
     .bind(script_uri)
@@ -1018,7 +1018,7 @@ where
 }
 
 /// Database-backed remove shared storage item
-async fn db_remove_shared_storage_item<'e, E>(
+async fn db_remove_script_properties_item<'e, E>(
     executor: E,
     script_uri: &str,
     key: &str,
@@ -1028,7 +1028,7 @@ where
 {
     let result = sqlx::query(
         r#"
-        DELETE FROM shared_storage WHERE script_uri = $1 AND key = $2
+        DELETE FROM script_properties WHERE script_uri = $1 AND key = $2
         "#,
     )
     .bind(script_uri)
@@ -1060,13 +1060,13 @@ where
 }
 
 /// Database-backed clear all shared storage for a script
-async fn db_clear_shared_storage<'e, E>(executor: E, script_uri: &str) -> AppResult<()>
+async fn db_clear_script_properties<'e, E>(executor: E, script_uri: &str) -> AppResult<()>
 where
     E: sqlx::Executor<'e, Database = sqlx::Postgres>,
 {
     sqlx::query(
         r#"
-        DELETE FROM shared_storage WHERE script_uri = $1
+        DELETE FROM script_properties WHERE script_uri = $1
         "#,
     )
     .bind(script_uri)
@@ -1088,7 +1088,7 @@ where
 }
 
 /// Database-backed set personal storage item
-async fn db_set_personal_storage_item(
+async fn db_set_user_properties_item(
     mut executor: crate::database::TransactionExecutor<'_>,
     script_uri: &str,
     user_id: &str,
@@ -1102,7 +1102,7 @@ async fn db_set_personal_storage_item(
         crate::database::TransactionExecutor::Transaction(ref mut tx) => {
             sqlx::query(
                 r#"
-                UPDATE personal_storage
+                UPDATE user_properties
                 SET value = $1, updated_at = $2
                 WHERE script_uri = $3 AND user_id = $4 AND key = $5
                 "#,
@@ -1118,7 +1118,7 @@ async fn db_set_personal_storage_item(
         crate::database::TransactionExecutor::Pool(pool) => {
             sqlx::query(
                 r#"
-                UPDATE personal_storage
+                UPDATE user_properties
                 SET value = $1, updated_at = $2
                 WHERE script_uri = $3 AND user_id = $4 AND key = $5
                 "#,
@@ -1153,7 +1153,7 @@ async fn db_set_personal_storage_item(
         crate::database::TransactionExecutor::Transaction(ref mut tx) => {
             sqlx::query(
                 r#"
-                INSERT INTO personal_storage (script_uri, user_id, key, value, created_at, updated_at)
+                INSERT INTO user_properties (script_uri, user_id, key, value, created_at, updated_at)
                 VALUES ($1, $2, $3, $4, $5, $5)
                 "#,
             )
@@ -1168,7 +1168,7 @@ async fn db_set_personal_storage_item(
         crate::database::TransactionExecutor::Pool(pool) => {
             sqlx::query(
                 r#"
-                INSERT INTO personal_storage (script_uri, user_id, key, value, created_at, updated_at)
+                INSERT INTO user_properties (script_uri, user_id, key, value, created_at, updated_at)
                 VALUES ($1, $2, $3, $4, $5, $5)
                 "#,
             )
@@ -1197,7 +1197,7 @@ async fn db_set_personal_storage_item(
 }
 
 /// Database-backed get personal storage item
-async fn db_get_personal_storage_item<'e, E>(
+async fn db_get_user_properties_item<'e, E>(
     executor: E,
     script_uri: &str,
     user_id: &str,
@@ -1208,7 +1208,7 @@ where
 {
     let row = sqlx::query(
         r#"
-        SELECT value FROM personal_storage WHERE script_uri = $1 AND user_id = $2 AND key = $3
+        SELECT value FROM user_properties WHERE script_uri = $1 AND user_id = $2 AND key = $3
         "#,
     )
     .bind(script_uri)
@@ -1239,7 +1239,7 @@ where
 }
 
 /// Database-backed remove personal storage item
-async fn db_remove_personal_storage_item<'e, E>(
+async fn db_remove_user_properties_item<'e, E>(
     executor: E,
     script_uri: &str,
     user_id: &str,
@@ -1250,7 +1250,7 @@ where
 {
     let result = sqlx::query(
         r#"
-        DELETE FROM personal_storage WHERE script_uri = $1 AND user_id = $2 AND key = $3
+        DELETE FROM user_properties WHERE script_uri = $1 AND user_id = $2 AND key = $3
         "#,
     )
     .bind(script_uri)
@@ -1283,7 +1283,7 @@ where
 }
 
 /// Database-backed clear all personal storage for a script and user
-async fn db_clear_personal_storage<'e, E>(
+async fn db_clear_user_properties<'e, E>(
     executor: E,
     script_uri: &str,
     user_id: &str,
@@ -1293,7 +1293,7 @@ where
 {
     sqlx::query(
         r#"
-        DELETE FROM personal_storage WHERE script_uri = $1 AND user_id = $2
+        DELETE FROM user_properties WHERE script_uri = $1 AND user_id = $2
         "#,
     )
     .bind(script_uri)
@@ -4341,9 +4341,9 @@ pub fn get_repository_stats() -> HashMap<String, usize> {
     stats.insert("log_entries".to_string(), log_count);
 
     // Count shared storage entries
-    let shared_storage_count = if let Some(db) = get_db_pool() {
+    let script_properties_count = if let Some(db) = get_db_pool() {
         run_blocking(async {
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM shared_storage")
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM script_properties")
                 .fetch_one(db.pool())
                 .await
                 .unwrap_or(0) as usize
@@ -4351,13 +4351,16 @@ pub fn get_repository_stats() -> HashMap<String, usize> {
     } else {
         0
     };
-    stats.insert("shared_storage_entries".to_string(), shared_storage_count);
+    stats.insert(
+        "script_properties_entries".to_string(),
+        script_properties_count,
+    );
 
     stats
 }
 
 /// Set a shared storage item (key-value pair for a specific script)
-pub fn set_shared_storage_item(script_uri: &str, key: &str, value: &str) -> AppResult<()> {
+pub fn set_script_properties_item(script_uri: &str, key: &str, value: &str) -> AppResult<()> {
     if script_uri.trim().is_empty() {
         return Err(RepositoryError::InvalidData("Script URI cannot be empty".to_string()).into());
     }
@@ -4372,13 +4375,13 @@ pub fn set_shared_storage_item(script_uri: &str, key: &str, value: &str) -> AppR
     }
 
     let repo = get_repository();
-    run_blocking(async { repo.set_shared_storage(script_uri, key, value).await })
+    run_blocking(async { repo.set_script_properties(script_uri, key, value).await })
 }
 
 /// Get a shared storage item
-pub fn get_shared_storage_item(script_uri: &str, key: &str) -> Option<String> {
+pub fn get_script_properties_item(script_uri: &str, key: &str) -> Option<String> {
     let repo = get_repository();
-    let result = run_blocking(async { repo.get_shared_storage(script_uri, key).await });
+    let result = run_blocking(async { repo.get_script_properties(script_uri, key).await });
 
     match result {
         Ok(value) => value,
@@ -4393,9 +4396,9 @@ pub fn get_shared_storage_item(script_uri: &str, key: &str) -> Option<String> {
 }
 
 /// Remove a shared storage item
-pub fn remove_shared_storage_item(script_uri: &str, key: &str) -> bool {
+pub fn remove_script_properties_item(script_uri: &str, key: &str) -> bool {
     let repo = get_repository();
-    let result = run_blocking(async { repo.remove_shared_storage(script_uri, key).await });
+    let result = run_blocking(async { repo.remove_script_properties(script_uri, key).await });
 
     match result {
         Ok(existed) => existed,
@@ -4410,13 +4413,13 @@ pub fn remove_shared_storage_item(script_uri: &str, key: &str) -> bool {
 }
 
 /// Clear all shared storage items for a specific script
-pub fn clear_shared_storage(script_uri: &str) -> AppResult<()> {
+pub fn clear_script_properties(script_uri: &str) -> AppResult<()> {
     let repo = get_repository();
-    run_blocking(async { repo.clear_shared_storage(script_uri).await })
+    run_blocking(async { repo.clear_script_properties(script_uri).await })
 }
 
 /// Set a personal storage item (key-value pair for a specific script and user)
-pub fn set_personal_storage_item(
+pub fn set_user_properties_item(
     script_uri: &str,
     user_id: &str,
     key: &str,
@@ -4441,15 +4444,15 @@ pub fn set_personal_storage_item(
 
     let repo = get_repository();
     run_blocking(async {
-        repo.set_personal_storage(script_uri, user_id, key, value)
+        repo.set_user_properties(script_uri, user_id, key, value)
             .await
     })
 }
 
 /// Get a personal storage item
-pub fn get_personal_storage_item(script_uri: &str, user_id: &str, key: &str) -> Option<String> {
+pub fn get_user_properties_item(script_uri: &str, user_id: &str, key: &str) -> Option<String> {
     let repo = get_repository();
-    let result = run_blocking(async { repo.get_personal_storage(script_uri, user_id, key).await });
+    let result = run_blocking(async { repo.get_user_properties(script_uri, user_id, key).await });
 
     match result {
         Ok(value) => value,
@@ -4464,10 +4467,10 @@ pub fn get_personal_storage_item(script_uri: &str, user_id: &str, key: &str) -> 
 }
 
 /// Remove a personal storage item
-pub fn remove_personal_storage_item(script_uri: &str, user_id: &str, key: &str) -> bool {
+pub fn remove_user_properties_item(script_uri: &str, user_id: &str, key: &str) -> bool {
     let repo = get_repository();
     let result =
-        run_blocking(async { repo.remove_personal_storage(script_uri, user_id, key).await });
+        run_blocking(async { repo.remove_user_properties(script_uri, user_id, key).await });
 
     match result {
         Ok(existed) => existed,
@@ -4482,9 +4485,9 @@ pub fn remove_personal_storage_item(script_uri: &str, user_id: &str, key: &str) 
 }
 
 /// Clear all personal storage items for a specific script and user
-pub fn clear_personal_storage(script_uri: &str, user_id: &str) -> AppResult<()> {
+pub fn clear_user_properties(script_uri: &str, user_id: &str) -> AppResult<()> {
     let repo = get_repository();
-    run_blocking(async { repo.clear_personal_storage(script_uri, user_id).await })
+    run_blocking(async { repo.clear_user_properties(script_uri, user_id).await })
 }
 
 /// Set a script secret (key-value pair for a specific script)
@@ -4645,32 +4648,38 @@ pub trait Repository: Send + Sync {
     async fn prune_logs(&self) -> AppResult<()>;
 
     // Shared storage operations
-    async fn get_shared_storage(&self, script_uri: &str, key: &str) -> AppResult<Option<String>>;
-    async fn set_shared_storage(&self, script_uri: &str, key: &str, value: &str) -> AppResult<()>;
-    async fn remove_shared_storage(&self, script_uri: &str, key: &str) -> AppResult<bool>;
-    async fn clear_shared_storage(&self, script_uri: &str) -> AppResult<()>;
+    async fn get_script_properties(&self, script_uri: &str, key: &str)
+    -> AppResult<Option<String>>;
+    async fn set_script_properties(
+        &self,
+        script_uri: &str,
+        key: &str,
+        value: &str,
+    ) -> AppResult<()>;
+    async fn remove_script_properties(&self, script_uri: &str, key: &str) -> AppResult<bool>;
+    async fn clear_script_properties(&self, script_uri: &str) -> AppResult<()>;
 
     // Personal storage operations
-    async fn get_personal_storage(
+    async fn get_user_properties(
         &self,
         script_uri: &str,
         user_id: &str,
         key: &str,
     ) -> AppResult<Option<String>>;
-    async fn set_personal_storage(
+    async fn set_user_properties(
         &self,
         script_uri: &str,
         user_id: &str,
         key: &str,
         value: &str,
     ) -> AppResult<()>;
-    async fn remove_personal_storage(
+    async fn remove_user_properties(
         &self,
         script_uri: &str,
         user_id: &str,
         key: &str,
     ) -> AppResult<bool>;
-    async fn clear_personal_storage(&self, script_uri: &str, user_id: &str) -> AppResult<()>;
+    async fn clear_user_properties(&self, script_uri: &str, user_id: &str) -> AppResult<()>;
 
     // Script secrets operations
     async fn get_script_secret(&self, script_uri: &str, key: &str) -> AppResult<Option<String>>;
@@ -5095,48 +5104,57 @@ impl Repository for PostgresRepository {
         }
     }
 
-    async fn get_shared_storage(&self, script_uri: &str, key: &str) -> AppResult<Option<String>> {
+    async fn get_script_properties(
+        &self,
+        script_uri: &str,
+        key: &str,
+    ) -> AppResult<Option<String>> {
         let executor = crate::database::get_current_executor(&self.pool);
         match executor {
             crate::database::TransactionExecutor::Transaction(tx) => {
-                db_get_shared_storage_item(&mut **tx, script_uri, key).await
+                db_get_script_properties_item(&mut **tx, script_uri, key).await
             }
             crate::database::TransactionExecutor::Pool(pool) => {
-                db_get_shared_storage_item(pool, script_uri, key).await
+                db_get_script_properties_item(pool, script_uri, key).await
             }
         }
     }
 
-    async fn set_shared_storage(&self, script_uri: &str, key: &str, value: &str) -> AppResult<()> {
+    async fn set_script_properties(
+        &self,
+        script_uri: &str,
+        key: &str,
+        value: &str,
+    ) -> AppResult<()> {
         let executor = crate::database::get_current_executor(&self.pool);
-        db_set_shared_storage_item(executor, script_uri, key, value).await
+        db_set_script_properties_item(executor, script_uri, key, value).await
     }
 
-    async fn remove_shared_storage(&self, script_uri: &str, key: &str) -> AppResult<bool> {
+    async fn remove_script_properties(&self, script_uri: &str, key: &str) -> AppResult<bool> {
         let executor = crate::database::get_current_executor(&self.pool);
         match executor {
             crate::database::TransactionExecutor::Transaction(tx) => {
-                db_remove_shared_storage_item(&mut **tx, script_uri, key).await
+                db_remove_script_properties_item(&mut **tx, script_uri, key).await
             }
             crate::database::TransactionExecutor::Pool(pool) => {
-                db_remove_shared_storage_item(pool, script_uri, key).await
+                db_remove_script_properties_item(pool, script_uri, key).await
             }
         }
     }
 
-    async fn clear_shared_storage(&self, script_uri: &str) -> AppResult<()> {
+    async fn clear_script_properties(&self, script_uri: &str) -> AppResult<()> {
         let executor = crate::database::get_current_executor(&self.pool);
         match executor {
             crate::database::TransactionExecutor::Transaction(tx) => {
-                db_clear_shared_storage(&mut **tx, script_uri).await
+                db_clear_script_properties(&mut **tx, script_uri).await
             }
             crate::database::TransactionExecutor::Pool(pool) => {
-                db_clear_shared_storage(pool, script_uri).await
+                db_clear_script_properties(pool, script_uri).await
             }
         }
     }
 
-    async fn get_personal_storage(
+    async fn get_user_properties(
         &self,
         script_uri: &str,
         user_id: &str,
@@ -5145,15 +5163,15 @@ impl Repository for PostgresRepository {
         let executor = crate::database::get_current_executor(&self.pool);
         match executor {
             crate::database::TransactionExecutor::Transaction(tx) => {
-                db_get_personal_storage_item(&mut **tx, script_uri, user_id, key).await
+                db_get_user_properties_item(&mut **tx, script_uri, user_id, key).await
             }
             crate::database::TransactionExecutor::Pool(pool) => {
-                db_get_personal_storage_item(pool, script_uri, user_id, key).await
+                db_get_user_properties_item(pool, script_uri, user_id, key).await
             }
         }
     }
 
-    async fn set_personal_storage(
+    async fn set_user_properties(
         &self,
         script_uri: &str,
         user_id: &str,
@@ -5161,10 +5179,10 @@ impl Repository for PostgresRepository {
         value: &str,
     ) -> AppResult<()> {
         let executor = crate::database::get_current_executor(&self.pool);
-        db_set_personal_storage_item(executor, script_uri, user_id, key, value).await
+        db_set_user_properties_item(executor, script_uri, user_id, key, value).await
     }
 
-    async fn remove_personal_storage(
+    async fn remove_user_properties(
         &self,
         script_uri: &str,
         user_id: &str,
@@ -5173,22 +5191,22 @@ impl Repository for PostgresRepository {
         let executor = crate::database::get_current_executor(&self.pool);
         match executor {
             crate::database::TransactionExecutor::Transaction(tx) => {
-                db_remove_personal_storage_item(&mut **tx, script_uri, user_id, key).await
+                db_remove_user_properties_item(&mut **tx, script_uri, user_id, key).await
             }
             crate::database::TransactionExecutor::Pool(pool) => {
-                db_remove_personal_storage_item(pool, script_uri, user_id, key).await
+                db_remove_user_properties_item(pool, script_uri, user_id, key).await
             }
         }
     }
 
-    async fn clear_personal_storage(&self, script_uri: &str, user_id: &str) -> AppResult<()> {
+    async fn clear_user_properties(&self, script_uri: &str, user_id: &str) -> AppResult<()> {
         let executor = crate::database::get_current_executor(&self.pool);
         match executor {
             crate::database::TransactionExecutor::Transaction(tx) => {
-                db_clear_personal_storage(&mut **tx, script_uri, user_id).await
+                db_clear_user_properties(&mut **tx, script_uri, user_id).await
             }
             crate::database::TransactionExecutor::Pool(pool) => {
-                db_clear_personal_storage(pool, script_uri, user_id).await
+                db_clear_user_properties(pool, script_uri, user_id).await
             }
         }
     }
@@ -5617,7 +5635,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_shared_storage_operations() {
+    async fn test_script_properties_operations() {
         if should_skip_db_tests() {
             return;
         }
@@ -5629,32 +5647,32 @@ mod tests {
         let value = "test_value";
 
         // Test set item
-        assert!(set_shared_storage_item(script_uri, key, value).is_ok());
+        assert!(set_script_properties_item(script_uri, key, value).is_ok());
 
         // Test get item
-        let retrieved = get_shared_storage_item(script_uri, key);
+        let retrieved = get_script_properties_item(script_uri, key);
         assert_eq!(retrieved, Some(value.to_string()));
 
         // Test remove item
-        assert!(remove_shared_storage_item(script_uri, key));
+        assert!(remove_script_properties_item(script_uri, key));
 
         // Verify item is gone
-        let retrieved_after_remove = get_shared_storage_item(script_uri, key);
+        let retrieved_after_remove = get_script_properties_item(script_uri, key);
         assert_eq!(retrieved_after_remove, None);
 
         // Test clear storage
-        assert!(set_shared_storage_item(script_uri, "key1", "value1").is_ok());
-        assert!(set_shared_storage_item(script_uri, "key2", "value2").is_ok());
+        assert!(set_script_properties_item(script_uri, "key1", "value1").is_ok());
+        assert!(set_script_properties_item(script_uri, "key2", "value2").is_ok());
 
-        assert!(clear_shared_storage(script_uri).is_ok());
+        assert!(clear_script_properties(script_uri).is_ok());
 
         // Verify both items are gone
-        assert_eq!(get_shared_storage_item(script_uri, "key1"), None);
-        assert_eq!(get_shared_storage_item(script_uri, "key2"), None);
+        assert_eq!(get_script_properties_item(script_uri, "key1"), None);
+        assert_eq!(get_script_properties_item(script_uri, "key2"), None);
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_shared_storage_validation() {
+    async fn test_script_properties_validation() {
         if should_skip_db_tests() {
             return;
         }
@@ -5662,18 +5680,18 @@ mod tests {
         let _guard = rt.enter();
         setup_db();
         // Test empty script URI
-        assert!(set_shared_storage_item("", "key", "value").is_err());
+        assert!(set_script_properties_item("", "key", "value").is_err());
 
         // Test empty key
-        assert!(set_shared_storage_item("test://script", "", "value").is_err());
+        assert!(set_script_properties_item("test://script", "", "value").is_err());
 
         // Test oversized value (simulate by creating a large string)
         let large_value = "x".repeat(1_000_001); // Just over 1MB
-        assert!(set_shared_storage_item("test://script", "key", &large_value).is_err());
+        assert!(set_script_properties_item("test://script", "key", &large_value).is_err());
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_personal_storage_operations() {
+    async fn test_user_properties_operations() {
         if should_skip_db_tests() {
             return;
         }
@@ -5688,54 +5706,54 @@ mod tests {
         let value2 = "test_value_2";
 
         // Test set item for user 1
-        assert!(set_personal_storage_item(script_uri, user_id_1, key, value1).is_ok());
+        assert!(set_user_properties_item(script_uri, user_id_1, key, value1).is_ok());
 
         // Test get item for user 1
-        let retrieved1 = get_personal_storage_item(script_uri, user_id_1, key);
+        let retrieved1 = get_user_properties_item(script_uri, user_id_1, key);
         assert_eq!(retrieved1, Some(value1.to_string()));
 
         // Test set item for user 2 (same script, same key, different user)
-        assert!(set_personal_storage_item(script_uri, user_id_2, key, value2).is_ok());
+        assert!(set_user_properties_item(script_uri, user_id_2, key, value2).is_ok());
 
         // Test get item for user 2
-        let retrieved2 = get_personal_storage_item(script_uri, user_id_2, key);
+        let retrieved2 = get_user_properties_item(script_uri, user_id_2, key);
         assert_eq!(retrieved2, Some(value2.to_string()));
 
         // Verify user 1's data is still separate
-        let still_user1 = get_personal_storage_item(script_uri, user_id_1, key);
+        let still_user1 = get_user_properties_item(script_uri, user_id_1, key);
         assert_eq!(still_user1, Some(value1.to_string()));
 
         // Test remove item for user 1
-        assert!(remove_personal_storage_item(script_uri, user_id_1, key));
+        assert!(remove_user_properties_item(script_uri, user_id_1, key));
 
         // Verify item is gone for user 1
-        let retrieved_after_remove = get_personal_storage_item(script_uri, user_id_1, key);
+        let retrieved_after_remove = get_user_properties_item(script_uri, user_id_1, key);
         assert_eq!(retrieved_after_remove, None);
 
         // Verify user 2's data is still there
-        let user2_still_there = get_personal_storage_item(script_uri, user_id_2, key);
+        let user2_still_there = get_user_properties_item(script_uri, user_id_2, key);
         assert_eq!(user2_still_there, Some(value2.to_string()));
 
         // Test clear storage for user 2
-        assert!(set_personal_storage_item(script_uri, user_id_2, "key1", "value1").is_ok());
-        assert!(set_personal_storage_item(script_uri, user_id_2, "key2", "value2").is_ok());
+        assert!(set_user_properties_item(script_uri, user_id_2, "key1", "value1").is_ok());
+        assert!(set_user_properties_item(script_uri, user_id_2, "key2", "value2").is_ok());
 
-        assert!(clear_personal_storage(script_uri, user_id_2).is_ok());
+        assert!(clear_user_properties(script_uri, user_id_2).is_ok());
 
         // Verify all items are gone for user 2
-        assert_eq!(get_personal_storage_item(script_uri, user_id_2, key), None);
+        assert_eq!(get_user_properties_item(script_uri, user_id_2, key), None);
         assert_eq!(
-            get_personal_storage_item(script_uri, user_id_2, "key1"),
+            get_user_properties_item(script_uri, user_id_2, "key1"),
             None
         );
         assert_eq!(
-            get_personal_storage_item(script_uri, user_id_2, "key2"),
+            get_user_properties_item(script_uri, user_id_2, "key2"),
             None
         );
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_personal_storage_validation() {
+    async fn test_user_properties_validation() {
         if should_skip_db_tests() {
             return;
         }
@@ -5746,21 +5764,21 @@ mod tests {
         let user_id = "user123";
 
         // Test empty script URI
-        assert!(set_personal_storage_item("", user_id, "key", "value").is_err());
+        assert!(set_user_properties_item("", user_id, "key", "value").is_err());
 
         // Test empty user ID
-        assert!(set_personal_storage_item(script_uri, "", "key", "value").is_err());
+        assert!(set_user_properties_item(script_uri, "", "key", "value").is_err());
 
         // Test empty key
-        assert!(set_personal_storage_item(script_uri, user_id, "", "value").is_err());
+        assert!(set_user_properties_item(script_uri, user_id, "", "value").is_err());
 
         // Test oversized value (simulate by creating a large string)
         let large_value = "x".repeat(1_000_001); // Just over 1MB
-        assert!(set_personal_storage_item(script_uri, user_id, "key", &large_value).is_err());
+        assert!(set_user_properties_item(script_uri, user_id, "key", &large_value).is_err());
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_personal_storage_user_isolation() {
+    async fn test_user_properties_user_isolation() {
         if should_skip_db_tests() {
             return;
         }
@@ -5772,31 +5790,31 @@ mod tests {
         let user2 = "bob";
 
         // Both users set the same key in the same script
-        assert!(set_personal_storage_item(script_uri, user1, "pref", "dark").is_ok());
-        assert!(set_personal_storage_item(script_uri, user2, "pref", "light").is_ok());
+        assert!(set_user_properties_item(script_uri, user1, "pref", "dark").is_ok());
+        assert!(set_user_properties_item(script_uri, user2, "pref", "light").is_ok());
 
         // Each user should see only their own value
         assert_eq!(
-            get_personal_storage_item(script_uri, user1, "pref"),
+            get_user_properties_item(script_uri, user1, "pref"),
             Some("dark".to_string())
         );
         assert_eq!(
-            get_personal_storage_item(script_uri, user2, "pref"),
+            get_user_properties_item(script_uri, user2, "pref"),
             Some("light".to_string())
         );
 
         // Removing user1's data shouldn't affect user2
-        assert!(remove_personal_storage_item(script_uri, user1, "pref"));
-        assert_eq!(get_personal_storage_item(script_uri, user1, "pref"), None);
+        assert!(remove_user_properties_item(script_uri, user1, "pref"));
+        assert_eq!(get_user_properties_item(script_uri, user1, "pref"), None);
         assert_eq!(
-            get_personal_storage_item(script_uri, user2, "pref"),
+            get_user_properties_item(script_uri, user2, "pref"),
             Some("light".to_string())
         );
 
         // Clearing user2's data shouldn't affect anything (since user1 already removed)
-        assert!(clear_personal_storage(script_uri, user2).is_ok());
-        assert_eq!(get_personal_storage_item(script_uri, user2, "pref"), None);
-        assert_eq!(get_personal_storage_item(script_uri, user1, "pref"), None);
+        assert!(clear_user_properties(script_uri, user2).is_ok());
+        assert_eq!(get_user_properties_item(script_uri, user2, "pref"), None);
+        assert_eq!(get_user_properties_item(script_uri, user1, "pref"), None);
     }
 
     #[tokio::test(flavor = "multi_thread")]
