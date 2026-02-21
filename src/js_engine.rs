@@ -473,13 +473,8 @@ fn setup_secure_global_functions(
     config: &GlobalSecurityConfig,
     register_fn: Option<RegisterFunctionType>,
     _auth_context: Option<crate::auth::JsAuthContext>, // Kept for API compatibility but unused
-    secrets_manager: Option<std::sync::Arc<crate::secrets::SecretsManager>>,
 ) -> Result<(), rquickjs::Error> {
-    let secure_context = if let Some(secrets) = secrets_manager {
-        SecureGlobalContext::new_with_secrets(user_context, config.clone(), secrets)
-    } else {
-        SecureGlobalContext::new_with_config(user_context, config.clone())
-    };
+    let secure_context = SecureGlobalContext::new_with_config(user_context, config.clone());
 
     // Setup secure functions with proper capability validation
     secure_context.setup_secure_functions(ctx, script_uri, register_fn)?;
@@ -781,7 +776,6 @@ pub fn execute_script_secure(
                         &security_config,
                         Some(register_impl),
                         None, // No auth context during script execution with config
-                        None, // No secrets manager yet
                     )?;
 
                     // Transpile if needed (TypeScript/JSX/TSX)
@@ -904,7 +898,6 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                                 &config,
                                 Some(register_impl),
                                 None, // No auth context during script registration
-                                None, // No secrets manager yet
                             )?;
 
                             // Transpile if needed (TypeScript/JSX/TSX)
@@ -1036,7 +1029,6 @@ pub fn execute_script_for_request_secure(
             &security_config,
             None,
             params.auth_context, // Pass auth context for request handling
-            None,                // No secrets manager yet
         )?;
 
         Ok(())
@@ -1248,7 +1240,6 @@ pub fn execute_script_for_request(
             &config,
             None,
             Some(auth_ctx.clone()), // Provide anonymous auth context
-            None,                   // No secrets manager yet
         )?;
 
         Ok(())
@@ -1349,7 +1340,6 @@ pub fn execute_scheduled_handler(
             &security_config,
             None,
             None,
-            None,
         )
     })
     .map_err(|e| format!("install scheduler globals: {}", e))?;
@@ -1447,7 +1437,6 @@ pub fn execute_graphql_resolver(params: GraphqlResolverExecutionParams) -> Resul
             &config,
             None,
             auth_context.clone(),
-            None,
         )?;
 
         // Override specific functions that have different signatures for GraphQL resolver context
@@ -1585,7 +1574,6 @@ pub fn execute_mcp_prompt_handler(
             &config,
             None,
             None,
-            None,
         )?;
 
         // Load and execute the script
@@ -1670,7 +1658,6 @@ pub fn execute_mcp_tool_handler(
             &script_uri_owned,
             UserContext::admin("mcp-tool".to_string()),
             &config,
-            None,
             None,
             None,
         )?;
@@ -1808,7 +1795,6 @@ pub fn execute_stream_customization_function(
                 &config,
                 None,
                 auth_context.clone(),
-                None,
             )?;
 
             // Load and execute the script
@@ -1995,7 +1981,6 @@ pub fn call_init_if_exists(
                 &config,
                 Some(register_impl),
                 None,
-                None, // No secrets manager yet
             );
 
             if let Err(ref e) = setup_result {

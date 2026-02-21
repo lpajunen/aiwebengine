@@ -444,25 +444,10 @@ See [04-SECRETS-AND-SECURITY.md](04-SECRETS-AND-SECURITY.md) for setting up OAut
 
 ### [secrets]
 
-Secrets management for AI services and external APIs.
+The `[secrets]` configuration section has been removed. Secrets are now stored
+exclusively in the database and managed via the `secretStorage` JavaScript API.
 
-```toml
-[secrets.values]
-# ⚠️ For development ONLY - use environment variables in production!
-anthropic_api_key = "${SECRET_ANTHROPIC_API_KEY}"
-openai_api_key = "${SECRET_OPENAI_API_KEY}"
-```
-
-**Environment overrides (recommended):**
-
-```bash
-# Any SECRET_ prefixed variable becomes available as a secret
-export SECRET_ANTHROPIC_API_KEY="sk-ant-api03-..."
-export SECRET_OPENAI_API_KEY="sk-..."
-export SECRET_STRIPE_API_KEY="sk_live_..."
-```
-
-See [04-SECRETS-AND-SECURITY.md](04-SECRETS-AND-SECURITY.md) for complete secrets management guide.
+See [04-SECRETS-AND-SECURITY.md](04-SECRETS-AND-SECURITY.md) for the complete secrets management guide.
 
 ---
 

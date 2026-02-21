@@ -1454,7 +1454,7 @@ const response = await fetch("https://api.anthropic.com/v1/messages", {
 The Rust layer:
 
 1. Detects `{{secret:identifier}}` pattern in header values
-2. Looks up secret from SecretsManager
+2. Looks up secret from the database (user secret takes priority over script secret)
 3. Replaces template with actual secret value
 4. Makes HTTP request with injected secret
 5. Returns response to JavaScript (secret never in JS context)

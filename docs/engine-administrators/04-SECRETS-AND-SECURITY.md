@@ -542,22 +542,39 @@ export APP_REPOSITORY__DATABASE_URL="postgresql://user:password@host/db"
 
 These secrets are used by JavaScript scripts but never exposed to JavaScript code.
 
-#### Environment Variable Format
+#### Database-Backed Secrets
 
-Any environment variable with `SECRET_` prefix becomes available:
+Secrets are stored in the database and accessed via the `secretStorage` JavaScript API. Administrators set script-level secrets; users can set their own personal secrets.
 
-```bash
-# Format: SECRET_{IDENTIFIER}
-# The identifier is lowercase of everything after SECRET_
+```javascript
+// Privileged: set a secret available to a specific script
+secretStorage.setSecretForUri(
+  "https://example.com/my-script",
+  "anthropic_api_key",
+  "sk-ant-api03-...",
+);
+//   → available as identifier: "anthropic_api_key"
 
-export SECRET_ANTHROPIC_API_KEY="sk-ant-api03-..."
-# → available as identifier: "anthropic_api_key"
+secretStorage.setSecretForUri(
+  "https://example.com/my-script",
+  "openai_api_key",
+  "sk-...",
+);
+//   → available as identifier: "openai_api_key"
 
-export SECRET_OPENAI_API_KEY="sk-..."
-# → available as identifier: "openai_api_key"
+secretStorage.setSecretForUri(
+  "https://example.com/my-script",
+  "stripe_api_key",
+  "sk_live_...",
+);
+//   → available as identifier: "stripe_api_key"
+```
 
-export SECRET_STRIPE_API_KEY="sk_live_..."
-# → available as identifier: "stripe_api_key"
+Users can also store personal secrets (user secret takes priority over script secret at resolution time):
+
+```javascript
+// Any authenticated user
+secretStorage.setSecret("anthropic_api_key", "sk-ant-api03-...");
 ```
 
 #### Using Secrets in JavaScript
@@ -576,8 +593,8 @@ if (secretStorage.exists("anthropic_api_key")) {
   };
 }
 
-// ✅ List all available secrets
-const secrets = secretStorage.list();
+// ✅ List all available secrets for this script
+const secrets = secretStorage.listForUri("https://example.com/my-script");
 console.log("Available secrets:", secrets);
 // Output: ['anthropic_api_key', 'openai_api_key', 'stripe_api_key']
 
@@ -630,59 +647,36 @@ function aiChatHandler(req) {
 routeRegistry.registerRoute('/api/chat', 'aiChatHandler', 'POST');
 ```
 
-### Common Application Secrets
+#### Common Application Secrets
 
-#### AI Services
+Set AI and service secrets via `secretStorage.setSecretForUri(scriptUri, key, value)` from a privileged admin script:
 
-```bash
-# Anthropic Claude
-export SECRET_ANTHROPIC_API_KEY="sk-ant-api03-..."
+```javascript
+// AI Services
+secretStorage.setSecretForUri(
+  scriptUri,
+  "anthropic_api_key",
+  "sk-ant-api03-...",
+);
+secretStorage.setSecretForUri(scriptUri, "openai_api_key", "sk-...");
+secretStorage.setSecretForUri(scriptUri, "google_api_key", "...");
+secretStorage.setSecretForUri(scriptUri, "cohere_api_key", "...");
 
-# OpenAI
-export SECRET_OPENAI_API_KEY="sk-..."
+// Payment Services
+secretStorage.setSecretForUri(scriptUri, "stripe_api_key", "sk_live_...");
+secretStorage.setSecretForUri(scriptUri, "stripe_webhook_secret", "whsec_...");
+secretStorage.setSecretForUri(scriptUri, "paypal_client_id", "...");
+secretStorage.setSecretForUri(scriptUri, "paypal_client_secret", "...");
 
-# Google Gemini
-export SECRET_GOOGLE_API_KEY="..."
+// Email Services
+secretStorage.setSecretForUri(scriptUri, "sendgrid_api_key", "SG...");
+secretStorage.setSecretForUri(scriptUri, "mailgun_api_key", "...");
+secretStorage.setSecretForUri(scriptUri, "mailgun_domain", "mg.yourdomain.com");
 
-# Cohere
-export SECRET_COHERE_API_KEY="..."
-```
-
-#### Payment Services
-
-```bash
-# Stripe
-export SECRET_STRIPE_API_KEY="sk_live_..."
-export SECRET_STRIPE_WEBHOOK_SECRET="whsec_..."
-
-# PayPal
-export SECRET_PAYPAL_CLIENT_ID="..."
-export SECRET_PAYPAL_CLIENT_SECRET="..."
-```
-
-#### Email Services
-
-```bash
-# SendGrid
-export SECRET_SENDGRID_API_KEY="SG..."
-
-# Mailgun
-export SECRET_MAILGUN_API_KEY="..."
-export SECRET_MAILGUN_DOMAIN="mg.yourdomain.com"
-```
-
-#### Cloud Services
-
-```bash
-# AWS
-export SECRET_AWS_ACCESS_KEY_ID="AKIA..."
-export SECRET_AWS_SECRET_ACCESS_KEY="..."
-
-# Azure
-export SECRET_AZURE_STORAGE_KEY="..."
-
-# Google Cloud
-export SECRET_GCP_SERVICE_ACCOUNT_KEY='{"type":"service_account",...}'
+// Cloud Services
+secretStorage.setSecretForUri(scriptUri, "aws_access_key_id", "AKIA...");
+secretStorage.setSecretForUri(scriptUri, "aws_secret_access_key", "...");
+secretStorage.setSecretForUri(scriptUri, "azure_storage_key", "...");
 ```
 
 ---

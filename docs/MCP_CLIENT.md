@@ -254,15 +254,21 @@ The client works with any MCP server that implements:
 
 ### Secret Configuration
 
-Secrets are loaded from environment variables with `SECRET_` prefix:
+Secrets are stored in the database via the `secretStorage` API and are **never** exposed to JavaScript code. An administrator sets script-level secrets; users can also set their own.
 
-```bash
-# .env file
-SECRET_GITHUB_TOKEN=ghp_abc123...
-SECRET_ANTHROPIC_API_KEY=sk-ant-api03-...
+```javascript
+// Privileged: set a secret for a specific script
+secretStorage.setSecretForUri(
+  "https://example.com/my-script",
+  "github_token",
+  "ghp_abc123...",
+);
+
+// Per-user: set a secret scoped to the current user
+secretStorage.setSecret("github_token", "ghp_abc123...");
 ```
 
-Conversion: `SECRET_GITHUB_TOKEN` → identifier: `github_token`
+At request time, Rust resolves the identifier against the database (user secret takes priority over script secret) and injects the value into the HTTP header — JavaScript never sees the value.
 
 ## Limitations
 
@@ -283,7 +289,7 @@ Current implementation:
 // Connect to a custom MCP server
 const client = new GitHubMcpClient(
   "https://my-mcp-server.example.com/mcp",
-  "my_custom_token", // References SECRET_MY_CUSTOM_TOKEN in .env
+  "my_custom_token", // Secret identifier stored in the database
 );
 
 const tools = client.listTools();
@@ -317,13 +323,19 @@ function callToolWithRetry(client, toolName, args, maxRetries = 3) {
 
 ### "Secret not found" error
 
-Ensure secret is defined in `.env`:
+Ensure the secret has been stored in the database:
 
-```bash
-SECRET_GITHUB_TOKEN=ghp_...
+```javascript
+// Privileged script: store a script-level secret
+secretStorage.setSecretForUri(
+  "https://your-script-uri",
+  "github_token",
+  "ghp_...",
+);
+
+// Or each user stores their own
+secretStorage.setSecret("github_token", "ghp_...");
 ```
-
-And restart the server to load new environment variables.
 
 ### "Authentication failed: HTTP 401"
 
@@ -331,7 +343,7 @@ Check that:
 
 1. Token is valid and not expired
 2. Token has required scopes (e.g., `repo` for GitHub)
-3. Secret identifier matches environment variable (case-insensitive after `SECRET_` prefix)
+3. Secret identifier matches the key stored in the database
 
 ### "Failed to list tools: Network error"
 
@@ -360,7 +372,7 @@ new McpClient(serverUrl, secretIdentifier);
 ```
 
 - `serverUrl`: String - MCP server endpoint URL
-- `secretIdentifier`: String - Secret identifier (without `SECRET_` prefix)
+- `secretIdentifier`: String - Secret identifier in the database (set via `secretStorage` API)
 - Returns: Client data JSON string (internal use only)
 
 #### Methods

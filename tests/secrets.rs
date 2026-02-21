@@ -125,9 +125,3 @@ async fn test_secrets_cannot_access_values_directly() {
         result.error
     );
 }
-
-// Note: Tests with actual SecretsManager will be added once main.rs integration is complete
-// Those tests will verify:
-// - secretStorage.exists() returns true for configured secrets
-// - secretStorage.list() returns configured secret identifiers
-// - Secret values are never exposed to JavaScript

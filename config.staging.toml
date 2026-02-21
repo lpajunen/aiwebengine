@@ -159,12 +159,3 @@ scopes = ["openid", "email", "profile"]
 # redirect_uri = "${APP_AUTH_PROVIDERS_MICROSOFT_REDIRECT_URI}"
 # tenant_id = "${APP_AUTH_PROVIDERS_MICROSOFT_TENANT_ID}"
 # scopes = ["openid", "email", "profile", "User.Read"]
-
-# Secrets Configuration
-# Store secret identifiers and values
-# Environment variables prefixed with SECRET_ will also be loaded automatically
-# Values can reference environment variables using ${VAR_NAME} syntax
-[secrets]
-# Example secrets (use environment variables in staging):
-# anthropic_api_key = "${ANTHROPIC_API_KEY}"
-# sendgrid_api_key = "${SENDGRID_API_KEY}"

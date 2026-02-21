@@ -131,19 +131,30 @@ export APP_AUTH__BOOTSTRAP_ADMINS='["admin@example.com"]'
 
 ### Secrets (AI Integration)
 
-```bash
-# Format: SECRET_{IDENTIFIER}
-# Identifier becomes lowercase: SECRET_ANTHROPIC_API_KEY → anthropic_api_key
+Secrets are stored in the database via the `secretStorage` JavaScript API — no environment variables needed.
 
-# Anthropic Claude
-export SECRET_ANTHROPIC_API_KEY="sk-ant-api03-..."
-
-# OpenAI
-export SECRET_OPENAI_API_KEY="sk-..."
-
-# Custom services
-export SECRET_STRIPE_API_KEY="sk_live_..."
-export SECRET_SENDGRID_API_KEY="SG..."
+```javascript
+// From a privileged admin script
+secretStorage.setSecretForUri(
+  "https://example.com/my-script",
+  "anthropic_api_key",
+  "sk-ant-api03-...",
+);
+secretStorage.setSecretForUri(
+  "https://example.com/my-script",
+  "openai_api_key",
+  "sk-...",
+);
+secretStorage.setSecretForUri(
+  "https://example.com/my-script",
+  "stripe_api_key",
+  "sk_live_...",
+);
+secretStorage.setSecretForUri(
+  "https://example.com/my-script",
+  "sendgrid_api_key",
+  "SG...",
+);
 ```
 
 ---

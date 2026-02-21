@@ -2,12 +2,10 @@ use base64::Engine;
 use chrono::Duration as ChronoDuration;
 use rquickjs::{Function, Result as JsResult, function::Opt};
 use std::collections::HashMap;
-use std::sync::Arc;
 use tracing::{debug, error, warn};
 
 use crate::repository;
 use crate::scheduler;
-use crate::secrets::SecretsManager;
 use crate::security::{
     SecureOperations, SecurityAuditor, SecurityEventType, SecuritySeverity, UserContext,
 };
@@ -74,16 +72,6 @@ impl SecureGlobalContext {
             auditor: SecurityAuditor::new(pool),
             config,
         }
-    }
-
-    /// Kept for API compatibility. The secrets_manager parameter is ignored;
-    /// secrets are now resolved exclusively from the database.
-    pub fn new_with_secrets(
-        user_context: UserContext,
-        config: GlobalSecurityConfig,
-        _secrets_manager: Arc<SecretsManager>,
-    ) -> Self {
-        Self::new_with_config(user_context, config)
     }
 
     /// Setup all secure global functions in the JavaScript context

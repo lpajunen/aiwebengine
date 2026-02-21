@@ -196,12 +196,3 @@ scopes = ["openid", "email", "profile", "User.Read"]
 # key_id = "${APP_AUTH_PROVIDERS_APPLE_KEY_ID}"
 # private_key = """${APP_AUTH_PROVIDERS_APPLE_PRIVATE_KEY}"""
 
-# Secrets Configuration
-# Store secret identifiers and values
-# Environment variables prefixed with SECRET_ will also be loaded automatically
-# Values can reference environment variables using ${VAR_NAME} syntax
-[secrets]
-# Example secrets (use environment variables in production):
-# anthropic_api_key = "${ANTHROPIC_API_KEY}"
-# sendgrid_api_key = "${SENDGRID_API_KEY}"
-

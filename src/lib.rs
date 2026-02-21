@@ -32,7 +32,6 @@ pub mod repository;
 pub mod safe_helpers;
 pub mod scheduler;
 pub mod script_init;
-pub mod secrets;
 pub mod security;
 pub mod stream_manager;
 pub mod stream_registry;
@@ -486,66 +485,6 @@ fn register_oauth_provider(
         extra_params: config.extra_params,
     };
     auth_manager.register_provider(provider_name, oauth_config)
-}
-
-/// Helper: Initialize secrets manager from environment and config
-fn initialize_secrets(config: &config::Config) -> Arc<secrets::SecretsManager> {
-    info!("Initializing secrets manager...");
-    let secrets_manager = secrets::SecretsManager::new();
-
-    // Load secrets from environment variables (SECRET_* prefix)
-    secrets_manager.load_from_env();
-    let env_secrets_count = secrets_manager.list_identifiers().len();
-    if env_secrets_count > 0 {
-        info!(
-            "Loaded {} secret(s) from environment variables",
-            env_secrets_count
-        );
-        debug!(
-            "Available secrets: {:?}",
-            secrets_manager.list_identifiers()
-        );
-    } else {
-        info!("No secrets loaded from environment variables");
-    }
-
-    // Load secrets from configuration file if available
-    if !config.secrets.values.is_empty() {
-        secrets_manager.load_from_map(config.secrets.values.clone());
-        let total_secrets = secrets_manager.list_identifiers().len();
-        let config_secrets = total_secrets - env_secrets_count;
-        if config_secrets > 0 {
-            info!(
-                "Loaded {} additional secret(s) from configuration file",
-                config_secrets
-            );
-        }
-        info!("Total secrets configured: {}", total_secrets);
-    } else if env_secrets_count == 0 {
-        debug!("No secrets configured from environment or config file");
-    }
-
-    // Load constrained secrets from secrets.toml if it exists
-    let secrets_toml_path = std::path::Path::new("secrets.toml");
-    if let Ok(constrained_count) = secrets_manager.load_from_toml_file(secrets_toml_path)
-        && constrained_count > 0
-    {
-        info!(
-            "Loaded {} constrained secret(s) from secrets.toml",
-            constrained_count
-        );
-    }
-
-    let secrets_manager = Arc::new(secrets_manager);
-
-    // Set as global secrets manager for access from js_engine
-    if secrets::initialize_global_secrets_manager(secrets_manager.clone()) {
-        info!("Global secrets manager initialized successfully");
-    } else {
-        warn!("Global secrets manager was already initialized");
-    }
-
-    secrets_manager
 }
 
 /// Helper: Initialize database and repository
@@ -1101,11 +1040,8 @@ async fn initialize_auth_manager(
     Ok(Arc::new(auth_manager))
 }
 
-/// Initialize all core components (secrets, database, scripts, assets)
+/// Initialize all core components (database, scripts, assets)
 async fn initialize_components(config: &config::Config) -> AppResult<()> {
-    // Initialize secrets manager
-    let _secrets_manager = initialize_secrets(config);
-
     // Initialize database connection and repository
     initialize_database_and_repository(config).await?;
 
