@@ -4552,6 +4552,19 @@ pub fn get_script_secret_item(script_uri: &str, key: &str) -> Option<String> {
     }
 }
 
+/// Resolve a secret by checking user_secrets first (if user_id is given), then script_secrets.
+/// Never reads environment variables or config files — only the database is consulted.
+/// Returns `None` if the repository is not initialized (e.g. in tests without a DB).
+pub fn resolve_secret_db(script_uri: &str, key: &str, user_id: Option<&str>) -> Option<String> {
+    get_repository_opt()?;
+    if let Some(uid) = user_id
+        && let Some(value) = get_user_secret_item(script_uri, uid, key)
+    {
+        return Some(value);
+    }
+    crate::repository::get_script_secret_item(script_uri, key)
+}
+
 /// Remove a script secret
 pub fn remove_script_secret_item(script_uri: &str, key: &str) -> bool {
     let repo = get_repository();
@@ -5574,6 +5587,12 @@ pub fn initialize_repository(repo: PostgresRepository) -> bool {
 }
 
 /// Get the global repository
+/// Returns the global repository if it has been initialized, or `None` otherwise.
+/// Use this in contexts where the repository may not be available (e.g. tests without a DB).
+pub fn get_repository_opt() -> Option<&'static PostgresRepository> {
+    GLOBAL_REPOSITORY.get()
+}
+
 pub fn get_repository() -> &'static PostgresRepository {
     GLOBAL_REPOSITORY.get_or_init(|| {
         let db = crate::database::get_global_database()

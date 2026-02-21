@@ -12,7 +12,6 @@
 //! 5. TLS/SSL certificate validation
 //! 6. Audit logging for secret access
 
-use crate::secrets::get_global_secrets_manager;
 use reqwest::Method;
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
@@ -84,6 +83,7 @@ impl HttpClient {
         url: String,
         options: FetchOptions,
         script_uri: Option<&str>,
+        user_id: Option<&str>,
     ) -> Result<FetchResponse, HttpError> {
         // Validate URL
         let parsed_url = if self.allow_private {
@@ -97,7 +97,7 @@ impl HttpClient {
             .map_err(|_| HttpError::InvalidMethod(options.method.clone()))?;
 
         // Process headers and inject secrets
-        let headers = self.process_headers(options.headers, &url, script_uri)?;
+        let headers = self.process_headers(options.headers, &url, script_uri, user_id)?;
 
         // Build request
         let timeout = options
@@ -210,12 +210,15 @@ impl HttpClient {
         }
     }
 
-    /// Process headers and inject secrets with constraint validation
+    /// Process headers and inject secrets, looking up values from the database.
+    /// Checks `user_secrets` first (when `user_id` is given), then `script_secrets`.
+    /// Environment variables and config files are never consulted.
     fn process_headers(
         &self,
         headers: Option<HashMap<String, String>>,
         url: &str,
         script_uri: Option<&str>,
+        user_id: Option<&str>,
     ) -> Result<HeaderMap, HttpError> {
         let mut header_map = HeaderMap::new();
 
@@ -225,32 +228,14 @@ impl HttpClient {
                     // Extract secret identifier — guarded by starts_with/ends_with above
                     let secret_id = value["{{secret:".len()..value.len() - "}}".len()].trim();
 
-                    // Get secrets manager
-                    let secrets_manager =
-                        get_global_secrets_manager().ok_or(HttpError::SecretsNotInitialized)?;
-
-                    // Look up secret with constraint validation
-                    let secret_value = secrets_manager
-                        .get_with_constraints(secret_id, url, script_uri)
-                        .map_err(|e| match e {
-                            crate::secrets::SecretAccessError::NotFound(id) => {
-                                HttpError::SecretNotFound(id)
-                            }
-                            crate::secrets::SecretAccessError::UrlConstraintViolation {
-                                secret_id,
-                                attempted_url,
-                            } => HttpError::SecretUrlConstraintViolation {
-                                secret_id,
-                                attempted_url,
-                            },
-                            crate::secrets::SecretAccessError::ScriptConstraintViolation {
-                                secret_id,
-                                script_uri,
-                            } => HttpError::SecretScriptConstraintViolation {
-                                secret_id,
-                                script_uri,
-                            },
-                        })?;
+                    // Look up secret from database: user_secrets first, then script_secrets.
+                    // Environment variables and config files are never consulted.
+                    let secret_value = crate::repository::resolve_secret_db(
+                        script_uri.unwrap_or(""),
+                        secret_id,
+                        user_id,
+                    )
+                    .ok_or_else(|| HttpError::SecretNotFound(secret_id.to_string()))?;
 
                     // Audit log (identifier only, never value)
                     info!(
@@ -418,21 +403,6 @@ pub enum HttpError {
 
     #[error("Secret not found: {0}")]
     SecretNotFound(String),
-
-    #[error("Secret '{secret_id}' not allowed for URL: {attempted_url}")]
-    SecretUrlConstraintViolation {
-        secret_id: String,
-        attempted_url: String,
-    },
-
-    #[error("Secret '{secret_id}' not allowed for script: {script_uri}")]
-    SecretScriptConstraintViolation {
-        secret_id: String,
-        script_uri: String,
-    },
-
-    #[error("Secrets manager not initialized")]
-    SecretsNotInitialized,
 
     #[error("Request failed: {0}")]
     RequestFailed(String),

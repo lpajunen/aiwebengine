@@ -12,7 +12,6 @@
 //! 5. Secret injection for Authorization headers
 //! 6. Error handling for network, auth, and protocol errors
 
-use crate::secrets::SecretsManager;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -195,7 +194,7 @@ impl McpClient {
     /// Initialize connection with the MCP server
     ///
     /// Performs protocol version negotiation
-    fn initialize(&self, secrets_manager: &SecretsManager) -> Result<Value, McpClientError> {
+    fn initialize(&self, script_uri: &str, user_id: Option<&str>) -> Result<Value, McpClientError> {
         let request_id = self.next_request_id();
 
         let request_body = json!({
@@ -214,7 +213,7 @@ impl McpClient {
             }
         });
 
-        let response = self.send_request(request_body, secrets_manager)?;
+        let response = self.send_request(request_body, script_uri, user_id)?;
 
         debug!("MCP server initialized: {}", self.server_url);
 
@@ -226,7 +225,8 @@ impl McpClient {
     /// Results are cached for 1 hour
     pub fn list_tools(
         &self,
-        secrets_manager: &SecretsManager,
+        script_uri: &str,
+        user_id: Option<&str>,
     ) -> Result<Vec<McpTool>, McpClientError> {
         // Check cache first
         {
@@ -240,7 +240,7 @@ impl McpClient {
         }
 
         // Initialize connection (optional, some servers may not require it)
-        let _ = self.initialize(secrets_manager);
+        let _ = self.initialize(script_uri, user_id);
 
         // List tools
         let request_id = self.next_request_id();
@@ -252,7 +252,7 @@ impl McpClient {
             "params": {}
         });
 
-        let response = self.send_request(request_body, secrets_manager)?;
+        let response = self.send_request(request_body, script_uri, user_id)?;
 
         // Parse tools from response
         let tools_array = response
@@ -293,7 +293,8 @@ impl McpClient {
         &self,
         name: String,
         arguments: Value,
-        secrets_manager: &SecretsManager,
+        script_uri: &str,
+        user_id: Option<&str>,
     ) -> Result<Value, McpClientError> {
         let request_id = self.next_request_id();
 
@@ -307,7 +308,7 @@ impl McpClient {
             }
         });
 
-        let response = self.send_request(request_body, secrets_manager)?;
+        let response = self.send_request(request_body, script_uri, user_id)?;
 
         debug!("Called tool '{}' on MCP server: {}", name, self.server_url);
 
@@ -318,14 +319,14 @@ impl McpClient {
     fn send_request(
         &self,
         request_body: Value,
-        secrets_manager: &SecretsManager,
+        script_uri: &str,
+        user_id: Option<&str>,
     ) -> Result<Value, McpClientError> {
-        // Get authorization token from secrets manager
-        // Note: MCP client is internal system use, constraints are enforced at script fetch() level
-        #[allow(deprecated)]
-        let token = secrets_manager
-            .get(&self.secret_identifier)
-            .ok_or_else(|| McpClientError::SecretNotFound(self.secret_identifier.clone()))?;
+        // Resolve authorization token from database (user_secrets first, then script_secrets).
+        // Environment variables and config files are never consulted.
+        let token =
+            crate::repository::resolve_secret_db(script_uri, &self.secret_identifier, user_id)
+                .ok_or_else(|| McpClientError::SecretNotFound(self.secret_identifier.clone()))?;
 
         // Build request
         let response = self

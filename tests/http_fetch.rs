@@ -13,7 +13,7 @@ async fn test_fetch_get_request() {
 
     let result = tokio::task::spawn_blocking(move || {
         let client = HttpClient::new_for_tests().expect("Failed to create client");
-        client.fetch(url, FetchOptions::default(), None)
+        client.fetch(url, FetchOptions::default(), None, None)
     })
     .await
     .expect("Task panicked");
@@ -52,6 +52,7 @@ async fn test_fetch_post_with_json() {
                 body: Some(body.to_string()),
                 timeout_ms: None,
             },
+            None,
             None,
         )
     })
@@ -92,6 +93,7 @@ async fn test_fetch_custom_headers() {
                 timeout_ms: None,
             },
             None,
+            None,
         )
     })
     .await
@@ -119,6 +121,7 @@ fn test_fetch_blocks_localhost() {
         "http://localhost:8080/api".to_string(),
         FetchOptions::default(),
         None,
+        None,
     );
 
     assert!(result.is_err(), "Localhost should be blocked");
@@ -133,6 +136,7 @@ fn test_fetch_blocks_private_ip() {
     let result = client.fetch(
         "http://192.168.1.1/api".to_string(),
         FetchOptions::default(),
+        None,
         None,
     );
 
@@ -149,6 +153,7 @@ fn test_fetch_blocks_127_0_0_1() {
         "http://127.0.0.1:3000/api".to_string(),
         FetchOptions::default(),
         None,
+        None,
     );
 
     assert!(result.is_err(), "127.0.0.1 should be blocked");
@@ -163,6 +168,7 @@ fn test_fetch_invalid_url_scheme() {
     let result = client.fetch(
         "ftp://example.com/file".to_string(),
         FetchOptions::default(),
+        None,
         None,
     );
 
@@ -183,6 +189,7 @@ fn test_fetch_file_scheme_blocked() {
         "file:///etc/passwd".to_string(),
         FetchOptions::default(),
         None,
+        None,
     );
 
     assert!(result.is_err(), "File scheme should be rejected");
@@ -192,7 +199,12 @@ fn test_fetch_file_scheme_blocked() {
 fn test_fetch_invalid_url() {
     let client = HttpClient::new().expect("Failed to create client");
 
-    let result = client.fetch("not-a-valid-url".to_string(), FetchOptions::default(), None);
+    let result = client.fetch(
+        "not-a-valid-url".to_string(),
+        FetchOptions::default(),
+        None,
+        None,
+    );
 
     assert!(result.is_err(), "Invalid URL should be rejected");
 }
@@ -206,7 +218,7 @@ async fn test_fetch_404_not_found() {
 
     let result = tokio::task::spawn_blocking(move || {
         let client = HttpClient::new_for_tests().expect("Failed to create client");
-        client.fetch(url, FetchOptions::default(), None)
+        client.fetch(url, FetchOptions::default(), None, None)
     })
     .await
     .expect("Task panicked");
@@ -242,6 +254,7 @@ async fn test_fetch_different_methods() {
                 timeout_ms: Some(10000),
             },
             None,
+            None,
         );
         assert!(result.is_ok(), "PUT request failed: {:?}", result.err());
         let response = result.unwrap();
@@ -261,6 +274,7 @@ async fn test_fetch_different_methods() {
                 timeout_ms: Some(10000),
             },
             None,
+            None,
         );
         assert!(result.is_ok(), "DELETE request failed: {:?}", result.err());
         let response = result.unwrap();
@@ -279,6 +293,7 @@ async fn test_fetch_different_methods() {
                 body: Some("patch data".to_string()),
                 timeout_ms: Some(10000),
             },
+            None,
             None,
         );
         assert!(result.is_ok(), "PATCH request failed: {:?}", result.err());
@@ -304,7 +319,7 @@ async fn test_fetch_response_headers() {
 
     let result = tokio::task::spawn_blocking(move || {
         let client = HttpClient::new_for_tests().expect("Failed to create client");
-        client.fetch(url, FetchOptions::default(), None)
+        client.fetch(url, FetchOptions::default(), None, None)
     })
     .await
     .expect("Task panicked");
@@ -319,30 +334,33 @@ async fn test_fetch_response_headers() {
     mock.shutdown().await;
 }
 
-// Test secret injection (requires secrets manager to be initialized)
-#[tokio::test]
+// Test secret injection using database-backed secrets
+#[tokio::test(flavor = "multi_thread")]
 async fn test_fetch_secret_template_syntax() {
     let mock = MockServer::start()
         .await
         .expect("Failed to start mock server");
     let url = mock.url("/headers");
 
-    // Get or initialize secrets manager
-    use aiwebengine::secrets::{
-        SecretsManager, get_global_secrets_manager, initialize_global_secrets_manager,
-    };
-    use std::sync::Arc;
+    // Set up database for secret storage
+    use aiwebengine::repository;
+    let config = aiwebengine::config::AppConfig::test_config_postgres(0);
+    if let Ok(db) = aiwebengine::database::Database::new(&config.repository).await {
+        let db_arc = std::sync::Arc::new(db);
+        aiwebengine::database::initialize_global_database(db_arc.clone());
+        let repo = repository::PostgresRepository::new(db_arc.pool().clone(), "test".to_string());
+        repository::initialize_repository(repo);
+    } else {
+        // Skip test if no DB available
+        mock.shutdown().await;
+        return;
+    }
 
-    // Try to get existing manager, or create new one
-    let manager = get_global_secrets_manager().unwrap_or_else(|| {
-        let mgr = Arc::new(SecretsManager::new());
-        initialize_global_secrets_manager(mgr.clone());
-        mgr
-    });
+    // Store the secret in the script_secrets table
+    let script_uri = "test://http-fetch";
+    let _ = repository::set_script_secret_item(script_uri, "test_api_key", "secret-key-12345");
 
-    // Add our test secret to the manager
-    manager.set("test_api_key".to_string(), "secret-key-12345".to_string());
-
+    let url_clone = url.clone();
     let result = tokio::task::spawn_blocking(move || {
         let client = HttpClient::new_for_tests().expect("Failed to create client");
         let mut headers = HashMap::new();
@@ -352,22 +370,27 @@ async fn test_fetch_secret_template_syntax() {
         );
 
         client.fetch(
-            url,
+            url_clone,
             FetchOptions {
                 method: "GET".to_string(),
                 headers: Some(headers),
                 body: None,
                 timeout_ms: None,
             },
+            Some(script_uri),
             None,
         )
     })
     .await
     .expect("Task panicked");
 
+    // Clean up
+    let _ = repository::remove_script_secret_item(script_uri, "test_api_key");
+
     assert!(
         result.is_ok(),
-        "Request with secret injection should succeed"
+        "Request with secret injection should succeed: {:?}",
+        result.err()
     );
     let response = result.unwrap();
     assert_eq!(response.status, 200);
@@ -386,22 +409,6 @@ async fn test_fetch_missing_secret_error() {
         .expect("Failed to start mock server");
     let url = mock.url("/headers");
 
-    // Get or initialize secrets manager
-    use aiwebengine::secrets::{
-        SecretsManager, get_global_secrets_manager, initialize_global_secrets_manager,
-    };
-    use std::sync::Arc;
-
-    // Try to get existing manager, or create new one
-    let manager = get_global_secrets_manager().unwrap_or_else(|| {
-        let mgr = Arc::new(SecretsManager::new());
-        initialize_global_secrets_manager(mgr.clone());
-        mgr
-    });
-
-    // Add a different secret (not the one we'll request)
-    manager.set("some_other_key".to_string(), "other-value".to_string());
-
     let result = tokio::task::spawn_blocking(move || {
         let client = HttpClient::new_for_tests().expect("Failed to create client");
         let mut headers = HashMap::new();
@@ -419,6 +426,7 @@ async fn test_fetch_missing_secret_error() {
                 timeout_ms: None,
             },
             None,
+            None,
         )
     })
     .await
@@ -426,12 +434,10 @@ async fn test_fetch_missing_secret_error() {
 
     assert!(result.is_err(), "Missing secret should cause error");
     let error = result.unwrap_err();
-    // Accept either error message depending on initialization state
     assert!(
-        error.to_string().contains("Secret not found")
-            || error
-                .to_string()
-                .contains("Secrets manager not initialized")
+        error.to_string().contains("Secret not found"),
+        "Expected 'Secret not found' error, got: {}",
+        error
     );
 
     mock.shutdown().await;

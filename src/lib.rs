@@ -2914,6 +2914,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_editor_script_execution() {
+        if should_skip_db_tests() {
+            return;
+        }
         setup_db();
         // Load test scripts dynamically using upsert_script
         let _ = repository::upsert_script(

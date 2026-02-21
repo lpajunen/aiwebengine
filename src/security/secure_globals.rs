@@ -22,7 +22,6 @@ pub struct SecureGlobalContext {
     secure_ops: SecureOperations,
     auditor: SecurityAuditor,
     config: GlobalSecurityConfig,
-    secrets_manager: Option<Arc<SecretsManager>>,
 }
 
 #[derive(Debug, Clone)]
@@ -63,7 +62,6 @@ impl SecureGlobalContext {
             secure_ops: SecureOperations::new(),
             auditor: SecurityAuditor::new(pool),
             config: GlobalSecurityConfig::default(),
-            secrets_manager: None,
         }
     }
 
@@ -75,24 +73,17 @@ impl SecureGlobalContext {
             secure_ops: SecureOperations::new(),
             auditor: SecurityAuditor::new(pool),
             config,
-            secrets_manager: None,
         }
     }
 
+    /// Kept for API compatibility. The secrets_manager parameter is ignored;
+    /// secrets are now resolved exclusively from the database.
     pub fn new_with_secrets(
         user_context: UserContext,
         config: GlobalSecurityConfig,
-        secrets_manager: Arc<SecretsManager>,
+        _secrets_manager: Arc<SecretsManager>,
     ) -> Self {
-        let pool = crate::database::get_global_database().map(|db| db.pool().clone());
-
-        Self {
-            user_context,
-            secure_ops: SecureOperations::new(),
-            auditor: SecurityAuditor::new(pool),
-            config,
-            secrets_manager: Some(secrets_manager),
-        }
+        Self::new_with_config(user_context, config)
     }
 
     /// Setup all secure global functions in the JavaScript context
@@ -2610,13 +2601,11 @@ impl SecureGlobalContext {
     }
 
     /// Setup McpClient class for external MCP server connections
-    fn setup_mcp_client_class(&self, ctx: &rquickjs::Ctx<'_>, _script_uri: &str) -> JsResult<()> {
+    fn setup_mcp_client_class(&self, ctx: &rquickjs::Ctx<'_>, script_uri: &str) -> JsResult<()> {
         let global = ctx.globals();
-        // Get the secrets manager - try instance first, then fall back to global
-        let secrets_manager = self
-            .secrets_manager
-            .clone()
-            .or_else(crate::secrets::get_global_secrets_manager);
+        let script_uri_owned = script_uri.to_string();
+        // Capture user_id for secret resolution (user_secrets first, then script_secrets)
+        let user_id_for_mcp = self.user_context.user_id.clone();
 
         // McpClient constructor
         let mcp_client_constructor = Function::new(
@@ -2652,7 +2641,8 @@ impl SecureGlobalContext {
         let mcp_client_class = rquickjs::Object::new(ctx.clone())?;
 
         // listTools method
-        let secrets_mgr_list = secrets_manager.clone();
+        let script_uri_list = script_uri_owned.clone();
+        let user_id_list = user_id_for_mcp.clone();
         let list_tools = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>, client_data_json: String| -> JsResult<String> {
@@ -2696,23 +2686,16 @@ impl SecureGlobalContext {
                     )
                 })?;
 
-                // Get secrets manager
-                let secrets = secrets_mgr_list.as_ref().ok_or_else(|| {
-                    rquickjs::Error::new_from_js_message(
-                        "McpClient",
-                        "listTools",
-                        "Secrets manager not available",
-                    )
-                })?;
-
                 // List tools
-                let tools = client.list_tools(secrets).map_err(|e| {
-                    rquickjs::Error::new_from_js_message(
-                        "McpClient",
-                        "listTools",
-                        &format!("Failed to list tools: {}", e),
-                    )
-                })?;
+                let tools = client
+                    .list_tools(&script_uri_list, user_id_list.as_deref())
+                    .map_err(|e| {
+                        rquickjs::Error::new_from_js_message(
+                            "McpClient",
+                            "listTools",
+                            &format!("Failed to list tools: {}", e),
+                        )
+                    })?;
 
                 // Serialize tools to JSON
                 serde_json::to_string(&tools).map_err(|e| {
@@ -2726,7 +2709,8 @@ impl SecureGlobalContext {
         )?;
 
         // callTool method
-        let secrets_mgr_call = secrets_manager.clone();
+        let script_uri_call = script_uri_owned.clone();
+        let user_id_call = user_id_for_mcp.clone();
         let call_tool = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>,
@@ -2784,17 +2768,13 @@ impl SecureGlobalContext {
                     )
                 })?;
 
-                // Get secrets manager
-                let secrets = secrets_mgr_call.as_ref().ok_or_else(|| {
-                    rquickjs::Error::new_from_js_message(
-                        "McpClient",
-                        "callTool",
-                        "Secrets manager not available",
-                    )
-                })?;
-
                 // Call tool
-                let result = match client.call_tool(tool_name.clone(), arguments, secrets) {
+                let result = match client.call_tool(
+                    tool_name.clone(),
+                    arguments,
+                    &script_uri_call,
+                    user_id_call.as_deref(),
+                ) {
                     Ok(res) => res,
                     Err(e) => {
                         // For JSON-RPC errors, return them as {error: {...}} objects
@@ -3787,6 +3767,8 @@ impl SecureGlobalContext {
     fn setup_fetch_function(&self, ctx: &rquickjs::Ctx<'_>, script_uri: &str) -> JsResult<()> {
         let global = ctx.globals();
         let script_uri_owned = script_uri.to_string();
+        // Capture the user_id at script setup time for secret lookup in user_secrets
+        let user_id_for_fetch = self.user_context.user_id.clone();
 
         // Create the fetch function (synchronous version)
         let fetch_fn = Function::new(
@@ -3820,30 +3802,21 @@ impl SecureGlobalContext {
                     )
                 })?;
 
-                // Perform the fetch (synchronous) with script_uri for constraint validation
-                let response =
-                    client
-                        .fetch(url.clone(), options, Some(&script_uri_owned))
-                        .map_err(|e| {
-                            // Log constraint violations for security monitoring
-                            if matches!(
-                        e,
-                        crate::http_client::HttpError::SecretUrlConstraintViolation { .. }
-                            | crate::http_client::HttpError::SecretScriptConstraintViolation { .. }
-                    ) {
-                                tracing::warn!(
-                                    error = %e,
-                                    url = %url,
-                                    script_uri = %script_uri_owned,
-                                    "Secret access constraint violation"
-                                );
-                            }
-                            rquickjs::Error::new_from_js_message(
-                                "fetch",
-                                "request_failed",
-                                &format!("Fetch error: {}", e),
-                            )
-                        })?;
+                // Perform the fetch (synchronous) with script_uri and user_id for secret resolution
+                let response = client
+                    .fetch(
+                        url.clone(),
+                        options,
+                        Some(&script_uri_owned),
+                        user_id_for_fetch.as_deref(),
+                    )
+                    .map_err(|e| {
+                        rquickjs::Error::new_from_js_message(
+                            "fetch",
+                            "request_failed",
+                            &format!("Fetch error: {}", e),
+                        )
+                    })?;
 
                 // Convert response to JSON string
                 let response_json = serde_json::to_string(&response).map_err(|e| {
