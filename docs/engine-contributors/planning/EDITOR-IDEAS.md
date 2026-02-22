@@ -221,11 +221,11 @@ AI Assistant
 
 **Comparison:**
 
-| Approach | Pros | Cons |
-|----------|------|------|
-| Anthropic | No extra infrastructure | API costs, latency |
-| Browser | No API costs, instant | Large download, less accurate |
-| Backend | Best accuracy, shared cache | Infrastructure complexity |
+| Approach  | Pros                        | Cons                          |
+| --------- | --------------------------- | ----------------------------- |
+| Anthropic | No extra infrastructure     | API costs, latency            |
+| Browser   | No API costs, instant       | Large download, less accurate |
+| Backend   | Best accuracy, shared cache | Infrastructure complexity     |
 
 **Implementation Example:**
 

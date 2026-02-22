@@ -1,13 +1,14 @@
 # Makefile for aiwebengine development
 
-.PHONY: help deps test dev build clean lint format coverage check ci
+.PHONY: help deps upgrade-deps test dev build clean lint format coverage check ci
 .PHONY: docker-build docker-local docker-staging docker-prod docker-stop docker-logs docker-clean
 
 help:
 	@echo "Available commands:"
 	@echo ""
 	@echo "Development:"
-	@echo "  make deps      - Install development tools (cargo-watch, cargo-nextest, cargo-llvm-cov)"
+	@echo "  make deps         - Install development tools (cargo-watch, cargo-nextest, cargo-llvm-cov)"
+	@echo "  make upgrade-deps - Upgrade npm packages to latest versions"
 	@echo "  make dev       - Run development server with auto-reload"
 	@echo "  make dev-local - Run development server with localhost OAuth (http://localhost:3000)"
 	@echo "  make docker-localhost - Start Docker with localhost only (no DNS setup required)"
@@ -37,6 +38,10 @@ help:
 	@echo "  make docker-test         - Run tests in Docker container"
 	@echo "  make postgres-local      - Start only PostgreSQL in local environment"
 	@echo "  make postgres-local-stop - Stop PostgreSQL in local environment"
+
+# Upgrade npm dependencies to latest versions
+upgrade-deps:
+	npx npm-check-updates -u && npm install
 
 # Install development dependencies
 deps:
