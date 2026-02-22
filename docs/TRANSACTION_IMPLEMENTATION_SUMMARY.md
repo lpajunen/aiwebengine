@@ -243,6 +243,7 @@ To test the implementation:
 1. Start the server
 2. Upload test script: `scripts/examples/transaction-tests.js`
 3. Run tests:
+
    ```bash
    curl http://localhost:8080/test/transaction-commit
    curl http://localhost:8080/test/transaction-rollback

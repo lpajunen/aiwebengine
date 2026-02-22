@@ -220,6 +220,7 @@ AI Assistant
 - Store embeddings in PostgreSQL with pgvector extension
 
 **Comparison:**
+
 | Approach | Pros | Cons |
 |----------|------|------|
 | Anthropic | No extra infrastructure | API costs, latency |

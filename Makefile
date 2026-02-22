@@ -80,6 +80,7 @@ perf-test:
 # Run clippy linter with warnings as errors
 lint:
 	cargo clippy --all-targets -- -D warnings
+	./node_modules/.bin/markdownlint "**/*.md" --ignore node_modules && echo '✓ Markdown files linted'
 
 # Format all code
 format: format-markdown format-javascript

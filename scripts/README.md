@@ -289,6 +289,7 @@ postgres:
    ```
 
 4. **Connect from engine running locally:**
+
    ```bash
    # PostgreSQL is exposed on localhost:5432
    export APP_REPOSITORY__DATABASE_URL="postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine"
