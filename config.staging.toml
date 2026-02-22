@@ -95,6 +95,8 @@ enable_request_validation = true
 max_request_body_bytes = 5242880
 # Optional: base64-encoded 32-byte session encryption key (set via APP_SECURITY__SESSION_ENCRYPTION_KEY)
 session_encryption_key = "${APP_SECURITY__SESSION_ENCRYPTION_KEY}"
+# secret encryption key for at-rest encryption of DB-stored secrets (set via APP_SECURITY__SECRET_ENCRYPTION_KEY)
+secret_encryption_key = "${APP_SECURITY__SECRET_ENCRYPTION_KEY}"
 # Set via APP_SECURITY__API_KEY environment variable
 api_key = "${APP_SECURITY__API_KEY}"
 

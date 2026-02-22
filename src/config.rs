@@ -192,6 +192,12 @@ pub struct SecurityConfig {
     #[serde(default)]
     pub session_encryption_key: Option<String>,
 
+    /// Optional base64-encoded 32-byte key for encrypting secrets stored in the database.
+    /// If not set, secrets are stored as plaintext with a warning logged at startup.
+    /// Example (env): APP_SECURITY__SECRET_ENCRYPTION_KEY
+    #[serde(default)]
+    pub secret_encryption_key: Option<String>,
+
     /// Optional API key for machine-to-machine authentication (e.g. MCP)
     /// Example (env): APP_SECURITY__API_KEY
     #[serde(default)]
@@ -330,6 +336,7 @@ impl Default for SecurityConfig {
             max_request_body_bytes: 1024 * 1024, // 1MB
             csrf_key: None,
             session_encryption_key: None,
+            secret_encryption_key: None,
             api_key: None,
         }
     }

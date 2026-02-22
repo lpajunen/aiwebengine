@@ -3,7 +3,7 @@ use crate::scheduler;
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::SystemTime;
 use tracing::{debug, error, info, warn};
 
@@ -1324,6 +1324,19 @@ async fn db_set_script_secret(
 ) -> AppResult<()> {
     let now = chrono::Utc::now();
 
+    // Encrypt the value if secret encryption is configured
+    let stored_value: String = if let Some(enc) = GLOBAL_SECRET_ENCRYPTION.get() {
+        let encrypted = enc.encrypt_field(value).map_err(|e| AppError::Internal {
+            message: format!("Failed to encrypt secret value: {}", e),
+        })?;
+        serde_json::to_string(&encrypted).map_err(|e| AppError::Internal {
+            message: format!("Failed to serialize encrypted secret: {}", e),
+        })?
+    } else {
+        value.to_string()
+    };
+    let value: &str = &stored_value;
+
     // Try to update existing item
     let update_result = match executor {
         crate::database::TransactionExecutor::Transaction(ref mut tx) => {
@@ -1443,13 +1456,31 @@ where
     })?;
 
     if let Some(row) = row {
-        let value: String = row.try_get("value").map_err(|e| {
+        let raw: String = row.try_get("value").map_err(|e| {
             error!("Database error getting value: {}", e);
             AppError::Database {
                 message: format!("Database error: {}", e),
                 source: None,
             }
         })?;
+        // Decrypt if encryption is configured and the value is in encrypted form
+        let value = if let Some(enc) = GLOBAL_SECRET_ENCRYPTION.get() {
+            match serde_json::from_str::<crate::security::encryption::EncryptedData>(&raw) {
+                Ok(encrypted) => match enc.decrypt_field(&encrypted) {
+                    Ok(plain) => plain,
+                    Err(e) => {
+                        error!(
+                            "Failed to decrypt script secret {}:{}: {}",
+                            script_uri, key, e
+                        );
+                        raw
+                    }
+                },
+                Err(_) => raw, // stored before encryption was enabled — return as-is
+            }
+        } else {
+            raw
+        };
         Ok(Some(value))
     } else {
         Ok(None)
@@ -1560,6 +1591,19 @@ async fn db_set_user_secret(
     value: &str,
 ) -> AppResult<()> {
     let now = chrono::Utc::now();
+
+    // Encrypt the value if secret encryption is configured
+    let stored_value: String = if let Some(enc) = GLOBAL_SECRET_ENCRYPTION.get() {
+        let encrypted = enc.encrypt_field(value).map_err(|e| AppError::Internal {
+            message: format!("Failed to encrypt user secret value: {}", e),
+        })?;
+        serde_json::to_string(&encrypted).map_err(|e| AppError::Internal {
+            message: format!("Failed to serialize encrypted user secret: {}", e),
+        })?
+    } else {
+        value.to_string()
+    };
+    let value: &str = &stored_value;
 
     // Try to update existing item
     let update_result = match executor {
@@ -1689,13 +1733,31 @@ where
     })?;
 
     if let Some(row) = row {
-        let value: String = row.try_get("value").map_err(|e| {
+        let raw: String = row.try_get("value").map_err(|e| {
             error!("Database error getting value: {}", e);
             AppError::Database {
                 message: format!("Database error: {}", e),
                 source: None,
             }
         })?;
+        // Decrypt if encryption is configured and the value is in encrypted form
+        let value = if let Some(enc) = GLOBAL_SECRET_ENCRYPTION.get() {
+            match serde_json::from_str::<crate::security::encryption::EncryptedData>(&raw) {
+                Ok(encrypted) => match enc.decrypt_field(&encrypted) {
+                    Ok(plain) => plain,
+                    Err(e) => {
+                        error!(
+                            "Failed to decrypt user secret {}:{}:{}: {}",
+                            script_uri, user_id, key, e
+                        );
+                        raw
+                    }
+                },
+                Err(_) => raw, // stored before encryption was enabled — return as-is
+            }
+        } else {
+            raw
+        };
         Ok(Some(value))
     } else {
         Ok(None)
@@ -5576,6 +5638,17 @@ impl Repository for PostgresRepository {
     ) -> AppResult<bool> {
         db_delete_row(&self.pool, script_uri, logical_table_name, id).await
     }
+}
+
+/// Global secret encryption instance (optional — if not set, secrets are stored plaintext)
+static GLOBAL_SECRET_ENCRYPTION: OnceLock<Arc<crate::security::encryption::DataEncryption>> =
+    OnceLock::new();
+
+/// Initialize the global secret encryption used for at-rest encryption of secret values.
+/// Should be called once at startup if a `secret_encryption_key` is configured.
+/// Returns `true` if initialized successfully, `false` if already initialized.
+pub fn initialize_secret_encryption(enc: Arc<crate::security::encryption::DataEncryption>) -> bool {
+    GLOBAL_SECRET_ENCRYPTION.set(enc).is_ok()
 }
 
 /// Global repository instance

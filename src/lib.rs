@@ -931,6 +931,33 @@ async fn initialize_auth_manager(
 
     let encryption = Arc::new(DataEncryption::new(&encryption_key));
 
+    // Load secret encryption key from configuration (base64-encoded 32 bytes)
+    // Used for encrypting secret values stored in the database at rest.
+    match &security_config.secret_encryption_key {
+        Some(s) if !s.is_empty() => {
+            let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, s)
+                .map_err(|e| auth::AuthError::InvalidConfig {
+                    key: "security.secret_encryption_key".to_string(),
+                    reason: format!("base64 decode failed: {}", e),
+                })?;
+            if decoded.len() != 32 {
+                return Err(auth::AuthError::InvalidConfig {
+                    key: "security.secret_encryption_key".to_string(),
+                    reason: "expected 32 bytes after base64 decoding".to_string(),
+                });
+            }
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&decoded);
+            repository::initialize_secret_encryption(Arc::new(DataEncryption::new(&arr)));
+            info!("Secret encryption key loaded — secrets will be encrypted at rest.");
+        }
+        _ => {
+            warn!(
+                "security.secret_encryption_key not configured. Secrets will be stored as plaintext in the database."
+            );
+        }
+    }
+
     // Create secure session manager
     let session_manager = Arc::new(SecureSessionManager::new(
         pool.clone(),

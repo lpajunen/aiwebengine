@@ -78,6 +78,7 @@ services:
       # Generate example: openssl rand -base64 32
       - APP_SECURITY__CSRF_KEY=${APP_SECURITY__CSRF_KEY:-}
       - APP_SECURITY__SESSION_ENCRYPTION_KEY=${APP_SECURITY__SESSION_ENCRYPTION_KEY:-}
+      - APP_SECURITY__SECRET_ENCRYPTION_KEY=${APP_SECURITY__SECRET_ENCRYPTION_KEY:-}
       # Repository
       - APP_REPOSITORY__DATABASE_URL=postgresql://aiwebengine:${POSTGRES_PASSWORD:-change-this-password}@postgres:5432/aiwebengine
     networks:
@@ -126,6 +127,7 @@ services:
       # CSRF & session encryption keys (base64 encoded 32-byte values)
       - APP_SECURITY__CSRF_KEY=${APP_SECURITY__CSRF_KEY:-}
       - APP_SECURITY__SESSION_ENCRYPTION_KEY=${APP_SECURITY__SESSION_ENCRYPTION_KEY:-}
+      - APP_SECURITY__SECRET_ENCRYPTION_KEY=${APP_SECURITY__SECRET_ENCRYPTION_KEY:-}
       # Repository
       - APP_REPOSITORY__DATABASE_URL=postgresql://aiwebengine:${POSTGRES_PASSWORD:-change-this-password}@postgres:5432/aiwebengine
     networks:
