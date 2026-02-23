@@ -1570,86 +1570,164 @@ impl SecureGlobalContext {
 
         // ====================================================================
         // Privileged URI-specific secret methods (for cross-script management)
+        // Only attached when the calling script itself is privileged.
+        // The user's admin role does NOT grant access — the script must be privileged.
         // ====================================================================
+        let setup_script_privileged =
+            crate::repository::is_script_privileged(&script_uri_owned).unwrap_or(false);
 
-        // secretStorage.listForUri(scriptUri) - List keys for any script (privileged)
-        let user_ctx_list_uri = self.user_context.clone();
-        let list_for_uri_fn = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, target_uri: String| -> JsResult<Vec<String>> {
-                let is_admin =
-                    user_ctx_list_uri.has_capability(&crate::security::Capability::DeleteScripts);
-                if !is_admin {
-                    return Ok(vec![]);
-                }
-                Ok(crate::repository::list_script_secrets(&target_uri).unwrap_or_default())
-            },
-        )?;
-        secret_storage_obj.set("listForUri", list_for_uri_fn)?;
+        if setup_script_privileged {
+            // secretStorage.listForUri(scriptUri) - List keys for any script (privileged)
+            let script_uri_list_uri = script_uri_owned.clone();
+            let list_for_uri_fn = Function::new(
+                ctx.clone(),
+                move |_ctx: rquickjs::Ctx<'_>, target_uri: String| -> JsResult<Vec<String>> {
+                    match crate::repository::is_script_privileged(&script_uri_list_uri) {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            return Err(rquickjs::Error::new_from_js_message(
+                                "secretStorage.listForUri",
+                                "permission_denied",
+                                &format!(
+                                    "Script '{}' is not privileged to access secretStorage.listForUri",
+                                    script_uri_list_uri
+                                ),
+                            ));
+                        }
+                        Err(e) => {
+                            return Err(rquickjs::Error::new_from_js_message(
+                                "secretStorage.listForUri",
+                                "privilege_lookup_failed",
+                                &format!(
+                                    "Unable to verify privileges for '{}': {}",
+                                    script_uri_list_uri, e
+                                ),
+                            ));
+                        }
+                    }
+                    Ok(crate::repository::list_script_secrets(&target_uri).unwrap_or_default())
+                },
+            )?;
+            secret_storage_obj.set("listForUri", list_for_uri_fn)?;
 
-        // secretStorage.setSecretForUri(scriptUri, key, value) - Store for any script (privileged)
-        let user_ctx_set_uri = self.user_context.clone();
-        let set_for_uri_fn = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>,
-                  target_uri: String,
-                  key: String,
-                  value: String|
-                  -> JsResult<String> {
-                let is_admin =
-                    user_ctx_set_uri.has_capability(&crate::security::Capability::DeleteScripts);
-                if !is_admin {
-                    return Ok("Error: Administrator privileges required".to_string());
-                }
-                if key.trim().is_empty() {
-                    return Ok("Error: Key cannot be empty".to_string());
-                }
-                if value.len() > 1_000_000 {
-                    return Ok("Error: Value too large (>1MB)".to_string());
-                }
-                match crate::repository::set_script_secret_item(&target_uri, &key, &value) {
-                    Ok(()) => Ok("Secret set successfully".to_string()),
-                    Err(e) => Ok(format!("Error setting secret: {}", e)),
-                }
-            },
-        )?;
-        secret_storage_obj.set("setSecretForUri", set_for_uri_fn)?;
+            // secretStorage.setSecretForUri(scriptUri, key, value) - Store for any script (privileged)
+            let script_uri_set_uri = script_uri_owned.clone();
+            let set_for_uri_fn = Function::new(
+                ctx.clone(),
+                move |_ctx: rquickjs::Ctx<'_>,
+                      target_uri: String,
+                      key: String,
+                      value: String|
+                      -> JsResult<String> {
+                    match crate::repository::is_script_privileged(&script_uri_set_uri) {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            return Err(rquickjs::Error::new_from_js_message(
+                                "secretStorage.setSecretForUri",
+                                "permission_denied",
+                                &format!(
+                                    "Script '{}' is not privileged to access secretStorage.setSecretForUri",
+                                    script_uri_set_uri
+                                ),
+                            ));
+                        }
+                        Err(e) => {
+                            return Err(rquickjs::Error::new_from_js_message(
+                                "secretStorage.setSecretForUri",
+                                "privilege_lookup_failed",
+                                &format!(
+                                    "Unable to verify privileges for '{}': {}",
+                                    script_uri_set_uri, e
+                                ),
+                            ));
+                        }
+                    }
+                    if key.trim().is_empty() {
+                        return Ok("Error: Key cannot be empty".to_string());
+                    }
+                    if value.len() > 1_000_000 {
+                        return Ok("Error: Value too large (>1MB)".to_string());
+                    }
+                    match crate::repository::set_script_secret_item(&target_uri, &key, &value) {
+                        Ok(()) => Ok("Secret set successfully".to_string()),
+                        Err(e) => Ok(format!("Error setting secret: {}", e)),
+                    }
+                },
+            )?;
+            secret_storage_obj.set("setSecretForUri", set_for_uri_fn)?;
 
-        // secretStorage.removeSecretForUri(scriptUri, key) - Remove for any script (privileged)
-        let user_ctx_remove_uri = self.user_context.clone();
-        let remove_for_uri_fn = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, target_uri: String, key: String| -> JsResult<bool> {
-                let is_admin =
-                    user_ctx_remove_uri.has_capability(&crate::security::Capability::DeleteScripts);
-                if !is_admin {
-                    return Ok(false);
-                }
-                Ok(crate::repository::remove_script_secret_item(
-                    &target_uri,
-                    &key,
-                ))
-            },
-        )?;
-        secret_storage_obj.set("removeSecretForUri", remove_for_uri_fn)?;
+            // secretStorage.removeSecretForUri(scriptUri, key) - Remove for any script (privileged)
+            let script_uri_remove_uri = script_uri_owned.clone();
+            let remove_for_uri_fn = Function::new(
+                ctx.clone(),
+                move |_ctx: rquickjs::Ctx<'_>, target_uri: String, key: String| -> JsResult<bool> {
+                    match crate::repository::is_script_privileged(&script_uri_remove_uri) {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            return Err(rquickjs::Error::new_from_js_message(
+                                "secretStorage.removeSecretForUri",
+                                "permission_denied",
+                                &format!(
+                                    "Script '{}' is not privileged to access secretStorage.removeSecretForUri",
+                                    script_uri_remove_uri
+                                ),
+                            ));
+                        }
+                        Err(e) => {
+                            return Err(rquickjs::Error::new_from_js_message(
+                                "secretStorage.removeSecretForUri",
+                                "privilege_lookup_failed",
+                                &format!(
+                                    "Unable to verify privileges for '{}': {}",
+                                    script_uri_remove_uri, e
+                                ),
+                            ));
+                        }
+                    }
+                    Ok(crate::repository::remove_script_secret_item(
+                        &target_uri,
+                        &key,
+                    ))
+                },
+            )?;
+            secret_storage_obj.set("removeSecretForUri", remove_for_uri_fn)?;
 
-        // secretStorage.clearForUri(scriptUri) - Clear all for any script (privileged)
-        let user_ctx_clear_uri = self.user_context.clone();
-        let clear_for_uri_fn = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, target_uri: String| -> JsResult<String> {
-                let is_admin =
-                    user_ctx_clear_uri.has_capability(&crate::security::Capability::DeleteScripts);
-                if !is_admin {
-                    return Ok("Error: Administrator privileges required".to_string());
-                }
-                match crate::repository::clear_script_secrets(&target_uri) {
-                    Ok(()) => Ok("Secrets cleared successfully".to_string()),
-                    Err(e) => Ok(format!("Error clearing secrets: {}", e)),
-                }
-            },
-        )?;
-        secret_storage_obj.set("clearForUri", clear_for_uri_fn)?;
+            // secretStorage.clearForUri(scriptUri) - Clear all for any script (privileged)
+            let script_uri_clear_uri = script_uri_owned.clone();
+            let clear_for_uri_fn = Function::new(
+                ctx.clone(),
+                move |_ctx: rquickjs::Ctx<'_>, target_uri: String| -> JsResult<String> {
+                    match crate::repository::is_script_privileged(&script_uri_clear_uri) {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            return Err(rquickjs::Error::new_from_js_message(
+                                "secretStorage.clearForUri",
+                                "permission_denied",
+                                &format!(
+                                    "Script '{}' is not privileged to access secretStorage.clearForUri",
+                                    script_uri_clear_uri
+                                ),
+                            ));
+                        }
+                        Err(e) => {
+                            return Err(rquickjs::Error::new_from_js_message(
+                                "secretStorage.clearForUri",
+                                "privilege_lookup_failed",
+                                &format!(
+                                    "Unable to verify privileges for '{}': {}",
+                                    script_uri_clear_uri, e
+                                ),
+                            ));
+                        }
+                    }
+                    match crate::repository::clear_script_secrets(&target_uri) {
+                        Ok(()) => Ok("Secrets cleared successfully".to_string()),
+                        Err(e) => Ok(format!("Error clearing secrets: {}", e)),
+                    }
+                },
+            )?;
+            secret_storage_obj.set("clearForUri", clear_for_uri_fn)?;
+        } // end if setup_script_privileged
 
         global.set("secretStorage", secret_storage_obj)?;
 

@@ -26,6 +26,7 @@
 //! ### Script Privilege Enforcement:
 //! - Route/stream/asset registration requires privileged script status
 //! - Stream messaging requires privileged script status
+//! - SecretStorage *ForUri methods require privileged script OR admin user
 //!
 //! ## Ignored Tests
 //!
@@ -361,34 +362,142 @@ async fn test_secret_storage_list_denied_for_non_privileged() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![]);
 
+    repository::upsert_script("test://secret-list-nonpriv", "").expect("Failed to create script");
+
     let script = r#"
-        const secrets = secretStorage.listForUri("test://api-test");
-        if (secrets.length > 0) {
-            throw new Error("Should deny access");
+        try {
+            secretStorage.listForUri("test://api-test");
+            throw new Error("Should have been denied");
+        } catch (e) {
+            // Method should not exist at all (TypeError) or throw privilege error
+            if (e.message.includes("Should have been denied")) {
+                throw e;
+            }
         }
     "#;
 
-    let result = execute_script_secure("test://api-test", script, user);
-    assert!(result.success, "Script should execute: {:?}", result.error);
+    let result = execute_script_secure("test://secret-list-nonpriv", script, user);
+    assert!(
+        result.success,
+        "Non-privileged script should be denied secretStorage.listForUri: {:?}",
+        result.error
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_secret_storage_list_available_for_admin() {
+async fn test_secret_storage_list_available_for_privileged_script_with_admin() {
     setup_env().await;
     let admin = UserContext::admin("admin".to_string());
 
+    repository::upsert_script("test://secret-list-admin-priv", "")
+        .expect("Failed to create script");
+    repository::set_script_privileged("test://secret-list-admin-priv", true)
+        .expect("Failed to set privileged");
+
     let script = r#"
-        const secrets = secretStorage.listForUri("test://api-test-admin");
+        const secrets = secretStorage.listForUri("test://secret-list-admin-priv");
         // Should not throw error, returns array
         if (!Array.isArray(secrets)) {
             throw new Error('Expected array from listForUri');
         }
     "#;
 
-    let result = execute_script_secure("test://api-test-admin", script, admin);
+    let result = execute_script_secure("test://secret-list-admin-priv", script, admin);
     assert!(
         result.success,
-        "Admin should access API: {:?}",
+        "Privileged script should have listForUri: {:?}",
+        result.error
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_secret_storage_for_uri_not_available_for_admin_on_non_privileged_script() {
+    setup_env().await;
+    let admin = UserContext::admin("admin".to_string());
+
+    repository::upsert_script("test://secret-admin-nonpriv", "").expect("Failed to create script");
+
+    // Admin role alone must NOT grant *ForUri methods on a non-privileged script
+    let script = r#"
+        const methods = ["listForUri", "setSecretForUri", "removeSecretForUri", "clearForUri"];
+        for (const name of methods) {
+            if (typeof secretStorage[name] !== "undefined") {
+                throw new Error(name + " should not be available on non-privileged script even for admin");
+            }
+        }
+    "#;
+
+    let result = execute_script_secure("test://secret-admin-nonpriv", script, admin);
+    assert!(
+        result.success,
+        "Admin on non-privileged script should not have *ForUri methods: {:?}",
+        result.error
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_secret_storage_for_uri_denied_for_non_privileged_script() {
+    setup_env().await;
+    let user = create_user_with_capabilities("user", vec![]);
+
+    repository::upsert_script("test://secret-foruri-nonpriv", "").expect("Failed to create script");
+
+    // All four *ForUri methods should not be available on a non-privileged script
+    let script = r#"
+        const methods = [
+            ["listForUri", () => secretStorage.listForUri("test://other")],
+            ["setSecretForUri", () => secretStorage.setSecretForUri("test://other", "k", "v")],
+            ["removeSecretForUri", () => secretStorage.removeSecretForUri("test://other", "k")],
+            ["clearForUri", () => secretStorage.clearForUri("test://other")],
+        ];
+        for (const [name, fn_] of methods) {
+            if (typeof secretStorage[name] !== "undefined") {
+                throw new Error(name + " should not be available on non-privileged script");
+            }
+        }
+    "#;
+
+    let result = execute_script_secure("test://secret-foruri-nonpriv", script, user);
+    assert!(
+        result.success,
+        "Non-privileged script should not have *ForUri methods available: {:?}",
+        result.error
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_secret_storage_for_uri_allowed_for_privileged_script() {
+    setup_env().await;
+    let user = create_user_with_capabilities("user", vec![]);
+
+    repository::upsert_script("test://secret-foruri-priv", "").expect("Failed to create script");
+    repository::set_script_privileged("test://secret-foruri-priv", true)
+        .expect("Failed to set privileged");
+
+    let script = r#"
+        // Privileged script can call *ForUri methods without throwing
+        const secrets = secretStorage.listForUri("test://secret-foruri-priv");
+        if (!Array.isArray(secrets)) {
+            throw new Error("Expected array from listForUri");
+        }
+        const setResult = secretStorage.setSecretForUri("test://secret-foruri-priv", "test-key", "test-value");
+        if (!setResult.includes("successfully")) {
+            throw new Error("Expected success from setSecretForUri, got: " + setResult);
+        }
+        const removeResult = secretStorage.removeSecretForUri("test://secret-foruri-priv", "test-key");
+        if (typeof removeResult !== "boolean") {
+            throw new Error("Expected boolean from removeSecretForUri");
+        }
+        const clearResult = secretStorage.clearForUri("test://secret-foruri-priv");
+        if (!clearResult.includes("successfully")) {
+            throw new Error("Expected success from clearForUri, got: " + clearResult);
+        }
+    "#;
+
+    let result = execute_script_secure("test://secret-foruri-priv", script, user);
+    assert!(
+        result.success,
+        "Privileged script should be allowed all *ForUri methods: {:?}",
         result.error
     );
 }

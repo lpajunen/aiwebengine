@@ -46,9 +46,14 @@ async fn test_secrets_exists_returns_false_without_manager() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_secrets_list_returns_empty_without_manager() {
     setup_env().await;
-    // Test that secretStorage.listForUri() returns empty array when no secrets are stored
+    // Test that secretStorage.listForUri() returns empty array when no secrets are stored.
+    // The script must be privileged to have listForUri available.
+    repository::upsert_script("test://secrets-list", "").expect("Failed to create script");
+    repository::set_script_privileged("test://secrets-list", true)
+        .expect("Failed to set privileged");
+
     let script = r#"
-        const result = secretStorage.listForUri('test://secrets');
+        const result = secretStorage.listForUri('test://secrets-list');
         if (!Array.isArray(result)) {
             throw new Error('Expected array');
         }
@@ -58,7 +63,7 @@ async fn test_secrets_list_returns_empty_without_manager() {
     "#;
 
     let user_context = UserContext::admin("test".to_string());
-    let result = execute_script_secure("test://secrets", script, user_context);
+    let result = execute_script_secure("test://secrets-list", script, user_context);
 
     assert!(
         result.success,
