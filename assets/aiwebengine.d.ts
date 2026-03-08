@@ -114,6 +114,9 @@ interface AuthContext {
 
   /** Whether user has admin privileges */
   isAdmin: boolean;
+
+  /** Whether user has editor privileges */
+  isEditor: boolean;
 }
 
 /**
