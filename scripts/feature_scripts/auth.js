@@ -249,7 +249,7 @@ function serveInsufficientPermissions(context) {
                 <a href="/auth/logout">Sign Out</a>
                 `
                     : `
-                <a href="/auth/login">Sign In</a>
+                <a href="/auth/login${attemptedPath !== "the requested page" ? `?redirect=${encodeURIComponent(attemptedPath)}` : ""}">Sign In</a>
                 `
                 }
             </div>
