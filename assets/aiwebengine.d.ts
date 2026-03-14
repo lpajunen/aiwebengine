@@ -97,26 +97,54 @@ interface HttpRequest {
 }
 
 /**
- * Authentication context available in request.auth when user is authenticated
+ * Authentication context available in request.auth
+ * Always present; check isAuthenticated before accessing user-specific fields.
  */
 interface AuthContext {
-  /** User ID */
-  userId: string;
-
-  /** User email address */
-  email: string;
-
-  /** User display name */
-  name: string;
-
-  /** Authentication provider (google, microsoft, apple) */
-  provider: string;
+  /** Whether the request is authenticated */
+  isAuthenticated: boolean;
 
   /** Whether user has admin privileges */
   isAdmin: boolean;
 
   /** Whether user has editor privileges */
   isEditor: boolean;
+
+  /** User ID, or null if not authenticated */
+  userId: string | null;
+
+  /** User email address, or null if not authenticated */
+  userEmail: string | null;
+
+  /** User display name, or null if not authenticated */
+  userName: string | null;
+
+  /** Authentication provider (google, microsoft, apple), or null if not authenticated */
+  provider: string | null;
+
+  /** Complete user object when authenticated, or null */
+  user: {
+    id: string | null;
+    email: string | null;
+    name: string | null;
+    provider: string | null;
+    isAuthenticated: boolean;
+  } | null;
+
+  /**
+   * Asserts that the request is authenticated, returning the user object.
+   * Throws an error if the request is not authenticated.
+   * @throws Error if not authenticated
+   * @example
+   * const user = req.auth.requireAuth(); // throws if anonymous
+   */
+  requireAuth(): {
+    id: string | null;
+    email: string | null;
+    name: string | null;
+    provider: string | null;
+    isAuthenticated: boolean;
+  };
 }
 
 /**
