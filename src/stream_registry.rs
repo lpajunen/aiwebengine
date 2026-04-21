@@ -6,7 +6,11 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 /// Send PostgreSQL notification for stream broadcast (cross-instance sync)
-async fn send_stream_broadcast_notification(path: &str, message: &str) -> Result<(), String> {
+async fn send_stream_broadcast_notification(
+    path: &str,
+    message: &str,
+    metadata_filter: Option<&HashMap<String, String>>,
+) -> Result<(), String> {
     // Get database pool if available
     let db = match crate::database::get_global_database() {
         Some(db) => db,
@@ -29,6 +33,7 @@ async fn send_stream_broadcast_notification(path: &str, message: &str) -> Result
     let payload = serde_json::json!({
         "stream_path": path,
         "message": message,
+        "metadata_filter": metadata_filter,
         "timestamp": chrono::Utc::now().timestamp(),
         "server_id": server_id,
     });
@@ -563,7 +568,9 @@ impl StreamRegistry {
         let path_clone = path.to_string();
         let message_clone = message.to_string();
         tokio::spawn(async move {
-            if let Err(e) = send_stream_broadcast_notification(&path_clone, &message_clone).await {
+            if let Err(e) =
+                send_stream_broadcast_notification(&path_clone, &message_clone, None).await
+            {
                 debug!(
                     "Failed to send cross-instance broadcast notification: {}",
                     e
@@ -571,6 +578,16 @@ impl StreamRegistry {
             }
         });
 
+        self.broadcast_to_stream_local(path, message)
+    }
+
+    /// Broadcast a message to all local connections on a specific stream path.
+    /// This does not send cross-instance notifications.
+    pub fn broadcast_to_stream_local(
+        &self,
+        path: &str,
+        message: &str,
+    ) -> Result<BroadcastResult, String> {
         match self.streams.lock() {
             Ok(mut streams) => {
                 match streams.get_mut(path) {
@@ -623,6 +640,33 @@ impl StreamRegistry {
 
     /// Broadcast a message to connections on a specific stream path that match the given metadata filter
     pub fn broadcast_to_stream_with_filter(
+        &self,
+        path: &str,
+        message: &str,
+        metadata_filter: &HashMap<String, String>,
+    ) -> Result<BroadcastResult, String> {
+        // Send cross-instance notification in background (non-blocking)
+        let path_clone = path.to_string();
+        let message_clone = message.to_string();
+        let filter_clone = metadata_filter.clone();
+        tokio::spawn(async move {
+            if let Err(e) =
+                send_stream_broadcast_notification(&path_clone, &message_clone, Some(&filter_clone))
+                    .await
+            {
+                debug!(
+                    "Failed to send cross-instance filtered broadcast notification: {}",
+                    e
+                );
+            }
+        });
+
+        self.broadcast_to_stream_with_filter_local(path, message, metadata_filter)
+    }
+
+    /// Broadcast a message locally to connections on a specific stream path that match the given metadata filter.
+    /// This does not send cross-instance notifications.
+    pub fn broadcast_to_stream_with_filter_local(
         &self,
         path: &str,
         message: &str,

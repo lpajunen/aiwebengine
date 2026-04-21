@@ -810,7 +810,7 @@ fn find_route_handler(
 
     // Sort by specificity (highest first) and return the most specific match
     if !candidates.is_empty() {
-        candidates.sort_by(|a, b| b.0.cmp(&a.0)); // Descending order
+        candidates.sort_by_key(|entry| std::cmp::Reverse(entry.0)); // Descending order
         if let Some((_, uri, handler, params)) = candidates.into_iter().next() {
             return Some((uri, handler, params));
         }

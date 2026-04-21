@@ -2,6 +2,7 @@ use crate::error::AppResult;
 use crate::{graphql, repository, scheduler, script_init};
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::{PgListener, PgPool};
+use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
@@ -53,6 +54,8 @@ pub struct NotificationMessage {
 pub struct StreamBroadcastMessage {
     pub stream_path: String,
     pub message: String,
+    #[serde(default)]
+    pub metadata_filter: Option<HashMap<String, String>>,
     pub timestamp: i64,
     pub server_id: String,
 }
@@ -330,8 +333,18 @@ impl NotificationListener {
         // Get the global stream registry
         let registry = stream_registry::get_global_registry();
 
-        // Broadcast to local connections on this path
-        match registry.broadcast_to_stream(&msg.stream_path, &msg.message) {
+        // Broadcast to local connections only (do not re-notify DB).
+        let result = if let Some(ref metadata_filter) = msg.metadata_filter {
+            registry.broadcast_to_stream_with_filter_local(
+                &msg.stream_path,
+                &msg.message,
+                metadata_filter,
+            )
+        } else {
+            registry.broadcast_to_stream_local(&msg.stream_path, &msg.message)
+        };
+
+        match result {
             Ok(result) => {
                 debug!(
                     "Broadcast to {} local connections on '{}' (from remote): {} successful, {} failed",
