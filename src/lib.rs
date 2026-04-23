@@ -2205,6 +2205,18 @@ async fn setup_routes(
         .route(
             "/health/cluster",
             axum::routing::get(health_cluster_handler),
+        )
+        .route(
+            "/.well-known/microsoft-identity-association.json",
+            axum::routing::get(|| async {
+                axum::Json(serde_json::json!({
+                    "associatedApplications": [
+                        {
+                            "applicationId": "48edce84-c6b1-4559-be54-998dba4c8b4c"
+                        }
+                    ]
+                }))
+            }),
         );
 
     // Add TypeScript type definitions endpoint (no authentication required)
