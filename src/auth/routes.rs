@@ -524,7 +524,10 @@ pub async fn refresh_session(
             .into_response();
     };
 
-    match auth_manager.get_session(&token, &ip_addr, &user_agent).await {
+    match auth_manager
+        .get_session(&token, &ip_addr, &user_agent)
+        .await
+    {
         Ok(_) => {
             let cookie_value = format!(
                 "{}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}{}",
@@ -917,9 +920,8 @@ pub async fn oauth2_token(
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "unsupported_grant_type".to_string(),
-                message:
-                    "Only authorization_code and refresh_token grant types are supported"
-                        .to_string(),
+                message: "Only authorization_code and refresh_token grant types are supported"
+                    .to_string(),
             }),
         )
             .into_response();
@@ -1188,7 +1190,11 @@ async fn handle_refresh_token_grant(
                     .or(Some(provider_refresh_token));
             }
             Err(err) => {
-                tracing::warn!("Provider refresh failed for {}: {}", session_data.provider, err);
+                tracing::warn!(
+                    "Provider refresh failed for {}: {}",
+                    session_data.provider,
+                    err
+                );
                 return (
                     StatusCode::BAD_REQUEST,
                     Json(ErrorResponse {
@@ -1268,7 +1274,7 @@ pub fn create_auth_router(auth_manager: Arc<AuthManager>) -> Router {
         .route("/login/{provider}", get(start_login))
         .route("/callback/{provider}", get(oauth_callback))
         .route("/logout", get(logout).post(logout))
-    .route("/refresh", post(refresh_session).get(refresh_session))
+        .route("/refresh", post(refresh_session).get(refresh_session))
         .route("/status", get(auth_status))
         .with_state(auth_manager)
 }

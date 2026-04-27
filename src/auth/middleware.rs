@@ -126,7 +126,9 @@ fn attach_session_cookie(response: &mut Response, auth_manager: &AuthManager, se
     );
 
     if let Ok(cookie_header) = HeaderValue::from_str(&cookie_value) {
-        response.headers_mut().insert(header::SET_COOKIE, cookie_header);
+        response
+            .headers_mut()
+            .insert(header::SET_COOKIE, cookie_header);
     }
 }
 
