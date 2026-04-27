@@ -1,9 +1,10 @@
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration as StdDuration;
 
 use chrono::{DateTime, Duration, Utc};
-use sqlx::{Postgres, pool::PoolConnection};
+use sqlx::{Postgres, Row, pool::PoolConnection};
 use tokio::sync::{Notify, oneshot};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -12,6 +13,9 @@ use crate::{js_engine, repository};
 
 static GLOBAL_SCHEDULER: OnceLock<Arc<Scheduler>> = OnceLock::new();
 const MIN_RECURRING_INTERVAL_MS: i64 = 100;
+const DB_CLAIM_BATCH_SIZE: i64 = 32;
+const DB_LOCK_TTL_SECONDS: i64 = 30;
+const DB_ONE_OFF_RETRY_DELAY_SECONDS: i64 = 2;
 
 /// Errors returned by scheduler operations
 #[derive(Debug, thiserror::Error)]
@@ -83,6 +87,7 @@ pub struct ScheduledInvocation {
     pub kind: ScheduledInvocationKind,
     pub scheduled_for: DateTime<Utc>,
     pub interval_seconds: Option<i64>,
+    pub interval_milliseconds: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -105,6 +110,7 @@ impl ScheduledInvocationKind {
 pub struct Scheduler {
     jobs_by_script: Mutex<HashMap<String, Vec<ScheduledJob>>>,
     wake_signal: Notify,
+    worker_id: String,
 }
 
 enum JobLockGuard {
@@ -160,7 +166,99 @@ impl Scheduler {
         Self {
             jobs_by_script: Mutex::new(HashMap::new()),
             wake_signal: Notify::new(),
+            worker_id: format!("scheduler:{}", Uuid::new_v4()),
         }
+    }
+
+    fn has_database() -> bool {
+        crate::database::get_global_database().is_some()
+    }
+
+    fn run_db_blocking<F, Fut, T>(future_factory: F) -> Option<T>
+    where
+        F: FnOnce(std::sync::Arc<crate::database::Database>) -> Fut,
+        Fut: Future<Output = T> + Send + 'static,
+        T: Send + 'static,
+    {
+        let db = crate::database::get_global_database()?;
+
+        let handle = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => handle,
+            Err(_) => return None,
+        };
+
+        Some(tokio::task::block_in_place(move || {
+            handle.block_on(future_factory(db))
+        }))
+    }
+
+    fn persist_job_in_db(
+        &self,
+        id: Uuid,
+        key: &str,
+        script_uri: &str,
+        handler_name: &str,
+        schedule: &ScheduleKind,
+    ) -> bool {
+        let kind = match schedule {
+            ScheduleKind::OneOff { .. } => "one_off",
+            ScheduleKind::Recurring { .. } => "recurring",
+        };
+
+        let run_at = schedule.next_run();
+        let interval_ms = match schedule {
+            ScheduleKind::OneOff { .. } => None,
+            ScheduleKind::Recurring { interval, .. } => Some(interval.num_milliseconds()),
+        };
+        let key = key.to_string();
+        let script_uri = script_uri.to_string();
+        let handler_name = handler_name.to_string();
+        let kind = kind.to_string();
+
+        let persisted = Self::run_db_blocking(move |db| async move {
+            let result = sqlx::query(
+                    r#"
+                    INSERT INTO scheduler_jobs (job_id, script_uri, handler_name, job_key, kind, run_at, interval_ms)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    ON CONFLICT (script_uri, job_key)
+                    DO UPDATE SET
+                        job_id = EXCLUDED.job_id,
+                        handler_name = EXCLUDED.handler_name,
+                        kind = EXCLUDED.kind,
+                        run_at = EXCLUDED.run_at,
+                        interval_ms = EXCLUDED.interval_ms,
+                        locked_by = NULL,
+                        locked_at = NULL,
+                        lock_expires_at = NULL,
+                        updated_at = NOW()
+                    "#,
+                )
+                .bind(id)
+                .bind(&script_uri)
+                .bind(&handler_name)
+                .bind(&key)
+                .bind(&kind)
+                .bind(run_at)
+                .bind(interval_ms)
+                .execute(db.pool())
+                .await;
+
+            match result {
+                Ok(_) => true,
+                Err(e) => {
+                    warn!(
+                        script = %script_uri,
+                        handler = %handler_name,
+                        job = %key,
+                        error = %e,
+                        "Failed to persist scheduler job in database"
+                    );
+                    false
+                }
+            }
+        });
+
+        persisted.unwrap_or(false)
     }
 
     /// Register a one-off job
@@ -180,20 +278,31 @@ impl Scheduler {
         }
 
         let key = Self::normalize_key(handler_name, key)?;
-        let mut guard = self.lock_jobs();
-        Self::remove_job_with_key(guard.entry(script_uri.to_string()).or_default(), &key);
-
         let job = ScheduledJob::new(
             script_uri,
             handler_name,
-            key,
+            key.clone(),
             ScheduleKind::OneOff { run_at },
         );
-        guard
-            .entry(script_uri.to_string())
-            .or_default()
-            .push(job.clone());
-        drop(guard);
+
+        let persisted = self.persist_job_in_db(
+            job.id,
+            &job.key,
+            &job.script_uri,
+            &job.handler_name,
+            &job.schedule,
+        );
+
+        if !persisted {
+            let mut guard = self.lock_jobs();
+            Self::remove_job_with_key(guard.entry(script_uri.to_string()).or_default(), &key);
+            guard
+                .entry(script_uri.to_string())
+                .or_default()
+                .push(job.clone());
+            drop(guard);
+        }
+
         self.wake_signal.notify_waiters();
         Ok(job)
     }
@@ -221,32 +330,69 @@ impl Scheduler {
         }
 
         let key = Self::normalize_key(handler_name, key)?;
-        let mut guard = self.lock_jobs();
-        Self::remove_job_with_key(guard.entry(script_uri.to_string()).or_default(), &key);
-
         let job = ScheduledJob::new(
             script_uri,
             handler_name,
-            key,
+            key.clone(),
             ScheduleKind::Recurring { interval, next_run },
         );
-        guard
-            .entry(script_uri.to_string())
-            .or_default()
-            .push(job.clone());
-        drop(guard);
+
+        let persisted = self.persist_job_in_db(
+            job.id,
+            &job.key,
+            &job.script_uri,
+            &job.handler_name,
+            &job.schedule,
+        );
+
+        if !persisted {
+            let mut guard = self.lock_jobs();
+            Self::remove_job_with_key(guard.entry(script_uri.to_string()).or_default(), &key);
+            guard
+                .entry(script_uri.to_string())
+                .or_default()
+                .push(job.clone());
+            drop(guard);
+        }
+
         self.wake_signal.notify_waiters();
         Ok(job)
     }
 
     /// Remove all jobs for a script (returns number removed)
     pub fn clear_script(&self, script_uri: &str) -> usize {
+        let removed_db = Self::run_db_blocking({
+            let script_uri = script_uri.to_string();
+            move |db| {
+                async move {
+                    match sqlx::query("DELETE FROM scheduler_jobs WHERE script_uri = $1")
+                        .bind(&script_uri)
+                        .execute(db.pool())
+                        .await
+                    {
+                        Ok(result) => result.rows_affected() as usize,
+                        Err(e) => {
+                            warn!(script = %script_uri, error = %e, "Failed clearing scheduler jobs from DB");
+                            0
+                        }
+                    }
+                }
+            }
+        })
+        .unwrap_or(0);
+
         let mut guard = self.lock_jobs();
         let removed = guard.remove(script_uri).map(|v| v.len()).unwrap_or(0);
-        if removed > 0 {
-            debug!(script_uri, removed, "Cleared scheduled jobs for script");
+        let total_removed = removed + removed_db;
+        if total_removed > 0 {
+            debug!(
+                script_uri,
+                removed_memory = removed,
+                removed_db,
+                "Cleared scheduled jobs for script"
+            );
         }
-        removed
+        total_removed
     }
 
     /// Get job counts per script for monitoring
@@ -312,6 +458,8 @@ impl Scheduler {
                                     Self::build_invocation(&snapshot, scheduled_for);
                                 invocation.kind = ScheduledInvocationKind::Recurring;
                                 invocation.interval_seconds = Some(interval.num_seconds());
+                                invocation.interval_milliseconds =
+                                    Some(interval.num_milliseconds());
 
                                 // Advance next_run so we don't rerun immediately
                                 let mut upcoming = *next_run + *interval;
@@ -358,6 +506,7 @@ impl Scheduler {
             kind: ScheduledInvocationKind::OneOff,
             scheduled_for,
             interval_seconds: None,
+            interval_milliseconds: None,
         }
     }
 
@@ -440,6 +589,159 @@ impl Scheduler {
         );
     }
 
+    async fn claim_due_jobs_from_db(&self, now: DateTime<Utc>) -> Vec<ScheduledInvocation> {
+        let db = match crate::database::get_global_database() {
+            Some(db) => db,
+            None => return Vec::new(),
+        };
+
+        let rows = match sqlx::query(
+            r#"
+            WITH candidates AS (
+                SELECT job_id
+                FROM scheduler_jobs
+                WHERE run_at <= $1
+                  AND (lock_expires_at IS NULL OR lock_expires_at <= $1)
+                ORDER BY run_at ASC
+                LIMIT $2
+                FOR UPDATE SKIP LOCKED
+            )
+            UPDATE scheduler_jobs AS jobs
+            SET locked_by = $3,
+                locked_at = $1,
+                lock_expires_at = $1 + make_interval(secs => $4),
+                updated_at = NOW()
+            FROM candidates
+            WHERE jobs.job_id = candidates.job_id
+            RETURNING jobs.job_id, jobs.script_uri, jobs.handler_name, jobs.job_key, jobs.kind, jobs.run_at, jobs.interval_ms
+            "#,
+        )
+        .bind(now)
+        .bind(DB_CLAIM_BATCH_SIZE)
+        .bind(&self.worker_id)
+        .bind(DB_LOCK_TTL_SECONDS)
+        .fetch_all(db.pool())
+        .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                warn!(error = %e, "Failed claiming due scheduler jobs from DB");
+                return Vec::new();
+            }
+        };
+
+        let mut claimed = Vec::with_capacity(rows.len());
+        for row in rows {
+            let kind = match row.get::<String, _>("kind").as_str() {
+                "recurring" => ScheduledInvocationKind::Recurring,
+                _ => ScheduledInvocationKind::OneOff,
+            };
+
+            let interval_seconds = if matches!(kind, ScheduledInvocationKind::Recurring) {
+                row.get::<Option<i64>, _>("interval_ms")
+                    .map(|interval_ms| interval_ms / 1000)
+            } else {
+                None
+            };
+
+            let interval_milliseconds = if matches!(kind, ScheduledInvocationKind::Recurring) {
+                row.get::<Option<i64>, _>("interval_ms")
+            } else {
+                None
+            };
+
+            claimed.push(ScheduledInvocation {
+                job_id: row.get("job_id"),
+                key: row.get("job_key"),
+                script_uri: row.get("script_uri"),
+                handler_name: row.get("handler_name"),
+                kind,
+                scheduled_for: row.get("run_at"),
+                interval_seconds,
+                interval_milliseconds,
+            });
+        }
+
+        claimed
+    }
+
+    async fn finalize_db_job_execution(&self, invocation: &ScheduledInvocation, succeeded: bool) {
+        let db = match crate::database::get_global_database() {
+            Some(db) => db,
+            None => return,
+        };
+
+        match invocation.kind {
+            ScheduledInvocationKind::OneOff => {
+                if succeeded {
+                    if let Err(e) = sqlx::query(
+                        "DELETE FROM scheduler_jobs WHERE job_id = $1 AND locked_by = $2",
+                    )
+                    .bind(invocation.job_id)
+                    .bind(&self.worker_id)
+                    .execute(db.pool())
+                    .await
+                    {
+                        warn!(job = %invocation.key, error = %e, "Failed deleting completed one-off scheduler job");
+                    }
+                } else {
+                    let retry_at = Utc::now() + Duration::seconds(DB_ONE_OFF_RETRY_DELAY_SECONDS);
+                    if let Err(e) = sqlx::query(
+                        r#"
+                        UPDATE scheduler_jobs
+                        SET run_at = $1,
+                            locked_by = NULL,
+                            locked_at = NULL,
+                            lock_expires_at = NULL,
+                            updated_at = NOW()
+                        WHERE job_id = $2 AND locked_by = $3
+                        "#,
+                    )
+                    .bind(retry_at)
+                    .bind(invocation.job_id)
+                    .bind(&self.worker_id)
+                    .execute(db.pool())
+                    .await
+                    {
+                        warn!(job = %invocation.key, error = %e, "Failed requeueing failed one-off scheduler job");
+                    }
+                }
+            }
+            ScheduledInvocationKind::Recurring => {
+                let interval_milliseconds = invocation
+                    .interval_milliseconds
+                    .unwrap_or(1000)
+                    .max(MIN_RECURRING_INTERVAL_MS);
+                let interval = Duration::milliseconds(interval_milliseconds);
+                let mut next_run = invocation.scheduled_for + interval;
+                let now = Utc::now();
+                while next_run <= now {
+                    next_run += interval;
+                }
+
+                if let Err(e) = sqlx::query(
+                    r#"
+                    UPDATE scheduler_jobs
+                    SET run_at = $1,
+                        locked_by = NULL,
+                        locked_at = NULL,
+                        lock_expires_at = NULL,
+                        updated_at = NOW()
+                    WHERE job_id = $2 AND locked_by = $3
+                    "#,
+                )
+                .bind(next_run)
+                .bind(invocation.job_id)
+                .bind(&self.worker_id)
+                .execute(db.pool())
+                .await
+                {
+                    warn!(job = %invocation.key, error = %e, "Failed updating recurring scheduler job next_run");
+                }
+            }
+        }
+    }
+
     async fn dispatch(self: Arc<Self>, invocation: ScheduledInvocation) {
         let script_uri = invocation.script_uri.clone();
         let handler_name = invocation.handler_name.clone();
@@ -485,8 +787,10 @@ impl Scheduler {
         })
         .await;
 
+        let mut succeeded = false;
         match execution {
             Ok(Ok(())) => {
+                succeeded = true;
                 debug!(
                     script = invocation.script_uri,
                     handler = invocation.handler_name,
@@ -534,11 +838,19 @@ impl Scheduler {
             }
         }
 
+        if Self::has_database() {
+            self.finalize_db_job_execution(&invocation, succeeded).await;
+        }
+
         // Release the advisory lock using the same DB connection used to acquire it.
         lock_guard.release().await;
     }
 
     fn sleep_duration_until(&self, next: Option<DateTime<Utc>>) -> StdDuration {
+        if Self::has_database() {
+            return StdDuration::from_millis(500);
+        }
+
         if let Some(next_run) = next {
             let now = Utc::now();
             if next_run <= now {
@@ -555,7 +867,13 @@ impl Scheduler {
     pub async fn run(self: Arc<Self>, mut shutdown: oneshot::Receiver<()>) {
         info!("Scheduler worker started");
         loop {
-            let due_jobs = self.collect_due_jobs(Utc::now());
+            let now = Utc::now();
+            let mut due_jobs = self.collect_due_jobs(now);
+
+            if Self::has_database() {
+                due_jobs.extend(self.claim_due_jobs_from_db(now).await);
+            }
+
             for invocation in due_jobs {
                 tokio::spawn(self.clone().dispatch(invocation));
             }

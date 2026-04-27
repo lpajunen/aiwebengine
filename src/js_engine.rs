@@ -1369,6 +1369,7 @@ pub fn execute_scheduled_handler(
             "type": invocation.kind.as_str(),
             "scheduledFor": invocation.scheduled_for.to_rfc3339(),
             "intervalSeconds": invocation.interval_seconds,
+            "intervalMilliseconds": invocation.interval_milliseconds,
         });
 
         let handler_context = JsHandlerContextBuilder::new(HandlerInvocationKind::Scheduled)

@@ -163,29 +163,29 @@ fn test_scheduler_clear_script_jobs() {
 fn test_recurring_job_interval_validation() {
     let scheduler = scheduler::Scheduler::new();
 
-    // Intervals less than 1 minute should fail
+    // Intervals less than 100 milliseconds should fail
     let result = scheduler.register_recurring(
         "script.js",
         "handler",
         Some("job".to_string()),
-        chrono::Duration::seconds(30), // 30 seconds - too short
+        chrono::Duration::milliseconds(99),
         None,
     );
 
     assert!(result.is_err());
 
-    // 1 minute or more should succeed
+    // 100 milliseconds or more should succeed
     let result = scheduler.register_recurring(
         "script.js",
         "handler",
         Some("job".to_string()),
-        chrono::Duration::minutes(1),
+        chrono::Duration::milliseconds(100),
         None,
     );
 
     assert!(result.is_ok());
 
-    println!("✓ Scheduler validates recurring job intervals (minimum 1 minute)");
+    println!("✓ Scheduler validates recurring job intervals (minimum 100 ms)");
 }
 
 /// Test that stream registry provides global access
