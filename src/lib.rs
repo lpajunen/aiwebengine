@@ -63,6 +63,7 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
         auth::routes::oauth_callback,
         auth::routes::logout,
         auth::routes::auth_status,
+        auth::routes::refresh_session,
         auth::routes::oauth2_authorize,
         auth::routes::oauth2_token,
         auth::metadata::metadata_handler,
