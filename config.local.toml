@@ -143,6 +143,9 @@ jwt_secret = "dev-jwt-secret-minimum-32-characters-required-for-security"
 # Session timeout in seconds (1 hour)
 session_timeout = 3600
 
+# Absolute maximum session age in seconds (30 days)
+max_session_age = 2592000
+
 # Maximum concurrent sessions per user
 max_concurrent_sessions = 10
 

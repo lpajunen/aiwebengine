@@ -962,8 +962,9 @@ async fn initialize_auth_manager(
     let session_manager = Arc::new(SecureSessionManager::new(
         pool.clone(),
         &encryption_key,
-        3600, // 1 hour session lifetime (seconds)
-        10,   // max 10 sessions per user
+        auth_config.session_timeout as i64,
+        auth_config.max_session_age as i64,
+        auth_config.max_concurrent_sessions,
         Arc::clone(&auditor),
     )?);
 

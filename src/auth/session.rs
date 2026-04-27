@@ -197,9 +197,15 @@ mod tests {
         .unwrap();
         let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
         let encryption_key: [u8; 32] = *b"test-encryption-key-32-bytes!!!!";
-        let session_manager =
-            SecureSessionManager::new(pool, &encryption_key, 10, 3600, Arc::clone(&auditor))
-                .unwrap();
+        let session_manager = SecureSessionManager::new(
+            pool,
+            &encryption_key,
+            3600,
+            86400 * 30,
+            10,
+            Arc::clone(&auditor),
+        )
+        .unwrap();
         let session_manager = Arc::new(session_manager);
 
         AuthSessionManager::new(session_manager)

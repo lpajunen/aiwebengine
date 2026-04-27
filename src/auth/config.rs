@@ -16,6 +16,10 @@ pub struct AuthConfig {
     #[serde(default = "default_session_timeout")]
     pub session_timeout: u64,
 
+    /// Absolute maximum session age in seconds (default: 30 days)
+    #[serde(default = "default_max_session_age")]
+    pub max_session_age: u64,
+
     /// Maximum concurrent sessions per user (default: 3)
     #[serde(default = "default_max_sessions")]
     pub max_concurrent_sessions: usize,
@@ -65,6 +69,22 @@ impl AuthConfig {
             });
         }
 
+        // Validate absolute max session age
+        if self.max_session_age < self.session_timeout {
+            return Err(AuthError::InvalidConfig {
+                key: "max_session_age".to_string(),
+                reason: "must be greater than or equal to session_timeout".to_string(),
+            });
+        }
+
+        if self.max_session_age > 86400 * 365 {
+            // 1 year
+            return Err(AuthError::InvalidConfig {
+                key: "max_session_age".to_string(),
+                reason: "must not exceed 365 days".to_string(),
+            });
+        }
+
         // Validate concurrent sessions
         if self.max_concurrent_sessions == 0 {
             return Err(AuthError::InvalidConfig {
@@ -109,6 +129,7 @@ impl Default for AuthConfig {
         Self {
             jwt_secret: String::new(), // Must be set explicitly
             session_timeout: default_session_timeout(),
+            max_session_age: default_max_session_age(),
             max_concurrent_sessions: default_max_sessions(),
             cookie: CookieConfig::default(),
             providers: ProvidersConfig::default(),
@@ -343,6 +364,10 @@ fn default_session_timeout() -> u64 {
     3600 // 1 hour
 }
 
+fn default_max_session_age() -> u64 {
+    86400 * 30 // 30 days
+}
+
 fn default_max_sessions() -> usize {
     3
 }
@@ -376,6 +401,7 @@ mod tests {
         let config = AuthConfig {
             jwt_secret: "a".repeat(32),
             session_timeout: 3600,
+            max_session_age: 86400 * 30,
             max_concurrent_sessions: 3,
             cookie: CookieConfig::default(),
             providers: ProvidersConfig::default(),
@@ -415,6 +441,24 @@ mod tests {
         assert!(config.validate().is_err());
 
         config.session_timeout = 3600; // Valid
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_max_session_age_validation() {
+        let mut config = AuthConfig {
+            jwt_secret: "a".repeat(32),
+            session_timeout: 3600,
+            max_session_age: 1800, // Too short
+            ..Default::default()
+        };
+
+        assert!(config.validate().is_err());
+
+        config.max_session_age = 86400 * 366; // Too long
+        assert!(config.validate().is_err());
+
+        config.max_session_age = 86400 * 30; // Valid
         assert!(config.validate().is_ok());
     }
 

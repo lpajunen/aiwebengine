@@ -569,8 +569,9 @@ mod tests {
         let session_mgr = SecureSessionManager::new(
             pool.clone(),
             &encryption_key,
-            10,
             3600,
+            86400 * 30,
+            10,
             Arc::clone(&auditor),
         )
         .unwrap();

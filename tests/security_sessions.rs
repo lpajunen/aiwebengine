@@ -32,7 +32,7 @@ async fn test_session_lifecycle() {
     )
     .unwrap();
     let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
-    let manager = SecureSessionManager::new(pool, &key, 3600, 3, auditor).unwrap();
+    let manager = SecureSessionManager::new(pool, &key, 3600, 86400 * 30, 3, auditor).unwrap();
 
     // Create session
     let params = CreateSessionParams {
@@ -86,7 +86,7 @@ async fn test_session_fingerprint_user_agent_mismatch() {
     )
     .unwrap();
     let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
-    let manager = SecureSessionManager::new(pool, &key, 3600, 3, auditor).unwrap();
+    let manager = SecureSessionManager::new(pool, &key, 3600, 86400 * 30, 3, auditor).unwrap();
 
     let params = CreateSessionParams {
         user_id: "user123".to_string(),
@@ -118,7 +118,7 @@ async fn test_session_ip_change_tolerance() {
     )
     .unwrap();
     let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
-    let manager = SecureSessionManager::new(pool, &key, 3600, 3, auditor).unwrap();
+    let manager = SecureSessionManager::new(pool, &key, 3600, 86400 * 30, 3, auditor).unwrap();
 
     let params = CreateSessionParams {
         user_id: "user123".to_string(),
@@ -152,7 +152,7 @@ async fn test_concurrent_session_limit() {
         )
         .unwrap();
         let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
-        let manager = SecureSessionManager::new(pool, &key, 3600, 3, auditor).unwrap();
+        let manager = SecureSessionManager::new(pool, &key, 3600, 86400 * 30, 3, auditor).unwrap();
         let unique_user_id = format!("user_concurrent_{}", rand::random::<u32>());
 
         // Create 5 sessions (limit is 3)
@@ -192,7 +192,7 @@ async fn test_session_encryption() {
     )
     .unwrap();
     let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
-    let manager = SecureSessionManager::new(pool, &key, 3600, 3, auditor).unwrap();
+    let manager = SecureSessionManager::new(pool, &key, 3600, 86400 * 30, 3, auditor).unwrap();
 
     // Create session with sensitive data
     let params = CreateSessionParams {
@@ -426,7 +426,7 @@ async fn test_full_auth_flow_simulation() {
     .unwrap();
     let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
     let session_manager =
-        Arc::new(SecureSessionManager::new(pool, &key, 3600, 3, auditor).unwrap());
+        Arc::new(SecureSessionManager::new(pool, &key, 3600, 86400 * 30, 3, auditor).unwrap());
     let oauth_state = Arc::new(OAuthStateManager::new(key));
     let encryption = Arc::new(DataEncryption::new(&key));
     let encryptor = FieldEncryptor::new(encryption);
@@ -507,7 +507,7 @@ async fn test_concurrent_users_isolation() {
     .unwrap();
     let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
     let session_manager =
-        Arc::new(SecureSessionManager::new(pool, &key, 3600, 5, auditor).unwrap());
+        Arc::new(SecureSessionManager::new(pool, &key, 3600, 86400 * 30, 5, auditor).unwrap());
 
     // Create sessions for multiple users
     let users = vec!["alice", "bob", "charlie"];

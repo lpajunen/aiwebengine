@@ -525,7 +525,8 @@ pub async fn refresh_session(
     };
 
     match auth_manager
-        .get_session(&token, &ip_addr, &user_agent)
+        .session_manager()
+        .refresh_session(&token, &ip_addr, &user_agent, None)
         .await
     {
         Ok(_) => {
@@ -1274,7 +1275,7 @@ pub fn create_auth_router(auth_manager: Arc<AuthManager>) -> Router {
         .route("/login/{provider}", get(start_login))
         .route("/callback/{provider}", get(oauth_callback))
         .route("/logout", get(logout).post(logout))
-        .route("/refresh", post(refresh_session).get(refresh_session))
+        .route("/refresh", post(refresh_session))
         .route("/status", get(auth_status))
         .with_state(auth_manager)
 }

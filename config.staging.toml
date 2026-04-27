@@ -130,6 +130,9 @@ jwt_secret = "${APP_AUTH_JWT_SECRET}"
 # Session timeout in seconds (1 hour)
 session_timeout = 3600
 
+# Absolute maximum session age in seconds (30 days)
+max_session_age = 2592000
+
 # Maximum concurrent sessions per user
 max_concurrent_sessions = 5
 

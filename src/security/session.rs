@@ -163,6 +163,8 @@ pub struct SecureSessionManager {
     max_concurrent_sessions: usize,
     /// Session timeout duration
     session_timeout: Duration,
+    /// Absolute maximum session age duration
+    max_session_age: Duration,
     /// Security auditor for logging
     auditor: Arc<SecurityAuditor>,
     /// Strict IP validation (false for mobile-friendly)
@@ -175,6 +177,7 @@ impl SecureSessionManager {
         pool: PgPool,
         encryption_key: &[u8; 32],
         session_timeout_seconds: i64,
+        max_session_age_seconds: i64,
         max_concurrent_sessions: usize,
         auditor: Arc<SecurityAuditor>,
     ) -> Result<Self, SessionError> {
@@ -185,9 +188,24 @@ impl SecureSessionManager {
             cipher,
             max_concurrent_sessions,
             session_timeout: Duration::seconds(session_timeout_seconds),
+            max_session_age: Duration::seconds(max_session_age_seconds),
             auditor,
             strict_ip_validation: false, // Mobile-friendly by default
         })
+    }
+
+    fn absolute_expiry_for_created_at(&self, created_at: DateTime<Utc>) -> DateTime<Utc> {
+        created_at + self.max_session_age
+    }
+
+    fn next_sliding_expiry(&self, created_at: DateTime<Utc>, now: DateTime<Utc>) -> DateTime<Utc> {
+        let sliding_expiry = now + self.session_timeout;
+        let absolute_expiry = self.absolute_expiry_for_created_at(created_at);
+        if sliding_expiry < absolute_expiry {
+            sliding_expiry
+        } else {
+            absolute_expiry
+        }
     }
 
     /// Create a new session for an authenticated user
@@ -230,7 +248,7 @@ impl SecureSessionManager {
         // Generate session token
         let token = SessionToken::generate();
         let now = Utc::now();
-        let expires_at = now + self.session_timeout;
+        let expires_at = self.next_sliding_expiry(now, now);
 
         // Create session data
         let session_data = SessionData {
@@ -335,6 +353,12 @@ impl SecureSessionManager {
 
         // Decrypt session data
         let mut session_data = self.decrypt_session(&encrypted)?;
+
+        // Enforce absolute maximum session age even if sliding timeout was refreshed.
+        if self.absolute_expiry_for_created_at(session_data.created_at) < Utc::now() {
+            self.invalidate_session(token).await?;
+            return Err(SessionError::SessionExpired);
+        }
 
         // Validate fingerprint
         // For MCP endpoints, be more lenient with User Agent since OAuth happens in browser
@@ -483,6 +507,13 @@ impl SecureSessionManager {
 
         let mut session_data = self.decrypt_session(&encrypted)?;
 
+        // Do not allow refresh beyond absolute maximum session age.
+        if self.absolute_expiry_for_created_at(session_data.created_at) < Utc::now() {
+            let _ = tx.rollback().await;
+            self.invalidate_session(token).await?;
+            return Err(SessionError::SessionExpired);
+        }
+
         let _ = (ip_addr, user_agent);
 
         if let Some(token_value) = new_refresh_token {
@@ -491,7 +522,7 @@ impl SecureSessionManager {
 
         let now = Utc::now();
         session_data.last_access = now;
-        session_data.expires_at = now + self.session_timeout;
+        session_data.expires_at = self.next_sliding_expiry(session_data.created_at, now);
 
         let encrypted = self.encrypt_session(&session_data)?;
         let encrypted_json = serde_json::to_value(&encrypted)
@@ -658,7 +689,7 @@ mod tests {
             "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
         )
         .unwrap();
-        SecureSessionManager::new(pool, &key, 3600, 3, create_test_auditor()).unwrap()
+        SecureSessionManager::new(pool, &key, 3600, 86400 * 30, 3, create_test_auditor()).unwrap()
     }
 
     #[tokio::test]
