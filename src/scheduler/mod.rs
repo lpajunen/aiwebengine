@@ -107,34 +107,43 @@ pub struct Scheduler {
     wake_signal: Notify,
 }
 
-struct JobLockGuard {
-    conn: PoolConnection<Postgres>,
-    lock_key: String,
+enum JobLockGuard {
+    Pg {
+        conn: PoolConnection<Postgres>,
+        lock_key: String,
+    },
+    Noop,
+}
+
+enum JobLockAcquireError {
+    HeldByOther,
+    Unavailable,
 }
 
 impl JobLockGuard {
     async fn release(self) {
-        let mut conn = self.conn;
-        match sqlx::query_scalar::<_, bool>("SELECT pg_advisory_unlock(hashtext($1))")
-            .bind(&self.lock_key)
-            .fetch_one(&mut *conn)
-            .await
-        {
-            Ok(released) => {
-                if released {
-                    debug!("Released advisory lock for job: {}", self.lock_key);
-                } else {
-                    warn!(
-                        "Failed to release advisory lock for job: {} (was not held)",
-                        self.lock_key
-                    );
+        match self {
+            JobLockGuard::Noop => {}
+            JobLockGuard::Pg { mut conn, lock_key } => {
+                match sqlx::query_scalar::<_, bool>("SELECT pg_advisory_unlock(hashtext($1))")
+                    .bind(&lock_key)
+                    .fetch_one(&mut *conn)
+                    .await
+                {
+                    Ok(released) => {
+                        if released {
+                            debug!("Released advisory lock for job: {}", lock_key);
+                        } else {
+                            warn!(
+                                "Failed to release advisory lock for job: {} (was not held)",
+                                lock_key
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        error!("Error releasing advisory lock for job {}: {}", lock_key, e);
+                    }
                 }
-            }
-            Err(e) => {
-                error!(
-                    "Error releasing advisory lock for job {}: {}",
-                    self.lock_key, e
-                );
             }
         }
     }
@@ -363,18 +372,20 @@ impl Scheduler {
 
     /// Try to acquire PostgreSQL advisory lock for a job.
     /// Returns a guard that keeps the same DB connection until unlock.
-    async fn try_acquire_job_lock(invocation: &ScheduledInvocation) -> Option<JobLockGuard> {
+    async fn try_acquire_job_lock(
+        invocation: &ScheduledInvocation,
+    ) -> Result<JobLockGuard, JobLockAcquireError> {
         // Get database pool if available
         let db = match crate::database::get_global_database() {
             Some(db) => db,
             None => {
-                warn!(
+                debug!(
                     script = %invocation.script_uri,
                     handler = %invocation.handler_name,
                     job = %invocation.key,
-                    "Skipping scheduler execution: database unavailable for distributed lock"
+                    "Scheduler running without database; executing job without advisory lock"
                 );
-                return None;
+                return Ok(JobLockGuard::Noop);
             }
         };
 
@@ -386,7 +397,7 @@ impl Scheduler {
                     "Error acquiring DB connection for advisory lock {}: {}. Skipping execution.",
                     lock_key, e
                 );
-                return None;
+                return Err(JobLockAcquireError::Unavailable);
             }
         };
 
@@ -400,13 +411,13 @@ impl Scheduler {
             Ok(acquired) => {
                 if acquired {
                     debug!("Acquired advisory lock for job: {}", lock_key);
-                    Some(JobLockGuard { conn, lock_key })
+                    Ok(JobLockGuard::Pg { conn, lock_key })
                 } else {
                     debug!(
                         "Failed to acquire advisory lock for job: {} (another instance has it)",
                         lock_key
                     );
-                    None
+                    Err(JobLockAcquireError::HeldByOther)
                 }
             }
             Err(e) => {
@@ -414,12 +425,22 @@ impl Scheduler {
                     "Error trying to acquire advisory lock for job {}: {}. Skipping execution.",
                     lock_key, e
                 );
-                None
+                Err(JobLockAcquireError::Unavailable)
             }
         }
     }
 
-    async fn dispatch(invocation: ScheduledInvocation) {
+    fn requeue_one_off_after_lock_failure(&self, invocation: &ScheduledInvocation) {
+        let run_at = Utc::now() + Duration::seconds(1);
+        let _ = self.register_one_off(
+            &invocation.script_uri,
+            &invocation.handler_name,
+            Some(invocation.key.clone()),
+            run_at,
+        );
+    }
+
+    async fn dispatch(self: Arc<Self>, invocation: ScheduledInvocation) {
         let script_uri = invocation.script_uri.clone();
         let handler_name = invocation.handler_name.clone();
         let job_key = invocation.key.clone();
@@ -427,17 +448,30 @@ impl Scheduler {
 
         // Try to acquire PostgreSQL advisory lock for this job
         // This ensures only one instance executes the job
-        let lock_guard = Self::try_acquire_job_lock(&invocation).await;
-
-        if lock_guard.is_none() {
-            debug!(
-                script = %script_uri,
-                handler = %handler_name,
-                job = %job_key,
-                "Skipping job execution - another instance has the lock"
-            );
-            return;
-        }
+        let lock_guard = match Self::try_acquire_job_lock(&invocation).await {
+            Ok(guard) => guard,
+            Err(JobLockAcquireError::HeldByOther) => {
+                debug!(
+                    script = %script_uri,
+                    handler = %handler_name,
+                    job = %job_key,
+                    "Skipping job execution - another instance has the lock"
+                );
+                return;
+            }
+            Err(JobLockAcquireError::Unavailable) => {
+                warn!(
+                    script = %script_uri,
+                    handler = %handler_name,
+                    job = %job_key,
+                    "Skipping job execution - advisory lock unavailable"
+                );
+                if matches!(invocation.kind, ScheduledInvocationKind::OneOff) {
+                    self.requeue_one_off_after_lock_failure(&invocation);
+                }
+                return;
+            }
+        };
 
         debug!(
             script = %script_uri,
@@ -501,9 +535,7 @@ impl Scheduler {
         }
 
         // Release the advisory lock using the same DB connection used to acquire it.
-        if let Some(guard) = lock_guard {
-            guard.release().await;
-        }
+        lock_guard.release().await;
     }
 
     fn sleep_duration_until(&self, next: Option<DateTime<Utc>>) -> StdDuration {
@@ -525,7 +557,7 @@ impl Scheduler {
         loop {
             let due_jobs = self.collect_due_jobs(Utc::now());
             for invocation in due_jobs {
-                tokio::spawn(Self::dispatch(invocation));
+                tokio::spawn(self.clone().dispatch(invocation));
             }
 
             let sleep_duration = self.sleep_duration_until(self.next_trigger_at());
