@@ -5259,22 +5259,46 @@ impl SecureGlobalContext {
                     );
                 }
 
-                let interval_value: f64 =
-                    match options.get("intervalMinutes") {
-                        Ok(value) => value,
-                        Err(_) => return Ok(
-                            "schedulerService.registerRecurring requires options.intervalMinutes"
-                                .to_string(),
-                        ),
-                    };
-                if !interval_value.is_finite() || interval_value < 1.0 {
+                let interval_ms_opt = options.get::<_, f64>("intervalMilliseconds").ok();
+                let interval_min_opt = options.get::<_, f64>("intervalMinutes").ok();
+
+                if interval_ms_opt.is_some() && interval_min_opt.is_some() {
                     return Ok(
-                        "schedulerService.registerRecurring requires intervalMinutes >= 1"
+                        "schedulerService.registerRecurring accepts either intervalMilliseconds or intervalMinutes, not both"
                             .to_string(),
                     );
                 }
-                let interval_minutes = interval_value.floor() as i64;
-                let interval = ChronoDuration::minutes(interval_minutes);
+
+                let (interval, interval_label) = if let Some(interval_ms_value) = interval_ms_opt {
+                    if !interval_ms_value.is_finite() || interval_ms_value < 100.0 {
+                        return Ok(
+                            "schedulerService.registerRecurring requires intervalMilliseconds >= 100"
+                                .to_string(),
+                        );
+                    }
+                    let interval_ms = interval_ms_value.floor() as i64;
+                    (
+                        ChronoDuration::milliseconds(interval_ms),
+                        format!("{} ms", interval_ms),
+                    )
+                } else if let Some(interval_min_value) = interval_min_opt {
+                    if !interval_min_value.is_finite() || interval_min_value < 1.0 {
+                        return Ok(
+                            "schedulerService.registerRecurring requires intervalMinutes >= 1"
+                                .to_string(),
+                        );
+                    }
+                    let interval_minutes = interval_min_value.floor() as i64;
+                    (
+                        ChronoDuration::minutes(interval_minutes),
+                        format!("{} minute(s)", interval_minutes),
+                    )
+                } else {
+                    return Ok(
+                        "schedulerService.registerRecurring requires intervalMilliseconds or intervalMinutes"
+                            .to_string(),
+                    );
+                };
 
                 let name = options.get::<_, String>("name").ok();
                 let first_run = if let Ok(start_at) = options.get::<_, String>("startAt") {
@@ -5294,9 +5318,9 @@ impl SecureGlobalContext {
                     first_run,
                 ) {
                     Ok(job) => Ok(format!(
-                        "Scheduled recurring job '{}' every {} minute(s); next run {} (id {})",
+                        "Scheduled recurring job '{}' every {}; next run {} (id {})",
                         job.key,
-                        interval_minutes,
+                        interval_label,
                         job.schedule.next_run().to_rfc3339(),
                         job.id
                     )),

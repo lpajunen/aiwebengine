@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::{js_engine, repository};
 
 static GLOBAL_SCHEDULER: OnceLock<Arc<Scheduler>> = OnceLock::new();
+const MIN_RECURRING_INTERVAL_MS: i64 = 100;
 
 /// Errors returned by scheduler operations
 #[derive(Debug, thiserror::Error)]
@@ -20,7 +21,7 @@ pub enum SchedulerError {
     InvalidTimestamp,
     #[error("scheduled time must be in the future")]
     TimeInPast,
-    #[error("intervalMinutes must be >= 1")]
+    #[error("recurring interval must be >= 100 milliseconds")]
     InvalidInterval,
     #[error("job name must be 1-64 characters")]
     InvalidJobName,
@@ -167,7 +168,7 @@ impl Scheduler {
             return Err(SchedulerError::MissingHandler);
         }
 
-        if interval.num_minutes() < 1 {
+        if interval.num_milliseconds() < MIN_RECURRING_INTERVAL_MS {
             return Err(SchedulerError::InvalidInterval);
         }
 
@@ -333,8 +334,13 @@ impl Scheduler {
         let db = match crate::database::get_global_database() {
             Some(db) => db,
             None => {
-                // No database available (memory mode), allow execution
-                return true;
+                warn!(
+                    script = %invocation.script_uri,
+                    handler = %invocation.handler_name,
+                    job = %invocation.key,
+                    "Skipping scheduler execution: database unavailable for distributed lock"
+                );
+                return false;
             }
         };
 
@@ -360,11 +366,10 @@ impl Scheduler {
             }
             Err(e) => {
                 warn!(
-                    "Error trying to acquire advisory lock for job {}: {}. Allowing execution.",
+                    "Error trying to acquire advisory lock for job {}: {}. Skipping execution.",
                     lock_key, e
                 );
-                // If we can't acquire lock due to error, allow execution to avoid blocking
-                true
+                false
             }
         }
     }
@@ -583,6 +588,24 @@ mod tests {
         let result =
             scheduler.register_recurring("script.js", "handler", None, Duration::minutes(0), None);
         assert!(matches!(result, Err(SchedulerError::InvalidInterval)));
+
+        let too_small = scheduler.register_recurring(
+            "script.js",
+            "handler",
+            None,
+            Duration::milliseconds(99),
+            None,
+        );
+        assert!(matches!(too_small, Err(SchedulerError::InvalidInterval)));
+
+        let valid = scheduler.register_recurring(
+            "script.js",
+            "handler",
+            None,
+            Duration::milliseconds(100),
+            None,
+        );
+        assert!(valid.is_ok());
     }
 
     #[test]

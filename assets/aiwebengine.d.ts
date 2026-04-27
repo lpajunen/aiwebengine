@@ -521,20 +521,22 @@ interface SchedulerService {
    * Register a recurring scheduled job
    * @param options - Job options
    * @param options.handler - Name of the handler function to call
-   * @param options.intervalMinutes - Interval in minutes (minimum 1)
+   * @param options.intervalMilliseconds - Interval in milliseconds (minimum 100)
+   * @param options.intervalMinutes - Interval in minutes (minimum 1, backward compatible)
    * @param options.name - Optional job name/key
    * @param options.startAt - Optional UTC ISO timestamp for first run
    * @returns Result message with job details
    * @example
    * schedulerService.registerRecurring({
    *   handler: "cleanupOldData",
-   *   intervalMinutes: 60,
+   *   intervalMilliseconds: 5000,
    *   name: "cleanup-job"
    * });
    */
   registerRecurring(options: {
     handler: string;
-    intervalMinutes: number;
+    intervalMilliseconds?: number;
+    intervalMinutes?: number;
     name?: string;
     startAt?: string;
   }): string;
