@@ -447,6 +447,75 @@ impl SecureSessionManager {
         Ok(session_data)
     }
 
+    /// Extend an existing session and optionally rotate its OAuth refresh token.
+    ///
+    /// This is used by engine-managed refresh flows to keep authenticated users signed in
+    /// without forcing a full interactive login.
+    pub async fn refresh_session(
+        &self,
+        token: &str,
+        ip_addr: &str,
+        user_agent: &str,
+        new_refresh_token: Option<String>,
+    ) -> Result<SessionData, SessionError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| SessionError::ValidationFailed(format!("Database error: {}", e)))?;
+
+        let row: Option<(serde_json::Value, DateTime<Utc>)> = sqlx::query_as(
+            "SELECT data, expires_at FROM sessions WHERE session_id = $1 FOR UPDATE",
+        )
+        .bind(token)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| SessionError::ValidationFailed(format!("Database error: {}", e)))?;
+
+        let (encrypted_json, expires_at) = row.ok_or(SessionError::SessionNotFound)?;
+        if expires_at < Utc::now() {
+            let _ = tx.rollback().await;
+            return Err(SessionError::SessionExpired);
+        }
+
+        let encrypted: EncryptedSessionData = serde_json::from_value(encrypted_json)
+            .map_err(|e| SessionError::ValidationFailed(format!("Data corruption: {}", e)))?;
+
+        let mut session_data = self.decrypt_session(&encrypted)?;
+
+        let _ = (ip_addr, user_agent);
+
+        if let Some(token_value) = new_refresh_token {
+            session_data.refresh_token = Some(token_value);
+        }
+
+        let now = Utc::now();
+        session_data.last_access = now;
+        session_data.expires_at = now + self.session_timeout;
+
+        let encrypted = self.encrypt_session(&session_data)?;
+        let encrypted_json = serde_json::to_value(&encrypted)
+            .map_err(|e| SessionError::EncryptionError(e.to_string()))?;
+
+        sqlx::query(
+            "UPDATE sessions
+             SET data = $1, expires_at = $2, last_accessed_at = NOW()
+             WHERE session_id = $3",
+        )
+        .bind(encrypted_json)
+        .bind(session_data.expires_at)
+        .bind(token)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| SessionError::ValidationFailed(format!("Database error: {}", e)))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| SessionError::ValidationFailed(format!("Database error: {}", e)))?;
+
+        Ok(session_data)
+    }
+
     /// Invalidate a session (logout)
     pub async fn invalidate_session(&self, token: &str) -> Result<(), SessionError> {
         self.invalidate_session_internal(token).await

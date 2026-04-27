@@ -91,6 +91,13 @@ pub struct AuthResponse {
     pub redirect: Option<String>,
 }
 
+/// JSON response for session refresh
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct RefreshResponse {
+    pub success: bool,
+    pub message: String,
+}
+
 /// JSON error response
 #[derive(Debug, Serialize)]
 pub struct ErrorResponse {
@@ -473,6 +480,95 @@ pub async fn auth_status(
     })
 }
 
+/// Refresh authenticated session and renew cookie
+#[utoipa::path(
+    post,
+    path = "/auth/refresh",
+    tags = ["Authentication"],
+    responses(
+        (status = 200, description = "Session refreshed", body = RefreshResponse),
+        (status = 401, description = "Session missing or invalid", body = crate::openapi_schemas::ErrorResponse),
+    )
+)]
+pub async fn refresh_session(
+    State(auth_manager): State<Arc<AuthManager>>,
+    headers: HeaderMap,
+) -> Response {
+    let config = auth_manager.config();
+    let ip_addr = get_client_ip(&headers);
+    let user_agent = get_user_agent(&headers);
+
+    let session_token = headers
+        .get(header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|cookies| {
+            cookies.split(';').find_map(|cookie| {
+                let trimmed = cookie.trim();
+                let (name, value) = trimmed.split_once('=')?;
+                if name == config.session_cookie_name {
+                    Some(value.to_string())
+                } else {
+                    None
+                }
+            })
+        });
+
+    let Some(token) = session_token else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorResponse {
+                error: "missing_session".to_string(),
+                message: "No active session cookie found".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match auth_manager.get_session(&token, &ip_addr, &user_agent).await {
+        Ok(_) => {
+            let cookie_value = format!(
+                "{}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}{}",
+                config.session_cookie_name,
+                token,
+                config.session_timeout,
+                if config.cookie_secure { "; Secure" } else { "" }
+            );
+
+            let response = Json(RefreshResponse {
+                success: true,
+                message: "Session refreshed".to_string(),
+            })
+            .into_response();
+
+            let (mut parts, body) = response.into_parts();
+            let cookie_header = match cookie_value.parse() {
+                Ok(value) => value,
+                Err(_) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            error: "internal_error".to_string(),
+                            message: "Invalid cookie header value".to_string(),
+                        }),
+                    )
+                        .into_response();
+                }
+            };
+
+            parts.headers.insert(header::SET_COOKIE, cookie_header);
+            Response::from_parts(parts, body)
+        }
+        Err(_) => (
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorResponse {
+                error: "invalid_session".to_string(),
+                message: "Session missing, expired, or invalid".to_string(),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 /// OAuth 2.0 authorization request parameters (RFC 6749)
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct AuthorizeParams {
@@ -767,7 +863,6 @@ pub struct TokenParams {
 
     /// Refresh token (for refresh_token grant)
     #[serde(default)]
-    #[allow(dead_code)] // Used by serde for form deserialization
     refresh_token: Option<String>,
 
     /// Client identifier
@@ -812,13 +907,19 @@ pub async fn oauth2_token(
     tracing::info!("  client_id: {:?}", params.client_id);
     tracing::info!("  redirect_uri: {:?}", params.redirect_uri);
 
+    if params.grant_type == "refresh_token" {
+        return handle_refresh_token_grant(&oauth2_state, &headers, &params).await;
+    }
+
     // Validate grant_type
     if params.grant_type != "authorization_code" {
         return (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "unsupported_grant_type".to_string(),
-                message: "Only authorization_code grant type is supported".to_string(),
+                message:
+                    "Only authorization_code and refresh_token grant types are supported"
+                        .to_string(),
             }),
         )
             .into_response();
@@ -1007,10 +1108,10 @@ pub async fn oauth2_token(
             );
 
             let response = TokenResponse {
-                access_token: session_token.token, // Extract the token string from SessionToken struct
+                access_token: session_token.token.clone(),
                 token_type: "Bearer".to_string(),
                 expires_in: Some(3600),
-                refresh_token: None,
+                refresh_token: Some(session_token.token),
                 scope: code_data.scope,
             };
 
@@ -1023,6 +1124,112 @@ pub async fn oauth2_token(
                 Json(ErrorResponse {
                     error: "server_error".to_string(),
                     message: "Failed to create session".to_string(),
+                }),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn handle_refresh_token_grant(
+    oauth2_state: &OAuth2State,
+    headers: &HeaderMap,
+    params: &TokenParams,
+) -> Response {
+    let provided_refresh_token = match params.refresh_token.as_deref() {
+        Some(token) if !token.is_empty() => token,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "invalid_request".to_string(),
+                    message: "refresh_token is required for refresh_token grant".to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let ip_addr = extract_client_ip_from_headers(headers);
+    let user_agent = extract_user_agent_from_headers(headers);
+
+    let session_data = match oauth2_state
+        .auth_manager
+        .session_manager()
+        .get_session_data(provided_refresh_token, &ip_addr, &user_agent)
+        .await
+    {
+        Ok(data) => data,
+        Err(err) => {
+            tracing::warn!("Refresh token grant rejected: {}", err);
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "invalid_grant".to_string(),
+                    message: "Invalid or expired refresh token".to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let mut rotated_refresh_token: Option<String> = None;
+    if let Some(provider_refresh_token) = session_data.refresh_token.clone()
+        && session_data.provider != "oauth2"
+    {
+        match oauth2_state
+            .auth_manager
+            .refresh_token(&session_data.provider, &provider_refresh_token)
+            .await
+        {
+            Ok(provider_response) => {
+                rotated_refresh_token = provider_response
+                    .refresh_token
+                    .or(Some(provider_refresh_token));
+            }
+            Err(err) => {
+                tracing::warn!("Provider refresh failed for {}: {}", session_data.provider, err);
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        error: "invalid_grant".to_string(),
+                        message: "Refresh token was rejected by provider".to_string(),
+                    }),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    match oauth2_state
+        .auth_manager
+        .session_manager()
+        .refresh_session(
+            provided_refresh_token,
+            &ip_addr,
+            &user_agent,
+            rotated_refresh_token,
+        )
+        .await
+    {
+        Ok(_) => {
+            let response = TokenResponse {
+                access_token: provided_refresh_token.to_string(),
+                token_type: "Bearer".to_string(),
+                expires_in: Some(oauth2_state.auth_manager.config().session_timeout),
+                refresh_token: Some(provided_refresh_token.to_string()),
+                scope: None,
+            };
+
+            (StatusCode::OK, Json(response)).into_response()
+        }
+        Err(err) => {
+            tracing::warn!("Refresh token grant failed: {}", err);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "invalid_grant".to_string(),
+                    message: "Failed to refresh session".to_string(),
                 }),
             )
                 .into_response()
@@ -1061,6 +1268,7 @@ pub fn create_auth_router(auth_manager: Arc<AuthManager>) -> Router {
         .route("/login/{provider}", get(start_login))
         .route("/callback/{provider}", get(oauth_callback))
         .route("/logout", get(logout).post(logout))
+    .route("/refresh", post(refresh_session).get(refresh_session))
         .route("/status", get(auth_status))
         .with_state(auth_manager)
 }

@@ -5,7 +5,7 @@
 use crate::auth::{AuthError, AuthManager};
 use axum::{
     extract::{Request, State},
-    http::{StatusCode, header},
+    http::{HeaderValue, StatusCode, header},
     middleware::Next,
     response::{IntoResponse, Response},
 };
@@ -115,6 +115,21 @@ fn extract_user_agent(req: &Request) -> String {
         .to_string()
 }
 
+fn attach_session_cookie(response: &mut Response, auth_manager: &AuthManager, session_token: &str) {
+    let config = auth_manager.config();
+    let cookie_value = format!(
+        "{}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}{}",
+        config.session_cookie_name,
+        session_token,
+        config.session_timeout,
+        if config.cookie_secure { "; Secure" } else { "" }
+    );
+
+    if let Ok(cookie_header) = HeaderValue::from_str(&cookie_value) {
+        response.headers_mut().insert(header::SET_COOKIE, cookie_header);
+    }
+}
+
 /// Optional authentication middleware - validates session if present but doesn't require it
 pub async fn optional_auth_middleware(
     State(auth_manager): State<Arc<AuthManager>>,
@@ -151,7 +166,7 @@ pub async fn optional_auth_middleware(
                 let auth_user = AuthUser::new(
                     session.user_id.clone(),
                     session.provider.clone(),
-                    session_token,
+                    session_token.clone(),
                     session.is_admin,
                     session.is_editor,
                     session.email.clone(),
@@ -159,6 +174,9 @@ pub async fn optional_auth_middleware(
                 );
                 req.extensions_mut().insert(auth_user);
                 tracing::debug!("✅ AuthUser injected into request extensions for {}", path);
+                let mut response = next.run(req).await;
+                attach_session_cookie(&mut response, auth_manager.as_ref(), &session_token);
+                return response;
             }
             Err(e) => {
                 tracing::warn!("⚠️  Session validation failed for {}: {}", path, e);
@@ -198,7 +216,7 @@ pub async fn required_auth_middleware(
     let auth_user = AuthUser::new(
         session.user_id.clone(),
         session.provider.clone(),
-        session_token,
+        session_token.clone(),
         session.is_admin,
         session.is_editor,
         session.email.clone(),
@@ -206,7 +224,9 @@ pub async fn required_auth_middleware(
     );
     req.extensions_mut().insert(auth_user);
 
-    Ok(next.run(req).await)
+    let mut response = next.run(req).await;
+    attach_session_cookie(&mut response, auth_manager.as_ref(), &session_token);
+    Ok(response)
 }
 
 /// Redirect to login middleware - redirects to login page if not authenticated
@@ -246,14 +266,16 @@ pub async fn redirect_to_login_middleware(
                 let auth_user = AuthUser::new(
                     session.user_id.clone(),
                     session.provider.clone(),
-                    session_token,
+                    session_token.clone(),
                     session.is_admin,
                     session.is_editor,
                     session.email.clone(),
                     session.name.clone(),
                 );
                 req.extensions_mut().insert(auth_user);
-                return next.run(req).await;
+                let mut response = next.run(req).await;
+                attach_session_cookie(&mut response, auth_manager.as_ref(), &session_token);
+                return response;
             }
             Err(e) => {
                 tracing::warn!("⚠️  Session validation failed for {}: {}", path, e);
@@ -317,14 +339,16 @@ pub async fn require_editor_or_admin_middleware(
                     let auth_user = AuthUser::new(
                         session.user_id.clone(),
                         session.provider.clone(),
-                        session_token,
+                        session_token.clone(),
                         session.is_admin,
                         session.is_editor,
                         session.email.clone(),
                         session.name.clone(),
                     );
                     req.extensions_mut().insert(auth_user);
-                    return next.run(req).await;
+                    let mut response = next.run(req).await;
+                    attach_session_cookie(&mut response, auth_manager.as_ref(), &session_token);
+                    return response;
                 } else {
                     // User is authenticated but doesn't have required role
                     tracing::warn!(

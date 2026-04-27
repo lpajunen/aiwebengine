@@ -108,6 +108,36 @@ impl AuthSessionManager {
         Ok(AuthSession::from(session_data))
     }
 
+    /// Validate and return internal session data.
+    pub async fn get_session_data(
+        &self,
+        token: &str,
+        ip_addr: &str,
+        user_agent: &str,
+    ) -> Result<SessionData, AuthError> {
+        self.session_manager
+            .validate_session(token, ip_addr, user_agent)
+            .await
+            .map_err(AuthError::Session)
+    }
+
+    /// Extend session lifetime and optionally update refresh token.
+    pub async fn refresh_session(
+        &self,
+        token: &str,
+        ip_addr: &str,
+        user_agent: &str,
+        new_refresh_token: Option<String>,
+    ) -> Result<AuthSession, AuthError> {
+        let session_data = self
+            .session_manager
+            .refresh_session(token, ip_addr, user_agent, new_refresh_token)
+            .await
+            .map_err(AuthError::Session)?;
+
+        Ok(AuthSession::from(session_data))
+    }
+
     /// Delete session (logout)
     pub async fn delete_session(&self, token: &str) -> Result<(), AuthError> {
         self.session_manager

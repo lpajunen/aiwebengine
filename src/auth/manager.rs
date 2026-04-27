@@ -6,6 +6,7 @@ use crate::auth::{
     AuthError, AuthSecurityContext, AuthSessionManager, OAuth2Provider, OAuth2ProviderConfig,
     OAuth2TokenResponse, OAuth2UserInfo, ProviderFactory,
 };
+use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -82,6 +83,8 @@ pub struct AuthManager {
     security_context: Arc<AuthSecurityContext>,
     api_key: Option<String>,
 }
+
+const SESSION_REFRESH_WINDOW_SECONDS: i64 = 300;
 
 impl AuthManager {
     /// Create a new authentication manager
@@ -374,9 +377,43 @@ impl AuthManager {
         ip_addr: &str,
         user_agent: &str,
     ) -> Result<crate::auth::session::AuthSession, AuthError> {
-        self.session_manager
-            .get_session(session_token, ip_addr, user_agent)
-            .await
+        let session_data = self
+            .session_manager
+            .get_session_data(session_token, ip_addr, user_agent)
+            .await?;
+
+        let seconds_until_expiry = (session_data.expires_at - Utc::now()).num_seconds();
+        if seconds_until_expiry > SESSION_REFRESH_WINDOW_SECONDS {
+            return Ok(session_data.into());
+        }
+
+        let Some(refresh_token) = session_data.refresh_token.clone() else {
+            return Ok(session_data.into());
+        };
+
+        let refresh_result = self
+            .refresh_token(&session_data.provider, &refresh_token)
+            .await;
+
+        match refresh_result {
+            Ok(refreshed) => {
+                let rotated_refresh_token = refreshed
+                    .refresh_token
+                    .or_else(|| Some(refresh_token.clone()));
+
+                self.session_manager
+                    .refresh_session(session_token, ip_addr, user_agent, rotated_refresh_token)
+                    .await
+            }
+            Err(err) => {
+                if Self::is_non_recoverable_refresh_error(&err) {
+                    let _ = self.session_manager.delete_session(session_token).await;
+                    Err(AuthError::NoSession)
+                } else {
+                    Ok(session_data.into())
+                }
+            }
+        }
     }
 
     /// Validate session with resource indicator check (RFC 8707)
@@ -443,6 +480,17 @@ impl AuthManager {
             .ok_or_else(|| AuthError::UnsupportedProvider(provider_name.to_string()))?;
 
         provider.refresh_token(refresh_token).await
+    }
+
+    fn is_non_recoverable_refresh_error(err: &AuthError) -> bool {
+        match err {
+            AuthError::OAuth2Error(msg) | AuthError::ProviderError(msg) => {
+                let lower = msg.to_lowercase();
+                lower.contains("invalid_grant") || lower.contains("invalid_token")
+            }
+            AuthError::UnsupportedProvider(_) => true,
+            _ => false,
+        }
     }
 
     /// Logout a user session
