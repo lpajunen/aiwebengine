@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration as StdDuration;
 
 use chrono::{DateTime, Duration, Utc};
+use sqlx::{Postgres, pool::PoolConnection};
 use tokio::sync::{Notify, oneshot};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -104,6 +105,39 @@ impl ScheduledInvocationKind {
 pub struct Scheduler {
     jobs_by_script: Mutex<HashMap<String, Vec<ScheduledJob>>>,
     wake_signal: Notify,
+}
+
+struct JobLockGuard {
+    conn: PoolConnection<Postgres>,
+    lock_key: String,
+}
+
+impl JobLockGuard {
+    async fn release(self) {
+        let mut conn = self.conn;
+        match sqlx::query_scalar::<_, bool>("SELECT pg_advisory_unlock(hashtext($1))")
+            .bind(&self.lock_key)
+            .fetch_one(&mut *conn)
+            .await
+        {
+            Ok(released) => {
+                if released {
+                    debug!("Released advisory lock for job: {}", self.lock_key);
+                } else {
+                    warn!(
+                        "Failed to release advisory lock for job: {} (was not held)",
+                        self.lock_key
+                    );
+                }
+            }
+            Err(e) => {
+                error!(
+                    "Error releasing advisory lock for job {}: {}",
+                    self.lock_key, e
+                );
+            }
+        }
+    }
 }
 
 impl Default for Scheduler {
@@ -327,9 +361,9 @@ impl Scheduler {
         )
     }
 
-    /// Try to acquire PostgreSQL advisory lock for a job
-    /// Returns true if lock was acquired, false if another instance has it
-    async fn try_acquire_job_lock(invocation: &ScheduledInvocation) -> bool {
+    /// Try to acquire PostgreSQL advisory lock for a job.
+    /// Returns a guard that keeps the same DB connection until unlock.
+    async fn try_acquire_job_lock(invocation: &ScheduledInvocation) -> Option<JobLockGuard> {
         // Get database pool if available
         let db = match crate::database::get_global_database() {
             Some(db) => db,
@@ -340,71 +374,47 @@ impl Scheduler {
                     job = %invocation.key,
                     "Skipping scheduler execution: database unavailable for distributed lock"
                 );
-                return false;
+                return None;
             }
         };
 
         let lock_key = Self::generate_lock_key(invocation);
+        let mut conn = match db.pool().acquire().await {
+            Ok(conn) => conn,
+            Err(e) => {
+                warn!(
+                    "Error acquiring DB connection for advisory lock {}: {}. Skipping execution.",
+                    lock_key, e
+                );
+                return None;
+            }
+        };
 
         // Use pg_try_advisory_lock with hashtext for deterministic lock ID
         // Returns true if lock was acquired, false if already held
         match sqlx::query_scalar::<_, bool>("SELECT pg_try_advisory_lock(hashtext($1))")
             .bind(&lock_key)
-            .fetch_one(db.pool())
+            .fetch_one(&mut *conn)
             .await
         {
             Ok(acquired) => {
                 if acquired {
                     debug!("Acquired advisory lock for job: {}", lock_key);
+                    Some(JobLockGuard { conn, lock_key })
                 } else {
                     debug!(
                         "Failed to acquire advisory lock for job: {} (another instance has it)",
                         lock_key
                     );
+                    None
                 }
-                acquired
             }
             Err(e) => {
                 warn!(
                     "Error trying to acquire advisory lock for job {}: {}. Skipping execution.",
                     lock_key, e
                 );
-                false
-            }
-        }
-    }
-
-    /// Release PostgreSQL advisory lock for a job
-    async fn release_job_lock(invocation: &ScheduledInvocation) {
-        // Get database pool if available
-        let db = match crate::database::get_global_database() {
-            Some(db) => db,
-            None => {
-                // No database available (memory mode), nothing to release
-                return;
-            }
-        };
-
-        let lock_key = Self::generate_lock_key(invocation);
-
-        // Use pg_advisory_unlock with hashtext to release the lock
-        match sqlx::query_scalar::<_, bool>("SELECT pg_advisory_unlock(hashtext($1))")
-            .bind(&lock_key)
-            .fetch_one(db.pool())
-            .await
-        {
-            Ok(released) => {
-                if released {
-                    debug!("Released advisory lock for job: {}", lock_key);
-                } else {
-                    warn!(
-                        "Failed to release advisory lock for job: {} (was not held)",
-                        lock_key
-                    );
-                }
-            }
-            Err(e) => {
-                error!("Error releasing advisory lock for job {}: {}", lock_key, e);
+                None
             }
         }
     }
@@ -417,16 +427,15 @@ impl Scheduler {
 
         // Try to acquire PostgreSQL advisory lock for this job
         // This ensures only one instance executes the job
-        let lock_acquired = Self::try_acquire_job_lock(&invocation).await;
+        let lock_guard = Self::try_acquire_job_lock(&invocation).await;
 
-        if !lock_acquired {
+        if lock_guard.is_none() {
             debug!(
                 script = %script_uri,
                 handler = %handler_name,
                 job = %job_key,
                 "Skipping job execution - another instance has the lock"
             );
-            // Don't release lock we never acquired
             return;
         }
 
@@ -491,8 +500,10 @@ impl Scheduler {
             }
         }
 
-        // Release the advisory lock
-        Self::release_job_lock(&invocation).await;
+        // Release the advisory lock using the same DB connection used to acquire it.
+        if let Some(guard) = lock_guard {
+            guard.release().await;
+        }
     }
 
     fn sleep_duration_until(&self, next: Option<DateTime<Utc>>) -> StdDuration {
