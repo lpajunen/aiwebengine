@@ -52,6 +52,9 @@ pub struct AuthManagerConfig {
 
     /// Session timeout in seconds
     pub session_timeout: u64,
+
+    /// Absolute maximum session age in seconds (30 days default)
+    pub max_session_age: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -70,7 +73,8 @@ impl Default for AuthManagerConfig {
             cookie_secure: true,
             cookie_http_only: true,
             cookie_same_site: CookieSameSite::Lax,
-            session_timeout: 3600 * 24 * 7, // 7 days
+            session_timeout: 3600 * 24 * 7,  // 7 days
+            max_session_age: 3600 * 24 * 30, // 30 days
         }
     }
 }

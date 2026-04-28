@@ -330,13 +330,14 @@ pub async fn oauth_callback(
             message: e.to_string(),
         })?;
 
-    // Set session cookie
+    // Set session cookie — use absolute max age so the browser retains the
+    // cookie for the full session lifetime (up to 30 days), not just one hour.
     let config = auth_manager.config();
     let cookie_value = format!(
         "{}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}{}",
         config.session_cookie_name,
         session_token,
-        config.session_timeout,
+        config.max_session_age,
         if config.cookie_secure { "; Secure" } else { "" }
     );
 
@@ -529,12 +530,15 @@ pub async fn refresh_session(
         .refresh_session(&token, &ip_addr, &user_agent, None)
         .await
     {
-        Ok(_) => {
+        Ok(session) => {
+            // Use the actual remaining lifetime from the DB session so the cookie
+            // never outlives the record (important near the 30-day absolute cap).
+            let remaining_secs = (session.expires_at - Utc::now()).num_seconds().max(0) as u64;
             let cookie_value = format!(
                 "{}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}{}",
                 config.session_cookie_name,
                 token,
-                config.session_timeout,
+                remaining_secs,
                 if config.cookie_secure { "; Secure" } else { "" }
             );
 

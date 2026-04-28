@@ -117,11 +117,13 @@ fn extract_user_agent(req: &Request) -> String {
 
 fn attach_session_cookie(response: &mut Response, auth_manager: &AuthManager, session_token: &str) {
     let config = auth_manager.config();
+    // Use max_session_age so the browser retains the cookie for the full session
+    // lifetime (up to 30 days) rather than expiring it after one sliding hour.
     let cookie_value = format!(
         "{}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}{}",
         config.session_cookie_name,
         session_token,
-        config.session_timeout,
+        config.max_session_age,
         if config.cookie_secure { "; Secure" } else { "" }
     );
 

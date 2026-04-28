@@ -220,6 +220,80 @@ async fn test_session_encryption() {
     assert!(session.is_admin);
 }
 
+#[tokio::test]
+async fn test_refresh_session_extends_expiry() {
+    let key: [u8; 32] = rand::random();
+    let pool = sqlx::PgPool::connect_lazy(
+        "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+    )
+    .unwrap();
+    let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
+    let manager = SecureSessionManager::new(pool, &key, 5, 86400 * 30, 3, auditor).unwrap();
+
+    let params = CreateSessionParams {
+        user_id: format!("user_refresh_ok_{}", rand::random::<u32>()),
+        provider: "google".to_string(),
+        email: None,
+        name: None,
+        is_admin: false,
+        is_editor: false,
+        ip_addr: "192.168.1.10".to_string(),
+        user_agent: "Mozilla/5.0".to_string(),
+        refresh_token: None,
+        audience: None,
+    };
+
+    let token = manager.create_session(params).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    let refreshed = manager
+        .refresh_session(&token.token, "192.168.1.10", "Mozilla/5.0", None)
+        .await
+        .unwrap();
+
+    assert!(
+        refreshed.expires_at > token.expires_at,
+        "refresh should extend the session expiry"
+    );
+}
+
+#[tokio::test]
+async fn test_refresh_session_rejects_after_absolute_max_age() {
+    let key: [u8; 32] = rand::random();
+    let pool = sqlx::PgPool::connect_lazy(
+        "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+    )
+    .unwrap();
+    let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
+    // Long idle timeout + very short absolute max age ensures absolute age check is exercised.
+    let manager = SecureSessionManager::new(pool, &key, 3600, 1, 3, auditor).unwrap();
+
+    let params = CreateSessionParams {
+        user_id: format!("user_refresh_max_age_{}", rand::random::<u32>()),
+        provider: "google".to_string(),
+        email: None,
+        name: None,
+        is_admin: false,
+        is_editor: false,
+        ip_addr: "192.168.1.11".to_string(),
+        user_agent: "Mozilla/5.0".to_string(),
+        refresh_token: None,
+        audience: None,
+    };
+
+    let token = manager.create_session(params).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    let refresh_result = manager
+        .refresh_session(&token.token, "192.168.1.11", "Mozilla/5.0", None)
+        .await;
+
+    assert!(
+        matches!(refresh_result, Err(SessionError::SessionExpired)),
+        "refresh should fail once absolute max session age is exceeded"
+    );
+}
+
 // ============================================================================
 // CSRF Protection Tests
 // ============================================================================

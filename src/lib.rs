@@ -996,6 +996,7 @@ async fn initialize_auth_manager(
             auth::SameSitePolicy::None => CookieSameSite::None,
         },
         session_timeout: auth_config.session_timeout,
+        max_session_age: auth_config.max_session_age,
     };
 
     // Create auth manager

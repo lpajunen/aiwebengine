@@ -409,8 +409,11 @@ impl SecureSessionManager {
             }
         }
 
-        // Update last access time
-        session_data.last_access = Utc::now();
+        // Update last access time and slide the expiry window so the user
+        // stays logged in as long as they are actively using the app.
+        let now = Utc::now();
+        session_data.last_access = now;
+        session_data.expires_at = self.next_sliding_expiry(session_data.created_at, now);
 
         // Re-encrypt and update session
         let encrypted = self.encrypt_session(&session_data)?;
@@ -418,9 +421,10 @@ impl SecureSessionManager {
             .map_err(|e| SessionError::EncryptionError(e.to_string()))?;
 
         sqlx::query(
-            "UPDATE sessions SET data = $1, last_accessed_at = NOW() WHERE session_id = $2",
+            "UPDATE sessions SET data = $1, expires_at = $2, last_accessed_at = NOW() WHERE session_id = $3",
         )
         .bind(encrypted_json)
+        .bind(session_data.expires_at)
         .bind(token)
         .execute(&self.pool)
         .await
