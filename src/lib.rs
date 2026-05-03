@@ -2740,13 +2740,12 @@ fn try_serve_asset(path: &str, method: &str) -> Option<Response> {
         let mut response = asset.content.into_response();
         // For text/* types, ensure charset=utf-8 is declared so browsers don't
         // fall back to Windows-1252 and garble multi-byte UTF-8 characters.
-        let content_type = if asset.mimetype.starts_with("text/")
-            && !asset.mimetype.contains("charset")
-        {
-            format!("{}; charset=utf-8", asset.mimetype)
-        } else {
-            asset.mimetype.clone()
-        };
+        let content_type =
+            if asset.mimetype.starts_with("text/") && !asset.mimetype.contains("charset") {
+                format!("{}; charset=utf-8", asset.mimetype)
+            } else {
+                asset.mimetype.clone()
+            };
         response.headers_mut().insert(
             axum::http::header::CONTENT_TYPE,
             axum::http::HeaderValue::from_str(&content_type).unwrap_or(

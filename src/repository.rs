@@ -3137,15 +3137,132 @@ async fn db_get_foreign_keys(
 // Script Database Data Access Functions
 // ============================================================================
 
-/// Query rows from a script-owned table
-async fn db_query_table(
+/// Supported comparison operators for query filters.
+enum FilterOp {
+    Eq,
+    Gt,
+    Gte,
+    Lt,
+    Lte,
+    Ne,
+}
+
+/// A single resolved filter condition (column, operator, value).
+struct FilterCondition {
+    column: String,
+    op: FilterOp,
+    value: serde_json::Value,
+}
+
+/// Parse a filter map into a flat list of `FilterCondition`s.
+///
+/// Supports two forms:
+/// - Equality:  `{ "col": value }`
+/// - Operators: `{ "col": { "$gt": v, "$lt": w, ... } }`
+///
+/// Allowed operators: `$gt`, `$gte`, `$lt`, `$lte`, `$ne`.
+fn parse_filter_conditions(
+    filters: &HashMap<String, serde_json::Value>,
+) -> AppResult<Vec<FilterCondition>> {
+    let mut conditions = Vec::new();
+    for (column, value) in filters {
+        validate_identifier(column).map_err(|e| AppError::Validation {
+            field: "filter_column".to_string(),
+            reason: e.to_string(),
+        })?;
+        match value {
+            serde_json::Value::Object(ops) => {
+                for (op_key, op_val) in ops {
+                    let op = match op_key.as_str() {
+                        "$gt" => FilterOp::Gt,
+                        "$gte" => FilterOp::Gte,
+                        "$lt" => FilterOp::Lt,
+                        "$lte" => FilterOp::Lte,
+                        "$ne" => FilterOp::Ne,
+                        other => {
+                            return Err(AppError::Validation {
+                                field: "filter_operator".to_string(),
+                                reason: format!("Unknown filter operator: {}", other),
+                            });
+                        }
+                    };
+                    conditions.push(FilterCondition {
+                        column: column.clone(),
+                        op,
+                        value: op_val.clone(),
+                    });
+                }
+            }
+            _ => {
+                conditions.push(FilterCondition {
+                    column: column.clone(),
+                    op: FilterOp::Eq,
+                    value: value.clone(),
+                });
+            }
+        }
+    }
+    Ok(conditions)
+}
+
+/// Bind a single JSON value to a sqlx query as the appropriate Postgres type.
+fn bind_json_value<'q>(
+    query: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
+    value: &'q serde_json::Value,
+) -> AppResult<sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>> {
+    match value {
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Ok(query.bind(i))
+            } else if let Some(f) = n.as_f64() {
+                Ok(query.bind(f))
+            } else {
+                Err(AppError::Validation {
+                    field: "value".to_string(),
+                    reason: "Numeric value out of range".to_string(),
+                })
+            }
+        }
+        serde_json::Value::String(s) => Ok(query.bind(s.as_str())),
+        serde_json::Value::Bool(b) => Ok(query.bind(*b)),
+        serde_json::Value::Null => Ok(query.bind(Option::<String>::None)),
+        _ => Err(AppError::Validation {
+            field: "value".to_string(),
+            reason: "Unsupported value type (array/object not allowed)".to_string(),
+        }),
+    }
+}
+
+/// Convert a sqlx `PgRow` to a `serde_json::Value::Object`.
+fn row_to_json(row: &sqlx::postgres::PgRow) -> serde_json::Value {
+    use sqlx::Column;
+    let mut obj = serde_json::Map::new();
+    for (idx, column) in row.columns().iter().enumerate() {
+        let column_name = column.name().to_string();
+        let value = if let Ok(v) = row.try_get::<i64, _>(idx) {
+            serde_json::Value::Number(v.into())
+        } else if let Ok(v) = row.try_get::<i32, _>(idx) {
+            serde_json::Value::Number(v.into())
+        } else if let Ok(v) = row.try_get::<String, _>(idx) {
+            serde_json::Value::String(v)
+        } else if let Ok(v) = row.try_get::<bool, _>(idx) {
+            serde_json::Value::Bool(v)
+        } else if let Ok(v) = row.try_get::<DateTime<Utc>, _>(idx) {
+            serde_json::Value::String(v.to_rfc3339())
+        } else {
+            serde_json::Value::Null
+        };
+        obj.insert(column_name, value);
+    }
+    serde_json::Value::Object(obj)
+}
+
+/// Look up the physical table name for a script-owned logical table.
+async fn get_physical_table_name(
     pool: &PgPool,
     script_uri: &str,
     logical_table_name: &str,
-    filters: Option<&HashMap<String, serde_json::Value>>,
-    limit: Option<i64>,
-) -> AppResult<Vec<serde_json::Value>> {
-    // Get physical table name
+) -> AppResult<String> {
     let physical_table_name: Option<String> = sqlx::query_scalar(
         "SELECT physical_table_name FROM script_tables WHERE script_uri = $1 AND logical_table_name = $2",
     )
@@ -3161,70 +3278,94 @@ async fn db_query_table(
         }
     })?;
 
-    let physical_table_name = physical_table_name.ok_or_else(|| AppError::Validation {
+    physical_table_name.ok_or_else(|| AppError::Validation {
         field: "table_name".to_string(),
         reason: format!("Table '{}' not found for this script", logical_table_name),
-    })?;
+    })
+}
 
-    // Build query with filters
-    let mut query = format!("SELECT * FROM {}", quote_identifier(&physical_table_name));
-    let mut where_clauses = Vec::new();
-    let mut param_count = 0;
+/// Query rows from a script-owned table.
+///
+/// `filters` supports equality (`{"col": value}`) and comparison operators
+/// (`{"col": {"$gt": v}}`). Supported operators: `$gt`, `$gte`, `$lt`,
+/// `$lte`, `$ne`.
+///
+/// `order_by` must be a valid column identifier; `order_dir` is `"asc"` or
+/// `"desc"` (defaults to `"asc"`).
+async fn db_query_table(
+    pool: &PgPool,
+    script_uri: &str,
+    logical_table_name: &str,
+    filters: Option<&HashMap<String, serde_json::Value>>,
+    limit: Option<i64>,
+    order_by: Option<&str>,
+    order_dir: Option<&str>,
+) -> AppResult<Vec<serde_json::Value>> {
+    let physical_table_name = get_physical_table_name(pool, script_uri, logical_table_name).await?;
 
-    if let Some(filters) = filters {
-        for column in filters.keys() {
-            validate_identifier(column).map_err(|e| AppError::Validation {
-                field: "filter_column".to_string(),
-                reason: e.to_string(),
-            })?;
-            param_count += 1;
-            where_clauses.push(format!("{} = ${}", quote_identifier(column), param_count));
-        }
+    // Parse filter conditions (supports equality and range operators)
+    let conditions = if let Some(f) = filters {
+        parse_filter_conditions(f)?
+    } else {
+        Vec::new()
+    };
+
+    // Build WHERE clause
+    let mut sql = format!("SELECT * FROM {}", quote_identifier(&physical_table_name));
+    let mut param_count = 0usize;
+
+    if !conditions.is_empty() {
+        let clauses: Vec<String> = conditions
+            .iter()
+            .map(|c| {
+                param_count += 1;
+                let op_str = match c.op {
+                    FilterOp::Eq => "=",
+                    FilterOp::Gt => ">",
+                    FilterOp::Gte => ">=",
+                    FilterOp::Lt => "<",
+                    FilterOp::Lte => "<=",
+                    FilterOp::Ne => "!=",
+                };
+                format!(
+                    "{} {} ${}",
+                    quote_identifier(&c.column),
+                    op_str,
+                    param_count
+                )
+            })
+            .collect();
+        sql.push_str(&format!(" WHERE {}", clauses.join(" AND ")));
     }
 
-    if !where_clauses.is_empty() {
-        query.push_str(&format!(" WHERE {}", where_clauses.join(" AND ")));
+    // ORDER BY
+    if let Some(order_col) = order_by {
+        validate_identifier(order_col).map_err(|e| AppError::Validation {
+            field: "order_by".to_string(),
+            reason: e.to_string(),
+        })?;
+        let dir = match order_dir.unwrap_or("asc").to_lowercase().as_str() {
+            "desc" => "DESC",
+            _ => "ASC",
+        };
+        sql.push_str(&format!(
+            " ORDER BY {} {}",
+            quote_identifier(order_col),
+            dir
+        ));
     }
 
-    // Apply limit (default 100, max 1000)
-    let limit = limit.unwrap_or(100).min(1000);
+    // LIMIT (default 100, max 1000)
+    let limit_val = limit.unwrap_or(100).min(1000);
     param_count += 1;
-    query.push_str(&format!(" LIMIT ${}", param_count));
+    sql.push_str(&format!(" LIMIT ${}", param_count));
 
-    // Build and execute query
-    let mut sql_query = sqlx::query(&query);
-
-    if let Some(filters) = filters {
-        for value in filters.values() {
-            // Bind parameters based on type
-            match value {
-                serde_json::Value::Number(n) => {
-                    if let Some(i) = n.as_i64() {
-                        sql_query = sql_query.bind(i as i32);
-                    } else if let Some(f) = n.as_f64() {
-                        sql_query = sql_query.bind(f);
-                    }
-                }
-                serde_json::Value::String(s) => {
-                    sql_query = sql_query.bind(s);
-                }
-                serde_json::Value::Bool(b) => {
-                    sql_query = sql_query.bind(b);
-                }
-                serde_json::Value::Null => {
-                    sql_query = sql_query.bind(Option::<String>::None);
-                }
-                _ => {
-                    return Err(AppError::Validation {
-                        field: "filter_value".to_string(),
-                        reason: "Unsupported filter value type".to_string(),
-                    });
-                }
-            }
-        }
+    // Bind parameters
+    let mut sql_query = sqlx::query(&sql);
+    for cond in &conditions {
+        sql_query = bind_json_value(sql_query, &cond.value)?;
     }
-
-    sql_query = sql_query.bind(limit);
+    sql_query = sql_query.bind(limit_val);
 
     let rows = sql_query.fetch_all(pool).await.map_err(|e| {
         error!("Database error querying table: {}", e);
@@ -3234,31 +3375,7 @@ async fn db_query_table(
         }
     })?;
 
-    // Convert rows to JSON
-    let mut results = Vec::new();
-    for row in rows {
-        let mut obj = serde_json::Map::new();
-        let columns = row.columns();
-        for (idx, column) in columns.iter().enumerate() {
-            use sqlx::Column;
-            let column_name = column.name().to_string();
-            let value = if let Ok(v) = row.try_get::<i32, _>(idx) {
-                serde_json::Value::Number(v.into())
-            } else if let Ok(v) = row.try_get::<String, _>(idx) {
-                serde_json::Value::String(v)
-            } else if let Ok(v) = row.try_get::<bool, _>(idx) {
-                serde_json::Value::Bool(v)
-            } else if let Ok(v) = row.try_get::<DateTime<Utc>, _>(idx) {
-                serde_json::Value::String(v.to_rfc3339())
-            } else {
-                serde_json::Value::Null
-            };
-            obj.insert(column_name, value);
-        }
-        results.push(serde_json::Value::Object(obj));
-    }
-
-    Ok(results)
+    Ok(rows.iter().map(row_to_json).collect())
 }
 
 /// Insert a row into a script-owned table
@@ -3268,26 +3385,7 @@ async fn db_insert_row(
     logical_table_name: &str,
     data: &HashMap<String, serde_json::Value>,
 ) -> AppResult<serde_json::Value> {
-    // Get physical table name
-    let physical_table_name: Option<String> = sqlx::query_scalar(
-        "SELECT physical_table_name FROM script_tables WHERE script_uri = $1 AND logical_table_name = $2",
-    )
-    .bind(script_uri)
-    .bind(logical_table_name)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| {
-        error!("Database error fetching table metadata: {}", e);
-        AppError::Database {
-            message: format!("Database error: {}", e),
-            source: None,
-        }
-    })?;
-
-    let physical_table_name = physical_table_name.ok_or_else(|| AppError::Validation {
-        field: "table_name".to_string(),
-        reason: format!("Table '{}' not found for this script", logical_table_name),
-    })?;
+    let physical_table_name = get_physical_table_name(pool, script_uri, logical_table_name).await?;
 
     if data.is_empty() {
         return Err(AppError::Validation {
@@ -3296,10 +3394,9 @@ async fn db_insert_row(
         });
     }
 
-    // Build INSERT query
     let mut columns = Vec::new();
     let mut placeholders = Vec::new();
-    let mut param_count = 0;
+    let mut param_count = 0usize;
 
     for column in data.keys() {
         validate_identifier(column).map_err(|e| AppError::Validation {
@@ -3311,41 +3408,16 @@ async fn db_insert_row(
         placeholders.push(format!("${}", param_count));
     }
 
-    let query = format!(
+    let sql = format!(
         "INSERT INTO {} ({}) VALUES ({}) RETURNING *",
         quote_identifier(&physical_table_name),
         columns.join(", "),
         placeholders.join(", ")
     );
 
-    // Build and execute query
-    let mut sql_query = sqlx::query(&query);
-
+    let mut sql_query = sqlx::query(&sql);
     for value in data.values() {
-        match value {
-            serde_json::Value::Number(n) => {
-                if let Some(i) = n.as_i64() {
-                    sql_query = sql_query.bind(i as i32);
-                } else if let Some(f) = n.as_f64() {
-                    sql_query = sql_query.bind(f);
-                }
-            }
-            serde_json::Value::String(s) => {
-                sql_query = sql_query.bind(s);
-            }
-            serde_json::Value::Bool(b) => {
-                sql_query = sql_query.bind(b);
-            }
-            serde_json::Value::Null => {
-                sql_query = sql_query.bind(Option::<String>::None);
-            }
-            _ => {
-                return Err(AppError::Validation {
-                    field: "data_value".to_string(),
-                    reason: "Unsupported data value type".to_string(),
-                });
-            }
-        }
+        sql_query = bind_json_value(sql_query, value)?;
     }
 
     let row = sql_query.fetch_one(pool).await.map_err(|e| {
@@ -3356,27 +3428,7 @@ async fn db_insert_row(
         }
     })?;
 
-    // Convert row to JSON
-    let mut obj = serde_json::Map::new();
-    let columns = row.columns();
-    for (idx, column) in columns.iter().enumerate() {
-        use sqlx::Column;
-        let column_name = column.name().to_string();
-        let value = if let Ok(v) = row.try_get::<i32, _>(idx) {
-            serde_json::Value::Number(v.into())
-        } else if let Ok(v) = row.try_get::<String, _>(idx) {
-            serde_json::Value::String(v)
-        } else if let Ok(v) = row.try_get::<bool, _>(idx) {
-            serde_json::Value::Bool(v)
-        } else if let Ok(v) = row.try_get::<DateTime<Utc>, _>(idx) {
-            serde_json::Value::String(v.to_rfc3339())
-        } else {
-            serde_json::Value::Null
-        };
-        obj.insert(column_name, value);
-    }
-
-    Ok(serde_json::Value::Object(obj))
+    Ok(row_to_json(&row))
 }
 
 /// Update a row in a script-owned table
@@ -3387,26 +3439,7 @@ async fn db_update_row(
     id: i32,
     data: &HashMap<String, serde_json::Value>,
 ) -> AppResult<serde_json::Value> {
-    // Get physical table name
-    let physical_table_name: Option<String> = sqlx::query_scalar(
-        "SELECT physical_table_name FROM script_tables WHERE script_uri = $1 AND logical_table_name = $2",
-    )
-    .bind(script_uri)
-    .bind(logical_table_name)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| {
-        error!("Database error fetching table metadata: {}", e);
-        AppError::Database {
-            message: format!("Database error: {}", e),
-            source: None,
-        }
-    })?;
-
-    let physical_table_name = physical_table_name.ok_or_else(|| AppError::Validation {
-        field: "table_name".to_string(),
-        reason: format!("Table '{}' not found for this script", logical_table_name),
-    })?;
+    let physical_table_name = get_physical_table_name(pool, script_uri, logical_table_name).await?;
 
     if data.is_empty() {
         return Err(AppError::Validation {
@@ -3415,9 +3448,8 @@ async fn db_update_row(
         });
     }
 
-    // Build UPDATE query
     let mut set_clauses = Vec::new();
-    let mut param_count = 0;
+    let mut param_count = 0usize;
 
     for column in data.keys() {
         validate_identifier(column).map_err(|e| AppError::Validation {
@@ -3429,43 +3461,17 @@ async fn db_update_row(
     }
 
     param_count += 1;
-    let query = format!(
+    let sql = format!(
         "UPDATE {} SET {} WHERE id = ${} RETURNING *",
         quote_identifier(&physical_table_name),
         set_clauses.join(", "),
         param_count
     );
 
-    // Build and execute query
-    let mut sql_query = sqlx::query(&query);
-
+    let mut sql_query = sqlx::query(&sql);
     for value in data.values() {
-        match value {
-            serde_json::Value::Number(n) => {
-                if let Some(i) = n.as_i64() {
-                    sql_query = sql_query.bind(i as i32);
-                } else if let Some(f) = n.as_f64() {
-                    sql_query = sql_query.bind(f);
-                }
-            }
-            serde_json::Value::String(s) => {
-                sql_query = sql_query.bind(s);
-            }
-            serde_json::Value::Bool(b) => {
-                sql_query = sql_query.bind(b);
-            }
-            serde_json::Value::Null => {
-                sql_query = sql_query.bind(Option::<String>::None);
-            }
-            _ => {
-                return Err(AppError::Validation {
-                    field: "data_value".to_string(),
-                    reason: "Unsupported data value type".to_string(),
-                });
-            }
-        }
+        sql_query = bind_json_value(sql_query, value)?;
     }
-
     sql_query = sql_query.bind(id);
 
     let row = sql_query.fetch_one(pool).await.map_err(|e| {
@@ -3476,63 +3482,24 @@ async fn db_update_row(
         }
     })?;
 
-    // Convert row to JSON
-    let mut obj = serde_json::Map::new();
-    let columns = row.columns();
-    for (idx, column) in columns.iter().enumerate() {
-        use sqlx::Column;
-        let column_name = column.name().to_string();
-        let value = if let Ok(v) = row.try_get::<i32, _>(idx) {
-            serde_json::Value::Number(v.into())
-        } else if let Ok(v) = row.try_get::<String, _>(idx) {
-            serde_json::Value::String(v)
-        } else if let Ok(v) = row.try_get::<bool, _>(idx) {
-            serde_json::Value::Bool(v)
-        } else if let Ok(v) = row.try_get::<DateTime<Utc>, _>(idx) {
-            serde_json::Value::String(v.to_rfc3339())
-        } else {
-            serde_json::Value::Null
-        };
-        obj.insert(column_name, value);
-    }
-
-    Ok(serde_json::Value::Object(obj))
+    Ok(row_to_json(&row))
 }
 
-/// Delete a row from a script-owned table
+/// Delete a row from a script-owned table by ID
 async fn db_delete_row(
     pool: &PgPool,
     script_uri: &str,
     logical_table_name: &str,
     id: i32,
 ) -> AppResult<bool> {
-    // Get physical table name
-    let physical_table_name: Option<String> = sqlx::query_scalar(
-        "SELECT physical_table_name FROM script_tables WHERE script_uri = $1 AND logical_table_name = $2",
-    )
-    .bind(script_uri)
-    .bind(logical_table_name)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| {
-        error!("Database error fetching table metadata: {}", e);
-        AppError::Database {
-            message: format!("Database error: {}", e),
-            source: None,
-        }
-    })?;
+    let physical_table_name = get_physical_table_name(pool, script_uri, logical_table_name).await?;
 
-    let physical_table_name = physical_table_name.ok_or_else(|| AppError::Validation {
-        field: "table_name".to_string(),
-        reason: format!("Table '{}' not found for this script", logical_table_name),
-    })?;
-
-    let query = format!(
+    let sql = format!(
         "DELETE FROM {} WHERE id = $1",
         quote_identifier(&physical_table_name)
     );
 
-    let result = sqlx::query(&query)
+    let result = sqlx::query(&sql)
         .bind(id)
         .execute(pool)
         .await
@@ -3545,6 +3512,452 @@ async fn db_delete_row(
         })?;
 
     Ok(result.rows_affected() > 0)
+}
+
+/// Upsert a row into a script-owned table using INSERT … ON CONFLICT DO UPDATE.
+///
+/// `key_columns` names the columns that form the conflict target; a unique
+/// index on those columns must exist (create one with `db_add_unique_index`).
+/// `data` must contain values for all columns, including the key columns.
+async fn db_upsert_row(
+    pool: &PgPool,
+    script_uri: &str,
+    logical_table_name: &str,
+    key_columns: &[String],
+    data: &HashMap<String, serde_json::Value>,
+) -> AppResult<serde_json::Value> {
+    let physical_table_name = get_physical_table_name(pool, script_uri, logical_table_name).await?;
+
+    if data.is_empty() {
+        return Err(AppError::Validation {
+            field: "data".to_string(),
+            reason: "No data provided for upsert".to_string(),
+        });
+    }
+    if key_columns.is_empty() {
+        return Err(AppError::Validation {
+            field: "key_columns".to_string(),
+            reason: "At least one key column must be specified".to_string(),
+        });
+    }
+
+    // Validate key columns
+    for kc in key_columns {
+        validate_identifier(kc).map_err(|e| AppError::Validation {
+            field: "key_column".to_string(),
+            reason: e.to_string(),
+        })?;
+    }
+
+    // Build column/placeholder lists (deterministic order via sorted keys)
+    let mut ordered_cols: Vec<&String> = data.keys().collect();
+    ordered_cols.sort();
+
+    let mut col_list = Vec::new();
+    let mut placeholder_list = Vec::new();
+    let mut param_count = 0usize;
+
+    for col in &ordered_cols {
+        validate_identifier(col).map_err(|e| AppError::Validation {
+            field: "column_name".to_string(),
+            reason: e.to_string(),
+        })?;
+        col_list.push(quote_identifier(col));
+        param_count += 1;
+        placeholder_list.push(format!("${}", param_count));
+    }
+
+    // SET clause: update all non-key columns
+    let key_set: std::collections::HashSet<&str> = key_columns.iter().map(|s| s.as_str()).collect();
+    let set_clauses: Vec<String> = ordered_cols
+        .iter()
+        .filter(|c| !key_set.contains(c.as_str()))
+        .map(|c| format!("{} = EXCLUDED.{}", quote_identifier(c), quote_identifier(c)))
+        .collect();
+
+    let conflict_target = key_columns
+        .iter()
+        .map(|c| quote_identifier(c))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let sql = if set_clauses.is_empty() {
+        // All columns are key columns — DO NOTHING is the right action
+        format!(
+            "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT ({}) DO NOTHING RETURNING *",
+            quote_identifier(&physical_table_name),
+            col_list.join(", "),
+            placeholder_list.join(", "),
+            conflict_target,
+        )
+    } else {
+        format!(
+            "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT ({}) DO UPDATE SET {} RETURNING *",
+            quote_identifier(&physical_table_name),
+            col_list.join(", "),
+            placeholder_list.join(", "),
+            conflict_target,
+            set_clauses.join(", "),
+        )
+    };
+
+    let mut sql_query = sqlx::query(&sql);
+    for col in &ordered_cols {
+        let value = &data[*col];
+        sql_query = bind_json_value(sql_query, value)?;
+    }
+
+    let row = sql_query.fetch_one(pool).await.map_err(|e| {
+        error!("Database error upserting row: {}", e);
+        AppError::Database {
+            message: format!("Upsert error: {}", e),
+            source: None,
+        }
+    })?;
+
+    Ok(row_to_json(&row))
+}
+
+/// Delete rows from a script-owned table matching the given filter conditions.
+///
+/// Supports the same filter syntax as `db_query_table` (equality and range
+/// operators). Returns the number of rows deleted.
+async fn db_delete_where(
+    pool: &PgPool,
+    script_uri: &str,
+    logical_table_name: &str,
+    filters: &HashMap<String, serde_json::Value>,
+) -> AppResult<u64> {
+    let physical_table_name = get_physical_table_name(pool, script_uri, logical_table_name).await?;
+
+    if filters.is_empty() {
+        return Err(AppError::Validation {
+            field: "filters".to_string(),
+            reason: "deleteWhere requires at least one filter to prevent accidental full-table delete. Use dropTable to remove all rows.".to_string(),
+        });
+    }
+
+    let conditions = parse_filter_conditions(filters)?;
+
+    let mut param_count = 0usize;
+    let clauses: Vec<String> = conditions
+        .iter()
+        .map(|c| {
+            param_count += 1;
+            let op_str = match c.op {
+                FilterOp::Eq => "=",
+                FilterOp::Gt => ">",
+                FilterOp::Gte => ">=",
+                FilterOp::Lt => "<",
+                FilterOp::Lte => "<=",
+                FilterOp::Ne => "!=",
+            };
+            format!(
+                "{} {} ${}",
+                quote_identifier(&c.column),
+                op_str,
+                param_count
+            )
+        })
+        .collect();
+
+    let sql = format!(
+        "DELETE FROM {} WHERE {}",
+        quote_identifier(&physical_table_name),
+        clauses.join(" AND ")
+    );
+
+    let mut sql_query = sqlx::query(&sql);
+    for cond in &conditions {
+        sql_query = bind_json_value(sql_query, &cond.value)?;
+    }
+
+    let result = sql_query.execute(pool).await.map_err(|e| {
+        error!("Database error in deleteWhere: {}", e);
+        AppError::Database {
+            message: format!("Delete error: {}", e),
+            source: None,
+        }
+    })?;
+
+    Ok(result.rows_affected())
+}
+
+/// Atomically acquire or extend a distributed lease stored in a script-owned table.
+///
+/// The table must have been created with `db_create_lease_table` (or manually
+/// given the schema `lease_id TEXT, owner TEXT, expires_at TIMESTAMPTZ` with a
+/// UNIQUE constraint on `lease_id`).
+///
+/// Returns `{acquired: bool, owner: string, expires_at: string}`.
+///
+/// How it works (single-statement, race-free):
+/// - If no row with `lease_id` exists → INSERT succeeds → we own the lease.
+/// - If a row exists and is expired OR already owned by us → UPDATE succeeds → we own it.
+/// - If a row exists, is not expired, and belongs to someone else → nothing changes → we do NOT own it.
+async fn db_acquire_lease(
+    pool: &PgPool,
+    script_uri: &str,
+    logical_table_name: &str,
+    lease_id: &str,
+    owner: &str,
+    ttl_ms: i64,
+) -> AppResult<serde_json::Value> {
+    let physical_table_name = get_physical_table_name(pool, script_uri, logical_table_name).await?;
+
+    if ttl_ms <= 0 {
+        return Err(AppError::Validation {
+            field: "ttl_ms".to_string(),
+            reason: "ttl_ms must be a positive integer".to_string(),
+        });
+    }
+
+    // Single-statement atomic upsert: wins only if slot is free or ours.
+    // bind order: $1=lease_id, $2=owner, $3=ttl_ms (bigint milliseconds)
+    let sql = format!(
+        r#"
+        INSERT INTO {tbl} (lease_id, owner, expires_at)
+        VALUES ($1, $2, NOW() + ($3::bigint * interval '1 millisecond'))
+        ON CONFLICT (lease_id) DO UPDATE
+            SET owner      = EXCLUDED.owner,
+                expires_at = EXCLUDED.expires_at
+        WHERE {tbl}.expires_at <= NOW()
+           OR {tbl}.owner = EXCLUDED.owner
+        RETURNING owner, expires_at
+        "#,
+        tbl = quote_identifier(&physical_table_name)
+    );
+
+    let upsert_row = sqlx::query(&sql)
+        .bind(lease_id)
+        .bind(owner)
+        .bind(ttl_ms)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| {
+            error!("Database error in acquireLease: {}", e);
+            AppError::Database {
+                message: format!("Lease error: {}", e),
+                source: None,
+            }
+        })?;
+
+    if let Some(row) = upsert_row {
+        // Upsert succeeded — we hold the lease
+        let row_owner: String = row.try_get("owner").unwrap_or_default();
+        let expires_at: String = row
+            .try_get::<DateTime<Utc>, _>("expires_at")
+            .map(|dt| dt.to_rfc3339())
+            .unwrap_or_default();
+        return Ok(serde_json::json!({
+            "acquired": row_owner == owner,
+            "owner": row_owner,
+            "expires_at": expires_at,
+        }));
+    }
+
+    // Upsert produced no row — someone else holds an active lease.
+    // Do a plain SELECT to return current lease info (best-effort, non-critical).
+    let select_sql = format!(
+        "SELECT owner, expires_at FROM {} WHERE lease_id = $1",
+        quote_identifier(&physical_table_name)
+    );
+    let current = sqlx::query(&select_sql)
+        .bind(lease_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| {
+            error!("Database error reading current lease: {}", e);
+            AppError::Database {
+                message: format!("Lease read error: {}", e),
+                source: None,
+            }
+        })?;
+
+    if let Some(row) = current {
+        let row_owner: String = row.try_get("owner").unwrap_or_default();
+        let expires_at: String = row
+            .try_get::<DateTime<Utc>, _>("expires_at")
+            .map(|dt| dt.to_rfc3339())
+            .unwrap_or_default();
+        Ok(serde_json::json!({
+            "acquired": false,
+            "owner": row_owner,
+            "expires_at": expires_at,
+        }))
+    } else {
+        Ok(serde_json::json!({
+            "acquired": false,
+            "owner": serde_json::Value::Null,
+            "expires_at": serde_json::Value::Null,
+        }))
+    }
+}
+
+/// Create a properly structured lease table owned by the given script.
+///
+/// The table schema is: `lease_id TEXT UNIQUE NOT NULL, owner TEXT NOT NULL,
+/// expires_at TIMESTAMPTZ NOT NULL`. An explicit UNIQUE index on `lease_id`
+/// is created so that `acquireLease` can use it as a conflict target.
+///
+/// Returns the physical table name on success.
+async fn db_create_lease_table(
+    pool: &PgPool,
+    script_uri: &str,
+    logical_table_name: &str,
+) -> AppResult<String> {
+    use crate::db_schema_utils::{
+        MAX_TABLES_PER_SCRIPT, generate_physical_table_name, validate_identifier,
+    };
+
+    validate_identifier(logical_table_name).map_err(|e| AppError::Validation {
+        field: "table_name".to_string(),
+        reason: e.to_string(),
+    })?;
+
+    // Count existing tables for this script
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM script_tables WHERE script_uri = $1")
+        .bind(script_uri)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        })?;
+
+    if count >= MAX_TABLES_PER_SCRIPT as i64 {
+        return Err(AppError::Validation {
+            field: "table_name".to_string(),
+            reason: format!("Maximum table limit of {} reached", MAX_TABLES_PER_SCRIPT),
+        });
+    }
+
+    // Check for duplicates
+    let existing: Option<String> = sqlx::query_scalar(
+        "SELECT physical_table_name FROM script_tables WHERE script_uri = $1 AND logical_table_name = $2",
+    )
+    .bind(script_uri)
+    .bind(logical_table_name)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| AppError::Database {
+        message: format!("Database error: {}", e),
+        source: None,
+    })?;
+
+    if let Some(existing_physical) = existing {
+        // Table already exists — idempotent
+        return Ok(existing_physical);
+    }
+
+    let physical_name = generate_physical_table_name(script_uri, logical_table_name);
+
+    // Create the table with the required lease schema
+    let create_sql = format!(
+        r#"CREATE TABLE {} (
+            lease_id  TEXT        NOT NULL,
+            owner     TEXT        NOT NULL,
+            expires_at TIMESTAMPTZ NOT NULL,
+            CONSTRAINT {}_pkey PRIMARY KEY (lease_id)
+        )"#,
+        quote_identifier(&physical_name),
+        physical_name,
+    );
+
+    sqlx::query(&create_sql)
+        .execute(pool)
+        .await
+        .map_err(|e| AppError::Database {
+            message: format!("Error creating lease table: {}", e),
+            source: None,
+        })?;
+
+    // Register in metadata
+    sqlx::query(
+        "INSERT INTO script_tables (script_uri, logical_table_name, physical_table_name, created_at)
+         VALUES ($1, $2, $3, NOW())",
+    )
+    .bind(script_uri)
+    .bind(logical_table_name)
+    .bind(&physical_name)
+    .execute(pool)
+    .await
+    .map_err(|e| AppError::Database {
+        message: format!("Error registering lease table: {}", e),
+        source: None,
+    })?;
+
+    debug!(
+        "Created lease table '{}' (physical: '{}') for script '{}'",
+        logical_table_name, physical_name, script_uri
+    );
+
+    Ok(physical_name)
+}
+
+/// Add a unique index on one or more columns of a script-owned table.
+///
+/// This is required before using those columns as a conflict target in
+/// `db_upsert_row`. Index names are derived from the physical table name and
+/// columns to avoid collisions.
+async fn db_add_unique_index(
+    pool: &PgPool,
+    script_uri: &str,
+    logical_table_name: &str,
+    columns: &[String],
+) -> AppResult<()> {
+    let physical_table_name = get_physical_table_name(pool, script_uri, logical_table_name).await?;
+
+    if columns.is_empty() {
+        return Err(AppError::Validation {
+            field: "columns".to_string(),
+            reason: "At least one column must be specified".to_string(),
+        });
+    }
+
+    for col in columns {
+        validate_identifier(col).map_err(|e| AppError::Validation {
+            field: "column".to_string(),
+            reason: e.to_string(),
+        })?;
+    }
+
+    // Build a deterministic index name
+    let cols_slug = columns.join("_");
+    // Truncate to stay within PostgreSQL's 63-char identifier limit
+    let index_name = format!(
+        "{}_uniq_{}",
+        &physical_table_name[..physical_table_name.len().min(40)],
+        &cols_slug[..cols_slug.len().min(20)]
+    );
+
+    let col_list = columns
+        .iter()
+        .map(|c| quote_identifier(c))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let sql = format!(
+        "CREATE UNIQUE INDEX IF NOT EXISTS {} ON {} ({})",
+        quote_identifier(&index_name),
+        quote_identifier(&physical_table_name),
+        col_list
+    );
+
+    sqlx::query(&sql).execute(pool).await.map_err(|e| {
+        error!("Database error adding unique index: {}", e);
+        AppError::Database {
+            message: format!("Index error: {}", e),
+            source: None,
+        }
+    })?;
+
+    debug!(
+        "Created unique index '{}' on table '{}' for script '{}'",
+        index_name, logical_table_name, script_uri
+    );
+
+    Ok(())
 }
 
 /// Fetch scripts from repository with proper error handling
@@ -4162,11 +4575,20 @@ pub fn query_table(
     logical_table_name: &str,
     filters: Option<&HashMap<String, serde_json::Value>>,
     limit: Option<i64>,
+    order_by: Option<&str>,
+    order_dir: Option<&str>,
 ) -> AppResult<Vec<serde_json::Value>> {
     let repo = get_repository();
     run_blocking(async {
-        repo.query_table(script_uri, logical_table_name, filters, limit)
-            .await
+        repo.query_table(
+            script_uri,
+            logical_table_name,
+            filters,
+            limit,
+            order_by,
+            order_dir,
+        )
+        .await
     })
 }
 
@@ -4198,6 +4620,70 @@ pub fn update_row(
 pub fn delete_row(script_uri: &str, logical_table_name: &str, id: i32) -> AppResult<bool> {
     let repo = get_repository();
     run_blocking(async { repo.delete_row(script_uri, logical_table_name, id).await })
+}
+
+/// Upsert a row into a script-owned table (INSERT … ON CONFLICT DO UPDATE)
+pub fn upsert_row(
+    script_uri: &str,
+    logical_table_name: &str,
+    key_columns: &[String],
+    data: &HashMap<String, serde_json::Value>,
+) -> AppResult<serde_json::Value> {
+    let repo = get_repository();
+    run_blocking(async {
+        repo.upsert_row(script_uri, logical_table_name, key_columns, data)
+            .await
+    })
+}
+
+/// Delete rows from a script-owned table matching the given filters
+pub fn delete_where(
+    script_uri: &str,
+    logical_table_name: &str,
+    filters: &HashMap<String, serde_json::Value>,
+) -> AppResult<u64> {
+    let repo = get_repository();
+    run_blocking(async {
+        repo.delete_where(script_uri, logical_table_name, filters)
+            .await
+    })
+}
+
+/// Atomically acquire or extend a distributed lease in a script-owned table
+pub fn acquire_lease(
+    script_uri: &str,
+    logical_table_name: &str,
+    lease_id: &str,
+    owner: &str,
+    ttl_ms: i64,
+) -> AppResult<serde_json::Value> {
+    let repo = get_repository();
+    run_blocking(async {
+        repo.acquire_lease(script_uri, logical_table_name, lease_id, owner, ttl_ms)
+            .await
+    })
+}
+
+/// Create a lease table with the required schema in a script-owned table
+pub fn create_lease_table(script_uri: &str, logical_table_name: &str) -> AppResult<String> {
+    let repo = get_repository();
+    run_blocking(async {
+        repo.create_lease_table(script_uri, logical_table_name)
+            .await
+    })
+}
+
+/// Add a unique index on one or more columns of a script-owned table
+pub fn add_unique_index(
+    script_uri: &str,
+    logical_table_name: &str,
+    columns: &[String],
+) -> AppResult<()> {
+    let repo = get_repository();
+    run_blocking(async {
+        repo.add_unique_index(script_uri, logical_table_name, columns)
+            .await
+    })
 }
 
 /// Helper function to get static assets embedded at compile time
@@ -4886,6 +5372,8 @@ pub trait Repository: Send + Sync {
         logical_table_name: &str,
         filters: Option<&HashMap<String, serde_json::Value>>,
         limit: Option<i64>,
+        order_by: Option<&str>,
+        order_dir: Option<&str>,
     ) -> AppResult<Vec<serde_json::Value>>;
     async fn insert_row(
         &self,
@@ -4906,6 +5394,38 @@ pub trait Repository: Send + Sync {
         logical_table_name: &str,
         id: i32,
     ) -> AppResult<bool>;
+    async fn upsert_row(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        key_columns: &[String],
+        data: &HashMap<String, serde_json::Value>,
+    ) -> AppResult<serde_json::Value>;
+    async fn delete_where(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        filters: &HashMap<String, serde_json::Value>,
+    ) -> AppResult<u64>;
+    async fn acquire_lease(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        lease_id: &str,
+        owner: &str,
+        ttl_ms: i64,
+    ) -> AppResult<serde_json::Value>;
+    async fn create_lease_table(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+    ) -> AppResult<String>;
+    async fn add_unique_index(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        columns: &[String],
+    ) -> AppResult<()>;
 }
 
 /// PostgreSQL implementation of the Repository trait
@@ -5607,8 +6127,19 @@ impl Repository for PostgresRepository {
         logical_table_name: &str,
         filters: Option<&HashMap<String, serde_json::Value>>,
         limit: Option<i64>,
+        order_by: Option<&str>,
+        order_dir: Option<&str>,
     ) -> AppResult<Vec<serde_json::Value>> {
-        db_query_table(&self.pool, script_uri, logical_table_name, filters, limit).await
+        db_query_table(
+            &self.pool,
+            script_uri,
+            logical_table_name,
+            filters,
+            limit,
+            order_by,
+            order_dir,
+        )
+        .await
     }
 
     async fn insert_row(
@@ -5637,6 +6168,68 @@ impl Repository for PostgresRepository {
         id: i32,
     ) -> AppResult<bool> {
         db_delete_row(&self.pool, script_uri, logical_table_name, id).await
+    }
+
+    async fn upsert_row(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        key_columns: &[String],
+        data: &HashMap<String, serde_json::Value>,
+    ) -> AppResult<serde_json::Value> {
+        db_upsert_row(
+            &self.pool,
+            script_uri,
+            logical_table_name,
+            key_columns,
+            data,
+        )
+        .await
+    }
+
+    async fn delete_where(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        filters: &HashMap<String, serde_json::Value>,
+    ) -> AppResult<u64> {
+        db_delete_where(&self.pool, script_uri, logical_table_name, filters).await
+    }
+
+    async fn acquire_lease(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        lease_id: &str,
+        owner: &str,
+        ttl_ms: i64,
+    ) -> AppResult<serde_json::Value> {
+        db_acquire_lease(
+            &self.pool,
+            script_uri,
+            logical_table_name,
+            lease_id,
+            owner,
+            ttl_ms,
+        )
+        .await
+    }
+
+    async fn create_lease_table(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+    ) -> AppResult<String> {
+        db_create_lease_table(&self.pool, script_uri, logical_table_name).await
+    }
+
+    async fn add_unique_index(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        columns: &[String],
+    ) -> AppResult<()> {
+        db_add_unique_index(&self.pool, script_uri, logical_table_name, columns).await
     }
 }
 

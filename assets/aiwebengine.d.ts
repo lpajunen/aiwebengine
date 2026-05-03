@@ -1060,16 +1060,38 @@ interface Database {
   dropColumn(tableName: string, columnName: string): string;
 
   /**
-   * Query rows from a table with optional filters and limit
+   * Query rows from a table with optional filters, limit, and ordering.
+   *
+   * `filters` supports two forms:
+   * - Equality: `{ "col": value }` → `col = value`
+   * - Comparison: `{ "col": { "$gt": v } }` → `col > v`
+   *   Supported operators: `$gt`, `$gte`, `$lt`, `$lte`, `$ne`
+   *   Multiple operators on the same column are AND-ed together.
+   *
    * @param tableName - Table name
    * @param filters - JSON string with filter conditions (optional)
-   * @param limit - Maximum number of rows to return (optional)
+   * @param limit - Maximum rows to return (default 100, max 1000)
+   * @param orderBy - Column to sort by (optional)
+   * @param orderDir - Sort direction: `"asc"` (default) or `"desc"`
    * @returns JSON string array of matching rows or {error: string}
    * @example
-   * const users = JSON.parse(database.query("users", JSON.stringify({active: true}), 10));
-   * const allPosts = JSON.parse(database.query("posts"));
+   * // Range filter: users active in the last 90 seconds
+   * const cutoff = Date.now() - 90000;
+   * const active = JSON.parse(database.query(
+   *   "presence",
+   *   JSON.stringify({ last_active: { "$gt": cutoff } })
+   * ));
+   *
+   * // Last 100 chat messages, newest first
+   * const msgs = JSON.parse(database.query("chat", null, 100, "ts", "desc"));
    */
-  query(tableName: string, filters?: string, limit?: number): string;
+  query(
+    tableName: string,
+    filters?: string | null,
+    limit?: number,
+    orderBy?: string,
+    orderDir?: "asc" | "desc",
+  ): string;
 
   /**
    * Insert a row into a table
@@ -1105,6 +1127,103 @@ interface Database {
    * const result = JSON.parse(database.delete("users", 5));
    */
   delete(tableName: string, id: number): string;
+
+  /**
+   * Insert or update a row by a unique key (atomic upsert).
+   *
+   * Uses PostgreSQL `INSERT … ON CONFLICT DO UPDATE`, so the table must have a
+   * unique index on `keyColumns` — create one with `database.addUniqueIndex()`.
+   *
+   * @param tableName - Table name
+   * @param keyColumns - JSON array of column names that form the conflict target, or a single column name string
+   * @param data - JSON string with all column values (including key columns)
+   * @returns JSON string with the upserted row or {error: string}
+   * @example
+   * // Ensure unique index exists first (idempotent):
+   * database.addUniqueIndex("presence", JSON.stringify(["user_id"]));
+   *
+   * database.upsert("presence",
+   *   JSON.stringify(["user_id"]),
+   *   JSON.stringify({ user_id: userId, nick: nick, last_active: Date.now() })
+   * );
+   */
+  upsert(tableName: string, keyColumns: string, data: string): string;
+
+  /**
+   * Delete rows matching filter conditions (bulk delete).
+   *
+   * Supports the same filter syntax as `query()` including range operators.
+   * At least one filter is required to prevent accidental full-table deletes.
+   *
+   * @param tableName - Table name
+   * @param filters - JSON string with filter conditions (required)
+   * @returns JSON string with result: {success: boolean, deleted: number} or {error: string}
+   * @example
+   * // Prune stale presence rows
+   * const cutoff = Date.now() - 90000;
+   * database.deleteWhere("presence",
+   *   JSON.stringify({ last_active: { "$lt": cutoff } })
+   * );
+   */
+  deleteWhere(tableName: string, filters: string): string;
+
+  /**
+   * Atomically acquire or extend a distributed lease (compare-and-swap).
+   *
+   * The table must be created with `database.createLeaseTable()` which sets up
+   * the required schema (`lease_id TEXT UNIQUE, owner TEXT, expires_at TIMESTAMPTZ`).
+   *
+   * Acquisition rules:
+   * - No existing row → INSERT succeeds → acquired.
+   * - Existing row is expired → UPDATE succeeds → acquired.
+   * - Existing row belongs to the same owner → UPDATE succeeds (extends TTL) → acquired.
+   * - Existing row belongs to a different owner and is not expired → no change → not acquired.
+   *
+   * @param tableName - Lease table created with `createLeaseTable`
+   * @param leaseId - Unique identifier for this lease slot (e.g., `"npc_tick_world_42"`)
+   * @param owner - Unique token for this process/server instance
+   * @param ttlMs - Lease duration in milliseconds
+   * @returns JSON string: `{acquired: boolean, owner: string, expires_at: string}` or `{error: string}`
+   * @example
+   * const lease = JSON.parse(
+   *   database.acquireLease("npc_leases", "world_" + worldId, myServerId, 2000)
+   * );
+   * if (!lease.acquired) return; // another instance owns the lease
+   */
+  acquireLease(
+    tableName: string,
+    leaseId: string,
+    owner: string,
+    ttlMs: number,
+  ): string;
+
+  /**
+   * Create a lease table with the correct schema for use with `acquireLease()`.
+   *
+   * The table is idempotent — calling it a second time returns the existing physical name.
+   * Schema: `lease_id TEXT PRIMARY KEY, owner TEXT NOT NULL, expires_at TIMESTAMPTZ NOT NULL`.
+   *
+   * @param tableName - Logical table name
+   * @returns JSON string: `{success: boolean, tableName: string, physicalName: string}` or `{error: string}`
+   * @example
+   * database.createLeaseTable("npc_leases");
+   */
+  createLeaseTable(tableName: string): string;
+
+  /**
+   * Add a unique index to a table column (or set of columns).
+   *
+   * Required before using those columns as the conflict target in `upsert()`.
+   * Uses `CREATE UNIQUE INDEX IF NOT EXISTS` — safe to call repeatedly.
+   *
+   * @param tableName - Table name
+   * @param columns - JSON array of column names, or a single column name string
+   * @returns JSON string: `{success: boolean, tableName: string, columns: …}` or `{error: string}`
+   * @example
+   * database.addUniqueIndex("presence", JSON.stringify(["user_id"]));
+   * database.addUniqueIndex("scores", JSON.stringify(["user_id", "world_id"]));
+   */
+  addUniqueIndex(tableName: string, columns: string): string;
 
   /**
    * Auto-generate GraphQL operations for a table

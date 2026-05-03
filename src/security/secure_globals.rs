@@ -4267,7 +4267,8 @@ impl SecureGlobalContext {
         )?;
         database_obj.set("dropTable", drop_table)?;
 
-        // database.query(tableName, filters, limit) - Query rows from table
+        // database.query(tableName, filters, limit, orderBy, orderDir)
+        // filters supports equality {"col": val} and range operators {"col": {"$gt": val, ...}}
         let script_uri_query = script_uri_owned.clone();
         let user_ctx_query = user_context.clone();
         let query_table = Function::new(
@@ -4275,7 +4276,9 @@ impl SecureGlobalContext {
             move |_ctx: rquickjs::Ctx<'_>,
                   table_name: String,
                   filters: Opt<String>,
-                  limit: Opt<i32>|
+                  limit: Opt<i32>,
+                  order_by: Opt<String>,
+                  order_dir: Opt<String>|
                   -> JsResult<String> {
                 debug!(
                     "database.query called for script {} on table: {}",
@@ -4292,7 +4295,6 @@ impl SecureGlobalContext {
                     );
                 }
 
-                // Parse filters from JSON string if provided
                 let filters_map = if let Some(filters_str) = filters.0 {
                     match serde_json::from_str::<std::collections::HashMap<String, serde_json::Value>>(
                         &filters_str,
@@ -4307,12 +4309,16 @@ impl SecureGlobalContext {
                 };
 
                 let limit_val = limit.0.map(|l| l as i64);
+                let order_by_ref = order_by.0.as_deref();
+                let order_dir_ref = order_dir.0.as_deref();
 
                 match crate::repository::query_table(
                     &script_uri_query,
                     &table_name,
                     filters_map.as_ref(),
                     limit_val,
+                    order_by_ref,
+                    order_dir_ref,
                 ) {
                     Ok(rows) => match serde_json::to_string(&rows) {
                         Ok(json) => Ok(json),
@@ -4440,7 +4446,241 @@ impl SecureGlobalContext {
         )?;
         database_obj.set("delete", delete_row)?;
 
-        // database.generateGraphQLForTable(tableName, options) - Auto-generate GraphQL operations
+        // database.upsert(tableName, keyColumns, data)
+        // INSERT … ON CONFLICT DO UPDATE — atomically insert or update by key
+        let script_uri_upsert = script_uri_owned.clone();
+        let user_ctx_upsert = user_context.clone();
+        let upsert_row = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  table_name: String,
+                  key_columns_json: String,
+                  data: String|
+                  -> JsResult<String> {
+                debug!(
+                    "database.upsert called for script {} on table: {}",
+                    script_uri_upsert, table_name
+                );
+
+                if user_ctx_upsert
+                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                    .is_err()
+                {
+                    return Ok(
+                        "{\"error\": \"Insufficient permissions for database operations\"}"
+                            .to_string(),
+                    );
+                }
+
+                // key_columns is a JSON array of strings, or a single string
+                let key_cols: Vec<String> = match serde_json::from_str::<serde_json::Value>(
+                    &key_columns_json,
+                ) {
+                    Ok(serde_json::Value::Array(arr)) => arr
+                        .into_iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect(),
+                    Ok(serde_json::Value::String(s)) => vec![s],
+                    _ => {
+                        return Ok("{\"error\": \"keyColumns must be a JSON array of strings or a single string\"}".to_string());
+                    }
+                };
+
+                let data_map = match serde_json::from_str::<
+                    std::collections::HashMap<String, serde_json::Value>,
+                >(&data)
+                {
+                    Ok(map) => map,
+                    Err(e) => return Ok(format!("{{\"error\": \"Invalid data JSON: {}\"}}", e)),
+                };
+
+                match crate::repository::upsert_row(
+                    &script_uri_upsert,
+                    &table_name,
+                    &key_cols,
+                    &data_map,
+                ) {
+                    Ok(row) => match serde_json::to_string(&row) {
+                        Ok(json) => Ok(json),
+                        Err(e) => Ok(format!("{{\"error\": \"Serialization error: {}\"}}", e)),
+                    },
+                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                }
+            },
+        )?;
+        database_obj.set("upsert", upsert_row)?;
+
+        // database.deleteWhere(tableName, filters)
+        // Bulk-delete rows matching filter conditions (equality + range operators)
+        let script_uri_dw = script_uri_owned.clone();
+        let user_ctx_dw = user_context.clone();
+        let delete_where = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  table_name: String,
+                  filters: String|
+                  -> JsResult<String> {
+                debug!(
+                    "database.deleteWhere called for script {} on table: {}",
+                    script_uri_dw, table_name
+                );
+
+                if user_ctx_dw
+                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                    .is_err()
+                {
+                    return Ok(
+                        "{\"error\": \"Insufficient permissions for database operations\"}"
+                            .to_string(),
+                    );
+                }
+
+                let filters_map = match serde_json::from_str::<
+                    std::collections::HashMap<String, serde_json::Value>,
+                >(&filters)
+                {
+                    Ok(map) => map,
+                    Err(e) => return Ok(format!("{{\"error\": \"Invalid filters JSON: {}\"}}", e)),
+                };
+
+                match crate::repository::delete_where(&script_uri_dw, &table_name, &filters_map) {
+                    Ok(count) => Ok(format!("{{\"success\": true, \"deleted\": {}}}", count)),
+                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                }
+            },
+        )?;
+        database_obj.set("deleteWhere", delete_where)?;
+
+        // database.acquireLease(tableName, leaseId, owner, ttlMs)
+        // Atomic compare-and-swap lease acquisition using a script-owned lease table
+        let script_uri_lease = script_uri_owned.clone();
+        let user_ctx_lease = user_context.clone();
+        let acquire_lease = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  table_name: String,
+                  lease_id: String,
+                  owner: String,
+                  ttl_ms: i64|
+                  -> JsResult<String> {
+                debug!(
+                    "database.acquireLease called for script {} on table: {}, lease: {}",
+                    script_uri_lease, table_name, lease_id
+                );
+
+                if user_ctx_lease
+                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                    .is_err()
+                {
+                    return Ok(
+                        "{\"error\": \"Insufficient permissions for database operations\"}"
+                            .to_string(),
+                    );
+                }
+
+                match crate::repository::acquire_lease(
+                    &script_uri_lease,
+                    &table_name,
+                    &lease_id,
+                    &owner,
+                    ttl_ms,
+                ) {
+                    Ok(result) => match serde_json::to_string(&result) {
+                        Ok(json) => Ok(json),
+                        Err(e) => Ok(format!("{{\"error\": \"Serialization error: {}\"}}", e)),
+                    },
+                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                }
+            },
+        )?;
+        database_obj.set("acquireLease", acquire_lease)?;
+
+        // database.createLeaseTable(tableName)
+        // Create a correctly-structured lease table with a UNIQUE constraint on lease_id
+        let script_uri_clt = script_uri_owned.clone();
+        let user_ctx_clt = user_context.clone();
+        let create_lease_table = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>, table_name: String| -> JsResult<String> {
+                debug!(
+                    "database.createLeaseTable called for script {} with table: {}",
+                    script_uri_clt, table_name
+                );
+
+                if user_ctx_clt
+                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                    .is_err()
+                {
+                    return Ok(
+                        "{\"error\": \"Insufficient permissions for database schema operations\"}"
+                            .to_string(),
+                    );
+                }
+
+                match crate::repository::create_lease_table(&script_uri_clt, &table_name) {
+                    Ok(physical_name) => Ok(format!(
+                        "{{\"success\": true, \"tableName\": \"{}\", \"physicalName\": \"{}\"}}",
+                        table_name, physical_name
+                    )),
+                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                }
+            },
+        )?;
+        database_obj.set("createLeaseTable", create_lease_table)?;
+
+        // database.addUniqueIndex(tableName, columns)
+        // Add a unique index to enable upsert() with a conflict target
+        let script_uri_idx = script_uri_owned.clone();
+        let user_ctx_idx = user_context.clone();
+        let add_unique_index = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  table_name: String,
+                  columns_json: String|
+                  -> JsResult<String> {
+                debug!(
+                    "database.addUniqueIndex called for script {} on table: {}",
+                    script_uri_idx, table_name
+                );
+
+                if user_ctx_idx
+                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                    .is_err()
+                {
+                    return Ok(
+                        "{\"error\": \"Insufficient permissions for database schema operations\"}"
+                            .to_string(),
+                    );
+                }
+
+                let columns: Vec<String> = match serde_json::from_str::<serde_json::Value>(
+                    &columns_json,
+                ) {
+                    Ok(serde_json::Value::Array(arr)) => arr
+                        .into_iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect(),
+                    Ok(serde_json::Value::String(s)) => vec![s],
+                    _ => {
+                        return Ok(
+                                "{\"error\": \"columns must be a JSON array of strings or a single string\"}"
+                                    .to_string(),
+                            );
+                    }
+                };
+
+                match crate::repository::add_unique_index(&script_uri_idx, &table_name, &columns) {
+                    Ok(()) => Ok(format!(
+                        "{{\"success\": true, \"tableName\": \"{}\", \"columns\": {}}}",
+                        table_name, columns_json
+                    )),
+                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                }
+            },
+        )?;
+        database_obj.set("addUniqueIndex", add_unique_index)?;
+
+        // database.generateGraphQLForTable
         let script_uri_graphql = script_uri_owned.clone();
         let user_ctx_graphql = user_context.clone();
         let generate_graphql = Function::new(
