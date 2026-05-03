@@ -1,7 +1,7 @@
 use crate::error::{AppError, AppResult};
 use crate::scheduler;
 use chrono::{DateTime, Utc};
-use sqlx::{PgPool, Row};
+use sqlx::{PgConnection, PgPool, Row};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::SystemTime;
@@ -3259,7 +3259,7 @@ fn row_to_json(row: &sqlx::postgres::PgRow) -> serde_json::Value {
 
 /// Look up the physical table name for a script-owned logical table.
 async fn get_physical_table_name(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     script_uri: &str,
     logical_table_name: &str,
 ) -> AppResult<String> {
@@ -3268,7 +3268,7 @@ async fn get_physical_table_name(
     )
     .bind(script_uri)
     .bind(logical_table_name)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await
     .map_err(|e| {
         error!("Database error fetching table metadata: {}", e);
@@ -3293,7 +3293,7 @@ async fn get_physical_table_name(
 /// `order_by` must be a valid column identifier; `order_dir` is `"asc"` or
 /// `"desc"` (defaults to `"asc"`).
 async fn db_query_table(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     script_uri: &str,
     logical_table_name: &str,
     filters: Option<&HashMap<String, serde_json::Value>>,
@@ -3301,7 +3301,7 @@ async fn db_query_table(
     order_by: Option<&str>,
     order_dir: Option<&str>,
 ) -> AppResult<Vec<serde_json::Value>> {
-    let physical_table_name = get_physical_table_name(pool, script_uri, logical_table_name).await?;
+    let physical_table_name = get_physical_table_name(conn, script_uri, logical_table_name).await?;
 
     // Parse filter conditions (supports equality and range operators)
     let conditions = if let Some(f) = filters {
@@ -3367,7 +3367,7 @@ async fn db_query_table(
     }
     sql_query = sql_query.bind(limit_val);
 
-    let rows = sql_query.fetch_all(pool).await.map_err(|e| {
+    let rows = sql_query.fetch_all(&mut *conn).await.map_err(|e| {
         error!("Database error querying table: {}", e);
         AppError::Database {
             message: format!("Query error: {}", e),
@@ -3380,12 +3380,12 @@ async fn db_query_table(
 
 /// Insert a row into a script-owned table
 async fn db_insert_row(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     script_uri: &str,
     logical_table_name: &str,
     data: &HashMap<String, serde_json::Value>,
 ) -> AppResult<serde_json::Value> {
-    let physical_table_name = get_physical_table_name(pool, script_uri, logical_table_name).await?;
+    let physical_table_name = get_physical_table_name(conn, script_uri, logical_table_name).await?;
 
     if data.is_empty() {
         return Err(AppError::Validation {
@@ -3420,7 +3420,7 @@ async fn db_insert_row(
         sql_query = bind_json_value(sql_query, value)?;
     }
 
-    let row = sql_query.fetch_one(pool).await.map_err(|e| {
+    let row = sql_query.fetch_one(&mut *conn).await.map_err(|e| {
         error!("Database error inserting row: {}", e);
         AppError::Database {
             message: format!("Insert error: {}", e),
@@ -3433,13 +3433,13 @@ async fn db_insert_row(
 
 /// Update a row in a script-owned table
 async fn db_update_row(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     script_uri: &str,
     logical_table_name: &str,
     id: i32,
     data: &HashMap<String, serde_json::Value>,
 ) -> AppResult<serde_json::Value> {
-    let physical_table_name = get_physical_table_name(pool, script_uri, logical_table_name).await?;
+    let physical_table_name = get_physical_table_name(conn, script_uri, logical_table_name).await?;
 
     if data.is_empty() {
         return Err(AppError::Validation {
@@ -3474,7 +3474,7 @@ async fn db_update_row(
     }
     sql_query = sql_query.bind(id);
 
-    let row = sql_query.fetch_one(pool).await.map_err(|e| {
+    let row = sql_query.fetch_one(&mut *conn).await.map_err(|e| {
         error!("Database error updating row: {}", e);
         AppError::Database {
             message: format!("Update error: {}", e),
@@ -3487,12 +3487,12 @@ async fn db_update_row(
 
 /// Delete a row from a script-owned table by ID
 async fn db_delete_row(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     script_uri: &str,
     logical_table_name: &str,
     id: i32,
 ) -> AppResult<bool> {
-    let physical_table_name = get_physical_table_name(pool, script_uri, logical_table_name).await?;
+    let physical_table_name = get_physical_table_name(conn, script_uri, logical_table_name).await?;
 
     let sql = format!(
         "DELETE FROM {} WHERE id = $1",
@@ -3501,7 +3501,7 @@ async fn db_delete_row(
 
     let result = sqlx::query(&sql)
         .bind(id)
-        .execute(pool)
+        .execute(&mut *conn)
         .await
         .map_err(|e| {
             error!("Database error deleting row: {}", e);
@@ -3520,13 +3520,13 @@ async fn db_delete_row(
 /// index on those columns must exist (create one with `db_add_unique_index`).
 /// `data` must contain values for all columns, including the key columns.
 async fn db_upsert_row(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     script_uri: &str,
     logical_table_name: &str,
     key_columns: &[String],
     data: &HashMap<String, serde_json::Value>,
 ) -> AppResult<serde_json::Value> {
-    let physical_table_name = get_physical_table_name(pool, script_uri, logical_table_name).await?;
+    let physical_table_name = get_physical_table_name(conn, script_uri, logical_table_name).await?;
 
     if data.is_empty() {
         return Err(AppError::Validation {
@@ -3607,7 +3607,7 @@ async fn db_upsert_row(
         sql_query = bind_json_value(sql_query, value)?;
     }
 
-    let row = sql_query.fetch_one(pool).await.map_err(|e| {
+    let row = sql_query.fetch_one(&mut *conn).await.map_err(|e| {
         error!("Database error upserting row: {}", e);
         AppError::Database {
             message: format!("Upsert error: {}", e),
@@ -3623,12 +3623,12 @@ async fn db_upsert_row(
 /// Supports the same filter syntax as `db_query_table` (equality and range
 /// operators). Returns the number of rows deleted.
 async fn db_delete_where(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     script_uri: &str,
     logical_table_name: &str,
     filters: &HashMap<String, serde_json::Value>,
 ) -> AppResult<u64> {
-    let physical_table_name = get_physical_table_name(pool, script_uri, logical_table_name).await?;
+    let physical_table_name = get_physical_table_name(conn, script_uri, logical_table_name).await?;
 
     if filters.is_empty() {
         return Err(AppError::Validation {
@@ -3672,7 +3672,7 @@ async fn db_delete_where(
         sql_query = bind_json_value(sql_query, &cond.value)?;
     }
 
-    let result = sql_query.execute(pool).await.map_err(|e| {
+    let result = sql_query.execute(&mut *conn).await.map_err(|e| {
         error!("Database error in deleteWhere: {}", e);
         AppError::Database {
             message: format!("Delete error: {}", e),
@@ -3696,14 +3696,14 @@ async fn db_delete_where(
 /// - If a row exists and is expired OR already owned by us → UPDATE succeeds → we own it.
 /// - If a row exists, is not expired, and belongs to someone else → nothing changes → we do NOT own it.
 async fn db_acquire_lease(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     script_uri: &str,
     logical_table_name: &str,
     lease_id: &str,
     owner: &str,
     ttl_ms: i64,
 ) -> AppResult<serde_json::Value> {
-    let physical_table_name = get_physical_table_name(pool, script_uri, logical_table_name).await?;
+    let physical_table_name = get_physical_table_name(conn, script_uri, logical_table_name).await?;
 
     if ttl_ms <= 0 {
         return Err(AppError::Validation {
@@ -3732,7 +3732,7 @@ async fn db_acquire_lease(
         .bind(lease_id)
         .bind(owner)
         .bind(ttl_ms)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await
         .map_err(|e| {
             error!("Database error in acquireLease: {}", e);
@@ -3764,7 +3764,7 @@ async fn db_acquire_lease(
     );
     let current = sqlx::query(&select_sql)
         .bind(lease_id)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await
         .map_err(|e| {
             error!("Database error reading current lease: {}", e);
@@ -3802,7 +3802,7 @@ async fn db_acquire_lease(
 ///
 /// Returns the physical table name on success.
 async fn db_create_lease_table(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     script_uri: &str,
     logical_table_name: &str,
 ) -> AppResult<String> {
@@ -3818,7 +3818,7 @@ async fn db_create_lease_table(
     // Count existing tables for this script
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM script_tables WHERE script_uri = $1")
         .bind(script_uri)
-        .fetch_one(pool)
+        .fetch_one(&mut *conn)
         .await
         .map_err(|e| AppError::Database {
             message: format!("Database error: {}", e),
@@ -3838,7 +3838,7 @@ async fn db_create_lease_table(
     )
     .bind(script_uri)
     .bind(logical_table_name)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await
     .map_err(|e| AppError::Database {
         message: format!("Database error: {}", e),
@@ -3865,7 +3865,7 @@ async fn db_create_lease_table(
     );
 
     sqlx::query(&create_sql)
-        .execute(pool)
+        .execute(&mut *conn)
         .await
         .map_err(|e| AppError::Database {
             message: format!("Error creating lease table: {}", e),
@@ -3880,7 +3880,7 @@ async fn db_create_lease_table(
     .bind(script_uri)
     .bind(logical_table_name)
     .bind(&physical_name)
-    .execute(pool)
+    .execute(&mut *conn)
     .await
     .map_err(|e| AppError::Database {
         message: format!("Error registering lease table: {}", e),
@@ -3901,12 +3901,12 @@ async fn db_create_lease_table(
 /// `db_upsert_row`. Index names are derived from the physical table name and
 /// columns to avoid collisions.
 async fn db_add_unique_index(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     script_uri: &str,
     logical_table_name: &str,
     columns: &[String],
 ) -> AppResult<()> {
-    let physical_table_name = get_physical_table_name(pool, script_uri, logical_table_name).await?;
+    let physical_table_name = get_physical_table_name(conn, script_uri, logical_table_name).await?;
 
     if columns.is_empty() {
         return Err(AppError::Validation {
@@ -3944,7 +3944,7 @@ async fn db_add_unique_index(
         col_list
     );
 
-    sqlx::query(&sql).execute(pool).await.map_err(|e| {
+    sqlx::query(&sql).execute(&mut *conn).await.map_err(|e| {
         error!("Database error adding unique index: {}", e);
         AppError::Database {
             message: format!("Index error: {}", e),
@@ -6130,8 +6130,12 @@ impl Repository for PostgresRepository {
         order_by: Option<&str>,
         order_dir: Option<&str>,
     ) -> AppResult<Vec<serde_json::Value>> {
+        let mut conn = self.pool.acquire().await.map_err(|e| AppError::Database {
+            message: format!("Failed to acquire connection: {}", e),
+            source: None,
+        })?;
         db_query_table(
-            &self.pool,
+            &mut conn,
             script_uri,
             logical_table_name,
             filters,
@@ -6148,7 +6152,11 @@ impl Repository for PostgresRepository {
         logical_table_name: &str,
         data: &HashMap<String, serde_json::Value>,
     ) -> AppResult<serde_json::Value> {
-        db_insert_row(&self.pool, script_uri, logical_table_name, data).await
+        let mut conn = self.pool.acquire().await.map_err(|e| AppError::Database {
+            message: format!("Failed to acquire connection: {}", e),
+            source: None,
+        })?;
+        db_insert_row(&mut conn, script_uri, logical_table_name, data).await
     }
 
     async fn update_row(
@@ -6158,7 +6166,11 @@ impl Repository for PostgresRepository {
         id: i32,
         data: &HashMap<String, serde_json::Value>,
     ) -> AppResult<serde_json::Value> {
-        db_update_row(&self.pool, script_uri, logical_table_name, id, data).await
+        let mut conn = self.pool.acquire().await.map_err(|e| AppError::Database {
+            message: format!("Failed to acquire connection: {}", e),
+            source: None,
+        })?;
+        db_update_row(&mut conn, script_uri, logical_table_name, id, data).await
     }
 
     async fn delete_row(
@@ -6167,7 +6179,11 @@ impl Repository for PostgresRepository {
         logical_table_name: &str,
         id: i32,
     ) -> AppResult<bool> {
-        db_delete_row(&self.pool, script_uri, logical_table_name, id).await
+        let mut conn = self.pool.acquire().await.map_err(|e| AppError::Database {
+            message: format!("Failed to acquire connection: {}", e),
+            source: None,
+        })?;
+        db_delete_row(&mut conn, script_uri, logical_table_name, id).await
     }
 
     async fn upsert_row(
@@ -6177,14 +6193,11 @@ impl Repository for PostgresRepository {
         key_columns: &[String],
         data: &HashMap<String, serde_json::Value>,
     ) -> AppResult<serde_json::Value> {
-        db_upsert_row(
-            &self.pool,
-            script_uri,
-            logical_table_name,
-            key_columns,
-            data,
-        )
-        .await
+        let mut conn = self.pool.acquire().await.map_err(|e| AppError::Database {
+            message: format!("Failed to acquire connection: {}", e),
+            source: None,
+        })?;
+        db_upsert_row(&mut conn, script_uri, logical_table_name, key_columns, data).await
     }
 
     async fn delete_where(
@@ -6193,7 +6206,11 @@ impl Repository for PostgresRepository {
         logical_table_name: &str,
         filters: &HashMap<String, serde_json::Value>,
     ) -> AppResult<u64> {
-        db_delete_where(&self.pool, script_uri, logical_table_name, filters).await
+        let mut conn = self.pool.acquire().await.map_err(|e| AppError::Database {
+            message: format!("Failed to acquire connection: {}", e),
+            source: None,
+        })?;
+        db_delete_where(&mut conn, script_uri, logical_table_name, filters).await
     }
 
     async fn acquire_lease(
@@ -6204,8 +6221,12 @@ impl Repository for PostgresRepository {
         owner: &str,
         ttl_ms: i64,
     ) -> AppResult<serde_json::Value> {
+        let mut conn = self.pool.acquire().await.map_err(|e| AppError::Database {
+            message: format!("Failed to acquire connection: {}", e),
+            source: None,
+        })?;
         db_acquire_lease(
-            &self.pool,
+            &mut conn,
             script_uri,
             logical_table_name,
             lease_id,
@@ -6220,7 +6241,11 @@ impl Repository for PostgresRepository {
         script_uri: &str,
         logical_table_name: &str,
     ) -> AppResult<String> {
-        db_create_lease_table(&self.pool, script_uri, logical_table_name).await
+        let mut conn = self.pool.acquire().await.map_err(|e| AppError::Database {
+            message: format!("Failed to acquire connection: {}", e),
+            source: None,
+        })?;
+        db_create_lease_table(&mut conn, script_uri, logical_table_name).await
     }
 
     async fn add_unique_index(
@@ -6229,7 +6254,11 @@ impl Repository for PostgresRepository {
         logical_table_name: &str,
         columns: &[String],
     ) -> AppResult<()> {
-        db_add_unique_index(&self.pool, script_uri, logical_table_name, columns).await
+        let mut conn = self.pool.acquire().await.map_err(|e| AppError::Database {
+            message: format!("Failed to acquire connection: {}", e),
+            source: None,
+        })?;
+        db_add_unique_index(&mut conn, script_uri, logical_table_name, columns).await
     }
 }
 
