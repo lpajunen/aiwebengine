@@ -4,7 +4,7 @@ use std::str::FromStr;
 use std::sync::OnceLock;
 
 /// Maximum number of tables per script
-pub const MAX_TABLES_PER_SCRIPT: usize = 10;
+pub const MAX_TABLES_PER_SCRIPT: usize = 50;
 
 /// Maximum number of columns per table
 pub const MAX_COLUMNS_PER_TABLE: usize = 50;
