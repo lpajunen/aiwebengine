@@ -3500,6 +3500,28 @@ impl SecureGlobalContext {
                                 }
                             }
                         }
+
+                        if let Ok(stream_paths) =
+                            crate::stream_registry::GLOBAL_STREAM_REGISTRY.list_stream_paths()
+                        {
+                            for path in stream_paths {
+                                if let Some((script_uri, customization_function)) =
+                                    crate::stream_registry::GLOBAL_STREAM_REGISTRY
+                                        .get_stream_info(&path)
+                                {
+                                    all_routes.push(serde_json::json!({
+                                        "path": path,
+                                        "method": "STREAM",
+                                        "handler": customization_function,
+                                        "script_uri": script_uri,
+                                        "summary": serde_json::Value::Null,
+                                        "description": serde_json::Value::Null,
+                                        "tags": Vec::<String>::new(),
+                                    }));
+                                }
+                            }
+                        }
+
                         match serde_json::to_string(&all_routes) {
                             Ok(json) => Ok(json),
                             Err(e) => Ok(format!("Error serializing routes: {}", e)),

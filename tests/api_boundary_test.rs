@@ -1115,6 +1115,41 @@ async fn test_register_routes_allowed_for_privileged_script() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_route_registry_list_routes_includes_stream_routes() {
+    setup_env().await;
+    let admin = UserContext::admin("admin".to_string());
+
+    repository::upsert_script("test://privileged-route-introspection", "")
+        .expect("Failed to create script");
+    repository::set_script_privileged("test://privileged-route-introspection", true)
+        .expect("Failed to set privileged");
+
+    let script = r#"
+        routeRegistry.registerStreamRoute("/test-introspection-stream", "streamCustomizer");
+
+        const routes = JSON.parse(routeRegistry.listRoutes());
+        const streamRoute = routes.find(
+            (route) => route.path === "/test-introspection-stream" && route.method === "STREAM"
+        );
+
+        if (!streamRoute) {
+            throw new Error("Expected stream route in listRoutes output");
+        }
+
+        if (streamRoute.handler !== "streamCustomizer") {
+            throw new Error("Expected stream customization handler in listRoutes output");
+        }
+    "#;
+
+    let result = execute_script_secure("test://privileged-route-introspection", script, admin);
+    assert!(
+        result.success,
+        "Privileged script should see stream routes in listRoutes: {:?}",
+        result.error
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_send_stream_message_denied_for_non_privileged_script() {
     setup_env().await;
     let admin = UserContext::admin("admin".to_string());
