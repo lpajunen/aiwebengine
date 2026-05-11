@@ -212,6 +212,29 @@ interface RouteRegistry {
    *   description: "Create a new user account",
    *   tags: ["Users"]
    * });
+   * routeRegistry.registerRoute("/api/users/:id", "updateUser", "PUT", {
+   *   summary: "Update user",
+   *   description: "Update an existing user account",
+   *   tags: ["Users"],
+   *   parameters: JSON.stringify([
+   *     {
+   *       name: "id",
+   *       in: "path",
+   *       required: true,
+   *       schema: { type: "string" }
+   *     }
+   *   ]),
+   *   requestBody: JSON.stringify({
+   *     required: true,
+   *     content: {
+   *       "application/json": {
+   *         schema: {
+   *           type: "object"
+   *         }
+   *       }
+   *     }
+   *   })
+   * });
    */
   registerRoute(
     path: string,

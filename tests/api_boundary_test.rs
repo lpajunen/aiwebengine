@@ -1171,13 +1171,27 @@ async fn test_route_registry_list_routes_includes_stream_routes() {
         .expect("Failed to create script");
     repository::set_script_privileged("test://privileged-route-introspection", true)
         .expect("Failed to set privileged");
+    repository::upsert_asset(repository::Asset {
+        uri: "test-introspection.css".to_string(),
+        mimetype: "text/css".to_string(),
+        content: b"body { color: red; }".to_vec(),
+        name: Some("test-introspection.css".to_string()),
+        script_uri: "test://privileged-route-introspection".to_string(),
+        created_at: std::time::SystemTime::now(),
+        updated_at: std::time::SystemTime::now(),
+    })
+    .expect("Failed to create asset for route introspection test");
 
     let script = r#"
         routeRegistry.registerStreamRoute("/test-introspection-stream", "streamCustomizer");
+        routeRegistry.registerAssetRoute("/test-introspection.css", "test-introspection.css");
 
         const routes = JSON.parse(routeRegistry.listRoutes());
         const streamRoute = routes.find(
             (route) => route.path === "/test-introspection-stream" && route.method === "STREAM"
+        );
+        const assetRoute = routes.find(
+            (route) => route.path === "/test-introspection.css" && route.method === "ASSET"
         );
 
         if (!streamRoute) {
@@ -1186,6 +1200,14 @@ async fn test_route_registry_list_routes_includes_stream_routes() {
 
         if (streamRoute.handler !== "streamCustomizer") {
             throw new Error("Expected stream customization handler in listRoutes output");
+        }
+
+        if (!assetRoute) {
+            throw new Error("Expected asset route in listRoutes output");
+        }
+
+        if (assetRoute.handler !== "test-introspection.css") {
+            throw new Error("Expected asset name in listRoutes output");
         }
     "#;
 

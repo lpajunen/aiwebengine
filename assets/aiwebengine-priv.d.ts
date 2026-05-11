@@ -168,13 +168,13 @@ interface Console {
  * Parsed entry from JSON returned by routeRegistry.listRoutes()
  */
 interface RouteIntrospectionEntry {
-  /** Registered HTTP or stream path */
+  /** Registered HTTP, stream, or asset path */
   path: string;
 
-  /** HTTP method for route handlers or "STREAM" for stream registrations */
+  /** HTTP method for route handlers, or "STREAM" / "ASSET" for non-handler registrations */
   method: string;
 
-  /** Handler or stream customization function name when present */
+  /** Handler name, stream customization function, or asset name when present */
   handler: string | null;
 
   /** URI of the script that registered the route */
@@ -202,6 +202,152 @@ interface StreamIntrospectionEntry {
 }
 
 /**
+ * OpenAPI tag object returned in parsed JSON from routeRegistry.generateOpenApi()
+ */
+interface OpenApiTag {
+  /** Tag name */
+  name: string;
+
+  /** Optional tag description */
+  description?: string;
+}
+
+/**
+ * Minimal schema object used inside OpenAPI media types
+ */
+interface OpenApiSchema {
+  /** Schema primitive type */
+  type?: string;
+
+  /** Optional schema format */
+  format?: string;
+
+  /** Additional schema fields */
+  [key: string]: unknown;
+}
+
+/**
+ * Minimal media type object used in OpenAPI response content
+ */
+interface OpenApiMediaType {
+  /** Optional schema for this media type */
+  schema?: OpenApiSchema;
+
+  /** Additional media type fields */
+  [key: string]: unknown;
+}
+
+/**
+ * Minimal OpenAPI response object returned by routeRegistry.generateOpenApi()
+ */
+interface OpenApiResponse {
+  /** Human-readable response description */
+  description: string;
+
+  /** Optional media types keyed by content type */
+  content?: Record<string, OpenApiMediaType>;
+
+  /** Additional response fields */
+  [key: string]: unknown;
+}
+
+/**
+ * Minimal OpenAPI parameter object returned by routeRegistry.generateOpenApi()
+ */
+interface OpenApiParameter {
+  /** Parameter name */
+  name: string;
+
+  /** Parameter location, such as query or path */
+  in: string;
+
+  /** Optional parameter description */
+  description?: string;
+
+  /** Whether the parameter is required */
+  required?: boolean;
+
+  /** Optional parameter schema */
+  schema?: OpenApiSchema;
+
+  /** Additional parameter fields */
+  [key: string]: unknown;
+}
+
+/**
+ * Minimal OpenAPI request body object returned by routeRegistry.generateOpenApi()
+ */
+interface OpenApiRequestBody {
+  /** Optional request body description */
+  description?: string;
+
+  /** Whether the request body is required */
+  required?: boolean;
+
+  /** Request body media types keyed by content type */
+  content: Record<string, OpenApiMediaType>;
+
+  /** Additional request body fields */
+  [key: string]: unknown;
+}
+
+/**
+ * Minimal OpenAPI operation shape returned by routeRegistry.generateOpenApi()
+ */
+interface OpenApiOperation {
+  /** Human-readable summary for the operation */
+  summary?: string;
+
+  /** Detailed description for the operation */
+  description?: string;
+
+  /** Tags associated with the operation */
+  tags?: string[];
+
+  /** Optional OpenAPI parameters */
+  parameters?: OpenApiParameter[];
+
+  /** Optional OpenAPI request body */
+  requestBody?: OpenApiRequestBody;
+
+  /** OpenAPI responses object */
+  responses: Record<string, OpenApiResponse>;
+
+  /** Extension fields added for script-backed routes */
+  "x-handler"?: string;
+  "x-script-uri"?: string;
+  "x-source"?: string;
+  "x-asset-name"?: string;
+
+  /** Additional OpenAPI operation fields */
+  [key: string]: unknown;
+}
+
+/**
+ * Minimal parsed shape returned by JSON.parse(routeRegistry.generateOpenApi())
+ */
+interface OpenApiSpec {
+  /** OpenAPI version string */
+  openapi: string;
+
+  /** API metadata */
+  info: {
+    title: string;
+    version: string;
+    [key: string]: unknown;
+  };
+
+  /** Registered API paths keyed by URL path */
+  paths: Record<string, Record<string, OpenApiOperation>>;
+
+  /** Optional tag list */
+  tags?: OpenApiTag[];
+
+  /** Additional top-level OpenAPI fields */
+  [key: string]: unknown;
+}
+
+/**
  * RouteRegistry interface extensions for privileged scripts
  * Requires appropriate capabilities for global introspection
  */
@@ -224,10 +370,10 @@ interface RouteRegistry {
 
   /**
    * Generate OpenAPI 3.0 specification from registered routes (requires ReadScripts capability)
-   * @returns JSON string with OpenAPI 3.0 specification
+   * @returns JSON string encoding OpenApiSpec
    * @example
    * const spec = routeRegistry.generateOpenApi();
-   * const openapi = JSON.parse(spec);
+   * const openapi = JSON.parse(spec) as OpenApiSpec;
    */
   generateOpenApi(): string;
 }

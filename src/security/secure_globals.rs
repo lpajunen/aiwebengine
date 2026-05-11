@@ -3522,6 +3522,20 @@ impl SecureGlobalContext {
                             }
                         }
 
+                        for (path, registration) in
+                            crate::asset_registry::get_global_registry().get_all_registrations()
+                        {
+                            all_routes.push(serde_json::json!({
+                                "path": path,
+                                "method": "ASSET",
+                                "handler": registration.asset_name,
+                                "script_uri": registration.script_uri,
+                                "summary": serde_json::Value::Null,
+                                "description": serde_json::Value::Null,
+                                "tags": vec!["Assets"],
+                            }));
+                        }
+
                         match serde_json::to_string(&all_routes) {
                             Ok(json) => Ok(json),
                             Err(e) => Ok(format!("Error serializing routes: {}", e)),
