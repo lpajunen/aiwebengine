@@ -165,23 +165,60 @@ interface Console {
 // ============================================================================
 
 /**
+ * Parsed entry from JSON returned by routeRegistry.listRoutes()
+ */
+interface RouteIntrospectionEntry {
+  /** Registered HTTP or stream path */
+  path: string;
+
+  /** HTTP method for route handlers or "STREAM" for stream registrations */
+  method: string;
+
+  /** Handler or stream customization function name when present */
+  handler: string | null;
+
+  /** URI of the script that registered the route */
+  script_uri: string;
+
+  /** Optional short summary used for API documentation */
+  summary: string | null;
+
+  /** Optional detailed description used for API documentation */
+  description: string | null;
+
+  /** Tags associated with the registered route */
+  tags: string[];
+}
+
+/**
+ * Parsed entry from JSON returned by routeRegistry.listStreams()
+ */
+interface StreamIntrospectionEntry {
+  /** Registered stream path */
+  path: string;
+
+  /** URI of the script that registered the stream */
+  script_uri: string;
+}
+
+/**
  * RouteRegistry interface extensions for privileged scripts
  * Requires appropriate capabilities for global introspection
  */
 interface RouteRegistry {
   /**
    * List all registered routes (requires ReadScripts capability)
-   * @returns JSON string array of registered routes
+   * @returns JSON string encoding RouteIntrospectionEntry[]
    * @example
-   * const routes = JSON.parse(routeRegistry.listRoutes());
+   * const routes = JSON.parse(routeRegistry.listRoutes()) as RouteIntrospectionEntry[];
    */
   listRoutes(): string;
 
   /**
    * List all registered streams (requires ReadScripts capability)
-   * @returns JSON string array of registered streams
+   * @returns JSON string encoding StreamIntrospectionEntry[]
    * @example
-   * const streams = JSON.parse(routeRegistry.listStreams());
+   * const streams = JSON.parse(routeRegistry.listStreams()) as StreamIntrospectionEntry[];
    */
   listStreams(): string;
 

@@ -144,6 +144,54 @@ async fn test_route_registry_introspection_available_for_admin() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn test_route_registry_list_streams_allowed_with_read_scripts() {
+    setup_env().await;
+    let admin = UserContext::admin("admin".to_string());
+    let reader = create_user_with_capabilities("reader", vec![Capability::ReadScripts]);
+
+    repository::upsert_script("test://privileged-list-streams-source", "")
+        .expect("Failed to create script");
+    repository::set_script_privileged("test://privileged-list-streams-source", true)
+        .expect("Failed to set privileged");
+
+    let register_script = r#"
+        routeRegistry.registerStreamRoute("/test-list-streams-readable", "streamCustomizer");
+    "#;
+
+    let register_result = execute_script_secure(
+        "test://privileged-list-streams-source",
+        register_script,
+        admin,
+    );
+    assert!(
+        register_result.success,
+        "Privileged script should register stream route: {:?}",
+        register_result.error
+    );
+
+    let inspect_script = r#"
+        const streams = JSON.parse(routeRegistry.listStreams());
+        const stream = streams.find((entry) => entry.path === "/test-list-streams-readable");
+
+        if (!stream) {
+            throw new Error("Expected stream in listStreams output");
+        }
+
+        if (stream.script_uri !== "test://privileged-list-streams-source") {
+            throw new Error("Expected stream script_uri in listStreams output");
+        }
+    "#;
+
+    let inspect_result =
+        execute_script_secure("test://read-scripts-viewer", inspect_script, reader);
+    assert!(
+        inspect_result.success,
+        "ReadScripts user should access listStreams: {:?}",
+        inspect_result.error
+    );
+}
+
 // ============================================================================
 // Privileged API Tests - ScriptStorage
 // ============================================================================

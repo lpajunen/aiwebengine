@@ -3797,7 +3797,7 @@ impl SecureGlobalContext {
             move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
                 // Check capability
                 if let Err(_e) = user_ctx_list_streams
-                    .require_capability(&crate::security::Capability::ManageStreams)
+                    .require_capability(&crate::security::Capability::ReadScripts)
                 {
                     return Ok("[]".to_string());
                 }
@@ -3807,10 +3807,10 @@ impl SecureGlobalContext {
                     Ok(streams) => {
                         let stream_objects: Vec<serde_json::Value> = streams
                             .iter()
-                            .map(|(path, uri)| {
+                            .map(|(path, script_uri)| {
                                 serde_json::json!({
                                     "path": path,
-                                    "uri": uri,
+                                    "script_uri": script_uri,
                                 })
                             })
                             .collect();

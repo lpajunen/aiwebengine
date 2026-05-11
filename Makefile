@@ -1,6 +1,6 @@
 # Makefile for aiwebengine development
 
-.PHONY: help deps upgrade-deps test dev build clean lint format coverage check ci
+.PHONY: help deps upgrade-deps test dev build clean lint format coverage check ci typecheck
 .PHONY: docker-build docker-local docker-staging docker-prod docker-stop docker-logs docker-clean
 
 help:
@@ -18,6 +18,7 @@ help:
 	@echo "  make test-simple - Run all tests with cargo test"
 	@echo "  make perf-test   - Run performance/load test against production server"
 	@echo "  make lint        - Run clippy linter"
+	@echo "  make typecheck   - Run TypeScript declaration checks"
 	@echo "  make format    - Format code with rustfmt"
 	@echo "  make format-check - Check code formatting without modifying"
 	@echo "  make coverage  - Generate test coverage report"
@@ -87,6 +88,10 @@ lint:
 	cargo clippy --all-targets -- -D warnings
 	./node_modules/.bin/markdownlint "**/*.md" --ignore node_modules && echo '✓ Markdown files linted'
 
+# Run TypeScript declaration checks
+typecheck:
+	npm run typecheck
+
 # Format all code
 format: format-markdown format-javascript
 	cargo fmt --all
@@ -115,11 +120,11 @@ clean:
 	cargo clean
 
 # Pre-commit checks (format check, lint, test)
-check: format-check lint test-simple
+check: format-check lint typecheck test-simple
 	@echo "✓ All checks passed!"
 
 # CI pipeline (format check, lint, test, coverage)
-ci: format-check lint test-simple coverage
+ci: format-check lint typecheck test-simple coverage
 	@echo "✓ CI pipeline completed!"
 
 # ==================== Docker Commands ====================

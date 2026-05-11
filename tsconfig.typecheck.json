@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "allowJs": false,
+    "checkJs": false,
+    "ignoreDeprecations": "6.0"
+  },
+  "include": [
+    "scripts/typecheck/**/*.ts",
+    "assets/**/*.d.ts"
+  ],
+  "exclude": ["node_modules", "target"]
+}
