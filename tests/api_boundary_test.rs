@@ -1163,7 +1163,7 @@ async fn test_register_routes_allowed_for_privileged_script() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_route_registry_list_routes_includes_stream_routes() {
+async fn test_route_registry_list_routes_includes_stream_and_asset_routes() {
     setup_env().await;
     let admin = UserContext::admin("admin".to_string());
 
