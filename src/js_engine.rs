@@ -1633,11 +1633,15 @@ pub fn execute_mcp_tool_handler(
     handler_function: &str,
     tool_name: &str,
     arguments: serde_json::Value,
+    auth_context: Option<crate::auth::JsAuthContext>,
+    user_context: UserContext,
 ) -> Result<String, String> {
     let script_uri_owned = script_uri.to_string();
     let handler_function_owned = handler_function.to_string();
     let tool_name_owned = tool_name.to_string();
     let arguments_owned = arguments.clone();
+    let auth_context_owned = auth_context;
+    let user_context_owned = user_context;
 
     let rt = Runtime::new().map_err(|e| format!("runtime new: {}", e))?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
@@ -1652,15 +1656,14 @@ pub fn execute_mcp_tool_handler(
             ..Default::default()
         };
 
-        // MCP tool handlers run with admin context (similar to GraphQL resolvers)
-        // In production, this should be secured via MCP-level authentication
+        // MCP tool handlers inherit the validated caller context from MCP auth middleware.
         setup_secure_global_functions(
             &ctx,
             &script_uri_owned,
-            UserContext::admin("mcp-tool".to_string()),
+            user_context_owned.clone(),
             &config,
             None,
-            None,
+            auth_context_owned.clone(),
         )?;
 
         // Load and execute the script
@@ -1692,7 +1695,7 @@ pub fn execute_mcp_tool_handler(
             uploaded_files: Vec::new(),
         };
 
-        let context_builder = JsHandlerContextBuilder::new(HandlerInvocationKind::McpTool)
+        let mut context_builder = JsHandlerContextBuilder::new(HandlerInvocationKind::McpTool)
             .with_script_metadata(&script_uri_owned, &handler_function_owned)
             .with_request(request_context)
             .with_args(arguments_owned)
@@ -1702,6 +1705,10 @@ pub fn execute_mcp_tool_handler(
                     "toolName": tool_name_owned
                 }),
             );
+
+        if let Some(auth_context) = auth_context_owned.clone() {
+            context_builder = context_builder.with_auth_context(auth_context);
+        }
 
         let handler_context = context_builder.build(&ctx)?;
 
@@ -2207,6 +2214,30 @@ mod tests {
         super::execute_graphql_resolver(params)
     }
 
+    fn execute_mcp_tool_handler(
+        script_uri: &str,
+        handler_function: &str,
+        tool_name: &str,
+        arguments: serde_json::Value,
+        auth_context: Option<crate::auth::JsAuthContext>,
+        user_context: crate::security::UserContext,
+    ) -> Result<String, String> {
+        if should_skip_db_tests() {
+            return Err("Test skipped: DATABASE_URL not set".to_string());
+        }
+        let rt = get_runtime();
+        let _guard = rt.enter();
+        setup_db();
+        super::execute_mcp_tool_handler(
+            script_uri,
+            handler_function,
+            tool_name,
+            arguments,
+            auth_context,
+            user_context,
+        )
+    }
+
     #[test]
     fn test_execute_script_simple_registration() {
         if should_skip_db_tests() {
@@ -2226,6 +2257,106 @@ mod tests {
             .get(&("/test".to_string(), "GET".to_string()));
         assert!(route_meta.is_some());
         assert_eq!(route_meta.unwrap().handler_name, "handler_function");
+    }
+
+    #[test]
+    fn test_execute_mcp_tool_handler_includes_request_auth_context() {
+        if should_skip_db_tests() {
+            return;
+        }
+
+        let script_uri = "test-mcp-auth-context";
+        let content = r#"
+            function toolHandler(context) {
+                return {
+                    kind: context.kind,
+                    toolName: context.meta.mcp.toolName,
+                    auth: {
+                        isAuthenticated: context.request.auth.isAuthenticated,
+                        isAdmin: context.request.auth.isAdmin,
+                        isEditor: context.request.auth.isEditor,
+                        userId: context.request.auth.userId,
+                        userEmail: context.request.auth.userEmail,
+                        userName: context.request.auth.userName,
+                        provider: context.request.auth.provider
+                    }
+                };
+            }
+        "#;
+
+        let _ = repository::upsert_script(script_uri, content);
+        let result = execute_mcp_tool_handler(
+            script_uri,
+            "toolHandler",
+            "whoami",
+            serde_json::json!({}),
+            Some(crate::auth::JsAuthContext::authenticated(
+                "user-123".to_string(),
+                Some("user@example.com".to_string()),
+                Some("Test User".to_string()),
+                "github".to_string(),
+                false,
+                true,
+            )),
+            UserContext::authenticated("user-123".to_string()),
+        )
+        .expect("MCP tool handler should execute successfully");
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("Result should be valid JSON");
+
+        assert_eq!(parsed["kind"], "mcpTool");
+        assert_eq!(parsed["toolName"], "whoami");
+        assert_eq!(parsed["auth"]["isAuthenticated"], true);
+        assert_eq!(parsed["auth"]["isAdmin"], false);
+        assert_eq!(parsed["auth"]["isEditor"], true);
+        assert_eq!(parsed["auth"]["userId"], "user-123");
+        assert_eq!(parsed["auth"]["userEmail"], "user@example.com");
+        assert_eq!(parsed["auth"]["userName"], "Test User");
+        assert_eq!(parsed["auth"]["provider"], "github");
+    }
+
+    #[test]
+    fn test_execute_mcp_tool_handler_uses_caller_capabilities() {
+        if should_skip_db_tests() {
+            return;
+        }
+
+        let script_uri = "test-mcp-caller-capabilities";
+        let content = r#"
+            function toolHandler(context) {
+                return {
+                    deleted: scriptStorage.deleteScript("script-owned-by-someone-else"),
+                    isAdmin: context.request.auth.isAdmin,
+                    userId: context.request.auth.userId
+                };
+            }
+        "#;
+
+        let _ = repository::upsert_script(script_uri, content);
+        let result = execute_mcp_tool_handler(
+            script_uri,
+            "toolHandler",
+            "delete-check",
+            serde_json::json!({}),
+            Some(crate::auth::JsAuthContext::authenticated(
+                "user-456".to_string(),
+                Some("member@example.com".to_string()),
+                Some("Member User".to_string()),
+                "github".to_string(),
+                false,
+                false,
+            )),
+            UserContext::authenticated("user-456".to_string()),
+        )
+        .expect("MCP tool handler should execute successfully");
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result).expect("Result should be valid JSON");
+
+        assert_eq!(parsed["isAdmin"], false);
+        assert_eq!(parsed["userId"], "user-456");
+        assert_eq!(parsed["deleted"], false);
     }
 
     #[test]

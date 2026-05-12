@@ -343,6 +343,8 @@ pub fn execute_mcp_completion(
 pub fn execute_mcp_tool(
     tool_name: &str,
     arguments: serde_json::Value,
+    auth_context: Option<crate::auth::JsAuthContext>,
+    user_context: crate::security::UserContext,
 ) -> Result<serde_json::Value, String> {
     debug!(
         "Executing MCP tool: {} with args: {:?}",
@@ -369,6 +371,8 @@ pub fn execute_mcp_tool(
         &handler_function,
         tool_name,
         arguments,
+        auth_context,
+        user_context,
     )
     .map_err(|e| format!("Tool execution failed: {}", e))?;
 

@@ -450,6 +450,28 @@ fn create_js_auth_context(auth_user: Option<&auth::AuthUser>) -> auth::JsAuthCon
     }
 }
 
+fn create_js_auth_context_from_session(session: Option<&auth::AuthSession>) -> auth::JsAuthContext {
+    match session {
+        Some(session) => auth::JsAuthContext::authenticated(
+            session.user_id.clone(),
+            session.email.clone(),
+            session.name.clone(),
+            session.provider.clone(),
+            session.is_admin,
+            session.is_editor,
+        ),
+        None => auth::JsAuthContext::anonymous(),
+    }
+}
+
+fn create_user_context_from_session(session: Option<&auth::AuthSession>) -> security::UserContext {
+    match session {
+        Some(session) if session.is_admin => security::UserContext::admin(session.user_id.clone()),
+        Some(session) => security::UserContext::authenticated(session.user_id.clone()),
+        None => security::UserContext::anonymous(),
+    }
+}
+
 /// OAuth provider registration configuration
 struct OAuthProviderConfig {
     client_id: String,
@@ -1719,6 +1741,11 @@ async fn setup_routes(
 
     // MCP JSON-RPC handler - supports tools/list and tools/call methods
     let mcp_handler = |req: axum::http::Request<axum::body::Body>| async move {
+        let mcp_session = req
+            .extensions()
+            .get::<auth::McpAuthSession>()
+            .map(|auth_session| auth_session.session.clone());
+
         let body_bytes = match axum::body::to_bytes(req.into_body(), usize::MAX).await {
             Ok(bytes) => bytes,
             Err(e) => {
@@ -1873,8 +1900,12 @@ async fn setup_routes(
                 };
 
                 let arguments = params.arguments.unwrap_or(serde_json::json!({}));
+                let auth_context = mcp_session
+                    .as_ref()
+                    .map(|session| create_js_auth_context_from_session(Some(session)));
+                let user_context = create_user_context_from_session(mcp_session.as_ref());
 
-                match mcp::execute_mcp_tool(&params.name, arguments) {
+                match mcp::execute_mcp_tool(&params.name, arguments, auth_context, user_context) {
                     Ok(result) => {
                         debug!("MCP tool '{}' executed successfully", params.name);
 
