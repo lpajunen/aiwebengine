@@ -2148,6 +2148,10 @@ mod tests {
         RUNTIME.get_or_init(|| tokio::runtime::Runtime::new().unwrap())
     }
 
+    fn unique_test_id(prefix: &str) -> String {
+        format!("{}-{}", prefix, rand::random::<u64>())
+    }
+
     // Check if we should skip database-dependent tests
     fn should_skip_db_tests() -> bool {
         std::env::var("DATABASE_URL").is_err()
@@ -2238,6 +2242,12 @@ mod tests {
         )
     }
 
+    fn setup_db_for_test() {
+        let rt = get_runtime();
+        let _guard = rt.enter();
+        setup_db();
+    }
+
     #[test]
     fn test_execute_script_simple_registration() {
         if should_skip_db_tests() {
@@ -2265,7 +2275,11 @@ mod tests {
             return;
         }
 
-        let script_uri = "test-mcp-auth-context";
+        let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
+        setup_db_for_test();
+
+        let script_uri = unique_test_id("test-mcp-auth-context");
+        let user_id = unique_test_id("user");
         let content = r#"
             function toolHandler(context) {
                 return {
@@ -2284,21 +2298,21 @@ mod tests {
             }
         "#;
 
-        let _ = repository::upsert_script(script_uri, content);
+        let _ = repository::upsert_script(&script_uri, content);
         let result = execute_mcp_tool_handler(
-            script_uri,
+            &script_uri,
             "toolHandler",
             "whoami",
             serde_json::json!({}),
             Some(crate::auth::JsAuthContext::authenticated(
-                "user-123".to_string(),
+                user_id.clone(),
                 Some("user@example.com".to_string()),
                 Some("Test User".to_string()),
                 "github".to_string(),
                 false,
                 true,
             )),
-            UserContext::authenticated("user-123".to_string()),
+            UserContext::authenticated(user_id.clone()),
         )
         .expect("MCP tool handler should execute successfully");
 
@@ -2310,7 +2324,7 @@ mod tests {
         assert_eq!(parsed["auth"]["isAuthenticated"], true);
         assert_eq!(parsed["auth"]["isAdmin"], false);
         assert_eq!(parsed["auth"]["isEditor"], true);
-        assert_eq!(parsed["auth"]["userId"], "user-123");
+        assert_eq!(parsed["auth"]["userId"], user_id);
         assert_eq!(parsed["auth"]["userEmail"], "user@example.com");
         assert_eq!(parsed["auth"]["userName"], "Test User");
         assert_eq!(parsed["auth"]["provider"], "github");
@@ -2322,32 +2336,39 @@ mod tests {
             return;
         }
 
-        let script_uri = "test-mcp-caller-capabilities";
+        let _lock = crate::repository::GLOBAL_TEST_LOCK.lock().unwrap();
+        setup_db_for_test();
+
+        let script_uri = unique_test_id("test-mcp-caller-capabilities");
+        let user_id = unique_test_id("user");
+        let target_script = unique_test_id("script-owned-by-someone-else");
         let content = r#"
             function toolHandler(context) {
                 return {
-                    deleted: scriptStorage.deleteScript("script-owned-by-someone-else"),
+                    deleted: scriptStorage.deleteScript(context.args.targetScript),
                     isAdmin: context.request.auth.isAdmin,
                     userId: context.request.auth.userId
                 };
             }
         "#;
 
-        let _ = repository::upsert_script(script_uri, content);
+        let _ = repository::upsert_script(&script_uri, content);
         let result = execute_mcp_tool_handler(
-            script_uri,
+            &script_uri,
             "toolHandler",
             "delete-check",
-            serde_json::json!({}),
+            serde_json::json!({
+                "targetScript": target_script,
+            }),
             Some(crate::auth::JsAuthContext::authenticated(
-                "user-456".to_string(),
+                user_id.clone(),
                 Some("member@example.com".to_string()),
                 Some("Member User".to_string()),
                 "github".to_string(),
                 false,
                 false,
             )),
-            UserContext::authenticated("user-456".to_string()),
+            UserContext::authenticated(user_id.clone()),
         )
         .expect("MCP tool handler should execute successfully");
 
@@ -2355,7 +2376,7 @@ mod tests {
             serde_json::from_str(&result).expect("Result should be valid JSON");
 
         assert_eq!(parsed["isAdmin"], false);
-        assert_eq!(parsed["userId"], "user-456");
+        assert_eq!(parsed["userId"], user_id);
         assert_eq!(parsed["deleted"], false);
     }
 

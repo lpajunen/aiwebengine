@@ -46,6 +46,10 @@ filter = 'test(test_concurrent)'
 threads-required = 1
 
 [[profile.default.overrides]]
+filter = 'test(execute_mcp_tool_handler)'
+test-group = 'serial-server-tests'
+
+[[profile.default.overrides]]
 filter = 'test(integration)'
 # Integration tests get longer timeout
 slow-timeout = { period = "120s" }
@@ -55,3 +59,7 @@ slow-timeout = { period = "120s" }
 test-threads = 2
 slow-timeout = { period = "180s", terminate-after = 5 }
 retries = { backoff = "exponential", count = 3, delay = "1s" }
+
+[[profile.ci.overrides]]
+filter = 'test(execute_mcp_tool_handler)'
+test-group = 'serial-server-tests'
