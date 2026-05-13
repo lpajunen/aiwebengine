@@ -6,10 +6,10 @@ use std::rc::Rc;
 use std::time::Instant;
 use tracing::{debug, error, info, warn};
 
+use crate::module_loader;
 use crate::repository;
 use crate::scheduler::ScheduledInvocation;
 use crate::security::UserContext;
-use crate::transpiler;
 
 // Use the enhanced secure globals implementation
 use crate::security::secure_globals::{GlobalSecurityConfig, SecureGlobalContext};
@@ -19,7 +19,9 @@ type RouteRegistrations = repository::RouteRegistrations;
 
 /// Transpile TypeScript/JSX/TSX to JavaScript if needed
 fn transpile_if_needed(uri: &str, content: &str) -> Result<String, String> {
-    transpiler::transpile_if_needed(uri, content).map_err(|e| format!("Transpilation error: {}", e))
+    module_loader::prepare_executable_program(uri, content)
+        .map(|prepared| prepared.code)
+        .map_err(|e| format!("Transpilation error: {}", e))
 }
 
 /// Extract detailed error information from a rquickjs::Error

@@ -25,6 +25,7 @@ pub mod js_engine;
 pub mod mcp;
 pub mod mcp_client;
 pub mod middleware;
+pub mod module_loader;
 pub mod notifications;
 pub mod openapi_schemas;
 pub mod parsers;
