@@ -778,7 +778,7 @@ impl InputValidator {
         let mut hasher = Sha256::new();
         hasher.update(uuid::Uuid::new_v4().as_bytes());
         hasher.update(chrono::Utc::now().timestamp().to_string().as_bytes());
-        format!("{:x}", hasher.finalize())
+        hex::encode(hasher.finalize())
     }
 
     /// Validate CSRF token

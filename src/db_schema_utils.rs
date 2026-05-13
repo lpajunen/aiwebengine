@@ -156,7 +156,7 @@ pub fn generate_physical_table_name(script_uri: &str, logical_name: &str) -> Str
     let mut hasher = Sha256::new();
     hasher.update(script_uri.as_bytes());
     let hash_result = hasher.finalize();
-    let hash_hex = format!("{:x}", hash_result);
+    let hash_hex = hex::encode(hash_result);
     let hash_prefix = &hash_hex[..8]; // First 8 characters
 
     format!("script_{}_{}", hash_prefix, logical_name)

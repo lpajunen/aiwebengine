@@ -38,13 +38,14 @@ async-stream = "0.3.6"
 mime = "0.3"
 mime_guess = "2.0"
 html-escape = "0.2"
-sha2 = "0.10"
+hex = "0.4"
+sha2 = "0.11"
 rand = "0.10.0"
 pulldown-cmark = "0.13.0"
 handlebars = "6.0"
 
 # TypeScript/JSX transpilation
-oxc = { version = "0.116.0", features = ["full"] }
+oxc = { version = "0.130.0", features = ["full"] }
 
 # Security and encryption (Phase 0.5)
 aes-gcm = "0.10"
@@ -79,7 +80,7 @@ lto = "thin"
 [dev-dependencies]
 tokio-test = "0.4"
 mockall = "0.14.0"
-jsonschema = "0.44.1"
+jsonschema = "0.46.5"
 
 # Build-time dependencies (for capturing build metadata)
 [build-dependencies]

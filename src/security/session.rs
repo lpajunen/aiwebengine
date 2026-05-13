@@ -107,7 +107,7 @@ impl SessionFingerprint {
         use sha2::Digest;
         let mut hasher = Sha256::default();
         hasher.update(user_agent.as_bytes());
-        format!("{:x}", hasher.finalize())
+        hex::encode(hasher.finalize())
     }
 
     /// Validate fingerprint with tolerance for IP changes

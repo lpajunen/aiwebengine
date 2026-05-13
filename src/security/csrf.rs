@@ -180,7 +180,7 @@ impl CsrfProtection {
         let mut mac = Sha256::new();
         mac.update(self.secret_key);
         mac.update(data);
-        format!("{:x}", mac.finalize())
+        hex::encode(mac.finalize())
     }
 
     /// Constant-time comparison to prevent timing attacks

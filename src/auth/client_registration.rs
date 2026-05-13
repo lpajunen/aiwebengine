@@ -275,7 +275,7 @@ impl ClientRegistrationManager {
         hasher.update(secret.as_bytes());
         let result = hasher.finalize();
 
-        Ok(format!("{:x}", result))
+        Ok(hex::encode(result))
     }
 
     /// Verify client credentials

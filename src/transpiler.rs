@@ -46,7 +46,7 @@ fn get_source_type(uri: &str) -> SourceType {
 fn calculate_content_hash(content: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 /// Get transpiled script from cache
