@@ -3252,10 +3252,7 @@ impl SecureGlobalContext {
                 if asset_name.is_empty() || asset_name.len() > 255 {
                     return Ok("Invalid asset name: must be 1-255 characters".to_string());
                 }
-                if asset_name.contains("..")
-                    || asset_name.contains('/')
-                    || asset_name.contains('\\')
-                {
+                if asset_name.contains("..") || asset_name.contains('\\') {
                     return Ok("Invalid asset name: path characters not allowed".to_string());
                 }
 
