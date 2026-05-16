@@ -463,6 +463,16 @@ fn rewrite_exports(
         .replace_all(&rewritten, "${1}${2} ${3}")
         .to_string();
 
+    let export_type =
+        Regex::new(r"(?m)^(\s*)export\s+type\s+").expect("export type regex should compile");
+    rewritten = export_type.replace_all(&rewritten, "${1}type ").to_string();
+
+    let export_interface = Regex::new(r"(?m)^(\s*)export\s+interface\s+")
+        .expect("export interface regex should compile");
+    rewritten = export_interface
+        .replace_all(&rewritten, "${1}interface ")
+        .to_string();
+
     let export_list = Regex::new(r"(?m)^\s*export\s*\{([^}]*)\}\s*;?\s*$")
         .expect("export list regex should compile");
     for capture in export_list.captures_iter(source) {
@@ -801,6 +811,34 @@ function handle() {
         assert_eq!(
             transformed.dependencies,
             vec!["server/world-domain.ts".to_string()]
+        );
+    }
+
+    #[test]
+    fn transform_module_source_rewrites_type_only_exports() {
+        let transformed = transform_module_source(
+            r#"
+export type WorldType = "forest" | "cave";
+
+export interface WorldTileDef {
+  value: number;
+}
+
+export const WORLD_TYPE_FOREST: WorldType = "forest";
+"#,
+            "server/world-domain.ts",
+            false,
+        )
+        .expect("type-only exports should rewrite");
+
+        assert!(!transformed.code.contains("export type"));
+        assert!(!transformed.code.contains("export interface"));
+        assert!(!transformed.code.contains("export const"));
+        assert!(transformed.code.contains("type WorldType"));
+        assert!(transformed.code.contains("interface WorldTileDef"));
+        assert_eq!(
+            transformed.export_footer,
+            vec!["exports.WORLD_TYPE_FOREST = WORLD_TYPE_FOREST;".to_string()]
         );
     }
 

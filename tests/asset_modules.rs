@@ -382,6 +382,89 @@ async fn imported_multiline_asset_root_module_executes_in_request_path() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn imported_typescript_asset_module_with_type_exports_executes() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let script_uri = "test://asset-root-module-type-exports.ts";
+    let asset_uri = "server/world-domain.ts";
+    ensure_script(script_uri);
+    repository::upsert_asset(test_asset(
+        script_uri,
+        asset_uri,
+        "text/plain",
+        br#"
+            export type WorldType = "forest" | "cave";
+
+            export interface WorldTileDef {
+                value: number;
+                walkable: boolean;
+            }
+
+            export const WORLD_TILE_DEFS: Record<string, WorldTileDef> = {
+                ground: { value: 1, walkable: true },
+            };
+
+            export function getWorldTileDef(tileName: string): WorldTileDef {
+                return WORLD_TILE_DEFS[tileName] || WORLD_TILE_DEFS.ground;
+            }
+
+            export function worldTileValueForName(tileName: string): number {
+                return getWorldTileDef(tileName).value;
+            }
+        "#,
+    ))
+    .expect("asset should be stored");
+
+    let script_content = r#"
+        import {
+            getWorldTileDef,
+            worldTileValueForName,
+        } from "server/world-domain.ts";
+
+        function handleImportedRequest(context) {
+            const tile = getWorldTileDef("ground");
+            return ResponseBuilder.json({
+                value: worldTileValueForName("ground"),
+                walkable: tile.walkable,
+            });
+        }
+    "#;
+
+    let setup_result = execute_script_secure(
+        script_uri,
+        script_content,
+        UserContext::authenticated("asset-root-type-exports-user".to_string()),
+    );
+    assert!(
+        setup_result.success,
+        "script setup should succeed: {:?}",
+        setup_result.error
+    );
+
+    let response = execute_script_for_request_secure(RequestExecutionParams {
+        script_uri: script_uri.to_string(),
+        handler_name: "handleImportedRequest".to_string(),
+        path: "/asset-root-type-exports".to_string(),
+        method: "GET".to_string(),
+        query_params: None,
+        form_data: None,
+        raw_body: None,
+        headers: HashMap::new(),
+        user_context: UserContext::authenticated("asset-root-type-exports-user".to_string()),
+        route_params: None,
+        auth_context: None,
+        uploaded_files: None,
+    })
+    .expect("request execution should succeed");
+
+    let body = String::from_utf8(response.body).expect("response should be utf-8 text");
+    assert_eq!(body, "{\"value\":1,\"walkable\":true}");
+
+    assert!(repository::delete_asset(script_uri, asset_uri));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn imported_asset_module_executes_in_init_path() {
     let _guard = test_mutex().lock().await;
     setup_env().await;
