@@ -559,6 +559,90 @@ async fn imported_asset_module_executes_in_scheduled_path() {
     assert!(repository::delete_asset(script_uri, asset_uri));
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn nested_asset_relative_import_chain_executes_in_request_path() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let script_uri = "test://asset-module-nested-chain.ts";
+    let world_domain_uri = "server/world-domain.ts";
+    let world_map_uri = "server/world-map.ts";
+    ensure_script(script_uri);
+
+    repository::upsert_asset(test_asset(
+        script_uri,
+        world_domain_uri,
+        "text/plain",
+        br#"
+            export const WORLD_TILE_GROUND = "ground";
+
+            export function worldTileValueForName(tileName: string): number {
+                return tileName === WORLD_TILE_GROUND ? 7 : 0;
+            }
+        "#,
+    ))
+    .expect("world-domain asset should be stored");
+
+    repository::upsert_asset(test_asset(
+        script_uri,
+        world_map_uri,
+        "text/plain",
+        br#"
+            import {
+                WORLD_TILE_GROUND,
+                worldTileValueForName,
+            } from "./world-domain.ts";
+
+            export function generateWorldMap(): number[][] {
+                return [[worldTileValueForName(WORLD_TILE_GROUND)]];
+            }
+        "#,
+    ))
+    .expect("world-map asset should be stored");
+
+    let script_content = r#"
+        import { generateWorldMap } from "./server/world-map.ts";
+
+        function handleImportedRequest(context) {
+            const map = generateWorldMap();
+            return ResponseBuilder.json({ tile: map[0][0] });
+        }
+    "#;
+
+    let setup_result = execute_script_secure(
+        script_uri,
+        script_content,
+        UserContext::authenticated("asset-nested-chain-user".to_string()),
+    );
+    assert!(
+        setup_result.success,
+        "script setup should succeed: {:?}",
+        setup_result.error
+    );
+
+    let response = execute_script_for_request_secure(RequestExecutionParams {
+        script_uri: script_uri.to_string(),
+        handler_name: "handleImportedRequest".to_string(),
+        path: "/asset-nested-chain".to_string(),
+        method: "GET".to_string(),
+        query_params: None,
+        form_data: None,
+        raw_body: None,
+        headers: HashMap::new(),
+        user_context: UserContext::authenticated("asset-nested-chain-user".to_string()),
+        route_params: None,
+        auth_context: None,
+        uploaded_files: None,
+    })
+    .expect("request execution should succeed");
+
+    let body = String::from_utf8(response.body).expect("response should be utf-8 text");
+    assert_eq!(body, "{\"tile\":7}");
+
+    assert!(repository::delete_asset(script_uri, world_map_uri));
+    assert!(repository::delete_asset(script_uri, world_domain_uri));
+}
+
 #[test]
 fn root_module_path_keeps_last_path_segment() {
     let path = module_loader::root_module_path("https://example.com/scripts/app/main.ts")
