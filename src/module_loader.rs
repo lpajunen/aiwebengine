@@ -512,8 +512,13 @@ pub fn normalize_asset_module_specifier(
     }
 
     if !specifier.starts_with("./") && !specifier.starts_with("../") {
+        if is_root_asset_specifier(specifier) {
+            return normalize_relative_path(Path::new(specifier));
+        }
+
         return Err(ModuleLoaderError::InvalidSpecifier(
-            "Module specifier must start with './' or '../'".to_string(),
+            "Module specifier must start with './' or '../', or use an asset-root path like 'server/module.ts'"
+                .to_string(),
         ));
     }
 
@@ -530,6 +535,13 @@ pub fn normalize_asset_module_specifier(
     }
 
     Ok(normalized)
+}
+
+fn is_root_asset_specifier(specifier: &str) -> bool {
+    specifier.contains('/')
+        && !specifier.starts_with('@')
+        && !specifier.contains(":")
+        && !specifier.starts_with("//")
 }
 
 fn normalize_relative_path(path: &Path) -> Result<String, ModuleLoaderError> {
@@ -606,13 +618,44 @@ mod tests {
     }
 
     #[test]
-    fn reject_bare_specifier() {
-        let error = normalize_asset_module_specifier("server/main.ts", "shared/format.ts")
-            .expect_err("bare specifier should be rejected");
+    fn normalize_asset_root_path_specifier() {
+        let normalized = normalize_asset_module_specifier("server/main.ts", "shared/format.ts")
+            .expect("asset-root specifier should normalize");
+        assert_eq!(normalized, "shared/format.ts");
+    }
+
+    #[test]
+    fn normalize_root_asset_specifier() {
+        let normalized = normalize_asset_module_specifier("main.ts", "server/world-domain.ts")
+            .expect("root asset specifier should normalize");
+        assert_eq!(normalized, "server/world-domain.ts");
+    }
+
+    #[test]
+    fn reject_url_style_specifier() {
+        let error = normalize_asset_module_specifier(
+            "server/main.ts",
+            "https://example.com/shared/format.ts",
+        )
+        .expect_err("url specifier should be rejected");
         assert_eq!(
             error,
             ModuleLoaderError::InvalidSpecifier(
-                "Module specifier must start with './' or '../'".to_string(),
+                "Module specifier must start with './' or '../', or use an asset-root path like 'server/module.ts'"
+                    .to_string(),
+            )
+        );
+    }
+
+    #[test]
+    fn reject_package_name_specifier() {
+        let error = normalize_asset_module_specifier("server/main.ts", "react")
+            .expect_err("package-name specifier should be rejected");
+        assert_eq!(
+            error,
+            ModuleLoaderError::InvalidSpecifier(
+                "Module specifier must start with './' or '../', or use an asset-root path like 'server/module.ts'"
+                    .to_string(),
             )
         );
     }

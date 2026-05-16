@@ -1616,6 +1616,22 @@ declare function Fragment(
   ...children: any[]
 ): string;
 
+declare module "react/jsx-runtime" {
+  export { Fragment };
+
+  export function jsx(
+    tag: string | Function,
+    props: Record<string, any> | null,
+    key?: string | number,
+  ): string;
+
+  export function jsxs(
+    tag: string | Function,
+    props: Record<string, any> | null,
+    key?: string | number,
+  ): string;
+}
+
 /**
  * JSX namespace for TypeScript JSX type checking
  */
@@ -1624,6 +1640,10 @@ declare namespace JSX {
    * JSX elements are rendered as HTML strings
    */
   type Element = string;
+
+  interface IntrinsicAttributes {
+    key?: string | number;
+  }
 
   /**
    * Intrinsic HTML elements with their attributes
@@ -1744,6 +1764,7 @@ declare namespace JSX {
    */
   interface HtmlAttributes {
     // Global attributes
+    key?: string | number;
     id?: string;
     className?: string;
     class?: string;
