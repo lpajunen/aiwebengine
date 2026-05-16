@@ -203,6 +203,30 @@ struct TransformedModule {
     export_footer: Vec<String>,
 }
 
+struct StaticImportPatterns {
+    default_and_named: Regex,
+    named: Regex,
+    default: Regex,
+    side_effect: Regex,
+}
+
+impl StaticImportPatterns {
+    fn new() -> Self {
+        Self {
+            default_and_named: Regex::new(
+                r#"^\s*import\s+([A-Za-z_$][\w$]*)\s*,\s*\{([^}]*)\}\s+from\s+['\"]([^'\"]+)['\"]\s*;?\s*$"#,
+            )
+            .expect("default and named import regex should compile"),
+            named: Regex::new(r#"^\s*import\s+\{([^}]*)\}\s+from\s+['\"]([^'\"]+)['\"]\s*;?\s*$"#)
+                .expect("named import regex should compile"),
+            default: Regex::new(r#"^\s*import\s+([A-Za-z_$][\w$]*)\s+from\s+['\"]([^'\"]+)['\"]\s*;?\s*$"#)
+                .expect("default import regex should compile"),
+            side_effect: Regex::new(r#"^\s*import\s+['\"]([^'\"]+)['\"]\s*;?\s*$"#)
+                .expect("side effect import regex should compile"),
+        }
+    }
+}
+
 fn transform_module_source(
     source: &str,
     importer_path: &str,
@@ -214,79 +238,61 @@ fn transform_module_source(
         ));
     }
 
-    let default_and_named_import = Regex::new(
-        r#"^\s*import\s+([A-Za-z_$][\w$]*)\s*,\s*\{([^}]*)\}\s+from\s+['\"]([^'\"]+)['\"]\s*;?\s*$"#,
-    )
-    .expect("default and named import regex should compile");
-    let named_import =
-        Regex::new(r#"^\s*import\s+\{([^}]*)\}\s+from\s+['\"]([^'\"]+)['\"]\s*;?\s*$"#)
-            .expect("named import regex should compile");
-    let default_import =
-        Regex::new(r#"^\s*import\s+([A-Za-z_$][\w$]*)\s+from\s+['\"]([^'\"]+)['\"]\s*;?\s*$"#)
-            .expect("default import regex should compile");
-    let side_effect_import = Regex::new(r#"^\s*import\s+['\"]([^'\"]+)['\"]\s*;?\s*$"#)
-        .expect("side effect import regex should compile");
+    let import_patterns = StaticImportPatterns::new();
 
     let mut generated_imports = Vec::new();
     let mut kept_lines = Vec::new();
     let mut dependencies = Vec::new();
+    let mut pending_import: Option<String> = None;
 
     for line in source.lines() {
-        if let Some(captures) = default_and_named_import.captures(line) {
-            let default_binding = captures.get(1).expect("default binding capture").as_str();
-            let named_bindings = captures.get(2).expect("named binding capture").as_str();
-            let specifier = captures.get(3).expect("specifier capture").as_str();
-            let resolved = normalize_asset_module_specifier(importer_path, specifier)?;
-            dependencies.push(resolved.clone());
-            let temp_binding = format!("__asset_module_{}", generated_imports.len());
-            generated_imports.push(format!(
-                "const {} = __asset_module_require__({:?});",
-                temp_binding, resolved
-            ));
-            generated_imports.push(format!(
-                "const {} = {}.default;",
-                default_binding, temp_binding
-            ));
-            generated_imports.push(render_named_binding_assignment(
-                &temp_binding,
-                named_bindings,
-            )?);
+        if let Some(statement) = pending_import.as_mut() {
+            statement.push('\n');
+            statement.push_str(line);
+
+            if try_rewrite_import_statement(
+                statement,
+                importer_path,
+                &import_patterns,
+                &mut generated_imports,
+                &mut dependencies,
+            )? {
+                pending_import = None;
+            } else if line.trim_end().ends_with(';') {
+                kept_lines.extend(statement.lines().map(str::to_string));
+                pending_import = None;
+            }
             continue;
         }
 
-        if let Some(captures) = named_import.captures(line) {
-            let named_bindings = captures.get(1).expect("named binding capture").as_str();
-            let specifier = captures.get(2).expect("specifier capture").as_str();
-            let resolved = normalize_asset_module_specifier(importer_path, specifier)?;
-            dependencies.push(resolved.clone());
-            generated_imports.push(render_named_binding_assignment(
-                &format!("__asset_module_require__({:?})", resolved),
-                named_bindings,
-            )?);
+        if try_rewrite_import_statement(
+            line,
+            importer_path,
+            &import_patterns,
+            &mut generated_imports,
+            &mut dependencies,
+        )? {
             continue;
         }
 
-        if let Some(captures) = default_import.captures(line) {
-            let default_binding = captures.get(1).expect("default binding capture").as_str();
-            let specifier = captures.get(2).expect("specifier capture").as_str();
-            let resolved = normalize_asset_module_specifier(importer_path, specifier)?;
-            dependencies.push(resolved.clone());
-            generated_imports.push(format!(
-                "const {} = __asset_module_require__({:?}).default;",
-                default_binding, resolved
-            ));
-            continue;
-        }
-
-        if let Some(captures) = side_effect_import.captures(line) {
-            let specifier = captures.get(1).expect("specifier capture").as_str();
-            let resolved = normalize_asset_module_specifier(importer_path, specifier)?;
-            dependencies.push(resolved.clone());
-            generated_imports.push(format!("__asset_module_require__({:?});", resolved));
+        if line.trim_start().starts_with("import ") {
+            pending_import = Some(line.to_string());
             continue;
         }
 
         kept_lines.push(line.to_string());
+    }
+
+    if let Some(statement) = pending_import
+        && !try_rewrite_import_statement(
+            &statement,
+            importer_path,
+            &import_patterns,
+            &mut generated_imports,
+            &mut dependencies,
+        )?
+    {
+        kept_lines.extend(statement.lines().map(str::to_string));
     }
 
     let mut body = kept_lines.join("\n");
@@ -314,6 +320,70 @@ fn transform_module_source(
         dependencies,
         export_footer,
     })
+}
+
+fn try_rewrite_import_statement(
+    statement: &str,
+    importer_path: &str,
+    import_patterns: &StaticImportPatterns,
+    generated_imports: &mut Vec<String>,
+    dependencies: &mut Vec<String>,
+) -> Result<bool, ModuleLoaderError> {
+    if let Some(captures) = import_patterns.default_and_named.captures(statement) {
+        let default_binding = captures.get(1).expect("default binding capture").as_str();
+        let named_bindings = captures.get(2).expect("named binding capture").as_str();
+        let specifier = captures.get(3).expect("specifier capture").as_str();
+        let resolved = normalize_asset_module_specifier(importer_path, specifier)?;
+        dependencies.push(resolved.clone());
+        let temp_binding = format!("__asset_module_{}", generated_imports.len());
+        generated_imports.push(format!(
+            "const {} = __asset_module_require__({:?});",
+            temp_binding, resolved
+        ));
+        generated_imports.push(format!(
+            "const {} = {}.default;",
+            default_binding, temp_binding
+        ));
+        generated_imports.push(render_named_binding_assignment(
+            &temp_binding,
+            named_bindings,
+        )?);
+        return Ok(true);
+    }
+
+    if let Some(captures) = import_patterns.named.captures(statement) {
+        let named_bindings = captures.get(1).expect("named binding capture").as_str();
+        let specifier = captures.get(2).expect("specifier capture").as_str();
+        let resolved = normalize_asset_module_specifier(importer_path, specifier)?;
+        dependencies.push(resolved.clone());
+        generated_imports.push(render_named_binding_assignment(
+            &format!("__asset_module_require__({:?})", resolved),
+            named_bindings,
+        )?);
+        return Ok(true);
+    }
+
+    if let Some(captures) = import_patterns.default.captures(statement) {
+        let default_binding = captures.get(1).expect("default binding capture").as_str();
+        let specifier = captures.get(2).expect("specifier capture").as_str();
+        let resolved = normalize_asset_module_specifier(importer_path, specifier)?;
+        dependencies.push(resolved.clone());
+        generated_imports.push(format!(
+            "const {} = __asset_module_require__({:?}).default;",
+            default_binding, resolved
+        ));
+        return Ok(true);
+    }
+
+    if let Some(captures) = import_patterns.side_effect.captures(statement) {
+        let specifier = captures.get(1).expect("specifier capture").as_str();
+        let resolved = normalize_asset_module_specifier(importer_path, specifier)?;
+        dependencies.push(resolved.clone());
+        generated_imports.push(format!("__asset_module_require__({:?});", resolved));
+        return Ok(true);
+    }
+
+    Ok(false)
 }
 
 fn render_named_binding_assignment(
@@ -704,6 +774,34 @@ mod tests {
 
         assert!(prepared.code.contains("message"));
         assert!(!prepared.code.contains(": string"));
+    }
+
+    #[test]
+    fn transform_module_source_rewrites_multiline_named_imports() {
+        let transformed = transform_module_source(
+            r#"
+import {
+  foo,
+  bar as baz,
+} from "server/world-domain.ts";
+
+function handle() {
+  return foo + baz;
+}
+"#,
+            "main.ts",
+            true,
+        )
+        .expect("multiline import should rewrite");
+
+        assert!(transformed.code.contains(
+            "const { foo, bar: baz } = __asset_module_require__(\"server/world-domain.ts\");"
+        ));
+        assert!(transformed.code.contains("function handle()"));
+        assert_eq!(
+            transformed.dependencies,
+            vec!["server/world-domain.ts".to_string()]
+        );
     }
 
     #[test]
