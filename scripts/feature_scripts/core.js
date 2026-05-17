@@ -140,9 +140,10 @@ function scriptUpdatesCustomizer(context) {
 }
 
 // Helper function to broadcast script update messages
-// NEW SEMANTICS: Message metadata in the JSON object will be used for filtering
-// Connections receive messages when their filter criteria (set by customization function)
-// is a subset of the message metadata
+// Message metadata in the JSON object will be used for filtering.
+// The default match mode is "subset", where connection criteria must be present
+// in the message metadata. Callers can opt into "overlap" matching when they
+// want one connection to receive personal, group, and global events.
 function broadcastScriptUpdate(uri, action, details = {}) {
   try {
     var message = {

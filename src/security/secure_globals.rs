@@ -14,6 +14,17 @@ use crate::security::{
 type RouteRegisterFn =
     Box<dyn Fn(&str, &repository::RouteMetadata, Option<&str>) -> Result<(), rquickjs::Error>>;
 
+fn parse_filter_match_mode(
+    match_mode: Option<String>,
+) -> JsResult<crate::stream_registry::FilterMatchMode> {
+    match match_mode {
+        Some(raw_mode) => raw_mode.parse().map_err(|err: String| {
+            rquickjs::Error::new_from_js_message("matchMode", "FilterMatchMode", &err)
+        }),
+        None => Ok(crate::stream_registry::FilterMatchMode::Subset),
+    }
+}
+
 /// Secure wrapper for JavaScript global functions that enforces Rust-level validation
 pub struct SecureGlobalContext {
     user_context: UserContext,
@@ -2299,7 +2310,8 @@ impl SecureGlobalContext {
             move |_ctx: rquickjs::Ctx<'_>,
                   subscription_name: String,
                   message: String,
-                  filter_json: Option<String>|
+                  filter_json: Option<String>,
+                  match_mode: Option<String>|
                   -> JsResult<String> {
                 // Parse filter criteria from JSON string
                 let metadata_filter: HashMap<String, String> = if let Some(json_str) = filter_json {
@@ -2313,6 +2325,7 @@ impl SecureGlobalContext {
                 } else {
                     HashMap::new() // Empty filter matches all connections
                 };
+                let match_mode = parse_filter_match_mode(match_mode)?;
 
                 // Allow system-level GraphQL subscription broadcasting without capability checks
                 let is_system_broadcast = true; // GraphQL subscriptions are considered system-level
@@ -2367,6 +2380,7 @@ impl SecureGlobalContext {
                     subscription_name = %subscription_name,
                     message_len = message.len(),
                     filter = ?metadata_filter,
+                    match_mode = ?match_mode,
                     "Secure sendSubscriptionMessageFiltered called"
                 );
 
@@ -2375,7 +2389,12 @@ impl SecureGlobalContext {
 
                 // Call selective broadcasting (sync operation)
                 let result = crate::stream_registry::GLOBAL_STREAM_REGISTRY
-                    .broadcast_to_stream_with_filter(&stream_path, &message, &metadata_filter);
+                    .broadcast_to_stream_with_filter_mode(
+                        &stream_path,
+                        &message,
+                        &metadata_filter,
+                        match_mode,
+                    );
 
                 match result {
                     Ok(broadcast_result) => {
@@ -3373,7 +3392,8 @@ impl SecureGlobalContext {
             move |_ctx: rquickjs::Ctx<'_>,
                   path: String,
                   message: String,
-                  filter_json: Option<String>|
+                  filter_json: Option<String>,
+                  match_mode: Option<String>|
                   -> JsResult<String> {
                 // Parse filter criteria
                 let metadata_filter: HashMap<String, String> = if let Some(json_str) = filter_json {
@@ -3387,6 +3407,7 @@ impl SecureGlobalContext {
                 } else {
                     HashMap::new()
                 };
+                let match_mode = parse_filter_match_mode(match_mode)?;
 
                 // Allow system-level broadcasting for certain paths
                 let is_system_broadcast = path == "/script_updates" || path.starts_with("/system/");
@@ -3438,7 +3459,12 @@ impl SecureGlobalContext {
 
                 // Send filtered message
                 let result = crate::stream_registry::GLOBAL_STREAM_REGISTRY
-                    .broadcast_to_stream_with_filter(&path, &message, &metadata_filter);
+                    .broadcast_to_stream_with_filter_mode(
+                        &path,
+                        &message,
+                        &metadata_filter,
+                        match_mode,
+                    );
 
                 match result {
                     Ok(broadcast_result) => {

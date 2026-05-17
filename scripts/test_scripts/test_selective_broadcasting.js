@@ -1,8 +1,10 @@
 /// <reference path="../../assets/aiwebengine.d.ts" />
 
 // Test script for selective broadcasting functionality
-// NEW SEMANTICS: Customization functions return connection filter criteria
-// Message metadata is matched against connection criteria for delivery
+// Customization functions return connection filter criteria.
+// By default, sendStreamMessageFiltered/sendSubscriptionMessageFiltered use
+// "subset" matching, where connection criteria must be present in message metadata.
+// Callers can opt into "overlap" matching with a fourth parameter.
 
 // Stream customization functions return filter criteria for connections
 function chatStreamCustomizer(context) {
@@ -81,7 +83,7 @@ function init(context) {
 }
 
 // Test selective broadcasting to stream connections
-// NEW: Message metadata is matched against connection filter criteria
+// Message metadata is matched against connection filter criteria.
 function testSelectiveStreamBroadcasting() {
   console.log("Testing selective stream broadcasting...");
 
@@ -113,6 +115,21 @@ function testSelectiveStreamBroadcasting() {
   );
 
   console.log("Broadcast result: " + allResult);
+
+  // In overlap mode, missing keys in the message metadata are ignored.
+  // This allows one connection to receive personal, group, and global events.
+  const overlapResult = routeRegistry.sendStreamMessageFiltered(
+    "/test/chat",
+    JSON.stringify({
+      type: "broadcast_overlap",
+      message: "Hello overlap mode!",
+      timestamp: new Date().toISOString(),
+    }),
+    JSON.stringify({ user_id: "user123" }),
+    "overlap",
+  );
+
+  console.log("Overlap broadcast result: " + overlapResult);
 }
 
 // Test selective broadcasting to GraphQL subscription connections

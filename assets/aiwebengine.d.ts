@@ -288,18 +288,21 @@ interface RouteRegistry {
    * @param path - Stream path
    * @param data - Data to send (will be JSON serialized)
    * @param filterJson - JSON filter criteria for connection metadata
+   * @param matchMode - Optional filter matching mode. Defaults to "subset".
    * @returns Broadcast result message
    * @example
    * routeRegistry.sendStreamMessageFiltered(
    *   "/events/notifications",
    *   { message: "Admin alert" },
-   *   JSON.stringify({ role: "admin" })
+   *   JSON.stringify({ role: "admin" }),
+   *   "subset"
    * );
    */
   sendStreamMessageFiltered(
     path: string,
     data: any,
     filterJson: string,
+    matchMode?: "subset" | "overlap",
   ): string;
 }
 
@@ -678,18 +681,21 @@ interface GraphQLRegistry {
    * @param subscriptionName - Name of the subscription
    * @param message - Message to send (will be JSON serialized)
    * @param filterJson - JSON filter criteria for connection metadata (optional)
+   * @param matchMode - Optional filter matching mode. Defaults to "subset".
    * @returns Send result message
    * @example
    * graphQLRegistry.sendSubscriptionMessageFiltered(
    *   "messageAdded",
    *   JSON.stringify({ id: "123", text: "Admin message" }),
-   *   JSON.stringify({ role: "admin" })
+   *   JSON.stringify({ role: "admin" }),
+   *   "subset"
    * );
    */
   sendSubscriptionMessageFiltered(
     subscriptionName: string,
     message: string,
     filterJson?: string,
+    matchMode?: "subset" | "overlap",
   ): string;
 }
 

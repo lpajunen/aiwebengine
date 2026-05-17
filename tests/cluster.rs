@@ -34,6 +34,7 @@ fn test_stream_broadcast_message_structure() {
         stream_path: "/test/stream".to_string(),
         message: "test message".to_string(),
         metadata_filter: None,
+        match_mode: aiwebengine::stream_registry::FilterMatchMode::Subset,
         timestamp: Utc::now().timestamp(),
         server_id: "test-server-456".to_string(),
     };

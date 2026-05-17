@@ -1243,3 +1243,109 @@ async fn test_send_stream_message_denied_for_non_privileged_script() {
     let result = execute_script_secure("test://non-priv-msg", script, admin);
     assert!(result.success, "Should be denied: {:?}", result.error);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_send_stream_message_filtered_accepts_optional_match_mode() {
+    setup_env().await;
+    if database::get_global_database().is_none() {
+        return;
+    }
+    let admin = UserContext::admin("admin".to_string());
+
+    repository::upsert_script("test://privileged-filtered-stream-msg", "")
+        .expect("Failed to create script");
+    repository::set_script_privileged("test://privileged-filtered-stream-msg", true)
+        .expect("Failed to set privileged");
+
+    let script = r#"
+        const result = routeRegistry.sendStreamMessageFiltered(
+            "/missing-stream",
+            JSON.stringify({ kind: "test" }),
+            JSON.stringify({ recipient_id: "a" }),
+            "overlap"
+        );
+
+        if (typeof result !== "string") {
+            throw new Error("Expected string result from sendStreamMessageFiltered");
+        }
+    "#;
+
+    let result = execute_script_secure("test://privileged-filtered-stream-msg", script, admin);
+    assert!(
+        result.success,
+        "Privileged script should accept optional match mode: {:?}",
+        result.error
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_send_stream_message_filtered_rejects_invalid_match_mode() {
+    setup_env().await;
+    if database::get_global_database().is_none() {
+        return;
+    }
+    let admin = UserContext::admin("admin".to_string());
+
+    repository::upsert_script("test://privileged-filtered-stream-msg-invalid", "")
+        .expect("Failed to create script");
+    repository::set_script_privileged("test://privileged-filtered-stream-msg-invalid", true)
+        .expect("Failed to set privileged");
+
+    let script = r#"
+        routeRegistry.sendStreamMessageFiltered(
+            "/missing-stream",
+            JSON.stringify({ kind: "test" }),
+            JSON.stringify({ recipient_id: "a" }),
+            "invalid-mode"
+        );
+    "#;
+
+    let result = execute_script_secure(
+        "test://privileged-filtered-stream-msg-invalid",
+        script,
+        admin,
+    );
+    assert!(!result.success, "Invalid match mode should fail");
+    assert!(
+        result
+            .error
+            .unwrap_or_default()
+            .contains("Expected 'subset' or 'overlap'"),
+        "Expected invalid match mode error"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_send_subscription_message_filtered_accepts_optional_match_mode() {
+    setup_env().await;
+    if database::get_global_database().is_none() {
+        return;
+    }
+    let admin = UserContext::admin("admin".to_string());
+
+    repository::upsert_script("test://privileged-filtered-subscription-msg", "")
+        .expect("Failed to create script");
+    repository::set_script_privileged("test://privileged-filtered-subscription-msg", true)
+        .expect("Failed to set privileged");
+
+    let script = r#"
+        const result = graphQLRegistry.sendSubscriptionMessageFiltered(
+            "missingSubscription",
+            JSON.stringify({ kind: "test" }),
+            JSON.stringify({ recipient_id: "a" }),
+            "overlap"
+        );
+
+        if (typeof result !== "string") {
+            throw new Error("Expected string result from sendSubscriptionMessageFiltered");
+        }
+    "#;
+
+    let result =
+        execute_script_secure("test://privileged-filtered-subscription-msg", script, admin);
+    assert!(
+        result.success,
+        "Privileged script should accept optional subscription match mode: {:?}",
+        result.error
+    );
+}

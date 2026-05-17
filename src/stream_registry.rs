@@ -5,11 +5,62 @@ use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FilterMatchMode {
+    #[default]
+    Subset,
+    Overlap,
+}
+
+impl std::str::FromStr for FilterMatchMode {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "subset" => Ok(Self::Subset),
+            "overlap" => Ok(Self::Overlap),
+            other => Err(format!(
+                "Invalid match mode '{}'. Expected 'subset' or 'overlap'",
+                other
+            )),
+        }
+    }
+}
+
+impl FilterMatchMode {
+    fn matches(
+        self,
+        connection_metadata: Option<&HashMap<String, String>>,
+        message_metadata: &HashMap<String, String>,
+    ) -> bool {
+        let Some(connection_metadata) = connection_metadata else {
+            return true;
+        };
+
+        if connection_metadata.is_empty() {
+            return true;
+        }
+
+        match self {
+            Self::Subset => connection_metadata
+                .iter()
+                .all(|(key, expected_value)| message_metadata.get(key) == Some(expected_value)),
+            Self::Overlap => connection_metadata.iter().all(|(key, expected_value)| {
+                message_metadata
+                    .get(key)
+                    .is_none_or(|actual_value| actual_value == expected_value)
+            }),
+        }
+    }
+}
+
 /// Send PostgreSQL notification for stream broadcast (cross-instance sync)
 async fn send_stream_broadcast_notification(
     path: &str,
     message: &str,
     metadata_filter: Option<&HashMap<String, String>>,
+    match_mode: FilterMatchMode,
 ) -> Result<(), String> {
     // Get database pool if available
     let db = match crate::database::get_global_database() {
@@ -34,6 +85,7 @@ async fn send_stream_broadcast_notification(
         "stream_path": path,
         "message": message,
         "metadata_filter": metadata_filter,
+        "match_mode": match_mode,
         "timestamp": chrono::Utc::now().timestamp(),
         "server_id": server_id,
     });
@@ -568,8 +620,13 @@ impl StreamRegistry {
         let path_clone = path.to_string();
         let message_clone = message.to_string();
         tokio::spawn(async move {
-            if let Err(e) =
-                send_stream_broadcast_notification(&path_clone, &message_clone, None).await
+            if let Err(e) = send_stream_broadcast_notification(
+                &path_clone,
+                &message_clone,
+                None,
+                FilterMatchMode::Subset,
+            )
+            .await
             {
                 debug!(
                     "Failed to send cross-instance broadcast notification: {}",
@@ -645,14 +702,33 @@ impl StreamRegistry {
         message: &str,
         metadata_filter: &HashMap<String, String>,
     ) -> Result<BroadcastResult, String> {
+        self.broadcast_to_stream_with_filter_mode(
+            path,
+            message,
+            metadata_filter,
+            FilterMatchMode::Subset,
+        )
+    }
+
+    pub fn broadcast_to_stream_with_filter_mode(
+        &self,
+        path: &str,
+        message: &str,
+        metadata_filter: &HashMap<String, String>,
+        match_mode: FilterMatchMode,
+    ) -> Result<BroadcastResult, String> {
         // Send cross-instance notification in background (non-blocking)
         let path_clone = path.to_string();
         let message_clone = message.to_string();
         let filter_clone = metadata_filter.clone();
         tokio::spawn(async move {
-            if let Err(e) =
-                send_stream_broadcast_notification(&path_clone, &message_clone, Some(&filter_clone))
-                    .await
+            if let Err(e) = send_stream_broadcast_notification(
+                &path_clone,
+                &message_clone,
+                Some(&filter_clone),
+                match_mode,
+            )
+            .await
             {
                 debug!(
                     "Failed to send cross-instance filtered broadcast notification: {}",
@@ -661,7 +737,7 @@ impl StreamRegistry {
             }
         });
 
-        self.broadcast_to_stream_with_filter_local(path, message, metadata_filter)
+        self.broadcast_to_stream_with_filter_local_mode(path, message, metadata_filter, match_mode)
     }
 
     /// Broadcast a message locally to connections on a specific stream path that match the given metadata filter.
@@ -672,6 +748,21 @@ impl StreamRegistry {
         message: &str,
         metadata_filter: &HashMap<String, String>,
     ) -> Result<BroadcastResult, String> {
+        self.broadcast_to_stream_with_filter_local_mode(
+            path,
+            message,
+            metadata_filter,
+            FilterMatchMode::Subset,
+        )
+    }
+
+    pub fn broadcast_to_stream_with_filter_local_mode(
+        &self,
+        path: &str,
+        message: &str,
+        metadata_filter: &HashMap<String, String>,
+        match_mode: FilterMatchMode,
+    ) -> Result<BroadcastResult, String> {
         match self.streams.lock() {
             Ok(mut streams) => {
                 match streams.get_mut(path) {
@@ -681,24 +772,8 @@ impl StreamRegistry {
                         let mut total_matching_connections = 0;
 
                         for (connection_id, connection) in &registration.connections {
-                            // NEW SEMANTICS: Message metadata must contain all connection metadata keys/values
-                            // Connection metadata = minimum required fields that must be in message metadata
-                            // Empty connection metadata matches all messages
                             let matches_filter =
-                                if let Some(ref conn_metadata) = connection.metadata {
-                                    if conn_metadata.is_empty() {
-                                        // Empty connection metadata matches all messages
-                                        true
-                                    } else {
-                                        // All connection metadata keys must exist in message metadata with matching values
-                                        conn_metadata.iter().all(|(key, expected_value)| {
-                                            metadata_filter.get(key) == Some(expected_value)
-                                        })
-                                    }
-                                } else {
-                                    // No connection metadata matches all messages
-                                    true
-                                };
+                                match_mode.matches(connection.metadata.as_ref(), metadata_filter);
 
                             if matches_filter {
                                 total_matching_connections += 1;
@@ -729,17 +804,18 @@ impl StreamRegistry {
 
                         if !result.failed_connections.is_empty() {
                             warn!(
-                                "Filtered broadcast to path {} with filter {:?}: {} successful, {} failed of {} matching connections",
+                                "Filtered broadcast to path {} with filter {:?} using mode {:?}: {} successful, {} failed of {} matching connections",
                                 path,
                                 metadata_filter,
+                                match_mode,
                                 successful_sends,
                                 failed_connections.len(),
                                 total_matching_connections
                             );
                         } else if successful_sends > 0 {
                             debug!(
-                                "Filtered broadcast to path {} with filter {:?}: {} connections matched and received message",
-                                path, metadata_filter, successful_sends
+                                "Filtered broadcast to path {} with filter {:?} using mode {:?}: {} connections matched and received message",
+                                path, metadata_filter, match_mode, successful_sends
                             );
                         }
 
@@ -988,6 +1064,13 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
+    fn metadata(entries: &[(&str, &str)]) -> HashMap<String, String> {
+        entries
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+            .collect()
+    }
+
     #[test]
     fn test_stream_connection_creation() {
         let conn = StreamConnection::new();
@@ -1230,5 +1313,39 @@ mod tests {
         thread::sleep(Duration::from_millis(10));
         let later_age = conn.age_seconds();
         assert!(later_age >= initial_age); // Age should not decrease
+    }
+
+    #[test]
+    fn test_filter_match_mode_subset_requires_all_connection_keys() {
+        let connection_metadata = metadata(&[("recipient_id", "a"), ("world_id", "b")]);
+
+        assert!(FilterMatchMode::Subset.matches(
+            Some(&connection_metadata),
+            &metadata(&[("recipient_id", "a"), ("world_id", "b")])
+        ));
+        assert!(!FilterMatchMode::Subset.matches(
+            Some(&connection_metadata),
+            &metadata(&[("recipient_id", "a")])
+        ));
+        assert!(!FilterMatchMode::Subset.matches(Some(&connection_metadata), &HashMap::new()));
+    }
+
+    #[test]
+    fn test_filter_match_mode_overlap_ignores_missing_message_keys() {
+        let connection_metadata = metadata(&[("recipient_id", "a"), ("world_id", "b")]);
+
+        assert!(FilterMatchMode::Overlap.matches(
+            Some(&connection_metadata),
+            &metadata(&[("recipient_id", "a")])
+        ));
+        assert!(
+            FilterMatchMode::Overlap
+                .matches(Some(&connection_metadata), &metadata(&[("world_id", "b")]))
+        );
+        assert!(FilterMatchMode::Overlap.matches(Some(&connection_metadata), &HashMap::new()));
+        assert!(!FilterMatchMode::Overlap.matches(
+            Some(&connection_metadata),
+            &metadata(&[("recipient_id", "other")])
+        ));
     }
 }

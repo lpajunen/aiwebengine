@@ -1,4 +1,5 @@
 use crate::error::AppResult;
+use crate::stream_registry::FilterMatchMode;
 use crate::{graphql, repository, scheduler, script_init};
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::{PgListener, PgPool};
@@ -56,6 +57,8 @@ pub struct StreamBroadcastMessage {
     pub message: String,
     #[serde(default)]
     pub metadata_filter: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub match_mode: FilterMatchMode,
     pub timestamp: i64,
     pub server_id: String,
 }
@@ -335,10 +338,11 @@ impl NotificationListener {
 
         // Broadcast to local connections only (do not re-notify DB).
         let result = if let Some(ref metadata_filter) = msg.metadata_filter {
-            registry.broadcast_to_stream_with_filter_local(
+            registry.broadcast_to_stream_with_filter_local_mode(
                 &msg.stream_path,
                 &msg.message,
                 metadata_filter,
+                msg.match_mode,
             )
         } else {
             registry.broadcast_to_stream_local(&msg.stream_path, &msg.message)
