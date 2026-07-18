@@ -80,7 +80,7 @@ lto = "thin"
 [dev-dependencies]
 tokio-test = "0.4"
 mockall = "0.15.0"
-jsonschema = "0.46.5"
+jsonschema = "0.48.1"
 
 # Build-time dependencies (for capturing build metadata)
 [build-dependencies]
