@@ -97,13 +97,13 @@ fn transpile(uri: &str, content: &str) -> AppResult<String> {
     let ret = Parser::new(&allocator, content, source_type).parse();
 
     // Check for parse errors
-    if !ret.errors.is_empty() {
-        let error_msg = format!("Parse errors in {}: {:?}", uri, ret.errors);
+    if !ret.diagnostics.is_empty() {
+        let error_msg = format!("Parse errors in {}: {:?}", uri, ret.diagnostics);
         error!(error = %error_msg, uri = uri, "Transpilation parse error");
         // Log to database
         insert_log_message(
             uri,
-            &format!("Transpilation parse error: {:?}", ret.errors),
+            &format!("Transpilation parse error: {:?}", ret.diagnostics),
             "ERROR",
         );
         return Err(crate::error::AppError::Config {
