@@ -330,7 +330,7 @@ impl Database {
 
                 // Execute SAVEPOINT command
                 run_blocking(async {
-                    sqlx::query(&format!("SAVEPOINT {}", savepoint_name))
+                    sqlx::query(sqlx::AssertSqlSafe(format!("SAVEPOINT {}", savepoint_name)))
                         .execute(&mut **tx_ref)
                         .await
                         .map_err(|e| format!("Failed to create savepoint: {}", e))?;
@@ -398,10 +398,13 @@ impl Database {
                     .ok_or("Transaction not available")?;
 
                 run_blocking(async {
-                    sqlx::query(&format!("RELEASE SAVEPOINT {}", savepoint_name))
-                        .execute(&mut **tx_ref)
-                        .await
-                        .map_err(|e| format!("Failed to release savepoint: {}", e))?;
+                    sqlx::query(sqlx::AssertSqlSafe(format!(
+                        "RELEASE SAVEPOINT {}",
+                        savepoint_name
+                    )))
+                    .execute(&mut **tx_ref)
+                    .await
+                    .map_err(|e| format!("Failed to release savepoint: {}", e))?;
                     Ok::<(), String>(())
                 })?;
             } else {
@@ -460,10 +463,13 @@ impl Database {
                     .ok_or("Transaction not available")?;
 
                 run_blocking(async {
-                    sqlx::query(&format!("ROLLBACK TO SAVEPOINT {}", savepoint_name))
-                        .execute(&mut **tx_ref)
-                        .await
-                        .map_err(|e| format!("Failed to rollback to savepoint: {}", e))?;
+                    sqlx::query(sqlx::AssertSqlSafe(format!(
+                        "ROLLBACK TO SAVEPOINT {}",
+                        savepoint_name
+                    )))
+                    .execute(&mut **tx_ref)
+                    .await
+                    .map_err(|e| format!("Failed to rollback to savepoint: {}", e))?;
                     Ok::<(), String>(())
                 })?;
             } else {
@@ -504,6 +510,16 @@ impl Database {
             }
         }
 
+        // Caller-supplied names are interpolated into DDL, so restrict them to
+        // safe SQL identifiers before touching the transaction (defense in
+        // depth: the extended query protocol already blocks multi-statement
+        // injection). Validated once here, so rollback/release — which only
+        // accept names already on the stack — are safe by construction.
+        if let Some(n) = name {
+            crate::db_schema_utils::validate_identifier(n)
+                .map_err(|e| format!("Invalid savepoint name: {}", e))?;
+        }
+
         CURRENT_TRANSACTION.with(|tx_cell| {
             let mut tx_option = tx_cell.borrow_mut();
 
@@ -527,7 +543,7 @@ impl Database {
                 .ok_or("Transaction not available")?;
 
             run_blocking(async {
-                sqlx::query(&format!("SAVEPOINT {}", savepoint_name))
+                sqlx::query(sqlx::AssertSqlSafe(format!("SAVEPOINT {}", savepoint_name)))
                     .execute(&mut **tx_ref)
                     .await
                     .map_err(|e| format!("Failed to create savepoint: {}", e))?;
@@ -572,10 +588,13 @@ impl Database {
                 .ok_or("Transaction not available")?;
 
             run_blocking(async {
-                sqlx::query(&format!("ROLLBACK TO SAVEPOINT {}", name))
-                    .execute(&mut **tx_ref)
-                    .await
-                    .map_err(|e| format!("Failed to rollback to savepoint: {}", e))?;
+                sqlx::query(sqlx::AssertSqlSafe(format!(
+                    "ROLLBACK TO SAVEPOINT {}",
+                    name
+                )))
+                .execute(&mut **tx_ref)
+                .await
+                .map_err(|e| format!("Failed to rollback to savepoint: {}", e))?;
                 Ok::<(), String>(())
             })?;
 
@@ -621,7 +640,7 @@ impl Database {
                 .ok_or("Transaction not available")?;
 
             run_blocking(async {
-                sqlx::query(&format!("RELEASE SAVEPOINT {}", name))
+                sqlx::query(sqlx::AssertSqlSafe(format!("RELEASE SAVEPOINT {}", name)))
                     .execute(&mut **tx_ref)
                     .await
                     .map_err(|e| format!("Failed to release savepoint: {}", e))?;
@@ -829,6 +848,23 @@ mod tests {
         let result = Database::create_savepoint(None);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("No active transaction"));
+    }
+
+    #[test]
+    fn test_create_savepoint_rejects_unsafe_name() {
+        // A savepoint name is interpolated into DDL; injection attempts must be
+        // rejected by identifier validation before any transaction work.
+        for bad in ["x; DROP TABLE users", "a b", "1foo", "foo\"bar", ""] {
+            let result = Database::create_savepoint(Some(bad));
+            assert!(
+                result
+                    .as_ref()
+                    .is_err_and(|e| e.contains("Invalid savepoint name")),
+                "name {:?} should be rejected as invalid, got {:?}",
+                bad,
+                result
+            );
+        }
     }
 
     #[test]

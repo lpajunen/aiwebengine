@@ -2434,7 +2434,7 @@ async fn db_create_script_table(
         quote_identifier(&physical_table_name)
     );
 
-    sqlx::query(&create_table_sql)
+    sqlx::query(sqlx::AssertSqlSafe(create_table_sql.as_str()))
         .execute(pool)
         .await
         .map_err(|e| {
@@ -2575,13 +2575,16 @@ async fn db_add_column_to_script_table(
     }
 
     // Execute the ALTER TABLE
-    sqlx::query(&alter_sql).execute(pool).await.map_err(|e| {
-        error!("Database error adding column: {}", e);
-        AppError::Database {
-            message: format!("Failed to add column: {}", e),
-            source: None,
-        }
-    })?;
+    sqlx::query(sqlx::AssertSqlSafe(alter_sql.as_str()))
+        .execute(pool)
+        .await
+        .map_err(|e| {
+            error!("Database error adding column: {}", e);
+            AppError::Database {
+                message: format!("Failed to add column: {}", e),
+                source: None,
+            }
+        })?;
 
     // Update schema_json metadata
     if let Some(columns) = schema_json
@@ -2708,13 +2711,16 @@ async fn db_add_reference_column(
         quote_identifier(&referenced_table)
     );
 
-    sqlx::query(&alter_sql).execute(pool).await.map_err(|e| {
-        error!("Database error creating foreign key: {}", e);
-        AppError::Database {
-            message: format!("Failed to create foreign key: {}", e),
-            source: None,
-        }
-    })?;
+    sqlx::query(sqlx::AssertSqlSafe(alter_sql.as_str()))
+        .execute(pool)
+        .await
+        .map_err(|e| {
+            error!("Database error creating foreign key: {}", e);
+            AppError::Database {
+                message: format!("Failed to create foreign key: {}", e),
+                source: None,
+            }
+        })?;
 
     debug!(
         "Created reference column: {}.{} -> {}.id (nullable: {})",
@@ -2792,13 +2798,16 @@ async fn db_drop_column(
         quote_identifier(column_name)
     );
 
-    sqlx::query(&drop_sql).execute(pool).await.map_err(|e| {
-        error!("Database error dropping column: {}", e);
-        AppError::Database {
-            message: format!("Failed to drop column: {}", e),
-            source: None,
-        }
-    })?;
+    sqlx::query(sqlx::AssertSqlSafe(drop_sql.as_str()))
+        .execute(pool)
+        .await
+        .map_err(|e| {
+            error!("Database error dropping column: {}", e);
+            AppError::Database {
+                message: format!("Failed to drop column: {}", e),
+                source: None,
+            }
+        })?;
 
     // Update schema_json metadata
     if let Some(columns) = schema_json
@@ -2867,13 +2876,16 @@ async fn db_drop_script_table(
             quote_identifier(&physical_name)
         );
 
-        sqlx::query(&drop_sql).execute(pool).await.map_err(|e| {
-            error!("Database error dropping table: {}", e);
-            AppError::Database {
-                message: format!("Failed to drop table: {}", e),
-                source: None,
-            }
-        })?;
+        sqlx::query(sqlx::AssertSqlSafe(drop_sql.as_str()))
+            .execute(pool)
+            .await
+            .map_err(|e| {
+                error!("Database error dropping table: {}", e);
+                AppError::Database {
+                    message: format!("Failed to drop table: {}", e),
+                    source: None,
+                }
+            })?;
 
         // Remove from script_tables metadata (will cascade due to FK)
         sqlx::query("DELETE FROM script_tables WHERE script_uri = $1 AND logical_table_name = $2")
@@ -2924,13 +2936,16 @@ async fn db_drop_all_script_tables(pool: &PgPool, script_uri: &str) -> AppResult
             quote_identifier(&physical_name)
         );
 
-        sqlx::query(&drop_sql).execute(pool).await.map_err(|e| {
-            error!("Database error dropping table {}: {}", physical_name, e);
-            AppError::Database {
-                message: format!("Failed to drop table: {}", e),
-                source: None,
-            }
-        })?;
+        sqlx::query(sqlx::AssertSqlSafe(drop_sql.as_str()))
+            .execute(pool)
+            .await
+            .map_err(|e| {
+                error!("Database error dropping table {}: {}", physical_name, e);
+                AppError::Database {
+                    message: format!("Failed to drop table: {}", e),
+                    source: None,
+                }
+            })?;
     }
 
     // Delete metadata entries (script_uri FK will auto-delete on script deletion)
@@ -3396,7 +3411,7 @@ async fn db_query_table(
     sql.push_str(&format!(" LIMIT ${}", param_count));
 
     // Bind parameters
-    let mut sql_query = sqlx::query(&sql);
+    let mut sql_query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
     for cond in &conditions {
         sql_query = bind_json_value(sql_query, &cond.value)?;
     }
@@ -3450,7 +3465,7 @@ async fn db_insert_row(
         placeholders.join(", ")
     );
 
-    let mut sql_query = sqlx::query(&sql);
+    let mut sql_query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
     for value in data.values() {
         sql_query = bind_json_value(sql_query, value)?;
     }
@@ -3503,7 +3518,7 @@ async fn db_update_row(
         param_count
     );
 
-    let mut sql_query = sqlx::query(&sql);
+    let mut sql_query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
     for value in data.values() {
         sql_query = bind_json_value(sql_query, value)?;
     }
@@ -3534,7 +3549,7 @@ async fn db_delete_row(
         quote_identifier(&physical_table_name)
     );
 
-    let result = sqlx::query(&sql)
+    let result = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
         .bind(id)
         .execute(&mut *conn)
         .await
@@ -3636,7 +3651,7 @@ async fn db_upsert_row(
         )
     };
 
-    let mut sql_query = sqlx::query(&sql);
+    let mut sql_query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
     for col in &ordered_cols {
         let value = &data[*col];
         sql_query = bind_json_value(sql_query, value)?;
@@ -3702,7 +3717,7 @@ async fn db_delete_where(
         clauses.join(" AND ")
     );
 
-    let mut sql_query = sqlx::query(&sql);
+    let mut sql_query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
     for cond in &conditions {
         sql_query = bind_json_value(sql_query, &cond.value)?;
     }
@@ -3763,7 +3778,7 @@ async fn db_acquire_lease(
         tbl = quote_identifier(&physical_table_name)
     );
 
-    let upsert_row = sqlx::query(&sql)
+    let upsert_row = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
         .bind(lease_id)
         .bind(owner)
         .bind(ttl_ms)
@@ -3797,7 +3812,7 @@ async fn db_acquire_lease(
         "SELECT owner, expires_at FROM {} WHERE lease_id = $1",
         quote_identifier(&physical_table_name)
     );
-    let current = sqlx::query(&select_sql)
+    let current = sqlx::query(sqlx::AssertSqlSafe(select_sql.as_str()))
         .bind(lease_id)
         .fetch_optional(&mut *conn)
         .await
@@ -3899,7 +3914,7 @@ async fn db_create_lease_table(
         physical_name,
     );
 
-    sqlx::query(&create_sql)
+    sqlx::query(sqlx::AssertSqlSafe(create_sql.as_str()))
         .execute(&mut *conn)
         .await
         .map_err(|e| AppError::Database {
@@ -3979,13 +3994,16 @@ async fn db_add_unique_index(
         col_list
     );
 
-    sqlx::query(&sql).execute(&mut *conn).await.map_err(|e| {
-        error!("Database error adding unique index: {}", e);
-        AppError::Database {
-            message: format!("Index error: {}", e),
-            source: None,
-        }
-    })?;
+    sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| {
+            error!("Database error adding unique index: {}", e);
+            AppError::Database {
+                message: format!("Index error: {}", e),
+                source: None,
+            }
+        })?;
 
     debug!(
         "Created unique index '{}' on table '{}' for script '{}'",

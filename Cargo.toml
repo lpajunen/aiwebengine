@@ -61,7 +61,7 @@ urlencoding = "2.1.3"
 multer = "3.0"
 
 # Database (SQLx)
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "migrate", "uuid", "chrono"] }
+sqlx = { version = "0.9", features = ["runtime-tokio", "postgres", "migrate", "uuid", "chrono"] }
 
 # Optimize test builds for faster compilation and execution
 [profile.test]
