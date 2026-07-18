@@ -297,6 +297,26 @@ mod tests {
         assert_eq!(plaintext, decrypted);
     }
 
+    /// Wire-format regression guard for data at rest. AES-256-GCM is a fixed
+    /// standard (nonce + ciphertext + 16-byte tag), so this fixture must keep
+    /// decrypting across encryption-library upgrades. A failure here means a
+    /// crate bump changed the on-disk format and would break decryption of
+    /// existing secrets/sessions in the database.
+    #[test]
+    fn test_decrypts_pinned_ciphertext() {
+        let key = [0x42u8; 32];
+        let enc = DataEncryption::new(&key);
+        let fixture = EncryptedData {
+            ciphertext: "Eu0x4l5HQuhn0zI/mHYyIUQCpljjp2L9kP004S2LwDz1".to_string(),
+            nonce: "82ba9OfibrkayZgB".to_string(),
+            version: 1,
+        };
+        let decrypted = enc
+            .decrypt_field(&fixture)
+            .expect("pinned ciphertext must remain decryptable");
+        assert_eq!(decrypted, "hello aiwebengine");
+    }
+
     #[test]
     fn test_encrypt_decrypt_bytes() {
         let encryption = create_test_encryption();

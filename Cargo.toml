@@ -48,7 +48,7 @@ handlebars = "6.0"
 oxc = { version = "0.140.0", features = ["full"] }
 
 # Security and encryption (Phase 0.5)
-aes-gcm = "0.10"
+aes-gcm = "0.11"
 argon2 = "0.5"
 subtle = "2.5"
 
