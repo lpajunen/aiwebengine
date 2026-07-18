@@ -5473,6 +5473,7 @@ impl Repository for PostgresRepository {
         if let Ok(mut guard) = safe_lock_scripts() {
             guard.remove(uri);
         }
+        crate::route_index::invalidate();
         Ok(())
     }
 
@@ -5497,6 +5498,7 @@ impl Repository for PostgresRepository {
             if let Ok(mut guard) = safe_lock_scripts() {
                 guard.remove(uri);
             }
+            crate::route_index::invalidate();
         }
         Ok(result)
     }
@@ -5633,6 +5635,8 @@ impl Repository for PostgresRepository {
                 return Err(RepositoryError::ScriptNotFound(uri.to_string()).into());
             }
         }
+        drop(guard);
+        crate::route_index::invalidate();
         Ok(())
     }
 

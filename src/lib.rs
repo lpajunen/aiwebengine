@@ -30,6 +30,7 @@ pub mod notifications;
 pub mod openapi_schemas;
 pub mod parsers;
 pub mod repository;
+pub mod route_index;
 pub mod safe_helpers;
 pub mod scheduler;
 pub mod script_init;
@@ -715,168 +716,6 @@ async fn handle_stream_request(req: Request<Body>) -> Response {
 
     // Return the SSE response
     sse.into_response()
-}
-
-/// Calculate specificity score for a route pattern
-/// Higher score = more specific route
-/// Score = (exact segments × 1000) + (param segments × 100) - (wildcard depth × 10)
-fn calculate_route_specificity(pattern: &str) -> i32 {
-    let parts: Vec<&str> = pattern.split('/').filter(|s| !s.is_empty()).collect();
-    let mut exact_count = 0i32;
-    let mut param_count = 0i32;
-    let mut wildcard_depth = 0i32;
-
-    for (depth, part) in parts.iter().enumerate() {
-        if part.starts_with(':') {
-            param_count += 1;
-        } else if *part == "*" {
-            wildcard_depth = (parts.len() - depth) as i32;
-        } else {
-            exact_count += 1;
-        }
-    }
-
-    (exact_count * 1000) + (param_count * 100) - (wildcard_depth * 10)
-}
-
-/// Match a route pattern with parameters against a path
-/// Returns extracted parameters if the pattern matches
-fn match_route_pattern(pattern: &str, path: &str) -> Option<HashMap<String, String>> {
-    let pattern_parts: Vec<&str> = pattern.split('/').filter(|s| !s.is_empty()).collect();
-    let path_parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-
-    if pattern_parts.len() != path_parts.len() {
-        return None;
-    }
-
-    let mut params = HashMap::new();
-
-    for (pattern_part, path_part) in pattern_parts.iter().zip(path_parts.iter()) {
-        if let Some(param_name) = pattern_part.strip_prefix(':') {
-            // This is a parameter
-            params.insert(param_name.to_string(), path_part.to_string());
-        } else if *pattern_part != *path_part {
-            // Literal parts must match exactly
-            return None;
-        }
-    }
-
-    Some(params)
-}
-
-/// Dynamically find a route handler by checking cached registrations from init()
-/// Routes are matched by specificity: exact > params > wildcards
-fn find_route_handler(
-    path: &str,
-    method: &str,
-) -> Option<(String, String, HashMap<String, String>)> {
-    // Fetch all script metadata which includes cached registrations from init()
-    let all_metadata = match repository::get_all_script_metadata() {
-        Ok(metadata) => metadata,
-        Err(e) => {
-            error!("Failed to fetch script metadata: {}", e);
-            return None;
-        }
-    };
-
-    // Collect all matching routes with their specificity scores
-    let mut candidates: Vec<(i32, String, String, HashMap<String, String>)> = Vec::new();
-
-    for metadata in all_metadata {
-        // Use cached registrations from init() function
-        if metadata.initialized && !metadata.registrations.is_empty() {
-            // Check for exact match
-            if let Some(route_meta) = metadata
-                .registrations
-                .get(&(path.to_string(), method.to_string()))
-            {
-                let specificity = calculate_route_specificity(path);
-                candidates.push((
-                    specificity,
-                    metadata.uri.clone(),
-                    route_meta.handler_name.clone(),
-                    HashMap::new(),
-                ));
-            }
-
-            // Check for parameterized matches (:variable)
-            for ((pattern, reg_method), route_meta) in &metadata.registrations {
-                if reg_method == method
-                    && let Some(params) = match_route_pattern(pattern, path)
-                {
-                    let specificity = calculate_route_specificity(pattern);
-                    candidates.push((
-                        specificity,
-                        metadata.uri.clone(),
-                        route_meta.handler_name.clone(),
-                        params,
-                    ));
-                }
-            }
-
-            // Check for wildcard matches
-            for ((pattern, reg_method), route_meta) in &metadata.registrations {
-                if reg_method == method && pattern.ends_with("/*") {
-                    let prefix = &pattern[..pattern.len() - 1]; // Remove the *
-                    if path.starts_with(prefix) {
-                        let specificity = calculate_route_specificity(pattern);
-                        candidates.push((
-                            specificity,
-                            metadata.uri.clone(),
-                            route_meta.handler_name.clone(),
-                            HashMap::new(),
-                        ));
-                    }
-                }
-            }
-        }
-    }
-
-    // Sort by specificity (highest first) and return the most specific match
-    if !candidates.is_empty() {
-        candidates.sort_by_key(|entry| std::cmp::Reverse(entry.0)); // Descending order
-        if let Some((_, uri, handler, params)) = candidates.into_iter().next() {
-            return Some((uri, handler, params));
-        }
-    }
-
-    None
-}
-
-/// Check if any script registers a route for the given path (used for 405 responses)
-fn path_has_any_route(path: &str) -> bool {
-    let all_metadata = match repository::get_all_script_metadata() {
-        Ok(metadata) => metadata,
-        Err(_) => return false,
-    };
-
-    for metadata in all_metadata {
-        if metadata.initialized && !metadata.registrations.is_empty() {
-            // Check for exact match
-            if metadata.registrations.keys().any(|(p, _)| p == path) {
-                return true;
-            }
-
-            // Check for parameterized matches
-            for (pattern, _) in metadata.registrations.keys() {
-                if match_route_pattern(pattern, path).is_some() {
-                    return true;
-                }
-            }
-
-            // Check for wildcard matches
-            for (pattern, _) in metadata.registrations.keys() {
-                if pattern.ends_with("/*") {
-                    let prefix = &pattern[..pattern.len() - 1]; // Remove the *
-                    if path.starts_with(prefix) {
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-
-    false
 }
 
 /// Initialize authentication manager with all dependencies
@@ -2428,13 +2267,24 @@ async fn handle_dynamic_request(
         return handle_stream_request(req).await;
     }
 
-    // Check if any route exists for this path (including wildcards)
-    let path_exists = path_has_any_route(&path);
+    // Match against the cached route index (rebuilt lazily on script changes)
+    let route_lookup = match route_index::lookup(&path, &request_method).await {
+        Ok(lookup) => lookup,
+        Err(e) => {
+            // Treat lookup failure as no match, mirroring the previous behavior
+            // when script metadata could not be fetched
+            error!("Route lookup failed for {} {}: {}", request_method, path, e);
+            route_index::RouteLookup::NotFound
+        }
+    };
 
-    let reg = find_route_handler(&path, &request_method);
-    let (owner_uri, handler_name, route_params) = match reg {
-        Some(t) => t,
-        None => {
+    let (owner_uri, handler_name, route_params) = match route_lookup {
+        route_index::RouteLookup::Handler {
+            script_uri,
+            handler_name,
+            params,
+        } => (script_uri, handler_name, params),
+        no_handler => {
             // Extract request ID from extensions
             let request_id = req
                 .extensions()
@@ -2442,7 +2292,7 @@ async fn handle_dynamic_request(
                 .map(|rid| rid.0.clone())
                 .unwrap_or_else(|| "unknown".to_string());
 
-            if path_exists {
+            if matches!(no_handler, route_index::RouteLookup::MethodNotAllowed) {
                 warn!(
                     "[{}] ⚠️  Method not allowed: {} {} (path exists but method not registered)",
                     request_id, request_method, path
@@ -2888,6 +2738,7 @@ fn build_http_response_from_js(js_response: js_engine::JsHttpResponse) -> Respon
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::route_index::{calculate_route_specificity, match_route_pattern};
     use std::sync::{Once, OnceLock};
 
     static INIT_DB: Once = Once::new();

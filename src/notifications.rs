@@ -285,6 +285,9 @@ impl NotificationListener {
             );
         }
 
+        // Ensure route lookups pick up the new registrations
+        crate::route_index::invalidate();
+
         Ok(())
     }
 
@@ -318,6 +321,7 @@ impl NotificationListener {
             guard.remove(uri);
             debug!("Removed script '{}' from cache", uri);
         }
+        crate::route_index::invalidate();
 
         info!("✓ Script '{}' cleanup completed after remote deletion", uri);
 
