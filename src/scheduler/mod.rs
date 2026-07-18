@@ -806,7 +806,7 @@ impl Scheduler {
                     error = %err,
                     "Scheduler job failed"
                 );
-                repository::insert_log_message(
+                repository::insert_log_message_async(
                     &invocation.script_uri,
                     &format!(
                         "scheduler job '{}' failed at {}: {}",
@@ -815,7 +815,8 @@ impl Scheduler {
                         err
                     ),
                     "FATAL",
-                );
+                )
+                .await;
             }
             Err(join_err) => {
                 error!(
@@ -825,7 +826,7 @@ impl Scheduler {
                     error = %join_err,
                     "Scheduler job panicked"
                 );
-                repository::insert_log_message(
+                repository::insert_log_message_async(
                     &invocation.script_uri,
                     &format!(
                         "scheduler job '{}' panicked at {}: {}",
@@ -834,7 +835,8 @@ impl Scheduler {
                         join_err
                     ),
                     "FATAL",
-                );
+                )
+                .await;
             }
         }
 

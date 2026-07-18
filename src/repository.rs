@@ -630,6 +630,41 @@ where
     }
 }
 
+/// Fetch the privilege flag for every script in one query
+async fn db_get_all_script_privileged<'e, E>(executor: E) -> AppResult<HashMap<String, bool>>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    let rows = sqlx::query(
+        r#"
+        SELECT uri, privileged FROM scripts
+        "#,
+    )
+    .fetch_all(executor)
+    .await
+    .map_err(|e| {
+        error!("Database error getting script privileges: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    let mut privileges = HashMap::new();
+    for row in rows {
+        let uri: String = row.try_get("uri").map_err(|e| AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        })?;
+        let privileged: bool = row.try_get("privileged").map_err(|e| AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        })?;
+        privileges.insert(uri, privileged);
+    }
+    Ok(privileges)
+}
+
 /// Database-backed setter for script privilege flag
 async fn db_set_script_privileged<'e, E>(executor: E, uri: &str, privileged: bool) -> AppResult<()>
 where
@@ -4112,10 +4147,13 @@ pub fn set_script_privileged(uri: &str, privileged: bool) -> AppResult<()> {
 
 /// Insert log message with error handling
 pub fn insert_log_message(script_uri: &str, message: &str, log_level: &str) {
-    let repo = get_repository();
-    let result = run_blocking(async { repo.insert_log(script_uri, message, log_level).await });
+    run_blocking(insert_log_message_async(script_uri, message, log_level))
+}
 
-    if let Err(e) = result {
+/// Async variant of [`insert_log_message`] for callers already in async context
+pub async fn insert_log_message_async(script_uri: &str, message: &str, log_level: &str) {
+    let repo = get_repository();
+    if let Err(e) = repo.insert_log(script_uri, message, log_level).await {
         error!(
             "Failed to insert log message for {}: {}. Message: {}",
             script_uri, e, message
@@ -4177,6 +4215,11 @@ pub fn prune_log_messages() -> AppResult<()> {
 
 /// Upsert script with error handling
 pub fn upsert_script(uri: &str, content: &str) -> AppResult<()> {
+    run_blocking(upsert_script_async(uri, content))
+}
+
+/// Async variant of [`upsert_script`] for callers already in async context
+pub async fn upsert_script_async(uri: &str, content: &str) -> AppResult<()> {
     if uri.trim().is_empty() {
         return Err(RepositoryError::InvalidData("URI cannot be empty".to_string()).into());
     }
@@ -4189,8 +4232,7 @@ pub fn upsert_script(uri: &str, content: &str) -> AppResult<()> {
     }
 
     let repo = get_repository();
-
-    run_blocking(async { repo.upsert_script(uri, content).await })
+    repo.upsert_script(uri, content).await
 }
 
 /// Upsert script and set owner if it's a new script
@@ -4282,6 +4324,11 @@ pub fn upsert_script_with_owner(
 
 /// Bootstrap hardcoded scripts into database on startup
 pub fn bootstrap_scripts() -> AppResult<()> {
+    run_blocking(bootstrap_scripts_async())
+}
+
+/// Async variant of [`bootstrap_scripts`] for callers already in async context
+pub async fn bootstrap_scripts_async() -> AppResult<()> {
     if let Some(db) = get_db_pool() {
         let pool = db.pool();
 
@@ -4321,7 +4368,7 @@ pub fn bootstrap_scripts() -> AppResult<()> {
             ));
         }
 
-        let result = run_blocking(async {
+        let result = async {
             for (uri, code) in all_scripts {
                 let mut exists = false;
                 // Check if script already exists
@@ -4375,7 +4422,8 @@ pub fn bootstrap_scripts() -> AppResult<()> {
                 }
             }
             Ok(())
-        });
+        }
+        .await;
 
         match result {
             Ok(()) => {
@@ -4813,10 +4861,15 @@ pub fn fetch_assets(script_uri: &str) -> HashMap<String, Asset> {
 
 /// Fetch single asset by URI with error handling (dynamic first, then static)
 pub fn fetch_asset(script_uri: &str, uri: &str) -> Option<Asset> {
+    run_blocking(fetch_asset_async(script_uri, uri))
+}
+
+/// Async variant of [`fetch_asset`] for callers already in async context
+pub async fn fetch_asset_async(script_uri: &str, uri: &str) -> Option<Asset> {
     let repo = get_repository();
 
     // Try repository first (DB or Memory)
-    let result = run_blocking(async { repo.get_asset(script_uri, uri).await });
+    let result = repo.get_asset(script_uri, uri).await;
 
     match result {
         Ok(Some(asset)) => {
@@ -4844,6 +4897,11 @@ pub fn fetch_asset(script_uri: &str, uri: &str) -> Option<Asset> {
 
 /// Upsert asset with validation and error handling
 pub fn upsert_asset(asset: Asset) -> AppResult<()> {
+    run_blocking(upsert_asset_async(asset))
+}
+
+/// Async variant of [`upsert_asset`] for callers already in async context
+pub async fn upsert_asset_async(asset: Asset) -> AppResult<()> {
     if asset.uri.trim().is_empty() {
         return Err(RepositoryError::InvalidData("Asset URI cannot be empty".to_string()).into());
     }
@@ -4860,7 +4918,7 @@ pub fn upsert_asset(asset: Asset) -> AppResult<()> {
     }
 
     let repo = get_repository();
-    run_blocking(async { repo.upsert_asset(asset).await })
+    repo.upsert_asset(asset).await
 }
 
 /// Delete asset with error handling  
@@ -5581,21 +5639,35 @@ impl Repository for PostgresRepository {
             }
         }
 
-        // Apply privilege overrides
-        if let Ok(overrides) = safe_lock_privilege_overrides() {
-            for metadata in &mut metadata_list {
-                if let Some(privileged) = overrides.get(&metadata.uri) {
-                    metadata.privileged = *privileged;
-                }
+        // Resolve privilege flags with one bulk query instead of a per-script
+        // lookup (which previously issued a nested blocking database call per
+        // script). Precedence matches get_script_security_profile: database
+        // value, then local override, then bootstrap default.
+        let executor = crate::database::get_current_executor(&self.pool);
+        let db_privileges_result = match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_get_all_script_privileged(&mut **tx).await
             }
-        }
-
-        // Apply default privileges
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_get_all_script_privileged(pool).await
+            }
+        };
+        let db_privileges = match db_privileges_result {
+            Ok(privileges) => privileges,
+            Err(e) => {
+                warn!("Failed to bulk-fetch script privileges: {}", e);
+                HashMap::new()
+            }
+        };
+        let overrides = safe_lock_privilege_overrides()
+            .map(|guard| guard.clone())
+            .unwrap_or_default();
         for metadata in &mut metadata_list {
-            let profile = get_script_security_profile(&metadata.uri)?;
-            if profile.privileged != metadata.privileged {
-                metadata.privileged = profile.privileged;
-            }
+            metadata.privileged = db_privileges
+                .get(&metadata.uri)
+                .copied()
+                .or_else(|| overrides.get(&metadata.uri).copied())
+                .unwrap_or_else(|| default_privileged_for(&metadata.uri));
         }
 
         Ok(metadata_list)

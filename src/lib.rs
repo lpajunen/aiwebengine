@@ -968,7 +968,7 @@ async fn initialize_components(config: &config::Config) -> AppResult<()> {
 
     // Bootstrap hardcoded scripts into database if configured
     info!("Bootstrapping hardcoded scripts into database...");
-    if let Err(e) = repository::bootstrap_scripts() {
+    if let Err(e) = repository::bootstrap_scripts_async().await {
         warn!(
             "Failed to bootstrap scripts: {}. Continuing with static scripts.",
             e
@@ -1166,7 +1166,7 @@ pub async fn start_server_with_config(
     let (actual_port, actual_addr) = find_available_port(&config)?;
 
     // Record startup in logs so tests can observe server start
-    repository::insert_log_message("server", "server started", "INFO");
+    repository::insert_log_message_async("server", "server started", "INFO").await;
     debug!(
         "Server configuration - host: {}, requested port: {}, actual port: {}",
         config.server.host, config.server.port, actual_port
@@ -2127,7 +2127,7 @@ async fn setup_routes(
         &type_defs_path,
         axum::routing::get(|| async {
             if let Some(asset) =
-                repository::fetch_asset("https://example.com/core", "aiwebengine.d.ts")
+                repository::fetch_asset_async("https://example.com/core", "aiwebengine.d.ts").await
             {
                 let mut response = asset.content.into_response();
                 response.headers_mut().insert(
@@ -2155,7 +2155,8 @@ async fn setup_routes(
         &type_defs_priv_path,
         axum::routing::get(|| async {
             if let Some(asset) =
-                repository::fetch_asset("https://example.com/core", "aiwebengine-priv.d.ts")
+                repository::fetch_asset_async("https://example.com/core", "aiwebengine-priv.d.ts")
+                    .await
             {
                 let mut response = asset.content.into_response();
                 response.headers_mut().insert(
@@ -2258,7 +2259,7 @@ async fn handle_dynamic_request(
     let request_method = req.method().to_string();
 
     // Check for registered asset paths first if it's a GET request
-    if let Some(asset_response) = try_serve_asset(&path, &request_method) {
+    if let Some(asset_response) = try_serve_asset(&path, &request_method).await {
         return asset_response;
     }
 
@@ -2515,7 +2516,7 @@ async fn handle_dynamic_request(
                 "Script execution failed for handler '{}': {}",
                 handler_name, e
             );
-            repository::insert_log_message(&owner_uri, &error_msg, "FATAL");
+            repository::insert_log_message_async(&owner_uri, &error_msg, "FATAL").await;
 
             error_to_response(error::errors::script_execution_failed(
                 &path,
@@ -2654,14 +2655,15 @@ pub async fn start_server_without_shutdown_with_config(config: config::Config) -
 // ============================================================================
 
 /// Try to serve an asset if the path matches a registered asset
-fn try_serve_asset(path: &str, method: &str) -> Option<Response> {
+async fn try_serve_asset(path: &str, method: &str) -> Option<Response> {
     if method != "GET" {
         return None;
     }
 
     let registration = asset_registry::get_global_registry().get_asset_registration(path)?;
 
-    if let Some(asset) = repository::fetch_asset(&registration.script_uri, &registration.asset_name)
+    if let Some(asset) =
+        repository::fetch_asset_async(&registration.script_uri, &registration.asset_name).await
     {
         let mut response = asset.content.into_response();
         // For text/* types, ensure charset=utf-8 is declared so browsers don't

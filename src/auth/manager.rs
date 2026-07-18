@@ -299,16 +299,19 @@ impl AuthManager {
             provider_name.to_string(),
             user_info.provider_user_id.clone(),
         )
+        .await
         .map_err(|e| {
             tracing::error!("Failed to upsert user: {}", e);
             AuthError::Internal(format!("Failed to create/update user: {}", e))
         })?;
 
         // Get user from repository to check roles
-        let user = crate::user_repository::get_user(&user_id).map_err(|e| {
-            tracing::error!("User not found after upsert: {}", e);
-            AuthError::Internal("User not found after creation".to_string())
-        })?;
+        let user = crate::user_repository::get_user_async(&user_id)
+            .await
+            .map_err(|e| {
+                tracing::error!("User not found after upsert: {}", e);
+                AuthError::Internal("User not found after creation".to_string())
+            })?;
 
         // Check if user has Administrator role
         let is_admin = user

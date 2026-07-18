@@ -77,7 +77,8 @@ impl SecureOperations {
         }
 
         // Call actual repository layer
-        match crate::repository::upsert_script(&request.script_name, &request.js_script) {
+        match crate::repository::upsert_script_async(&request.script_name, &request.js_script).await
+        {
             Ok(()) => {
                 let success_message =
                     format!("Script '{}' upserted successfully", request.script_name);
@@ -147,7 +148,7 @@ impl SecureOperations {
             script_uri: "https://example.com/core".to_string(), // TODO: After UI and JavaScript API change, set based on related script
         };
 
-        match crate::repository::upsert_asset(asset) {
+        match crate::repository::upsert_asset_async(asset).await {
             Ok(()) => {
                 let success_message = format!("Asset '{}' uploaded successfully", filename);
                 Ok(OperationResult::success(success_message))

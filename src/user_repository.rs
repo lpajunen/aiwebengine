@@ -470,7 +470,7 @@ async fn db_find_user_by_provider(
 ///
 /// # Returns
 /// The user ID (either existing or newly created)
-pub fn upsert_user(
+pub async fn upsert_user(
     email: String,
     name: Option<String>,
     provider_name: String,
@@ -484,6 +484,7 @@ pub fn upsert_user(
         provider_user_id,
         bootstrap_admins,
     )
+    .await
 }
 
 /// Upsert a user with bootstrap admin configuration
@@ -501,7 +502,7 @@ pub fn upsert_user(
 ///
 /// # Returns
 /// The user ID (either existing or newly created)
-pub fn upsert_user_with_bootstrap(
+pub async fn upsert_user_with_bootstrap(
     email: String,
     name: Option<String>,
     provider_name: String,
@@ -548,28 +549,29 @@ pub fn upsert_user_with_bootstrap(
 
     let db = get_db_pool()?;
 
+    db_upsert_user(
+        db.pool(),
+        &email,
+        name.as_deref(),
+        &provider_name,
+        &provider_user_id,
+        is_admin,
+        is_editor,
+    )
+    .await
+}
+
+/// Get a user by their internal ID (for blocking contexts, e.g. JS host functions)
+pub fn get_user(user_id: &str) -> AppResult<User> {
     tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async {
-            db_upsert_user(
-                db.pool(),
-                &email,
-                name.as_deref(),
-                &provider_name,
-                &provider_user_id,
-                is_admin,
-                is_editor,
-            )
-            .await
-        })
+        tokio::runtime::Handle::current().block_on(get_user_async(user_id))
     })
 }
 
-/// Get a user by their internal ID
-pub fn get_user(user_id: &str) -> AppResult<User> {
+/// Async variant of [`get_user`] for callers already in async context
+pub async fn get_user_async(user_id: &str) -> AppResult<User> {
     let db = get_db_pool()?;
-    tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async { db_get_user(db.pool(), user_id).await })
-    })
+    db_get_user(db.pool(), user_id).await
 }
 
 /// Find a user by provider credentials
@@ -880,6 +882,7 @@ mod tests {
                 "github".to_string(),
                 "github456".to_string(),
             )
+            .await
             .unwrap();
 
             let user = get_user(&user_id).unwrap();
@@ -904,6 +907,7 @@ mod tests {
                 "google".to_string(),
                 "google789".to_string(),
             )
+            .await
             .unwrap();
 
             // Second insert with same provider credentials
@@ -913,6 +917,7 @@ mod tests {
                 "google".to_string(),
                 "google789".to_string(),
             )
+            .await
             .unwrap();
 
             // Should return the same user ID
@@ -940,6 +945,7 @@ mod tests {
                 "google".to_string(),
                 "google_roles".to_string(),
             )
+            .await
             .unwrap();
 
             // Add Editor role
@@ -994,6 +1000,7 @@ mod tests {
                 "google".to_string(),
                 "google_auth".to_string(),
             )
+            .await
             .unwrap();
 
             let result = remove_user_role(&user_id, &UserRole::Authenticated);
@@ -1016,6 +1023,7 @@ mod tests {
                 "github".to_string(),
                 "github_provider".to_string(),
             )
+            .await
             .unwrap();
 
             let found = find_user_by_provider("github", "github_provider")
@@ -1043,6 +1051,7 @@ mod tests {
                 "google".to_string(),
                 "google_update".to_string(),
             )
+            .await
             .unwrap();
 
             // Set roles to Editor and Administrator
@@ -1071,6 +1080,7 @@ mod tests {
                 "google".to_string(),
                 "google_delete".to_string(),
             )
+            .await
             .unwrap();
 
             // Verify user exists
@@ -1105,6 +1115,7 @@ mod tests {
                     "google".to_string(),
                     "user123".to_string()
                 )
+                .await
                 .is_err()
             );
 
@@ -1116,6 +1127,7 @@ mod tests {
                     "".to_string(),
                     "user123".to_string()
                 )
+                .await
                 .is_err()
             );
 
@@ -1127,6 +1139,7 @@ mod tests {
                     "google".to_string(),
                     "".to_string()
                 )
+                .await
                 .is_err()
             );
         });
@@ -1151,6 +1164,7 @@ mod tests {
                 "google_admin".to_string(),
                 &bootstrap_admins,
             )
+            .await
             .unwrap();
 
             // User should have Administrator role automatically
@@ -1166,6 +1180,7 @@ mod tests {
                 "google_regular".to_string(),
                 &bootstrap_admins,
             )
+            .await
             .unwrap();
 
             // User should NOT have Administrator role
@@ -1194,6 +1209,7 @@ mod tests {
                 "google_admin_case".to_string(),
                 &bootstrap_admins,
             )
+            .await
             .unwrap();
 
             // Should still get admin role (case-insensitive comparison)
