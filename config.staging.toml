@@ -74,6 +74,10 @@ log_retention_hours = 48
 auto_prune_logs = true
 
 [security]
+# Anonymous users get minimal read-only capabilities. Must stay false outside
+# local development; when false (with auth enabled), the CSRF, session and
+# secret encryption keys below are mandatory at startup.
+development_mode = false
 enable_cors = true
 # Allow staging and development origins
 cors_allowed_origins = ["https://staging.yourdomain.com", "http://localhost:3000"]

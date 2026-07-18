@@ -76,6 +76,10 @@ log_retention_hours = 168
 auto_prune_logs = true
 
 [security]
+# Anonymous users get minimal read-only capabilities. Must stay false outside
+# local development; when false (with auth enabled), the CSRF, session and
+# secret encryption keys below are mandatory at startup.
+development_mode = false
 # Enable CORS with specific origins
 enable_cors = true
 # Restrict origins in production - MUST be set via environment variables

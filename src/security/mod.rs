@@ -11,7 +11,7 @@ pub mod threat_detection;
 pub mod validation;
 
 pub use audit::{SecurityAuditor, SecurityEvent, SecurityEventType, SecuritySeverity};
-pub use capabilities::UserContext;
+pub use capabilities::{UserContext, is_development_mode, set_development_mode};
 pub use csp::{CspDirective, CspManager, CspPolicy, CspSource, CspViolationReport};
 pub use csrf::{CsrfProtection, CsrfToken, OAuthStateManager};
 pub use encryption::{

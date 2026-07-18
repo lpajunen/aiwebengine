@@ -155,6 +155,13 @@ pub struct RepositoryConfig {
 /// Security configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecurityConfig {
+    /// Development mode grants anonymous users elevated capabilities (write,
+    /// delete, manage) for local testing. MUST be false in production: when
+    /// false, anonymous users get minimal read-only capabilities and the
+    /// security keys below become mandatory. Defaults to false (fail closed).
+    #[serde(default)]
+    pub development_mode: bool,
+
     /// Enable CORS
     pub enable_cors: bool,
 
@@ -323,6 +330,7 @@ impl Default for RepositoryConfig {
 impl Default for SecurityConfig {
     fn default() -> Self {
         Self {
+            development_mode: false,
             enable_cors: true,
             cors_allowed_origins: vec!["*".to_string()],
             enable_csrf: false,
@@ -429,6 +437,9 @@ impl AppConfig {
     pub fn test_config_with_port(port: u16) -> Self {
         let mut config = Self::default();
         config.server.port = port;
+        // Tests exercise anonymous script/asset management, which requires
+        // the elevated capabilities of development mode.
+        config.security.development_mode = true;
         config
     }
 
@@ -531,6 +542,44 @@ impl AppConfig {
             anyhow::bail!("Max request body size must be > 0");
         }
 
+        // In production mode (development_mode = false) with authentication
+        // enabled, security keys must be explicitly provisioned. Falling back
+        // to random per-boot keys invalidates sessions and CSRF tokens across
+        // restarts and instances, and a missing secret encryption key stores
+        // secrets as plaintext in the database.
+        if !self.security.development_mode
+            && let Some(auth) = &self.auth
+            && auth.enabled
+        {
+            let key_missing =
+                |key: &Option<String>| key.as_deref().map(str::trim).unwrap_or("").is_empty();
+
+            if key_missing(&self.security.csrf_key) {
+                anyhow::bail!(
+                    "security.csrf_key (APP_SECURITY__CSRF_KEY) is required when authentication \
+                     is enabled and security.development_mode is false. \
+                     Generate with: openssl rand -base64 32"
+                );
+            }
+
+            if key_missing(&self.security.session_encryption_key) {
+                anyhow::bail!(
+                    "security.session_encryption_key (APP_SECURITY__SESSION_ENCRYPTION_KEY) is \
+                     required when authentication is enabled and security.development_mode is \
+                     false. Generate with: openssl rand -base64 32"
+                );
+            }
+
+            if key_missing(&self.security.secret_encryption_key) {
+                anyhow::bail!(
+                    "security.secret_encryption_key (APP_SECURITY__SECRET_ENCRYPTION_KEY) is \
+                     required when authentication is enabled and security.development_mode is \
+                     false (secrets would otherwise be stored as plaintext). \
+                     Generate with: openssl rand -base64 32"
+                );
+            }
+        }
+
         // Validate performance configuration
         if self.performance.compression_level < 1 || self.performance.compression_level > 9 {
             anyhow::bail!("Compression level must be between 1 and 9");
@@ -618,6 +667,45 @@ mod tests {
         config = AppConfig::default();
         config.logging.level = "invalid".to_string();
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_production_mode_requires_security_keys_when_auth_enabled() {
+        let mut config = AppConfig::test_config_with_port(8080);
+        config.auth = Some(crate::auth::AuthConfig {
+            enabled: true,
+            ..Default::default()
+        });
+
+        // Production mode (development_mode = false) with auth enabled and no
+        // keys must be rejected
+        config.security.development_mode = false;
+        assert!(config.validate().is_err());
+
+        // Empty strings (e.g. from `${VAR:-}` docker-compose defaults) count
+        // as missing
+        config.security.csrf_key = Some("".to_string());
+        config.security.session_encryption_key = Some("".to_string());
+        config.security.secret_encryption_key = Some("".to_string());
+        assert!(config.validate().is_err());
+
+        // All keys provisioned passes
+        config.security.csrf_key = Some("a".repeat(44));
+        config.security.session_encryption_key = Some("b".repeat(44));
+        config.security.secret_encryption_key = Some("c".repeat(44));
+        assert!(config.validate().is_ok());
+
+        // Development mode does not require the keys
+        config.security.csrf_key = None;
+        config.security.session_encryption_key = None;
+        config.security.secret_encryption_key = None;
+        config.security.development_mode = true;
+        assert!(config.validate().is_ok());
+
+        // Auth disabled does not require the keys either
+        config.security.development_mode = false;
+        config.auth = None;
+        assert!(config.validate().is_ok());
     }
 
     #[test]

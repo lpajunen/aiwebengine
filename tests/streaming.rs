@@ -49,6 +49,10 @@ async fn setup_env() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_core_js_script_streaming() {
     setup_env().await;
+    // The core.js handlers are driven through the legacy anonymous execution
+    // path here; anonymous script writes require development mode (which a
+    // test server config would normally enable at startup).
+    aiwebengine::security::set_development_mode(true);
     // Test the real core.js script with streaming functionality
 
     // First, read the actual core.js file to use for testing

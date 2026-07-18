@@ -1265,6 +1265,17 @@ pub async fn start_server_with_config(
     config: config::Config,
     shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) -> AppResult<u16> {
+    // Apply the capability mode before any script runs. Fail closed: anonymous
+    // users get minimal read-only capabilities unless development mode is
+    // explicitly enabled in configuration.
+    security::set_development_mode(config.security.development_mode);
+    if security::is_development_mode() {
+        warn!(
+            "Development mode is ENABLED: anonymous users receive elevated capabilities \
+             (write/delete scripts and assets). Never enable this in production."
+        );
+    }
+
     // Apply configured JavaScript limits to every execution path (memory limit,
     // stack size, and the interrupt-handler deadline) before any script runs.
     let js_limits = js_engine::ExecutionLimits {
@@ -1298,7 +1309,7 @@ pub async fn start_server_with_config(
     let pool = database::get_global_database().map(|db| db.pool().clone());
 
     // Initialize authentication if configured and enabled
-    let auth_manager = initialize_auth_if_enabled(&config, pool.clone()).await;
+    let auth_manager = initialize_auth_if_enabled(&config, pool.clone()).await?;
 
     // Determine if auth is enabled
     let auth_enabled = auth_manager.is_some();
@@ -1420,25 +1431,26 @@ async fn health_cluster_handler() -> impl IntoResponse {
     }))
 }
 
-/// Initialize authentication manager if configured and enabled
+/// Initialize authentication manager if configured and enabled.
+///
+/// Fails startup when authentication is explicitly enabled but cannot be
+/// initialized: silently continuing without auth would leave every endpoint
+/// open that the operator expects to be protected.
 async fn initialize_auth_if_enabled(
     config: &config::Config,
     pool: Option<sqlx::PgPool>,
-) -> Option<Arc<auth::AuthManager>> {
+) -> AppResult<Option<Arc<auth::AuthManager>>> {
     if let Some(auth_config) = config.auth.clone()
         && auth_config.enabled
     {
         info!("Authentication is enabled, initializing AuthManager...");
 
-        let pool = match pool {
-            Some(p) => p,
-            None => {
-                error!(
-                    "Authentication enabled but database not initialized. Disabling authentication."
-                );
-                return None;
-            }
-        };
+        let pool = pool.ok_or_else(|| {
+            AppError::config(
+                "Authentication is enabled but the database is not initialized; \
+                 refusing to start without authentication",
+            )
+        })?;
 
         debug!(
             "Auth config: enabled={}, providers={:?}",
@@ -1459,15 +1471,13 @@ async fn initialize_auth_if_enabled(
         match initialize_auth_manager(auth_config, &config.server, &config.security, pool).await {
             Ok(manager) => {
                 info!("AuthManager initialized successfully");
-                Some(manager)
+                Ok(Some(manager))
             }
-            Err(e) => {
-                error!(
-                    "Failed to initialize AuthManager: {}. Authentication will be disabled.",
-                    e
-                );
-                None
-            }
+            Err(e) => Err(AppError::config(format!(
+                "Failed to initialize AuthManager: {}. Authentication is enabled in \
+                 configuration, so the server refuses to start without it.",
+                e
+            ))),
         }
     } else {
         info!(
@@ -1475,7 +1485,7 @@ async fn initialize_auth_if_enabled(
             config.auth.is_some(),
             config.auth.as_ref().map(|c| c.enabled).unwrap_or(false)
         );
-        None
+        Ok(None)
     }
 }
 

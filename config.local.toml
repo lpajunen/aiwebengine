@@ -77,6 +77,9 @@ log_retention_hours = 24
 auto_prune_logs = true
 
 [security]
+# Development mode: anonymous users get elevated capabilities (write/delete
+# scripts and assets) for local testing. NEVER enable in production.
+development_mode = true
 # Relaxed security for development
 enable_cors = true
 # Allow all origins in development

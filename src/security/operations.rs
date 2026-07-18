@@ -337,18 +337,25 @@ mod tests {
         assert!(!result.success);
         assert!(result.error.as_ref().unwrap().contains("Access denied"));
 
-        // Test that anonymous users (with write capability) CAN write
-        let anonymous_user = UserContext::anonymous();
+        // Test that a context holding WriteScripts (e.g. an anonymous user in
+        // development mode) CAN write
+        let writer = UserContext {
+            user_id: None,
+            is_authenticated: false,
+            capabilities: [crate::security::Capability::WriteScripts]
+                .into_iter()
+                .collect(),
+        };
         let request2 = UpsertScriptRequest {
             script_name: "test2".to_string(),
             js_script: "console.log('hello2');".to_string(),
         };
-        let result2 = rt.block_on(ops.upsert_script(&anonymous_user, request2));
+        let result2 = rt.block_on(ops.upsert_script(&writer, request2));
         assert!(result2.is_ok());
         let result2 = result2.unwrap();
         assert!(
             result2.success,
-            "Anonymous users should be able to write scripts in dev mode"
+            "A context with WriteScripts should be able to write scripts"
         );
     }
 

@@ -120,6 +120,9 @@ export APP_LOGGING__FILE_PATH="/var/log/aiwebengine.log"
 export APP_REPOSITORY__DATABASE_URL="postgresql://user:pass@host/db"
 
 # Security
+# Development mode grants anonymous users elevated capabilities (write/delete
+# scripts). Defaults to false; only enable for local development.
+export APP_SECURITY__DEVELOPMENT_MODE="false"
 export APP_SECURITY__ENABLE_CSRF="true"
 export APP_SECURITY__CSRF_KEY="$(openssl rand -base64 32)"
 export APP_SECURITY__SESSION_ENCRYPTION_KEY="$(openssl rand -base64 32)"
