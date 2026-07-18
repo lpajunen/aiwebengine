@@ -3,7 +3,8 @@ use serde_json::Value as JsonValue;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::time::Instant;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 
 use crate::module_loader;
@@ -109,6 +110,34 @@ impl Default for ExecutionLimits {
             max_script_size_bytes: 1_000_000, // 1MB
         }
     }
+}
+
+/// Execution limits derived from server configuration, set once at startup.
+static CONFIGURED_LIMITS: OnceLock<ExecutionLimits> = OnceLock::new();
+
+/// Stores the configured execution limits used by all JavaScript execution paths.
+/// Returns false if limits were already configured.
+pub fn configure_execution_limits(limits: ExecutionLimits) -> bool {
+    CONFIGURED_LIMITS.set(limits).is_ok()
+}
+
+/// The execution limits currently in effect (configured at startup, or defaults).
+pub fn current_execution_limits() -> ExecutionLimits {
+    CONFIGURED_LIMITS.get().cloned().unwrap_or_default()
+}
+
+/// Creates a QuickJS runtime with memory, stack, and wall-clock limits enforced.
+///
+/// The interrupt handler is the only mechanism that can stop a runaway script
+/// (e.g. `while(true) {}`); outer tokio timeouts abandon the blocking thread
+/// but cannot terminate execution running on it.
+fn create_sandboxed_runtime(limits: &ExecutionLimits) -> Result<Runtime, String> {
+    let rt = Runtime::new().map_err(|e| format!("Failed to create runtime: {}", e))?;
+    rt.set_memory_limit(limits.max_memory_mb * 1024 * 1024);
+    rt.set_max_stack_size(512 * 1024);
+    let deadline = Instant::now() + Duration::from_millis(limits.timeout_ms);
+    rt.set_interrupt_handler(Some(Box::new(move || Instant::now() >= deadline)));
+    Ok(rt)
 }
 
 /// Parameters for secure script execution in request context
@@ -719,8 +748,8 @@ pub fn execute_script_secure(
 ) -> ScriptExecutionResult {
     let start_time = Instant::now();
 
-    // Validate script using default limits
-    let limits = ExecutionLimits::default();
+    // Validate script using configured limits
+    let limits = current_execution_limits();
     if let Err(e) = validate_script(content, &limits) {
         return ScriptExecutionResult::failed(e, start_time.elapsed().as_millis() as u64);
     }
@@ -731,7 +760,7 @@ pub fn execute_script_secure(
     let registrations = Rc::new(RefCell::new(HashMap::new()));
     let uri_owned = uri.to_string();
 
-    match Runtime::new() {
+    match create_sandboxed_runtime(&limits) {
         Ok(rt) => match Context::full(&rt) {
             Ok(ctx) => {
                 // Create a shared location for detailed error message
@@ -836,10 +865,7 @@ pub fn execute_script_secure(
         },
         Err(e) => {
             error!("Failed to create runtime for script {}: {}", uri, e);
-            ScriptExecutionResult::failed(
-                format!("Failed to create runtime: {}", e),
-                start_time.elapsed().as_millis() as u64,
-            )
+            ScriptExecutionResult::failed(e, start_time.elapsed().as_millis() as u64)
         }
     }
 }
@@ -852,8 +878,8 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
 
     tracing::info!("execute_script called for URI: {}", uri);
 
-    // Validate script using default limits
-    let limits = ExecutionLimits::default();
+    // Validate script using configured limits
+    let limits = current_execution_limits();
     if let Err(e) = validate_script(content, &limits) {
         return ScriptExecutionResult::failed(e, start_time.elapsed().as_millis() as u64);
     }
@@ -861,7 +887,7 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
     let registrations = Rc::new(RefCell::new(HashMap::new()));
     let uri_owned = uri.to_string();
 
-    match Runtime::new() {
+    match create_sandboxed_runtime(&limits) {
         Ok(rt) => {
             match Context::full(&rt) {
                 Ok(ctx) => {
@@ -953,10 +979,7 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                 "Failed to create QuickJS runtime for script {}: {}",
                 uri_owned, e
             );
-            ScriptExecutionResult::failed(
-                format!("Runtime creation error: {}", e),
-                start_time.elapsed().as_millis() as u64,
-            )
+            ScriptExecutionResult::failed(e, start_time.elapsed().as_millis() as u64)
         }
     }
 }
@@ -1012,7 +1035,7 @@ pub fn execute_script_for_request_secure(
 ) -> Result<JsHttpResponse, String> {
     let script_uri_owned = params.script_uri.clone();
     let auth_context = params.auth_context.clone(); // Clone for later use
-    let rt = Runtime::new().map_err(|e| format!("runtime new: {}", e))?;
+    let rt = create_sandboxed_runtime(&current_execution_limits())?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
     ctx.with(|ctx| -> Result<(), rquickjs::Error> {
@@ -1222,7 +1245,7 @@ pub fn execute_script_for_request(
 ) -> Result<(u16, String, Option<String>), String> {
     let script_uri_owned = script_uri.to_string();
     let auth_ctx = crate::auth::JsAuthContext::anonymous();
-    let rt = Runtime::new().map_err(|e| format!("runtime new: {}", e))?;
+    let rt = create_sandboxed_runtime(&current_execution_limits())?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
     ctx.with(|ctx| -> Result<(), rquickjs::Error> {
@@ -1324,7 +1347,7 @@ pub fn execute_scheduled_handler(
     handler_name: &str,
     invocation: &ScheduledInvocation,
 ) -> Result<(), String> {
-    let rt = Runtime::new().map_err(|e| format!("runtime new: {}", e))?;
+    let rt = create_sandboxed_runtime(&current_execution_limits())?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
     let script_uri_owned = script_uri.to_string();
 
@@ -1418,7 +1441,7 @@ pub fn execute_graphql_resolver(params: GraphqlResolverExecutionParams) -> Resul
     let args_owned = params.args.clone();
     let auth_context = params.auth_context.clone();
 
-    let rt = Runtime::new().map_err(|e| format!("runtime new: {}", e))?;
+    let rt = create_sandboxed_runtime(&current_execution_limits())?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
     let result_exec = ctx.with(|ctx| -> Result<String, rquickjs::Error> {
@@ -1556,7 +1579,7 @@ pub fn execute_mcp_prompt_handler(
     let handler_function_owned = handler_function.to_string();
     let arguments_owned = arguments.clone();
 
-    let rt = Runtime::new().map_err(|e| format!("runtime new: {}", e))?;
+    let rt = create_sandboxed_runtime(&current_execution_limits())?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
     let result_exec = ctx.with(|ctx| -> Result<serde_json::Value, rquickjs::Error> {
@@ -1645,7 +1668,7 @@ pub fn execute_mcp_tool_handler(
     let auth_context_owned = auth_context;
     let user_context_owned = user_context;
 
-    let rt = Runtime::new().map_err(|e| format!("runtime new: {}", e))?;
+    let rt = create_sandboxed_runtime(&current_execution_limits())?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
     let result_exec = ctx.with(|ctx| -> Result<String, rquickjs::Error> {
@@ -1785,7 +1808,7 @@ pub fn execute_stream_customization_function(
     let path_owned = path.to_string();
     let query_params_owned = query_params.clone();
 
-    let rt = Runtime::new().map_err(|e| format!("runtime new: {}", e))?;
+    let rt = create_sandboxed_runtime(&current_execution_limits())?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
     let result_exec = ctx.with(
@@ -1929,16 +1952,33 @@ pub fn call_init_if_exists(
     script_content: &str,
     context: crate::script_init::InitContext,
 ) -> Result<Option<RouteRegistrations>, String> {
+    call_init_if_exists_with_timeout(
+        script_uri,
+        script_content,
+        context,
+        current_execution_limits().timeout_ms,
+    )
+}
+
+/// Like [`call_init_if_exists`], but with an explicit wall-clock budget so init()
+/// can be granted a longer timeout than regular handler execution
+/// (config `javascript.init_timeout_ms`).
+pub fn call_init_if_exists_with_timeout(
+    script_uri: &str,
+    script_content: &str,
+    context: crate::script_init::InitContext,
+    timeout_ms: u64,
+) -> Result<Option<RouteRegistrations>, String> {
     use std::cell::RefCell;
     use std::rc::Rc;
 
     debug!("Checking for init() function in script: {}", script_uri);
 
-    let rt = Runtime::new().map_err(|e| format!("Failed to create runtime: {}", e))?;
-
-    // Set memory limit to help with cleanup
-    rt.set_memory_limit(256 * 1024 * 1024); // 256MB limit
-    rt.set_max_stack_size(512 * 1024); // 512KB stack
+    let limits = ExecutionLimits {
+        timeout_ms,
+        ..current_execution_limits()
+    };
+    let rt = create_sandboxed_runtime(&limits)?;
 
     let ctx = Context::full(&rt).map_err(|e| format!("Failed to create context: {}", e))?;
 
@@ -2152,6 +2192,50 @@ mod tests {
 
     fn unique_test_id(prefix: &str) -> String {
         format!("{}-{}", prefix, rand::random::<u64>())
+    }
+
+    #[test]
+    fn test_interrupt_handler_stops_infinite_loop() {
+        let limits = ExecutionLimits {
+            timeout_ms: 200,
+            ..ExecutionLimits::default()
+        };
+        let rt = create_sandboxed_runtime(&limits).expect("runtime creation failed");
+        let ctx = Context::full(&rt).expect("context creation failed");
+        let start = Instant::now();
+        let result: Result<(), rquickjs::Error> =
+            ctx.with(|ctx| ctx.eval::<(), _>("while(true){}"));
+        assert!(result.is_err(), "infinite loop must be interrupted");
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "interrupt should fire near the {}ms deadline, took {:?}",
+            limits.timeout_ms,
+            start.elapsed()
+        );
+    }
+
+    #[test]
+    fn test_memory_limit_stops_runaway_allocation() {
+        let limits = ExecutionLimits {
+            timeout_ms: 10_000,
+            max_memory_mb: 8,
+            ..ExecutionLimits::default()
+        };
+        let rt = create_sandboxed_runtime(&limits).expect("runtime creation failed");
+        let ctx = Context::full(&rt).expect("context creation failed");
+        let start = Instant::now();
+        let result: Result<(), rquickjs::Error> = ctx.with(|ctx| {
+            ctx.eval::<(), _>("const a = []; while(true) { a.push('x'.repeat(1024 * 1024)); }")
+        });
+        assert!(
+            result.is_err(),
+            "allocation beyond the memory limit must fail"
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "memory limit (not the timeout) should stop the script, took {:?}",
+            start.elapsed()
+        );
     }
 
     // Check if we should skip database-dependent tests

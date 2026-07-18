@@ -115,14 +115,16 @@ impl ScriptInitializer {
         let metadata_clone = metadata.clone();
 
         debug!("Spawning blocking task for {}", script_uri);
+        let init_timeout_ms = self.timeout_ms;
         let result = timeout(
             timeout_duration,
             tokio::task::spawn_blocking(move || {
                 debug!("Inside spawn_blocking for {}", script_uri_clone);
-                crate::js_engine::call_init_if_exists(
+                crate::js_engine::call_init_if_exists_with_timeout(
                     &script_uri_clone,
                     &metadata_clone.content,
                     context,
+                    init_timeout_ms,
                 )
             }),
         )

@@ -1265,6 +1265,17 @@ pub async fn start_server_with_config(
     config: config::Config,
     shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) -> AppResult<u16> {
+    // Apply configured JavaScript limits to every execution path (memory limit,
+    // stack size, and the interrupt-handler deadline) before any script runs.
+    let js_limits = js_engine::ExecutionLimits {
+        timeout_ms: config.javascript.execution_timeout_ms,
+        max_memory_mb: (config.javascript.max_memory_bytes / (1024 * 1024)).max(1),
+        ..js_engine::ExecutionLimits::default()
+    };
+    if !js_engine::configure_execution_limits(js_limits) {
+        debug!("JavaScript execution limits were already configured");
+    }
+
     // Initialize all core components
     initialize_components(&config).await?;
 
@@ -2583,21 +2594,21 @@ async fn handle_dynamic_request(
         js_engine::execute_script_for_request_secure(params)
     };
 
-    let join = tokio::task::spawn_blocking(worker)
-        .await
-        .map_err(|e| format!("join error: {}", e));
-
-    let timed =
-        match tokio::time::timeout(std::time::Duration::from_millis(script_timeout_ms), async {
-            join
-        })
-        .await
-        {
-            Ok(r) => r,
-            Err(_) => {
-                return error_to_response(error::errors::script_timeout(&path, &request_id));
-            }
-        };
+    // The timeout must wrap the un-awaited join handle: awaiting spawn_blocking first
+    // would block until the script finishes and the timeout could never fire. On
+    // timeout the blocking thread is abandoned; the QuickJS interrupt handler
+    // (see js_engine::create_sandboxed_runtime) terminates the script itself.
+    let timed = match tokio::time::timeout(
+        std::time::Duration::from_millis(script_timeout_ms),
+        tokio::task::spawn_blocking(worker),
+    )
+    .await
+    {
+        Ok(join) => join.map_err(|e| format!("join error: {}", e)),
+        Err(_) => {
+            return error_to_response(error::errors::script_timeout(&path, &request_id));
+        }
+    };
 
     match timed {
         Ok(Ok(js_response)) => {
