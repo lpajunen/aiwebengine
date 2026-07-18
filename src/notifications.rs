@@ -285,8 +285,9 @@ impl NotificationListener {
             );
         }
 
-        // Ensure route lookups pick up the new registrations
+        // Ensure route lookups and bytecode pick up the changed source
         crate::route_index::invalidate();
+        crate::bytecode::invalidate(uri);
 
         Ok(())
     }
@@ -322,6 +323,7 @@ impl NotificationListener {
             debug!("Removed script '{}' from cache", uri);
         }
         crate::route_index::invalidate();
+        crate::bytecode::invalidate(uri);
 
         info!("✓ Script '{}' cleanup completed after remote deletion", uri);
 

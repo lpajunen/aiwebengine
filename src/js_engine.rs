@@ -823,7 +823,8 @@ pub fn execute_script_secure(
                     };
 
                     // Execute the script
-                    let eval_result = ctx.eval::<(), _>(executable_code.as_str());
+                    let eval_result =
+                        crate::bytecode::eval_program(&ctx, &uri_owned, &executable_code);
 
                     // If there was an error, capture detailed information
                     if let Err(ref e) = eval_result {
@@ -933,7 +934,7 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                                 .map_err(|_e| rquickjs::Error::Exception)?;
 
                             // Execute the script
-                            ctx.eval::<(), _>(executable_code.as_str())?;
+                            crate::bytecode::eval_program(&ctx, &uri_owned, &executable_code)?;
                             Ok(())
                         });
 
@@ -1068,7 +1069,7 @@ pub fn execute_script_for_request_secure(
 
     // Evaluate the script and capture detailed error information if it fails
     ctx.with(|ctx| -> Result<(), String> {
-        let result = ctx.eval::<(), _>(executable_code.as_str());
+        let result = crate::bytecode::eval_program(&ctx, &params.script_uri, &executable_code);
         if let Err(ref e) = result {
             let details = extract_error_details(&ctx, e);
             return Err(format!("owner eval: {}", details));
@@ -1277,7 +1278,7 @@ pub fn execute_script_for_request(
     // Transpile if needed (TypeScript/JSX/TSX)
     let executable_code = transpile_if_needed(script_uri, &owner_script)?;
 
-    ctx.with(|ctx| ctx.eval::<(), _>(executable_code.as_str()))
+    ctx.with(|ctx| crate::bytecode::eval_program(&ctx, script_uri, &executable_code))
         .map_err(|e| format!("owner eval: {}", e))?;
 
     let (status, body, content_type) =
@@ -1376,7 +1377,7 @@ pub fn execute_scheduled_handler(
     let executable_code = transpile_if_needed(script_uri, &owner_script)?;
 
     ctx.with(|ctx| {
-        ctx.eval::<(), _>(executable_code.as_str()).map_err(|e| {
+        crate::bytecode::eval_program(&ctx, script_uri, &executable_code).map_err(|e| {
             let details = extract_error_details(&ctx, &e);
             format!("script eval: {}", details)
         })
@@ -1473,7 +1474,7 @@ pub fn execute_graphql_resolver(params: GraphqlResolverExecutionParams) -> Resul
             .ok_or_else(|| rquickjs::Error::new_from_js("Script", "not found"))?;
 
         // Execute the script
-        ctx.eval::<(), _>(script_content.as_str())?;
+        crate::bytecode::eval_program(&ctx, &script_uri_owned, &script_content)?;
 
         let resolver_result: rquickjs::Value = ctx.globals().get(&resolver_function_owned)?;
         let resolver_func = resolver_result
@@ -1613,7 +1614,7 @@ pub fn execute_mcp_prompt_handler(
             })?;
 
         // Execute the script
-        ctx.eval::<(), _>(executable_code.as_str())?;
+        crate::bytecode::eval_program(&ctx, &script_uri_owned, &executable_code)?;
 
         // Get the handler function
         let handler_result: rquickjs::Value = ctx.globals().get(&handler_function_owned)?;
@@ -1702,7 +1703,7 @@ pub fn execute_mcp_tool_handler(
             })?;
 
         // Execute the script
-        ctx.eval::<(), _>(executable_code.as_str())?;
+        crate::bytecode::eval_program(&ctx, &script_uri_owned, &executable_code)?;
 
         let handler_result: rquickjs::Value = ctx.globals().get(&handler_function_owned)?;
         let handler_func = handler_result
@@ -1840,7 +1841,7 @@ pub fn execute_stream_customization_function(
                     rquickjs::Error::new_from_js("transpile", Box::leak(e.into_boxed_str()))
                 })?;
 
-            ctx.eval::<(), _>(executable_code.as_str())?;
+            crate::bytecode::eval_program(&ctx, &script_uri_owned, &executable_code)?;
 
             let request_context = JsRequestContext {
                 path: Some(path_owned.clone()),
@@ -2055,7 +2056,7 @@ pub fn call_init_if_exists_with_timeout(
             };
 
             // Execute the script to define functions
-            let eval_result = ctx.eval::<(), _>(executable_code.as_str());
+            let eval_result = crate::bytecode::eval_program(&ctx, &uri_owned, &executable_code);
             if let Err(ref e) = eval_result {
                 let details = extract_error_details(&ctx, e);
                 if let Ok(mut error_ref) = error_details_clone.try_borrow_mut() {

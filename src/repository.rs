@@ -5532,6 +5532,7 @@ impl Repository for PostgresRepository {
             guard.remove(uri);
         }
         crate::route_index::invalidate();
+        crate::bytecode::invalidate(uri);
         Ok(())
     }
 
@@ -5557,6 +5558,7 @@ impl Repository for PostgresRepository {
                 guard.remove(uri);
             }
             crate::route_index::invalidate();
+            crate::bytecode::invalidate(uri);
         }
         Ok(result)
     }
