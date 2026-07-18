@@ -16,8 +16,9 @@ use reqwest::Method;
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::net::IpAddr;
+use std::net::{IpAddr, ToSocketAddrs};
 use std::str::FromStr;
+use std::sync::OnceLock;
 use std::time::Duration;
 use thiserror::Error;
 use tracing::{debug, info};
@@ -29,29 +30,63 @@ const MAX_RESPONSE_SIZE: usize = 10 * 1024 * 1024;
 /// Default request timeout (30 seconds)
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// HTTP client for making external requests
+/// Maximum redirects followed per fetch (each hop is re-validated)
+const MAX_REDIRECTS: usize = 5;
+
+/// Shared connection-pooled client. Redirects are disabled: `fetch` follows
+/// them manually so every hop gets URL and DNS validation (a public URL
+/// redirecting to an internal address must be blocked).
+fn shared_client() -> Result<&'static reqwest::blocking::Client, HttpError> {
+    static CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::blocking::Client::builder()
+                .timeout(DEFAULT_TIMEOUT)
+                .use_rustls_tls()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|e| e.to_string())
+        })
+        .as_ref()
+        .map_err(|e| HttpError::ClientInitialization(e.clone()))
+}
+
+/// Shared client for tests: follows redirects automatically and accepts
+/// self-signed certificates.
+fn shared_test_client() -> Result<&'static reqwest::blocking::Client, HttpError> {
+    static CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::blocking::Client::builder()
+                .timeout(DEFAULT_TIMEOUT)
+                .use_rustls_tls()
+                .danger_accept_invalid_certs(true)
+                .build()
+                .map_err(|e| e.to_string())
+        })
+        .as_ref()
+        .map_err(|e| HttpError::ClientInitialization(e.clone()))
+}
+
+/// HTTP client for making external requests. Cheap to construct: the
+/// underlying reqwest client (connection pool) is shared process-wide.
 pub struct HttpClient {
-    client: reqwest::blocking::Client,
     default_timeout: Duration,
     max_response_size: usize,
     /// Allow localhost/private IPs (test mode only)
     allow_private: bool,
+    /// Follow redirects manually, validating every hop
+    manual_redirects: bool,
 }
 
 impl HttpClient {
     /// Create a new HTTP client with default settings
     pub fn new() -> Result<Self, HttpError> {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(DEFAULT_TIMEOUT)
-            .use_rustls_tls()
-            .build()
-            .map_err(|e| HttpError::ClientInitialization(e.to_string()))?;
-
         Ok(Self {
-            client,
             default_timeout: DEFAULT_TIMEOUT,
             max_response_size: MAX_RESPONSE_SIZE,
             allow_private: false,
+            manual_redirects: true,
         })
     }
 
@@ -59,19 +94,32 @@ impl HttpClient {
     /// Only use this for test purposes!
     #[doc(hidden)]
     pub fn new_for_tests() -> Result<Self, HttpError> {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(DEFAULT_TIMEOUT)
-            .use_rustls_tls()
-            .danger_accept_invalid_certs(true) // For testing with self-signed certs
-            .build()
-            .map_err(|e| HttpError::ClientInitialization(e.to_string()))?;
-
         Ok(Self {
-            client,
             default_timeout: DEFAULT_TIMEOUT,
             max_response_size: MAX_RESPONSE_SIZE,
             allow_private: true,
+            manual_redirects: false,
         })
+    }
+
+    /// Test-only client that exercises the manual redirect loop against
+    /// localhost mock servers.
+    #[doc(hidden)]
+    pub fn new_for_redirect_tests() -> Result<Self, HttpError> {
+        Ok(Self {
+            default_timeout: DEFAULT_TIMEOUT,
+            max_response_size: MAX_RESPONSE_SIZE,
+            allow_private: true,
+            manual_redirects: true,
+        })
+    }
+
+    fn validate(&self, url: &str) -> Result<Url, HttpError> {
+        if self.allow_private {
+            Self::validate_url_test(url)
+        } else {
+            Self::validate_url(url)
+        }
     }
 
     /// Make an HTTP request with the Fetch API interface
@@ -85,13 +133,6 @@ impl HttpClient {
         script_uri: Option<&str>,
         user_id: Option<&str>,
     ) -> Result<FetchResponse, HttpError> {
-        // Validate URL
-        let parsed_url = if self.allow_private {
-            Self::validate_url_test(&url)?
-        } else {
-            Self::validate_url(&url)?
-        };
-
         // Parse HTTP method
         let method = Method::from_str(&options.method.to_uppercase())
             .map_err(|_| HttpError::InvalidMethod(options.method.clone()))?;
@@ -99,33 +140,99 @@ impl HttpClient {
         // Process headers and inject secrets
         let headers = self.process_headers(options.headers, &url, script_uri, user_id)?;
 
-        // Build request
         let timeout = options
             .timeout_ms
             .map(Duration::from_millis)
             .unwrap_or(self.default_timeout);
 
-        let mut request = self
-            .client
-            .request(method, parsed_url.as_str())
-            .headers(headers);
+        debug!("Fetching URL: {} with method: {}", url, options.method);
 
-        // Add body if provided
-        if let Some(body) = options.body {
-            request = request.body(body);
+        if !self.manual_redirects {
+            // Test mode: single request through the redirect-following client
+            let parsed_url = self.validate(&url)?;
+            let mut request = shared_test_client()?
+                .request(method, parsed_url.as_str())
+                .headers(headers)
+                .timeout(timeout);
+            if let Some(body) = options.body {
+                request = request.body(body);
+            }
+            let response = request
+                .send()
+                .map_err(|e| HttpError::RequestFailed(e.to_string()))?;
+            return self.convert_response(response);
         }
 
-        // Set timeout
-        request = request.timeout(timeout);
+        // Follow redirects manually so every hop is validated (URL scheme,
+        // host, and DNS resolution). The shared client has redirects disabled.
+        let client = shared_client()?;
+        let mut current_url = self.validate(&url)?;
+        let mut current_method = method;
+        let mut current_body = options.body;
+        let mut current_headers = headers;
 
-        // Execute request
-        debug!("Fetching URL: {} with method: {}", url, options.method);
-        let response = request
-            .send()
-            .map_err(|e| HttpError::RequestFailed(e.to_string()))?;
+        for _ in 0..=MAX_REDIRECTS {
+            let mut request = client
+                .request(current_method.clone(), current_url.as_str())
+                .headers(current_headers.clone())
+                .timeout(timeout);
+            if let Some(body) = &current_body {
+                request = request.body(body.clone());
+            }
 
-        // Convert to FetchResponse
-        self.convert_response(response)
+            let response = request
+                .send()
+                .map_err(|e| HttpError::RequestFailed(e.to_string()))?;
+
+            let status = response.status();
+            let is_redirect = matches!(status.as_u16(), 301 | 302 | 303 | 307 | 308);
+            if !is_redirect {
+                return self.convert_response(response);
+            }
+
+            let Some(location) = response
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+            else {
+                // Redirect status without a Location header: return as-is
+                return self.convert_response(response);
+            };
+
+            // Resolve relative redirects against the current URL, then apply
+            // the same validation as the original request
+            let next_url = current_url
+                .join(location)
+                .map_err(|e| HttpError::InvalidUrl(format!("Invalid redirect target: {}", e)))?;
+            let next_url = self.validate(next_url.as_str())?;
+
+            // 301/302/303 switch non-GET/HEAD methods to GET and drop the
+            // body (browser/fetch semantics); 307/308 preserve both
+            if matches!(status.as_u16(), 301..=303)
+                && current_method != Method::GET
+                && current_method != Method::HEAD
+            {
+                current_method = Method::GET;
+                current_body = None;
+            }
+
+            // Strip credentials when the redirect changes host, mirroring
+            // reqwest's own redirect policy
+            if next_url.host_str() != current_url.host_str() {
+                current_headers.remove(reqwest::header::AUTHORIZATION);
+                current_headers.remove(reqwest::header::COOKIE);
+                current_headers.remove(reqwest::header::PROXY_AUTHORIZATION);
+                current_headers.remove(reqwest::header::WWW_AUTHENTICATE);
+            }
+
+            debug!("Following redirect ({}) to {}", status.as_u16(), next_url);
+            current_url = next_url;
+        }
+
+        Err(HttpError::RequestFailed(format!(
+            "Too many redirects (max {})",
+            MAX_REDIRECTS
+        )))
     }
 
     /// Validate URL and block private IPs, localhost, and malicious URLs
@@ -150,27 +257,34 @@ impl HttpClient {
             ));
         }
 
-        // Check for IP addresses
-        if let Ok(ip) = IpAddr::from_str(host)
-            && Self::is_private_ip(&ip)
-        {
-            return Err(HttpError::BlockedUrl(format!(
-                "Private IP address not allowed: {}",
-                ip
-            )));
-        }
-
-        // Check for internal domains (optional, can be extended)
-        if host == "127.0.0.1"
-            || host == "0.0.0.0"
-            || host.starts_with("10.")
-            || host.starts_with("172.16.")
-            || host.starts_with("192.168.")
-        {
-            return Err(HttpError::BlockedUrl(format!(
-                "Internal address not allowed: {}",
-                host
-            )));
+        // Check for IP address literals
+        if let Ok(ip) = IpAddr::from_str(host.trim_start_matches('[').trim_end_matches(']')) {
+            if Self::is_private_ip(&ip) {
+                return Err(HttpError::BlockedUrl(format!(
+                    "Private IP address not allowed: {}",
+                    ip
+                )));
+            }
+        } else {
+            // Hostname: resolve it and validate every address it maps to,
+            // blocking DNS-based SSRF (a public name resolving to e.g.
+            // 10.0.0.5). Resolution failures are left for the request itself
+            // to surface — the connection uses the same resolver and would
+            // fail identically. Note: a TTL-0 DNS-rebinding window between
+            // this check and the connection remains; closing it would require
+            // pinning the connection to the validated address.
+            let port = parsed.port_or_known_default().unwrap_or(443);
+            if let Ok(addrs) = (host, port).to_socket_addrs() {
+                for addr in addrs {
+                    if Self::is_private_ip(&addr.ip()) {
+                        return Err(HttpError::BlockedUrl(format!(
+                            "Host '{}' resolves to blocked address {}",
+                            host,
+                            addr.ip()
+                        )));
+                    }
+                }
+            }
         }
 
         Ok(parsed)
@@ -195,18 +309,31 @@ impl HttpClient {
         Ok(parsed)
     }
 
-    /// Check if an IP address is private
+    /// Check if an IP address is private, loopback, link-local, or otherwise
+    /// not a legitimate public destination for script-initiated requests
     fn is_private_ip(ip: &IpAddr) -> bool {
         match ip {
             IpAddr::V4(ipv4) => {
+                let octets = ipv4.octets();
                 ipv4.is_private()
                     || ipv4.is_loopback()
                     || ipv4.is_link_local()
                     || ipv4.is_broadcast()
                     || ipv4.is_documentation()
                     || ipv4.is_unspecified()
+                    // Carrier-grade NAT range 100.64.0.0/10 (RFC 6598)
+                    || (octets[0] == 100 && (octets[1] & 0xC0) == 64)
             }
-            IpAddr::V6(ipv6) => ipv6.is_loopback() || ipv6.is_unspecified(),
+            IpAddr::V6(ipv6) => {
+                // IPv4-mapped IPv6 (::ffff:10.0.0.5) must not bypass V4 rules
+                if let Some(mapped) = ipv6.to_ipv4_mapped() {
+                    return Self::is_private_ip(&IpAddr::V4(mapped));
+                }
+                ipv6.is_loopback()
+                    || ipv6.is_unspecified()
+                    || ipv6.is_unique_local()
+                    || ipv6.is_unicast_link_local()
+            }
         }
     }
 
@@ -288,18 +415,21 @@ impl HttpClient {
             return Err(HttpError::ResponseTooLarge(content_length));
         }
 
-        // Get response body
-        let bytes = response
-            .bytes()
+        // Read the body with a hard cap so responses without a Content-Length
+        // header (e.g. chunked) cannot buffer unbounded memory
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        response
+            .take(self.max_response_size as u64 + 1)
+            .read_to_end(&mut bytes)
             .map_err(|e| HttpError::ResponseReadFailed(e.to_string()))?;
 
-        // Check size after reading
         if bytes.len() > self.max_response_size {
             return Err(HttpError::ResponseTooLarge(bytes.len() as u64));
         }
 
         // Convert to string (UTF-8)
-        let body = String::from_utf8(bytes.to_vec())
+        let body = String::from_utf8(bytes)
             .map_err(|e| HttpError::ResponseEncodingError(e.to_string()))?;
 
         Ok(FetchResponse {
@@ -477,5 +607,52 @@ mod tests {
         assert!(HttpClient::is_private_ip(&"172.16.0.1".parse().unwrap()));
         assert!(!HttpClient::is_private_ip(&"8.8.8.8".parse().unwrap()));
         assert!(!HttpClient::is_private_ip(&"1.1.1.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_is_private_ip_cgnat_range() {
+        // RFC 6598 carrier-grade NAT: 100.64.0.0/10
+        assert!(HttpClient::is_private_ip(&"100.64.0.1".parse().unwrap()));
+        assert!(HttpClient::is_private_ip(
+            &"100.127.255.254".parse().unwrap()
+        ));
+        assert!(!HttpClient::is_private_ip(
+            &"100.63.255.255".parse().unwrap()
+        ));
+        assert!(!HttpClient::is_private_ip(&"100.128.0.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_is_private_ip_ipv6_ranges() {
+        assert!(HttpClient::is_private_ip(&"::1".parse().unwrap()));
+        // Unique-local fc00::/7
+        assert!(HttpClient::is_private_ip(&"fd00::1".parse().unwrap()));
+        // Link-local fe80::/10
+        assert!(HttpClient::is_private_ip(&"fe80::1".parse().unwrap()));
+        // Public IPv6 stays allowed
+        assert!(!HttpClient::is_private_ip(
+            &"2606:4700:4700::1111".parse().unwrap()
+        ));
+    }
+
+    #[test]
+    fn test_is_private_ip_v4_mapped_v6_no_bypass() {
+        // ::ffff:10.0.0.5 must be treated as the private 10.0.0.5, not as a
+        // public IPv6 address
+        assert!(HttpClient::is_private_ip(
+            &"::ffff:10.0.0.5".parse().unwrap()
+        ));
+        assert!(HttpClient::is_private_ip(
+            &"::ffff:127.0.0.1".parse().unwrap()
+        ));
+        assert!(!HttpClient::is_private_ip(
+            &"::ffff:8.8.8.8".parse().unwrap()
+        ));
+    }
+
+    #[test]
+    fn test_validate_url_blocks_v4_mapped_v6_literal() {
+        let result = HttpClient::validate_url("http://[::ffff:10.0.0.5]/api");
+        assert!(matches!(result, Err(HttpError::BlockedUrl(_))));
     }
 }

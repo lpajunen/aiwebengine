@@ -442,3 +442,84 @@ async fn test_fetch_missing_secret_error() {
 
     mock.shutdown().await;
 }
+
+// ============================================================================
+// Manual Redirect Loop Tests (production fetch path)
+// ============================================================================
+
+#[tokio::test]
+async fn test_manual_redirects_are_followed() {
+    let mock = MockServer::start()
+        .await
+        .expect("Failed to start mock server");
+    let url = mock.url("/redirect/3");
+
+    let result = tokio::task::spawn_blocking(move || {
+        let client = HttpClient::new_for_redirect_tests().expect("Failed to create client");
+        client.fetch(url, FetchOptions::default(), None, None)
+    })
+    .await
+    .expect("Task panicked");
+
+    let response = result.expect("Redirects within the limit should be followed");
+    assert_eq!(response.status, 200, "should land on /get after 3 hops");
+    assert!(response.ok);
+
+    mock.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_manual_redirects_reject_redirect_loop() {
+    let mock = MockServer::start()
+        .await
+        .expect("Failed to start mock server");
+    let url = mock.url("/redirect-loop");
+
+    let result = tokio::task::spawn_blocking(move || {
+        let client = HttpClient::new_for_redirect_tests().expect("Failed to create client");
+        client.fetch(url, FetchOptions::default(), None, None)
+    })
+    .await
+    .expect("Task panicked");
+
+    let error = result.expect_err("A redirect loop must be rejected");
+    assert!(
+        error.to_string().contains("Too many redirects"),
+        "unexpected error: {}",
+        error
+    );
+
+    mock.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_manual_redirect_switches_post_to_get() {
+    let mock = MockServer::start()
+        .await
+        .expect("Failed to start mock server");
+    // 302 from a POST must be retried as GET (browser/fetch semantics);
+    // /redirect/1 redirects to /get, which only accepts GET
+    let url = mock.url("/redirect/1");
+
+    let result = tokio::task::spawn_blocking(move || {
+        let client = HttpClient::new_for_redirect_tests().expect("Failed to create client");
+        client.fetch(
+            url,
+            FetchOptions {
+                method: "POST".to_string(),
+                headers: None,
+                body: Some("payload".to_string()),
+                timeout_ms: None,
+            },
+            None,
+            None,
+        )
+    })
+    .await
+    .expect("Task panicked");
+
+    let response = result.expect("POST through a 302 should succeed as GET");
+    assert_eq!(response.status, 200);
+
+    mock.shutdown().await;
+}

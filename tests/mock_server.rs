@@ -59,7 +59,9 @@ impl MockServer {
                 "/response-headers",
                 axum::routing::get(handle_response_headers),
             )
-            .route("/status/{code}", axum::routing::get(handle_status));
+            .route("/status/{code}", axum::routing::get(handle_status))
+            .route("/redirect/{n}", axum::routing::any(handle_redirect))
+            .route("/redirect-loop", axum::routing::get(handle_redirect_loop));
 
         // Bind to random port
         let addr = SocketAddr::from(([127, 0, 0, 1], 0));
@@ -233,6 +235,29 @@ fn extract_headers(headers: &HeaderMap) -> HashMap<String, String> {
                 .map(|v| (name.as_str().to_string(), v.to_string()))
         })
         .collect()
+}
+
+/// Redirects n times (302) before landing on /get
+async fn handle_redirect(axum::extract::Path(n): axum::extract::Path<u32>) -> Response {
+    let location = if n <= 1 {
+        "/get".to_string()
+    } else {
+        format!("/redirect/{}", n - 1)
+    };
+    Response::builder()
+        .status(StatusCode::FOUND)
+        .header(header::LOCATION, location)
+        .body(Body::empty())
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+/// Redirects to itself forever (302)
+async fn handle_redirect_loop() -> Response {
+    Response::builder()
+        .status(StatusCode::FOUND)
+        .header(header::LOCATION, "/redirect-loop")
+        .body(Body::empty())
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 #[cfg(test)]
