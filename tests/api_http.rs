@@ -906,3 +906,59 @@ async fn test_graphql_registration_clearing() {
         assert!(!registry.subscriptions.contains_key(script_uri));
     }
 }
+
+// ============================================================================
+// Request Body Limit Tests
+// ============================================================================
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_oversized_request_body_is_rejected() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    let context = TestContext::new();
+
+    // Load the core script so /upsert_script is a registered dynamic route
+    let _ = repository::upsert_script(
+        "https://example.com/core",
+        include_str!("../scripts/feature_scripts/core.js"),
+    );
+
+    let port = context
+        .start_server()
+        .await
+        .expect("server failed to start");
+    wait_for_server(port, 20).await.expect("Server not ready");
+
+    let client = reqwest::Client::new();
+
+    // Default security.max_request_body_bytes is 1 MB; send a larger body
+    let oversized = "x".repeat(1024 * 1024 + 100 * 1024);
+
+    // Dynamic script route with a non-form content type must reject with 413
+    let response = client
+        .post(format!("http://127.0.0.1:{}/upsert_script", port))
+        .header("content-type", "application/json")
+        .body(oversized.clone())
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(response.status(), 413);
+
+    // GraphQL endpoint reports the limit as a JSON error
+    let response = client
+        .post(format!("http://127.0.0.1:{}/graphql", port))
+        .header("content-type", "application/json")
+        .body(oversized)
+        .send()
+        .await
+        .expect("request failed");
+    let body = response.text().await.expect("failed to read body");
+    assert!(
+        body.contains("too large"),
+        "GraphQL should reject oversized bodies, got: {}",
+        body
+    );
+
+    context.cleanup().await.expect("Failed to cleanup");
+}

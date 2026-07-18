@@ -28,8 +28,9 @@ pub async fn parse_form_data(
 ) -> Result<(HashMap<String, String>, Vec<UploadedFile>), StatusCode> {
     if let Some(ct) = content_type {
         if ct.starts_with("application/x-www-form-urlencoded") {
-            // Convert body to bytes and parse as URL-encoded form data
-            match axum::body::to_bytes(body, usize::MAX).await {
+            // Convert body to bytes (bounded by the upload limit) and parse as
+            // URL-encoded form data
+            match axum::body::to_bytes(body, max_upload_size).await {
                 Ok(bytes) => {
                     let body_str =
                         String::from_utf8(bytes.to_vec()).map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -39,7 +40,7 @@ pub async fn parse_form_data(
                 }
                 Err(e) => {
                     error!("Failed to read form data body: {}", e);
-                    Err(StatusCode::BAD_REQUEST)
+                    Err(StatusCode::PAYLOAD_TOO_LARGE)
                 }
             }
         } else if ct.starts_with("multipart/form-data") {

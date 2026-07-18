@@ -1497,19 +1497,23 @@ async fn setup_routes(
     auth_manager: Option<&Arc<auth::AuthManager>>,
     pool: Option<sqlx::PgPool>,
 ) -> Router {
+    // Cap on request body reads; bodies beyond this are rejected instead of
+    // being buffered into memory (usize is Copy, so each closure gets its own)
+    let max_request_body = config.security.max_request_body_bytes;
+
     // GraphQL handler - executes queries (supports GET and POST)
-    let graphql_post_handler = |req: axum::http::Request<axum::body::Body>| async move {
+    let graphql_post_handler = move |req: axum::http::Request<axum::body::Body>| async move {
         // Extract authentication context before consuming the request
         let auth_user = req.extensions().get::<auth::AuthUser>().cloned();
 
         let (parts, body) = req.into_parts();
         let method = parts.method.clone();
 
-        let body_bytes = match axum::body::to_bytes(body, usize::MAX).await {
+        let body_bytes = match axum::body::to_bytes(body, max_request_body).await {
             Ok(bytes) => bytes,
             Err(_) => {
                 return axum::response::Json(
-                    serde_json::json!({"error": "Failed to read request body"}),
+                    serde_json::json!({"error": "Request body too large or unreadable"}),
                 );
             }
         };
@@ -1596,24 +1600,26 @@ async fn setup_routes(
         };
 
     // GraphQL SSE handler - handles subscriptions over Server-Sent Events using execute_stream
-    let graphql_sse_handler = |req: axum::http::Request<axum::body::Body>| async move {
+    let graphql_sse_handler = move |req: axum::http::Request<axum::body::Body>| async move {
         // Extract authentication context before consuming the request
         let auth_user = req.extensions().get::<auth::AuthUser>().cloned();
 
         let (parts, body) = req.into_parts();
         info!("GraphQL SSE request for URI: {}", parts.uri);
 
-        let body_bytes = match axum::body::to_bytes(body, usize::MAX).await {
+        let body_bytes = match axum::body::to_bytes(body, max_request_body).await {
             Ok(bytes) => bytes,
             Err(e) => {
                 error!("GraphQL SSE: Failed to read request body: {}", e);
                 return axum::response::Response::builder()
-                    .status(400)
+                    .status(StatusCode::PAYLOAD_TOO_LARGE)
                     .header("content-type", "text/plain")
-                    .body(axum::body::Body::from("Failed to read request body"))
+                    .body(axum::body::Body::from(
+                        "Request body too large or unreadable",
+                    ))
                     .unwrap_or_else(|err| {
                         error!("Failed to build error response: {}", err);
-                        axum::response::Response::new(axum::body::Body::from("Bad Request"))
+                        axum::response::Response::new(axum::body::Body::from("Payload Too Large"))
                     });
             }
         };
@@ -1762,13 +1768,13 @@ async fn setup_routes(
     };
 
     // MCP JSON-RPC handler - supports tools/list and tools/call methods
-    let mcp_handler = |req: axum::http::Request<axum::body::Body>| async move {
+    let mcp_handler = move |req: axum::http::Request<axum::body::Body>| async move {
         let mcp_session = req
             .extensions()
             .get::<auth::McpAuthSession>()
             .map(|auth_session| auth_session.session.clone());
 
-        let body_bytes = match axum::body::to_bytes(req.into_body(), usize::MAX).await {
+        let body_bytes = match axum::body::to_bytes(req.into_body(), max_request_body).await {
             Ok(bytes) => bytes,
             Err(e) => {
                 error!("MCP: Failed to read request body: {}", e);
@@ -1776,7 +1782,7 @@ async fn setup_routes(
                     "jsonrpc": "2.0",
                     "error": {
                         "code": -32700,
-                        "message": "Parse error: Failed to read request body"
+                        "message": "Parse error: request body too large or unreadable"
                     },
                     "id": null
                 }));
@@ -2366,6 +2372,7 @@ async fn setup_routes(
                     script_timeout_for_home,
                     auth_enabled_for_home,
                     max_upload_for_home,
+                    max_request_body,
                 )
                 .await
             }),
@@ -2378,6 +2385,7 @@ async fn setup_routes(
                     script_timeout_for_path,
                     auth_enabled_for_path,
                     max_upload_for_path,
+                    max_request_body,
                 )
                 .await
             }),
@@ -2405,6 +2413,7 @@ async fn handle_dynamic_request(
     script_timeout_ms: u64,
     _auth_enabled: bool,
     max_upload_size: usize,
+    max_request_body_bytes: usize,
 ) -> impl IntoResponse {
     let path = req.uri().path().to_string();
     let request_method = req.method().to_string();
@@ -2511,10 +2520,32 @@ async fn handle_dynamic_request(
         .map(|s| s.to_string());
     let body = req.into_body();
 
-    // Always read the body as bytes first
-    let body_bytes = match to_bytes(body, usize::MAX).await {
+    // Read the body with a size cap: form submissions are bounded by the
+    // configured upload limit (plus headroom for multipart framing), everything
+    // else by the general request body limit. Oversized bodies are rejected
+    // instead of being buffered into memory.
+    let is_form_data = content_type
+        .as_ref()
+        .map(|ct| {
+            ct.contains("application/x-www-form-urlencoded") || ct.contains("multipart/form-data")
+        })
+        .unwrap_or(false);
+
+    let body_limit = if is_form_data {
+        max_upload_size.saturating_add(64 * 1024)
+    } else {
+        max_request_body_bytes
+    };
+
+    let body_bytes = match to_bytes(body, body_limit).await {
         Ok(bytes) => bytes,
-        Err(_) => axum::body::Bytes::new(),
+        Err(_) => {
+            return Response::builder()
+                .status(StatusCode::PAYLOAD_TOO_LARGE)
+                .header("content-type", "text/plain")
+                .body(Body::from("Request body too large"))
+                .unwrap_or_else(|_| Response::new(Body::from("Payload Too Large")));
+        }
     };
 
     // Make raw body available for all requests that might have a body
@@ -2526,14 +2557,6 @@ async fn handle_dynamic_request(
     } else {
         None
     };
-
-    // Parse form data if content type indicates form submission
-    let is_form_data = content_type
-        .as_ref()
-        .map(|ct| {
-            ct.contains("application/x-www-form-urlencoded") || ct.contains("multipart/form-data")
-        })
-        .unwrap_or(false);
 
     let (form_data, uploaded_files) = if is_form_data {
         // Parse form data from the bytes
