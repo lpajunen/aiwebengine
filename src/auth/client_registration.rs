@@ -66,9 +66,11 @@ pub struct ClientRegistrationResponse {
     pub client_id: String,
 
     /// Client secret (for confidential clients)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub client_secret: Option<String>,
 
     /// Time when client_secret expires (Unix timestamp)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub client_secret_expires_at: Option<i64>,
 
     /// All registered metadata
@@ -80,19 +82,26 @@ pub struct ClientRegistrationResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RegisteredClientMetadata {
     pub redirect_uris: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub client_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub logo_uri: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub client_uri: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub contacts: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tos_uri: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub policy_uri: Option<String>,
     pub token_endpoint_auth_method: String,
     pub grant_types: Vec<String>,
     pub response_types: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
 
-    /// Time at which the client was registered (ISO 8601)
-    pub client_id_issued_at: String,
+    /// Time at which the client was registered (Unix timestamp, seconds)
+    pub client_id_issued_at: i64,
 }
 
 /// Stored client information in the database
@@ -179,7 +188,7 @@ impl ClientRegistrationManager {
             grant_types,
             response_types,
             scope: request.scope,
-            client_id_issued_at: Utc::now().to_rfc3339(),
+            client_id_issued_at: Utc::now().timestamp(),
         };
 
         // TODO: Store in database
@@ -369,6 +378,51 @@ mod tests {
 
         let result = manager.register_client(request).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_registration_response_is_rfc7591_compliant() {
+        let manager = ClientRegistrationManager::new(90);
+
+        let request = ClientRegistrationRequest {
+            redirect_uris: vec!["http://localhost:33418/callback".to_string()],
+            client_name: Some("Claude Code".to_string()),
+            logo_uri: None,
+            client_uri: None,
+            contacts: None,
+            tos_uri: None,
+            policy_uri: None,
+            token_endpoint_auth_method: Some("none".to_string()),
+            grant_types: vec![
+                "authorization_code".to_string(),
+                "refresh_token".to_string(),
+            ],
+            response_types: vec!["code".to_string()],
+            scope: None,
+        };
+
+        let response = manager.register_client(request).await.unwrap();
+        let json = serde_json::to_value(&response).unwrap();
+
+        // RFC 7591: omitted optional metadata must be absent, not null
+        for field in [
+            "logo_uri",
+            "client_uri",
+            "contacts",
+            "tos_uri",
+            "policy_uri",
+            "scope",
+        ] {
+            assert!(
+                json.get(field).is_none(),
+                "field `{}` must be omitted when not provided, got {:?}",
+                field,
+                json.get(field)
+            );
+        }
+
+        // RFC 7591: client_id_issued_at is a numeric Unix timestamp
+        assert!(json["client_id_issued_at"].is_i64());
     }
 
     #[test]
