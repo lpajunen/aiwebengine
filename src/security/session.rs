@@ -373,8 +373,14 @@ impl SecureSessionManager {
                 || user_agent_lower.contains("cursor")
                 || user_agent_lower.contains("mcp");
 
-            if is_mcp_validation && is_likely_mcp_client {
-                // Allow User Agent change for MCP clients from same IP
+            // Sessions issued by the OAuth2 token endpoint are bearer tokens: the
+            // User-Agent is self-reported and OAuth clients legitimately use
+            // different HTTP stacks for the token exchange and API requests, so
+            // UA pinning only breaks interop without adding security.
+            let is_oauth2_bearer = session_data.provider == "oauth2";
+
+            if is_mcp_validation && (is_likely_mcp_client || is_oauth2_bearer) {
+                // Allow User Agent change for MCP/OAuth2 bearer clients from same IP
                 debug!(
                     "Allowing User Agent change for MCP client from same IP: {} -> {}",
                     session_data.fingerprint.ip_addr, user_agent
@@ -750,6 +756,39 @@ mod tests {
             .validate_session(&token.token, "192.168.1.1", "Chrome/90.0")
             .await;
         assert!(matches!(result, Err(SessionError::FingerprintMismatch)));
+    }
+
+    #[tokio::test]
+    async fn test_oauth2_bearer_session_allows_user_agent_change() {
+        let manager = create_test_manager();
+
+        // Session issued by the OAuth2 token endpoint (bearer token). OAuth
+        // clients use different HTTP stacks for the token exchange and API
+        // requests, so a UA change from the same IP must be accepted.
+        let params = CreateSessionParams {
+            user_id: "user_oauth2_ua".to_string(),
+            provider: "oauth2".to_string(),
+            email: None,
+            name: None,
+            is_admin: false,
+            is_editor: false,
+            ip_addr: "192.168.1.1".to_string(),
+            user_agent: "token-exchange-client/1.0".to_string(),
+            refresh_token: None,
+            audience: None,
+        };
+
+        let token = manager.create_session(params).await.unwrap();
+
+        let session = manager
+            .validate_session(
+                &token.token,
+                "192.168.1.1",
+                "claude-code/2.0 (external, cli)",
+            )
+            .await
+            .unwrap();
+        assert_eq!(session.user_id, "user_oauth2_ua");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
