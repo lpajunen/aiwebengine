@@ -202,7 +202,10 @@ interface RouteRegistry {
    * Register an HTTP route handler
    * @param path - URL path pattern (e.g., "/blog/post/:id")
    * @param handlerName - Name of the handler function to call
-   * @param method - HTTP method (GET, POST, PUT, DELETE, etc.)
+   * @param method - HTTP method (GET, POST, PUT, DELETE, etc.). Registering
+   *   GET automatically serves HEAD requests too, running the same handler
+   *   and returning its headers with an empty body. Register HEAD explicitly
+   *   to override this with custom behavior.
    * @param metadata - Optional OpenAPI metadata (summary, description, tags, parameters, requestBody)
    * @returns Registration result message
    * @example

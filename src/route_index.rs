@@ -21,6 +21,11 @@ pub enum RouteLookup {
         handler_name: String,
         /// Parameters extracted from `:param` path segments
         params: HashMap<String, String>,
+        /// True when a HEAD request was served by falling back to the path's
+        /// GET handler because no HEAD handler was registered for it. The
+        /// caller must run the handler as usual but drop the response body
+        /// before returning it, per RFC 7231 §4.3.2.
+        strip_body: bool,
     },
     /// The path is registered, but not for the requested method (HTTP 405).
     MethodNotAllowed,
@@ -149,9 +154,35 @@ fn build_index(metadata: &[repository::ScriptMetadata]) -> IndexInner {
 /// Finds the handler for a path and method. Exact matches win; param and
 /// wildcard patterns compete on specificity (exact segments outweigh params,
 /// which outweigh wildcard depth — see [`calculate_route_specificity`]).
+///
+/// HEAD requests fall back to the path's GET handler when no HEAD handler is
+/// registered (RFC 7231 §4.3.2): a script that explicitly registers HEAD
+/// always wins, otherwise the GET handler runs and [`RouteLookup::Handler`]
+/// is returned with `strip_body: true` so the caller drops the body.
 pub async fn lookup(path: &str, method: &str) -> Result<RouteLookup, String> {
     let index = current_index().await?;
-    Ok(match_index(&index, path, method))
+    Ok(resolve(&index, path, method))
+}
+
+fn resolve(index: &IndexInner, path: &str, method: &str) -> RouteLookup {
+    let result = match_index(index, path, method);
+    if method == "HEAD"
+        && !matches!(result, RouteLookup::Handler { .. })
+        && let RouteLookup::Handler {
+            script_uri,
+            handler_name,
+            params,
+            ..
+        } = match_index(index, path, "GET")
+    {
+        return RouteLookup::Handler {
+            script_uri,
+            handler_name,
+            params,
+            strip_body: true,
+        };
+    }
+    result
 }
 
 fn match_index(index: &IndexInner, path: &str, method: &str) -> RouteLookup {
@@ -160,6 +191,7 @@ fn match_index(index: &IndexInner, path: &str, method: &str) -> RouteLookup {
             script_uri: target.script_uri.clone(),
             handler_name: target.handler_name.clone(),
             params: HashMap::new(),
+            strip_body: false,
         };
     }
 
@@ -182,6 +214,7 @@ fn match_index(index: &IndexInner, path: &str, method: &str) -> RouteLookup {
             script_uri: route.target.script_uri.clone(),
             handler_name: route.target.handler_name.clone(),
             params,
+            strip_body: false,
         };
     }
 
@@ -361,5 +394,79 @@ mod tests {
             match_index(&index, "/route", "GET"),
             RouteLookup::NotFound
         ));
+    }
+
+    #[test]
+    fn test_head_falls_back_to_get_and_strips_body() {
+        let index = build_index(&[script_with_routes(
+            "s1",
+            &[("/api/users", "GET", "list_users")],
+        )]);
+
+        match resolve(&index, "/api/users", "HEAD") {
+            RouteLookup::Handler {
+                handler_name,
+                strip_body,
+                ..
+            } => {
+                assert_eq!(handler_name, "list_users");
+                assert!(strip_body);
+            }
+            other => panic!("Expected a handler, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_explicit_head_registration_wins_over_get_fallback() {
+        let index = build_index(&[script_with_routes(
+            "s1",
+            &[
+                ("/api/users", "GET", "list_users"),
+                ("/api/users", "HEAD", "head_users"),
+            ],
+        )]);
+
+        match resolve(&index, "/api/users", "HEAD") {
+            RouteLookup::Handler {
+                handler_name,
+                strip_body,
+                ..
+            } => {
+                assert_eq!(handler_name, "head_users");
+                assert!(!strip_body);
+            }
+            other => panic!("Expected a handler, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_head_still_405_when_path_only_registered_for_other_methods() {
+        let index = build_index(&[script_with_routes(
+            "s1",
+            &[("/api/thing", "POST", "post_handler")],
+        )]);
+
+        assert!(matches!(
+            resolve(&index, "/api/thing", "HEAD"),
+            RouteLookup::MethodNotAllowed
+        ));
+    }
+
+    #[test]
+    fn test_head_fallback_matches_param_and_wildcard_routes() {
+        let index = build_index(&[script_with_routes(
+            "s1",
+            &[
+                ("/api/users/:id", "GET", "get_user"),
+                ("/files/*", "GET", "get_file"),
+            ],
+        )]);
+
+        let (handler, params) = handler_of(resolve(&index, "/api/users/42", "HEAD"));
+        assert_eq!(handler, "get_user");
+        assert_eq!(params.get("id").map(String::as_str), Some("42"));
+
+        let (handler, _) = handler_of(resolve(&index, "/files/a/b.txt", "HEAD"));
+        assert_eq!(handler, "get_file");
     }
 }

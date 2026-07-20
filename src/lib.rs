@@ -2280,12 +2280,13 @@ async fn handle_dynamic_request(
         }
     };
 
-    let (owner_uri, handler_name, route_params) = match route_lookup {
+    let (owner_uri, handler_name, route_params, strip_body) = match route_lookup {
         route_index::RouteLookup::Handler {
             script_uri,
             handler_name,
             params,
-        } => (script_uri, handler_name, params),
+            strip_body,
+        } => (script_uri, handler_name, params, strip_body),
         no_handler => {
             // Extract request ID from extensions
             let request_id = req
@@ -2505,7 +2506,11 @@ async fn handle_dynamic_request(
                 js_response.body.len(),
                 js_response.headers.len()
             );
-            build_http_response_from_js(js_response)
+            let mut response = build_http_response_from_js(js_response);
+            if strip_body {
+                *response.body_mut() = Body::empty();
+            }
+            response
         }
         Ok(Err(e)) => {
             error!(
@@ -2657,7 +2662,9 @@ pub async fn start_server_without_shutdown_with_config(config: config::Config) -
 
 /// Try to serve an asset if the path matches a registered asset
 async fn try_serve_asset(path: &str, method: &str) -> Option<Response> {
-    if method != "GET" {
+    // Asset routes have no per-method registration (see `AssetPathRegistration`),
+    // so HEAD is served the same way as GET with the body dropped afterward.
+    if method != "GET" && method != "HEAD" {
         return None;
     }
 
@@ -2681,6 +2688,9 @@ async fn try_serve_asset(path: &str, method: &str) -> Option<Response> {
                 axum::http::HeaderValue::from_static("application/octet-stream"),
             ),
         );
+        if method == "HEAD" {
+            *response.body_mut() = Body::empty();
+        }
         return Some(response);
     }
 

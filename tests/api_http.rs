@@ -262,6 +262,177 @@ async fn test_different_http_methods() {
     context.cleanup().await.expect("Failed to cleanup");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn test_head_request_falls_back_to_get_with_empty_body() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    let context = TestContext::new();
+
+    let _ = repository::upsert_script(
+        "https://example.com/method_test",
+        include_str!("../scripts/test_scripts/method_test.js"),
+    );
+
+    let port = context
+        .start_server()
+        .await
+        .expect("Server failed to start");
+    wait_for_server(port, 20).await.expect("Server not ready");
+
+    let client = reqwest::Client::new();
+
+    // No HEAD handler is registered for /api/test, only GET - HEAD should
+    // transparently run the GET handler and come back with an empty body.
+    let head_response = client
+        .head(format!("http://127.0.0.1:{}/api/test", port))
+        .send()
+        .await
+        .expect("HEAD request failed");
+
+    assert_eq!(head_response.status(), 200);
+    let head_body = head_response
+        .text()
+        .await
+        .expect("Failed to read HEAD response");
+    assert!(
+        head_body.is_empty(),
+        "HEAD response should have an empty body, got: {:?}",
+        head_body
+    );
+
+    // An unregistered path must still 404 on HEAD, not silently match something else.
+    let head_not_found_response = client
+        .head(format!("http://127.0.0.1:{}/api/nonexistent", port))
+        .send()
+        .await
+        .expect("HEAD request to nonexistent path failed");
+    assert_eq!(head_not_found_response.status(), 404);
+
+    context.cleanup().await.expect("Failed to cleanup");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_head_request_on_asset_route_strips_body() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    let context = TestContext::new();
+
+    let script_uri = "https://example.com/head_asset_test";
+    let _ = repository::upsert_script(script_uri, "function init() {}");
+    repository::set_script_privileged(script_uri, true).expect("Failed to set privileged");
+    repository::upsert_asset(repository::Asset {
+        uri: "head-test.css".to_string(),
+        mimetype: "text/css".to_string(),
+        content: b"body { color: red; }".to_vec(),
+        name: Some("head-test.css".to_string()),
+        script_uri: script_uri.to_string(),
+        created_at: std::time::SystemTime::now(),
+        updated_at: std::time::SystemTime::now(),
+    })
+    .expect("Failed to create asset");
+
+    let script = r#"
+        function init(context) {
+          routeRegistry.registerAssetRoute("/head-test.css", "head-test.css");
+          return { success: true };
+        }
+    "#;
+    let _ = repository::upsert_script(script_uri, script);
+
+    let port = context
+        .start_server()
+        .await
+        .expect("Server failed to start");
+    wait_for_server(port, 20).await.expect("Server not ready");
+
+    let client = reqwest::Client::new();
+
+    let get_response = client
+        .get(format!("http://127.0.0.1:{}/head-test.css", port))
+        .send()
+        .await
+        .expect("GET request failed");
+    assert_eq!(get_response.status(), 200);
+    let get_body = get_response.text().await.expect("Failed to read GET body");
+    assert_eq!(get_body, "body { color: red; }");
+
+    let head_response = client
+        .head(format!("http://127.0.0.1:{}/head-test.css", port))
+        .send()
+        .await
+        .expect("HEAD request failed");
+    assert_eq!(head_response.status(), 200);
+    assert_eq!(
+        head_response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok()),
+        Some("text/css; charset=utf-8")
+    );
+    let head_body = head_response
+        .text()
+        .await
+        .expect("Failed to read HEAD body");
+    assert!(
+        head_body.is_empty(),
+        "HEAD response for asset route should have an empty body, got: {:?}",
+        head_body
+    );
+
+    context.cleanup().await.expect("Failed to cleanup");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_explicit_head_handler_overrides_get_fallback() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    let context = TestContext::new();
+
+    let script = r#"
+        function get_handler(context) {
+          return { status: 200, body: "GET body" };
+        }
+        function head_handler(context) {
+          return { status: 200, body: "", headers: { "x-head-handler": "custom" } };
+        }
+        function init(context) {
+          routeRegistry.registerRoute("/api/explicit-head", "get_handler", "GET");
+          routeRegistry.registerRoute("/api/explicit-head", "head_handler", "HEAD");
+          return { success: true };
+        }
+    "#;
+    let _ = repository::upsert_script("https://example.com/explicit_head_test", script);
+
+    let port = context
+        .start_server()
+        .await
+        .expect("Server failed to start");
+    wait_for_server(port, 20).await.expect("Server not ready");
+
+    let client = reqwest::Client::new();
+
+    let head_response = client
+        .head(format!("http://127.0.0.1:{}/api/explicit-head", port))
+        .send()
+        .await
+        .expect("HEAD request failed");
+
+    assert_eq!(head_response.status(), 200);
+    assert_eq!(
+        head_response
+            .headers()
+            .get("x-head-handler")
+            .and_then(|v| v.to_str().ok()),
+        Some("custom"),
+        "Explicitly registered HEAD handler should run instead of falling back to GET"
+    );
+
+    context.cleanup().await.expect("Failed to cleanup");
+}
+
 // ============================================================================
 // Query Parameters Tests
 // ============================================================================
