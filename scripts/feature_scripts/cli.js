@@ -1,5 +1,9 @@
 /// <reference path="../../assets/aiwebengine-priv.d.ts" />
 
+function getArgs(context) {
+  return (context && context.args) || {};
+}
+
 // asset management script: manages assets for other scripts
 function asset_handler(context) {
   const req = context.request || {};
@@ -127,6 +131,201 @@ function asset_handler(context) {
   }
 }
 
+// ============================================================================
+// MCP Tool Handlers for Asset Operations
+// ============================================================================
+
+// List assets handler - lists all assets owned by a script
+function listAssetsHandler(context) {
+  const args = getArgs(context);
+  const scriptUri = args.script;
+
+  if (!scriptUri) {
+    return JSON.stringify({
+      error: "Missing required parameter: script",
+    });
+  }
+
+  try {
+    const assetsJson = assetStorage.listAssetsForUri(scriptUri);
+    const assets = JSON.parse(assetsJson);
+
+    console.log(
+      `MCP list_assets found ${assets.length} assets for: ${scriptUri}`,
+    );
+
+    return JSON.stringify({
+      script: scriptUri,
+      assets: assets,
+      count: assets.length,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error(`MCP list_assets error: ${error.message}`);
+    return JSON.stringify({
+      error: `Failed to list assets: ${error.message}`,
+    });
+  }
+}
+
+// Read asset handler - fetches the content of a specific asset
+function readAssetHandler(context) {
+  const args = getArgs(context);
+  const scriptUri = args.script;
+  const assetUri = args.asset;
+
+  if (!scriptUri) {
+    return JSON.stringify({
+      error: "Missing required parameter: script",
+    });
+  }
+  if (!assetUri) {
+    return JSON.stringify({
+      error: "Missing required parameter: asset",
+    });
+  }
+
+  try {
+    const content = assetStorage.fetchAssetForUri(scriptUri, assetUri);
+
+    if (
+      content &&
+      !content.startsWith("Error:") &&
+      content !== "Asset '" + assetUri + "' not found"
+    ) {
+      return JSON.stringify({
+        script: scriptUri,
+        asset: assetUri,
+        content: content,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    return JSON.stringify({
+      error: content || `Asset not found: ${assetUri}`,
+    });
+  } catch (error) {
+    console.error(`MCP read_asset error: ${error.message}`);
+    return JSON.stringify({
+      error: `Failed to read asset: ${error.message}`,
+    });
+  }
+}
+
+// Write asset handler - creates or updates an asset for a script
+function writeAssetHandler(context) {
+  const args = getArgs(context);
+  const scriptUri = args.script;
+  const assetUri = args.asset;
+  const mimetype = args.mimetype;
+  const content = args.content;
+
+  if (!scriptUri) {
+    return JSON.stringify({
+      error: "Missing required parameter: script",
+    });
+  }
+  if (!assetUri) {
+    return JSON.stringify({
+      error: "Missing required parameter: asset",
+    });
+  }
+  if (!mimetype) {
+    return JSON.stringify({
+      error: "Missing required parameter: mimetype",
+    });
+  }
+  if (content === undefined || content === null) {
+    return JSON.stringify({
+      error: "Missing required parameter: content",
+    });
+  }
+
+  try {
+    const result = assetStorage.upsertAssetForUri(
+      scriptUri,
+      assetUri,
+      mimetype,
+      content,
+    );
+
+    if (
+      !result ||
+      result.startsWith("Error") ||
+      result.startsWith("Access denied")
+    ) {
+      console.error(`MCP write_asset failed: ${result}`);
+      return JSON.stringify({
+        error: `Failed to write asset: ${result || "Unknown error"}`,
+      });
+    }
+
+    console.log(`MCP write_asset: ${assetUri} for ${scriptUri}`);
+
+    return JSON.stringify({
+      success: true,
+      message: result,
+      script: scriptUri,
+      asset: assetUri,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error(`MCP write_asset error: ${error.message}`);
+    return JSON.stringify({
+      error: `Failed to write asset: ${error.message}`,
+    });
+  }
+}
+
+// Delete asset handler - removes an asset from a script
+function deleteAssetHandler(context) {
+  const args = getArgs(context);
+  const scriptUri = args.script;
+  const assetUri = args.asset;
+
+  if (!scriptUri) {
+    return JSON.stringify({
+      error: "Missing required parameter: script",
+    });
+  }
+  if (!assetUri) {
+    return JSON.stringify({
+      error: "Missing required parameter: asset",
+    });
+  }
+
+  try {
+    const result = assetStorage.deleteAssetForUri(scriptUri, assetUri);
+
+    if (result && result.startsWith("Error:")) {
+      console.error(`MCP delete_asset failed: ${result}`);
+      return JSON.stringify({
+        error: `Failed to delete asset: ${result}`,
+      });
+    }
+    if (result && result.includes("not found")) {
+      return JSON.stringify({
+        error: result,
+      });
+    }
+
+    console.log(`MCP delete_asset: ${assetUri} for ${scriptUri}`);
+
+    return JSON.stringify({
+      success: true,
+      message: result || "Asset deleted",
+      script: scriptUri,
+      asset: assetUri,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error(`MCP delete_asset error: ${error.message}`);
+    return JSON.stringify({
+      error: `Failed to delete asset: ${error.message}`,
+    });
+  }
+}
+
 // Initialization function - called when script is loaded or updated
 function init(context) {
   try {
@@ -230,12 +429,112 @@ function init(context) {
       ]),
     });
 
+    // Register MCP tools for asset operations
+    let registeredMcpTools = 0;
+    if (typeof mcpRegistry !== "undefined") {
+      console.log("Registering MCP asset operation tools...");
+
+      mcpRegistry.registerTool(
+        "list_assets",
+        "List all assets owned by a script. Requires the user to own the script, have ReadAssets capability, or be an administrator.",
+        JSON.stringify({
+          type: "object",
+          properties: {
+            script: {
+              type: "string",
+              description:
+                "URI of the script whose assets to list (e.g., 'https://example.com/myscript')",
+            },
+          },
+          required: ["script"],
+        }),
+        "listAssetsHandler",
+      );
+
+      mcpRegistry.registerTool(
+        "read_asset",
+        "Fetch the base64-encoded content of a specific asset owned by a script. Requires the user to own the script, have ReadAssets capability, or be an administrator.",
+        JSON.stringify({
+          type: "object",
+          properties: {
+            script: {
+              type: "string",
+              description: "URI of the script that owns the asset",
+            },
+            asset: {
+              type: "string",
+              description:
+                "URI/path of the asset to fetch (e.g., '/images/logo.png')",
+            },
+          },
+          required: ["script", "asset"],
+        }),
+        "readAssetHandler",
+      );
+
+      mcpRegistry.registerTool(
+        "write_asset",
+        "Create or update an asset for a script. Requires the user to own the script, have WriteAssets capability, or be an administrator.",
+        JSON.stringify({
+          type: "object",
+          properties: {
+            script: {
+              type: "string",
+              description: "URI of the script that will own the asset",
+            },
+            asset: {
+              type: "string",
+              description: "URI/path of the asset (e.g., '/images/logo.png')",
+            },
+            mimetype: {
+              type: "string",
+              description:
+                "MIME type of the asset (e.g., 'image/png', 'text/css')",
+            },
+            content: {
+              type: "string",
+              description: "Base64-encoded content of the asset (max 10MB)",
+            },
+          },
+          required: ["script", "asset", "mimetype", "content"],
+        }),
+        "writeAssetHandler",
+      );
+
+      mcpRegistry.registerTool(
+        "delete_asset",
+        "Delete an asset from a script. Requires the user to own the script, have DeleteAssets capability, or be an administrator.",
+        JSON.stringify({
+          type: "object",
+          properties: {
+            script: {
+              type: "string",
+              description: "URI of the script that owns the asset",
+            },
+            asset: {
+              type: "string",
+              description:
+                "URI/path of the asset to delete (e.g., '/images/logo.png')",
+            },
+          },
+          required: ["script", "asset"],
+        }),
+        "deleteAssetHandler",
+      );
+
+      registeredMcpTools = 4;
+      console.log("MCP asset operation tools registered successfully");
+    } else {
+      console.warn("mcpRegistry unavailable; skipping MCP tool registration");
+    }
+
     console.log("Asset management script initialized successfully");
 
     return {
       success: true,
       message: "Asset management script initialized successfully",
       registeredEndpoints: 3,
+      registeredMcpTools: registeredMcpTools,
     };
   } catch (error) {
     console.log(
