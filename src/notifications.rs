@@ -288,6 +288,7 @@ impl NotificationListener {
         // Ensure route lookups and bytecode pick up the changed source
         crate::route_index::invalidate();
         crate::bytecode::invalidate(uri);
+        crate::module_loader::invalidate(uri);
 
         Ok(())
     }
@@ -324,6 +325,7 @@ impl NotificationListener {
         }
         crate::route_index::invalidate();
         crate::bytecode::invalidate(uri);
+        crate::module_loader::invalidate(uri);
 
         info!("✓ Script '{}' cleanup completed after remote deletion", uri);
 

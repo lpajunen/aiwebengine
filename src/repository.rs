@@ -328,6 +328,14 @@ pub fn get_db_pool() -> Option<std::sync::Arc<crate::database::Database>> {
 }
 
 /// Send PostgreSQL notification about script change
+/// Drop the caches whose contents depend on a script and its imported assets:
+/// the compiled bytecode (keyed by root URI) and the prepared program bundle.
+/// The next request rebuilds both from current source.
+fn invalidate_script_program_caches(script_uri: &str) {
+    crate::bytecode::invalidate(script_uri);
+    crate::module_loader::invalidate(script_uri);
+}
+
 async fn send_script_notification(
     pool: &PgPool,
     uri: &str,
@@ -5551,6 +5559,7 @@ impl Repository for PostgresRepository {
         }
         crate::route_index::invalidate();
         crate::bytecode::invalidate(uri);
+        crate::module_loader::invalidate(uri);
         Ok(())
     }
 
@@ -5577,6 +5586,7 @@ impl Repository for PostgresRepository {
             }
             crate::route_index::invalidate();
             crate::bytecode::invalidate(uri);
+            crate::module_loader::invalidate(uri);
         }
         Ok(result)
     }
@@ -5758,19 +5768,33 @@ impl Repository for PostgresRepository {
 
     async fn upsert_asset(&self, asset: Asset) -> AppResult<()> {
         let executor = crate::database::get_current_executor(&self.pool);
-        db_upsert_asset(executor, &asset).await
+        db_upsert_asset(executor, &asset).await?;
+
+        // An imported asset is part of the owning script's prepared program, so
+        // its change must invalidate the same caches a script edit does — both
+        // locally and (via the refresh notification) on other cluster nodes.
+        invalidate_script_program_caches(&asset.script_uri);
+        send_script_notification(&self.pool, &asset.script_uri, "upserted", &self.server_id)
+            .await?;
+        Ok(())
     }
 
     async fn delete_asset(&self, script_uri: &str, uri: &str) -> AppResult<bool> {
         let executor = crate::database::get_current_executor(&self.pool);
-        match executor {
+        let result = match executor {
             crate::database::TransactionExecutor::Transaction(tx) => {
-                db_delete_asset(&mut **tx, script_uri, uri).await
+                db_delete_asset(&mut **tx, script_uri, uri).await?
             }
             crate::database::TransactionExecutor::Pool(pool) => {
-                db_delete_asset(pool, script_uri, uri).await
+                db_delete_asset(pool, script_uri, uri).await?
             }
+        };
+
+        if result {
+            invalidate_script_program_caches(script_uri);
+            send_script_notification(&self.pool, script_uri, "upserted", &self.server_id).await?;
         }
+        Ok(result)
     }
 
     async fn insert_log(&self, script_uri: &str, message: &str, level: &str) -> AppResult<()> {

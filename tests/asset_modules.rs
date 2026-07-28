@@ -649,3 +649,69 @@ fn root_module_path_keeps_last_path_segment() {
         .expect("script uri should yield root module path");
     assert_eq!(path, "main.ts");
 }
+
+/// The prepared-program cache must not serve a stale bundle after an imported
+/// asset changes. Because the cache key hashes only the root script (unchanged
+/// here), correctness depends on `upsert_asset` invalidating the cache.
+#[tokio::test(flavor = "multi_thread")]
+async fn edited_imported_asset_invalidates_prepared_program_cache() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let script_uri = "test://asset-cache-invalidation.ts";
+    let asset_uri = "server/edit-helper.ts";
+
+    let script_content = r#"
+        import { buildMessage } from "./server/edit-helper.ts";
+
+        function editHandler(context) {
+            return { status: 200, body: buildMessage("x"), contentType: "text/plain" };
+        }
+    "#;
+    repository::upsert_script(script_uri, script_content).expect("store root script");
+
+    repository::upsert_asset(test_asset(
+        script_uri,
+        asset_uri,
+        "text/plain",
+        b"export function buildMessage(t) { return `v1-${t}`; }",
+    ))
+    .expect("store v1 asset");
+
+    let run = || {
+        let response = execute_script_for_request_secure(RequestExecutionParams {
+            script_uri: script_uri.to_string(),
+            handler_name: "editHandler".to_string(),
+            path: "/asset-edit".to_string(),
+            method: "GET".to_string(),
+            query_params: None,
+            form_data: None,
+            raw_body: None,
+            headers: HashMap::new(),
+            user_context: UserContext::authenticated("asset-edit-user".to_string()),
+            route_params: None,
+            auth_context: None,
+            uploaded_files: None,
+        })
+        .expect("request execution should succeed");
+        String::from_utf8(response.body).expect("utf-8 body")
+    };
+
+    // First request populates the prepared-program cache with v1.
+    assert_eq!(run(), "v1-x");
+
+    // Edit the imported asset. Root script is byte-identical, so only the
+    // asset-change invalidation can prevent a stale cache hit.
+    repository::upsert_asset(test_asset(
+        script_uri,
+        asset_uri,
+        "text/plain",
+        b"export function buildMessage(t) { return `v2-${t}`; }",
+    ))
+    .expect("store v2 asset");
+
+    assert_eq!(run(), "v2-x", "edited asset must take effect (cache invalidated)");
+
+    assert!(repository::delete_asset(script_uri, asset_uri));
+    let _ = repository::delete_script(script_uri);
+}

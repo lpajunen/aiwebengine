@@ -126,6 +126,20 @@ pub fn current_execution_limits() -> ExecutionLimits {
     CONFIGURED_LIMITS.get().cloned().unwrap_or_default()
 }
 
+/// Whether per-request phase profiling is enabled (env `AIWEBENGINE_PROFILE_REQUESTS=1`).
+///
+/// Read once and cached. When enabled, [`execute_script_for_request_secure`] emits a
+/// single structured log line per request breaking down where wall-clock time is spent.
+fn request_profiling_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        matches!(
+            std::env::var("AIWEBENGINE_PROFILE_REQUESTS").ok().as_deref(),
+            Some("1") | Some("true") | Some("yes")
+        )
+    })
+}
+
 /// Creates a QuickJS runtime with memory, stack, and wall-clock limits enforced.
 ///
 /// The interrupt handler is the only mechanism that can stop a runaway script
@@ -1036,9 +1050,18 @@ pub fn execute_script_for_request_secure(
 ) -> Result<JsHttpResponse, String> {
     let script_uri_owned = params.script_uri.clone();
     let auth_context = params.auth_context.clone(); // Clone for later use
+
+    // Per-request phase profiling (gated by AIWEBENGINE_PROFILE_REQUESTS). The
+    // Instant::now() calls are always taken (they cost nanoseconds); only the
+    // final log line is gated so profiling adds no measurable overhead when off.
+    let profile = request_profiling_enabled();
+    let phase = Instant::now();
+
     let rt = create_sandboxed_runtime(&current_execution_limits())?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
+    let t_runtime = phase.elapsed();
 
+    let phase = Instant::now();
     ctx.with(|ctx| -> Result<(), rquickjs::Error> {
         // Set up all secure global functions
         // For request handling, we don't need GraphQL registration but enable everything else
@@ -1060,14 +1083,21 @@ pub fn execute_script_for_request_secure(
         Ok(())
     })
     .map_err(|e| format!("install secure host fns: {}", e))?;
+    let t_globals = phase.elapsed();
 
+    let phase = Instant::now();
     let owner_script = repository::fetch_script(&params.script_uri)
         .ok_or_else(|| format!("no script for uri {}", params.script_uri))?;
+    let t_fetch = phase.elapsed();
 
-    // Transpile if needed (TypeScript/JSX/TSX)
+    // Transpile if needed (TypeScript/JSX/TSX) — cached by (uri, source hash).
+    let phase = Instant::now();
     let executable_code = transpile_if_needed(&params.script_uri, &owner_script)?;
+    let t_transpile = phase.elapsed();
 
-    // Evaluate the script and capture detailed error information if it fails
+    // Evaluate the script and capture detailed error information if it fails.
+    // Bytecode is cached, but the top-level program still executes each request.
+    let phase = Instant::now();
     ctx.with(|ctx| -> Result<(), String> {
         let result = crate::bytecode::eval_program(&ctx, &params.script_uri, &executable_code);
         if let Err(ref e) = result {
@@ -1076,7 +1106,9 @@ pub fn execute_script_for_request_secure(
         }
         Ok(())
     })?;
+    let t_eval = phase.elapsed();
 
+    let phase = Instant::now();
     let response_exec = ctx.with(|ctx| -> Result<JsHttpResponse, String> {
         let global = ctx.globals();
         let func: Function = global
@@ -1223,7 +1255,27 @@ pub fn execute_script_for_request_secure(
         }
     });
 
+    let t_handler = phase.elapsed();
+
     let response_result = response_exec.map_err(|e| e.to_string())?;
+
+    if profile {
+        let total =
+            t_runtime + t_globals + t_fetch + t_transpile + t_eval + t_handler;
+        info!(
+            target: "request_profile",
+            uri = %params.script_uri,
+            handler = %params.handler_name,
+            runtime_us = t_runtime.as_micros() as u64,
+            globals_us = t_globals.as_micros() as u64,
+            fetch_us = t_fetch.as_micros() as u64,
+            transpile_us = t_transpile.as_micros() as u64,
+            eval_us = t_eval.as_micros() as u64,
+            handler_us = t_handler.as_micros() as u64,
+            total_us = total.as_micros() as u64,
+            "request phase profile"
+        );
+    }
 
     // Ensure clean shutdown: drop Context before Runtime
     drop(ctx);

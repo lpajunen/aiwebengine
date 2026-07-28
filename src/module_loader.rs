@@ -1,10 +1,59 @@
 use crate::repository;
 use crate::transpiler;
 use regex::Regex;
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path};
+use std::sync::{Arc, Mutex, OnceLock};
+use tracing::debug;
 
 const MAX_MODULE_SPECIFIER_LENGTH: usize = 255;
+
+/// Cache of fully-prepared executable programs, keyed by root `script_uri`.
+///
+/// Building an asset-backed program is expensive: every import triggers a
+/// blocking DB fetch of the asset plus a transform/transpile pass, and the
+/// results are concatenated and transpiled again as one bundle. That whole
+/// pipeline ran on every request because the downstream bytecode cache is
+/// content-addressed and needs the produced source to compute its key.
+///
+/// This cache short-circuits the pipeline. It is validated by a hash of the
+/// root module content (so edits to the root script self-heal even without an
+/// explicit invalidation), and invalidated by [`invalidate`] on any change to
+/// the script *or its assets* — see `repository::upsert_asset`/`delete_asset`
+/// and the notification handlers, which are the only inputs the content hash
+/// cannot see.
+struct CachedPrepared {
+    root_hash: String,
+    code: Arc<str>,
+}
+
+static PREPARED_CACHE: OnceLock<Mutex<HashMap<String, CachedPrepared>>> = OnceLock::new();
+
+fn prepared_cache() -> &'static Mutex<HashMap<String, CachedPrepared>> {
+    PREPARED_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn hash_root(content: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(content.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+/// Drop any cached prepared program for `script_uri`. Call whenever the script
+/// or one of its imported assets changes.
+pub fn invalidate(script_uri: &str) {
+    if let Ok(mut guard) = prepared_cache().lock() {
+        guard.remove(script_uri);
+    }
+}
+
+/// Clear the entire prepared-program cache.
+pub fn clear() {
+    if let Ok(mut guard) = prepared_cache().lock() {
+        guard.clear();
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModuleLoaderError {
@@ -38,6 +87,41 @@ pub struct ModuleSource {
 }
 
 pub fn prepare_executable_program(
+    script_uri: &str,
+    root_content: &str,
+) -> Result<PreparedExecutable, ModuleLoaderError> {
+    let root_hash = hash_root(root_content);
+
+    // Fast path: return the cached prepared program when the root content is
+    // unchanged. Asset edits (which the hash cannot see) drop the entry via
+    // `invalidate`, so a present entry with a matching hash is safe to serve.
+    if let Ok(guard) = prepared_cache().lock()
+        && let Some(entry) = guard.get(script_uri)
+        && entry.root_hash == root_hash
+    {
+        debug!(uri = script_uri, "Prepared-program cache hit");
+        return Ok(PreparedExecutable {
+            code: entry.code.to_string(),
+        });
+    }
+
+    debug!(uri = script_uri, "Prepared-program cache miss; bundling");
+    let prepared = build_executable_program(script_uri, root_content)?;
+
+    if let Ok(mut guard) = prepared_cache().lock() {
+        guard.insert(
+            script_uri.to_string(),
+            CachedPrepared {
+                root_hash,
+                code: Arc::from(prepared.code.as_str()),
+            },
+        );
+    }
+
+    Ok(prepared)
+}
+
+fn build_executable_program(
     script_uri: &str,
     root_content: &str,
 ) -> Result<PreparedExecutable, ModuleLoaderError> {
