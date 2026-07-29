@@ -275,6 +275,12 @@ function init(context) {
       "/auth/unauthorized",
       "serveInsufficientPermissions",
       "GET",
+      {
+        summary: "Insufficient permissions page",
+        description:
+          "Displayed when an authenticated user lacks the permissions required for the page they attempted to access.",
+        tags: ["Authentication"],
+      },
     );
 
     console.log("Insufficient permissions script initialized successfully");
