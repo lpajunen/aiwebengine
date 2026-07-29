@@ -1094,10 +1094,10 @@ pub fn execute_script_for_request_secure(
         setup_secure_global_functions(
             &ctx,
             &script_uri_owned,
-            params.user_context,
+            params.user_context.clone(),
             &security_config,
             None,
-            params.auth_context, // Pass auth context for request handling
+            params.auth_context.clone(), // Pass auth context for request handling
         )?;
 
         Ok(())
@@ -1129,151 +1129,8 @@ pub fn execute_script_for_request_secure(
     let t_eval = phase.elapsed();
 
     let phase = Instant::now();
-    let response_exec = ctx.with(|ctx| -> Result<JsHttpResponse, String> {
-        let global = ctx.globals();
-        let func: Function = global
-            .get::<_, Function>(&params.handler_name)
-            .map_err(|e| format!("no handler {}: {}", params.handler_name, e))?;
-
-        let request_context = JsRequestContext {
-            path: Some(params.path.clone()),
-            method: Some(params.method.clone()),
-            headers: params.headers.clone(),
-            query_params: params.query_params.clone().unwrap_or_default(),
-            form_data: params.form_data.clone().unwrap_or_default(),
-            body: params.raw_body.clone(),
-            route_params: params.route_params.clone().unwrap_or_default(),
-            uploaded_files: params.uploaded_files.clone().unwrap_or_default(),
-        };
-
-        let mut context_builder = JsHandlerContextBuilder::new(HandlerInvocationKind::HttpRoute)
-            .with_script_metadata(&params.script_uri, &params.handler_name)
-            .with_request(request_context);
-
-        if let Some(ref auth_ctx) = auth_context {
-            context_builder = context_builder.with_auth_context(auth_ctx.clone());
-        }
-
-        let handler_context = context_builder
-            .build(&ctx)
-            .map_err(|e| format!("build context: {}", e))?;
-
-        // Set context as a global variable so personalStorage and other APIs can access it
-        global.set("context", handler_context.clone()).map_err(|e| format!("set context global: {}", e))?;
-
-        // Call the handler function with automatic transaction handling
-        let result: Value = func.call::<_, Value>((handler_context,)).map_err(|e| {
-            let details = extract_error_details(&ctx, &e);
-            // Auto-rollback on exception if transaction is active
-            if crate::database::get_current_transaction_active() {
-                let _ = crate::database::Database::rollback_transaction();
-            }
-            format!("call handler: {}", details)
-        })?;
-
-        // Auto-commit on success if transaction is active
-        if crate::database::get_current_transaction_active() {
-            crate::database::Database::commit_transaction()
-                .map_err(|e| format!("transaction commit failed: {}", e))?;
-        }
-
-        // Parse the response
-        if let Some(response_obj) = result.as_object() {
-            let status: i32 = response_obj
-                .get("status")
-                .map_err(|e| format!("missing status: {}", e))?;
-
-            // Try to get bodyBase64 first (for binary data), otherwise fall back to body (for text)
-            let (body, used_body_base64): (Vec<u8>, bool) = if let Ok(body_base64) = response_obj.get::<_, String>("bodyBase64")
-            {
-                // Decode base64 to bytes
-                let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &body_base64)
-                    .map_err(|e| format!("failed to decode bodyBase64: {}", e))?;
-                (decoded, true)
-            } else {
-                // Fall back to string body - handle both strings and SafeHTML objects
-                let body_value: rquickjs::Value = response_obj
-                    .get("body")
-                    .map_err(|e| format!("missing body or bodyBase64: {}", e))?;
-
-                let body_string: String = if body_value.is_string() {
-                    // Direct string value
-                    body_value.as_string()
-                        .and_then(|s| s.to_string().ok())
-                        .ok_or_else(|| "Failed to convert body to string".to_string())?
-                } else if let Some(obj) = body_value.as_object() {
-                    // Check if it's a SafeHTML object with __html property
-                    if let Ok(html) = obj.get::<_, String>("__html") {
-                        html
-                    } else {
-                        // Try calling toString() on the object
-                        if let Ok(to_string_fn) = obj.get::<_, rquickjs::Function>("toString") {
-                            to_string_fn.call::<_, String>(()).map_err(|e| format!("Failed to call toString: {}", e))?
-                        } else {
-                            return Err("Body must be a string or have a toString() method".to_string());
-                        }
-                    }
-                } else {
-                    return Err("Body must be a string or object with __html property".to_string());
-                };
-
-                (body_string.into_bytes(), false)
-            };
-
-            let content_type: Option<String> = response_obj.get("contentType").ok();
-
-            // Set default content type if not specified
-            let content_type = content_type.or_else(|| {
-                if used_body_base64 {
-                    Some("application/octet-stream".to_string())
-                } else {
-                    Some("text/plain; charset=UTF-8".to_string())
-                }
-            });
-
-            // Extract headers if present
-            let mut headers = std::collections::HashMap::new();
-            if let Ok(headers_obj) = response_obj.get::<_, rquickjs::Object>("headers") {
-                // Iterate over headers object properties
-                for (key, value) in headers_obj.props::<String, String>().flatten() {
-                    headers.insert(key, value);
-                }
-            }
-
-            debug!(
-                "Secure request handler {} returned status: {}, body length: {}, content_type: {:?}, headers: {}",
-                params.handler_name,
-                status,
-                body.len(),
-                content_type,
-                headers.len()
-            );
-
-            let mut response = JsHttpResponse::new(status as u16, body);
-            if let Some(ct) = content_type {
-                response = response.with_content_type(ct);
-            }
-            for (name, value) in headers {
-                response = response.with_header(name, value);
-            }
-
-            Ok(response)
-        } else {
-            // If not an object, treat as string response
-            let body = if result.is_string() {
-                result
-                    .as_string()
-                    .and_then(|s| s.to_string().ok())
-                    .unwrap_or_else(|| "<conversion error>".to_string())
-                    .into_bytes()
-            } else {
-                "<no response>".to_string().into_bytes()
-            };
-            let mut response = JsHttpResponse::new(200, body);
-            response = response.with_content_type("text/plain; charset=UTF-8".to_string());
-            Ok(response)
-        }
-    });
+    let response_exec =
+        ctx.with(|ctx| invoke_handler_and_build_response(&ctx, &params, &auth_context));
 
     let t_handler = phase.elapsed();
 
@@ -1309,6 +1166,157 @@ pub fn execute_script_for_request_secure(
     // Ensure clean shutdown: drop Context before Runtime
     drop(ctx);
     Ok(response_result)
+}
+
+/// Builds the per-request handler context, invokes the named handler, and maps
+/// its return value into an [`JsHttpResponse`]. Runs inside an active `ctx.with`.
+///
+/// Shared by the standard request path and the pooling prototype so both agree
+/// on transaction handling and response shaping.
+fn invoke_handler_and_build_response(
+    ctx: &rquickjs::Ctx<'_>,
+    params: &RequestExecutionParams,
+    auth_context: &Option<crate::auth::JsAuthContext>,
+) -> Result<JsHttpResponse, String> {
+    let global = ctx.globals();
+    let func: Function = global
+        .get::<_, Function>(&params.handler_name)
+        .map_err(|e| format!("no handler {}: {}", params.handler_name, e))?;
+
+    let request_context = JsRequestContext {
+        path: Some(params.path.clone()),
+        method: Some(params.method.clone()),
+        headers: params.headers.clone(),
+        query_params: params.query_params.clone().unwrap_or_default(),
+        form_data: params.form_data.clone().unwrap_or_default(),
+        body: params.raw_body.clone(),
+        route_params: params.route_params.clone().unwrap_or_default(),
+        uploaded_files: params.uploaded_files.clone().unwrap_or_default(),
+    };
+
+    let mut context_builder = JsHandlerContextBuilder::new(HandlerInvocationKind::HttpRoute)
+        .with_script_metadata(&params.script_uri, &params.handler_name)
+        .with_request(request_context);
+
+    if let Some(auth_ctx) = auth_context {
+        context_builder = context_builder.with_auth_context(auth_ctx.clone());
+    }
+
+    let handler_context = context_builder
+        .build(ctx)
+        .map_err(|e| format!("build context: {}", e))?;
+
+    // Set context as a global variable so personalStorage and other APIs can access it
+    global
+        .set("context", handler_context.clone())
+        .map_err(|e| format!("set context global: {}", e))?;
+
+    // Call the handler function with automatic transaction handling
+    let result: Value = func.call::<_, Value>((handler_context,)).map_err(|e| {
+        let details = extract_error_details(ctx, &e);
+        // Auto-rollback on exception if transaction is active
+        if crate::database::get_current_transaction_active() {
+            let _ = crate::database::Database::rollback_transaction();
+        }
+        format!("call handler: {}", details)
+    })?;
+
+    // Auto-commit on success if transaction is active
+    if crate::database::get_current_transaction_active() {
+        crate::database::Database::commit_transaction()
+            .map_err(|e| format!("transaction commit failed: {}", e))?;
+    }
+
+    // Parse the response
+    if let Some(response_obj) = result.as_object() {
+        let status: i32 = response_obj
+            .get("status")
+            .map_err(|e| format!("missing status: {}", e))?;
+
+        // Try to get bodyBase64 first (for binary data), otherwise fall back to body (for text)
+        let (body, used_body_base64): (Vec<u8>, bool) = if let Ok(body_base64) =
+            response_obj.get::<_, String>("bodyBase64")
+        {
+            // Decode base64 to bytes
+            let decoded =
+                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &body_base64)
+                    .map_err(|e| format!("failed to decode bodyBase64: {}", e))?;
+            (decoded, true)
+        } else {
+            // Fall back to string body - handle both strings and SafeHTML objects
+            let body_value: rquickjs::Value = response_obj
+                .get("body")
+                .map_err(|e| format!("missing body or bodyBase64: {}", e))?;
+
+            let body_string: String = if body_value.is_string() {
+                // Direct string value
+                body_value
+                    .as_string()
+                    .and_then(|s| s.to_string().ok())
+                    .ok_or_else(|| "Failed to convert body to string".to_string())?
+            } else if let Some(obj) = body_value.as_object() {
+                // Check if it's a SafeHTML object with __html property
+                if let Ok(html) = obj.get::<_, String>("__html") {
+                    html
+                } else if let Ok(to_string_fn) = obj.get::<_, rquickjs::Function>("toString") {
+                    // Try calling toString() on the object
+                    to_string_fn
+                        .call::<_, String>(())
+                        .map_err(|e| format!("Failed to call toString: {}", e))?
+                } else {
+                    return Err("Body must be a string or have a toString() method".to_string());
+                }
+            } else {
+                return Err("Body must be a string or object with __html property".to_string());
+            };
+
+            (body_string.into_bytes(), false)
+        };
+
+        let content_type: Option<String> = response_obj.get("contentType").ok();
+
+        // Set default content type if not specified
+        let content_type = content_type.or_else(|| {
+            if used_body_base64 {
+                Some("application/octet-stream".to_string())
+            } else {
+                Some("text/plain; charset=UTF-8".to_string())
+            }
+        });
+
+        // Extract headers if present
+        let mut headers = std::collections::HashMap::new();
+        if let Ok(headers_obj) = response_obj.get::<_, rquickjs::Object>("headers") {
+            // Iterate over headers object properties
+            for (key, value) in headers_obj.props::<String, String>().flatten() {
+                headers.insert(key, value);
+            }
+        }
+
+        let mut response = JsHttpResponse::new(status as u16, body);
+        if let Some(ct) = content_type {
+            response = response.with_content_type(ct);
+        }
+        for (name, value) in headers {
+            response = response.with_header(name, value);
+        }
+
+        Ok(response)
+    } else {
+        // If not an object, treat as string response
+        let body = if result.is_string() {
+            result
+                .as_string()
+                .and_then(|s| s.to_string().ok())
+                .unwrap_or_else(|| "<conversion error>".to_string())
+                .into_bytes()
+        } else {
+            "<no response>".to_string().into_bytes()
+        };
+        let mut response = JsHttpResponse::new(200, body);
+        response = response.with_content_type("text/plain; charset=UTF-8".to_string());
+        Ok(response)
+    }
 }
 
 /// Executes a JavaScript script for an HTTP request (LEGACY - has security vulnerabilities)
