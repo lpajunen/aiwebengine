@@ -3,7 +3,12 @@
     "allow": [
       "Bash(cargo clippy *)",
       "Bash(make typecheck)",
-      "Bash(make lint)"
+      "Bash(make lint)",
+      "mcp__softagen__virtualWorldGetState",
+      "mcp__softagen__read_asset",
+      "mcp__softagen__list_files",
+      "mcp__softagen__list_assets",
+      "mcp__softagen__read_logs"
     ]
   }
 }
