@@ -8,7 +8,10 @@
 //! cargo nextest run --test prepare_cache_bench --no-capture -- --ignored
 //! ```
 
-use aiwebengine::js_engine::{RequestExecutionParams, execute_script_for_request_secure};
+use aiwebengine::js_engine::{
+    RequestExecutionParams, execute_script_for_request_secure,
+    execute_script_for_request_secure_pooled,
+};
 use aiwebengine::module_loader;
 use aiwebengine::repository;
 use aiwebengine::security::UserContext;
@@ -89,8 +92,8 @@ fn time_prepare(uri: &str, content: &str, iters: usize, clear_each: bool) -> u12
     median(samples)
 }
 
-fn one_request(uri: &str) {
-    let _ = execute_script_for_request_secure(RequestExecutionParams {
+fn request_params(uri: &str) -> RequestExecutionParams {
+    RequestExecutionParams {
         script_uri: uri.to_string(),
         handler_name: "benchHandler".to_string(),
         path: "/bench".to_string(),
@@ -103,8 +106,11 @@ fn one_request(uri: &str) {
         route_params: None,
         auth_context: None,
         uploaded_files: None,
-    })
-    .expect("request execution");
+    }
+}
+
+fn one_request(uri: &str) {
+    execute_script_for_request_secure(request_params(uri)).expect("request execution");
 }
 
 fn time_request(uri: &str, iters: usize, clear_prepare_each: bool) -> u128 {
@@ -207,5 +213,74 @@ async fn bench_prepared_program_cache() {
         fetch_db as f64 / fetch_cache.max(1) as f64
     );
     let _ = repository::delete_script(uri);
+    println!();
+}
+
+/// Prototype measurement for context pooling (Lever 2): the per-thread warmed
+/// context reuses the 212 host-function installs instead of paying ~750µs of
+/// install on every request. Uniform (same user, same script) workload — the
+/// only case the prototype is sound for; see the SAFETY caveat in js_engine.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "manual benchmark; needs Postgres"]
+async fn bench_context_pooling() {
+    setup_env().await;
+
+    println!("\n=== context pooling prototype (median µs, n=500) ===");
+    println!(
+        "{:<10} {:>14} {:>14} {:>10} {:>10}",
+        "script", "fresh", "pooled", "saved", "speedup"
+    );
+
+    // "tiny" isolates the fixed overhead pooling removes; "heavy" carries a
+    // realistic top-level so absolute latencies reflect a real handler (the
+    // saving is script-independent, the ratio is not).
+    let tiny = root_script(0);
+    // `var`/`function` only: re-evaluating into a *reused* global scope
+    // redeclares top-level `const`/`let`/`class` ("redeclaration of X"), which
+    // is the reset blocker the prototype exposed. See the SAFETY caveat.
+    let mut heavy = String::new();
+    for i in 0..40 {
+        heavy.push_str(&format!(
+            "var TABLE_{i} = {{ id: {i}, name: \"row-{i}\", tags: [\"a\",\"b\",\"c\",\"{i}\"] }};\n"
+        ));
+        heavy.push_str(&format!(
+            "function util{i}(x) {{ return (x + {i}) * 3 - {i}; }}\n"
+        ));
+    }
+    heavy.push_str(&root_script(0));
+
+    for (label, src) in [("tiny", &tiny), ("heavy", &heavy)] {
+        let uri = format!("test://bench-pooling-{label}");
+        repository::upsert_script(&uri, src).expect("store script");
+        let _ = repository::get_script_metadata(&uri); // populate source cache (#2)
+
+        for _ in 0..50 {
+            one_request(&uri);
+            let _ = execute_script_for_request_secure_pooled(request_params(&uri)).expect("pooled");
+        }
+
+        let iters = 500;
+        let (mut normal, mut pooled) = (Vec::with_capacity(iters), Vec::with_capacity(iters));
+        for _ in 0..iters {
+            let t = Instant::now();
+            one_request(&uri);
+            normal.push(t.elapsed().as_micros());
+
+            let t = Instant::now();
+            execute_script_for_request_secure_pooled(request_params(&uri)).expect("pooled");
+            pooled.push(t.elapsed().as_micros());
+        }
+
+        let (n, p) = (median(normal), median(pooled));
+        println!(
+            "{:<10} {:>14} {:>14} {:>9}µs {:>9.1}x",
+            label,
+            n,
+            p,
+            n.saturating_sub(p),
+            n as f64 / p.max(1) as f64
+        );
+        let _ = repository::delete_script(&uri);
+    }
     println!();
 }
