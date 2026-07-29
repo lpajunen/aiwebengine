@@ -3570,38 +3570,44 @@ impl SecureGlobalContext {
                             }
                         }
 
-                        if let Ok(stream_paths) =
-                            crate::stream_registry::GLOBAL_STREAM_REGISTRY.list_stream_paths()
+                        for (path, script_uri, metadata) in
+                            crate::stream_registry::GLOBAL_STREAM_REGISTRY.get_all_registrations()
                         {
-                            for path in stream_paths {
-                                if let Some((script_uri, customization_function)) =
-                                    crate::stream_registry::GLOBAL_STREAM_REGISTRY
-                                        .get_stream_info(&path)
-                                {
-                                    all_routes.push(serde_json::json!({
-                                        "path": path,
-                                        "method": "STREAM",
-                                        "handler": customization_function,
-                                        "script_uri": script_uri,
-                                        "summary": serde_json::Value::Null,
-                                        "description": serde_json::Value::Null,
-                                        "tags": Vec::<String>::new(),
-                                    }));
-                                }
-                            }
+                            let handler = crate::stream_registry::GLOBAL_STREAM_REGISTRY
+                                .get_stream_info(&path)
+                                .and_then(|(_, customization_function)| customization_function);
+                            let tags = if metadata.tags.is_empty() {
+                                vec!["Streams".to_string()]
+                            } else {
+                                metadata.tags
+                            };
+                            all_routes.push(serde_json::json!({
+                                "path": path,
+                                "method": "STREAM",
+                                "handler": handler,
+                                "script_uri": script_uri,
+                                "summary": metadata.summary,
+                                "description": metadata.description,
+                                "tags": tags,
+                            }));
                         }
 
                         for (path, registration) in
                             crate::asset_registry::get_global_registry().get_all_registrations()
                         {
+                            let tags = if registration.metadata.tags.is_empty() {
+                                vec!["Assets".to_string()]
+                            } else {
+                                registration.metadata.tags.clone()
+                            };
                             all_routes.push(serde_json::json!({
                                 "path": path,
                                 "method": "ASSET",
                                 "handler": registration.asset_name,
                                 "script_uri": registration.script_uri,
-                                "summary": serde_json::Value::Null,
-                                "description": serde_json::Value::Null,
-                                "tags": vec!["Assets"],
+                                "summary": registration.metadata.summary,
+                                "description": registration.metadata.description,
+                                "tags": tags,
                             }));
                         }
 
@@ -6334,5 +6340,39 @@ impl SecureGlobalContext {
         )?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod metadata_tests {
+    use super::extract_route_metadata;
+    use rquickjs::{Context, Runtime};
+
+    #[test]
+    fn extract_route_metadata_reads_tags_summary_description() {
+        let rt = Runtime::new().unwrap();
+        let ctx = Context::full(&rt).unwrap();
+        ctx.with(|ctx| {
+            // Build a metadata object like `{ tags: ["Foo"], summary: "S" }`.
+            let obj = rquickjs::Object::new(ctx.clone()).unwrap();
+            let arr = rquickjs::Array::new(ctx.clone()).unwrap();
+            arr.set(0, "Foo").unwrap();
+            arr.set(1, "Bar").unwrap();
+            obj.set("tags", arr).unwrap();
+            obj.set("summary", "S").unwrap();
+
+            let (tags, summary, description) = extract_route_metadata(Some(&obj));
+            assert_eq!(tags, vec!["Foo".to_string(), "Bar".to_string()]);
+            assert_eq!(summary, Some("S".to_string()));
+            assert_eq!(description, None);
+        });
+    }
+
+    #[test]
+    fn extract_route_metadata_handles_missing_object() {
+        let (tags, summary, description) = extract_route_metadata(None);
+        assert!(tags.is_empty());
+        assert_eq!(summary, None);
+        assert_eq!(description, None);
     }
 }

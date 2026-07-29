@@ -513,6 +513,55 @@ async fn imported_asset_module_executes_in_init_path() {
     assert!(repository::delete_asset(script_uri, asset_uri));
 }
 
+/// End-to-end: an asset route registered from JS with a `metadata` object must
+/// carry the given tags/summary into the asset registry (which the OpenAPI
+/// generator then reads).
+#[tokio::test(flavor = "multi_thread")]
+async fn register_asset_route_records_metadata_tags() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let script_uri = "test://asset-metadata-tags";
+    let asset_uri = "repro.css";
+    ensure_script(script_uri);
+    repository::upsert_asset(test_asset(script_uri, asset_uri, "text/css", b"body{}"))
+        .expect("asset should be stored");
+
+    // Ensure a clean registry so we only observe this test's registration.
+    aiwebengine::asset_registry::get_global_registry().clear();
+
+    let script_content = r#"
+        function init(context) {
+          routeRegistry.registerAssetRoute("/repro-asset.css", "repro.css", {
+            tags: ["ReproGroup"],
+            summary: "Repro asset",
+          });
+        }
+    "#;
+
+    call_init_if_exists(
+        script_uri,
+        script_content,
+        InitContext::new(script_uri.to_string(), true),
+    )
+    .expect("init execution should succeed");
+
+    let registrations = aiwebengine::asset_registry::get_global_registry().get_all_registrations();
+    let (_, reg) = registrations
+        .iter()
+        .find(|(path, _)| path == "/repro-asset.css")
+        .expect("asset route should be registered");
+
+    assert_eq!(
+        reg.metadata.tags,
+        vec!["ReproGroup".to_string()],
+        "asset route metadata should carry the tags passed from JS"
+    );
+    assert_eq!(reg.metadata.summary.as_deref(), Some("Repro asset"));
+
+    assert!(repository::delete_asset(script_uri, asset_uri));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn imported_asset_module_executes_in_scheduled_path() {
     let _guard = test_mutex().lock().await;
