@@ -63,7 +63,7 @@ async fn test_js_registered_route_returns_expected() {
         .build()
         .expect("Failed to create HTTP client");
 
-    // First verify /health works (confirms core.js is loaded)
+    // First verify /health works (confirms the engine is up and the DB is reachable)
     let health_res = client
         .get(format!("http://127.0.0.1:{}/health", port))
         .send()

@@ -1179,19 +1179,39 @@ pub async fn start_server_with_config(
 }
 
 /// Health check endpoint - returns basic instance status
+///
+/// Verifies the database dependency with a lightweight `SELECT 1` round-trip so
+/// that load balancers and container health checks are pulled from rotation when
+/// Postgres is unreachable. Returns 503 when the database check fails.
 #[utoipa::path(
     get,
     path = "/health",
     tags = ["Health"],
     responses(
         (status = 200, description = "Service is healthy", body = crate::openapi_schemas::HealthResponse),
+        (status = 503, description = "Service is unhealthy (database unreachable)", body = crate::openapi_schemas::HealthResponse),
     )
 )]
 async fn health_handler() -> impl IntoResponse {
     let server_id = notifications::get_server_id().unwrap_or_else(|| "unknown".to_string());
 
-    axum::response::Json(serde_json::json!({
-        "status": "healthy",
+    // Verify the database dependency with a real query, not just process liveness.
+    let (healthy, database) = match database::get_global_database() {
+        Some(db) => match db.health_check().await {
+            Ok(()) => (true, "ok".to_string()),
+            Err(e) => (false, format!("error: {}", e)),
+        },
+        None => (false, "not configured".to_string()),
+    };
+
+    let status_code = if healthy {
+        axum::http::StatusCode::OK
+    } else {
+        axum::http::StatusCode::SERVICE_UNAVAILABLE
+    };
+
+    let body = axum::response::Json(serde_json::json!({
+        "status": if healthy { "healthy" } else { "unhealthy" },
         "instance_id": server_id,
         "timestamp": chrono::Utc::now().to_rfc3339(),
         "version": {
@@ -1200,38 +1220,55 @@ async fn health_handler() -> impl IntoResponse {
             "git_commit_timestamp": option_env!("VERGEN_GIT_COMMIT_TIMESTAMP").unwrap_or(""),
             "build_timestamp": option_env!("VERGEN_BUILD_TIMESTAMP").unwrap_or("")
         },
-        "checks": {}
-    }))
+        "database": database
+    }));
+
+    (status_code, body)
 }
 
 /// Cluster health endpoint - returns detailed cluster status
+///
+/// Like `/health`, this verifies the database with a real `SELECT 1` ping and
+/// returns 503 when it fails; on top of that it reports pool metrics, the
+/// notification-listener state, and per-script scheduler job counts for
+/// operator diagnostics.
 #[utoipa::path(
     get,
     path = "/health/cluster",
     tags = ["Health"],
     responses(
         (status = 200, description = "Detailed cluster health information", body = crate::openapi_schemas::ClusterHealthResponse),
+        (status = 503, description = "Cluster is unhealthy (database unreachable)", body = crate::openapi_schemas::ClusterHealthResponse),
     )
 )]
 async fn health_cluster_handler() -> impl IntoResponse {
     let server_id = notifications::get_server_id().unwrap_or_else(|| "unknown".to_string());
 
-    // Get database pool stats if available
-    let pool_stats = if let Some(db) = database::get_global_database() {
+    // Verify the database with a real query and report pool stats alongside it.
+    let (db_healthy, pool_stats) = if let Some(db) = database::get_global_database() {
+        let connected = db.health_check().await.is_ok();
         let pool = db.pool();
         let size = pool.size() as usize;
         let idle = pool.num_idle();
-        serde_json::json!({
-            "available": true,
-            "active_connections": size.saturating_sub(idle),
-            "idle_connections": idle,
-            "max_connections": pool.options().get_max_connections(),
-        })
+        (
+            connected,
+            serde_json::json!({
+                "available": true,
+                "connected": connected,
+                "active_connections": size.saturating_sub(idle),
+                "idle_connections": idle,
+                "max_connections": pool.options().get_max_connections(),
+            }),
+        )
     } else {
-        serde_json::json!({
-            "available": false,
-            "message": "Database not initialized (memory mode)"
-        })
+        (
+            false,
+            serde_json::json!({
+                "available": false,
+                "connected": false,
+                "message": "Database not initialized (memory mode)"
+            }),
+        )
     };
 
     // Get notification listener status
@@ -1252,8 +1289,14 @@ async fn health_cluster_handler() -> impl IntoResponse {
     let job_counts = scheduler.get_job_counts();
     let total_jobs: usize = job_counts.values().sum();
 
-    axum::response::Json(serde_json::json!({
-        "status": "healthy",
+    let status_code = if db_healthy {
+        axum::http::StatusCode::OK
+    } else {
+        axum::http::StatusCode::SERVICE_UNAVAILABLE
+    };
+
+    let body = axum::response::Json(serde_json::json!({
+        "status": if db_healthy { "healthy" } else { "unhealthy" },
         "instance_id": server_id,
         "timestamp": chrono::Utc::now().to_rfc3339(),
         "version": {
@@ -1268,7 +1311,9 @@ async fn health_cluster_handler() -> impl IntoResponse {
             "total_jobs": total_jobs,
             "jobs_by_script": job_counts,
         }
-    }))
+    }));
+
+    (status_code, body)
 }
 
 /// Initialize authentication manager if configured and enabled.

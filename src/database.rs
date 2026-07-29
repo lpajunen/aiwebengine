@@ -247,45 +247,6 @@ impl Database {
         Ok(())
     }
 
-    /// Synchronous health check wrapper for use from JavaScript
-    /// Returns a JSON string with the health status
-    pub fn check_health_sync() -> String {
-        if let Some(db) = get_global_database() {
-            // Create a new Tokio runtime for this synchronous call
-            let rt = match tokio::runtime::Runtime::new() {
-                Ok(rt) => rt,
-                Err(e) => {
-                    return serde_json::json!({
-                        "healthy": false,
-                        "error": format!("Failed to create runtime: {}", e)
-                    })
-                    .to_string();
-                }
-            };
-
-            match rt.block_on(db.health_check()) {
-                Ok(()) => serde_json::json!({
-                    "healthy": true,
-                    "database": "ok"
-                })
-                .to_string(),
-                Err(e) => serde_json::json!({
-                    "healthy": false,
-                    "error": format!("Database health check failed: {}", e)
-                })
-                .to_string(),
-            }
-        } else {
-            // Database not initialized - this is an error since PostgreSQL is required
-            serde_json::json!({
-                "healthy": false,
-                "database": "not configured",
-                "error": "Database connection required but not initialized"
-            })
-            .to_string()
-        }
-    }
-
     /// Gracefully close the database connection pool
     pub async fn close(self) {
         info!("Closing database connection pool...");

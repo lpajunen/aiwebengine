@@ -1360,15 +1360,6 @@ interface Database {
    * database.releaseSavepoint(sp.savepoint);
    */
   releaseSavepoint(name: string): string;
-
-  /**
-   * Check database health status
-   * @returns Health status message
-   * @example
-   * const health = database.checkDatabaseHealth();
-   * console.log(health);
-   */
-  checkDatabaseHealth(): string;
 }
 
 // ============================================================================

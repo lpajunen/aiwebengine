@@ -61,7 +61,8 @@ async fn test_health_endpoint() {
     // Verify the health response structure
     assert_eq!(health_json["status"], "healthy");
     assert!(health_json["timestamp"].is_string());
-    assert!(health_json["checks"].is_object());
+    // The health endpoint performs a real database check and reports its status.
+    assert_eq!(health_json["database"], "ok");
 
     // Cleanup
     context.cleanup().await.expect("Failed to cleanup");

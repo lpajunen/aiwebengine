@@ -17,43 +17,6 @@ function logServerStillRunning() {
 }
 
 // Health check endpoint
-function health_check(context) {
-  const req = getRequest(context);
-  // Call Rust function to check database health
-  var databaseHealth;
-  try {
-    var dbHealthJson = database.checkDatabaseHealth();
-    databaseHealth = JSON.parse(dbHealthJson);
-  } catch (error) {
-    databaseHealth = {
-      healthy: false,
-      error: "Failed to check database health: " + error.message,
-    };
-  }
-
-  // Determine overall health status
-  var isHealthy = databaseHealth.healthy;
-  var status = isHealthy ? "healthy" : "unhealthy";
-
-  return {
-    status: 200,
-    body: JSON.stringify({
-      status: status,
-      timestamp: new Date().toISOString(),
-      checks: {
-        javascript: "ok",
-        logging: "ok",
-        json: "ok",
-        database: databaseHealth.healthy ? "ok" : "error",
-      },
-      details: {
-        database: databaseHealth,
-      },
-    }),
-    contentType: "application/json",
-  };
-}
-
 // Installation confirmation page
 function installed_page(context) {
   return {
@@ -1200,12 +1163,8 @@ function init(context) {
     routeRegistry.registerAssetRoute("/engine.css", "engine.css");
 
     // Register HTTP endpoints with OpenAPI metadata
-    routeRegistry.registerRoute("/health", "health_check", "GET", {
-      summary: "Health check",
-      description:
-        "Returns system health status including database connectivity",
-      tags: ["Monitoring"],
-    });
+    // Note: /health is served by the Rust engine (see health_handler in lib.rs),
+    // which performs the database check directly; no script route is registered.
     routeRegistry.registerRoute("/engine/installed", "installed_page", "GET", {
       summary: "Installation confirmation",
       description: "Shows a confirmation page for successful installation",
