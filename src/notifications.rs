@@ -251,6 +251,14 @@ impl NotificationListener {
     async fn handle_script_upserted(uri: &str) -> AppResult<()> {
         info!("Handling script upserted for: {}", uri);
 
+        // Evict the stale in-memory metadata (which carries the script's source
+        // content) before reinitializing, so both init() below and later
+        // `fetch_script` reads pick up the new source from the database rather
+        // than the pre-upsert cached copy.
+        if let Ok(mut guard) = repository::safe_lock_scripts() {
+            guard.remove(uri);
+        }
+
         // Initialize the script (this will call init() and register routes/GraphQL)
         let initializer = script_init::ScriptInitializer::new(10_000); // 10 second timeout
         match initializer.initialize_script(uri, false).await {

@@ -134,7 +134,9 @@ fn request_profiling_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
         matches!(
-            std::env::var("AIWEBENGINE_PROFILE_REQUESTS").ok().as_deref(),
+            std::env::var("AIWEBENGINE_PROFILE_REQUESTS")
+                .ok()
+                .as_deref(),
             Some("1") | Some("true") | Some("yes")
         )
     })
@@ -1260,8 +1262,7 @@ pub fn execute_script_for_request_secure(
     let response_result = response_exec.map_err(|e| e.to_string())?;
 
     if profile {
-        let total =
-            t_runtime + t_globals + t_fetch + t_transpile + t_eval + t_handler;
+        let total = t_runtime + t_globals + t_fetch + t_transpile + t_eval + t_handler;
         info!(
             target: "request_profile",
             uri = %params.script_uri,

@@ -4040,8 +4040,27 @@ pub fn fetch_scripts() -> HashMap<String, String> {
     }
 }
 
-/// Fetch a single script by URI with proper error handling
+/// Fetch a single script by URI with proper error handling.
+///
+/// Fast path: the in-memory metadata cache (`DYNAMIC_SCRIPTS`) already holds
+/// each script's source `content`. It is populated when the route index is
+/// (re)built via `get_all_script_metadata` and evicted on every upsert/delete —
+/// locally and through the cross-instance notification handlers — so a present
+/// entry is authoritative. Serving content from it avoids a Postgres round-trip
+/// on the hot request path.
+///
+/// The cache is bypassed while a transaction is active so a script still reads
+/// its own uncommitted writes (an in-flight upsert has already evicted the
+/// entry, so a concurrent reader without the transaction correctly falls through
+/// to committed state).
 pub fn fetch_script(uri: &str) -> Option<String> {
+    if !crate::database::get_current_transaction_active()
+        && let Ok(guard) = safe_lock_scripts()
+        && let Some(metadata) = guard.get(uri)
+    {
+        return Some(metadata.content.clone());
+    }
+
     let repo = get_repository();
 
     let result = run_blocking(async { repo.get_script(uri).await });

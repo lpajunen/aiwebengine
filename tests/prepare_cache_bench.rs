@@ -48,8 +48,8 @@ fn asset(script_uri: &str, uri: &str, content: String) -> repository::Asset {
 
 /// A realistically-sized helper module (~1 KB of source) exporting one function.
 fn helper_module(idx: usize) -> String {
-    let filler = "// realistic helper body line kept around to reach a plausible file size\n"
-        .repeat(12);
+    let filler =
+        "// realistic helper body line kept around to reach a plausible file size\n".repeat(12);
     format!(
         "{filler}export function helper{idx}(target: string): string {{\n  \
          const parts = [\"{idx}\", target, String({idx} * 7)];\n  \
@@ -120,6 +120,21 @@ fn time_request(uri: &str, iters: usize, clear_prepare_each: bool) -> u128 {
     median(samples)
 }
 
+/// Measure `fetch_script` (#2): the in-memory source-cache hit vs the old
+/// per-request Postgres round-trip (forced by evicting the metadata entry).
+fn time_fetch(uri: &str, iters: usize, evict_each: bool) -> u128 {
+    let mut samples = Vec::with_capacity(iters);
+    for _ in 0..iters {
+        if evict_each && let Ok(mut guard) = repository::safe_lock_scripts() {
+            guard.remove(uri); // old world: no source cache -> DB read
+        }
+        let t = Instant::now();
+        let _ = repository::fetch_script(uri);
+        samples.push(t.elapsed().as_micros());
+    }
+    median(samples)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "manual benchmark; needs Postgres"]
 async fn bench_prepared_program_cache() {
@@ -144,8 +159,12 @@ async fn bench_prepared_program_cache() {
         }
 
         // Warm the transpiler + bytecode caches once (both existed before this
-        // change) so we measure only the prepared-program cache's contribution.
+        // change) and populate the in-memory script-source cache the way a
+        // route-index rebuild does in production, so the request measurements
+        // isolate the prepared-program cache (#3) rather than the source
+        // fetch (#2), which is measured separately below.
         module_loader::clear();
+        let _ = repository::get_script_metadata(&uri);
         one_request(&uri);
 
         let prepare_old = time_prepare(&uri, &content, 200, true);
@@ -166,5 +185,27 @@ async fn bench_prepared_program_cache() {
         }
         let _ = repository::delete_script(&uri);
     }
+    println!();
+
+    // #2: script-source fetch — in-memory cache hit vs Postgres round-trip.
+    let uri = "test://bench-source-fetch";
+    repository::upsert_script(
+        uri,
+        "function h(context){ return { status:200, body:\"ok\" }; }",
+    )
+    .expect("store script");
+    let _ = repository::get_script_metadata(uri); // populate source cache
+
+    let fetch_db = time_fetch(uri, 500, true); // evict each iter -> DB read
+    let _ = repository::get_script_metadata(uri); // repopulate (fetch_db left it evicted)
+    let fetch_cache = time_fetch(uri, 500, false); // steady-state cache hit
+    println!("=== script-source fetch (#2), median µs ===");
+    println!(
+        "fetch_from_db = {}  fetch_from_cache = {}  ({:.1}x)",
+        fetch_db,
+        fetch_cache,
+        fetch_db as f64 / fetch_cache.max(1) as f64
+    );
+    let _ = repository::delete_script(uri);
     println!();
 }

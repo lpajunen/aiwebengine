@@ -650,6 +650,45 @@ fn root_module_path_keeps_last_path_segment() {
     assert_eq!(path, "main.ts");
 }
 
+/// `fetch_script` serves source from the in-memory metadata cache. An upsert
+/// must evict that entry so a subsequent fetch returns the new source rather
+/// than a stale cached copy.
+#[tokio::test(flavor = "multi_thread")]
+async fn upsert_evicts_cached_script_source() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://source-cache-evict.ts";
+    repository::upsert_script(
+        uri,
+        "function h(c) { return { status: 200, body: \"v1\" }; }",
+    )
+    .expect("store v1");
+
+    // Populate the source cache the way a route-index rebuild does in production.
+    let _ = repository::get_script_metadata(uri);
+    assert!(
+        repository::fetch_script(uri)
+            .expect("fetch v1")
+            .contains("v1"),
+        "cached fetch should return v1"
+    );
+
+    repository::upsert_script(
+        uri,
+        "function h(c) { return { status: 200, body: \"v2\" }; }",
+    )
+    .expect("store v2");
+    assert!(
+        repository::fetch_script(uri)
+            .expect("fetch v2")
+            .contains("v2"),
+        "upsert must evict the cached source so fetch returns v2"
+    );
+
+    let _ = repository::delete_script(uri);
+}
+
 /// The prepared-program cache must not serve a stale bundle after an imported
 /// asset changes. Because the cache key hashes only the root script (unchanged
 /// here), correctness depends on `upsert_asset` invalidating the cache.
@@ -710,7 +749,11 @@ async fn edited_imported_asset_invalidates_prepared_program_cache() {
     ))
     .expect("store v2 asset");
 
-    assert_eq!(run(), "v2-x", "edited asset must take effect (cache invalidated)");
+    assert_eq!(
+        run(),
+        "v2-x",
+        "edited asset must take effect (cache invalidated)"
+    );
 
     assert!(repository::delete_asset(script_uri, asset_uri));
     let _ = repository::delete_script(script_uri);
