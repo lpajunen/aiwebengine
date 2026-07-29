@@ -256,22 +256,52 @@ interface RouteRegistry {
    * Register a Server-Sent Events (SSE) stream endpoint
    * @param path - URL path for the stream (must start with /)
    * @param customizationFunction - Optional name of a function that returns connection filter criteria
+   * @param metadata - Optional OpenAPI metadata. `tags` sets the Swagger group
+   *   (defaults to "Streams"); `summary`/`description` override the
+   *   auto-generated documentation text.
    * @returns Registration result message
    * @example
    * routeRegistry.registerStreamRoute("/events/notifications");
    * routeRegistry.registerStreamRoute("/events/chat", "chatCustomizer");
+   * routeRegistry.registerStreamRoute("/events/alerts", undefined, {
+   *   tags: ["Alerts"],
+   *   summary: "Alert stream",
+   * });
    */
-  registerStreamRoute(path: string, customizationFunction?: string): string;
+  registerStreamRoute(
+    path: string,
+    customizationFunction?: string,
+    metadata?: {
+      summary?: string;
+      description?: string;
+      tags?: string[];
+    },
+  ): string;
 
   /**
    * Register a static asset route
    * @param httpPath - HTTP path where asset will be served (e.g., "/styles/main.css")
    * @param assetName - Name of the asset in the asset storage (e.g., "main.css")
+   * @param metadata - Optional OpenAPI metadata. `tags` sets the Swagger group
+   *   (defaults to "Assets"); `summary`/`description` override the
+   *   auto-generated documentation text.
    * @returns Registration result message
    * @example
    * routeRegistry.registerAssetRoute("/styles/main.css", "main.css");
+   * routeRegistry.registerAssetRoute("/logo.svg", "logo.svg", {
+   *   tags: ["Branding"],
+   *   summary: "Company logo",
+   * });
    */
-  registerAssetRoute(httpPath: string, assetName: string): string;
+  registerAssetRoute(
+    httpPath: string,
+    assetName: string,
+    metadata?: {
+      summary?: string;
+      description?: string;
+      tags?: string[];
+    },
+  ): string;
 
   /**
    * Broadcast a message to all connections on a stream

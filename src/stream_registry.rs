@@ -208,6 +208,20 @@ pub struct StreamRegistration {
     pub connections: HashMap<String, StreamConnection>,
     /// Optional customization function to determine connection filter criteria
     pub customization_function: Option<String>,
+    /// OpenAPI documentation metadata (tags/summary/description) for this stream.
+    pub metadata: StreamRouteMetadata,
+}
+
+/// Optional OpenAPI documentation metadata for a stream route. Mirrors the
+/// `metadata` object accepted by `routeRegistry.registerRoute`.
+#[derive(Debug, Clone, Default)]
+pub struct StreamRouteMetadata {
+    /// Swagger groups for this stream; empty falls back to "Streams".
+    pub tags: Vec<String>,
+    /// Overrides the auto-generated OpenAPI summary when present.
+    pub summary: Option<String>,
+    /// Overrides the auto-generated OpenAPI description when present.
+    pub description: Option<String>,
 }
 
 impl StreamRegistration {
@@ -222,6 +236,7 @@ impl StreamRegistration {
                 .as_secs(),
             connections: HashMap::new(),
             customization_function,
+            metadata: StreamRouteMetadata::default(),
         }
     }
 
@@ -347,6 +362,26 @@ impl StreamRegistry {
         script_uri: &str,
         customization_function: Option<String>,
     ) -> Result<(), String> {
+        self.register_stream_with_metadata(
+            path,
+            script_uri,
+            customization_function,
+            StreamRouteMetadata::default(),
+        )
+    }
+
+    /// Register a stream path with explicit OpenAPI metadata.
+    ///
+    /// Behaves like [`register_stream`](Self::register_stream) but records the
+    /// given tags/summary/description; empty tags fall back to the default
+    /// "Streams" group when the OpenAPI spec is generated.
+    pub fn register_stream_with_metadata(
+        &self,
+        path: &str,
+        script_uri: &str,
+        customization_function: Option<String>,
+        metadata: StreamRouteMetadata,
+    ) -> Result<(), String> {
         match self.streams.lock() {
             Ok(mut streams) => {
                 if let Some(existing_registration) = streams.get(path) {
@@ -371,11 +406,12 @@ impl StreamRegistry {
                     );
                 }
 
-                let registration = StreamRegistration::new(
+                let mut registration = StreamRegistration::new(
                     path.to_string(),
                     script_uri.to_string(),
                     customization_function,
                 );
+                registration.metadata = metadata;
                 streams.insert(path.to_string(), registration);
                 Ok(())
             }
@@ -455,6 +491,27 @@ impl StreamRegistry {
             Err(e) => {
                 error!("Failed to acquire stream registry lock: {}", e);
                 None
+            }
+        }
+    }
+
+    /// List all registered streams as `(path, script_uri, metadata)` tuples for
+    /// OpenAPI generation. Empty tags mean the default "Streams" group.
+    pub fn get_all_registrations(&self) -> Vec<(String, String, StreamRouteMetadata)> {
+        match self.streams.lock() {
+            Ok(streams) => streams
+                .values()
+                .map(|reg| {
+                    (
+                        reg.path.clone(),
+                        reg.script_uri.clone(),
+                        reg.metadata.clone(),
+                    )
+                })
+                .collect(),
+            Err(e) => {
+                error!("Failed to acquire stream registry lock: {}", e);
+                Vec::new()
             }
         }
     }

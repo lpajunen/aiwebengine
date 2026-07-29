@@ -15,6 +15,18 @@ pub fn get_global_registry() -> &'static AssetRegistry {
     GLOBAL_ASSET_REGISTRY.get_or_init(AssetRegistry::new)
 }
 
+/// Optional OpenAPI documentation metadata for an asset route. Mirrors the
+/// `metadata` object accepted by `routeRegistry.registerRoute`.
+#[derive(Debug, Clone, Default)]
+pub struct AssetRouteMetadata {
+    /// Swagger groups for this path; empty falls back to "Assets".
+    pub tags: Vec<String>,
+    /// Overrides the auto-generated OpenAPI summary when present.
+    pub summary: Option<String>,
+    /// Overrides the auto-generated OpenAPI description when present.
+    pub description: Option<String>,
+}
+
 /// Stores registration information for a public asset path
 #[derive(Debug, Clone)]
 pub struct AssetPathRegistration {
@@ -22,6 +34,8 @@ pub struct AssetPathRegistration {
     pub asset_name: String,
     /// The script URI that registered this path
     pub script_uri: String,
+    /// OpenAPI documentation metadata (tags/summary/description) for this path.
+    pub metadata: AssetRouteMetadata,
 }
 
 /// Registry for managing public asset path registrations
@@ -39,7 +53,7 @@ impl AssetRegistry {
         }
     }
 
-    /// Register a public path for an asset
+    /// Register a public path for an asset (using the default "Assets" group).
     ///
     /// # Arguments
     /// * `path` - The HTTP path (e.g., "/logo.svg", "/css/main.css")
@@ -50,6 +64,28 @@ impl AssetRegistry {
         path: &str,
         asset_name: &str,
         script_uri: &str,
+    ) -> Result<(), String> {
+        self.register_path_with_metadata(
+            path,
+            asset_name,
+            script_uri,
+            AssetRouteMetadata::default(),
+        )
+    }
+
+    /// Register a public path for an asset with explicit OpenAPI metadata.
+    ///
+    /// # Arguments
+    /// * `path` - The HTTP path (e.g., "/logo.svg", "/css/main.css")
+    /// * `asset_name` - The name of the asset in the repository (e.g., "logo.svg", "main.css")
+    /// * `script_uri` - The URI of the script registering this path
+    /// * `metadata` - OpenAPI tags/summary/description; empty tags fall back to "Assets"
+    pub fn register_path_with_metadata(
+        &self,
+        path: &str,
+        asset_name: &str,
+        script_uri: &str,
+        metadata: AssetRouteMetadata,
     ) -> Result<(), String> {
         match self.paths.lock() {
             Ok(mut paths) => {
@@ -78,6 +114,7 @@ impl AssetRegistry {
                     AssetPathRegistration {
                         asset_name: asset_name.to_string(),
                         script_uri: script_uri.to_string(),
+                        metadata,
                     },
                 );
                 Ok(())

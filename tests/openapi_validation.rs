@@ -464,3 +464,66 @@ async fn test_openapi_javascript_routes_included() {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
 }
+
+/// Asset and stream routes registered without explicit tags must fall back to
+/// the "Assets" and "Streams" Swagger groups respectively. core.js registers
+/// `/logo.svg` (asset) and `/script_updates` (stream) with no tags.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_openapi_asset_and_stream_default_groups() {
+    let ctx = TestContext::new();
+    let port = ctx.start_server().await.expect("Failed to start server");
+    wait_for_server(port, 30)
+        .await
+        .expect("Server failed to start");
+
+    let client = reqwest::Client::new();
+    let url = format!("http://localhost:{}/engine/openapi.json", port);
+
+    // Returns the "tags" array for GET on `path` if the operation is present.
+    fn get_tags(spec: &Value, path: &str) -> Option<Vec<String>> {
+        spec["paths"][path]["get"]["tags"].as_array().map(|arr| {
+            arr.iter()
+                .filter_map(|t| t.as_str().map(String::from))
+                .collect()
+        })
+    }
+
+    // JS init runs asynchronously; poll until both routes appear or we time out.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let spec: Value = client
+            .get(&url)
+            .send()
+            .await
+            .expect("Failed to fetch OpenAPI spec")
+            .json()
+            .await
+            .expect("Failed to parse JSON");
+
+        let asset_tags = get_tags(&spec, "/logo.svg");
+        let stream_tags = get_tags(&spec, "/script_updates");
+
+        if let (Some(asset_tags), Some(stream_tags)) = (asset_tags, stream_tags) {
+            assert_eq!(
+                asset_tags,
+                vec!["Assets".to_string()],
+                "untagged asset route should default to the Assets group"
+            );
+            assert_eq!(
+                stream_tags,
+                vec!["Streams".to_string()],
+                "untagged stream route should default to the Streams group"
+            );
+            return;
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            panic!(
+                "OpenAPI spec should include /logo.svg (asset) and /script_updates (stream) \
+                 routes (timed out waiting for JS init to complete)"
+            );
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+}

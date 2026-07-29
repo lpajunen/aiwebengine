@@ -25,6 +25,35 @@ fn parse_filter_match_mode(
     }
 }
 
+/// Extract optional OpenAPI documentation metadata (`tags`, `summary`,
+/// `description`) from the `metadata` object accepted by
+/// `registerAssetRoute`/`registerStreamRoute`. Returns `(tags, summary,
+/// description)`; missing fields yield an empty vector / `None`, so callers
+/// fall back to their default Swagger group and auto-generated text.
+fn extract_route_metadata(
+    metadata: Option<&rquickjs::Object<'_>>,
+) -> (Vec<String>, Option<String>, Option<String>) {
+    let mut tags = Vec::new();
+    let mut summary = None;
+    let mut description = None;
+    if let Some(meta) = metadata {
+        if let Ok(tags_arr) = meta.get::<_, rquickjs::Array>("tags") {
+            for i in 0..tags_arr.len() {
+                if let Ok(tag) = tags_arr.get::<String>(i) {
+                    tags.push(tag);
+                }
+            }
+        }
+        if let Ok(value) = meta.get::<_, Option<String>>("summary") {
+            summary = value;
+        }
+        if let Ok(value) = meta.get::<_, Option<String>>("description") {
+            description = value;
+        }
+    }
+    (tags, summary, description)
+}
+
 /// Secure wrapper for JavaScript global functions that enforces Rust-level validation
 pub struct SecureGlobalContext {
     user_context: UserContext,
@@ -3068,10 +3097,13 @@ impl SecureGlobalContext {
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>,
                   path: String,
-                  customization_function: Opt<String>|
+                  customization_function: Opt<String>,
+                  metadata: Opt<rquickjs::Object>|
                   -> JsResult<String> {
                 // Convert Opt to Option
                 let customization_function = customization_function.0;
+                // Extract optional OpenAPI metadata (tags/summary/description)
+                let (tags, summary, description) = extract_route_metadata(metadata.0.as_ref());
                 // If streams are disabled, return success without doing anything
                 if !config_stream.enable_streams {
                     return Ok(format!(
@@ -3201,10 +3233,15 @@ impl SecureGlobalContext {
                 }
 
                 // Register the stream
-                match crate::stream_registry::GLOBAL_STREAM_REGISTRY.register_stream(
+                match crate::stream_registry::GLOBAL_STREAM_REGISTRY.register_stream_with_metadata(
                     &path,
                     &script_uri_stream,
                     customization_function,
+                    crate::stream_registry::StreamRouteMetadata {
+                        tags,
+                        summary,
+                        description,
+                    },
                 ) {
                     Ok(()) => Ok(format!("Web stream '{}' registered successfully", path)),
                     Err(e) => Ok(format!("Failed to register stream '{}': {}", path, e)),
@@ -3220,7 +3257,8 @@ impl SecureGlobalContext {
             ctx.clone(),
             move |_c: rquickjs::Ctx<'_>,
                   path: String,
-                  asset_name: String|
+                  asset_name: String,
+                  metadata: Opt<rquickjs::Object>|
                   -> Result<String, rquickjs::Error> {
                 // Check if script is privileged OR user has admin privileges
                 let script_privileged = match repository::is_script_privileged(&script_uri_asset) {
@@ -3288,11 +3326,19 @@ impl SecureGlobalContext {
                     }
                 }
 
+                // Extract optional OpenAPI metadata (tags/summary/description)
+                let (tags, summary, description) = extract_route_metadata(metadata.0.as_ref());
+
                 // Register the path in the global asset registry
-                match crate::asset_registry::get_global_registry().register_path(
+                match crate::asset_registry::get_global_registry().register_path_with_metadata(
                     &path,
                     &asset_name,
                     &script_uri_asset,
+                    crate::asset_registry::AssetRouteMetadata {
+                        tags,
+                        summary,
+                        description,
+                    },
                 ) {
                     Ok(()) => Ok(format!(
                         "Asset path '{}' registered to asset '{}'",
@@ -3704,22 +3750,33 @@ impl SecureGlobalContext {
                             };
 
                             let mut asset_operation = serde_json::Map::new();
-                            asset_operation.insert(
-                                "summary".to_string(),
-                                serde_json::json!(format!(
-                                    "Static asset: {}",
-                                    registration.asset_name
-                                )),
-                            );
+                            let asset_summary =
+                                registration.metadata.summary.clone().unwrap_or_else(|| {
+                                    format!("Static asset: {}", registration.asset_name)
+                                });
+                            asset_operation
+                                .insert("summary".to_string(), serde_json::json!(asset_summary));
+                            let asset_description = registration
+                                .metadata
+                                .description
+                                .clone()
+                                .unwrap_or_else(|| {
+                                    format!(
+                                        "Serves static asset '{}' registered by script '{}'",
+                                        registration.asset_name, registration.script_uri
+                                    )
+                                });
                             asset_operation.insert(
                                 "description".to_string(),
-                                serde_json::json!(format!(
-                                    "Serves static asset '{}' registered by script '{}'",
-                                    registration.asset_name, registration.script_uri
-                                )),
+                                serde_json::json!(asset_description),
                             );
+                            let asset_tags = if registration.metadata.tags.is_empty() {
+                                vec!["Assets".to_string()]
+                            } else {
+                                registration.metadata.tags.clone()
+                            };
                             asset_operation
-                                .insert("tags".to_string(), serde_json::json!(["Assets"]));
+                                .insert("tags".to_string(), serde_json::json!(asset_tags));
                             asset_operation.insert(
                                 "responses".to_string(),
                                 serde_json::json!({
@@ -3760,6 +3817,64 @@ impl SecureGlobalContext {
                             if let Some(path_obj) = path_entry.as_object_mut() {
                                 path_obj
                                     .insert("get".to_string(), serde_json::json!(asset_operation));
+                            }
+                        }
+
+                        // Add SSE stream routes from the stream registry
+                        for (path, script_uri, metadata) in
+                            crate::stream_registry::GLOBAL_STREAM_REGISTRY.get_all_registrations()
+                        {
+                            let stream_tags = if metadata.tags.is_empty() {
+                                vec!["Streams".to_string()]
+                            } else {
+                                metadata.tags
+                            };
+
+                            let mut stream_operation = serde_json::Map::new();
+                            let stream_summary = metadata
+                                .summary
+                                .unwrap_or_else(|| format!("SSE stream: {}", path));
+                            stream_operation
+                                .insert("summary".to_string(), serde_json::json!(stream_summary));
+                            let stream_description = metadata.description.unwrap_or_else(|| {
+                                format!(
+                                    "Server-Sent Events stream registered by script '{}'",
+                                    script_uri
+                                )
+                            });
+                            stream_operation.insert(
+                                "description".to_string(),
+                                serde_json::json!(stream_description),
+                            );
+                            stream_operation
+                                .insert("tags".to_string(), serde_json::json!(stream_tags));
+                            stream_operation.insert(
+                                "responses".to_string(),
+                                serde_json::json!({
+                                    "200": {
+                                        "description": "SSE event stream",
+                                        "content": {
+                                            "text/event-stream": {
+                                                "schema": { "type": "string" }
+                                            }
+                                        }
+                                    }
+                                }),
+                            );
+                            stream_operation
+                                .insert("x-script-uri".to_string(), serde_json::json!(script_uri));
+                            stream_operation.insert(
+                                "x-source".to_string(),
+                                serde_json::json!("stream-registry"),
+                            );
+
+                            let path_entry = js_paths
+                                .entry(path)
+                                .or_insert_with(|| serde_json::json!({}));
+
+                            if let Some(path_obj) = path_entry.as_object_mut() {
+                                path_obj
+                                    .insert("get".to_string(), serde_json::json!(stream_operation));
                             }
                         }
 

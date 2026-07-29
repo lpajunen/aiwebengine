@@ -109,6 +109,8 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
         (name = "GraphQL", description = "GraphQL API endpoints for queries, mutations, and subscriptions"),
         (name = "MCP", description = "Model Context Protocol (JSON-RPC 2.0) endpoints for AI tool integration"),
         (name = "Authentication", description = "OAuth2 authentication and authorization endpoints"),
+        (name = "Assets", description = "Static assets served from the asset registry"),
+        (name = "Streams", description = "Server-Sent Events (SSE) streams registered by scripts"),
     )
 )]
 struct ApiDoc;
