@@ -195,7 +195,7 @@ The GitHub MCP server provides tools for:
 
 ### Full Example
 
-See [scripts/examples/github_mcp_issues.js](../../scripts/examples/github_mcp_issues.js) for a complete working example.
+See [github_mcp_issues.js](https://github.com/lpajunen/aiwebengine-examples/blob/main/src/github_mcp_issues/github_mcp_issues.js) in the aiwebengine-examples repo for a complete working example.
 
 ```javascript
 // List all open issues in a repository
@@ -467,4 +467,4 @@ Authorization: Bearer <token-injected-by-rust>
 - [Model Context Protocol Specification](https://modelcontextprotocol.io/)
 - [GitHub MCP Server](https://github.com/github/github-mcp-server)
 - [AIWebEngine Secrets Management](./secrets.md)
-- [Example Scripts](../../scripts/examples/)
+- [Example Scripts](https://github.com/lpajunen/aiwebengine-examples)
