@@ -17,7 +17,7 @@ futures-util = "0.3"
 axum-server = "0.8"
 reqwest = { version = "0.13.1", features = ["json", "blocking", "rustls", "multipart", "form"], default-features = false }
 serde_urlencoded = "0.7.1"
-base64 = "0.22"
+base64 = "0.23"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 chrono = { version = "0.4", features = ["serde"] }
@@ -45,7 +45,7 @@ pulldown-cmark = "0.13.0"
 handlebars = "6.0"
 
 # TypeScript/JSX transpilation
-oxc = { version = "0.140.0", features = ["full"] }
+oxc = { version = "0.142.0", features = ["full"] }
 
 # Security and encryption (Phase 0.5)
 aes-gcm = "0.11"
@@ -54,7 +54,7 @@ subtle = "2.5"
 
 # OAuth2 and JWT (Phase 2)
 oauth2 = "5.0.0"
-jsonwebtoken = { version = "10.0.0", features = ["rust_crypto"] }
+jsonwebtoken = { version = "11.0.0", features = ["rust_crypto"] }
 openidconnect = "4.0.1"
 async-trait = "0.1"
 urlencoding = "2.1.3"
@@ -80,7 +80,7 @@ lto = "thin"
 [dev-dependencies]
 tokio-test = "0.4"
 mockall = "0.15.0"
-jsonschema = "0.48.1"
+jsonschema = "0.49"
 
 # Build-time dependencies (for capturing build metadata)
 [build-dependencies]
