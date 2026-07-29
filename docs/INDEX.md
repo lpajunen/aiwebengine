@@ -110,7 +110,7 @@ routeRegistry.registerRoute("/hello", "helloHandler", "GET");
 → Visit [Troubleshooting Guide](engine-administrators/06-TROUBLESHOOTING.md)
 
 **Contribute to the project**
-→ Read [Development Guide](engine-contributors/implementing/DEVELOPMENT.md) and [TODO](engine-contributors/implementing/TODO.md)
+→ Read [Development Guide](engine-contributors/implementing/DEVELOPMENT.md) and [Roadmap](engine-contributors/implementing/ROADMAP.md)
 
 ---
 
@@ -137,26 +137,15 @@ docs/
     │   └── CUSTOMER_SURVEY.md        # Customer research
     │
     └── implementing/                 # Development guides
+        ├── README.md                 # Implementation overview
         ├── DEVELOPMENT.md            # Development setup
-        ├── TODO.md                   # Roadmap and tasks
-        ├── SECURITY_TODO.md          # Security tasks
-        ├── AUTH_TODO.md              # Auth tasks
-        └── [implementation docs]     # Various implementation guides
+        ├── CONTRIBUTING.md           # Contribution guide
+        ├── ROADMAP.md                # Roadmap and tasks
+        ├── AUTH_DEBUGGING_GUIDE.md   # Auth debugging
+        ├── features/                 # New capabilities to build
+        ├── improvements/             # Quality/perf/security work
+        └── guides/                   # Implementation best practices
 ```
-
----
-
-## 🗄️ Archived Documentation
-
-Historical implementation notes, completed phases, and deprecated analysis documents are located in `/archive/`.
-
-These documents provide historical context but are no longer actively maintained:
-
-- Phase completion documents (PHASE\_\*.md)
-- Implementation plans for completed features
-- Test fixes and analysis (historical)
-- Requirements gap analysis (completed)
-- Bootstrap admin and manager UI docs (now integrated into admin docs)
 
 ---
 
@@ -221,4 +210,4 @@ For questions or suggestions about documentation structure, please open an issue
 
 ---
 
-**Last updated:** October 24, 2025
+**Last updated:** July 29, 2026
