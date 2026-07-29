@@ -521,20 +521,38 @@ fn setup_secure_global_functions(
     register_fn: Option<RegisterFunctionType>,
     _auth_context: Option<crate::auth::JsAuthContext>, // Kept for API compatibility but unused
 ) -> Result<(), rquickjs::Error> {
+    let t = Instant::now();
     let secure_context = SecureGlobalContext::new_with_config(user_context, config.clone());
+    let d_ctor = t.elapsed();
 
     // Setup secure functions with proper capability validation
+    let t = Instant::now();
     secure_context.setup_secure_functions(ctx, script_uri, register_fn)?;
+    let d_native = t.elapsed();
 
     // Add Response builder helpers
+    let t = Instant::now();
     setup_response_builders(ctx)?;
+    let d_resp = t.elapsed();
 
     // Add validation helpers
+    let t = Instant::now();
     setup_validation_helpers(ctx)?;
+    let d_valid = t.elapsed();
+
+    GLOBALS_BREAKDOWN.with(|b| b.set(Some((d_ctor, d_native, d_resp, d_valid))));
 
     // Auth is no longer set up as a global - it's attached to req.auth by the caller
 
     Ok(())
+}
+
+thread_local! {
+    /// Carries the last globals-install sub-timings (ctor, native fns, response
+    /// builders, validation helpers) so the per-request profiler can log them
+    /// *outside* any timed window — logging inside would inflate the reading.
+    static GLOBALS_BREAKDOWN: std::cell::Cell<Option<(Duration, Duration, Duration, Duration)>> =
+        const { std::cell::Cell::new(None) };
 }
 
 /// Sets up Response builder helpers for JavaScript handlers
@@ -1276,6 +1294,16 @@ pub fn execute_script_for_request_secure(
             total_us = total.as_micros() as u64,
             "request phase profile"
         );
+        if let Some((ctor, native, resp, valid)) = GLOBALS_BREAKDOWN.with(|b| b.take()) {
+            info!(
+                target: "request_profile",
+                ctor_us = ctor.as_micros() as u64,
+                native_fns_us = native.as_micros() as u64,
+                response_builders_us = resp.as_micros() as u64,
+                validation_helpers_us = valid.as_micros() as u64,
+                "globals install breakdown"
+            );
+        }
     }
 
     // Ensure clean shutdown: drop Context before Runtime

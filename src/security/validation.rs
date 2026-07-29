@@ -2,6 +2,7 @@ use html_escape::encode_text;
 use regex::Regex;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
+use std::sync::LazyLock;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -83,8 +84,22 @@ impl Default for InputValidator {
     }
 }
 
+/// Process-wide validator, compiled once. The ~33 regexes below are immutable,
+/// so every request shares this single instance instead of recompiling them —
+/// regex compilation dominated per-request global setup (~2.3ms). `Regex` is
+/// `Arc`-backed, so cloning out of this singleton in `new()` is O(1).
+static SHARED_VALIDATOR: LazyLock<InputValidator> = LazyLock::new(InputValidator::build);
+
 impl InputValidator {
+    /// Returns a validator backed by the process-wide compiled pattern set.
+    /// Cheap: clones `Arc`-backed regexes rather than recompiling them.
     pub fn new() -> Self {
+        SHARED_VALIDATOR.clone()
+    }
+
+    /// Compiles the pattern set from scratch. Call once via [`SHARED_VALIDATOR`];
+    /// use [`InputValidator::new`] everywhere else.
+    fn build() -> Self {
         let uri_pattern =
             Regex::new(r"^[a-zA-Z0-9\-_/.]+$").expect("Valid regex pattern for URI validation");
 
