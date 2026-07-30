@@ -33,7 +33,6 @@ use tracing::{debug, error, info, warn};
 pub const PRIVILEGED_BOOTSTRAP_SCRIPTS: &[&str] = &[
     "https://example.com/core",
     "https://example.com/cli",
-    "https://example.com/admin",
     "https://example.com/auth",
 ];
 
@@ -4388,10 +4387,6 @@ pub async fn bootstrap_scripts_async() -> AppResult<()> {
                 include_str!("../scripts/feature_scripts/cli.js"),
             ),
             (
-                "https://example.com/admin",
-                include_str!("../scripts/feature_scripts/admin.js"),
-            ),
-            (
                 "https://example.com/auth",
                 include_str!("../scripts/feature_scripts/auth.js"),
             ),
@@ -4854,12 +4849,10 @@ fn get_static_scripts() -> HashMap<String, String> {
 
     let core = include_str!("../scripts/feature_scripts/core.js");
     let cli = include_str!("../scripts/feature_scripts/cli.js");
-    let admin = include_str!("../scripts/feature_scripts/admin.js");
     let auth = include_str!("../scripts/feature_scripts/auth.js");
 
     m.insert("https://example.com/core".to_string(), core.to_string());
     m.insert("https://example.com/cli".to_string(), cli.to_string());
-    m.insert("https://example.com/admin".to_string(), admin.to_string());
     m.insert("https://example.com/auth".to_string(), auth.to_string());
 
     // Include test scripts when appropriate
