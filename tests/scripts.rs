@@ -1254,6 +1254,82 @@ async fn test_script_initializer_single_script() {
     assert!(result.duration_ms > 0, "Should have measurable duration");
 }
 
+/// A redeploy must not take the script's routes down. Registrations live only
+/// in the in-memory metadata, so upserting new source — and a re-init that then
+/// fails or times out against it — used to leave the script with an empty route
+/// table, 404ing every one of its routes until some later init() succeeded.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_redeploy_keeps_routes_when_reinit_fails() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    setup_env().await;
+    let script_uri = "test://redeploy-keeps-routes";
+    let route_key = ("/redeploy-probe".to_string(), "GET".to_string());
+
+    let working_version = r#"
+        function init(context) {
+            routeRegistry.registerRoute('/redeploy-probe', 'probe_handler', 'GET');
+        }
+        function probe_handler(request) { return { status: 200, body: "v1" }; }
+    "#;
+    upsert_script(script_uri, working_version).expect("Should upsert script");
+
+    let initializer = ScriptInitializer::new(5000);
+    let result = initializer
+        .initialize_script(script_uri, false)
+        .await
+        .expect("Should initialize");
+    assert!(result.success, "First init should succeed: {:?}", result);
+
+    let metadata = get_script_metadata(script_uri).expect("Should get metadata");
+    assert!(
+        metadata.registrations.contains_key(&route_key),
+        "First init should have registered the route"
+    );
+
+    // Redeploy a version whose init() fails after registering.
+    let broken_version = r#"
+        function init(context) {
+            routeRegistry.registerRoute('/redeploy-probe', 'probe_handler', 'GET');
+            throw new Error("init failed after registering");
+        }
+        function probe_handler(request) { return { status: 200, body: "v2" }; }
+    "#;
+    upsert_script(script_uri, broken_version).expect("Should upsert new version");
+
+    let metadata = get_script_metadata(script_uri).expect("Should get metadata");
+    assert_eq!(
+        metadata.content, broken_version,
+        "Upsert should serve the new source"
+    );
+    assert!(
+        metadata.initialized && metadata.registrations.contains_key(&route_key),
+        "Routes must stay live between the upsert and the re-init"
+    );
+
+    let result = initializer
+        .initialize_script(script_uri, false)
+        .await
+        .expect("Should return InitResult");
+    assert!(!result.success, "Re-init should fail");
+
+    let metadata = get_script_metadata(script_uri).expect("Should get metadata");
+    assert!(
+        metadata.registrations.contains_key(&route_key),
+        "A failed re-init must not drop the previously registered routes"
+    );
+    assert!(
+        metadata.initialized,
+        "Routing skips scripts that are not marked initialized, so the flag must \
+         stay set while a usable route table is installed"
+    );
+    assert!(
+        metadata.init_error.is_some(),
+        "The failure should still be recorded"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_initializer_all_scripts() {
     if should_skip_integration_tests() {

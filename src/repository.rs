@@ -192,17 +192,24 @@ impl ScriptMetadata {
         self.last_init_time = Some(SystemTime::now());
     }
 
-    /// Update script content
+    /// Update script content, keeping the route registrations installed by the
+    /// last successful `init()`.
+    ///
+    /// Registrations live only in this in-memory metadata, and routing skips
+    /// any script whose registrations are empty (see `route_index::build_index`).
+    /// Clearing them here made every route of a script 404 from the moment its
+    /// source was upserted until the re-init that follows finished — seconds for
+    /// a small script, indefinitely for one whose init() times out. Keeping the
+    /// previous table means a deploy serves the *new* source through the *old*
+    /// route map for that window, and `update_script_init_status` swaps in the
+    /// new map atomically when init() succeeds.
     pub fn update_content(&mut self, new_content: String) {
         self.content = new_content;
         self.updated_at = SystemTime::now();
-        // Reset initialization status when content changes
-        self.initialized = false;
+        // The pending init() has not run against this source yet; `init_error`
+        // describes the previous one, so drop it. `initialized` and
+        // `registrations` stay as-is so routing keeps working meanwhile.
         self.init_error = None;
-        // Clear cached registrations when content changes
-        self.registrations.clear();
-        // TODO: Invalidate transpilation cache when transpiler is re-enabled
-        // crate::transpiler::invalidate_transpilation_cache(&self.uri);
     }
 }
 
@@ -333,6 +340,37 @@ pub fn get_db_pool() -> Option<std::sync::Arc<crate::database::Database>> {
 fn invalidate_script_program_caches(script_uri: &str) {
     crate::bytecode::invalidate(script_uri);
     crate::module_loader::invalidate(script_uri);
+}
+
+/// Point the metadata cache at `content` without disturbing the script's route
+/// registrations, so requests keep routing while the re-init that follows an
+/// upsert runs. Does nothing when the script is not cached — the next
+/// `get_script_metadata` loads it from the database.
+fn refresh_cached_script_source(uri: &str, content: &str) {
+    if let Ok(mut guard) = safe_lock_scripts()
+        && let Some(metadata) = guard.get_mut(uri)
+    {
+        metadata.update_content(content.to_string());
+    }
+}
+
+/// [`refresh_cached_script_source`] for callers that do not hold the new source
+/// — a script upserted on another cluster instance, where the update arrives as
+/// a notification and only the database has the new content.
+///
+/// Falls back to evicting the entry if the new source cannot be read: serving a
+/// stale *source* is a correctness bug, while losing the registrations only
+/// costs the routes until the pending init() restores them.
+pub async fn refresh_cached_script_source_from_db(uri: &str) {
+    let repo = get_repository();
+    match repo.get_script(uri).await {
+        Ok(Some(content)) => refresh_cached_script_source(uri, &content),
+        Ok(None) | Err(_) => {
+            if let Ok(mut guard) = safe_lock_scripts() {
+                guard.remove(uri);
+            }
+        }
+    }
 }
 
 async fn send_script_notification(
@@ -5565,10 +5603,10 @@ impl Repository for PostgresRepository {
         // Send notification after successful upsert
         send_script_notification(&self.pool, uri, "upserted", &self.server_id).await?;
 
-        // Invalidate cache
-        if let Ok(mut guard) = safe_lock_scripts() {
-            guard.remove(uri);
-        }
+        // Refresh the cached source in place rather than evicting it: eviction
+        // would also drop the script's route registrations, 404ing every one of
+        // its routes until the re-init that follows this upsert completes.
+        refresh_cached_script_source(uri, content);
         crate::route_index::invalidate();
         crate::bytecode::invalidate(uri);
         crate::module_loader::invalidate(uri);
@@ -5724,7 +5762,12 @@ impl Repository for PostgresRepository {
     ) -> AppResult<()> {
         let mut guard = safe_lock_scripts()?;
         if let Some(metadata) = guard.get_mut(uri) {
-            metadata.initialized = initialized;
+            // A failed init() must not retire routes that are still serving.
+            // Routing reads `initialized` as "has a usable route table" (see
+            // `route_index::build_index`), so it stays set while the previous
+            // registrations are in place; `init_error` records the failure.
+            let keep_serving_previous_routes = !initialized && !metadata.registrations.is_empty();
+            metadata.initialized = initialized || keep_serving_previous_routes;
             metadata.init_error = init_error;
             if let Some(regs) = registrations {
                 metadata.registrations = regs;
@@ -6473,6 +6516,51 @@ mod tests {
     // Helper to check if we should skip database-dependent tests
     fn should_skip_db_tests() -> bool {
         std::env::var("DATABASE_URL").is_err()
+    }
+
+    fn initialized_metadata_with_route(uri: &str, content: &str) -> ScriptMetadata {
+        let mut metadata = ScriptMetadata::new(uri.to_string(), content.to_string());
+        let mut registrations = RouteRegistrations::new();
+        registrations.insert(
+            ("/keep-me".to_string(), "GET".to_string()),
+            RouteMetadata::simple("keepMeHandler".to_string()),
+        );
+        metadata.mark_initialized_with_registrations(registrations);
+        metadata
+    }
+
+    #[test]
+    fn update_content_keeps_routes_serving_until_reinit() {
+        let mut metadata = initialized_metadata_with_route("test://redeploy", "v1");
+        metadata.init_error = Some("previous failure".to_string());
+
+        metadata.update_content("v2".to_string());
+
+        assert_eq!(metadata.content, "v2", "should serve the new source");
+        assert!(
+            metadata.initialized,
+            "routes must keep serving while the re-init runs"
+        );
+        assert!(
+            metadata
+                .registrations
+                .contains_key(&("/keep-me".to_string(), "GET".to_string())),
+            "upserting source must not drop the route table"
+        );
+        assert!(
+            metadata.init_error.is_none(),
+            "the error describes the previous source"
+        );
+    }
+
+    #[test]
+    fn update_content_on_never_initialized_script_registers_nothing() {
+        let mut metadata = ScriptMetadata::new("test://fresh".to_string(), "v1".to_string());
+
+        metadata.update_content("v2".to_string());
+
+        assert!(!metadata.initialized);
+        assert!(metadata.registrations.is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread")]

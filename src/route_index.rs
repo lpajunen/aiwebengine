@@ -308,6 +308,20 @@ mod tests {
     }
 
     #[test]
+    fn test_redeployed_script_keeps_routing_until_reinit() {
+        // A deploy upserts the source and re-inits asynchronously. The index is
+        // rebuilt in between, and must still route to the previous handlers
+        // instead of 404ing every route of the script.
+        let mut metadata = script_with_routes("s1", &[("/api/world", "GET", "world_handler")]);
+        metadata.update_content("// redeployed source".to_string());
+
+        let index = build_index(&[metadata]);
+
+        let (handler, _) = handler_of(match_index(&index, "/api/world", "GET"));
+        assert_eq!(handler, "world_handler");
+    }
+
+    #[test]
     fn test_exact_match_wins_over_patterns() {
         let index = build_index(&[script_with_routes(
             "s1",
