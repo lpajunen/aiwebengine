@@ -125,6 +125,10 @@ fn default_enable_init_functions() -> bool {
     true
 }
 
+fn default_db_max_connections() -> u32 {
+    20
+}
+
 /// Repository configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepositoryConfig {
@@ -150,6 +154,16 @@ pub struct RepositoryConfig {
 
     /// Maximum upload file size in bytes
     pub max_upload_size_bytes: usize,
+
+    /// Maximum size of the PostgreSQL connection pool.
+    ///
+    /// Every JavaScript database call blocks a pool connection for its whole
+    /// round trip, and a single request can make many — so this bounds how many
+    /// script executions can touch the database at once, not just how many
+    /// queries run concurrently. Remember to multiply by the number of engine
+    /// instances when sizing the server's own `max_connections`.
+    #[serde(default = "default_db_max_connections")]
+    pub max_connections: u32,
 }
 
 /// Security configuration
@@ -323,6 +337,7 @@ impl Default for RepositoryConfig {
             log_retention_hours: 24,
             auto_prune_logs: true,
             max_upload_size_bytes: 10 * 1024 * 1024, // 10MB
+            max_connections: default_db_max_connections(),
         }
     }
 }
@@ -534,6 +549,9 @@ impl AppConfig {
 
         // PostgreSQL is the only supported storage backend - no validation needed
         // Connection string is required and already enforced by type system
+        if self.repository.max_connections == 0 {
+            anyhow::bail!("Database max connections must be > 0");
+        }
 
         // Validate security configuration
         // Note: rate_limit_per_minute of 0 means disabled, which is allowed
@@ -756,6 +774,19 @@ mod tests {
 
         config.javascript.execution_timeout_ms = 0;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_database_pool_size_defaults_and_validation() {
+        let mut config = AppConfig::default();
+        assert_eq!(config.repository.max_connections, 20);
+        assert!(config.validate().is_ok());
+
+        config.repository.max_connections = 0;
+        assert!(
+            config.validate().is_err(),
+            "a pool of zero connections can serve nothing"
+        );
     }
 
     #[test]

@@ -69,6 +69,10 @@ max_script_size_bytes = 1048576
 max_asset_size_bytes = 10485760
 # Maximum upload file size in bytes (10 MB)
 max_upload_size_bytes = 10485760
+
+# Maximum PostgreSQL connections. Every JavaScript database call holds one
+# for its whole round trip, so this caps concurrent script database work.
+max_connections = 10
 # Maximum number of log messages per script
 max_log_messages_per_script = 100
 # Log message retention time in hours

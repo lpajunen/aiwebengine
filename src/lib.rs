@@ -1047,14 +1047,9 @@ async fn execute_startup_scripts() -> AppResult<()> {
 }
 
 /// Initialize script functions by calling their init() functions
-async fn initialize_script_functions(config: &config::Config) -> AppResult<()> {
+async fn initialize_script_functions(_config: &config::Config) -> AppResult<()> {
     info!("Initializing all scripts...");
-    let init_timeout = config
-        .javascript
-        .init_timeout_ms
-        .unwrap_or(config.javascript.execution_timeout_ms);
-
-    let initializer = script_init::ScriptInitializer::new(init_timeout);
+    let initializer = script_init::ScriptInitializer::with_configured_timeout();
     info!("Calling initialize_all_scripts...");
 
     match initializer.initialize_all_scripts().await {
@@ -1127,6 +1122,16 @@ pub async fn start_server_with_config(
     };
     if !js_engine::configure_execution_limits(js_limits) {
         debug!("JavaScript execution limits were already configured");
+    }
+
+    // The init() budget every re-initialization path uses: startup, a local
+    // upsert, and a peer instance's upsert notification.
+    let init_timeout_ms = config
+        .javascript
+        .init_timeout_ms
+        .unwrap_or(config.javascript.execution_timeout_ms);
+    if !script_init::configure_init_timeout(init_timeout_ms) {
+        debug!("Script init timeout was already configured");
     }
 
     // Initialize all core components

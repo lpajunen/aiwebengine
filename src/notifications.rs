@@ -259,7 +259,7 @@ impl NotificationListener {
         repository::refresh_cached_script_source_from_db(uri).await;
 
         // Initialize the script (this will call init() and register routes/GraphQL)
-        let initializer = script_init::ScriptInitializer::new(10_000); // 10 second timeout
+        let initializer = script_init::ScriptInitializer::with_configured_timeout();
         match initializer.initialize_script(uri, false).await {
             Ok(result) => {
                 if result.success {

@@ -248,15 +248,19 @@ impl Database {
 
         info!("Attempting to connect to database: {}", safe_conn_string);
 
+        let max_connections = config.max_connections;
         let pool = PgPoolOptions::new()
-            .max_connections(5) // Default pool size
+            .max_connections(max_connections)
             .acquire_timeout(Duration::from_millis(5000)) // Increased for tests
             .connect(connection_string)
             .await
             .context("Failed to connect to database")?;
 
         info!("✓ Database connection established successfully");
-        info!("✓ Connection pool created with max 5 connections");
+        info!(
+            "✓ Connection pool created with max {} connections",
+            max_connections
+        );
 
         Ok(Self { pool })
     }
@@ -610,12 +614,7 @@ mod tests {
 
         let config = RepositoryConfig {
             connection_string: database_url,
-            max_script_size_bytes: 1024 * 1024,
-            max_asset_size_bytes: 10 * 1024 * 1024,
-            max_log_messages_per_script: 100,
-            log_retention_hours: 24,
-            auto_prune_logs: true,
-            max_upload_size_bytes: 10 * 1024 * 1024,
+            ..RepositoryConfig::default()
         };
 
         // Try to connect with a short timeout to avoid hanging

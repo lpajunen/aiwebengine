@@ -858,7 +858,8 @@ impl SecureGlobalContext {
                     crate::graphql::clear_script_graphql_registrations(&script_name_for_init);
                     crate::mcp::clear_script_mcp_registrations(&script_name_for_init);
 
-                    let initializer = crate::script_init::ScriptInitializer::new(5000); // 5s timeout
+                    let initializer =
+                        crate::script_init::ScriptInitializer::with_configured_timeout();
                     match initializer
                         .initialize_script(&script_name_for_init, false)
                         .await

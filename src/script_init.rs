@@ -2,6 +2,7 @@ use crate::error::AppResult;
 use crate::repository;
 use crate::repository::Repository;
 use crate::scheduler;
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
@@ -10,6 +11,26 @@ use tracing::{debug, error, info, warn};
 /// interrupt budget, so the interrupt is what normally stops a slow init() —
 /// it reports the routes registered so far, the outer timeout cannot.
 const INIT_TIMEOUT_GRACE_MS: u64 = 5_000;
+
+/// The init() budget from configuration, set once at startup.
+static CONFIGURED_INIT_TIMEOUT_MS: OnceLock<u64> = OnceLock::new();
+
+/// Record the configured init() budget (`javascript.init_timeout_ms`, falling
+/// back to `javascript.execution_timeout_ms`). Returns false if already set.
+pub fn configure_init_timeout(timeout_ms: u64) -> bool {
+    CONFIGURED_INIT_TIMEOUT_MS.set(timeout_ms).is_ok()
+}
+
+/// The init() budget in effect. Every path that re-initializes a script — server
+/// startup, a local upsert, a peer's upsert notification — must use this one
+/// value: a script that initializes on boot but gets a shorter budget on deploy
+/// comes back up with no routes, which is invisible until someone requests one.
+pub fn configured_init_timeout_ms() -> u64 {
+    CONFIGURED_INIT_TIMEOUT_MS
+        .get()
+        .copied()
+        .unwrap_or_else(|| crate::js_engine::current_execution_limits().timeout_ms)
+}
 
 /// Result of a script initialization attempt
 #[derive(Debug, Clone)]
@@ -79,6 +100,13 @@ impl ScriptInitializer {
     /// Create a new script initializer
     pub fn new(timeout_ms: u64) -> Self {
         Self { timeout_ms }
+    }
+
+    /// Create an initializer with the configured init() budget. Prefer this over
+    /// [`ScriptInitializer::new`] outside tests, so every re-initialization path
+    /// grants a script the same budget.
+    pub fn with_configured_timeout() -> Self {
+        Self::new(configured_init_timeout_ms())
     }
 
     /// Initialize a single script by URI
