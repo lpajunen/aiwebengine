@@ -8,6 +8,47 @@ use tracing::{info, warn};
 
 use crate::config::RepositoryConfig;
 
+/// Drive `future` to completion from a blocking context.
+///
+/// Inside a tokio runtime this hands off to `block_in_place` so the reactor
+/// keeps running (it requires the multi-threaded runtime — a default
+/// `#[tokio::test]` will panic here). Outside one, it uses the shared fallback
+/// runtime below.
+pub(crate) fn run_blocking<F, R>(future: F) -> R
+where
+    F: std::future::Future<Output = R>,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(move || handle.block_on(future)),
+        Err(_) => fallback_runtime().block_on(future),
+    }
+}
+
+/// The runtime used when a database call happens outside any tokio runtime
+/// (tests, CLI entry points).
+///
+/// It must be a *single* process-wide runtime rather than one built per call.
+/// A sqlx connection is driven by a background task belonging to the runtime
+/// that opened it, so a throwaway runtime leaves the pool holding connections
+/// whose driver is gone the moment it is dropped. The next caller then acquires
+/// one of those corpses and blocks on it until the pool's acquire timeout
+/// expires — 30s by default — and the query surfaces as a "not found" rather
+/// than as an error.
+fn fallback_runtime() -> &'static tokio::runtime::Runtime {
+    static FALLBACK: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    FALLBACK.get_or_init(|| {
+        // Multi-threaded so `block_on` from several threads can make progress
+        // concurrently, and so `block_in_place` stays legal inside it.
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            // Same failure mode as the per-call build this replaces: if the
+            // process cannot build a tokio runtime, no database call can work.
+            .expect("Failed to build the database fallback runtime")
+    })
+}
+
 /// Transaction state stored in thread-local storage
 pub struct TransactionState {
     /// The active PostgreSQL transaction
@@ -259,21 +300,6 @@ impl Database {
     /// If a transaction is already active, this will create a savepoint instead.
     /// Returns a TransactionGuard for automatic rollback on drop.
     pub fn begin_transaction(timeout_ms: Option<u64>) -> Result<TransactionGuard, String> {
-        // Helper to run async code in blocking context
-        fn run_blocking<F, R>(future: F) -> R
-        where
-            F: std::future::Future<Output = R>,
-        {
-            match tokio::runtime::Handle::try_current() {
-                Ok(handle) => tokio::task::block_in_place(move || handle.block_on(future)),
-                Err(_) => tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .expect("Failed to create temporary runtime")
-                    .block_on(future),
-            }
-        }
-
         CURRENT_TRANSACTION.with(|tx_cell| {
             let mut tx_option = tx_cell.borrow_mut();
 
@@ -328,20 +354,6 @@ impl Database {
     /// If savepoints are active, this will release the most recent savepoint.
     /// Otherwise, it commits the entire transaction.
     pub fn commit_transaction() -> Result<(), String> {
-        fn run_blocking<F, R>(future: F) -> R
-        where
-            F: std::future::Future<Output = R>,
-        {
-            match tokio::runtime::Handle::try_current() {
-                Ok(handle) => tokio::task::block_in_place(move || handle.block_on(future)),
-                Err(_) => tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .expect("Failed to create temporary runtime")
-                    .block_on(future),
-            }
-        }
-
         CURRENT_TRANSACTION.with(|tx_cell| {
             let mut tx_option = tx_cell.borrow_mut();
 
@@ -395,20 +407,6 @@ impl Database {
     /// If savepoints are active, this will rollback to the most recent savepoint.
     /// Otherwise, it rolls back the entire transaction.
     pub fn rollback_transaction() -> Result<(), String> {
-        fn run_blocking<F, R>(future: F) -> R
-        where
-            F: std::future::Future<Output = R>,
-        {
-            match tokio::runtime::Handle::try_current() {
-                Ok(handle) => tokio::task::block_in_place(move || handle.block_on(future)),
-                Err(_) => tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .expect("Failed to create temporary runtime")
-                    .block_on(future),
-            }
-        }
-
         CURRENT_TRANSACTION.with(|tx_cell| {
             let mut tx_option = tx_cell.borrow_mut();
 
@@ -457,20 +455,6 @@ impl Database {
 
     /// Create a named savepoint
     pub fn create_savepoint(name: Option<&str>) -> Result<String, String> {
-        fn run_blocking<F, R>(future: F) -> R
-        where
-            F: std::future::Future<Output = R>,
-        {
-            match tokio::runtime::Handle::try_current() {
-                Ok(handle) => tokio::task::block_in_place(move || handle.block_on(future)),
-                Err(_) => tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .expect("Failed to create temporary runtime")
-                    .block_on(future),
-            }
-        }
-
         // Caller-supplied names are interpolated into DDL, so restrict them to
         // safe SQL identifiers before touching the transaction (defense in
         // depth: the extended query protocol already blocks multi-statement
@@ -518,20 +502,6 @@ impl Database {
 
     /// Rollback to a named savepoint
     pub fn rollback_to_savepoint(name: &str) -> Result<(), String> {
-        fn run_blocking<F, R>(future: F) -> R
-        where
-            F: std::future::Future<Output = R>,
-        {
-            match tokio::runtime::Handle::try_current() {
-                Ok(handle) => tokio::task::block_in_place(move || handle.block_on(future)),
-                Err(_) => tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .expect("Failed to create temporary runtime")
-                    .block_on(future),
-            }
-        }
-
         CURRENT_TRANSACTION.with(|tx_cell| {
             let mut tx_option = tx_cell.borrow_mut();
 
@@ -570,20 +540,6 @@ impl Database {
 
     /// Release a named savepoint
     pub fn release_savepoint(name: &str) -> Result<(), String> {
-        fn run_blocking<F, R>(future: F) -> R
-        where
-            F: std::future::Future<Output = R>,
-        {
-            match tokio::runtime::Handle::try_current() {
-                Ok(handle) => tokio::task::block_in_place(move || handle.block_on(future)),
-                Err(_) => tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .expect("Failed to create temporary runtime")
-                    .block_on(future),
-            }
-        }
-
         CURRENT_TRANSACTION.with(|tx_cell| {
             let mut tx_option = tx_cell.borrow_mut();
 

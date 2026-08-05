@@ -41,22 +41,7 @@ fn run_blocking<F, R>(future: F) -> R
 where
     F: std::future::Future<Output = R>,
 {
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) => {
-            // We are in a runtime. Use block_in_place to avoid blocking the reactor.
-            // Note: This requires a multi-threaded runtime. If called from a single-threaded
-            // runtime (like default #[tokio::test]), this will panic.
-            tokio::task::block_in_place(move || handle.block_on(future))
-        }
-        Err(_) => {
-            // No runtime available. Create a temporary single-threaded runtime.
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("Failed to create temporary runtime")
-                .block_on(future)
-        }
-    }
+    crate::database::run_blocking(future)
 }
 
 fn is_bootstrap_script(uri: &str) -> bool {
