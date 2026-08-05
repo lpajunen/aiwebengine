@@ -5761,36 +5761,39 @@ impl Repository for PostgresRepository {
         registrations: Option<RouteRegistrations>,
     ) -> AppResult<()> {
         let mut guard = safe_lock_scripts()?;
-        if let Some(metadata) = guard.get_mut(uri) {
-            // A failed init() must not retire routes that are still serving.
-            // Routing reads `initialized` as "has a usable route table" (see
-            // `route_index::build_index`), so it stays set while the previous
-            // registrations are in place; `init_error` records the failure.
-            let keep_serving_previous_routes = !initialized && !metadata.registrations.is_empty();
-            metadata.initialized = initialized || keep_serving_previous_routes;
-            metadata.init_error = init_error;
-            if let Some(regs) = registrations {
-                metadata.registrations = regs;
+        let metadata = match guard.get_mut(uri) {
+            Some(metadata) => metadata,
+            None => {
+                // If it's a static script, it might not be in dynamic scripts map yet
+                let static_scripts = get_static_scripts();
+                let Some(content) = static_scripts.get(uri) else {
+                    return Err(RepositoryError::ScriptNotFound(uri.to_string()).into());
+                };
+                guard
+                    .entry(uri.to_string())
+                    .or_insert_with(|| ScriptMetadata::new(uri.to_string(), content.clone()))
             }
-            if initialized {
-                metadata.last_init_time = Some(SystemTime::now());
-            }
-        } else {
-            // If it's a static script, it might not be in dynamic scripts map yet
-            if let Some(content) = get_static_scripts().get(uri) {
-                let mut metadata = ScriptMetadata::new(uri.to_string(), content.clone());
-                metadata.initialized = initialized;
-                metadata.init_error = init_error;
-                if let Some(regs) = registrations {
-                    metadata.registrations = regs;
-                }
-                if initialized {
-                    metadata.last_init_time = Some(SystemTime::now());
-                }
-                guard.insert(uri.to_string(), metadata);
-            } else {
-                return Err(RepositoryError::ScriptNotFound(uri.to_string()).into());
-            }
+        };
+
+        // Registrations from a *failed* init() are partial by definition — the
+        // script stopped registering wherever it broke. They are worth
+        // installing only when there is no working table to lose, which is the
+        // case on a script's first init: a route table that is missing entries
+        // still beats a script that answers nothing. An already-serving table
+        // is kept instead, so a broken redeploy degrades to "running the old
+        // routes" rather than to a partial set.
+        if let Some(regs) = registrations
+            && (initialized || metadata.registrations.is_empty())
+        {
+            metadata.registrations = regs;
+        }
+        // Routing reads `initialized` as "has a usable route table" (see
+        // `route_index::build_index`), so it stays set whenever registrations
+        // are installed; `init_error` is what records a failure.
+        metadata.initialized = initialized || !metadata.registrations.is_empty();
+        metadata.init_error = init_error;
+        if initialized {
+            metadata.last_init_time = Some(SystemTime::now());
         }
         drop(guard);
         crate::route_index::invalidate();
@@ -6551,6 +6554,124 @@ mod tests {
             metadata.init_error.is_none(),
             "the error describes the previous source"
         );
+    }
+
+    /// `update_script_init_status` only touches the in-memory metadata map, so a
+    /// lazily-connected pool is enough — nothing in these tests reaches the
+    /// database.
+    fn metadata_only_repository() -> PostgresRepository {
+        let pool = sqlx::PgPool::connect_lazy("postgresql://unused@localhost/unused")
+            .expect("lazy pool should be constructible without connecting");
+        PostgresRepository::new(pool, "test".to_string())
+    }
+
+    fn route_table(handler: &str) -> RouteRegistrations {
+        let mut registrations = RouteRegistrations::new();
+        registrations.insert(
+            ("/probe".to_string(), "GET".to_string()),
+            RouteMetadata::simple(handler.to_string()),
+        );
+        registrations
+    }
+
+    fn seed_metadata(uri: &str, metadata: ScriptMetadata) {
+        safe_lock_scripts()
+            .expect("scripts lock")
+            .insert(uri.to_string(), metadata);
+    }
+
+    fn seeded_metadata(uri: &str) -> ScriptMetadata {
+        safe_lock_scripts()
+            .expect("scripts lock")
+            .get(uri)
+            .cloned()
+            .expect("metadata should still be cached")
+    }
+
+    fn handler_at(metadata: &ScriptMetadata, path: &str, method: &str) -> Option<String> {
+        metadata
+            .registrations
+            .get(&(path.to_string(), method.to_string()))
+            .map(|route| route.handler_name.clone())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn failed_init_keeps_the_route_table_that_is_already_serving() {
+        let uri = "test://failed-init-keeps-table";
+        let mut metadata = ScriptMetadata::new(uri.to_string(), "v1".to_string());
+        metadata.mark_initialized_with_registrations(route_table("v1Handler"));
+        seed_metadata(uri, metadata);
+
+        metadata_only_repository()
+            .update_script_init_status(
+                uri,
+                false,
+                Some("init threw".to_string()),
+                // Partial registrations from the failed attempt
+                Some(route_table("v2Handler")),
+            )
+            .await
+            .expect("status update should succeed");
+
+        let metadata = seeded_metadata(uri);
+        assert_eq!(
+            handler_at(&metadata, "/probe", "GET").as_deref(),
+            Some("v1Handler"),
+            "a partial table from a failed init must not replace one that works"
+        );
+        assert!(metadata.initialized, "routes must keep serving");
+        assert!(metadata.init_error.is_some(), "failure must be recorded");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn failed_init_installs_partial_routes_when_nothing_is_serving() {
+        let uri = "test://failed-init-installs-partial";
+        seed_metadata(uri, ScriptMetadata::new(uri.to_string(), "v1".to_string()));
+
+        metadata_only_repository()
+            .update_script_init_status(
+                uri,
+                false,
+                Some("init threw after registering".to_string()),
+                Some(route_table("registeredBeforeFailing")),
+            )
+            .await
+            .expect("status update should succeed");
+
+        let metadata = seeded_metadata(uri);
+        assert_eq!(
+            handler_at(&metadata, "/probe", "GET").as_deref(),
+            Some("registeredBeforeFailing"),
+            "routes registered before the failure are better than no routes"
+        );
+        assert!(
+            metadata.initialized,
+            "routing skips scripts that are not marked initialized"
+        );
+        assert!(metadata.init_error.is_some(), "failure must be recorded");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn successful_init_replaces_the_previous_route_table() {
+        let uri = "test://successful-init-replaces-table";
+        let mut metadata = ScriptMetadata::new(uri.to_string(), "v1".to_string());
+        metadata.mark_initialized_with_registrations(route_table("v1Handler"));
+        seed_metadata(uri, metadata);
+
+        metadata_only_repository()
+            .update_script_init_status(uri, true, None, Some(route_table("v2Handler")))
+            .await
+            .expect("status update should succeed");
+
+        let metadata = seeded_metadata(uri);
+        assert_eq!(
+            handler_at(&metadata, "/probe", "GET").as_deref(),
+            Some("v2Handler"),
+            "a successful init swaps in the new table"
+        );
+        assert!(metadata.initialized);
+        assert!(metadata.init_error.is_none());
+        assert!(metadata.last_init_time.is_some());
     }
 
     #[test]

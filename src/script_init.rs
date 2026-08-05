@@ -6,6 +6,11 @@ use std::time::{Duration, SystemTime};
 use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
 
+/// Extra wall-clock time the outer init timeout allows beyond the runtime's own
+/// interrupt budget, so the interrupt is what normally stops a slow init() —
+/// it reports the routes registered so far, the outer timeout cannot.
+const INIT_TIMEOUT_GRACE_MS: u64 = 5_000;
+
 /// Result of a script initialization attempt
 #[derive(Debug, Clone)]
 pub struct InitResult {
@@ -109,8 +114,18 @@ impl ScriptInitializer {
         // Create init context
         let context = InitContext::new(metadata.uri.clone(), is_startup);
 
-        // Call init with timeout
-        let timeout_duration = Duration::from_millis(self.timeout_ms);
+        // Call init with timeout.
+        //
+        // Two budgets bound this call: the runtime's interrupt handler inside
+        // `call_init_if_exists_with_timeout`, and this outer one. The interrupt
+        // is the better of the two — it returns the routes init() registered
+        // before running out of time, whereas expiring here abandons the
+        // blocking task and its registrations with it. So the outer budget gets
+        // a grace period and serves only as the backstop for the case the
+        // interrupt cannot handle: JavaScript blocked in a host call (a database
+        // query, say), where no bytecode executes for the handler to interrupt.
+        let timeout_duration =
+            Duration::from_millis(self.timeout_ms.saturating_add(INIT_TIMEOUT_GRACE_MS));
         let script_uri_clone = script_uri.to_string();
         let metadata_clone = metadata.clone();
 
@@ -157,10 +172,17 @@ impl ScriptInitializer {
                     debug!("Script '{}' has no init() function (skipped)", script_uri);
                     Ok(InitResult::skipped(script_uri.to_string()))
                 }
-                Err(e) => {
-                    // Init function threw an error (already formatted by call_init_if_exists)
+                Err(failure) => {
+                    // Init function threw or ran out of budget (message already
+                    // formatted by call_init_if_exists). Offer the routes it
+                    // registered before failing: the repository installs them
+                    // only when the script has no working route table to lose,
+                    // which is what makes a first deploy with a slow init()
+                    // reachable instead of invisible.
+                    let partial = Some(failure.registrations).filter(|regs| !regs.is_empty());
+                    let e = failure.error;
                     if let Err(err) = repository::get_repository()
-                        .update_script_init_status(script_uri, false, Some(e.clone()), None)
+                        .update_script_init_status(script_uri, false, Some(e.clone()), partial)
                         .await
                     {
                         warn!("Failed to mark script init as failed: {}", err);
@@ -200,8 +222,12 @@ impl ScriptInitializer {
                 ))
             }
             Err(_timeout_error) => {
-                // Timeout occurred
-                let error_msg = format!("Init timeout ({}ms)", self.timeout_ms);
+                // The backstop fired: the blocking task is abandoned mid-run, so
+                // there are no registrations to recover here.
+                let error_msg = format!(
+                    "Init timeout ({}ms + {}ms grace)",
+                    self.timeout_ms, INIT_TIMEOUT_GRACE_MS
+                );
                 if let Err(e) = repository::get_repository()
                     .update_script_init_status(script_uri, false, Some(error_msg.clone()), None)
                     .await
@@ -216,8 +242,9 @@ impl ScriptInitializer {
                     warn!("Failed to log error to database: {}", err);
                 }
                 error!(
-                    "✗ Script '{}' init timeout after {}ms",
-                    script_uri, self.timeout_ms
+                    "✗ Script '{}' init timeout after {}ms (blocked in a host call?)",
+                    script_uri,
+                    self.timeout_ms + INIT_TIMEOUT_GRACE_MS
                 );
                 Ok(InitResult::failed(
                     script_uri.to_string(),

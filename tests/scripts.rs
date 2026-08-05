@@ -1330,6 +1330,49 @@ async fn test_redeploy_keeps_routes_when_reinit_fails() {
     );
 }
 
+/// A first init() that registers its routes before doing slow setup should come
+/// up routable even if that setup then fails — the routes it managed to register
+/// are reported with the failure instead of being discarded.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_failed_first_init_keeps_routes_it_registered() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    setup_env().await;
+    let script_uri = "test://partial-init-registrations";
+    let route_key = ("/partial-probe".to_string(), "GET".to_string());
+
+    let script_content = r#"
+        function init(context) {
+            routeRegistry.registerRoute('/partial-probe', 'probe_handler', 'GET');
+            throw new Error("setup failed after registering");
+        }
+        function probe_handler(request) { return { status: 200, body: "ok" }; }
+    "#;
+    upsert_script(script_uri, script_content).expect("Should upsert script");
+
+    let initializer = ScriptInitializer::new(5000);
+    let result = initializer
+        .initialize_script(script_uri, false)
+        .await
+        .expect("Should return InitResult");
+    assert!(!result.success, "Init should be reported as failed");
+
+    let metadata = get_script_metadata(script_uri).expect("Should get metadata");
+    assert!(
+        metadata.registrations.contains_key(&route_key),
+        "Routes registered before the failure should be installed"
+    );
+    assert!(
+        metadata.initialized,
+        "Installed routes must be reachable, which routing gates on this flag"
+    );
+    assert!(
+        metadata.init_error.is_some(),
+        "The failure should still be recorded"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_initializer_all_scripts() {
     if should_skip_integration_tests() {

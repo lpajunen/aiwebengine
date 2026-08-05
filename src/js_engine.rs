@@ -794,6 +794,22 @@ pub fn execute_script_secure(
     let registrations = Rc::new(RefCell::new(HashMap::new()));
     let uri_owned = uri.to_string();
 
+    // Prepare the program before the runtime exists. Bundling an asset-backed
+    // script fetches and transpiles every imported module, and the interrupt
+    // deadline armed by `create_sandboxed_runtime` starts at runtime creation —
+    // preparing inside it spends the script's execution budget on the bundle
+    // whenever the caches are cold, which is exactly the state a deploy leaves
+    // them in.
+    let executable_code = match transpile_if_needed(&uri_owned, content) {
+        Ok(code) => code,
+        Err(e) => {
+            return ScriptExecutionResult::failed(
+                format!("Transpilation failed: {}", e),
+                start_time.elapsed().as_millis() as u64,
+            );
+        }
+    };
+
     match create_sandboxed_runtime(&limits) {
         Ok(rt) => match Context::full(&rt) {
             Ok(ctx) => {
@@ -843,20 +859,7 @@ pub fn execute_script_secure(
                         None, // No auth context during script execution with config
                     )?;
 
-                    // Transpile if needed (TypeScript/JSX/TSX)
-                    let executable_code = match transpile_if_needed(&uri_owned, content) {
-                        Ok(code) => code,
-                        Err(e) => {
-                            let error_msg = format!("Transpilation failed: {}", e);
-                            if let Ok(mut error_ref) = error_details_clone.try_borrow_mut() {
-                                *error_ref = Some(error_msg.clone());
-                            }
-                            let static_msg: &'static str = Box::leak(error_msg.into_boxed_str());
-                            return Err(rquickjs::Error::new_from_js("transpilation", static_msg));
-                        }
-                    };
-
-                    // Execute the script
+                    // Execute the script (already bundled above)
                     let eval_result =
                         crate::bytecode::eval_program(&ctx, &uri_owned, &executable_code);
 
@@ -922,6 +925,18 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
     let registrations = Rc::new(RefCell::new(HashMap::new()));
     let uri_owned = uri.to_string();
 
+    // Bundle before arming the runtime's interrupt deadline (see
+    // `execute_script_secure`).
+    let executable_code = match transpile_if_needed(&uri_owned, content) {
+        Ok(code) => code,
+        Err(e) => {
+            return ScriptExecutionResult::failed(
+                format!("Transpilation failed: {}", e),
+                start_time.elapsed().as_millis() as u64,
+            );
+        }
+    };
+
     match create_sandboxed_runtime(&limits) {
         Ok(rt) => {
             match Context::full(&rt) {
@@ -963,11 +978,7 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                                 None, // No auth context during script registration
                             )?;
 
-                            // Transpile if needed (TypeScript/JSX/TSX)
-                            let executable_code = transpile_if_needed(&uri_owned, content)
-                                .map_err(|_e| rquickjs::Error::Exception)?;
-
-                            // Execute the script
+                            // Execute the script (already bundled above)
                             crate::bytecode::eval_program(&ctx, &uri_owned, &executable_code)?;
                             Ok(())
                         });
@@ -1075,8 +1086,25 @@ pub fn execute_script_for_request_secure(
     // Instant::now() calls are always taken (they cost nanoseconds); only the
     // final log line is gated so profiling adds no measurable overhead when off.
     let profile = request_profiling_enabled();
-    let phase = Instant::now();
 
+    // Fetch and bundle the program *before* creating the runtime: the interrupt
+    // deadline armed by `create_sandboxed_runtime` starts at runtime creation,
+    // so preparing the program afterwards charges the bundle against the
+    // request's execution budget. On a cold cache — the state every deploy
+    // leaves behind — an asset-backed script fetches and transpiles every
+    // imported module here, which was enough to exhaust the budget before the
+    // handler ran.
+    let phase = Instant::now();
+    let owner_script = repository::fetch_script(&params.script_uri)
+        .ok_or_else(|| format!("no script for uri {}", params.script_uri))?;
+    let t_fetch = phase.elapsed();
+
+    // Transpile if needed (TypeScript/JSX/TSX) — cached by (uri, source hash).
+    let phase = Instant::now();
+    let executable_code = transpile_if_needed(&params.script_uri, &owner_script)?;
+    let t_transpile = phase.elapsed();
+
+    let phase = Instant::now();
     let rt = create_sandboxed_runtime(&current_execution_limits())?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
     let t_runtime = phase.elapsed();
@@ -1104,16 +1132,6 @@ pub fn execute_script_for_request_secure(
     })
     .map_err(|e| format!("install secure host fns: {}", e))?;
     let t_globals = phase.elapsed();
-
-    let phase = Instant::now();
-    let owner_script = repository::fetch_script(&params.script_uri)
-        .ok_or_else(|| format!("no script for uri {}", params.script_uri))?;
-    let t_fetch = phase.elapsed();
-
-    // Transpile if needed (TypeScript/JSX/TSX) — cached by (uri, source hash).
-    let phase = Instant::now();
-    let executable_code = transpile_if_needed(&params.script_uri, &owner_script)?;
-    let t_transpile = phase.elapsed();
 
     // Evaluate the script and capture detailed error information if it fails.
     // Bytecode is cached, but the top-level program still executes each request.
@@ -1335,6 +1353,13 @@ pub fn execute_script_for_request(
 ) -> Result<(u16, String, Option<String>), String> {
     let script_uri_owned = script_uri.to_string();
     let auth_ctx = crate::auth::JsAuthContext::anonymous();
+
+    // Fetch and bundle before arming the runtime's interrupt deadline (see
+    // `execute_script_for_request_secure`).
+    let owner_script = repository::fetch_script(script_uri)
+        .ok_or_else(|| format!("no script for uri {}", script_uri))?;
+    let executable_code = transpile_if_needed(script_uri, &owner_script)?;
+
     let rt = create_sandboxed_runtime(&current_execution_limits())?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
@@ -1360,12 +1385,6 @@ pub fn execute_script_for_request(
         Ok(())
     })
     .map_err(|e| format!("install host fns: {}", e))?;
-
-    let owner_script = repository::fetch_script(script_uri)
-        .ok_or_else(|| format!("no script for uri {}", script_uri))?;
-
-    // Transpile if needed (TypeScript/JSX/TSX)
-    let executable_code = transpile_if_needed(script_uri, &owner_script)?;
 
     ctx.with(|ctx| crate::bytecode::eval_program(&ctx, script_uri, &executable_code))
         .map_err(|e| format!("owner eval: {}", e))?;
@@ -1437,9 +1456,16 @@ pub fn execute_scheduled_handler(
     handler_name: &str,
     invocation: &ScheduledInvocation,
 ) -> Result<(), String> {
+    let script_uri_owned = script_uri.to_string();
+
+    // Fetch and bundle before arming the runtime's interrupt deadline (see
+    // `execute_script_for_request_secure`).
+    let owner_script = repository::fetch_script(script_uri)
+        .ok_or_else(|| format!("no script for uri {}", script_uri))?;
+    let executable_code = transpile_if_needed(script_uri, &owner_script)?;
+
     let rt = create_sandboxed_runtime(&current_execution_limits())?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
-    let script_uri_owned = script_uri.to_string();
 
     ctx.with(|ctx| -> Result<(), rquickjs::Error> {
         let security_config = GlobalSecurityConfig {
@@ -1458,12 +1484,6 @@ pub fn execute_scheduled_handler(
         )
     })
     .map_err(|e| format!("install scheduler globals: {}", e))?;
-
-    let owner_script = repository::fetch_script(script_uri)
-        .ok_or_else(|| format!("no script for uri {}", script_uri))?;
-
-    // Transpile if needed (TypeScript/JSX/TSX)
-    let executable_code = transpile_if_needed(script_uri, &owner_script)?;
 
     ctx.with(|ctx| {
         crate::bytecode::eval_program(&ctx, script_uri, &executable_code).map_err(|e| {
@@ -1531,6 +1551,13 @@ pub fn execute_graphql_resolver(params: GraphqlResolverExecutionParams) -> Resul
     let args_owned = params.args.clone();
     let auth_context = params.auth_context.clone();
 
+    // Fetch and bundle before arming the runtime's interrupt deadline (see
+    // `execute_script_for_request_secure`). This path previously evaluated the
+    // raw source, which cannot work for a TypeScript or asset-importing script.
+    let script_content = repository::fetch_script(&script_uri_owned)
+        .ok_or_else(|| format!("no script for uri {}", script_uri_owned))?;
+    let executable_code = transpile_if_needed(&script_uri_owned, &script_content)?;
+
     let rt = create_sandboxed_runtime(&current_execution_limits())?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
@@ -1558,12 +1585,8 @@ pub fn execute_graphql_resolver(params: GraphqlResolverExecutionParams) -> Resul
         // Override specific functions that have different signatures for GraphQL resolver context
         let _global = ctx.globals();
 
-        // Load and execute the script
-        let script_content = repository::fetch_script(&script_uri_owned)
-            .ok_or_else(|| rquickjs::Error::new_from_js("Script", "not found"))?;
-
-        // Execute the script
-        crate::bytecode::eval_program(&ctx, &script_uri_owned, &script_content)?;
+        // Execute the script (fetched and bundled above)
+        crate::bytecode::eval_program(&ctx, &script_uri_owned, &executable_code)?;
 
         let resolver_result: rquickjs::Value = ctx.globals().get(&resolver_function_owned)?;
         let resolver_func = resolver_result
@@ -1669,6 +1692,12 @@ pub fn execute_mcp_prompt_handler(
     let handler_function_owned = handler_function.to_string();
     let arguments_owned = arguments.clone();
 
+    // Fetch and bundle before arming the runtime's interrupt deadline (see
+    // `execute_script_for_request_secure`).
+    let script_content = repository::fetch_script(&script_uri_owned)
+        .ok_or_else(|| format!("no script for uri {}", script_uri_owned))?;
+    let executable_code = transpile_if_needed(&script_uri_owned, &script_content)?;
+
     let rt = create_sandboxed_runtime(&current_execution_limits())?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
@@ -1692,17 +1721,7 @@ pub fn execute_mcp_prompt_handler(
             None,
         )?;
 
-        // Load and execute the script
-        let script_content = repository::fetch_script(&script_uri_owned)
-            .ok_or_else(|| rquickjs::Error::new_from_js("Script", "not found"))?;
-
-        // Transpile if needed (TypeScript/JSX/TSX)
-        let executable_code =
-            transpile_if_needed(&script_uri_owned, &script_content).map_err(|e| {
-                rquickjs::Error::new_from_js("transpile", Box::leak(e.into_boxed_str()))
-            })?;
-
-        // Execute the script
+        // Execute the script (fetched and bundled above)
         crate::bytecode::eval_program(&ctx, &script_uri_owned, &executable_code)?;
 
         // Get the handler function
@@ -1758,6 +1777,12 @@ pub fn execute_mcp_tool_handler(
     let auth_context_owned = auth_context;
     let user_context_owned = user_context;
 
+    // Fetch and bundle before arming the runtime's interrupt deadline (see
+    // `execute_script_for_request_secure`).
+    let script_content = repository::fetch_script(&script_uri_owned)
+        .ok_or_else(|| format!("no script for uri {}", script_uri_owned))?;
+    let executable_code = transpile_if_needed(&script_uri_owned, &script_content)?;
+
     let rt = create_sandboxed_runtime(&current_execution_limits())?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
@@ -1781,17 +1806,7 @@ pub fn execute_mcp_tool_handler(
             auth_context_owned.clone(),
         )?;
 
-        // Load and execute the script
-        let script_content = repository::fetch_script(&script_uri_owned)
-            .ok_or_else(|| rquickjs::Error::new_from_js("Script", "not found"))?;
-
-        // Transpile if needed (TypeScript/JSX/TSX)
-        let executable_code =
-            transpile_if_needed(&script_uri_owned, &script_content).map_err(|e| {
-                rquickjs::Error::new_from_js("transpile", Box::leak(e.into_boxed_str()))
-            })?;
-
-        // Execute the script
+        // Execute the script (fetched and bundled above)
         crate::bytecode::eval_program(&ctx, &script_uri_owned, &executable_code)?;
 
         let handler_result: rquickjs::Value = ctx.globals().get(&handler_function_owned)?;
@@ -1898,6 +1913,12 @@ pub fn execute_stream_customization_function(
     let path_owned = path.to_string();
     let query_params_owned = query_params.clone();
 
+    // Fetch and bundle before arming the runtime's interrupt deadline (see
+    // `execute_script_for_request_secure`).
+    let script_content = repository::fetch_script(&script_uri_owned)
+        .ok_or_else(|| format!("no script for uri {}", script_uri_owned))?;
+    let executable_code = transpile_if_needed(&script_uri_owned, &script_content)?;
+
     let rt = create_sandboxed_runtime(&current_execution_limits())?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
@@ -1920,15 +1941,7 @@ pub fn execute_stream_customization_function(
                 auth_context.clone(),
             )?;
 
-            // Load and execute the script
-            let script_content = repository::fetch_script(&script_uri_owned)
-                .ok_or_else(|| rquickjs::Error::new_from_js("Script", "not found"))?;
-
-            // Transpile if needed (TypeScript/JSX/TSX)
-            let executable_code =
-                transpile_if_needed(&script_uri_owned, &script_content).map_err(|e| {
-                    rquickjs::Error::new_from_js("transpile", Box::leak(e.into_boxed_str()))
-                })?;
+            // The script was fetched and bundled above.
 
             crate::bytecode::eval_program(&ctx, &script_uri_owned, &executable_code)?;
 
@@ -2028,20 +2041,47 @@ pub fn execute_stream_customization_function(
     Ok(filter_criteria)
 }
 
+/// A failed init() attempt, carrying whatever the script managed to register
+/// before it failed.
+#[derive(Debug, Clone)]
+pub struct InitFailure {
+    pub error: String,
+    /// Routes registered before the failure. Empty when init() failed before
+    /// reaching any `routeRegistry.registerRoute` call.
+    pub registrations: RouteRegistrations,
+}
+
+impl InitFailure {
+    /// A failure that happened before the script could register anything.
+    fn new(error: String) -> Self {
+        Self {
+            error,
+            registrations: RouteRegistrations::new(),
+        }
+    }
+}
+
+impl std::fmt::Display for InitFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.error)
+    }
+}
+
 /// Calls the init() function in a script if it exists
 ///
 /// This function executes a script and checks if it has an `init()` function defined.
 /// If found, it calls the function with the provided context.
 ///
 /// Returns:
-/// - Ok(true) if init() was found and called successfully
-/// - Ok(false) if no init() function exists (not an error)
-/// - Err(String) if init() exists but threw an error
+/// - `Ok(Some(registrations))` if init() was found and completed
+/// - `Ok(None)` if no init() function exists (not an error)
+/// - `Err(InitFailure)` if init() exists but threw or exceeded its budget —
+///   including any routes it registered before that point
 pub fn call_init_if_exists(
     script_uri: &str,
     script_content: &str,
     context: crate::script_init::InitContext,
-) -> Result<Option<RouteRegistrations>, String> {
+) -> Result<Option<RouteRegistrations>, InitFailure> {
     call_init_if_exists_with_timeout(
         script_uri,
         script_content,
@@ -2058,7 +2098,7 @@ pub fn call_init_if_exists_with_timeout(
     script_content: &str,
     context: crate::script_init::InitContext,
     timeout_ms: u64,
-) -> Result<Option<RouteRegistrations>, String> {
+) -> Result<Option<RouteRegistrations>, InitFailure> {
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -2068,9 +2108,18 @@ pub fn call_init_if_exists_with_timeout(
         timeout_ms,
         ..current_execution_limits()
     };
-    let rt = create_sandboxed_runtime(&limits)?;
 
-    let ctx = Context::full(&rt).map_err(|e| format!("Failed to create context: {}", e))?;
+    // Bundle before arming the runtime's interrupt deadline. init() is the step
+    // a deploy depends on, and it runs with the caches cold by definition — with
+    // the bundle inside the budget, a script with many imported modules could
+    // spend its whole init() allowance fetching and transpiling them.
+    let executable_code = transpile_if_needed(script_uri, script_content)
+        .map_err(|e| InitFailure::new(format!("Transpilation failed: {}", e)))?;
+
+    let rt = create_sandboxed_runtime(&limits).map_err(InitFailure::new)?;
+
+    let ctx = Context::full(&rt)
+        .map_err(|e| InitFailure::new(format!("Failed to create context: {}", e)))?;
 
     // Create registrations map to capture routeRegistry.registerRoute() calls during init
     let registrations = Rc::new(RefCell::new(HashMap::new()));
@@ -2131,20 +2180,7 @@ pub fn call_init_if_exists_with_timeout(
             }
             setup_result?;
 
-            // Transpile if needed (TypeScript/JSX/TSX)
-            let executable_code = match transpile_if_needed(script_uri, script_content) {
-                Ok(code) => code,
-                Err(e) => {
-                    let error_msg = format!("Transpilation failed: {}", e);
-                    if let Ok(mut error_ref) = error_details_clone.try_borrow_mut() {
-                        *error_ref = Some(error_msg.clone());
-                    }
-                    let static_msg: &'static str = Box::leak(error_msg.into_boxed_str());
-                    return Err(rquickjs::Error::new_from_js("transpilation", static_msg));
-                }
-            };
-
-            // Execute the script to define functions
+            // Execute the script to define functions (bundled above)
             let eval_result = crate::bytecode::eval_program(&ctx, &uri_owned, &executable_code);
             if let Err(ref e) = eval_result {
                 let details = extract_error_details(&ctx, e);
@@ -2219,23 +2255,41 @@ pub fn call_init_if_exists_with_timeout(
                 return format!("Init function error: {}", details);
             }
             format!("Init function error: {}", e)
-        })?;
+        });
 
-    // Return registrations if init was called
-    let final_result = if result {
-        match registrations.try_borrow() {
-            Ok(regs) => {
-                let reg_count = regs.len();
-                info!(
-                    "Init() for script {} registered {} routes",
-                    script_uri, reg_count
-                );
-                Ok(Some(regs.clone()))
-            }
-            Err(_) => Err("Failed to access registrations".to_string()),
+    // Routes registered before init() threw or ran out of budget are reported
+    // with the failure rather than dropped. Scripts whose init() registers first
+    // and does its slow setup afterwards then come up routable even when that
+    // setup does not finish; the caller decides whether to install them.
+    let registered = registrations
+        .try_borrow()
+        .map(|regs| regs.clone())
+        .unwrap_or_default();
+
+    let final_result = match result {
+        Ok(true) => {
+            info!(
+                "Init() for script {} registered {} routes",
+                script_uri,
+                registered.len()
+            );
+            Ok(Some(registered))
         }
-    } else {
-        Ok(None)
+        Ok(false) => Ok(None),
+        Err(error) => {
+            if !registered.is_empty() {
+                warn!(
+                    "Init() for script {} failed after registering {} routes: {}",
+                    script_uri,
+                    registered.len(),
+                    error
+                );
+            }
+            Err(InitFailure {
+                error,
+                registrations: registered,
+            })
+        }
     };
 
     // Ensure clean shutdown: drop Context before Runtime
