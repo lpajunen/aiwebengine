@@ -265,6 +265,90 @@ async fn imported_asset_module_executes_in_request_path() {
     assert!(repository::delete_asset(script_uri, asset_uri));
 }
 
+/// Module sources are cached across builds, so the cache must not outlive the
+/// asset it was read from — and must survive edits that cannot have changed it.
+#[tokio::test(flavor = "multi_thread")]
+async fn cached_module_sources_track_asset_edits() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let script_uri = "test://asset-module-cache-invalidation.ts";
+    let asset_uri = "server/versioned-helper.ts";
+    let script_content = r#"
+        import { version } from "./server/versioned-helper.ts";
+
+        function handleVersionRequest(context) {
+            return ResponseBuilder.text(version());
+        }
+    "#;
+
+    let store_version = |version: &str| {
+        repository::upsert_asset(test_asset(
+            script_uri,
+            asset_uri,
+            "text/plain",
+            format!("export function version() {{ return \"{}\"; }}", version).as_bytes(),
+        ))
+        .expect("asset should be stored");
+    };
+
+    let served_version = || {
+        let response = execute_script_for_request_secure(RequestExecutionParams {
+            script_uri: script_uri.to_string(),
+            handler_name: "handleVersionRequest".to_string(),
+            path: "/asset-cache".to_string(),
+            method: "GET".to_string(),
+            query_params: None,
+            form_data: None,
+            raw_body: None,
+            headers: HashMap::new(),
+            user_context: UserContext::authenticated("asset-cache-user".to_string()),
+            route_params: None,
+            auth_context: None,
+            uploaded_files: None,
+        })
+        .expect("request execution should succeed");
+        String::from_utf8(response.body).expect("response should be utf-8 text")
+    };
+
+    ensure_script(script_uri);
+    store_version("v1");
+    repository::upsert_script(script_uri, script_content).expect("script should be stored");
+    assert_eq!(served_version(), "v1");
+
+    // Editing the asset must reach the next build even though its source is cached.
+    store_version("v2");
+    assert_eq!(
+        served_version(),
+        "v2",
+        "an asset edit must invalidate its cached module source"
+    );
+
+    // Re-upserting the root script leaves the asset untouched, so the cached
+    // module source is reused — it must still be the current one.
+    repository::upsert_script(script_uri, script_content).expect("script should be stored");
+    assert_eq!(
+        served_version(),
+        "v2",
+        "a script edit must not resurrect a stale module source"
+    );
+
+    assert!(repository::delete_asset(script_uri, asset_uri));
+
+    // With the asset gone, the import can no longer resolve.
+    let error = module_loader::load_owned_asset_module(
+        script_uri,
+        "main.ts",
+        "./server/versioned-helper.ts",
+    )
+    .expect_err("a deleted asset must not be served from cache");
+    assert!(
+        error.to_string().contains("was not found in assets"),
+        "unexpected error: {}",
+        error
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn imported_asset_root_module_executes_in_request_path() {
     let _guard = test_mutex().lock().await;

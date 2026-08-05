@@ -318,13 +318,13 @@ pub fn get_db_pool() -> Option<std::sync::Arc<crate::database::Database>> {
     None
 }
 
-/// Send PostgreSQL notification about script change
-/// Drop the caches whose contents depend on a script and its imported assets:
-/// the compiled bytecode (keyed by root URI) and the prepared program bundle.
-/// The next request rebuilds both from current source.
-fn invalidate_script_program_caches(script_uri: &str) {
+/// Drop the caches that depend on one of a script's assets: the compiled
+/// bytecode (keyed by root URI), the prepared program bundle, and the cached
+/// source of the asset that changed. The script's *other* module sources stay
+/// cached, so the rebuild re-reads one asset rather than all of them.
+fn invalidate_script_asset_caches(script_uri: &str, asset_path: &str) {
     crate::bytecode::invalidate(script_uri);
-    crate::module_loader::invalidate(script_uri);
+    crate::module_loader::invalidate_asset(script_uri, asset_path);
 }
 
 /// Point the metadata cache at `content` without disturbing the script's route
@@ -5594,7 +5594,9 @@ impl Repository for PostgresRepository {
         refresh_cached_script_source(uri, content);
         crate::route_index::invalidate();
         crate::bytecode::invalidate(uri);
-        crate::module_loader::invalidate(uri);
+        // Only the root source changed; the script's imported modules are still
+        // current, so the rebuild reads them from cache instead of the database.
+        crate::module_loader::invalidate_program(uri);
         Ok(())
     }
 
@@ -5816,7 +5818,7 @@ impl Repository for PostgresRepository {
         // An imported asset is part of the owning script's prepared program, so
         // its change must invalidate the same caches a script edit does — both
         // locally and (via the refresh notification) on other cluster nodes.
-        invalidate_script_program_caches(&asset.script_uri);
+        invalidate_script_asset_caches(&asset.script_uri, &asset.uri);
         send_script_notification(&self.pool, &asset.script_uri, "upserted", &self.server_id)
             .await?;
         Ok(())
@@ -5834,7 +5836,7 @@ impl Repository for PostgresRepository {
         };
 
         if result {
-            invalidate_script_program_caches(script_uri);
+            invalidate_script_asset_caches(script_uri, uri);
             send_script_notification(&self.pool, script_uri, "upserted", &self.server_id).await?;
         }
         Ok(result)

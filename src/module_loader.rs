@@ -40,17 +40,60 @@ fn hash_root(content: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
-/// Drop any cached prepared program for `script_uri`. Call whenever the script
-/// or one of its imported assets changes.
+/// Cache of imported module sources, keyed by `(script_uri, logical_path)`.
+///
+/// Building a program fetches every imported module from the database one at a
+/// time — 70+ blocking round trips for a script with a large `server/` tree —
+/// and [`PREPARED_CACHE`] is dropped whenever *any* of those modules changes.
+/// Without this, editing one asset costs a full re-read of all of them.
+///
+/// Only modules that are actually imported land here, so the cache holds about
+/// as much as the bundles themselves; unimported assets (client bundles,
+/// images) never enter it.
+/// `(script_uri, logical_path)` identifying one script's imported module.
+type ModuleKey = (String, String);
+
+static MODULE_SOURCE_CACHE: OnceLock<Mutex<HashMap<ModuleKey, Arc<ModuleSource>>>> =
+    OnceLock::new();
+
+fn module_source_cache() -> &'static Mutex<HashMap<ModuleKey, Arc<ModuleSource>>> {
+    MODULE_SOURCE_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Drop the prepared program for `script_uri` *and* every module source cached
+/// for it. Use when the change is unknown or wholesale — a deletion, or an
+/// upsert that happened on another instance and reached us as a notification.
 pub fn invalidate(script_uri: &str) {
+    invalidate_program(script_uri);
+    if let Ok(mut guard) = module_source_cache().lock() {
+        guard.retain(|(cached_script, _), _| cached_script != script_uri);
+    }
+}
+
+/// Drop only the prepared program for `script_uri`, keeping its module sources.
+/// Use when the root script changed but its assets did not.
+pub fn invalidate_program(script_uri: &str) {
     if let Ok(mut guard) = prepared_cache().lock() {
         guard.remove(script_uri);
     }
 }
 
-/// Clear the entire prepared-program cache.
+/// Drop the prepared program for `script_uri` and the one module source backed
+/// by `asset_path`. Use when a single asset was written or deleted: the rebuild
+/// then re-reads that module only.
+pub fn invalidate_asset(script_uri: &str, asset_path: &str) {
+    invalidate_program(script_uri);
+    if let Ok(mut guard) = module_source_cache().lock() {
+        guard.remove(&(script_uri.to_string(), asset_path.to_string()));
+    }
+}
+
+/// Clear the prepared-program and module-source caches.
 pub fn clear() {
     if let Ok(mut guard) = prepared_cache().lock() {
+        guard.clear();
+    }
+    if let Ok(mut guard) = module_source_cache().lock() {
         guard.clear();
     }
 }
@@ -610,6 +653,7 @@ pub fn load_owned_asset_module(
 ) -> Result<ModuleSource, ModuleLoaderError> {
     let logical_path = normalize_asset_module_specifier(importer_path, specifier)?;
     load_owned_asset_module_by_path(root_script_uri, &logical_path, specifier, importer_path)
+        .map(|source| (*source).clone())
 }
 
 fn load_owned_asset_module_by_path(
@@ -617,7 +661,14 @@ fn load_owned_asset_module_by_path(
     logical_path: &str,
     original_specifier: &str,
     importer_path: &str,
-) -> Result<ModuleSource, ModuleLoaderError> {
+) -> Result<Arc<ModuleSource>, ModuleLoaderError> {
+    let cache_key = (root_script_uri.to_string(), logical_path.to_string());
+    if let Ok(guard) = module_source_cache().lock()
+        && let Some(source) = guard.get(&cache_key)
+    {
+        return Ok(Arc::clone(source));
+    }
+
     let asset = repository::fetch_asset(root_script_uri, logical_path).ok_or_else(|| {
         ModuleLoaderError::InvalidSpecifier(format!(
             "Module '{}' imported from '{}' was not found in assets for '{}'",
@@ -639,11 +690,17 @@ fn load_owned_asset_module_by_path(
         ))
     })?;
 
-    Ok(ModuleSource {
+    let source = Arc::new(ModuleSource {
         logical_path: logical_path.to_string(),
         content,
         mimetype: asset.mimetype,
-    })
+    });
+
+    if let Ok(mut guard) = module_source_cache().lock() {
+        guard.insert(cache_key, Arc::clone(&source));
+    }
+
+    Ok(source)
 }
 
 pub fn normalize_asset_module_specifier(
