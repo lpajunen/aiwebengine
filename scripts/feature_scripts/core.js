@@ -73,19 +73,6 @@ function installed_page(context) {
   };
 }
 
-// GraphQL subscription resolver for script updates
-// NEW: Returns filter criteria (empty object = broadcast to all connections)
-function scriptUpdatesResolver(context) {
-  const req = getRequest(context);
-  const args = getArgs(context);
-  console.log("Client subscribed to scriptUpdates GraphQL subscription");
-  console.log("Request context: " + JSON.stringify(req));
-
-  // Return empty object to broadcast to all connections
-  // To filter, return an object like: { userId: req.auth.userId, role: "admin" }
-  return {};
-}
-
 // Stream customization function for script_updates
 // NEW: Returns connection filter criteria based on request context
 // This function is called once when a client connects to the stream
@@ -127,12 +114,6 @@ function broadcastScriptUpdate(uri, action, details = {}) {
     // Broadcast to /script_updates stream
     // All connections will receive this since we return {} from customization function
     routeRegistry.sendStreamMessage("/script_updates", JSON.stringify(message));
-
-    // Send to GraphQL subscription using modern approach
-    graphQLRegistry.sendSubscriptionMessage(
-      "scriptUpdates",
-      JSON.stringify(message),
-    );
 
     console.log("Broadcasted script update: " + action + " " + uri);
   } catch (error) {
@@ -443,335 +424,46 @@ function script_logs_handler(context) {
   }
 }
 
-// GraphQL resolvers
-function scriptsQuery(context) {
-  const req = getRequest(context);
+// Read init status handler - reports init() success/failure for scripts
+// (useful for debugging; covers one script or all scripts)
+function readInitStatusHandler(context) {
   const args = getArgs(context);
+  const uri = args.uri;
+
   try {
-    const scriptsJson =
-      typeof scriptStorage !== "undefined" &&
-      typeof scriptStorage.listScripts === "function"
-        ? scriptStorage.listScripts()
-        : "[]";
-
-    const scriptMetadata = JSON.parse(scriptsJson);
-
-    const scriptArray = scriptMetadata.map((meta) => {
-      // Get owners for this script
-      let owners = [];
-      try {
-        if (
-          typeof scriptStorage !== "undefined" &&
-          typeof scriptStorage.getScriptOwners === "function"
-        ) {
-          const ownersJson = scriptStorage.getScriptOwners(meta.uri);
-          owners = JSON.parse(ownersJson);
-        }
-      } catch (e) {
-        console.warn(
-          `Failed to get owners for script ${meta.uri}: ${e.message}`,
-        );
-      }
-
-      return {
-        uri: meta.uri,
-        chars: meta.size || 0,
-        owners: owners,
-      };
-    });
-
-    return JSON.stringify(scriptArray);
-  } catch (error) {
-    console.error(`Scripts query failed: ${error.message}`);
-    return JSON.stringify([]);
-  }
-}
-
-function scriptQuery(context) {
-  const req = getRequest(context);
-  const args = getArgs(context);
-  try {
-    const content =
-      typeof scriptStorage !== "undefined" &&
-      typeof scriptStorage.getScript === "function"
-        ? scriptStorage.getScript(args.uri)
-        : null;
-    const logsJson = console.listLogsForUri(args.uri);
-    const logs = JSON.parse(logsJson);
-
-    // Get owners for this script
-    let owners = [];
-    try {
-      if (
-        typeof scriptStorage !== "undefined" &&
-        typeof scriptStorage.getScriptOwners === "function"
-      ) {
-        const ownersJson = scriptStorage.getScriptOwners(args.uri);
-        owners = JSON.parse(ownersJson);
-      }
-    } catch (e) {
-      console.warn(`Failed to get owners for script ${args.uri}: ${e.message}`);
-    }
-
-    // getScript returns null if script not found
-    if (content !== null && content !== undefined) {
+    if (uri) {
+      const status = scriptStorage.getScriptInitStatus(uri);
       return JSON.stringify({
-        uri: args.uri,
-        content: content,
-        contentLength: content.length,
-        logs: logs,
-        owners: owners,
-      });
-    } else {
-      // Return null if script doesn't exist
-      return JSON.stringify({
-        uri: args.uri,
-        content: null,
-        contentLength: 0,
-        logs: logs,
-        owners: owners,
+        uri: uri,
+        status: status ? JSON.parse(status) : null,
+        timestamp: new Date().toISOString(),
       });
     }
-  } catch (error) {
-    console.error(`Script query failed: ${error.message}`);
-    return JSON.stringify({
-      uri: args.uri,
-      content: null,
-      contentLength: 0,
-      logs: [],
-      owners: [],
-    });
-  }
-}
 
-function scriptInitStatusQuery(context) {
-  const req = getRequest(context);
-  const args = getArgs(context);
-  try {
-    const status = scriptStorage.getScriptInitStatus(args.uri);
-    if (status) {
-      return status; // Already JSON string
-    } else {
-      // Script not found or no metadata
-      return JSON.stringify(null);
-    }
-  } catch (error) {
-    console.error(`Script init status query failed: ${error.message}`);
-    return JSON.stringify(null);
-  }
-}
-
-function allScriptsInitStatusQuery(context) {
-  const req = getRequest(context);
-  const args = getArgs(context);
-  try {
     const scriptsJson =
       typeof scriptStorage !== "undefined" &&
       typeof scriptStorage.listScripts === "function"
         ? scriptStorage.listScripts()
         : "[]";
     const scriptMetadata = JSON.parse(scriptsJson);
-    const scriptUris = scriptMetadata.map((meta) => meta.uri);
-    const statusArray = [];
+    const statuses = [];
 
-    for (const uri of scriptUris) {
-      const statusStr =
-        typeof scriptStorage !== "undefined" &&
-        typeof scriptStorage.getScriptInitStatus === "function"
-          ? scriptStorage.getScriptInitStatus(uri)
-          : null;
-      if (statusStr) {
-        const status = JSON.parse(statusStr);
-        statusArray.push(status);
+    for (const meta of scriptMetadata) {
+      const status = scriptStorage.getScriptInitStatus(meta.uri);
+      if (status) {
+        statuses.push(JSON.parse(status));
       }
     }
 
-    return JSON.stringify(statusArray);
-  } catch (error) {
-    console.error(`All scripts init status query failed: ${error.message}`);
-    return JSON.stringify([]);
-  }
-}
-
-function upsertScriptMutation(context) {
-  const req = getRequest(context);
-  const args = getArgs(context);
-  try {
-    // Check if script already exists to determine action
-    const existingScript =
-      typeof scriptStorage !== "undefined" &&
-      typeof scriptStorage.getScript === "function"
-        ? scriptStorage.getScript(args.uri)
-        : null;
-    const action = existingScript ? "updated" : "inserted";
-
-    const result =
-      typeof scriptStorage !== "undefined" &&
-      typeof scriptStorage.upsertScript === "function"
-        ? scriptStorage.upsertScript(args.uri, args.content)
-        : "Error: scriptStorage.upsertScript not available";
-
-    // Check if the result indicates an error (Rust returns string for both success and errors)
-    if (!result || result.startsWith("Error:")) {
-      console.error(`Script upsert failed via GraphQL: ${result}`);
-      return JSON.stringify({
-        message: "Failed to upsert script",
-        uri: args.uri,
-        chars: 0,
-        success: false,
-        error: result || "Unknown error",
-      });
-    }
-
-    // Broadcast the script update
-    broadcastScriptUpdate(args.uri, action, {
-      contentLength: args.content.length,
-      previousExists: !!existingScript,
-      via: "graphql",
-    });
-
-    console.log(
-      `Script upserted via GraphQL: ${args.uri} (${args.content.length} characters)`,
-    );
     return JSON.stringify({
-      message: `Script upserted successfully: ${args.uri} (${args.content.length} characters)`,
-      uri: args.uri,
-      chars: args.content.length,
-      success: true,
+      statuses: statuses,
+      count: statuses.length,
+      timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error(`Script upsert mutation failed: ${error.message}`);
+    console.error(`MCP read_init_status error: ${error.message}`);
     return JSON.stringify({
-      message: `Error: Failed to upsert script: ${error.message}`,
-      uri: args ? args.uri : null,
-      chars: args && args.content ? args.content.length : 0,
-      success: false,
-    });
-  }
-}
-
-function deleteScriptMutation(context) {
-  const req = getRequest(context);
-  const args = getArgs(context);
-  try {
-    const result =
-      typeof scriptStorage !== "undefined" &&
-      typeof scriptStorage.deleteScript === "function"
-        ? scriptStorage.deleteScript(args.uri)
-        : false;
-    // deleteScript now returns boolean: true if deleted, false if not found
-
-    if (result) {
-      // Broadcast the script removal
-      broadcastScriptUpdate(args.uri, "removed", {
-        via: "graphql",
-      });
-
-      console.log(`Script deleted via GraphQL: ${args.uri}`);
-      return JSON.stringify({
-        message: `Script deleted successfully: ${args.uri}`,
-        uri: args.uri,
-        success: true,
-      });
-    } else {
-      return JSON.stringify({
-        message: `Script not found: ${args.uri}`,
-        uri: args.uri,
-        success: false,
-      });
-    }
-  } catch (error) {
-    console.error(`Script delete mutation failed: ${error.message}`);
-    return JSON.stringify({
-      message: `Error: Failed to delete script: ${error.message}`,
-      uri: args.uri,
-      success: false,
-    });
-  }
-}
-
-function addScriptOwnerMutation(context) {
-  const req = getRequest(context);
-  const args = getArgs(context);
-  try {
-    const result =
-      typeof scriptStorage !== "undefined" &&
-      typeof scriptStorage.addScriptOwner === "function"
-        ? scriptStorage.addScriptOwner(args.uri, args.userId)
-        : "Error: scriptStorage.addScriptOwner not available";
-
-    // Check if result indicates an error
-    if (typeof result === "string" && result.startsWith("Error:")) {
-      console.error(`Add script owner mutation failed: ${result}`);
-      return JSON.stringify({
-        message: result,
-        uri: args.uri,
-        userId: args.userId,
-        success: false,
-      });
-    }
-
-    console.log(
-      `Owner added via GraphQL: ${args.userId} to script ${args.uri}`,
-    );
-    return JSON.stringify({
-      message:
-        result ||
-        `Successfully added owner ${args.userId} to script ${args.uri}`,
-      uri: args.uri,
-      userId: args.userId,
-      success: true,
-    });
-  } catch (error) {
-    console.error(`Add script owner mutation failed: ${error.message}`);
-    return JSON.stringify({
-      message: `Error: Failed to add owner: ${error.message}`,
-      uri: args.uri,
-      userId: args.userId,
-      success: false,
-    });
-  }
-}
-
-function removeScriptOwnerMutation(context) {
-  const req = getRequest(context);
-  const args = getArgs(context);
-  try {
-    const result =
-      typeof scriptStorage !== "undefined" &&
-      typeof scriptStorage.removeScriptOwner === "function"
-        ? scriptStorage.removeScriptOwner(args.uri, args.userId)
-        : "Error: scriptStorage.removeScriptOwner not available";
-
-    // Check if result indicates an error
-    if (typeof result === "string" && result.startsWith("Error:")) {
-      console.error(`Remove script owner mutation failed: ${result}`);
-      return JSON.stringify({
-        message: result,
-        uri: args.uri,
-        userId: args.userId,
-        success: false,
-      });
-    }
-
-    console.log(
-      `Owner removed via GraphQL: ${args.userId} from script ${args.uri}`,
-    );
-    return JSON.stringify({
-      message:
-        result ||
-        `Successfully removed owner ${args.userId} from script ${args.uri}`,
-      uri: args.uri,
-      userId: args.userId,
-      success: true,
-    });
-  } catch (error) {
-    console.error(`Remove script owner mutation failed: ${error.message}`);
-    return JSON.stringify({
-      message: `Error: Failed to remove owner: ${error.message}`,
-      uri: args.uri,
-      userId: args.userId,
-      success: false,
+      error: `Failed to read init status: ${error.message}`,
     });
   }
 }
@@ -1215,66 +907,6 @@ function init(context) {
       "scriptUpdatesCustomizer",
     );
 
-    // Register GraphQL subscription (authenticated - used by UI clients)
-    graphQLRegistry.registerSubscription(
-      "scriptUpdates",
-      "type ScriptUpdate { type: String!, uri: String!, action: String!, timestamp: String!, contentLength: Int, previousExists: Boolean, via: String } type Subscription { scriptUpdates: ScriptUpdate! }",
-      "scriptUpdatesResolver",
-      "external",
-    );
-
-    // Register GraphQL queries (authenticated - used by clients and tests)
-    graphQLRegistry.registerQuery(
-      "scripts",
-      "type ScriptInfo { uri: String!, chars: Int!, owners: [String!]! } type Query { scripts: [ScriptInfo!]! }",
-      "scriptsQuery",
-      "external",
-    );
-    graphQLRegistry.registerQuery(
-      "script",
-      "type ScriptDetail { uri: String!, content: String!, contentLength: Int!, logs: [String!]!, owners: [String!]! } type Query { script(uri: String!): ScriptDetail }",
-      "scriptQuery",
-      "external",
-    );
-    graphQLRegistry.registerQuery(
-      "scriptInitStatus",
-      "type ScriptInitStatus { scriptName: String!, initialized: Boolean!, initError: String, lastInitTime: Float, createdAt: Float, updatedAt: Float } type Query { scriptInitStatus(uri: String!): ScriptInitStatus }",
-      "scriptInitStatusQuery",
-      "external",
-    );
-    graphQLRegistry.registerQuery(
-      "allScriptsInitStatus",
-      "type ScriptInitStatus { scriptName: String!, initialized: Boolean!, initError: String, lastInitTime: Float, createdAt: Float, updatedAt: Float } type Query { allScriptsInitStatus: [ScriptInitStatus!]! }",
-      "allScriptsInitStatusQuery",
-      "external",
-    );
-
-    // Register GraphQL mutations (authenticated - used by clients and tests)
-    graphQLRegistry.registerMutation(
-      "upsertScript",
-      "type UpsertScriptResponse { message: String!, uri: String!, chars: Int!, success: Boolean! } type Mutation { upsertScript(uri: String!, content: String!): UpsertScriptResponse! }",
-      "upsertScriptMutation",
-      "external",
-    );
-    graphQLRegistry.registerMutation(
-      "deleteScript",
-      "type DeleteScriptResponse { message: String!, uri: String!, success: Boolean! } type Mutation { deleteScript(uri: String!): DeleteScriptResponse! }",
-      "deleteScriptMutation",
-      "external",
-    );
-    graphQLRegistry.registerMutation(
-      "addScriptOwner",
-      "type OwnershipResponse { message: String!, uri: String!, userId: String!, success: Boolean! } type Mutation { addScriptOwner(uri: String!, userId: String!): OwnershipResponse! }",
-      "addScriptOwnerMutation",
-      "external",
-    );
-    graphQLRegistry.registerMutation(
-      "removeScriptOwner",
-      "type OwnershipResponse { message: String!, uri: String!, userId: String!, success: Boolean! } type Mutation { removeScriptOwner(uri: String!, userId: String!): OwnershipResponse! }",
-      "removeScriptOwnerMutation",
-      "external",
-    );
-
     if (typeof schedulerService !== "undefined") {
       const oneMinuteFromNow = new Date(Date.now() + 60 * 1000).toISOString();
       schedulerService.clearAll();
@@ -1421,6 +1053,22 @@ function init(context) {
         "readLogsHandler",
       );
 
+      mcpRegistry.registerTool(
+        "read_init_status",
+        "Read init() status for scripts (useful for debugging). Returns status for one script when uri is given, otherwise for all scripts.",
+        JSON.stringify({
+          type: "object",
+          properties: {
+            uri: {
+              type: "string",
+              description:
+                "Optional script URI to retrieve init status for; omit to list all scripts",
+            },
+          },
+        }),
+        "readInitStatusHandler",
+      );
+
       console.log("MCP file operation tools registered successfully");
     } else {
       console.warn("mcpRegistry unavailable; skipping MCP tool registration");
@@ -1433,8 +1081,7 @@ function init(context) {
       message: "Core script initialized successfully",
       registeredEndpoints: 8,
       registeredAssets: 3,
-      registeredGraphQLOperations: 8,
-      registeredMcpTools: 7,
+      registeredMcpTools: 8,
     };
   } catch (error) {
     console.error(`Core script initialization failed: ${error.message}`);

@@ -237,6 +237,14 @@ async fn test_asset_management() {
 async fn test_subscription_schema_configured() {
     let context = TestContext::new();
 
+    // Load the GraphQL test script, which registers the userUpdates
+    // subscription via graphQLRegistry (subscriptions come from scripts;
+    // the engine itself registers none)
+    let _ = repository::upsert_script(
+        "https://example.com/graphql_test",
+        include_str!("../scripts/test_scripts/graphql_test.js"),
+    );
+
     // Start the server
     let port = context
         .start_server()
@@ -281,14 +289,15 @@ async fn test_subscription_schema_configured() {
 
                     info!("Available subscription fields: {:?}", field_names);
 
-                    // We expect at least one subscription field (scriptUpdates from core.js)
+                    // We expect at least one subscription field (userUpdates
+                    // registered by the graphql_test.js script)
                     assert!(
                         !field_names.is_empty(),
                         "Expected at least one subscription field"
                     );
                     assert!(
-                        field_names.contains(&"scriptUpdates".to_string()),
-                        "Expected 'scriptUpdates' subscription field to be present"
+                        field_names.contains(&"userUpdates".to_string()),
+                        "Expected 'userUpdates' subscription field to be present"
                     );
                 }
             }

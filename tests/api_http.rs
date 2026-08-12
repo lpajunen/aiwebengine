@@ -644,13 +644,8 @@ async fn test_graphql_endpoints() {
     }
     let context = TestContext::new();
 
-    // Load the core script to get script management GraphQL operations
-    let _ = repository::upsert_script(
-        "https://example.com/core",
-        include_str!("../scripts/feature_scripts/core.js"),
-    );
-
-    // Load the GraphQL test script
+    // Load the GraphQL test script (a script that registers its own
+    // queries, mutations, and subscriptions via graphQLRegistry)
     let _ = repository::upsert_script(
         "https://example.com/graphql_test",
         include_str!("../scripts/test_scripts/graphql_test.js"),
@@ -729,86 +724,36 @@ async fn test_graphql_endpoints() {
     // Should contain data
     assert!(query_json["data"].is_object());
     assert!(query_json["data"]["hello"].is_string());
-
-    // Test script management GraphQL operations
-    let list_scripts_query = r#"{ scripts { uri chars } }"#;
-    let list_response = client
-        .post(format!("http://127.0.0.1:{}/graphql", port))
-        .header("Content-Type", "application/json")
-        .body(format!(r#"{{"query": "{}"}}"#, list_scripts_query))
-        .send()
-        .await
-        .expect("GraphQL list scripts request failed");
-
-    assert_eq!(list_response.status(), 200);
-
-    let list_body = list_response
-        .text()
-        .await
-        .expect("Failed to read list scripts response");
-
-    let list_json: serde_json::Value =
-        serde_json::from_str(&list_body).expect("Failed to parse list scripts response");
-
-    if let Some(errors) = list_json.get("errors") {
-        panic!("GraphQL scripts query failed with errors: {:?}", errors);
-    }
-
-    // Should return actual script data as an array of objects
-    assert!(list_json["data"]["scripts"].is_array());
-    let scripts_array = list_json["data"]["scripts"].as_array().unwrap();
-    assert!(!scripts_array.is_empty());
-
-    // Should contain script objects with uri and chars properties
-    let has_test_script = scripts_array.iter().any(|script| {
-        (script["uri"]
-            .as_str()
-            .unwrap_or("")
-            .contains("https://example.com/graphql_test")
-            || script["uri"]
-                .as_str()
-                .unwrap_or("")
-                .contains("https://example.com/core"))
-            && script["chars"].is_number()
-    });
-    assert!(
-        has_test_script,
-        "Should contain test script with uri and chars properties"
-    );
-
-    // Test script query - should return ScriptDetail object
-    let script_query = r#"{ script(uri: \"https://example.com/graphql_test\") { uri } }"#;
-    let script_response = client
-        .post(format!("http://127.0.0.1:{}/graphql", port))
-        .header("Content-Type", "application/json")
-        .body(format!(r#"{{"query": "{}"}}"#, script_query))
-        .send()
-        .await
-        .expect("GraphQL script query request failed");
-
-    assert_eq!(script_response.status(), 200);
-
-    let script_body = script_response
-        .text()
-        .await
-        .expect("Failed to read script query response");
-
-    let script_json: serde_json::Value =
-        serde_json::from_str(&script_body).expect("Failed to parse script query response");
-
-    if let Some(errors) = script_json.get("errors") {
-        panic!("GraphQL script query failed with errors: {:?}", errors);
-    }
-
-    // Should return a ScriptDetail object with uri field
-    assert!(script_json["data"]["script"].is_object());
-    let script_obj = &script_json["data"]["script"];
-
-    assert!(script_obj["uri"].is_string());
     assert_eq!(
-        script_obj["uri"].as_str().unwrap(),
-        "https://example.com/graphql_test"
+        query_json["data"]["hello"].as_str().unwrap(),
+        "Hello from JavaScript!"
     );
+
+    // Engine management is REST/MCP only — the built-in scripts must not
+    // register any GraphQL operations. Check the registry by script URI
+    // (the shared test database may contain unrelated leftover scripts,
+    // so schema introspection is not a reliable negative check here).
+    {
+        let registry = aiwebengine::graphql::GRAPHQL_REGISTRY.read().unwrap();
+        let builtin_uris = [
+            "https://example.com/core",
+            "https://example.com/cli",
+            "https://example.com/auth",
+        ];
+        let builtin_ops: Vec<&String> = registry
+            .queries
+            .iter()
+            .chain(registry.mutations.iter())
+            .chain(registry.subscriptions.iter())
+            .filter(|(_, op)| builtin_uris.contains(&op.script_uri.as_str()))
+            .map(|(name, _)| name)
+            .collect();
+        assert!(
+            builtin_ops.is_empty(),
+            "Built-in engine scripts must not register GraphQL operations, found: {:?}",
+            builtin_ops
+        );
+    }
 
     // Test GraphQL SSE endpoint (basic connectivity test)
     let sse_response = client
@@ -834,20 +779,18 @@ async fn test_graphql_endpoints() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_graphql_script_mutations() {
+async fn test_graphql_script_defined_mutations() {
     if should_skip_integration_tests() {
         return;
     }
     let context = TestContext::new();
 
-    // Clean up any existing test scripts
-    let _ = repository::delete_script("http://test/script");
-    let _ = repository::delete_script("http://test/nonexistent");
-
-    // Load the core script to get script management GraphQL operations
+    // Load the GraphQL test script, which registers its own mutations
+    // via graphQLRegistry (script-provided GraphQL is supported; engine
+    // management via GraphQL is not)
     let _ = repository::upsert_script(
-        "https://example.com/core",
-        include_str!("../scripts/feature_scripts/core.js"),
+        "https://example.com/graphql_test",
+        include_str!("../scripts/test_scripts/graphql_test.js"),
     );
 
     // Start server
@@ -859,145 +802,59 @@ async fn test_graphql_script_mutations() {
 
     let client = reqwest::Client::new();
 
-    // Test upsertScript mutation (now JavaScript-defined)
-    let upsert_mutation_body = serde_json::json!({
-        "query": "mutation { upsertScript(uri: \"http://test/script\", content: \"console.log('test');\") { message uri chars success } }"
+    // Execute the script-defined createUser mutation
+    let create_user_body = serde_json::json!({
+        "query": "mutation { createUser(name: \"Alice\") }"
     });
 
-    let upsert_response = client
+    let create_response = client
         .post(format!("http://127.0.0.1:{}/graphql", port))
         .header("Content-Type", "application/json")
-        .body(upsert_mutation_body.to_string())
+        .body(create_user_body.to_string())
         .send()
         .await
-        .expect("GraphQL upsert mutation request failed");
+        .expect("GraphQL createUser mutation request failed");
 
-    assert_eq!(upsert_response.status(), 200);
+    assert_eq!(create_response.status(), 200);
 
-    let upsert_body = upsert_response
+    let create_body = create_response
         .text()
         .await
-        .expect("Failed to read upsert mutation response");
+        .expect("Failed to read createUser mutation response");
 
-    let upsert_json: serde_json::Value =
-        serde_json::from_str(&upsert_body).expect("Failed to parse upsert mutation response");
+    let create_json: serde_json::Value =
+        serde_json::from_str(&create_body).expect("Failed to parse createUser mutation response");
 
-    if let Some(errors) = upsert_json.get("errors") {
-        panic!("GraphQL upsert mutation failed with errors: {:?}", errors);
-    }
-
-    // Verify the response structure (JavaScript-defined mutation)
-    assert!(upsert_json["data"]["upsertScript"].is_object());
-    let upsert_result = &upsert_json["data"]["upsertScript"];
-
-    assert!(upsert_result["message"].is_string());
-    assert!(upsert_result["uri"].is_string());
-    assert!(upsert_result["chars"].is_number());
-    assert!(upsert_result["success"].is_boolean());
-
-    assert_eq!(upsert_result["uri"].as_str().unwrap(), "http://test/script");
-    assert_eq!(upsert_result["chars"].as_u64().unwrap(), 20);
-    assert!(upsert_result["success"].as_bool().unwrap());
-    assert!(
-        upsert_result["message"]
-            .as_str()
-            .unwrap()
-            .contains("Script upserted successfully")
-    );
-
-    // Test deleteScript mutation (now JavaScript-defined)
-    let delete_mutation_body = serde_json::json!({
-        "query": "mutation { deleteScript(uri: \"http://test/script\") { message uri success } }"
-    });
-
-    let delete_response = client
-        .post(format!("http://127.0.0.1:{}/graphql", port))
-        .header("Content-Type", "application/json")
-        .body(delete_mutation_body.to_string())
-        .send()
-        .await
-        .expect("GraphQL delete mutation request failed");
-
-    assert_eq!(delete_response.status(), 200);
-
-    let delete_body = delete_response
-        .text()
-        .await
-        .expect("Failed to read delete mutation response");
-
-    let delete_json: serde_json::Value =
-        serde_json::from_str(&delete_body).expect("Failed to parse delete mutation response");
-
-    if let Some(errors) = delete_json.get("errors") {
-        panic!("GraphQL delete mutation failed with errors: {:?}", errors);
-    }
-
-    // Verify the response structure (JavaScript-defined mutation)
-    assert!(delete_json["data"]["deleteScript"].is_object());
-    let delete_result = &delete_json["data"]["deleteScript"];
-
-    assert!(delete_result["message"].is_string());
-    assert!(delete_result["uri"].is_string());
-    assert!(delete_result["success"].is_boolean());
-
-    assert_eq!(delete_result["uri"].as_str().unwrap(), "http://test/script");
-    assert!(delete_result["success"].as_bool().unwrap());
-    assert!(
-        delete_result["message"]
-            .as_str()
-            .unwrap()
-            .contains("deleted successfully")
-    );
-
-    // Test deleteScript with non-existent script (JavaScript-defined mutation)
-    let delete_nonexistent_mutation_body = serde_json::json!({
-        "query": "mutation { deleteScript(uri: \"http://test/nonexistent\") { message uri success } }"
-    });
-
-    let delete_nonexistent_response = client
-        .post(format!("http://127.0.0.1:{}/graphql", port))
-        .header("Content-Type", "application/json")
-        .body(delete_nonexistent_mutation_body.to_string())
-        .send()
-        .await
-        .expect("GraphQL delete nonexistent mutation request failed");
-
-    assert_eq!(delete_nonexistent_response.status(), 200);
-
-    let delete_nonexistent_body = delete_nonexistent_response
-        .text()
-        .await
-        .expect("Failed to read delete nonexistent mutation response");
-
-    let delete_nonexistent_json: serde_json::Value = serde_json::from_str(&delete_nonexistent_body)
-        .expect("Failed to parse delete nonexistent mutation response");
-
-    if let Some(errors) = delete_nonexistent_json.get("errors") {
+    if let Some(errors) = create_json.get("errors") {
         panic!(
-            "GraphQL delete nonexistent mutation failed with errors: {:?}",
+            "GraphQL createUser mutation failed with errors: {:?}",
             errors
         );
     }
 
-    // Verify the response structure for non-existent script (JavaScript-defined mutation)
-    assert!(delete_nonexistent_json["data"]["deleteScript"].is_object());
-    let delete_nonexistent_result = &delete_nonexistent_json["data"]["deleteScript"];
-
-    assert!(delete_nonexistent_result["message"].is_string());
-    assert!(delete_nonexistent_result["uri"].is_string());
-    assert!(delete_nonexistent_result["success"].is_boolean());
-
     assert_eq!(
-        delete_nonexistent_result["uri"].as_str().unwrap(),
-        "http://test/nonexistent"
+        create_json["data"]["createUser"].as_str().unwrap(),
+        "Created user: Alice"
     );
-    assert!(!delete_nonexistent_result["success"].as_bool().unwrap());
-    assert!(
-        delete_nonexistent_result["message"]
-            .as_str()
-            .unwrap()
-            .contains("not found")
-    );
+
+    // Engine script management mutations must NOT be exposed via GraphQL —
+    // script management is REST/MCP only. Check the registry by script URI
+    // (the shared test database may contain unrelated leftover scripts, so
+    // executing the mutation is not a reliable negative check here).
+    {
+        let registry = aiwebengine::graphql::GRAPHQL_REGISTRY.read().unwrap();
+        let core_mutations: Vec<&String> = registry
+            .mutations
+            .iter()
+            .filter(|(_, op)| op.script_uri == "https://example.com/core")
+            .map(|(name, _)| name)
+            .collect();
+        assert!(
+            core_mutations.is_empty(),
+            "core.js must not register GraphQL mutations, found: {:?}",
+            core_mutations
+        );
+    }
 
     // Cleanup
     context.cleanup().await.expect("Failed to cleanup");

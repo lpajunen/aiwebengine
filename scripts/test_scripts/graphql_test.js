@@ -25,7 +25,8 @@ function helloResolver() {
   return "Hello from JavaScript!";
 }
 
-function createUserResolver(args) {
+function createUserResolver(context) {
+  const args = (context && context.args) || {};
   return "Created user: " + args.name;
 }
 
@@ -42,7 +43,8 @@ graphQLRegistry.registerMutation(
   "external",
 );
 
-function triggerUserUpdateResolver(args) {
+function triggerUserUpdateResolver(context) {
+  const args = (context && context.args) || {};
   const updateData = {
     userId: args.userId,
     action: "profile_updated",
