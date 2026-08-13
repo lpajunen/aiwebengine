@@ -48,6 +48,37 @@ fn user_owns_script(user: &UserContext, script_uri: &str) -> bool {
     }
 }
 
+fn is_admin_user(user: &UserContext) -> bool {
+    user.has_capability(&Capability::DeleteScripts)
+}
+
+fn is_admin_or_owner(user: &UserContext, script_uri: &str) -> bool {
+    is_admin_user(user) || user_owns_script(user, script_uri)
+}
+
+/// Path prefixes owned by the engine. Scripts may not register HTTP, stream,
+/// or asset routes at or under these prefixes; every other path is open to
+/// any script. `/` and `/favicon.ico` are intentionally not reserved — the
+/// engine serves defaults for them only when no script claims them.
+pub const RESERVED_ROUTE_PREFIXES: &[&str] = &[
+    "/health",
+    "/graphql",
+    "/mcp",
+    "/auth",
+    "/.well-known",
+    "/engine",
+];
+
+/// Returns the reserved prefix that `path` falls under, if any.
+pub fn reserved_route_prefix(path: &str) -> Option<&'static str> {
+    RESERVED_ROUTE_PREFIXES.iter().copied().find(|prefix| {
+        path == *prefix
+            || path
+                .strip_prefix(prefix)
+                .is_some_and(|rest| rest.starts_with('/'))
+    })
+}
+
 /// Broadcast a script update to the `/script_updates` stream, matching the
 /// message format core.js used. Extra `details` entries become message
 /// metadata used for connection filtering.
@@ -309,6 +340,157 @@ fn script_init_status_json(metadata: &repository::ScriptMetadata) -> Value {
         "createdAt": millis(metadata.created_at),
         "updatedAt": millis(metadata.updated_at),
     })
+}
+
+/// Security profile for one script (privileged flag plus whether the calling
+/// user may change it); ReadScripts capability required. Covers both
+/// `scriptStorage.getScriptSecurityProfile` and `canManageScriptPrivileges`.
+pub fn security_profile_authorized(user: &UserContext, uri: &str) -> Option<Value> {
+    if user.require_capability(&Capability::ReadScripts).is_err() {
+        return None;
+    }
+    let profile = repository::get_script_security_profile(uri).ok()?;
+    Some(json!({
+        "uri": profile.uri,
+        "privileged": profile.privileged,
+        "defaultPrivileged": profile.default_privileged,
+        "canManagePrivileges": is_admin_user(user),
+    }))
+}
+
+/// Mark a script privileged/unprivileged; admin only — same rule as
+/// `scriptStorage.setScriptPrivileged`.
+pub fn set_privileged_authorized(
+    user: &UserContext,
+    uri: &str,
+    privileged: bool,
+) -> Result<(), String> {
+    if !is_admin_user(user) {
+        return Err("Administrator privileges required".to_string());
+    }
+    repository::set_script_privileged(uri, privileged).map_err(|e| format!("{}", e))
+}
+
+/// Why an owner change was rejected.
+pub enum OwnerChangeError {
+    AccessDenied,
+    LastOwner,
+    Storage(String),
+}
+
+/// List a script's owners. Anyone may view owners (for transparency), same
+/// as `scriptStorage.getScriptOwners`.
+pub fn owners_authorized(uri: &str) -> Result<Vec<String>, String> {
+    repository::get_script_owners(uri).map_err(|e| format!("{}", e))
+}
+
+/// Add an owner to a script; admin or current owner only.
+pub fn add_owner_authorized(
+    user: &UserContext,
+    uri: &str,
+    owner: &str,
+) -> Result<(), OwnerChangeError> {
+    if !is_admin_or_owner(user, uri) {
+        return Err(OwnerChangeError::AccessDenied);
+    }
+    repository::add_script_owner(uri, owner)
+        .map_err(|e| OwnerChangeError::Storage(format!("{}", e)))
+}
+
+/// Remove an owner from a script; admin or current owner only. Non-admins
+/// cannot remove the last owner. Returns whether the owner existed.
+pub fn remove_owner_authorized(
+    user: &UserContext,
+    uri: &str,
+    owner: &str,
+) -> Result<bool, OwnerChangeError> {
+    if !is_admin_or_owner(user, uri) {
+        return Err(OwnerChangeError::AccessDenied);
+    }
+    if !is_admin_user(user) {
+        match repository::count_script_owners(uri) {
+            Ok(count) if count <= 1 => return Err(OwnerChangeError::LastOwner),
+            Err(e) => return Err(OwnerChangeError::Storage(format!("{}", e))),
+            _ => {}
+        }
+    }
+    repository::remove_script_owner(uri, owner)
+        .map_err(|e| OwnerChangeError::Storage(format!("{}", e)))
+}
+
+/// Why a secret operation was rejected.
+pub enum SecretAccessError {
+    AccessDenied,
+    Validation(String),
+    Storage(String),
+}
+
+/// Cross-script secret management (the `secretStorage.*ForUri` functions) was
+/// gated on the *calling script* being privileged. Over HTTP/MCP there is no
+/// calling script, so the rule maps to the calling user: admins and owners of
+/// the target script may manage its secret keys. Secret values are write-only
+/// through this surface — there is deliberately no read-value operation.
+fn can_manage_secrets(user: &UserContext, script_uri: &str) -> bool {
+    is_admin_or_owner(user, script_uri)
+}
+
+/// List secret keys (not values) stored for a script.
+pub fn list_secrets_authorized(
+    user: &UserContext,
+    script_uri: &str,
+) -> Result<Vec<String>, SecretAccessError> {
+    if !can_manage_secrets(user, script_uri) {
+        return Err(SecretAccessError::AccessDenied);
+    }
+    Ok(repository::list_script_secrets(script_uri).unwrap_or_default())
+}
+
+/// Store a secret for a script. Same validation as `setSecretForUri`.
+pub fn set_secret_authorized(
+    user: &UserContext,
+    script_uri: &str,
+    key: &str,
+    value: &str,
+) -> Result<(), SecretAccessError> {
+    if !can_manage_secrets(user, script_uri) {
+        return Err(SecretAccessError::AccessDenied);
+    }
+    if key.trim().is_empty() {
+        return Err(SecretAccessError::Validation(
+            "Key cannot be empty".to_string(),
+        ));
+    }
+    if value.len() > 1_000_000 {
+        return Err(SecretAccessError::Validation(
+            "Value too large (>1MB)".to_string(),
+        ));
+    }
+    repository::set_script_secret_item(script_uri, key, value)
+        .map_err(|e| SecretAccessError::Storage(format!("{}", e)))
+}
+
+/// Remove one secret from a script. Returns whether the key existed.
+pub fn remove_secret_authorized(
+    user: &UserContext,
+    script_uri: &str,
+    key: &str,
+) -> Result<bool, SecretAccessError> {
+    if !can_manage_secrets(user, script_uri) {
+        return Err(SecretAccessError::AccessDenied);
+    }
+    Ok(repository::remove_script_secret_item(script_uri, key))
+}
+
+/// Remove all secrets stored for a script.
+pub fn clear_secrets_authorized(
+    user: &UserContext,
+    script_uri: &str,
+) -> Result<(), SecretAccessError> {
+    if !can_manage_secrets(user, script_uri) {
+        return Err(SecretAccessError::AccessDenied);
+    }
+    repository::clear_script_secrets(script_uri)
+        .map_err(|e| SecretAccessError::Storage(format!("{}", e)))
 }
 
 /// Whether the user may access assets of `script_uri` given the per-operation
@@ -736,7 +918,7 @@ pub struct ScriptParams {
 /// Create or update a script.
 #[utoipa::path(
     post,
-    path = "/upsert_script",
+    path = "/engine/upsert_script",
     tags = ["Scripts"],
     request_body(content_type = "application/x-www-form-urlencoded",
         description = "Form fields: uri (required), content (required)"),
@@ -798,7 +980,7 @@ pub async fn upsert_script_route(
 /// Delete a script.
 #[utoipa::path(
     post,
-    path = "/delete_script",
+    path = "/engine/delete_script",
     tags = ["Scripts"],
     request_body(content_type = "application/x-www-form-urlencoded",
         description = "Form fields: uri (required)"),
@@ -851,7 +1033,7 @@ pub async fn delete_script_route(
 /// Read a script's content.
 #[utoipa::path(
     get,
-    path = "/read_script",
+    path = "/engine/read_script",
     tags = ["Scripts"],
     params(("uri" = String, Query, description = "Script URI")),
     responses(
@@ -896,7 +1078,7 @@ pub async fn read_script_route(
 /// Get logs for a script.
 #[utoipa::path(
     get,
-    path = "/script_logs",
+    path = "/engine/script_logs",
     tags = ["Logging"],
     params(("uri" = String, Query, description = "Script URI")),
     responses(
@@ -949,7 +1131,7 @@ fn error_response(status: StatusCode, message: String) -> Response {
 /// List assets for a script, or fetch one asset when `asset` is given.
 #[utoipa::path(
     get,
-    path = "/assets",
+    path = "/engine/assets",
     tags = ["Assets"],
     params(
         ("script" = String, Query, description = "URI of the script whose assets to manage"),
@@ -1013,7 +1195,7 @@ pub async fn assets_get_route(
 /// Create or update an asset for a script.
 #[utoipa::path(
     post,
-    path = "/assets",
+    path = "/engine/assets",
     tags = ["Assets"],
     params(("script" = String, Query, description = "URI of the script that will own this asset")),
     request_body(content_type = "application/json",
@@ -1079,7 +1261,7 @@ pub async fn assets_post_route(
 /// Delete an asset from a script.
 #[utoipa::path(
     delete,
-    path = "/assets",
+    path = "/engine/assets",
     tags = ["Assets"],
     params(
         ("script" = String, Query, description = "URI of the script that owns the asset"),
@@ -1132,6 +1314,565 @@ pub async fn assets_delete_route(
                 "asset": asset,
             }),
         ),
+    }
+}
+
+/// List all scripts with metadata (same shape as `scriptStorage.listScripts`).
+#[utoipa::path(
+    get,
+    path = "/engine/scripts",
+    tags = ["Scripts"],
+    responses(
+        (status = 200, description = "Script metadata list"),
+    )
+)]
+pub async fn list_scripts_route(auth_user: Option<Extension<AuthUser>>) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    let scripts = tokio::task::spawn_blocking(move || {
+        list_scripts_authorized(&user)
+            .iter()
+            .map(|meta| {
+                let millis = |t: std::time::SystemTime| {
+                    t.duration_since(std::time::UNIX_EPOCH)
+                        .ok()
+                        .map(|d| d.as_millis() as f64)
+                };
+                json!({
+                    "uri": meta.uri,
+                    "name": meta.name,
+                    "size": meta.content.len(),
+                    "updatedAt": millis(meta.updated_at),
+                    "createdAt": millis(meta.created_at),
+                    "privileged": meta.privileged,
+                    "initialized": meta.initialized,
+                    "initError": meta.init_error.as_deref(),
+                })
+            })
+            .collect::<Vec<Value>>()
+    })
+    .await
+    .unwrap_or_default();
+
+    json_response(
+        StatusCode::OK,
+        json!({
+            "scripts": scripts,
+            "count": scripts.len(),
+            "timestamp": iso_timestamp(),
+        }),
+    )
+}
+
+/// Init status for one script (`uri` given) or all scripts.
+#[utoipa::path(
+    get,
+    path = "/engine/script_init_status",
+    tags = ["Scripts"],
+    params(("uri" = Option<String>, Query, description = "Script URI; omit for all scripts")),
+    responses(
+        (status = 200, description = "Init status for one or all scripts"),
+    )
+)]
+pub async fn script_init_status_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<ScriptParams>,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    match query.uri {
+        Some(uri) => {
+            let uri_cl = uri.clone();
+            let status =
+                tokio::task::spawn_blocking(move || init_status_authorized(&user, &uri_cl))
+                    .await
+                    .unwrap_or(None);
+            json_response(
+                StatusCode::OK,
+                json!({ "uri": uri, "status": status, "timestamp": iso_timestamp() }),
+            )
+        }
+        None => {
+            let statuses = tokio::task::spawn_blocking(move || {
+                list_scripts_authorized(&user)
+                    .iter()
+                    .map(script_init_status_json)
+                    .collect::<Vec<Value>>()
+            })
+            .await
+            .unwrap_or_default();
+            json_response(
+                StatusCode::OK,
+                json!({
+                    "statuses": statuses,
+                    "count": statuses.len(),
+                    "timestamp": iso_timestamp(),
+                }),
+            )
+        }
+    }
+}
+
+/// Security profile of a script: privileged flag plus whether the calling
+/// user may change it.
+#[utoipa::path(
+    get,
+    path = "/engine/script_security_profile",
+    tags = ["Scripts"],
+    params(("uri" = String, Query, description = "Script URI")),
+    responses(
+        (status = 200, description = "Security profile"),
+        (status = 400, description = "Missing required parameter"),
+        (status = 403, description = "Access denied"),
+    )
+)]
+pub async fn script_security_profile_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<ScriptParams>,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    let Some(uri) = query.uri else {
+        return missing_param_response("uri");
+    };
+
+    let uri_cl = uri.clone();
+    let profile = tokio::task::spawn_blocking(move || security_profile_authorized(&user, &uri_cl))
+        .await
+        .unwrap_or(None);
+
+    match profile {
+        Some(mut profile) => {
+            if let Some(obj) = profile.as_object_mut() {
+                obj.insert("timestamp".to_string(), json!(iso_timestamp()));
+            }
+            json_response(StatusCode::OK, profile)
+        }
+        None => json_response(
+            StatusCode::FORBIDDEN,
+            json!({ "error": "Access denied", "uri": uri, "timestamp": iso_timestamp() }),
+        ),
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub struct PrivilegedParams {
+    uri: Option<String>,
+    privileged: Option<bool>,
+}
+
+/// Mark a script privileged/unprivileged (admin only).
+#[utoipa::path(
+    post,
+    path = "/engine/set_script_privileged",
+    tags = ["Scripts"],
+    request_body(content_type = "application/x-www-form-urlencoded",
+        description = "Form fields: uri (required), privileged (required, true/false)"),
+    responses(
+        (status = 200, description = "Privilege flag updated"),
+        (status = 400, description = "Missing required parameter"),
+        (status = 403, description = "Administrator privileges required"),
+    )
+)]
+pub async fn set_script_privileged_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<PrivilegedParams>,
+    body: axum::body::Bytes,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    let form: PrivilegedParams = serde_urlencoded::from_bytes(&body).unwrap_or_default();
+    let Some(uri) = form.uri.or(query.uri) else {
+        return missing_param_response("uri");
+    };
+    let Some(privileged) = form.privileged.or(query.privileged) else {
+        return missing_param_response("privileged");
+    };
+
+    let uri_cl = uri.clone();
+    let result =
+        tokio::task::spawn_blocking(move || set_privileged_authorized(&user, &uri_cl, privileged))
+            .await
+            .unwrap_or_else(|e| Err(format!("join error: {}", e)));
+
+    match result {
+        Ok(()) => json_response(
+            StatusCode::OK,
+            json!({
+                "success": true,
+                "uri": uri,
+                "privileged": privileged,
+                "timestamp": iso_timestamp(),
+            }),
+        ),
+        Err(details) => json_response(
+            StatusCode::FORBIDDEN,
+            json!({ "error": details, "uri": uri, "timestamp": iso_timestamp() }),
+        ),
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub struct OwnerParams {
+    uri: Option<String>,
+    owner: Option<String>,
+}
+
+/// List a script's owners.
+#[utoipa::path(
+    get,
+    path = "/engine/script_owners",
+    tags = ["Scripts"],
+    params(("uri" = String, Query, description = "Script URI")),
+    responses(
+        (status = 200, description = "Owner list"),
+        (status = 400, description = "Missing required parameter"),
+    )
+)]
+pub async fn script_owners_get_route(Query(query): Query<OwnerParams>) -> Response {
+    let Some(uri) = query.uri else {
+        return missing_param_response("uri");
+    };
+
+    let uri_cl = uri.clone();
+    let result = tokio::task::spawn_blocking(move || owners_authorized(&uri_cl))
+        .await
+        .unwrap_or_else(|e| Err(format!("join error: {}", e)));
+
+    match result {
+        Ok(owners) => json_response(
+            StatusCode::OK,
+            json!({
+                "uri": uri,
+                "owners": owners,
+                "count": owners.len(),
+                "timestamp": iso_timestamp(),
+            }),
+        ),
+        Err(details) => json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({ "error": details, "uri": uri, "timestamp": iso_timestamp() }),
+        ),
+    }
+}
+
+fn owner_change_error_response(uri: &str, owner: &str, error: OwnerChangeError) -> Response {
+    let (status, message) = match error {
+        OwnerChangeError::AccessDenied => (
+            StatusCode::FORBIDDEN,
+            "Permission denied. You must be an administrator or owner".to_string(),
+        ),
+        OwnerChangeError::LastOwner => (
+            StatusCode::CONFLICT,
+            "Cannot remove the last owner. Transfer ownership to another user first, or contact an administrator.".to_string(),
+        ),
+        OwnerChangeError::Storage(details) => (StatusCode::INTERNAL_SERVER_ERROR, details),
+    };
+    json_response(
+        status,
+        json!({ "error": message, "uri": uri, "owner": owner, "timestamp": iso_timestamp() }),
+    )
+}
+
+/// Add an owner to a script (admin or current owner only).
+#[utoipa::path(
+    post,
+    path = "/engine/script_owners",
+    tags = ["Scripts"],
+    request_body(content_type = "application/x-www-form-urlencoded",
+        description = "Form fields: uri (required), owner (required)"),
+    responses(
+        (status = 200, description = "Owner added"),
+        (status = 400, description = "Missing required parameter"),
+        (status = 403, description = "Permission denied"),
+    )
+)]
+pub async fn script_owners_post_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<OwnerParams>,
+    body: axum::body::Bytes,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    let form: OwnerParams = serde_urlencoded::from_bytes(&body).unwrap_or_default();
+    let Some(uri) = form.uri.or(query.uri) else {
+        return missing_param_response("uri");
+    };
+    let Some(owner) = form.owner.or(query.owner) else {
+        return missing_param_response("owner");
+    };
+
+    let (uri_cl, owner_cl) = (uri.clone(), owner.clone());
+    let result =
+        tokio::task::spawn_blocking(move || add_owner_authorized(&user, &uri_cl, &owner_cl))
+            .await
+            .unwrap_or_else(|e| Err(OwnerChangeError::Storage(format!("join error: {}", e))));
+
+    match result {
+        Ok(()) => json_response(
+            StatusCode::OK,
+            json!({
+                "success": true,
+                "uri": uri,
+                "owner": owner,
+                "timestamp": iso_timestamp(),
+            }),
+        ),
+        Err(error) => owner_change_error_response(&uri, &owner, error),
+    }
+}
+
+/// Remove an owner from a script (admin or current owner only; non-admins
+/// cannot remove the last owner).
+#[utoipa::path(
+    delete,
+    path = "/engine/script_owners",
+    tags = ["Scripts"],
+    params(
+        ("uri" = String, Query, description = "Script URI"),
+        ("owner" = String, Query, description = "Owner user id to remove"),
+    ),
+    responses(
+        (status = 200, description = "Owner removed"),
+        (status = 400, description = "Missing required parameter"),
+        (status = 403, description = "Permission denied"),
+        (status = 404, description = "Owner not found"),
+        (status = 409, description = "Cannot remove the last owner"),
+    )
+)]
+pub async fn script_owners_delete_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<OwnerParams>,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    let Some(uri) = query.uri else {
+        return missing_param_response("uri");
+    };
+    let Some(owner) = query.owner else {
+        return missing_param_response("owner");
+    };
+
+    let (uri_cl, owner_cl) = (uri.clone(), owner.clone());
+    let result =
+        tokio::task::spawn_blocking(move || remove_owner_authorized(&user, &uri_cl, &owner_cl))
+            .await
+            .unwrap_or_else(|e| Err(OwnerChangeError::Storage(format!("join error: {}", e))));
+
+    match result {
+        Ok(true) => json_response(
+            StatusCode::OK,
+            json!({
+                "success": true,
+                "uri": uri,
+                "owner": owner,
+                "timestamp": iso_timestamp(),
+            }),
+        ),
+        Ok(false) => json_response(
+            StatusCode::NOT_FOUND,
+            json!({
+                "error": format!("Owner '{}' was not found for script '{}'", owner, uri),
+                "uri": uri,
+                "owner": owner,
+                "timestamp": iso_timestamp(),
+            }),
+        ),
+        Err(error) => owner_change_error_response(&uri, &owner, error),
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub struct SecretQuery {
+    script: Option<String>,
+    key: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+pub struct SecretBody {
+    key: Option<String>,
+    value: Option<String>,
+}
+
+fn secret_error_response(script: &str, error: SecretAccessError) -> Response {
+    let (status, message) = match error {
+        SecretAccessError::AccessDenied => (
+            StatusCode::FORBIDDEN,
+            "Permission denied. You must be an administrator or owner of the script".to_string(),
+        ),
+        SecretAccessError::Validation(details) => (StatusCode::BAD_REQUEST, details),
+        SecretAccessError::Storage(details) => (StatusCode::INTERNAL_SERVER_ERROR, details),
+    };
+    json_response(
+        status,
+        json!({ "error": message, "script": script, "timestamp": iso_timestamp() }),
+    )
+}
+
+/// List the secret keys stored for a script (values are never returned).
+#[utoipa::path(
+    get,
+    path = "/engine/secrets",
+    tags = ["Secrets"],
+    params(("script" = String, Query, description = "URI of the script whose secrets to manage")),
+    responses(
+        (status = 200, description = "Secret key list (no values)"),
+        (status = 400, description = "Missing required parameter"),
+        (status = 403, description = "Permission denied"),
+    )
+)]
+pub async fn secrets_get_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<SecretQuery>,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    let Some(script) = query.script else {
+        return missing_param_response("script");
+    };
+
+    let script_cl = script.clone();
+    let result = tokio::task::spawn_blocking(move || list_secrets_authorized(&user, &script_cl))
+        .await
+        .unwrap_or_else(|e| Err(SecretAccessError::Storage(format!("join error: {}", e))));
+
+    match result {
+        Ok(keys) => json_response(
+            StatusCode::OK,
+            json!({
+                "script": script,
+                "keys": keys,
+                "count": keys.len(),
+                "timestamp": iso_timestamp(),
+            }),
+        ),
+        Err(error) => secret_error_response(&script, error),
+    }
+}
+
+/// Store a secret for a script.
+#[utoipa::path(
+    post,
+    path = "/engine/secrets",
+    tags = ["Secrets"],
+    params(("script" = String, Query, description = "URI of the script whose secrets to manage")),
+    request_body(content_type = "application/json",
+        description = "JSON fields: key (required), value (required, max 1MB)"),
+    responses(
+        (status = 200, description = "Secret stored"),
+        (status = 400, description = "Missing or invalid parameters"),
+        (status = 403, description = "Permission denied"),
+    )
+)]
+pub async fn secrets_post_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<SecretQuery>,
+    body: axum::body::Bytes,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    let Some(script) = query.script else {
+        return missing_param_response("script");
+    };
+    let body: SecretBody = serde_json::from_slice(&body).unwrap_or_default();
+    let Some(key) = body.key else {
+        return missing_param_response("key");
+    };
+    let Some(value) = body.value else {
+        return missing_param_response("value");
+    };
+
+    let (script_cl, key_cl) = (script.clone(), key.clone());
+    let result = tokio::task::spawn_blocking(move || {
+        set_secret_authorized(&user, &script_cl, &key_cl, &value)
+    })
+    .await
+    .unwrap_or_else(|e| Err(SecretAccessError::Storage(format!("join error: {}", e))));
+
+    match result {
+        Ok(()) => json_response(
+            StatusCode::OK,
+            json!({
+                "success": true,
+                "script": script,
+                "key": key,
+                "timestamp": iso_timestamp(),
+            }),
+        ),
+        Err(error) => secret_error_response(&script, error),
+    }
+}
+
+/// Remove one secret (`key` given) or all secrets from a script.
+#[utoipa::path(
+    delete,
+    path = "/engine/secrets",
+    tags = ["Secrets"],
+    params(
+        ("script" = String, Query, description = "URI of the script whose secrets to manage"),
+        ("key" = Option<String>, Query, description = "Secret key to remove; omit to clear all"),
+    ),
+    responses(
+        (status = 200, description = "Secret(s) removed"),
+        (status = 400, description = "Missing required parameter"),
+        (status = 403, description = "Permission denied"),
+        (status = 404, description = "Secret key not found"),
+    )
+)]
+pub async fn secrets_delete_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<SecretQuery>,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    let Some(script) = query.script else {
+        return missing_param_response("script");
+    };
+
+    match query.key {
+        Some(key) => {
+            let (script_cl, key_cl) = (script.clone(), key.clone());
+            let result = tokio::task::spawn_blocking(move || {
+                remove_secret_authorized(&user, &script_cl, &key_cl)
+            })
+            .await
+            .unwrap_or_else(|e| Err(SecretAccessError::Storage(format!("join error: {}", e))));
+
+            match result {
+                Ok(true) => json_response(
+                    StatusCode::OK,
+                    json!({
+                        "success": true,
+                        "script": script,
+                        "key": key,
+                        "timestamp": iso_timestamp(),
+                    }),
+                ),
+                Ok(false) => json_response(
+                    StatusCode::NOT_FOUND,
+                    json!({
+                        "error": format!("Secret '{}' not found for script '{}'", key, script),
+                        "script": script,
+                        "key": key,
+                        "timestamp": iso_timestamp(),
+                    }),
+                ),
+                Err(error) => secret_error_response(&script, error),
+            }
+        }
+        None => {
+            let script_cl = script.clone();
+            let result =
+                tokio::task::spawn_blocking(move || clear_secrets_authorized(&user, &script_cl))
+                    .await
+                    .unwrap_or_else(|e| {
+                        Err(SecretAccessError::Storage(format!("join error: {}", e)))
+                    });
+
+            match result {
+                Ok(()) => json_response(
+                    StatusCode::OK,
+                    json!({
+                        "success": true,
+                        "cleared": true,
+                        "script": script,
+                        "timestamp": iso_timestamp(),
+                    }),
+                ),
+                Err(error) => secret_error_response(&script, error),
+            }
+        }
     }
 }
 
@@ -1779,6 +2520,138 @@ fn native_tools() -> &'static [NativeToolEntry] {
             },
             tool_delete_asset,
         ),
+        (
+            "read_security_profile",
+            "Read a script's security profile: privileged flag and whether the caller may change it",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "uri": { "type": "string", "description": "Script URI" }
+                    },
+                    "required": ["uri"]
+                })
+            },
+            tool_read_security_profile,
+        ),
+        (
+            "set_script_privileged",
+            "Mark a script privileged or unprivileged. Requires administrator privileges.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "uri": { "type": "string", "description": "Script URI" },
+                        "privileged": { "type": "boolean", "description": "New privileged flag" }
+                    },
+                    "required": ["uri", "privileged"]
+                })
+            },
+            tool_set_script_privileged,
+        ),
+        (
+            "list_script_owners",
+            "List the owners of a script",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "uri": { "type": "string", "description": "Script URI" }
+                    },
+                    "required": ["uri"]
+                })
+            },
+            tool_list_script_owners,
+        ),
+        (
+            "add_script_owner",
+            "Add an owner to a script. Requires the user to own the script or be an administrator.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "uri": { "type": "string", "description": "Script URI" },
+                        "owner": { "type": "string", "description": "User id to add as owner" }
+                    },
+                    "required": ["uri", "owner"]
+                })
+            },
+            tool_add_script_owner,
+        ),
+        (
+            "remove_script_owner",
+            "Remove an owner from a script. Requires the user to own the script or be an administrator; non-admins cannot remove the last owner.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "uri": { "type": "string", "description": "Script URI" },
+                        "owner": { "type": "string", "description": "Owner user id to remove" }
+                    },
+                    "required": ["uri", "owner"]
+                })
+            },
+            tool_remove_script_owner,
+        ),
+        (
+            "list_secrets",
+            "List the secret keys stored for a script (values are never returned). Requires the user to own the script or be an administrator.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "script": { "type": "string", "description": "URI of the script whose secrets to manage" }
+                    },
+                    "required": ["script"]
+                })
+            },
+            tool_list_secrets,
+        ),
+        (
+            "write_secret",
+            "Store a secret for a script. Requires the user to own the script or be an administrator.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "script": { "type": "string", "description": "URI of the script whose secrets to manage" },
+                        "key": { "type": "string", "description": "Secret key" },
+                        "value": { "type": "string", "description": "Secret value (max 1MB)" }
+                    },
+                    "required": ["script", "key", "value"]
+                })
+            },
+            tool_write_secret,
+        ),
+        (
+            "delete_secret",
+            "Remove one secret from a script. Requires the user to own the script or be an administrator.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "script": { "type": "string", "description": "URI of the script whose secrets to manage" },
+                        "key": { "type": "string", "description": "Secret key to remove" }
+                    },
+                    "required": ["script", "key"]
+                })
+            },
+            tool_delete_secret,
+        ),
+        (
+            "clear_secrets",
+            "Remove all secrets stored for a script. Requires the user to own the script or be an administrator.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "script": { "type": "string", "description": "URI of the script whose secrets to manage" }
+                    },
+                    "required": ["script"]
+                })
+            },
+            tool_clear_secrets,
+        ),
     ]
 }
 
@@ -2081,5 +2954,211 @@ fn tool_delete_asset(args: &Value, user: &UserContext) -> Value {
         }),
         Ok(false) => json!({ "error": format!("Asset '{}' not found", asset) }),
         Err(_) => json!({ "error": "Failed to delete asset: Access denied" }),
+    }
+}
+
+fn owner_change_error_json(error: OwnerChangeError) -> Value {
+    match error {
+        OwnerChangeError::AccessDenied => {
+            json!({ "error": "Permission denied. You must be an administrator or owner" })
+        }
+        OwnerChangeError::LastOwner => json!({
+            "error": "Cannot remove the last owner. Transfer ownership to another user first, or contact an administrator."
+        }),
+        OwnerChangeError::Storage(details) => json!({ "error": details }),
+    }
+}
+
+fn secret_error_json(error: SecretAccessError) -> Value {
+    match error {
+        SecretAccessError::AccessDenied => json!({
+            "error": "Permission denied. You must be an administrator or owner of the script"
+        }),
+        SecretAccessError::Validation(details) | SecretAccessError::Storage(details) => {
+            json!({ "error": details })
+        }
+    }
+}
+
+fn tool_read_security_profile(args: &Value, user: &UserContext) -> Value {
+    let Some(uri) = arg_str(args, "uri") else {
+        return missing_arg("uri");
+    };
+    match security_profile_authorized(user, uri) {
+        Some(profile) => profile,
+        None => json!({ "error": "Access denied" }),
+    }
+}
+
+fn tool_set_script_privileged(args: &Value, user: &UserContext) -> Value {
+    let Some(uri) = arg_str(args, "uri") else {
+        return missing_arg("uri");
+    };
+    let Some(privileged) = args.get("privileged").and_then(Value::as_bool) else {
+        return missing_arg("privileged");
+    };
+    match set_privileged_authorized(user, uri, privileged) {
+        Ok(()) => json!({
+            "success": true,
+            "uri": uri,
+            "privileged": privileged,
+            "timestamp": iso_timestamp(),
+        }),
+        Err(details) => json!({ "error": details }),
+    }
+}
+
+fn tool_list_script_owners(args: &Value, _user: &UserContext) -> Value {
+    let Some(uri) = arg_str(args, "uri") else {
+        return missing_arg("uri");
+    };
+    match owners_authorized(uri) {
+        Ok(owners) => json!({
+            "uri": uri,
+            "owners": owners,
+            "count": owners.len(),
+            "timestamp": iso_timestamp(),
+        }),
+        Err(details) => json!({ "error": details }),
+    }
+}
+
+fn tool_add_script_owner(args: &Value, user: &UserContext) -> Value {
+    let Some(uri) = arg_str(args, "uri") else {
+        return missing_arg("uri");
+    };
+    let Some(owner) = arg_str(args, "owner") else {
+        return missing_arg("owner");
+    };
+    match add_owner_authorized(user, uri, owner) {
+        Ok(()) => json!({
+            "success": true,
+            "uri": uri,
+            "owner": owner,
+            "timestamp": iso_timestamp(),
+        }),
+        Err(error) => owner_change_error_json(error),
+    }
+}
+
+fn tool_remove_script_owner(args: &Value, user: &UserContext) -> Value {
+    let Some(uri) = arg_str(args, "uri") else {
+        return missing_arg("uri");
+    };
+    let Some(owner) = arg_str(args, "owner") else {
+        return missing_arg("owner");
+    };
+    match remove_owner_authorized(user, uri, owner) {
+        Ok(true) => json!({
+            "success": true,
+            "uri": uri,
+            "owner": owner,
+            "timestamp": iso_timestamp(),
+        }),
+        Ok(false) => {
+            json!({ "error": format!("Owner '{}' was not found for script '{}'", owner, uri) })
+        }
+        Err(error) => owner_change_error_json(error),
+    }
+}
+
+fn tool_list_secrets(args: &Value, user: &UserContext) -> Value {
+    let Some(script) = arg_str(args, "script") else {
+        return missing_arg("script");
+    };
+    match list_secrets_authorized(user, script) {
+        Ok(keys) => json!({
+            "script": script,
+            "keys": keys,
+            "count": keys.len(),
+            "timestamp": iso_timestamp(),
+        }),
+        Err(error) => secret_error_json(error),
+    }
+}
+
+fn tool_write_secret(args: &Value, user: &UserContext) -> Value {
+    let Some(script) = arg_str(args, "script") else {
+        return missing_arg("script");
+    };
+    let Some(key) = arg_str(args, "key") else {
+        return missing_arg("key");
+    };
+    let Some(value) = arg_str(args, "value") else {
+        return missing_arg("value");
+    };
+    match set_secret_authorized(user, script, key, value) {
+        Ok(()) => json!({
+            "success": true,
+            "script": script,
+            "key": key,
+            "timestamp": iso_timestamp(),
+        }),
+        Err(error) => secret_error_json(error),
+    }
+}
+
+fn tool_delete_secret(args: &Value, user: &UserContext) -> Value {
+    let Some(script) = arg_str(args, "script") else {
+        return missing_arg("script");
+    };
+    let Some(key) = arg_str(args, "key") else {
+        return missing_arg("key");
+    };
+    match remove_secret_authorized(user, script, key) {
+        Ok(true) => json!({
+            "success": true,
+            "script": script,
+            "key": key,
+            "timestamp": iso_timestamp(),
+        }),
+        Ok(false) => {
+            json!({ "error": format!("Secret '{}' not found for script '{}'", key, script) })
+        }
+        Err(error) => secret_error_json(error),
+    }
+}
+
+fn tool_clear_secrets(args: &Value, user: &UserContext) -> Value {
+    let Some(script) = arg_str(args, "script") else {
+        return missing_arg("script");
+    };
+    match clear_secrets_authorized(user, script) {
+        Ok(()) => json!({
+            "success": true,
+            "cleared": true,
+            "script": script,
+            "timestamp": iso_timestamp(),
+        }),
+        Err(error) => secret_error_json(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reserved_route_prefix;
+
+    #[test]
+    fn reserved_prefixes_match_exact_and_subpaths() {
+        assert_eq!(reserved_route_prefix("/engine"), Some("/engine"));
+        assert_eq!(reserved_route_prefix("/engine/scripts"), Some("/engine"));
+        assert_eq!(reserved_route_prefix("/auth/login"), Some("/auth"));
+        assert_eq!(
+            reserved_route_prefix("/.well-known/oauth-authorization-server"),
+            Some("/.well-known")
+        );
+        assert_eq!(reserved_route_prefix("/health"), Some("/health"));
+        assert_eq!(reserved_route_prefix("/graphql/sse"), Some("/graphql"));
+        assert_eq!(reserved_route_prefix("/mcp"), Some("/mcp"));
+    }
+
+    #[test]
+    fn non_reserved_paths_are_allowed() {
+        assert_eq!(reserved_route_prefix("/"), None);
+        assert_eq!(reserved_route_prefix("/favicon.ico"), None);
+        assert_eq!(reserved_route_prefix("/engineering"), None);
+        assert_eq!(reserved_route_prefix("/healthcheck"), None);
+        assert_eq!(reserved_route_prefix("/authors"), None);
+        assert_eq!(reserved_route_prefix("/my/app"), None);
     }
 }

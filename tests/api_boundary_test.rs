@@ -4,7 +4,8 @@
 //! Tests ensure that:
 //! - Non-privileged users cannot access privileged APIs
 //! - All users can access public APIs
-//! - Non-privileged scripts cannot register routes/streams/schedules
+//! - Any script can register routes on non-reserved paths; engine-owned
+//!   prefixes (/health, /graphql, /mcp, /auth, /.well-known, /engine) are rejected
 //! - Privileged scripts can access all functionality
 //!
 //! ## Test Coverage
@@ -24,7 +25,7 @@
 //! - **SchedulerService**: registerOnce(), registerRecurring(), clearAll()
 //!
 //! ### Script Privilege Enforcement:
-//! - Route/stream/asset registration requires privileged script status
+//! - Route/stream/asset registration is open to all scripts on non-reserved paths
 //! - Stream messaging requires privileged script status
 //! - SecretStorage *ForUri methods require privileged script OR admin user
 //!
@@ -1051,11 +1052,15 @@ async fn test_console_logging_available_for_all() {
 }
 
 // ============================================================================
-// Route Registration Tests - Requires Privileged Script
+// Route Registration Tests - Reserved Prefix Policy
+//
+// Any script may register routes/streams/asset routes on non-reserved paths;
+// paths under the engine-owned prefixes (/health, /graphql, /mcp, /auth,
+// /.well-known, /engine) are rejected regardless of script privilege.
 // ============================================================================
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_register_route_denied_for_non_privileged_script() {
+async fn test_register_route_allowed_for_any_script() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![Capability::WriteScripts]);
 
@@ -1063,26 +1068,49 @@ async fn test_register_route_denied_for_non_privileged_script() {
     repository::upsert_script("test://non-privileged-routes", "").expect("Failed to create script");
 
     let script = r#"
-        try {
-            routeRegistry.registerRoute("/test", "handler", "GET");
-            throw new Error("Should have been denied");
-        } catch (e) {
-            if (!e.message.includes("not privileged")) {
-                throw e;
-            }
-        }
+        routeRegistry.registerRoute("/test", "handler", "GET");
+        // Should not throw
     "#;
 
     let result = execute_script_secure("test://non-privileged-routes", script, user);
     assert!(
         result.success,
-        "Non-privileged script should be denied route registration: {:?}",
+        "Any script should be able to register non-reserved routes: {:?}",
         result.error
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_register_stream_route_denied_for_non_privileged_script() {
+async fn test_register_route_denied_for_reserved_path() {
+    setup_env().await;
+    let user = create_user_with_capabilities("user", vec![Capability::WriteScripts]);
+
+    repository::upsert_script("test://reserved-path-routes", "").expect("Failed to create script");
+
+    let script = r#"
+        const reserved = ["/engine/fake", "/health", "/graphql", "/mcp", "/auth/login", "/.well-known/x"];
+        for (const path of reserved) {
+            try {
+                routeRegistry.registerRoute(path, "handler", "GET");
+                throw new Error("Should have been denied: " + path);
+            } catch (e) {
+                if (!e.message.includes("reserved")) {
+                    throw e;
+                }
+            }
+        }
+    "#;
+
+    let result = execute_script_secure("test://reserved-path-routes", script, user);
+    assert!(
+        result.success,
+        "Reserved paths should be denied for route registration: {:?}",
+        result.error
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_register_stream_route_allowed_for_any_script() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![Capability::ManageStreams]);
 
@@ -1093,46 +1121,66 @@ async fn test_register_stream_route_denied_for_non_privileged_script() {
         if (typeof routeRegistry === "undefined" || typeof routeRegistry.registerStreamRoute !== "function") {
             throw new Error("routeRegistry.registerStreamRoute should be defined");
         }
-        try {
-            routeRegistry.registerStreamRoute("/test-stream");
-            throw new Error("Should have been denied");
-        } catch (e) {
-            if (!e.message.includes("privileged") && !e.message.includes("denied")) {
-                throw new Error("Expected privilege error, got: " + e.message);
-            }
-        }
+        routeRegistry.registerStreamRoute("/test-stream-any-script");
+        // Should not throw
     "#;
 
     let result = execute_script_secure("test://non-privileged-streams", script, user);
     assert!(
         result.success,
-        "Non-privileged script should be denied stream registration: {:?}",
+        "Any script should be able to register non-reserved stream routes: {:?}",
         result.error
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_register_asset_route_denied_for_non_privileged_script() {
+async fn test_register_stream_route_denied_for_reserved_path() {
     setup_env().await;
-    let user = create_user_with_capabilities("user", vec![Capability::WriteAssets]);
+    let user = create_user_with_capabilities("user", vec![Capability::ManageStreams]);
 
-    repository::upsert_script("test://non-privileged-assets", "").expect("Failed to create script");
+    repository::upsert_script("test://reserved-path-streams", "").expect("Failed to create script");
 
     let script = r#"
         try {
-            routeRegistry.registerAssetRoute("/test.css", "test.css");
+            routeRegistry.registerStreamRoute("/engine/fake-stream");
             throw new Error("Should have been denied");
         } catch (e) {
-            if (!e.message.includes("not privileged")) {
+            if (!e.message.includes("reserved")) {
                 throw e;
             }
         }
     "#;
 
-    let result = execute_script_secure("test://non-privileged-assets", script, user);
+    let result = execute_script_secure("test://reserved-path-streams", script, user);
     assert!(
         result.success,
-        "Non-privileged script should be denied asset route registration: {:?}",
+        "Reserved paths should be denied for stream registration: {:?}",
+        result.error
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_register_asset_route_denied_for_reserved_path() {
+    setup_env().await;
+    let user = create_user_with_capabilities("user", vec![Capability::WriteAssets]);
+
+    repository::upsert_script("test://reserved-path-assets", "").expect("Failed to create script");
+
+    let script = r#"
+        try {
+            routeRegistry.registerAssetRoute("/engine/fake.css", "test.css");
+            throw new Error("Should have been denied");
+        } catch (e) {
+            if (!e.message.includes("reserved")) {
+                throw e;
+            }
+        }
+    "#;
+
+    let result = execute_script_secure("test://reserved-path-assets", script, user);
+    assert!(
+        result.success,
+        "Reserved paths should be denied for asset route registration: {:?}",
         result.error
     );
 }

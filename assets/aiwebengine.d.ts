@@ -5,7 +5,7 @@
  * @version 0.1.0
  *
  * Add this reference to your scripts for IDE autocomplete and type checking:
- * /// <reference path="https://your-engine.com/api/types/v0.1.0/aiwebengine.d.ts" />
+ * /// <reference path="https://your-engine.com/engine/types/v0.1.0/aiwebengine.d.ts" />
  *
  * IMPORTANT: Every script MUST export an init() function that registers routes,
  * GraphQL resolvers, or other initialization logic.

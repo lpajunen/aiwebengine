@@ -1388,6 +1388,10 @@ pub fn create_oauth2_router(
         .route("/authorize", get(oauth2_authorize)) // Also support /authorize for compatibility
         .route("/oauth2/token", post(oauth2_token))
         .route("/token", post(oauth2_token)) // Also support /token for compatibility
+        // Aliases under the reserved /auth prefix; the top-level paths above
+        // stay advertised in the server metadata until clients migrate.
+        .route("/auth/oauth2/authorize", get(oauth2_authorize))
+        .route("/auth/oauth2/token", post(oauth2_token))
         .layer(cors)
         .with_state(oauth2_state);
 
@@ -1397,6 +1401,7 @@ pub fn create_oauth2_router(
     if let Some(manager) = registration_manager {
         let registration_router = Router::new()
             .route("/oauth2/register", post(register_client_handler))
+            .route("/auth/oauth2/register", post(register_client_handler))
             .with_state(manager);
 
         router.merge(registration_router)

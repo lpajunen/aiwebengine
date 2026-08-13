@@ -6,7 +6,7 @@
  *
  * These APIs are only available to scripts marked as privileged.
  * Add this reference to your privileged scripts for IDE autocomplete and type checking:
- * /// <reference path="https://your-engine.com/api/types/v0.1.0/aiwebengine-priv.d.ts" />
+ * /// <reference path="https://your-engine.com/engine/types/v0.1.0/aiwebengine-priv.d.ts" />
  */
 
 // ============================================================================

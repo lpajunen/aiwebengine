@@ -2954,8 +2954,6 @@ impl SecureGlobalContext {
 
         // 1. registerRoute function
         if let Some(register_impl) = register_fn {
-            let script_uri_for_register = script_uri_owned.clone();
-            let user_ctx_route = user_context.clone();
             let register_route = Function::new(
                 ctx.clone(),
                 move |_ctx: rquickjs::Ctx<'_>,
@@ -2964,33 +2962,15 @@ impl SecureGlobalContext {
                       method: Option<String>,
                       metadata: Opt<rquickjs::Object>|
                       -> Result<(), rquickjs::Error> {
-                    // Check if script is privileged OR user has admin privileges
-                    let script_privileged =
-                        match repository::is_script_privileged(&script_uri_for_register) {
-                            Ok(true) => true,
-                            Ok(false) => false,
-                            Err(e) => {
-                                return Err(rquickjs::Error::new_from_js_message(
-                                    "routeRegistry.registerRoute",
-                                    "privilege_lookup_failed",
-                                    &format!(
-                                        "Unable to verify privileges for '{}': {}",
-                                        script_uri_for_register, e
-                                    ),
-                                ));
-                            }
-                        };
-
-                    let user_is_admin =
-                        user_ctx_route.has_capability(&crate::security::Capability::DeleteScripts);
-
-                    if !script_privileged && !user_is_admin {
+                    // Engine-owned prefixes are off-limits; any script may
+                    // register any other path.
+                    if let Some(prefix) = crate::engine_api::reserved_route_prefix(&path) {
                         return Err(rquickjs::Error::new_from_js_message(
                             "routeRegistry.registerRoute",
-                            "permission_denied",
+                            "reserved_path",
                             &format!(
-                                "Script '{}' is not privileged to register HTTP routes",
-                                script_uri_for_register
+                                "Path '{}' is reserved for the engine (prefix '{}')",
+                                path, prefix
                             ),
                         ));
                     }
@@ -3041,44 +3021,22 @@ impl SecureGlobalContext {
             )?;
             route_registry.set("registerRoute", register_route)?;
         } else {
-            // No-op register function with privilege check
-            let script_uri_for_noop = script_uri_owned.clone();
-            let user_ctx_noop = user_context.clone();
+            // No-op register function with the same reserved-path check
             let reg_noop = Function::new(
                 ctx.clone(),
                 move |_c: rquickjs::Ctx<'_>,
-                      _p: String,
+                      path: String,
                       _h: String,
                       _m: Option<String>,
                       _meta: Opt<rquickjs::Object>|
                       -> Result<(), rquickjs::Error> {
-                    // Check if script is privileged OR user has admin privileges
-                    let script_privileged =
-                        match repository::is_script_privileged(&script_uri_for_noop) {
-                            Ok(true) => true,
-                            Ok(false) => false,
-                            Err(e) => {
-                                return Err(rquickjs::Error::new_from_js_message(
-                                    "routeRegistry.registerRoute",
-                                    "privilege_lookup_failed",
-                                    &format!(
-                                        "Unable to verify privileges for '{}': {}",
-                                        script_uri_for_noop, e
-                                    ),
-                                ));
-                            }
-                        };
-
-                    let user_is_admin =
-                        user_ctx_noop.has_capability(&crate::security::Capability::DeleteScripts);
-
-                    if !script_privileged && !user_is_admin {
+                    if let Some(prefix) = crate::engine_api::reserved_route_prefix(&path) {
                         return Err(rquickjs::Error::new_from_js_message(
                             "routeRegistry.registerRoute",
-                            "permission_denied",
+                            "reserved_path",
                             &format!(
-                                "Script '{}' is not privileged to register HTTP routes",
-                                script_uri_for_noop
+                                "Path '{}' is reserved for the engine (prefix '{}')",
+                                path, prefix
                             ),
                         ));
                     }
@@ -3113,32 +3071,15 @@ impl SecureGlobalContext {
                     ));
                 }
 
-                // Check if script is privileged OR user has admin privileges
-                let script_privileged = match repository::is_script_privileged(&script_uri_stream) {
-                    Ok(true) => true,
-                    Ok(false) => false,
-                    Err(e) => {
-                        return Err(rquickjs::Error::new_from_js_message(
-                            "routeRegistry.registerStreamRoute",
-                            "privilege_lookup_failed",
-                            &format!(
-                                "Unable to verify privileges for '{}': {}",
-                                script_uri_stream, e
-                            ),
-                        ));
-                    }
-                };
-
-                let user_is_admin =
-                    user_ctx_stream.has_capability(&crate::security::Capability::DeleteScripts);
-
-                if !script_privileged && !user_is_admin {
+                // Engine-owned prefixes are off-limits; any script may
+                // register any other stream path.
+                if let Some(prefix) = crate::engine_api::reserved_route_prefix(&path) {
                     return Err(rquickjs::Error::new_from_js_message(
                         "routeRegistry.registerStreamRoute",
-                        "permission_denied",
+                        "reserved_path",
                         &format!(
-                            "Script '{}' is not privileged to register stream routes",
-                            script_uri_stream
+                            "Path '{}' is reserved for the engine (prefix '{}')",
+                            path, prefix
                         ),
                     ));
                 }
@@ -3261,32 +3202,15 @@ impl SecureGlobalContext {
                   asset_name: String,
                   metadata: Opt<rquickjs::Object>|
                   -> Result<String, rquickjs::Error> {
-                // Check if script is privileged OR user has admin privileges
-                let script_privileged = match repository::is_script_privileged(&script_uri_asset) {
-                    Ok(true) => true,
-                    Ok(false) => false,
-                    Err(e) => {
-                        return Err(rquickjs::Error::new_from_js_message(
-                            "routeRegistry.registerAssetRoute",
-                            "privilege_lookup_failed",
-                            &format!(
-                                "Unable to verify privileges for '{}': {}",
-                                script_uri_asset, e
-                            ),
-                        ));
-                    }
-                };
-
-                let user_is_admin =
-                    user_ctx_asset.has_capability(&crate::security::Capability::DeleteScripts);
-
-                if !script_privileged && !user_is_admin {
+                // Engine-owned prefixes are off-limits; any script may
+                // register any other asset path.
+                if let Some(prefix) = crate::engine_api::reserved_route_prefix(&path) {
                     return Err(rquickjs::Error::new_from_js_message(
                         "routeRegistry.registerAssetRoute",
-                        "permission_denied",
+                        "reserved_path",
                         &format!(
-                            "Script '{}' is not privileged to register asset routes",
-                            script_uri_asset
+                            "Path '{}' is reserved for the engine (prefix '{}')",
+                            path, prefix
                         ),
                     ));
                 }

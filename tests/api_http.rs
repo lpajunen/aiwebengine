@@ -130,6 +130,114 @@ async fn test_script_logs_endpoint() {
 }
 
 // ============================================================================
+// Engine Management Endpoint Tests (/engine/*)
+// ============================================================================
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_engine_management_endpoints() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    let context = TestContext::new();
+
+    let port = context
+        .start_server()
+        .await
+        .expect("server failed to start");
+    wait_for_server(port, 20).await.expect("Server not ready");
+
+    let client = reqwest::Client::new();
+    let base = format!("http://127.0.0.1:{}", port);
+
+    // /engine/script_logs is the canonical alias of /script_logs
+    let response = client
+        .get(format!(
+            "{}/engine/script_logs?uri=https://example.com/core",
+            base
+        ))
+        .send()
+        .await
+        .expect("engine script_logs request failed");
+    assert_eq!(response.status(), 200);
+
+    // /engine/scripts lists script metadata
+    let response = client
+        .get(format!("{}/engine/scripts", base))
+        .send()
+        .await
+        .expect("engine scripts request failed");
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.expect("scripts response not JSON");
+    assert!(body["scripts"].is_array());
+    assert!(body["count"].is_number());
+
+    // /engine/script_init_status without uri returns all statuses
+    let response = client
+        .get(format!("{}/engine/script_init_status", base))
+        .send()
+        .await
+        .expect("engine script_init_status request failed");
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.expect("status response not JSON");
+    assert!(body["statuses"].is_array());
+
+    // /engine/script_owners lists owners for anyone
+    let script_uri = "https://example.com/owners-endpoint-test";
+    let _ = repository::upsert_script(script_uri, "function init() {}");
+    let response = client
+        .get(format!("{}/engine/script_owners?uri={}", base, script_uri))
+        .send()
+        .await
+        .expect("engine script_owners request failed");
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.expect("owners response not JSON");
+    assert!(body["owners"].is_array());
+
+    // Missing required parameters are rejected
+    for path in [
+        "/engine/secrets",
+        "/engine/script_security_profile",
+        "/engine/script_owners",
+    ] {
+        let response = client
+            .get(format!("{}{}", base, path))
+            .send()
+            .await
+            .expect("missing-param request failed");
+        assert_eq!(response.status(), 400, "expected 400 for {}", path);
+    }
+
+    // Cleanup
+    context.cleanup().await.expect("Failed to cleanup");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_favicon_default_served_when_unregistered() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    let context = TestContext::new();
+
+    let port = context
+        .start_server()
+        .await
+        .expect("server failed to start");
+    wait_for_server(port, 20).await.expect("Server not ready");
+
+    let client = reqwest::Client::new();
+
+    // No script registers /favicon.ico, so the engine default is served.
+    let response = client
+        .get(format!("http://127.0.0.1:{}/favicon.ico", port))
+        .send()
+        .await
+        .expect("favicon request failed");
+    assert_eq!(response.status(), 200);
+
+    context.cleanup().await.expect("Failed to cleanup");
+}
+
+// ============================================================================
 // HTTP Methods Tests
 // ============================================================================
 

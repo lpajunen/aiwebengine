@@ -69,6 +69,16 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
         engine_api::assets_get_route,
         engine_api::assets_post_route,
         engine_api::assets_delete_route,
+        engine_api::list_scripts_route,
+        engine_api::script_init_status_route,
+        engine_api::script_security_profile_route,
+        engine_api::set_script_privileged_route,
+        engine_api::script_owners_get_route,
+        engine_api::script_owners_post_route,
+        engine_api::script_owners_delete_route,
+        engine_api::secrets_get_route,
+        engine_api::secrets_post_route,
+        engine_api::secrets_delete_route,
         engine_api::installed_page_route,
         engine_api::openapi_route,
         engine_api::unauthorized_page_route,
@@ -363,7 +373,7 @@ pub fn get_rust_openapi_spec() -> String {
 
                 // TypeScript type definitions
                 let version = env!("CARGO_PKG_VERSION");
-                let type_defs_path = format!("/api/types/v{}/aiwebengine.d.ts", version);
+                let type_defs_path = format!("/engine/types/v{}/aiwebengine.d.ts", version);
                 paths.insert(type_defs_path.clone(), serde_json::json!({
                     "get": {
                         "tags": ["Documentation"],
@@ -383,7 +393,8 @@ pub fn get_rust_openapi_spec() -> String {
                     }
                 }));
 
-                let type_defs_priv_path = format!("/api/types/v{}/aiwebengine-priv.d.ts", version);
+                let type_defs_priv_path =
+                    format!("/engine/types/v{}/aiwebengine-priv.d.ts", version);
                 paths.insert(type_defs_priv_path.clone(), serde_json::json!({
                     "get": {
                         "tags": ["Documentation"],
@@ -2163,7 +2174,60 @@ async fn setup_routes(
     // Script and asset management endpoints (engine functionality,
     // previously provided by the built-in core.js/cli.js scripts).
     // The configured request body limit applies, same as dynamic routes.
+    // The canonical paths live under the reserved /engine prefix; the
+    // top-level paths are deprecated aliases kept until clients migrate.
     let management_router = Router::new()
+        .route(
+            "/engine/upsert_script",
+            axum::routing::post(engine_api::upsert_script_route),
+        )
+        .route(
+            "/engine/delete_script",
+            axum::routing::post(engine_api::delete_script_route),
+        )
+        .route(
+            "/engine/read_script",
+            axum::routing::get(engine_api::read_script_route),
+        )
+        .route(
+            "/engine/script_logs",
+            axum::routing::get(engine_api::script_logs_route),
+        )
+        .route(
+            "/engine/assets",
+            axum::routing::get(engine_api::assets_get_route)
+                .post(engine_api::assets_post_route)
+                .delete(engine_api::assets_delete_route),
+        )
+        .route(
+            "/engine/scripts",
+            axum::routing::get(engine_api::list_scripts_route),
+        )
+        .route(
+            "/engine/script_init_status",
+            axum::routing::get(engine_api::script_init_status_route),
+        )
+        .route(
+            "/engine/script_security_profile",
+            axum::routing::get(engine_api::script_security_profile_route),
+        )
+        .route(
+            "/engine/set_script_privileged",
+            axum::routing::post(engine_api::set_script_privileged_route),
+        )
+        .route(
+            "/engine/script_owners",
+            axum::routing::get(engine_api::script_owners_get_route)
+                .post(engine_api::script_owners_post_route)
+                .delete(engine_api::script_owners_delete_route),
+        )
+        .route(
+            "/engine/secrets",
+            axum::routing::get(engine_api::secrets_get_route)
+                .post(engine_api::secrets_post_route)
+                .delete(engine_api::secrets_delete_route),
+        )
+        // Deprecated top-level aliases of the /engine/* management routes.
         .route(
             "/upsert_script",
             axum::routing::post(engine_api::upsert_script_route),
@@ -2198,10 +2262,6 @@ async fn setup_routes(
             "/auth/unauthorized",
             axum::routing::get(engine_api::unauthorized_page_route),
         )
-        .route(
-            "/favicon.ico",
-            axum::routing::get(engine_api::favicon_route),
-        )
         .layer(axum::extract::DefaultBodyLimit::max(max_request_body));
     app = app.merge(management_router);
 
@@ -2225,63 +2285,44 @@ async fn setup_routes(
             }),
         );
 
-    // Add TypeScript type definitions endpoint (no authentication required)
-    let version = env!("CARGO_PKG_VERSION");
-    let type_defs_path = format!("/api/types/v{}/aiwebengine.d.ts", version);
-    app = app.route(
-        &type_defs_path,
-        axum::routing::get(|| async {
-            if let Some(asset) =
-                repository::fetch_asset_async("https://example.com/core", "aiwebengine.d.ts").await
-            {
-                let mut response = asset.content.into_response();
-                response.headers_mut().insert(
-                    axum::http::header::CONTENT_TYPE,
-                    axum::http::HeaderValue::from_static("text/plain; charset=utf-8"),
-                );
-                response.headers_mut().insert(
-                    axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
-                    axum::http::HeaderValue::from_static("*"),
-                );
-                response.headers_mut().insert(
-                    axum::http::header::CACHE_CONTROL,
-                    axum::http::HeaderValue::from_static("public, max-age=3600"),
-                );
-                response
-            } else {
-                (StatusCode::NOT_FOUND, "Type definitions not found").into_response()
-            }
-        }),
-    );
+    // Add TypeScript type definitions endpoints (no authentication required).
+    // Canonical paths live under /engine/types; the /api/types paths are
+    // deprecated aliases kept until clients migrate.
+    async fn serve_type_defs(asset_name: &'static str) -> axum::response::Response {
+        if let Some(asset) =
+            repository::fetch_asset_async("https://example.com/core", asset_name).await
+        {
+            let mut response = asset.content.into_response();
+            response.headers_mut().insert(
+                axum::http::header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static("text/plain; charset=utf-8"),
+            );
+            response.headers_mut().insert(
+                axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
+                axum::http::HeaderValue::from_static("*"),
+            );
+            response.headers_mut().insert(
+                axum::http::header::CACHE_CONTROL,
+                axum::http::HeaderValue::from_static("public, max-age=3600"),
+            );
+            response
+        } else {
+            (StatusCode::NOT_FOUND, "Type definitions not found").into_response()
+        }
+    }
 
-    // Add TypeScript private type definitions endpoint (no authentication required)
-    let type_defs_priv_path = format!("/api/types/v{}/aiwebengine-priv.d.ts", version);
-    app = app.route(
-        &type_defs_priv_path,
-        axum::routing::get(|| async {
-            if let Some(asset) =
-                repository::fetch_asset_async("https://example.com/core", "aiwebengine-priv.d.ts")
-                    .await
-            {
-                let mut response = asset.content.into_response();
-                response.headers_mut().insert(
-                    axum::http::header::CONTENT_TYPE,
-                    axum::http::HeaderValue::from_static("text/plain; charset=utf-8"),
-                );
-                response.headers_mut().insert(
-                    axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
-                    axum::http::HeaderValue::from_static("*"),
-                );
-                response.headers_mut().insert(
-                    axum::http::header::CACHE_CONTROL,
-                    axum::http::HeaderValue::from_static("public, max-age=3600"),
-                );
-                response
-            } else {
-                (StatusCode::NOT_FOUND, "Type definitions not found").into_response()
-            }
-        }),
-    );
+    let version = env!("CARGO_PKG_VERSION");
+    for prefix in ["/engine/types", "/api/types"] {
+        app = app
+            .route(
+                &format!("{}/v{}/aiwebengine.d.ts", prefix, version),
+                axum::routing::get(|| serve_type_defs("aiwebengine.d.ts")),
+            )
+            .route(
+                &format!("{}/v{}/aiwebengine-priv.d.ts", prefix, version),
+                axum::routing::get(|| serve_type_defs("aiwebengine-priv.d.ts")),
+            );
+    }
 
     // Documentation routes are now handled by docs.js feature script
     // Commented out to avoid conflicts with JavaScript implementation
@@ -2409,6 +2450,9 @@ async fn handle_dynamic_request(
                     &request_method,
                     &request_id,
                 ));
+            } else if path == "/favicon.ico" && request_method == "GET" {
+                // No script claimed /favicon.ico — serve the engine default.
+                return engine_api::favicon_route().await;
             } else if path == "/" && request_method == "GET" {
                 info!(
                     "[{}] 🔄 Redirecting root path to /engine/installed for bootstrapping",
