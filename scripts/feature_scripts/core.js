@@ -34,11 +34,10 @@ function init(context) {
     console.log(`Initializing core.js script at ${new Date().toISOString()}`);
     console.log(`Init context: ${JSON.stringify(context)}`);
 
-    // Register public asset paths
     // Note: the engine's own endpoints (script/asset management,
     // /engine/installed, /engine/openapi.json, /favicon.ico, MCP tools)
-    // are implemented natively in Rust (src/engine_api.rs).
-    routeRegistry.registerAssetRoute("/engine.css", "engine.css");
+    // are implemented natively in Rust (src/engine_api.rs), and the
+    // engine-served pages carry their own inline styles.
 
     // Register the script update stream endpoint with customization function.
     // The Rust engine broadcasts script_update messages to this stream.
@@ -69,7 +68,6 @@ function init(context) {
     return {
       success: true,
       message: "Core script initialized successfully",
-      registeredAssets: 1,
     };
   } catch (error) {
     console.error(`Core script initialization failed: ${error.message}`);

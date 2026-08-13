@@ -1275,10 +1275,36 @@ pub async fn unauthorized_page_route(
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Insufficient Permissions - aiwebengine</title>
-    <link rel="stylesheet" href="/engine.css">
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <style>
-        /* Insufficient permissions page specific overrides */
+        /* Self-contained: this page is shown in error situations and must
+           not depend on any other resource being served correctly. */
+        :root {{
+            --primary-color: #007acc;
+            --bg-primary: #ffffff;
+            --bg-secondary: #f8f9fa;
+            --text-color: #212529;
+            --text-muted: #6c757d;
+            --border-color: #dee2e6;
+            --border-radius: 6px;
+            --border-radius-lg: 8px;
+            --shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
+            --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1), 0 4px 6px rgba(0, 0, 0, 0.05);
+            --transition: all 0.2s ease;
+            --info-bg: #e8f4fd;
+            --info-border: #b6def7;
+            --info-color: #0c5464;
+            --error-bg: #f8d7da;
+            --error-color: #dc3545;
+        }}
+
+        body {{
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            font-size: 14px;
+            line-height: 1.5;
+        }}
+
         body {{
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;

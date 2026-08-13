@@ -170,26 +170,90 @@ pub async fn login_page(
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login</title>
-    <link rel="stylesheet" href="/engine.css">
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <style>
+        body {{
+            margin: 0;
+            padding: 1rem;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            font-size: 14px;
+            line-height: 1.5;
+            color: #212529;
+            background: #f8f9fa;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }}
+
+        .card {{
+            width: 100%;
+            max-width: 400px;
+            background: #ffffff;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
+            padding: 2rem;
+            text-align: center;
+        }}
+
+        .card h1 {{
+            margin: 0 0 1rem 0;
+            font-size: 1.75rem;
+        }}
+
+        .card p {{
+            color: #6c757d;
+            margin: 0 0 1.5rem 0;
+        }}
+
+        .provider-btn {{
+            display: block;
+            width: 100%;
+            box-sizing: border-box;
+            padding: 0.75rem 1rem;
+            margin-bottom: 0.5rem;
+            border: none;
+            border-radius: 6px;
+            font-weight: 500;
+            font-size: 1rem;
+            text-decoration: none;
+            transition: all 0.2s ease;
+        }}
+
+        .provider-google {{
+            background-color: #4285f4;
+            color: white;
+        }}
+
+        .provider-google:hover {{
+            background-color: #3367d6;
+        }}
+
+        .provider-microsoft {{
+            background-color: #00a4ef;
+            color: white;
+        }}
+
+        .provider-microsoft:hover {{
+            background-color: #0078d4;
+        }}
+
+        .provider-apple {{
+            background-color: #000000;
+            color: white;
+        }}
+
+        .provider-apple:hover {{
+            background-color: #333333;
+        }}
+    </style>
 </head>
 <body>
-    <div class="page-container">
-        <main class="page-main">
-            <div class="container">
-                <div class="row justify-content-center">
-                    <div class="col-12 col-md-6 col-lg-4">
-                        <div class="card">
-                            <div class="card-body text-center">
-                                <h1 class="mb-3">Sign In</h1>
-                                <p class="text-muted mb-4">Choose a provider to continue:</p>
-                                {}
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </main>
+    <div class="card">
+        <h1>Sign In</h1>
+        <p>Choose a provider to continue:</p>
+        {}
     </div>
 </body>
 </html>"#,
@@ -199,7 +263,7 @@ pub async fn login_page(
             sorted_providers
                 .iter()
                 .map(|p| format!(
-                    r#"<a href="/auth/login/{}?redirect={}" class="btn btn-block provider-btn provider-{} mb-2">{}</a>"#,
+                    r#"<a href="/auth/login/{}?redirect={}" class="provider-btn provider-{}">{}</a>"#,
                     p.to_lowercase(),
                     encoded_redirect,
                     p.to_lowercase(),
