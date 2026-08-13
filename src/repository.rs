@@ -30,11 +30,13 @@ use tracing::{debug, error, info, warn};
 // state and pass the appropriate executor.
 
 /// Built-in scripts that must remain privileged by default
-pub const PRIVILEGED_BOOTSTRAP_SCRIPTS: &[&str] = &[
-    "https://example.com/core",
-    "https://example.com/cli",
-    "https://example.com/auth",
-];
+pub const PRIVILEGED_BOOTSTRAP_SCRIPTS: &[&str] =
+    &["https://example.com/core", "https://example.com/auth"];
+
+/// Built-in scripts that were bootstrapped by earlier versions of the engine
+/// and have since been replaced by native Rust functionality. They are
+/// removed from the database on startup so stale copies stop executing.
+const RETIRED_BOOTSTRAP_SCRIPTS: &[&str] = &["https://example.com/cli"];
 
 /// Helper to run async code in a blocking context, handling different runtime scenarios
 fn run_blocking<F, R>(future: F) -> R
@@ -4406,10 +4408,6 @@ pub async fn bootstrap_scripts_async() -> AppResult<()> {
                 include_str!("../scripts/feature_scripts/core.js"),
             ),
             (
-                "https://example.com/cli",
-                include_str!("../scripts/feature_scripts/cli.js"),
-            ),
-            (
                 "https://example.com/auth",
                 include_str!("../scripts/feature_scripts/auth.js"),
             ),
@@ -4472,18 +4470,26 @@ pub async fn bootstrap_scripts_async() -> AppResult<()> {
                 }
 
                 // Ensure privileged flag is set for privileged scripts
-                if PRIVILEGED_BOOTSTRAP_SCRIPTS.contains(&uri) {
-                    if let Err(e) = db_set_script_privileged(pool, uri, true).await {
-                        warn!(
-                            "Failed to flag bootstrapped script {} as privileged: {}",
-                            uri, e
-                        );
-                        eprintln!("DEBUG: Failed to set privileged flag for {}: {}", uri, e);
-                    } else {
-                        eprintln!("DEBUG: Successfully set privileged flag for {}", uri);
-                    }
+                if PRIVILEGED_BOOTSTRAP_SCRIPTS.contains(&uri)
+                    && let Err(e) = db_set_script_privileged(pool, uri, true).await
+                {
+                    warn!(
+                        "Failed to flag bootstrapped script {} as privileged: {}",
+                        uri, e
+                    );
                 }
             }
+
+            // Remove built-in scripts that have been replaced by native Rust
+            // functionality so stale database copies stop executing.
+            for uri in RETIRED_BOOTSTRAP_SCRIPTS {
+                match db_delete_script(pool, uri).await {
+                    Ok(true) => info!("Removed retired bootstrap script from database: {}", uri),
+                    Ok(false) => {}
+                    Err(e) => warn!("Failed to remove retired bootstrap script {}: {}", uri, e),
+                }
+            }
+
             Ok(())
         }
         .await;
@@ -4871,11 +4877,9 @@ fn get_static_scripts() -> HashMap<String, String> {
     let mut m = HashMap::new();
 
     let core = include_str!("../scripts/feature_scripts/core.js");
-    let cli = include_str!("../scripts/feature_scripts/cli.js");
     let auth = include_str!("../scripts/feature_scripts/auth.js");
 
     m.insert("https://example.com/core".to_string(), core.to_string());
-    m.insert("https://example.com/cli".to_string(), cli.to_string());
     m.insert("https://example.com/auth".to_string(), auth.to_string());
 
     // Include test scripts when appropriate

@@ -49,16 +49,13 @@ async fn setup_env() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_core_js_script_streaming() {
     setup_env().await;
-    // The core.js handlers are driven through the legacy anonymous execution
-    // path here; anonymous script writes require development mode (which a
-    // test server config would normally enable at startup).
+    // The native engine API is driven with an anonymous user context here;
+    // anonymous script writes require development mode (which a test server
+    // config would normally enable at startup).
     aiwebengine::security::set_development_mode(true);
     // Test the real core.js script with streaming functionality
 
-    // First, read the actual core.js file to use for testing
-    let core_js_path = "/Users/lassepajunen/work/aiwebengine/scripts/feature_scripts/core.js";
-    let core_script_content =
-        std::fs::read_to_string(core_js_path).expect("Failed to read core.js file");
+    let core_script_content = include_str!("../scripts/feature_scripts/core.js").to_string();
 
     info!("Testing core.js script streaming functionality");
 
@@ -106,31 +103,22 @@ async fn test_core_js_script_streaming() {
     // Give the system a moment to establish the connection
     sleep(Duration::from_millis(200)).await;
 
-    // Now test the upsert_script endpoint using core.js
-    info!("Testing script upsert through core.js /upsert_script endpoint...");
+    // Now upsert a script through the native engine API, which broadcasts
+    // the update to the /script_updates stream
+    info!("Testing script upsert through the native engine API...");
 
-    let mut form_data = std::collections::HashMap::new();
-    form_data.insert("uri".to_string(), "test_streaming.js".to_string());
-    form_data.insert(
-        "content".to_string(),
-        "console.log('test streaming script');".to_string(),
-    );
-
-    let upsert_result = js_engine::execute_script_for_request(
-        "core.js",
-        "upsert_script_handler",
-        "/upsert_script",
-        "POST",
-        None,
-        Some(&form_data),
+    let user = aiwebengine::security::UserContext::anonymous();
+    let upsert_result = aiwebengine::engine_api::upsert_script_authorized(
+        &user,
+        "test_streaming.js",
+        "console.log('test streaming script');",
         None,
     );
 
-    info!("Upsert result: {:?}", upsert_result);
     assert!(
         upsert_result.is_ok(),
         "Script upsert failed: {:?}",
-        upsert_result
+        upsert_result.err()
     );
 
     // Wait for the streaming message
@@ -166,26 +154,11 @@ async fn test_core_js_script_streaming() {
     }
 
     // Test deletion as well
-    info!("Testing script deletion through core.js /delete_script endpoint...");
+    info!("Testing script deletion through the native engine API...");
 
-    let mut delete_form_data = std::collections::HashMap::new();
-    delete_form_data.insert("uri".to_string(), "test_streaming.js".to_string());
-
-    let delete_result = js_engine::execute_script_for_request(
-        "core.js",
-        "delete_script_handler",
-        "/delete_script",
-        "POST",
-        None,
-        Some(&delete_form_data),
-        None,
-    );
-
-    assert!(
-        delete_result.is_ok(),
-        "Script delete failed: {:?}",
-        delete_result
-    );
+    let deleted =
+        aiwebengine::engine_api::delete_script_authorized(&user, "test_streaming.js", None);
+    assert!(deleted, "Script delete failed");
 
     // Wait for the deletion message
     match timeout(Duration::from_secs(2), receiver.recv()).await {

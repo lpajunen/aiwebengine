@@ -226,14 +226,34 @@ pub fn clear_script_mcp_registrations(script_uri: &str) {
     }
 }
 
-/// List all registered MCP tools
+/// List all registered MCP tools: native engine tools first, then
+/// script-registered tools. A script tool whose name collides with a native
+/// tool is omitted — native tools always win at dispatch time.
 pub fn list_tools() -> Vec<McpTool> {
+    let mut tools: Vec<McpTool> = crate::engine_api::native_mcp_tool_descriptors()
+        .into_iter()
+        .map(|descriptor| McpTool {
+            name: descriptor.name.to_string(),
+            description: descriptor.description.to_string(),
+            input_schema: descriptor.input_schema,
+            handler_function: String::new(),
+            script_uri: "engine://native".to_string(),
+        })
+        .collect();
+
     if let Ok(registry) = get_registry().read() {
-        registry.get_tools().values().cloned().collect()
+        let native_names: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
+        tools.extend(
+            registry
+                .get_tools()
+                .values()
+                .filter(|tool| !native_names.iter().any(|name| name == &tool.name))
+                .cloned(),
+        );
     } else {
         error!("Failed to acquire read lock on MCP registry");
-        Vec::new()
     }
+    tools
 }
 
 /// List all registered MCP prompts
@@ -350,6 +370,13 @@ pub fn execute_mcp_tool(
         "Executing MCP tool: {} with args: {:?}",
         tool_name, arguments
     );
+
+    // Native engine tools take precedence over script-registered tools
+    if let Some(result) =
+        crate::engine_api::execute_native_mcp_tool(tool_name, &arguments, &user_context)
+    {
+        return Ok(result);
+    }
 
     // Get the tool from registry
     let registry_arc = get_registry();

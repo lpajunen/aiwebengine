@@ -17,6 +17,7 @@ pub mod conversion;
 pub mod database;
 pub mod db_schema_utils;
 pub mod dispatcher;
+pub mod engine_api;
 pub mod error;
 pub mod graphql;
 pub mod graphql_schema_gen;
@@ -61,6 +62,13 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
     paths(
         health_handler,
         health_cluster_handler,
+        engine_api::upsert_script_route,
+        engine_api::delete_script_route,
+        engine_api::read_script_route,
+        engine_api::script_logs_route,
+        engine_api::assets_get_route,
+        engine_api::assets_post_route,
+        engine_api::assets_delete_route,
         auth::routes::login_page,
         auth::routes::start_login,
         auth::routes::oauth_callback,
@@ -2152,6 +2160,35 @@ async fn setup_routes(
         // MCP endpoint without authentication (auth is disabled globally)
         app = app.route("/mcp", axum::routing::post(mcp_handler));
     }
+
+    // Script and asset management endpoints (engine functionality,
+    // previously provided by the built-in core.js/cli.js scripts).
+    // The configured request body limit applies, same as dynamic routes.
+    let management_router = Router::new()
+        .route(
+            "/upsert_script",
+            axum::routing::post(engine_api::upsert_script_route),
+        )
+        .route(
+            "/delete_script",
+            axum::routing::post(engine_api::delete_script_route),
+        )
+        .route(
+            "/read_script",
+            axum::routing::get(engine_api::read_script_route),
+        )
+        .route(
+            "/script_logs",
+            axum::routing::get(engine_api::script_logs_route),
+        )
+        .route(
+            "/assets",
+            axum::routing::get(engine_api::assets_get_route)
+                .post(engine_api::assets_post_route)
+                .delete(engine_api::assets_delete_route),
+        )
+        .layer(axum::extract::DefaultBodyLimit::max(max_request_body));
+    app = app.merge(management_router);
 
     // Add health check endpoints (no authentication required)
     app = app
