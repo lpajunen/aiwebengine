@@ -116,7 +116,7 @@ async fn test_script_logs_endpoint() {
     // Test script_logs endpoint with a valid URI parameter
     let logs_response = client
         .get(format!(
-            "http://127.0.0.1:{}/script_logs?uri=https://example.com/core",
+            "http://127.0.0.1:{}/engine/script_logs?uri=https://example.com/core",
             port
         ))
         .send()
@@ -1050,7 +1050,7 @@ async fn test_oversized_request_body_is_rejected() {
 
     // Dynamic script route with a non-form content type must reject with 413
     let response = client
-        .post(format!("http://127.0.0.1:{}/upsert_script", port))
+        .post(format!("http://127.0.0.1:{}/engine/upsert_script", port))
         .header("content-type", "application/json")
         .body(oversized.clone())
         .send()

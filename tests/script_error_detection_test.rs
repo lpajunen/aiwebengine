@@ -41,7 +41,7 @@ function init(context) {
 
         // First, create the script successfully
         let create_response = client
-            .post(format!("http://127.0.0.1:{}/upsert_script", port))
+            .post(format!("http://127.0.0.1:{}/engine/upsert_script", port))
             .form(&[("uri", test_script_uri), ("content", test_content)])
             .send()
             .await

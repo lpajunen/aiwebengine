@@ -485,7 +485,7 @@ function init(context) {
 "#;
 
     let upsert_request = client
-        .post(format!("http://127.0.0.1:{}/upsert_script", port))
+        .post(format!("http://127.0.0.1:{}/engine/upsert_script", port))
         .form(&[
             ("uri", "https://example.com/test-endpoint-script"),
             ("content", test_script_content),
@@ -494,8 +494,8 @@ function init(context) {
 
     let response = match timeout(Duration::from_secs(5), upsert_request).await {
         Ok(Ok(response)) => response,
-        Ok(Err(e)) => panic!("POST request to /upsert_script failed: {:?}", e),
-        Err(_) => panic!("POST request to /upsert_script timed out"),
+        Ok(Err(e)) => panic!("POST request to /engine/upsert_script failed: {:?}", e),
+        Err(_) => panic!("POST request to /engine/upsert_script timed out"),
     };
 
     assert_eq!(
@@ -591,7 +591,7 @@ function init(context) {
 "#;
 
     let upsert_request = client
-        .post(format!("http://127.0.0.1:{}/upsert_script", port))
+        .post(format!("http://127.0.0.1:{}/engine/upsert_script", port))
         .form(&[
             ("uri", "https://example.com/delete-test-script"),
             ("content", test_script_content),
@@ -600,8 +600,8 @@ function init(context) {
 
     let upsert_response = match timeout(Duration::from_secs(5), upsert_request).await {
         Ok(Ok(response)) => response,
-        Ok(Err(e)) => panic!("POST request to /upsert_script failed: {:?}", e),
-        Err(_) => panic!("POST request to /upsert_script timed out"),
+        Ok(Err(e)) => panic!("POST request to /engine/upsert_script failed: {:?}", e),
+        Err(_) => panic!("POST request to /engine/upsert_script timed out"),
     };
 
     assert_eq!(
@@ -631,14 +631,14 @@ function init(context) {
 
     // Now test the delete_script endpoint
     let delete_request = client
-        .post(format!("http://127.0.0.1:{}/delete_script", port))
+        .post(format!("http://127.0.0.1:{}/engine/delete_script", port))
         .form(&[("uri", "https://example.com/delete-test-script")])
         .send();
 
     let delete_response = match timeout(Duration::from_secs(5), delete_request).await {
         Ok(Ok(response)) => response,
-        Ok(Err(e)) => panic!("POST request to /delete_script failed: {:?}", e),
-        Err(_) => panic!("POST request to /delete_script timed out"),
+        Ok(Err(e)) => panic!("POST request to /engine/delete_script failed: {:?}", e),
+        Err(_) => panic!("POST request to /engine/delete_script timed out"),
     };
 
     assert_eq!(
@@ -687,7 +687,7 @@ function init(context) {
 
     // Test deleting a non-existent script
     let nonexistent_delete_request = client
-        .post(format!("http://127.0.0.1:{}/delete_script", port))
+        .post(format!("http://127.0.0.1:{}/engine/delete_script", port))
         .form(&[("uri", "https://example.com/nonexistent-script")])
         .send();
 
@@ -695,10 +695,12 @@ function init(context) {
         match timeout(Duration::from_secs(5), nonexistent_delete_request).await {
             Ok(Ok(response)) => response,
             Ok(Err(e)) => panic!(
-                "POST request to /delete_script for nonexistent script failed: {:?}",
+                "POST request to /engine/delete_script for nonexistent script failed: {:?}",
                 e
             ),
-            Err(_) => panic!("POST request to /delete_script for nonexistent script timed out"),
+            Err(_) => {
+                panic!("POST request to /engine/delete_script for nonexistent script timed out")
+            }
         };
 
     assert_eq!(
@@ -761,7 +763,7 @@ function init(context) {
 
     // 1. Create script via HTTP API
     let create_request = client
-        .post(format!("http://127.0.0.1:{}/upsert_script", port))
+        .post(format!("http://127.0.0.1:{}/engine/upsert_script", port))
         .form(&[
             ("uri", "https://example.com/lifecycle-test-script"),
             ("content", script_content),
@@ -812,7 +814,7 @@ function init(context) {
 
     // 3. Delete script via HTTP API
     let delete_request = client
-        .post(format!("http://127.0.0.1:{}/delete_script", port))
+        .post(format!("http://127.0.0.1:{}/engine/delete_script", port))
         .form(&[("uri", "https://example.com/lifecycle-test-script")])
         .send();
 
@@ -888,7 +890,7 @@ function init(context) {
 "#;
 
     let upsert_request = client
-        .post(format!("http://127.0.0.1:{}/upsert_script", port))
+        .post(format!("http://127.0.0.1:{}/engine/upsert_script", port))
         .form(&[
             ("uri", "https://example.com/read-test-script"),
             ("content", test_script_content),
@@ -897,8 +899,8 @@ function init(context) {
 
     let upsert_response = match timeout(Duration::from_secs(5), upsert_request).await {
         Ok(Ok(response)) => response,
-        Ok(Err(e)) => panic!("POST request to /upsert_script failed: {:?}", e),
-        Err(_) => panic!("POST request to /upsert_script timed out"),
+        Ok(Err(e)) => panic!("POST request to /engine/upsert_script failed: {:?}", e),
+        Err(_) => panic!("POST request to /engine/upsert_script timed out"),
     };
 
     assert_eq!(
@@ -910,15 +912,15 @@ function init(context) {
     // Now test the read_script endpoint
     let read_request = client
         .get(format!(
-            "http://127.0.0.1:{}/read_script?uri=https://example.com/read-test-script",
+            "http://127.0.0.1:{}/engine/read_script?uri=https://example.com/read-test-script",
             port
         ))
         .send();
 
     let read_response = match timeout(Duration::from_secs(5), read_request).await {
         Ok(Ok(response)) => response,
-        Ok(Err(e)) => panic!("GET request to /read_script failed: {:?}", e),
-        Err(_) => panic!("GET request to /read_script timed out"),
+        Ok(Err(e)) => panic!("GET request to /engine/read_script failed: {:?}", e),
+        Err(_) => panic!("GET request to /engine/read_script timed out"),
     };
 
     assert_eq!(
@@ -946,7 +948,7 @@ function init(context) {
     // Test reading a non-existent script
     let nonexistent_read_request = client
         .get(format!(
-            "http://127.0.0.1:{}/read_script?uri=https://example.com/nonexistent-script",
+            "http://127.0.0.1:{}/engine/read_script?uri=https://example.com/nonexistent-script",
             port
         ))
         .send();
@@ -955,10 +957,10 @@ function init(context) {
         match timeout(Duration::from_secs(5), nonexistent_read_request).await {
             Ok(Ok(response)) => response,
             Ok(Err(e)) => panic!(
-                "GET request to /read_script for nonexistent script failed: {:?}",
+                "GET request to /engine/read_script for nonexistent script failed: {:?}",
                 e
             ),
-            Err(_) => panic!("GET request to /read_script for nonexistent script timed out"),
+            Err(_) => panic!("GET request to /engine/read_script for nonexistent script timed out"),
         };
 
     assert_eq!(
@@ -981,13 +983,16 @@ function init(context) {
 
     // Test missing uri parameter
     let missing_uri_request = client
-        .get(format!("http://127.0.0.1:{}/read_script", port))
+        .get(format!("http://127.0.0.1:{}/engine/read_script", port))
         .send();
 
     let missing_uri_response = match timeout(Duration::from_secs(5), missing_uri_request).await {
         Ok(Ok(response)) => response,
-        Ok(Err(e)) => panic!("GET request to /read_script without uri failed: {:?}", e),
-        Err(_) => panic!("GET request to /read_script without uri timed out"),
+        Ok(Err(e)) => panic!(
+            "GET request to /engine/read_script without uri failed: {:?}",
+            e
+        ),
+        Err(_) => panic!("GET request to /engine/read_script without uri timed out"),
     };
 
     assert_eq!(

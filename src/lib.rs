@@ -2174,8 +2174,7 @@ async fn setup_routes(
     // Script and asset management endpoints (engine functionality,
     // previously provided by the built-in core.js/cli.js scripts).
     // The configured request body limit applies, same as dynamic routes.
-    // The canonical paths live under the reserved /engine prefix; the
-    // top-level paths are deprecated aliases kept until clients migrate.
+    // These paths live under the reserved /engine prefix.
     let management_router = Router::new()
         .route(
             "/engine/upsert_script",
@@ -2227,29 +2226,6 @@ async fn setup_routes(
                 .post(engine_api::secrets_post_route)
                 .delete(engine_api::secrets_delete_route),
         )
-        // Deprecated top-level aliases of the /engine/* management routes.
-        .route(
-            "/upsert_script",
-            axum::routing::post(engine_api::upsert_script_route),
-        )
-        .route(
-            "/delete_script",
-            axum::routing::post(engine_api::delete_script_route),
-        )
-        .route(
-            "/read_script",
-            axum::routing::get(engine_api::read_script_route),
-        )
-        .route(
-            "/script_logs",
-            axum::routing::get(engine_api::script_logs_route),
-        )
-        .route(
-            "/assets",
-            axum::routing::get(engine_api::assets_get_route)
-                .post(engine_api::assets_post_route)
-                .delete(engine_api::assets_delete_route),
-        )
         .route(
             "/engine/installed",
             axum::routing::get(engine_api::installed_page_route),
@@ -2286,8 +2262,6 @@ async fn setup_routes(
         );
 
     // Add TypeScript type definitions endpoints (no authentication required).
-    // Canonical paths live under /engine/types; the /api/types paths are
-    // deprecated aliases kept until clients migrate.
     async fn serve_type_defs(asset_name: &'static str) -> axum::response::Response {
         if let Some(asset) =
             repository::fetch_asset_async("https://example.com/core", asset_name).await
@@ -2312,17 +2286,15 @@ async fn setup_routes(
     }
 
     let version = env!("CARGO_PKG_VERSION");
-    for prefix in ["/engine/types", "/api/types"] {
-        app = app
-            .route(
-                &format!("{}/v{}/aiwebengine.d.ts", prefix, version),
-                axum::routing::get(|| serve_type_defs("aiwebengine.d.ts")),
-            )
-            .route(
-                &format!("{}/v{}/aiwebengine-priv.d.ts", prefix, version),
-                axum::routing::get(|| serve_type_defs("aiwebengine-priv.d.ts")),
-            );
-    }
+    app = app
+        .route(
+            &format!("/engine/types/v{}/aiwebengine.d.ts", version),
+            axum::routing::get(|| serve_type_defs("aiwebengine.d.ts")),
+        )
+        .route(
+            &format!("/engine/types/v{}/aiwebengine-priv.d.ts", version),
+            axum::routing::get(|| serve_type_defs("aiwebengine-priv.d.ts")),
+        );
 
     // Documentation routes are now handled by docs.js feature script
     // Commented out to avoid conflicts with JavaScript implementation

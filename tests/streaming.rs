@@ -445,11 +445,11 @@ async fn test_script_update_streaming_integration() {
 
     // Note: SSE streaming from /script_updates would require a more complex setup
     // For now, we verify the core.js script properly broadcasts updates
-    // when scripts are upserted via the /upsert_script endpoint
+    // when scripts are upserted via the /engine/upsert_script endpoint
 
     // Test 1: Insert a new script via HTTP (this should trigger broadcast)
     let insert_request = client
-        .post(format!("http://127.0.0.1:{}/upsert_script", port))
+        .post(format!("http://127.0.0.1:{}/engine/upsert_script", port))
         .form(&[
             ("uri", "https://example.com/test_script"),
             ("content", "console.log('test');"),
@@ -466,7 +466,7 @@ async fn test_script_update_streaming_integration() {
 
     // Test 2: Update the script
     let update_request = client
-        .post(format!("http://127.0.0.1:{}/upsert_script", port))
+        .post(format!("http://127.0.0.1:{}/engine/upsert_script", port))
         .form(&[
             ("uri", "https://example.com/test_script"),
             ("content", "console.log('updated');"),
