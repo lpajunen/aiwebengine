@@ -72,6 +72,22 @@ pub fn broadcast_script_update(uri: &str, action: &str, details: &[(&str, Value)
     }
 }
 
+/// Register engine-provided streams. Called once at startup.
+///
+/// `/script_updates` carries the script change notifications broadcast by
+/// [`broadcast_script_update`]. There is no customization function, so a
+/// connection's filter criteria come from its query parameters — a client
+/// connecting without any receives all messages, exactly as before.
+pub fn register_engine_streams() {
+    if let Err(e) = crate::stream_registry::GLOBAL_STREAM_REGISTRY.register_stream(
+        "/script_updates",
+        "engine://native",
+        None,
+    ) {
+        warn!("Failed to register /script_updates stream: {}", e);
+    }
+}
+
 /// Re-initialize a script in the background after an upsert: clear its
 /// GraphQL/MCP registrations, run init(), and rebuild the GraphQL schema.
 /// Mirrors the behavior of the sandboxed `scriptStorage.upsertScript`.

@@ -990,14 +990,9 @@ async fn initialize_components(config: &config::Config) -> AppResult<()> {
         );
     }
 
-    // Bootstrap hardcoded assets into database if configured
-    info!("Bootstrapping hardcoded assets into database...");
-    if let Err(e) = repository::bootstrap_assets_async().await {
-        warn!(
-            "Failed to bootstrap assets: {}. Continuing with static assets.",
-            e
-        );
-    }
+    // Register engine-provided streams (e.g. /script_updates) before any
+    // script or connection can reference them
+    engine_api::register_engine_streams();
 
     // Execute all scripts at startup to populate GraphQL registry
     execute_startup_scripts().await?;
@@ -3001,14 +2996,6 @@ mod tests {
             return;
         }
         setup_db();
-        // Test script retrieval
-        let script_content = repository::fetch_script("https://example.com/core");
-        assert!(script_content.is_some(), "Core script should exist");
-        assert!(
-            script_content.unwrap().contains("function"),
-            "Core script should contain functions"
-        );
-
         // Test script upsert and retrieval
         let test_uri = "https://example.com/test_script";
         let test_content = "// Test script\nfunction test() { return 'hello'; }";

@@ -29,13 +29,14 @@ use tracing::{debug, error, info, warn};
 // The synchronous wrappers (run_blocking) would check thread-local transaction
 // state and pass the appropriate executor.
 
-/// Built-in scripts that must remain privileged by default
-pub const PRIVILEGED_BOOTSTRAP_SCRIPTS: &[&str] = &["https://example.com/core"];
-
 /// Built-in scripts that were bootstrapped by earlier versions of the engine
 /// and have since been replaced by native Rust functionality. They are
 /// removed from the database on startup so stale copies stop executing.
-const RETIRED_BOOTSTRAP_SCRIPTS: &[&str] = &["https://example.com/cli", "https://example.com/auth"];
+const RETIRED_BOOTSTRAP_SCRIPTS: &[&str] = &[
+    "https://example.com/core",
+    "https://example.com/cli",
+    "https://example.com/auth",
+];
 
 /// Helper to run async code in a blocking context, handling different runtime scenarios
 fn run_blocking<F, R>(future: F) -> R
@@ -43,16 +44,6 @@ where
     F: std::future::Future<Output = R>,
 {
     crate::database::run_blocking(future)
-}
-
-fn is_bootstrap_script(uri: &str) -> bool {
-    PRIVILEGED_BOOTSTRAP_SCRIPTS
-        .iter()
-        .any(|bootstrap_uri| bootstrap_uri == &uri)
-}
-
-fn default_privileged_for(uri: &str) -> bool {
-    is_bootstrap_script(uri)
 }
 
 /// Defines the types of repository errors that can occur
@@ -4139,7 +4130,7 @@ pub fn mark_script_initialized_with_registrations(
 
 /// Determine current privilege state for a script
 pub fn get_script_security_profile(uri: &str) -> AppResult<ScriptSecurityProfile> {
-    let default_privileged = default_privileged_for(uri);
+    let default_privileged = false;
     let repo = get_repository();
 
     // Try repository first
@@ -4341,14 +4332,7 @@ pub fn upsert_script_with_owner(
     // Assign ownership if needed:
     // - For NEW scripts: set the creator as owner
     // - For EXISTING scripts: set owner if they don't have any owners yet (backfill)
-    // - Skip bootstrap scripts (they remain ownerless)
-    let is_bootstrap = is_bootstrap_script(uri);
-    debug!(
-        "Bootstrap check: uri={}, is_bootstrap={}",
-        uri, is_bootstrap
-    );
-
-    if !is_bootstrap && let Some(user_id) = owner_user_id {
+    if let Some(user_id) = owner_user_id {
         // Check if script has any owners
         let owner_count = run_blocking(async { repo.count_script_owners(uri).await }).unwrap_or(0);
         let has_owners = owner_count > 0;
@@ -4375,11 +4359,6 @@ pub fn upsert_script_with_owner(
                 owner_count, uri
             );
         }
-    } else if is_bootstrap {
-        debug!(
-            "Skipping ownership assignment - bootstrap script: uri={}",
-            uri
-        );
     } else {
         debug!(
             "Skipping ownership assignment - no user_id provided: uri={}",
@@ -4400,14 +4379,9 @@ pub async fn bootstrap_scripts_async() -> AppResult<()> {
     if let Some(db) = get_db_pool() {
         let pool = db.pool();
 
-        // Define the hardcoded scripts
-        let hardcoded_scripts = vec![(
-            "https://example.com/core",
-            include_str!("../scripts/feature_scripts/core.js"),
-        )];
-
-        // Include test scripts when appropriate
-        let mut all_scripts = hardcoded_scripts;
+        // All former built-in scripts are now native Rust functionality
+        // (src/engine_api.rs); only test fixtures are bootstrapped here.
+        let mut all_scripts: Vec<(&str, &str)> = Vec::new();
         let include_test_scripts =
             std::env::var("AIWEBENGINE_INCLUDE_TEST_SCRIPTS").is_ok() || cfg!(test);
 
@@ -4461,16 +4435,6 @@ pub async fn bootstrap_scripts_async() -> AppResult<()> {
                         info!("Bootstrapped script into database: {}", uri);
                     }
                 }
-
-                // Ensure privileged flag is set for privileged scripts
-                if PRIVILEGED_BOOTSTRAP_SCRIPTS.contains(&uri)
-                    && let Err(e) = db_set_script_privileged(pool, uri, true).await
-                {
-                    warn!(
-                        "Failed to flag bootstrapped script {} as privileged: {}",
-                        uri, e
-                    );
-                }
             }
 
             // Remove built-in scripts that have been replaced by native Rust
@@ -4501,28 +4465,6 @@ pub async fn bootstrap_scripts_async() -> AppResult<()> {
         debug!("Database not configured, skipping script bootstrap");
         Ok(())
     }
-}
-
-/// Bootstrap hardcoded assets into database on startup
-pub fn bootstrap_assets() -> AppResult<()> {
-    run_blocking(async { bootstrap_assets_async().await })
-}
-
-/// Async version of bootstrap_assets
-pub async fn bootstrap_assets_async() -> AppResult<()> {
-    let repo = get_repository();
-    let assets = get_static_assets();
-    info!("Bootstrapping {} assets...", assets.len());
-
-    for (uri, asset) in assets {
-        debug!("Bootstrapping asset: {}", uri);
-        if let Err(e) = repo.upsert_asset(asset).await {
-            error!("Failed to bootstrap asset {}: {}", uri, e);
-            return Err(e);
-        }
-    }
-
-    Ok(())
 }
 
 /// Delete script with error handling
@@ -4868,10 +4810,6 @@ fn get_static_assets() -> HashMap<String, Asset> {
 /// Helper function to get static scripts embedded at compile time
 fn get_static_scripts() -> HashMap<String, String> {
     let mut m = HashMap::new();
-
-    let core = include_str!("../scripts/feature_scripts/core.js");
-
-    m.insert("https://example.com/core".to_string(), core.to_string());
 
     // Include test scripts when appropriate
     let include_test_scripts =
@@ -5637,10 +5575,7 @@ impl Repository for PostgresRepository {
             .await?
             .ok_or_else(|| RepositoryError::ScriptNotFound(uri.to_string()))?;
 
-        let privileged = self
-            .get_script_privileged(uri)
-            .await?
-            .unwrap_or(default_privileged_for(uri));
+        let privileged = self.get_script_privileged(uri).await?.unwrap_or(false);
 
         let executor = crate::database::get_current_executor(&self.pool);
         let owners = match executor {
@@ -5729,7 +5664,7 @@ impl Repository for PostgresRepository {
                 .get(&metadata.uri)
                 .copied()
                 .or_else(|| overrides.get(&metadata.uri).copied())
-                .unwrap_or_else(|| default_privileged_for(&metadata.uri));
+                .unwrap_or(false);
         }
 
         Ok(metadata_list)
@@ -6704,22 +6639,6 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_bootstrap_assets() {
-        if should_skip_db_tests() {
-            return;
-        }
-        let rt = get_runtime();
-        let _guard = rt.enter();
-        setup_db();
-        // Test that bootstrap_assets doesn't crash when database is available
-        let result = bootstrap_assets();
-        assert!(
-            result.is_ok(),
-            "bootstrap_assets should succeed with database"
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
     async fn test_script_properties_operations() {
         if should_skip_db_tests() {
             return;
@@ -7114,24 +7033,10 @@ mod tests {
         setup_db();
         let _lock = GLOBAL_TEST_LOCK.lock().unwrap();
 
-        // Clean up potential pollution from other tests
-        let bootstrap_uri = "https://example.com/core";
-        let _ = delete_script(bootstrap_uri);
-
         // Clear overrides to ensure clean state
         if let Ok(mut guard) = safe_lock_privilege_overrides() {
             guard.clear();
         }
-
-        // Ensure scripts are bootstrapped
-        let _ = bootstrap_scripts();
-
-        let bootstrap_profile =
-            get_script_security_profile(bootstrap_uri).expect("bootstrap profile available");
-        assert!(
-            bootstrap_profile.privileged,
-            "Bootstrap scripts should default to privileged"
-        );
 
         let custom_uri = "test://privileged-script";
         let code = "function handler() { return { status: 200 }; }";
@@ -7266,28 +7171,6 @@ mod tests {
         let owners = get_script_owners(script_uri).expect("Should get owners");
         assert_eq!(owners.len(), 1, "Should still have exactly one owner");
         assert_eq!(owners[0], owner_user_id, "Owner should be unchanged");
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_script_ownership_bootstrap_scripts_remain_ownerless() {
-        if should_skip_db_tests() {
-            return;
-        }
-        let rt = get_runtime();
-        let _guard = rt.enter();
-        setup_db();
-        // Test that bootstrap scripts never get owners assigned
-        let bootstrap_uri = "https://example.com/core"; // This is a bootstrap script
-        let user_id = "admin-user";
-        let script_code = "console.log('bootstrap script');";
-
-        // Try to create/update a bootstrap script with an owner
-        let result = upsert_script_with_owner(bootstrap_uri, script_code, Some(user_id));
-        assert!(result.is_ok(), "Should succeed");
-
-        // Verify it has no owners (bootstrap scripts are ownerless)
-        let owners = get_script_owners(bootstrap_uri).expect("Should get owners");
-        assert_eq!(owners.len(), 0, "Bootstrap script should have no owners");
     }
 
     #[tokio::test(flavor = "multi_thread")]

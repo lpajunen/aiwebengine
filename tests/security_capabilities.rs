@@ -282,30 +282,6 @@ async fn test_validation_enforces_script_size_limits() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_asset_upload_enforces_size_limits() {
-    if should_skip_integration_tests() {
-        return;
-    }
-    let user = create_user_with_capabilities("test_user", vec![Capability::WriteAssets]);
-    let ops = SecureOperations::new();
-
-    // Create content that exceeds 10MB limit
-    let huge_content = vec![0u8; 11 * 1024 * 1024]; // 11MB
-
-    let result = ops
-        .upload_asset(&user, "huge.bin".to_string(), huge_content)
-        .await;
-
-    assert!(result.is_ok());
-    let op_result = result.unwrap();
-    assert!(!op_result.success, "Huge assets should be rejected");
-    assert!(
-        op_result.error.as_ref().unwrap().contains("too large"),
-        "Error should mention size limit"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn test_rate_limiting_blocks_excessive_requests() {
     if should_skip_integration_tests() {
         return;
@@ -577,36 +553,6 @@ async fn test_security_operations_repository_integration() {
 
     // Cleanup
     aiwebengine::repository::delete_script("integration_test.js");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_asset_upload_repository_integration() {
-    if should_skip_integration_tests() {
-        return;
-    }
-    setup_env().await;
-    let user = create_user_with_capabilities("test_user", vec![Capability::WriteAssets]);
-    let ops = SecureOperations::new();
-
-    let content = b"Test asset content".to_vec();
-    let result = ops
-        .upload_asset(&user, "test_asset.txt".to_string(), content.clone())
-        .await;
-
-    assert!(result.is_ok());
-    let op_result = result.unwrap();
-    assert!(op_result.success, "Asset upload should succeed");
-
-    // Verify the asset was actually stored
-    let stored_asset =
-        aiwebengine::repository::fetch_asset("https://example.com/core", "test_asset.txt");
-    assert!(stored_asset.is_some(), "Asset should be in repository");
-    let asset = stored_asset.unwrap();
-    assert_eq!(asset.content, content);
-    assert_eq!(asset.mimetype, "text/plain");
-
-    // Cleanup
-    aiwebengine::repository::delete_asset("https://example.com/core", "test_asset.txt");
 }
 
 // ============================================================================

@@ -11,7 +11,7 @@
 mod common;
 
 use aiwebengine::{
-    js_engine, repository, script_init,
+    js_engine, repository,
     stream_registry::{BroadcastResult, GLOBAL_STREAM_REGISTRY, StreamConnection, StreamRegistry},
 };
 use common::{TestContext, wait_for_server};
@@ -47,41 +47,22 @@ async fn setup_env() {
 // ============================================================================
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_core_js_script_streaming() {
+async fn test_native_script_update_streaming() {
     setup_env().await;
     // The native engine API is driven with an anonymous user context here;
     // anonymous script writes require development mode (which a test server
     // config would normally enable at startup).
     aiwebengine::security::set_development_mode(true);
-    // Test the real core.js script with streaming functionality
 
-    let core_script_content = include_str!("../scripts/feature_scripts/core.js").to_string();
+    info!("Testing native /script_updates streaming functionality");
 
-    info!("Testing core.js script streaming functionality");
-
-    // Store and execute the core script
-    let _ = repository::upsert_script("core.js", &core_script_content);
-    let result = js_engine::execute_script("core.js", &core_script_content);
-    assert!(
-        result.success,
-        "Core script execution failed: {:?}",
-        result.error
-    );
-
-    // Initialize the script to register streams and routes
-    let init_context = script_init::InitContext::new("core.js".to_string(), false);
-    let registrations =
-        js_engine::call_init_if_exists("core.js", &core_script_content, init_context)
-            .expect("Failed to call init on core.js");
-    assert!(
-        registrations.is_some(),
-        "Core.js should have an init() function"
-    );
+    // Register the engine streams, as server startup does
+    aiwebengine::engine_api::register_engine_streams();
 
     // Verify the /script_updates stream was registered
     assert!(
         GLOBAL_STREAM_REGISTRY.is_stream_registered("/script_updates"),
-        "Script updates stream should be registered by core.js"
+        "Script updates stream should be registered by the engine"
     );
 
     info!("Script updates stream successfully registered");
@@ -187,26 +168,10 @@ async fn test_core_js_script_streaming() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_stream_health_and_stats() {
     setup_env().await;
-    // Test that we can retrieve health and stats for script streams
+    // Test that we can retrieve health and stats for engine streams
 
-    let core_js_path = "/Users/lassepajunen/work/aiwebengine/scripts/feature_scripts/core.js";
-    let core_script_content =
-        std::fs::read_to_string(core_js_path).expect("Failed to read core.js file");
-
-    // Execute core script to register the stream
-    let _ = repository::upsert_script("core_health.js", &core_script_content);
-    let result = js_engine::execute_script("core_health.js", &core_script_content);
-    assert!(result.success, "Core script execution failed");
-
-    // Initialize the script to register streams
-    let init_context = script_init::InitContext::new("core_health.js".to_string(), false);
-    let registrations =
-        js_engine::call_init_if_exists("core_health.js", &core_script_content, init_context)
-            .expect("Failed to call init on core_health.js");
-    assert!(
-        registrations.is_some(),
-        "Core.js should have an init() function"
-    );
+    // Register the engine streams, as server startup does
+    aiwebengine::engine_api::register_engine_streams();
 
     // Test stream health and statistics
     let health = GLOBAL_STREAM_REGISTRY

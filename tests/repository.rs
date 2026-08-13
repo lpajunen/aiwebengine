@@ -29,10 +29,6 @@ async fn test_dynamic_script_lifecycle() {
         .expect("Server failed to start");
     wait_for_server(port, 20).await.expect("Server not ready");
 
-    // Verify initial static scripts exist
-    let scripts = repository::fetch_scripts();
-    assert!(scripts.contains_key("https://example.com/core"));
-
     // Upsert a dynamic script
     let _ = repository::upsert_script(
         "https://example.com/dyn",
@@ -185,7 +181,8 @@ async fn test_asset_management() {
         .expect("Server failed to start");
     wait_for_server(port, 20).await.expect("Server not ready");
 
-    // Test static asset
+    // Engine assets are served from compiled-in static fallbacks under the
+    // legacy core URI (no database rows required)
     let asset = repository::fetch_asset("https://example.com/core", "logo.svg");
     assert!(asset.is_some());
     let asset = asset.unwrap();
@@ -193,11 +190,10 @@ async fn test_asset_management() {
     assert_eq!(asset.mimetype, "image/svg+xml");
     assert!(!asset.content.is_empty());
 
-    // Test listing assets
-    let assets = repository::fetch_assets("https://example.com/core");
-    assert!(assets.contains_key("logo.svg"));
+    // Test upsert and fetch dynamic asset; assets require an owning script
+    let owner_uri = "https://example.com/asset-mgmt-test";
+    let _ = repository::upsert_script(owner_uri, "// asset owner test script");
 
-    // Test upsert and fetch dynamic asset
     let test_content = b"test content".to_vec();
     let now = std::time::SystemTime::now();
     let test_asset = repository::Asset {
@@ -207,11 +203,15 @@ async fn test_asset_management() {
         content: test_content.clone(),
         created_at: now,
         updated_at: now,
-        script_uri: "https://example.com/core".to_string(),
+        script_uri: owner_uri.to_string(),
     };
     let _ = repository::upsert_asset(test_asset);
 
-    let fetched = repository::fetch_asset("https://example.com/core", "test.txt");
+    // Test listing assets
+    let assets = repository::fetch_assets(owner_uri);
+    assert!(assets.contains_key("test.txt"));
+
+    let fetched = repository::fetch_asset(owner_uri, "test.txt");
     assert!(fetched.is_some());
     let fetched = fetched.unwrap();
     assert_eq!(fetched.uri, "test.txt");
@@ -219,12 +219,14 @@ async fn test_asset_management() {
     assert_eq!(fetched.content, test_content);
 
     // Test delete
-    let deleted = repository::delete_asset("https://example.com/core", "test.txt");
+    let deleted = repository::delete_asset(owner_uri, "test.txt");
     assert!(deleted);
 
     // Verify it's gone
-    let fetched_after_delete = repository::fetch_asset("https://example.com/core", "test.txt");
+    let fetched_after_delete = repository::fetch_asset(owner_uri, "test.txt");
     assert!(fetched_after_delete.is_none());
+
+    let _ = repository::delete_script(owner_uri);
 
     context.cleanup().await.expect("Failed to cleanup");
 }

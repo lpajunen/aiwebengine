@@ -109,73 +109,6 @@ async fn test_js_registered_route_returns_expected() {
     context.cleanup().await.expect("Failed to cleanup");
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn test_core_js_does_not_register_root_path() {
-    if should_skip_integration_tests() {
-        return;
-    }
-    setup_env().await;
-    // Ensure core.js does NOT register '/' path (it's handled by Rust redirect)
-    let core = repository::fetch_script("https://example.com/core").expect("core script missing");
-    assert!(
-        !core.contains("routeRegistry.registerRoute('/"),
-        "core.js should NOT register '/' path with routeRegistry (handled by Rust redirect)"
-    );
-    assert!(
-        !core.contains("routeRegistry.registerRoute(\"/\""),
-        "core.js should NOT register '/' path with routeRegistry (handled by Rust redirect)"
-    );
-}
-
-// ============================================================================
-// Core Script Initialization Tests
-// ============================================================================
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_core_script_init_called() {
-    if should_skip_integration_tests() {
-        return;
-    }
-    let context = TestContext::new();
-
-    let _ = repository::upsert_script(
-        "https://example.com/core",
-        include_str!("../scripts/feature_scripts/core.js"),
-    );
-
-    let port = context
-        .start_server()
-        .await
-        .expect("server failed to start");
-
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-
-    let client = reqwest::Client::new();
-
-    let init_status_result = repository::get_script_metadata("https://example.com/core");
-    println!("Init status via repository: {:?}", init_status_result);
-
-    let health_response = client
-        .get(format!("http://127.0.0.1:{}/health", port))
-        .send()
-        .await
-        .expect("Health check request failed");
-
-    let status = health_response.status();
-    println!("Health response status: {}", status);
-
-    let health_body = health_response
-        .text()
-        .await
-        .expect("Failed to read health response");
-
-    println!("Health response body: {}", health_body);
-
-    assert_eq!(status, 200, "Health endpoint should return 200");
-
-    context.cleanup().await.expect("Failed to cleanup");
-}
-
 // ============================================================================
 // JavaScript Logging Tests
 // ============================================================================
@@ -494,10 +427,10 @@ async fn js_script_mgmt_functions_work() {
     assert!(
         list.iter().any(|v| {
             v.as_str()
-                .map(|s| s.contains("example.com/core"))
+                .map(|s| s.contains("example.com/js-mgmt-test"))
                 .unwrap_or(false)
         }),
-        "Expected core script in list"
+        "Expected the js-mgmt-test script itself in list"
     );
 
     // The script management test validates that:

@@ -91,75 +91,6 @@ impl SecureOperations {
         }
     }
 
-    /// Secure wrapper for asset management operations
-    pub async fn upload_asset(
-        &self,
-        user: &UserContext,
-        filename: String,
-        content: Vec<u8>,
-    ) -> Result<OperationResult<String>, StatusCode> {
-        // Check user capabilities
-        if let Err(e) = user.require_capability(&Capability::WriteAssets) {
-            return Ok(OperationResult::error(format!("Access denied: {}", e)));
-        }
-
-        // Validate filename
-        if let Err(e) = self.validator.validate_asset_filename(&filename) {
-            return Ok(OperationResult::error(format!("Invalid filename: {}", e)));
-        }
-
-        // Validate content size (10MB limit)
-        if content.len() > 10 * 1024 * 1024 {
-            return Ok(OperationResult::error(
-                "Asset too large (max 10MB)".to_string(),
-            ));
-        }
-
-        // Determine MIME type (simple implementation, could be enhanced)
-        let mimetype = if filename.ends_with(".html") {
-            "text/html"
-        } else if filename.ends_with(".css") {
-            "text/css"
-        } else if filename.ends_with(".js") {
-            "application/javascript"
-        } else if filename.ends_with(".json") {
-            "application/json"
-        } else if filename.ends_with(".svg") {
-            "image/svg+xml"
-        } else if filename.ends_with(".png") {
-            "image/png"
-        } else if filename.ends_with(".jpg") || filename.ends_with(".jpeg") {
-            "image/jpeg"
-        } else if filename.ends_with(".txt") {
-            "text/plain"
-        } else {
-            "application/octet-stream"
-        };
-
-        // Call actual asset storage
-        let now = std::time::SystemTime::now();
-        let asset = crate::repository::Asset {
-            uri: filename.clone(),
-            name: Some(filename.clone()),
-            mimetype: mimetype.to_string(),
-            content,
-            created_at: now,
-            updated_at: now,
-            script_uri: "https://example.com/core".to_string(), // TODO: After UI and JavaScript API change, set based on related script
-        };
-
-        match crate::repository::upsert_asset_async(asset).await {
-            Ok(()) => {
-                let success_message = format!("Asset '{}' uploaded successfully", filename);
-                Ok(OperationResult::success(success_message))
-            }
-            Err(e) => Ok(OperationResult::error(format!(
-                "Failed to upload asset: {}",
-                e
-            ))),
-        }
-    }
-
     /// Secure wrapper for HTTP requests
     pub async fn make_http_request(
         &self,
@@ -358,25 +289,6 @@ mod tests {
             result2.success,
             "A context with WriteScripts should be able to write scripts"
         );
-    }
-
-    #[test]
-    fn test_upload_asset_validates_filename() {
-        let ops = SecureOperations::new();
-        let user = UserContext::authenticated("user123".to_string());
-
-        // Should fail with invalid filename
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(ops.upload_asset(
-            &user,
-            "../../../etc/passwd".to_string(), // Path traversal attempt
-            vec![1, 2, 3],
-        ));
-
-        assert!(result.is_ok());
-        let result = result.unwrap();
-        assert!(!result.success);
-        assert!(result.error.as_ref().unwrap().contains("Invalid filename"));
     }
 
     #[test]

@@ -23,12 +23,6 @@ async fn test_health_endpoint() {
     }
     let context = TestContext::new();
 
-    // Load the core script which contains the health endpoint
-    let _ = repository::upsert_script(
-        "https://example.com/core",
-        include_str!("../scripts/feature_scripts/core.js"),
-    );
-
     // Start server with proper shutdown support
     let port = context
         .start_server()
@@ -75,12 +69,6 @@ async fn test_health_endpoint_content_type() {
     }
     let context = TestContext::new();
 
-    // Load the core script
-    let _ = repository::upsert_script(
-        "https://example.com/core",
-        include_str!("../scripts/feature_scripts/core.js"),
-    );
-
     // Start server
     let port = context
         .start_server()
@@ -116,12 +104,6 @@ async fn test_script_logs_endpoint() {
         return;
     }
     let context = TestContext::new();
-
-    // Load the core script which contains the script_logs endpoint
-    let _ = repository::upsert_script(
-        "https://example.com/core",
-        include_str!("../scripts/feature_scripts/core.js"),
-    );
 
     let port = context
         .start_server()
@@ -946,12 +928,6 @@ async fn test_oversized_request_body_is_rejected() {
         return;
     }
     let context = TestContext::new();
-
-    // Load the core script so /upsert_script is a registered dynamic route
-    let _ = repository::upsert_script(
-        "https://example.com/core",
-        include_str!("../scripts/feature_scripts/core.js"),
-    );
 
     let port = context
         .start_server()
