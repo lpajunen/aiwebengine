@@ -411,6 +411,15 @@ async fn test_openapi_graphql_endpoints_have_x_protocol() {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_openapi_javascript_routes_included() {
     let ctx = TestContext::new();
+
+    // The built-in scripts no longer register HTTP routes (engine endpoints
+    // are native Rust), so load a script that registers routes via
+    // routeRegistry to exercise the JavaScript path merging.
+    let _ = aiwebengine::repository::upsert_script(
+        "https://example.com/method_test",
+        include_str!("../scripts/test_scripts/method_test.js"),
+    );
+
     let port = ctx.start_server().await.expect("Failed to start server");
     wait_for_server(port, 30)
         .await
@@ -467,7 +476,7 @@ async fn test_openapi_javascript_routes_included() {
 
 /// Asset and stream routes registered without explicit tags must fall back to
 /// the "Assets" and "Streams" Swagger groups respectively. core.js registers
-/// `/logo.svg` (asset) and `/script_updates` (stream) with no tags.
+/// `/engine.css` (asset) and `/script_updates` (stream) with no tags.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_openapi_asset_and_stream_default_groups() {
     let ctx = TestContext::new();
@@ -500,7 +509,7 @@ async fn test_openapi_asset_and_stream_default_groups() {
             .await
             .expect("Failed to parse JSON");
 
-        let asset_tags = get_tags(&spec, "/logo.svg");
+        let asset_tags = get_tags(&spec, "/engine.css");
         let stream_tags = get_tags(&spec, "/script_updates");
 
         if let (Some(asset_tags), Some(stream_tags)) = (asset_tags, stream_tags) {
@@ -519,7 +528,7 @@ async fn test_openapi_asset_and_stream_default_groups() {
 
         if tokio::time::Instant::now() >= deadline {
             panic!(
-                "OpenAPI spec should include /logo.svg (asset) and /script_updates (stream) \
+                "OpenAPI spec should include /engine.css (asset) and /script_updates (stream) \
                  routes (timed out waiting for JS init to complete)"
             );
         }

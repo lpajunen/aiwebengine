@@ -69,6 +69,10 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
         engine_api::assets_get_route,
         engine_api::assets_post_route,
         engine_api::assets_delete_route,
+        engine_api::installed_page_route,
+        engine_api::openapi_route,
+        engine_api::unauthorized_page_route,
+        engine_api::favicon_route,
         auth::routes::login_page,
         auth::routes::start_login,
         auth::routes::oauth_callback,
@@ -2186,6 +2190,22 @@ async fn setup_routes(
             axum::routing::get(engine_api::assets_get_route)
                 .post(engine_api::assets_post_route)
                 .delete(engine_api::assets_delete_route),
+        )
+        .route(
+            "/engine/installed",
+            axum::routing::get(engine_api::installed_page_route),
+        )
+        .route(
+            "/engine/openapi.json",
+            axum::routing::get(engine_api::openapi_route),
+        )
+        .route(
+            "/auth/unauthorized",
+            axum::routing::get(engine_api::unauthorized_page_route),
+        )
+        .route(
+            "/favicon.ico",
+            axum::routing::get(engine_api::favicon_route),
         )
         .layer(axum::extract::DefaultBodyLimit::max(max_request_body));
     app = app.merge(management_router);

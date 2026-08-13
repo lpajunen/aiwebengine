@@ -474,6 +474,221 @@ pub fn delete_asset_authorized(
 }
 
 // ============================================================================
+// OpenAPI spec generation
+// ============================================================================
+
+/// Generate the full OpenAPI spec: the Rust (utoipa) spec merged with
+/// script-registered routes, asset routes, and SSE stream routes. Returns
+/// the same `{"error": ...}` JSON strings as the former JS implementation
+/// when a step fails, so callers can pass the result through unchanged.
+pub fn generate_merged_openapi_spec() -> String {
+    let rust_spec_str = crate::get_rust_openapi_spec();
+    let mut rust_spec: Value = match serde_json::from_str(&rust_spec_str) {
+        Ok(spec) => spec,
+        Err(e) => {
+            return format!(
+                "{{\"error\": \"Failed to parse Rust OpenAPI spec: {}\"}}",
+                e
+            );
+        }
+    };
+
+    let metadata_list = match repository::get_all_script_metadata() {
+        Ok(list) => list,
+        Err(e) => {
+            return format!(
+                "{{\"error\": \"Failed to fetch JavaScript routes: {}\"}}",
+                e
+            );
+        }
+    };
+
+    let mut js_paths = serde_json::Map::new();
+
+    // Script-registered HTTP routes
+    for metadata in metadata_list {
+        if metadata.initialized && !metadata.registrations.is_empty() {
+            for ((path, method), route_meta) in metadata.registrations {
+                let path_item = js_paths.entry(path.clone()).or_insert_with(|| json!({}));
+                let Some(path_obj) = path_item.as_object_mut() else {
+                    continue;
+                };
+
+                let mut operation = serde_json::Map::new();
+                operation.insert(
+                    "summary".to_string(),
+                    json!(
+                        route_meta
+                            .summary
+                            .unwrap_or_else(|| format!("{} {}", method, path))
+                    ),
+                );
+                if let Some(desc) = route_meta.description {
+                    operation.insert("description".to_string(), json!(desc));
+                }
+                if !route_meta.tags.is_empty() {
+                    operation.insert("tags".to_string(), json!(route_meta.tags));
+                } else {
+                    operation.insert("tags".to_string(), json!(["API"]));
+                }
+                if let Some(params) = &route_meta.parameters {
+                    operation.insert("parameters".to_string(), params.clone());
+                }
+                if let Some(body) = &route_meta.request_body {
+                    operation.insert("requestBody".to_string(), body.clone());
+                }
+                operation.insert(
+                    "responses".to_string(),
+                    json!({ "200": { "description": "Success" } }),
+                );
+                operation.insert("x-handler".to_string(), json!(route_meta.handler_name));
+                operation.insert("x-script-uri".to_string(), json!(metadata.uri));
+                operation.insert("x-source".to_string(), json!("javascript"));
+
+                path_obj.insert(method.to_lowercase(), json!(operation));
+            }
+        }
+    }
+
+    // Asset routes from the asset registry
+    let asset_registrations = crate::asset_registry::get_global_registry().get_all_registrations();
+    for (path, registration) in asset_registrations {
+        let extension = path.rsplit('.').next().unwrap_or("");
+        let mime_type = match extension {
+            "css" => "text/css",
+            "js" => "application/javascript",
+            "svg" => "image/svg+xml",
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "gif" => "image/gif",
+            "ico" => "image/x-icon",
+            "html" => "text/html",
+            "json" => "application/json",
+            "xml" => "application/xml",
+            "pdf" => "application/pdf",
+            "woff" | "woff2" => "font/woff2",
+            "ttf" => "font/ttf",
+            _ => "application/octet-stream",
+        };
+
+        let mut asset_operation = serde_json::Map::new();
+        let asset_summary = registration
+            .metadata
+            .summary
+            .clone()
+            .unwrap_or_else(|| format!("Static asset: {}", registration.asset_name));
+        asset_operation.insert("summary".to_string(), json!(asset_summary));
+        let asset_description = registration
+            .metadata
+            .description
+            .clone()
+            .unwrap_or_else(|| {
+                format!(
+                    "Serves static asset '{}' registered by script '{}'",
+                    registration.asset_name, registration.script_uri
+                )
+            });
+        asset_operation.insert("description".to_string(), json!(asset_description));
+        let asset_tags = if registration.metadata.tags.is_empty() {
+            vec!["Assets".to_string()]
+        } else {
+            registration.metadata.tags.clone()
+        };
+        asset_operation.insert("tags".to_string(), json!(asset_tags));
+        asset_operation.insert(
+            "responses".to_string(),
+            json!({
+                "200": {
+                    "description": "Asset content",
+                    "content": {
+                        mime_type: {
+                            "schema": { "type": "string", "format": "binary" }
+                        }
+                    }
+                },
+                "404": { "description": "Asset not found" }
+            }),
+        );
+        asset_operation.insert("x-asset-name".to_string(), json!(registration.asset_name));
+        asset_operation.insert("x-script-uri".to_string(), json!(registration.script_uri));
+        asset_operation.insert("x-source".to_string(), json!("asset-registry"));
+
+        let path_entry = js_paths.entry(path).or_insert_with(|| json!({}));
+        if let Some(path_obj) = path_entry.as_object_mut() {
+            path_obj.insert("get".to_string(), json!(asset_operation));
+        }
+    }
+
+    // SSE stream routes from the stream registry
+    for (path, script_uri, metadata) in
+        crate::stream_registry::GLOBAL_STREAM_REGISTRY.get_all_registrations()
+    {
+        let stream_tags = if metadata.tags.is_empty() {
+            vec!["Streams".to_string()]
+        } else {
+            metadata.tags
+        };
+
+        let mut stream_operation = serde_json::Map::new();
+        let stream_summary = metadata
+            .summary
+            .unwrap_or_else(|| format!("SSE stream: {}", path));
+        stream_operation.insert("summary".to_string(), json!(stream_summary));
+        let stream_description = metadata.description.unwrap_or_else(|| {
+            format!(
+                "Server-Sent Events stream registered by script '{}'",
+                script_uri
+            )
+        });
+        stream_operation.insert("description".to_string(), json!(stream_description));
+        stream_operation.insert("tags".to_string(), json!(stream_tags));
+        stream_operation.insert(
+            "responses".to_string(),
+            json!({
+                "200": {
+                    "description": "SSE event stream",
+                    "content": {
+                        "text/event-stream": { "schema": { "type": "string" } }
+                    }
+                }
+            }),
+        );
+        stream_operation.insert("x-script-uri".to_string(), json!(script_uri));
+        stream_operation.insert("x-source".to_string(), json!("stream-registry"));
+
+        let path_entry = js_paths.entry(path).or_insert_with(|| json!({}));
+        if let Some(path_obj) = path_entry.as_object_mut() {
+            path_obj.insert("get".to_string(), json!(stream_operation));
+        }
+    }
+
+    // Merge collected paths into the Rust spec
+    if let Some(rust_paths) = rust_spec["paths"].as_object_mut() {
+        for (path, operations) in js_paths {
+            if let Some(existing) = rust_paths.get_mut(&path) {
+                if let (Some(existing_obj), Some(new_ops)) =
+                    (existing.as_object_mut(), operations.as_object())
+                {
+                    for (method, operation) in new_ops {
+                        existing_obj.insert(method.clone(), operation.clone());
+                    }
+                }
+            } else {
+                rust_paths.insert(path, operations);
+            }
+        }
+    }
+
+    match serde_json::to_string_pretty(&rust_spec) {
+        Ok(json) => json,
+        Err(e) => format!(
+            "{{\"error\": \"Failed to serialize merged OpenAPI spec: {}\"}}",
+            e
+        ),
+    }
+}
+
+// ============================================================================
 // REST routes (contracts identical to the core.js/cli.js handlers)
 // ============================================================================
 
@@ -902,6 +1117,426 @@ pub async fn assets_delete_route(
             }),
         ),
     }
+}
+
+/// Installation confirmation page, shown after a fresh install (the root
+/// path redirects here until further routes are registered).
+const INSTALLED_PAGE_HTML: &str = r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>aiwebengine Installed</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    }
+    .container {
+      text-align: center;
+      background: white;
+      padding: 3rem 4rem;
+      border-radius: 1rem;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    }
+    h1 {
+      color: #333;
+      margin: 0 0 1rem 0;
+      font-size: 2.5rem;
+    }
+    p {
+      color: #666;
+      font-size: 1.2rem;
+      margin: 0;
+    }
+    .emoji {
+      font-size: 4rem;
+      margin-bottom: 1rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="emoji">🎉</div>
+    <h1>Thanks for installing aiwebengine!</h1>
+    <p>Your server is up and running.</p>
+  </div>
+</body>
+</html>"#;
+
+/// Installation confirmation page.
+#[utoipa::path(
+    get,
+    path = "/engine/installed",
+    tags = ["Engine"],
+    responses(
+        (status = 200, description = "Shows a confirmation page for successful installation",
+            content_type = "text/html"),
+    )
+)]
+pub async fn installed_page_route() -> Response {
+    (
+        StatusCode::OK,
+        [("content-type", "text/html")],
+        INSTALLED_PAGE_HTML,
+    )
+        .into_response()
+}
+
+fn html_escape(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+#[derive(Deserialize, Default)]
+pub struct UnauthorizedQuery {
+    attempted: Option<String>,
+}
+
+/// Insufficient permissions page, shown when an authenticated user lacks the
+/// role required for the page they attempted to access (formerly auth.js).
+#[utoipa::path(
+    get,
+    path = "/auth/unauthorized",
+    tags = ["Authentication"],
+    params(("attempted" = Option<String>, Query, description = "Path the user attempted to access")),
+    responses(
+        (status = 403, description = "Insufficient permissions page", content_type = "text/html"),
+    )
+)]
+pub async fn unauthorized_page_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<UnauthorizedQuery>,
+) -> Response {
+    let auth_user = auth_user.as_deref();
+    let attempted = query.attempted.as_deref();
+
+    let user_info_block = match auth_user {
+        Some(user) => {
+            let user_name = user
+                .name
+                .as_deref()
+                .or(user.email.as_deref())
+                .unwrap_or("User");
+            let email_suffix = user
+                .email
+                .as_deref()
+                .map(|email| format!(" ({})", html_escape(email)))
+                .unwrap_or_default();
+            format!(
+                r#"
+            <div class="user-info">
+                <strong>Signed in as:</strong> {}{}
+            </div>
+            "#,
+                html_escape(user_name),
+                email_suffix
+            )
+        }
+        None => String::new(),
+    };
+
+    let attempted_path_block = match attempted {
+        Some(path) => format!(
+            r#"
+            <div class="attempted-path">
+                <strong>Attempted to access:</strong> {}
+            </div>
+            "#,
+            html_escape(path)
+        ),
+        None => String::new(),
+    };
+
+    let action_link = match auth_user {
+        Some(_) => r#"<a href="/auth/logout">Sign Out</a>"#.to_string(),
+        None => {
+            let redirect_suffix = attempted
+                .map(|path| format!("?redirect={}", urlencoding::encode(path)))
+                .unwrap_or_default();
+            format!(r#"<a href="/auth/login{}">Sign In</a>"#, redirect_suffix)
+        }
+    };
+
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Insufficient Permissions - aiwebengine</title>
+    <link rel="stylesheet" href="/engine.css">
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <style>
+        /* Insufficient permissions page specific overrides */
+        body {{
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem 0;
+        }}
+
+        .permissions-container {{
+            max-width: 600px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: var(--border-radius-lg);
+            box-shadow: var(--shadow-lg);
+            overflow: hidden;
+        }}
+
+        .permissions-content {{
+            padding: 3rem 2rem;
+            text-align: center;
+        }}
+
+        .permissions-icon {{
+            width: 80px;
+            height: 80px;
+            margin: 0 auto 1.5rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 40px;
+            color: white;
+        }}
+
+        .permissions-content h1 {{
+            color: var(--text-color);
+            margin-bottom: 1rem;
+            font-size: 2rem;
+        }}
+
+        .permissions-subtitle {{
+            color: var(--text-muted);
+            margin-bottom: 2rem;
+            font-size: 1.1rem;
+            line-height: 1.6;
+        }}
+
+        .info-box {{
+            background: var(--bg-secondary);
+            border-left: 4px solid var(--primary-color);
+            border-radius: var(--border-radius);
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            text-align: left;
+        }}
+
+        .info-box p {{
+            color: var(--text-muted);
+            line-height: 1.6;
+            margin-bottom: 0.75rem;
+        }}
+
+        .info-box p:last-child {{
+            margin-bottom: 0;
+        }}
+
+        .info-box strong {{
+            color: var(--text-color);
+        }}
+
+        .user-info {{
+            background: var(--info-bg);
+            border: 1px solid var(--info-border);
+            border-radius: var(--border-radius);
+            padding: 1rem;
+            margin-bottom: 1.5rem;
+            font-size: 0.9rem;
+            color: var(--info-color);
+        }}
+
+        .user-info strong {{
+            color: var(--text-color);
+        }}
+
+        .attempted-path {{
+            background: var(--error-bg);
+            border-left: 4px solid var(--error-color);
+            border-radius: var(--border-radius);
+            padding: 1rem;
+            margin-bottom: 1.5rem;
+            text-align: left;
+            font-size: 0.9rem;
+            color: var(--error-color);
+            word-break: break-all;
+        }}
+
+        .permissions-actions {{
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-bottom: 2rem;
+        }}
+
+        .permissions-actions a {{
+            padding: 0.75rem 1.5rem;
+            border-radius: var(--border-radius);
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 1rem;
+            transition: var(--transition);
+            display: inline-block;
+            text-align: center;
+        }}
+
+        .permissions-actions a:first-child {{
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }}
+
+        .permissions-actions a:first-child:hover {{
+            transform: translateY(-2px);
+            box-shadow: var(--shadow);
+        }}
+
+        .permissions-actions a:last-child {{
+            background: var(--bg-secondary);
+            color: var(--text-muted);
+            border: 1px solid var(--border-color);
+        }}
+
+        .permissions-actions a:last-child:hover {{
+            background: var(--bg-primary);
+        }}
+
+        .contact-info {{
+            margin-top: 2rem;
+            padding-top: 1.5rem;
+            border-top: 1px solid var(--border-color);
+            font-size: 0.9rem;
+            color: var(--text-muted);
+        }}
+
+        @media (max-width: 768px) {{
+            .permissions-content {{
+                padding: 2rem 1rem;
+            }}
+
+            .permissions-content h1 {{
+                font-size: 1.75rem;
+            }}
+
+            .permissions-actions {{
+                flex-direction: column;
+            }}
+
+            .permissions-actions a {{
+                width: 100%;
+            }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="permissions-container">
+        <div class="permissions-content">
+            <div class="permissions-icon">
+                🔒
+            </div>
+
+            <h1>Insufficient Permissions</h1>
+
+            <p class="permissions-subtitle">
+                You don't have the required permissions to access this resource.
+            </p>
+            {user_info_block}{attempted_path_block}
+            <div class="info-box">
+                <p><strong>Why am I seeing this?</strong></p>
+                <p>This page or feature requires <strong>Editor</strong> or <strong>Administrator</strong> privileges. Your current account does not have these permissions.</p>
+                <p><strong>What can I do?</strong></p>
+                <p>• Contact your system administrator to request the appropriate role</p>
+                <p>• Verify you're signed in with the correct account</p>
+                <p>• Return to the home page to access features available to you</p>
+            </div>
+
+            <div class="permissions-actions">
+                <a href="/">Go to Home</a>
+                {action_link}
+            </div>
+
+            <div class="contact-info">
+                If you believe this is an error, please contact your system administrator.
+            </div>
+        </div>
+    </div>
+</body>
+</html>"#
+    );
+
+    (
+        StatusCode::FORBIDDEN,
+        [("content-type", "text/html; charset=UTF-8")],
+        html,
+    )
+        .into_response()
+}
+
+/// Site favicon, served from the engine's bootstrapped assets.
+#[utoipa::path(
+    get,
+    path = "/favicon.ico",
+    tags = ["Assets"],
+    responses(
+        (status = 200, description = "Favicon", content_type = "image/x-icon"),
+        (status = 404, description = "Favicon not found"),
+    )
+)]
+pub async fn favicon_route() -> Response {
+    match repository::fetch_asset_async("https://example.com/core", "favicon.ico").await {
+        Some(asset) => (
+            StatusCode::OK,
+            [
+                ("content-type", asset.mimetype),
+                ("cache-control", "public, max-age=3600".to_string()),
+            ],
+            asset.content,
+        )
+            .into_response(),
+        None => (StatusCode::NOT_FOUND, "Favicon not found").into_response(),
+    }
+}
+
+/// OpenAPI specification for all registered routes.
+#[utoipa::path(
+    get,
+    path = "/engine/openapi.json",
+    tags = ["Engine"],
+    responses(
+        (status = 200, description = "OpenAPI 3.0 specification for all registered routes"),
+        (status = 403, description = "Insufficient permissions"),
+    )
+)]
+pub async fn openapi_route(auth_user: Option<Extension<AuthUser>>) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    if user.require_capability(&Capability::ReadScripts).is_err() {
+        return json_response(
+            StatusCode::FORBIDDEN,
+            json!({ "error": "Insufficient permissions" }),
+        );
+    }
+
+    let spec = tokio::task::spawn_blocking(generate_merged_openapi_spec)
+        .await
+        .unwrap_or_else(|e| format!("{{\"error\": \"join error: {}\"}}", e));
+
+    (StatusCode::OK, [("content-type", "application/json")], spec).into_response()
 }
 
 // ============================================================================

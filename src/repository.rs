@@ -30,13 +30,12 @@ use tracing::{debug, error, info, warn};
 // state and pass the appropriate executor.
 
 /// Built-in scripts that must remain privileged by default
-pub const PRIVILEGED_BOOTSTRAP_SCRIPTS: &[&str] =
-    &["https://example.com/core", "https://example.com/auth"];
+pub const PRIVILEGED_BOOTSTRAP_SCRIPTS: &[&str] = &["https://example.com/core"];
 
 /// Built-in scripts that were bootstrapped by earlier versions of the engine
 /// and have since been replaced by native Rust functionality. They are
 /// removed from the database on startup so stale copies stop executing.
-const RETIRED_BOOTSTRAP_SCRIPTS: &[&str] = &["https://example.com/cli"];
+const RETIRED_BOOTSTRAP_SCRIPTS: &[&str] = &["https://example.com/cli", "https://example.com/auth"];
 
 /// Helper to run async code in a blocking context, handling different runtime scenarios
 fn run_blocking<F, R>(future: F) -> R
@@ -4402,16 +4401,10 @@ pub async fn bootstrap_scripts_async() -> AppResult<()> {
         let pool = db.pool();
 
         // Define the hardcoded scripts
-        let hardcoded_scripts = vec![
-            (
-                "https://example.com/core",
-                include_str!("../scripts/feature_scripts/core.js"),
-            ),
-            (
-                "https://example.com/auth",
-                include_str!("../scripts/feature_scripts/auth.js"),
-            ),
-        ];
+        let hardcoded_scripts = vec![(
+            "https://example.com/core",
+            include_str!("../scripts/feature_scripts/core.js"),
+        )];
 
         // Include test scripts when appropriate
         let mut all_scripts = hardcoded_scripts;
@@ -4877,10 +4870,8 @@ fn get_static_scripts() -> HashMap<String, String> {
     let mut m = HashMap::new();
 
     let core = include_str!("../scripts/feature_scripts/core.js");
-    let auth = include_str!("../scripts/feature_scripts/auth.js");
 
     m.insert("https://example.com/core".to_string(), core.to_string());
-    m.insert("https://example.com/auth".to_string(), auth.to_string());
 
     // Include test scripts when appropriate
     let include_test_scripts =
