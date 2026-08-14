@@ -226,15 +226,23 @@ Configure log forwarding via filebeat or similar.
 
 ## User Management
 
-The Manager UI (`/engine/admin`) provides administrators with a web interface to view and manage user roles in the AIWebEngine system.
+The engine lets administrators list users and manage their roles over HTTP
+(`/engine/users`, `/engine/user_roles`) and over MCP (`list_users`,
+`add_user_role`, `remove_user_role`). See [API Endpoints](#api-endpoints) below.
+
+The engine ships no user-management web UI of its own — the `/engine` prefix is
+reserved for engine routes, so a management console is a solution script served
+from a path of its own, built on the endpoints documented here.
 
 ### Access Control
 
-**Administrator Access Only:** The manager UI and its API endpoints are restricted to users with administrator privileges. Non-admin users will receive a 403 Forbidden error.
+**Administrator Access Only:** These endpoints require an authenticated session
+whose user holds the Administrator role. Every other caller — anonymous,
+authenticated non-admin — receives a 403 Forbidden.
 
 ### Getting Administrator Access
 
-To use the Manager UI, you need Administrator privileges. See the [Bootstrap Admin Configuration](04-SECRETS-AND-SECURITY.md#bootstrap-admin-configuration) section for setting up your first administrator account.
+You need Administrator privileges. See the [Bootstrap Admin Configuration](04-SECRETS-AND-SECURITY.md#bootstrap-admin-configuration) section for setting up your first administrator account.
 
 Quick example:
 
@@ -246,98 +254,43 @@ bootstrap_admins = ["your.email@company.com"]
 
 After signing in with this email via OAuth, you'll automatically have Administrator access.
 
-### Accessing the Manager UI
+### Roles
 
-1. Ensure you're logged in as an administrator
-2. Navigate to `/engine/admin` in your browser
-3. View the user list and statistics
-
-**Example:**
-
-```bash
-# Local
-open http://localhost:3000/engine/admin
-
-# Production
-open https://yourdomain.com/engine/admin
-```
-
-### Features
-
-#### 1. User Dashboard
-
-The main dashboard displays:
-
-- **Statistics Cards:**
-  - Total number of users
-  - Number of administrators
-  - Number of editors
-
-- **User Table:** Shows all users with:
-  - Email address
-  - Display name
-  - Current roles (with color-coded badges)
-  - OAuth providers used
-  - Account creation date
-  - Role management actions
-
-#### 2. Role Management
-
-Administrators can:
-
-- **Add Editor Role:** Grant editor privileges to a user
-- **Remove Editor Role:** Revoke editor privileges from a user
-- **Add Administrator Role:** Grant administrator privileges to a user
-- **Remove Administrator Role:** Revoke administrator privileges from a user
-
-**Note:** The `Authenticated` role cannot be removed as it's the base role for all users.
-
-#### 3. Visual Design
-
-The UI features:
-
-- Modern gradient background (purple theme)
-- Card-based layout
-- Responsive design (mobile-friendly)
-- Color-coded role badges:
-  - Blue for Authenticated
-  - Orange for Editor
-  - Pink for Administrator
-- Hover effects and smooth transitions
-- Real-time updates after role changes
+| Role            | Meaning                                                          |
+| --------------- | ---------------------------------------------------------------- |
+| `Authenticated` | Base role held by every user. Cannot be granted away or revoked. |
+| `Editor`        | May edit scripts and assets beyond the ones they own.            |
+| `Administrator` | Full access, including user administration.                      |
 
 ### Managing User Roles
 
-#### Adding Editor Role to a User
+Find the user's id with `GET /engine/users`, then grant or revoke:
 
-1. Locate the user in the table
-2. Click "Add Editor" button
-3. The role is added immediately
-4. The button changes to "Remove Editor"
+```bash
+# Grant the Editor role
+curl -X POST https://yourdomain.com/engine/user_roles \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"user_id": "uuid-here", "role": "Editor"}'
 
-#### Adding Administrator Role
+# Revoke it again
+curl -X DELETE \
+  "https://yourdomain.com/engine/user_roles?user_id=uuid-here&role=Editor" \
+  -b cookies.txt
+```
 
-1. Find the user in the table
-2. Click "Add Admin" button
-3. Confirmation message appears
-4. Role is added to the user
-
-#### Removing Roles
-
-1. Find the user with the role you want to remove
-2. Click the appropriate "Remove" button (e.g., "Remove Admin")
-3. Confirmation message appears
-4. Role is removed from the user
+Both calls return the user's resulting role set, so no follow-up read is needed
+to confirm the change. Role changes are recorded in the security audit log.
 
 ### API Endpoints
 
-The Manager UI uses these API endpoints (for reference):
+User administration is engine functionality, served natively over HTTP and MCP.
+Every endpoint below requires an authenticated session whose user holds the
+Administrator role; anything else is rejected with 403.
 
 #### List Users
 
-**Endpoint:** `GET /api/engine/admin/users`
-
-**Authentication:** Required (Admin only)
+**Endpoint:** `GET /engine/users`
 
 **Response:**
 
@@ -349,28 +302,31 @@ The Manager UI uses these API endpoints (for reference):
       "email": "user@example.com",
       "name": "John Doe",
       "roles": ["Authenticated", "Editor"],
-      "created_at": "2025-10-24T12:00:00Z",
-      "providers": ["google"]
+      "providers": ["google"],
+      "createdAt": 1729771200000,
+      "updatedAt": 1729771200000
     }
   ],
-  "total": 1
+  "count": 1,
+  "timestamp": "2025-10-24T12:00:00.000Z"
 }
 ```
 
-#### Update User Role
+#### Grant a Role
 
-**Endpoint:** `POST /api/engine/admin/users/:userId/roles`
+**Endpoint:** `POST /engine/user_roles`
 
-**Authentication:** Required (Admin only)
-
-**Request Body:**
+**Request Body** (JSON or form-encoded):
 
 ```json
 {
-  "role": "Editor",
-  "action": "add"
+  "user_id": "uuid-here",
+  "role": "Editor"
 }
 ```
+
+`role` is one of `Editor`, `Administrator`, or `Authenticated`. Granting a role
+the user already holds is a no-op rather than an error.
 
 **Response:**
 
@@ -379,23 +335,55 @@ The Manager UI uses these API endpoints (for reference):
   "success": true,
   "userId": "uuid-here",
   "role": "Editor",
-  "action": "add"
+  "roles": ["Authenticated", "Editor"],
+  "timestamp": "2025-10-24T12:00:00.000Z"
 }
+```
+
+#### Revoke a Role
+
+**Endpoint:** `DELETE /engine/user_roles?user_id=<id>&role=<role>`
+
+Responds with the same body as the grant endpoint. Two revocations are refused:
+the `Authenticated` role (400), because it is the base role every user holds,
+and the last remaining `Administrator` (409), because that would leave the
+instance with nobody able to appoint another.
+
+**Errors:** 400 (missing parameter or unknown role), 403 (not an administrator),
+404 (no such user), 409 (last administrator).
+
+#### MCP Tools
+
+The same three operations are available to AI clients through the `/mcp`
+endpoint as the native tools `list_users`, `add_user_role`, and
+`remove_user_role`, with identical authorization and response shapes.
+
+```bash
+curl -X POST https://yourdomain.com/mcp \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call",
+       "params":{"name":"add_user_role",
+                 "arguments":{"user_id":"uuid-here","role":"Editor"}}}'
 ```
 
 ### Troubleshooting
 
-**Problem:** Cannot Access Manager UI (403 Forbidden)
+**Problem:** 403 Forbidden from `/engine/users` or `/engine/user_roles`
 
-**Solution:** Ensure you're logged in as an administrator. Check:
+**Solution:** Ensure you're calling as an administrator. Check:
 
 1. You've signed in with a bootstrap admin email
-2. Another admin has granted you Administrator role
-3. Check server logs for authentication errors
+2. Another admin has granted you the Administrator role
+3. Your request carries the session cookie or bearer token
+4. Check server logs for authentication errors
 
 ```bash
-docker-compose logs aiwebengine | grep -i "manager\|admin"
+docker-compose logs aiwebengine | grep -i "admin\|authz"
 ```
+
+Note that development mode's relaxed anonymous permissions do **not** apply
+here: user administration always requires a real authenticated admin session.
 
 **Problem:** Role Changes Not Persisting
 
@@ -407,14 +395,11 @@ docker-compose logs aiwebengine | grep -i error
 
 Ensure the database is functioning correctly and user repository is accessible.
 
-**Problem:** UI Not Loading
+**Problem:** 409 Conflict when revoking the Administrator role
 
-**Solution:**
-
-1. Check browser console for JavaScript errors
-2. Verify manager.js script is loaded
-3. Ensure server is running and accessible
-4. Clear browser cache and reload
+**Solution:** You're removing the last administrator, which would leave nobody
+able to appoint another. Grant `Administrator` to a second user first, then
+retry the revocation.
 
 ### Security Considerations
 
@@ -428,8 +413,8 @@ Ensure the database is functioning correctly and user repository is accessible.
 
 ✅ **DO:**
 
-- Use HTTPS for all manager access in production
-- Review role changes regularly
+- Use HTTPS for all user administration in production
+- Review role changes regularly in the audit log
 - Limit the number of administrators (principle of least privilege)
 - Keep administrator accounts secure with strong passwords on OAuth providers
 - Log out when finished managing users
@@ -438,16 +423,8 @@ Ensure the database is functioning correctly and user repository is accessible.
 
 - Share administrator accounts
 - Grant Administrator role unnecessarily
-- Access manager UI over insecure networks
+- Administer users over insecure networks
 - Leave administrator sessions open on shared computers
-
-### Navigation
-
-The manager UI includes quick navigation links to:
-
-- **Home** (`/`) - Main application
-- **Editor** (`/editor`) - Script editor
-- **GraphQL** (`/graphql`) - GraphQL playground
 
 ---
 

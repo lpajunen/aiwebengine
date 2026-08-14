@@ -40,10 +40,15 @@ interface User {
 
 /**
  * User storage API for managing users and roles (admin only)
+ *
+ * @deprecated Use the engine HTTP API (`GET /engine/users`,
+ * `POST|DELETE /engine/user_roles`) or the equivalent MCP tools
+ * (`list_users`, `add_user_role`, `remove_user_role`) instead.
  */
 interface UserStorage {
   /**
    * List all users (requires admin privileges)
+   * @deprecated Use `GET /engine/users`, or the `list_users` MCP tool.
    * @returns JSON string array of user objects
    * @throws If user doesn't have administrator privileges
    * @example
@@ -57,6 +62,7 @@ interface UserStorage {
 
   /**
    * Add a role to a user (requires admin privileges)
+   * @deprecated Use `POST /engine/user_roles`, or the `add_user_role` MCP tool.
    * @param userId - User ID
    * @param role - Role name ("Editor", "Administrator", or "Authenticated")
    * @throws If user doesn't have administrator privileges or role is invalid
@@ -67,6 +73,7 @@ interface UserStorage {
 
   /**
    * Remove a role from a user (requires admin privileges)
+   * @deprecated Use `DELETE /engine/user_roles`, or the `remove_user_role` MCP tool.
    * @param userId - User ID
    * @param role - Role name ("Editor" or "Administrator", cannot remove "Authenticated")
    * @throws If user doesn't have administrator privileges, role is invalid, or attempting to remove "Authenticated" role

@@ -463,6 +463,216 @@ pub fn clear_secrets_authorized(
         .map_err(|e| SecretAccessError::Storage(format!("{}", e)))
 }
 
+// ----------------------------------------------------------------------------
+// User administration
+// ----------------------------------------------------------------------------
+
+/// Why a user-administration operation was rejected.
+#[derive(Debug)]
+pub enum UserAdminError {
+    AccessDenied,
+    Validation(String),
+    UserNotFound(String),
+    LastAdministrator,
+    Storage(String),
+}
+
+/// User administration is restricted to session-verified administrators.
+///
+/// Deliberately stricter than [`is_admin_user`], which accepts any holder of
+/// `DeleteScripts` — a capability development mode also grants to *anonymous*
+/// callers. Requiring authentication as well means only a `UserContext::admin`
+/// passes, and that is built solely from a session whose `is_admin` flag is
+/// set (`lib.rs`), for both the HTTP and MCP entry points. So development mode
+/// cannot hand an unauthenticated caller the user directory or the ability to
+/// grant itself a role.
+fn is_user_admin(user: &UserContext) -> bool {
+    user.is_authenticated && user.has_capability(&Capability::DeleteScripts)
+}
+
+/// Record an authorization failure against the user-administration surface.
+fn audit_user_admin_denied(user: &UserContext, action: &str) {
+    let auditor = auditor();
+    let user_id = user.user_id.clone();
+    let action = action.to_string();
+    tokio::task::spawn(async move {
+        let _ = auditor
+            .log_authz_failure(
+                user_id,
+                "user".to_string(),
+                action,
+                "Administrator".to_string(),
+            )
+            .await;
+    });
+}
+
+/// Record a completed role change. Role changes are privilege escalations or
+/// revocations, so they are logged at high severity like script deletion.
+fn audit_role_change(actor: &UserContext, target_user_id: &str, role: &str, action: &str) {
+    let auditor = auditor();
+    let actor_id = actor.user_id.clone();
+    let (target, role, action) = (
+        target_user_id.to_string(),
+        role.to_string(),
+        action.to_string(),
+    );
+    tokio::task::spawn(async move {
+        let _ = auditor
+            .log_event(
+                SecurityEvent::new(
+                    SecurityEventType::SystemSecurityEvent,
+                    SecuritySeverity::High,
+                    actor_id,
+                )
+                .with_resource("user".to_string())
+                .with_action(action)
+                .with_detail("target_user", &target)
+                .with_detail("role", &role),
+            )
+            .await;
+    });
+}
+
+/// Parse a role name accepted by the role endpoints.
+fn parse_user_role(role: &str) -> Result<crate::user_repository::UserRole, UserAdminError> {
+    use crate::user_repository::UserRole;
+    match role {
+        "Authenticated" => Ok(UserRole::Authenticated),
+        "Editor" => Ok(UserRole::Editor),
+        "Administrator" => Ok(UserRole::Administrator),
+        other => Err(UserAdminError::Validation(format!(
+            "Invalid role: {}. Must be Editor, Administrator, or Authenticated",
+            other
+        ))),
+    }
+}
+
+/// Look up a user, distinguishing "no such user" from a storage failure so the
+/// caller can answer 404 rather than 500.
+fn lookup_user(user_id: &str) -> Result<crate::user_repository::User, UserAdminError> {
+    crate::user_repository::get_user(user_id).map_err(|e| match e {
+        // `db_get_user` reports a missing row as a validation error on `user_id`.
+        crate::error::AppError::Validation { ref field, .. } if field == "user_id" => {
+            UserAdminError::UserNotFound(user_id.to_string())
+        }
+        other => UserAdminError::Storage(format!("{}", other)),
+    })
+}
+
+fn role_names(user: &crate::user_repository::User) -> Vec<String> {
+    user.roles.iter().map(|r| format!("{:?}", r)).collect()
+}
+
+fn user_to_json(user: &crate::user_repository::User) -> Value {
+    let millis = |t: std::time::SystemTime| {
+        t.duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as f64
+    };
+    json!({
+        "id": user.id,
+        "email": user.email,
+        "name": user.name,
+        "roles": role_names(user),
+        "providers": user.providers
+            .iter()
+            .map(|p| p.provider_name.clone())
+            .collect::<Vec<_>>(),
+        "createdAt": millis(user.created_at),
+        "updatedAt": millis(user.updated_at),
+    })
+}
+
+/// List every user in the directory; administrators only.
+///
+/// Unlike the deprecated `userStorage.listUsers()`, an unauthorized caller is
+/// denied rather than handed an empty array — "denied" and "no users" must not
+/// look alike.
+pub fn list_users_authorized(user: &UserContext) -> Result<Vec<Value>, UserAdminError> {
+    if !is_user_admin(user) {
+        audit_user_admin_denied(user, "list");
+        return Err(UserAdminError::AccessDenied);
+    }
+    crate::user_repository::list_users()
+        .map(|users| users.iter().map(user_to_json).collect())
+        .map_err(|e| UserAdminError::Storage(format!("{}", e)))
+}
+
+/// Grant a role to a user; administrators only. Returns the user's resulting
+/// role set. Granting a role the user already holds is a no-op, not an error.
+pub fn add_user_role_authorized(
+    actor: &UserContext,
+    user_id: &str,
+    role: &str,
+) -> Result<Vec<String>, UserAdminError> {
+    if !is_user_admin(actor) {
+        audit_user_admin_denied(actor, "add_role");
+        return Err(UserAdminError::AccessDenied);
+    }
+    let parsed = parse_user_role(role)?;
+    // Establish the user exists before mutating, so a typo'd id reads as 404.
+    lookup_user(user_id)?;
+
+    crate::user_repository::add_user_role(user_id, parsed)
+        .map_err(|e| UserAdminError::Storage(format!("{}", e)))?;
+    audit_role_change(actor, user_id, role, "add_role");
+
+    Ok(role_names(&lookup_user(user_id)?))
+}
+
+/// Revoke a role from a user; administrators only. Returns the user's
+/// resulting role set.
+///
+/// Two roles cannot be revoked: `Authenticated` (every user has it by
+/// definition) and the last remaining `Administrator` — locking the last
+/// administrator out would leave the instance with no way to appoint another,
+/// the same reasoning behind the last-owner guard on scripts.
+pub fn remove_user_role_authorized(
+    actor: &UserContext,
+    user_id: &str,
+    role: &str,
+) -> Result<Vec<String>, UserAdminError> {
+    use crate::user_repository::UserRole;
+
+    if !is_user_admin(actor) {
+        audit_user_admin_denied(actor, "remove_role");
+        return Err(UserAdminError::AccessDenied);
+    }
+    let parsed = parse_user_role(role)?;
+    if matches!(parsed, UserRole::Authenticated) {
+        return Err(UserAdminError::Validation(
+            "Cannot remove the Authenticated role".to_string(),
+        ));
+    }
+    let target = lookup_user(user_id)?;
+
+    if matches!(parsed, UserRole::Administrator)
+        && target.has_role(&UserRole::Administrator)
+        && count_administrators()? <= 1
+    {
+        return Err(UserAdminError::LastAdministrator);
+    }
+
+    crate::user_repository::remove_user_role(user_id, &parsed)
+        .map_err(|e| UserAdminError::Storage(format!("{}", e)))?;
+    audit_role_change(actor, user_id, role, "remove_role");
+
+    Ok(role_names(&lookup_user(user_id)?))
+}
+
+fn count_administrators() -> Result<usize, UserAdminError> {
+    use crate::user_repository::UserRole;
+    crate::user_repository::list_users()
+        .map(|users| {
+            users
+                .iter()
+                .filter(|u| u.has_role(&UserRole::Administrator))
+                .count()
+        })
+        .map_err(|e| UserAdminError::Storage(format!("{}", e)))
+}
+
 /// Whether the user may access assets of `script_uri` given the per-operation
 /// capability: capability holders, script owners, and admins all qualify —
 /// same rule as the `assetStorage.*ForUri` functions.
@@ -1748,6 +1958,175 @@ pub async fn secrets_delete_route(
     }
 }
 
+#[derive(Deserialize, Default)]
+pub struct UserRoleParams {
+    #[serde(alias = "userId")]
+    user_id: Option<String>,
+    role: Option<String>,
+}
+
+/// Role changes carry two short scalar fields, so accept either a JSON body or
+/// a form-encoded one rather than making callers guess.
+fn parse_user_role_body(body: &[u8]) -> UserRoleParams {
+    serde_json::from_slice(body)
+        .ok()
+        .or_else(|| serde_urlencoded::from_bytes(body).ok())
+        .unwrap_or_default()
+}
+
+fn user_admin_error_response(user_id: Option<&str>, error: UserAdminError) -> Response {
+    let (status, message) = match error {
+        UserAdminError::AccessDenied => (
+            StatusCode::FORBIDDEN,
+            "Permission denied. Administrator privileges are required".to_string(),
+        ),
+        UserAdminError::Validation(details) => (StatusCode::BAD_REQUEST, details),
+        UserAdminError::UserNotFound(id) => {
+            (StatusCode::NOT_FOUND, format!("User not found: {}", id))
+        }
+        UserAdminError::LastAdministrator => (
+            StatusCode::CONFLICT,
+            "Cannot remove the last administrator. Grant the Administrator role to another user first.".to_string(),
+        ),
+        UserAdminError::Storage(details) => (StatusCode::INTERNAL_SERVER_ERROR, details),
+    };
+    let mut body = json!({ "error": message, "timestamp": iso_timestamp() });
+    if let (Some(obj), Some(id)) = (body.as_object_mut(), user_id) {
+        obj.insert("userId".to_string(), json!(id));
+    }
+    json_response(status, body)
+}
+
+/// List all users. Administrators only.
+#[utoipa::path(
+    get,
+    path = "/engine/users",
+    tags = ["Users"],
+    responses(
+        (status = 200, description = "User list with roles and linked providers"),
+        (status = 403, description = "Permission denied"),
+    )
+)]
+pub async fn users_get_route(auth_user: Option<Extension<AuthUser>>) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+
+    let result = tokio::task::spawn_blocking(move || list_users_authorized(&user))
+        .await
+        .unwrap_or_else(|e| Err(UserAdminError::Storage(format!("join error: {}", e))));
+
+    match result {
+        Ok(users) => json_response(
+            StatusCode::OK,
+            json!({
+                "users": users,
+                "count": users.len(),
+                "timestamp": iso_timestamp(),
+            }),
+        ),
+        Err(error) => user_admin_error_response(None, error),
+    }
+}
+
+/// Grant a role to a user. Administrators only.
+#[utoipa::path(
+    post,
+    path = "/engine/user_roles",
+    tags = ["Users"],
+    request_body(content_type = "application/json",
+        description = "Fields (JSON or form-encoded): user_id (required), role (required: Editor, Administrator, or Authenticated)"),
+    responses(
+        (status = 200, description = "Role granted; returns the resulting role set"),
+        (status = 400, description = "Missing parameter or unknown role"),
+        (status = 403, description = "Permission denied"),
+        (status = 404, description = "User not found"),
+    )
+)]
+pub async fn user_roles_post_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<UserRoleParams>,
+    body: axum::body::Bytes,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    let form = parse_user_role_body(&body);
+    let Some(user_id) = form.user_id.or(query.user_id) else {
+        return missing_param_response("user_id");
+    };
+    let Some(role) = form.role.or(query.role) else {
+        return missing_param_response("role");
+    };
+
+    let (user_id_cl, role_cl) = (user_id.clone(), role.clone());
+    let result =
+        tokio::task::spawn_blocking(move || add_user_role_authorized(&user, &user_id_cl, &role_cl))
+            .await
+            .unwrap_or_else(|e| Err(UserAdminError::Storage(format!("join error: {}", e))));
+
+    match result {
+        Ok(roles) => json_response(
+            StatusCode::OK,
+            json!({
+                "success": true,
+                "userId": user_id,
+                "role": role,
+                "roles": roles,
+                "timestamp": iso_timestamp(),
+            }),
+        ),
+        Err(error) => user_admin_error_response(Some(&user_id), error),
+    }
+}
+
+/// Revoke a role from a user. Administrators only.
+#[utoipa::path(
+    delete,
+    path = "/engine/user_roles",
+    tags = ["Users"],
+    params(
+        ("user_id" = String, Query, description = "Id of the user to modify"),
+        ("role" = String, Query, description = "Role to revoke: Editor or Administrator"),
+    ),
+    responses(
+        (status = 200, description = "Role revoked; returns the resulting role set"),
+        (status = 400, description = "Missing parameter, unknown role, or the Authenticated role"),
+        (status = 403, description = "Permission denied"),
+        (status = 404, description = "User not found"),
+        (status = 409, description = "Cannot remove the last administrator"),
+    )
+)]
+pub async fn user_roles_delete_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<UserRoleParams>,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    let Some(user_id) = query.user_id else {
+        return missing_param_response("user_id");
+    };
+    let Some(role) = query.role else {
+        return missing_param_response("role");
+    };
+
+    let (user_id_cl, role_cl) = (user_id.clone(), role.clone());
+    let result = tokio::task::spawn_blocking(move || {
+        remove_user_role_authorized(&user, &user_id_cl, &role_cl)
+    })
+    .await
+    .unwrap_or_else(|e| Err(UserAdminError::Storage(format!("join error: {}", e))));
+
+    match result {
+        Ok(roles) => json_response(
+            StatusCode::OK,
+            json!({
+                "success": true,
+                "userId": user_id,
+                "role": role,
+                "roles": roles,
+                "timestamp": iso_timestamp(),
+            }),
+        ),
+        Err(error) => user_admin_error_response(Some(&user_id), error),
+    }
+}
+
 /// Installation confirmation page, shown after a fresh install (the root
 /// path redirects here until further routes are registered).
 const INSTALLED_PAGE_HTML: &str = r#"<!DOCTYPE html>
@@ -2495,6 +2874,55 @@ fn native_tools() -> &'static [NativeToolEntry] {
             },
             tool_clear_secrets,
         ),
+        (
+            "list_users",
+            "List all users with their roles and linked identity providers. Administrator privileges required.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {}
+                })
+            },
+            tool_list_users,
+        ),
+        (
+            "add_user_role",
+            "Grant a role to a user. Administrator privileges required.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "user_id": { "type": "string", "description": "Id of the user to modify" },
+                        "role": {
+                            "type": "string",
+                            "description": "Role to grant",
+                            "enum": ["Editor", "Administrator", "Authenticated"]
+                        }
+                    },
+                    "required": ["user_id", "role"]
+                })
+            },
+            tool_add_user_role,
+        ),
+        (
+            "remove_user_role",
+            "Revoke a role from a user. Administrator privileges required. The Authenticated role and the last remaining Administrator cannot be removed.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "user_id": { "type": "string", "description": "Id of the user to modify" },
+                        "role": {
+                            "type": "string",
+                            "description": "Role to revoke",
+                            "enum": ["Editor", "Administrator"]
+                        }
+                    },
+                    "required": ["user_id", "role"]
+                })
+            },
+            tool_remove_user_role,
+        ),
     ]
 }
 
@@ -2946,6 +3374,70 @@ fn tool_clear_secrets(args: &Value, user: &UserContext) -> Value {
             "timestamp": iso_timestamp(),
         }),
         Err(error) => secret_error_json(error),
+    }
+}
+
+fn user_admin_error_json(error: UserAdminError) -> Value {
+    match error {
+        UserAdminError::AccessDenied => {
+            json!({ "error": "Permission denied. Administrator privileges are required" })
+        }
+        UserAdminError::UserNotFound(id) => json!({ "error": format!("User not found: {}", id) }),
+        UserAdminError::LastAdministrator => json!({
+            "error": "Cannot remove the last administrator. Grant the Administrator role to another user first."
+        }),
+        UserAdminError::Validation(details) | UserAdminError::Storage(details) => {
+            json!({ "error": details })
+        }
+    }
+}
+
+fn tool_list_users(_args: &Value, user: &UserContext) -> Value {
+    match list_users_authorized(user) {
+        Ok(users) => json!({
+            "users": users,
+            "count": users.len(),
+            "timestamp": iso_timestamp(),
+        }),
+        Err(error) => user_admin_error_json(error),
+    }
+}
+
+fn tool_add_user_role(args: &Value, user: &UserContext) -> Value {
+    let Some(user_id) = arg_str(args, "user_id") else {
+        return missing_arg("user_id");
+    };
+    let Some(role) = arg_str(args, "role") else {
+        return missing_arg("role");
+    };
+    match add_user_role_authorized(user, user_id, role) {
+        Ok(roles) => json!({
+            "success": true,
+            "userId": user_id,
+            "role": role,
+            "roles": roles,
+            "timestamp": iso_timestamp(),
+        }),
+        Err(error) => user_admin_error_json(error),
+    }
+}
+
+fn tool_remove_user_role(args: &Value, user: &UserContext) -> Value {
+    let Some(user_id) = arg_str(args, "user_id") else {
+        return missing_arg("user_id");
+    };
+    let Some(role) = arg_str(args, "role") else {
+        return missing_arg("role");
+    };
+    match remove_user_role_authorized(user, user_id, role) {
+        Ok(roles) => json!({
+            "success": true,
+            "userId": user_id,
+            "role": role,
+            "roles": roles,
+            "timestamp": iso_timestamp(),
+        }),
+        Err(error) => user_admin_error_json(error),
     }
 }
 

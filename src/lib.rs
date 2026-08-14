@@ -77,6 +77,9 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
         engine_api::secrets_get_route,
         engine_api::secrets_post_route,
         engine_api::secrets_delete_route,
+        engine_api::users_get_route,
+        engine_api::user_roles_post_route,
+        engine_api::user_roles_delete_route,
         engine_api::installed_page_route,
         engine_api::openapi_route,
         engine_api::unauthorized_page_route,
@@ -131,6 +134,7 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
         (name = "Authentication", description = "OAuth2 authentication and authorization endpoints"),
         (name = "Assets", description = "Static assets served from the asset registry"),
         (name = "Streams", description = "Server-Sent Events (SSE) streams registered by scripts"),
+        (name = "Users", description = "User directory and role administration (administrators only)"),
     )
 )]
 struct ApiDoc;
@@ -2215,6 +2219,15 @@ async fn setup_routes(
             axum::routing::get(engine_api::secrets_get_route)
                 .post(engine_api::secrets_post_route)
                 .delete(engine_api::secrets_delete_route),
+        )
+        .route(
+            "/engine/users",
+            axum::routing::get(engine_api::users_get_route),
+        )
+        .route(
+            "/engine/user_roles",
+            axum::routing::post(engine_api::user_roles_post_route)
+                .delete(engine_api::user_roles_delete_route),
         )
         .route(
             "/engine/installed",
