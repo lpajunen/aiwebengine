@@ -71,8 +71,6 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
         engine_api::assets_delete_route,
         engine_api::list_scripts_route,
         engine_api::script_init_status_route,
-        engine_api::script_security_profile_route,
-        engine_api::set_script_privileged_route,
         engine_api::script_owners_get_route,
         engine_api::script_owners_post_route,
         engine_api::script_owners_delete_route,
@@ -2205,14 +2203,6 @@ async fn setup_routes(
         .route(
             "/engine/script_init_status",
             axum::routing::get(engine_api::script_init_status_route),
-        )
-        .route(
-            "/engine/script_security_profile",
-            axum::routing::get(engine_api::script_security_profile_route),
-        )
-        .route(
-            "/engine/set_script_privileged",
-            axum::routing::post(engine_api::set_script_privileged_route),
         )
         .route(
             "/engine/script_owners",

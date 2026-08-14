@@ -122,7 +122,6 @@ pub struct ScriptMetadata {
     pub last_init_time: Option<SystemTime>,
     /// Cached route registrations from init() function
     pub registrations: RouteRegistrations,
-    pub privileged: bool,
     pub owners: Vec<String>,
 }
 
@@ -142,7 +141,6 @@ impl ScriptMetadata {
             init_error: None,
             last_init_time: None,
             registrations: HashMap::new(),
-            privileged: false,
             owners: Vec::new(),
         }
     }
@@ -188,14 +186,6 @@ impl ScriptMetadata {
         // `registrations` stay as-is so routing keeps working meanwhile.
         self.init_error = None;
     }
-}
-
-/// Script security metadata exposed to admin tooling
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ScriptSecurityProfile {
-    pub uri: String,
-    pub privileged: bool,
-    pub default_privileged: bool,
 }
 
 /// Asset representation
@@ -253,8 +243,6 @@ pub struct ForeignKeyInfo {
 
 static DYNAMIC_SCRIPTS: OnceLock<Mutex<HashMap<String, ScriptMetadata>>> = OnceLock::new();
 
-static SCRIPT_PRIVILEGE_OVERRIDES: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
-
 /// Safe mutex access with recovery from poisoned state
 pub fn safe_lock_scripts()
 -> AppResult<std::sync::MutexGuard<'static, HashMap<String, ScriptMetadata>>> {
@@ -268,24 +256,6 @@ pub fn safe_lock_scripts()
             // In production, you might want to restart the component or use more sophisticated recovery
             store.lock().map_err(|e| {
                 error!("Failed to recover from poisoned mutex: {}", e);
-                AppError::Internal {
-                    message: format!("Unrecoverable mutex poisoning: {}", e),
-                }
-            })
-        }
-    }
-}
-
-fn safe_lock_privilege_overrides()
--> AppResult<std::sync::MutexGuard<'static, HashMap<String, bool>>> {
-    let store = SCRIPT_PRIVILEGE_OVERRIDES.get_or_init(|| Mutex::new(HashMap::new()));
-
-    match store.lock() {
-        Ok(guard) => Ok(guard),
-        Err(PoisonError { .. }) => {
-            warn!("Privilege override mutex was poisoned, recovering with new data");
-            store.lock().map_err(|e| {
-                error!("Failed to recover from poisoned privilege mutex: {}", e);
                 AppError::Internal {
                     message: format!("Unrecoverable mutex poisoning: {}", e),
                 }
@@ -615,102 +585,6 @@ where
     }
 
     Ok(existed)
-}
-
-/// Database-backed getter for script privilege flag
-async fn db_get_script_privileged<'e, E>(executor: E, uri: &str) -> AppResult<Option<bool>>
-where
-    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
-{
-    let row = sqlx::query(
-        r#"
-        SELECT privileged FROM scripts WHERE uri = $1
-        "#,
-    )
-    .bind(uri)
-    .fetch_optional(executor)
-    .await
-    .map_err(|e| {
-        error!("Database error getting script privilege: {}", e);
-        AppError::Database {
-            message: format!("Database error: {}", e),
-            source: None,
-        }
-    })?;
-
-    if let Some(row) = row {
-        let privileged: bool = row.try_get("privileged").map_err(|e| {
-            error!("Database error parsing privilege flag: {}", e);
-            AppError::Database {
-                message: format!("Database error: {}", e),
-                source: None,
-            }
-        })?;
-        Ok(Some(privileged))
-    } else {
-        Ok(None)
-    }
-}
-
-/// Fetch the privilege flag for every script in one query
-async fn db_get_all_script_privileged<'e, E>(executor: E) -> AppResult<HashMap<String, bool>>
-where
-    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
-{
-    let rows = sqlx::query(
-        r#"
-        SELECT uri, privileged FROM scripts
-        "#,
-    )
-    .fetch_all(executor)
-    .await
-    .map_err(|e| {
-        error!("Database error getting script privileges: {}", e);
-        AppError::Database {
-            message: format!("Database error: {}", e),
-            source: None,
-        }
-    })?;
-
-    let mut privileges = HashMap::new();
-    for row in rows {
-        let uri: String = row.try_get("uri").map_err(|e| AppError::Database {
-            message: format!("Database error: {}", e),
-            source: None,
-        })?;
-        let privileged: bool = row.try_get("privileged").map_err(|e| AppError::Database {
-            message: format!("Database error: {}", e),
-            source: None,
-        })?;
-        privileges.insert(uri, privileged);
-    }
-    Ok(privileges)
-}
-
-/// Database-backed setter for script privilege flag
-async fn db_set_script_privileged<'e, E>(executor: E, uri: &str, privileged: bool) -> AppResult<()>
-where
-    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
-{
-    sqlx::query(
-        r#"
-        UPDATE scripts SET privileged = $1, updated_at = $2 WHERE uri = $3
-        "#,
-    )
-    .bind(privileged)
-    .bind(chrono::Utc::now())
-    .bind(uri)
-    .execute(executor)
-    .await
-    .map_err(|e| {
-        error!("Database error updating script privilege: {}", e);
-        AppError::Database {
-            message: format!("Database error: {}", e),
-            source: None,
-        }
-    })?;
-
-    Ok(())
 }
 
 /// Database-backed add script owner
@@ -4128,82 +4002,6 @@ pub fn mark_script_initialized_with_registrations(
     })
 }
 
-/// Determine current privilege state for a script
-pub fn get_script_security_profile(uri: &str) -> AppResult<ScriptSecurityProfile> {
-    let default_privileged = false;
-    let repo = get_repository();
-
-    // Try repository first
-    let result = run_blocking(async { repo.get_script_privileged(uri).await });
-
-    if let Ok(Some(privileged)) = result {
-        return Ok(ScriptSecurityProfile {
-            uri: uri.to_string(),
-            privileged,
-            default_privileged,
-        });
-    }
-
-    // If repository didn't have it (or failed), check overrides explicitly
-    // This handles the case where we are in Postgres mode but the script is static/local
-    // and has a local override.
-    if let Ok(guard) = safe_lock_privilege_overrides()
-        && let Some(value) = guard.get(uri)
-    {
-        return Ok(ScriptSecurityProfile {
-            uri: uri.to_string(),
-            privileged: *value,
-            default_privileged,
-        });
-    }
-
-    Ok(ScriptSecurityProfile {
-        uri: uri.to_string(),
-        privileged: default_privileged,
-        default_privileged,
-    })
-}
-
-/// Helper used by security enforcement
-pub fn is_script_privileged(uri: &str) -> AppResult<bool> {
-    Ok(get_script_security_profile(uri)?.privileged)
-}
-
-/// Update the privilege flag for a script
-pub fn set_script_privileged(uri: &str, privileged: bool) -> AppResult<()> {
-    // Ensure script exists before toggling
-    if fetch_script(uri).is_none() {
-        return Err(RepositoryError::ScriptNotFound(uri.to_string()).into());
-    }
-
-    let repo = get_repository();
-
-    // 1. Try to update repository (DB or Memory)
-    let result = run_blocking(async { repo.set_script_privileged(uri, privileged).await });
-
-    if let Err(e) = result {
-        warn!("Repository set privileged failed for {}: {}", uri, e);
-    }
-
-    // 2. Also update in-memory structures to ensure static scripts or fallbacks work
-
-    // Update dynamic metadata cache if present
-    if let Ok(mut guard) = safe_lock_scripts()
-        && let Some(metadata) = guard.get_mut(uri)
-    {
-        metadata.privileged = privileged;
-        debug!(script = %uri, privileged, "Updated in-memory script privilege");
-        return Ok(());
-    }
-
-    // Persist override for static scripts or when metadata not present
-    let mut guard = safe_lock_privilege_overrides()?;
-    guard.insert(uri.to_string(), privileged);
-    debug!(script = %uri, privileged, "Stored privilege override in memory");
-
-    Ok(())
-}
-
 /// Insert log message with error handling
 pub fn insert_log_message(script_uri: &str, message: &str, log_level: &str) {
     run_blocking(insert_log_message_async(script_uri, message, log_level))
@@ -5359,8 +5157,6 @@ pub trait Repository: Send + Sync {
     async fn clear_user_secrets(&self, script_uri: &str, user_id: &str) -> AppResult<()>;
 
     // Security operations
-    async fn get_script_privileged(&self, uri: &str) -> AppResult<Option<bool>>;
-    async fn set_script_privileged(&self, uri: &str, privileged: bool) -> AppResult<()>;
 
     // Ownership operations
     async fn add_script_owner(&self, uri: &str, user_id: &str) -> AppResult<()>;
@@ -5575,8 +5371,6 @@ impl Repository for PostgresRepository {
             .await?
             .ok_or_else(|| RepositoryError::ScriptNotFound(uri.to_string()))?;
 
-        let privileged = self.get_script_privileged(uri).await?.unwrap_or(false);
-
         let executor = crate::database::get_current_executor(&self.pool);
         let owners = match executor {
             crate::database::TransactionExecutor::Transaction(tx) => {
@@ -5588,7 +5382,6 @@ impl Repository for PostgresRepository {
         };
 
         let mut metadata = ScriptMetadata::new(uri.to_string(), content);
-        metadata.privileged = privileged;
         metadata.owners = owners;
 
         // Cache it
@@ -5634,37 +5427,6 @@ impl Repository for PostgresRepository {
                     metadata_list.push(metadata);
                 }
             }
-        }
-
-        // Resolve privilege flags with one bulk query instead of a per-script
-        // lookup (which previously issued a nested blocking database call per
-        // script). Precedence matches get_script_security_profile: database
-        // value, then local override, then bootstrap default.
-        let executor = crate::database::get_current_executor(&self.pool);
-        let db_privileges_result = match executor {
-            crate::database::TransactionExecutor::Transaction(tx) => {
-                db_get_all_script_privileged(&mut **tx).await
-            }
-            crate::database::TransactionExecutor::Pool(pool) => {
-                db_get_all_script_privileged(pool).await
-            }
-        };
-        let db_privileges = match db_privileges_result {
-            Ok(privileges) => privileges,
-            Err(e) => {
-                warn!("Failed to bulk-fetch script privileges: {}", e);
-                HashMap::new()
-            }
-        };
-        let overrides = safe_lock_privilege_overrides()
-            .map(|guard| guard.clone())
-            .unwrap_or_default();
-        for metadata in &mut metadata_list {
-            metadata.privileged = db_privileges
-                .get(&metadata.uri)
-                .copied()
-                .or_else(|| overrides.get(&metadata.uri).copied())
-                .unwrap_or(false);
         }
 
         Ok(metadata_list)
@@ -6043,30 +5805,6 @@ impl Repository for PostgresRepository {
             }
             crate::database::TransactionExecutor::Pool(pool) => {
                 db_clear_user_secrets(pool, script_uri, user_id).await
-            }
-        }
-    }
-
-    async fn get_script_privileged(&self, uri: &str) -> AppResult<Option<bool>> {
-        let executor = crate::database::get_current_executor(&self.pool);
-        match executor {
-            crate::database::TransactionExecutor::Transaction(tx) => {
-                db_get_script_privileged(&mut **tx, uri).await
-            }
-            crate::database::TransactionExecutor::Pool(pool) => {
-                db_get_script_privileged(pool, uri).await
-            }
-        }
-    }
-
-    async fn set_script_privileged(&self, uri: &str, privileged: bool) -> AppResult<()> {
-        let executor = crate::database::get_current_executor(&self.pool);
-        match executor {
-            crate::database::TransactionExecutor::Transaction(tx) => {
-                db_set_script_privileged(&mut **tx, uri, privileged).await
-            }
-            crate::database::TransactionExecutor::Pool(pool) => {
-                db_set_script_privileged(pool, uri, privileged).await
             }
         }
     }
@@ -7021,41 +6759,6 @@ mod tests {
         assert!(clear_user_secrets(script_uri, bob).is_ok());
         assert_eq!(get_user_secret_item(script_uri, bob, "api_token"), None);
         assert_eq!(get_user_secret_item(script_uri, alice, "api_token"), None);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_script_privileged_flag_defaults() {
-        if should_skip_db_tests() {
-            return;
-        }
-        let rt = get_runtime();
-        let _guard = rt.enter();
-        setup_db();
-        let _lock = GLOBAL_TEST_LOCK.lock().unwrap();
-
-        // Clear overrides to ensure clean state
-        if let Ok(mut guard) = safe_lock_privilege_overrides() {
-            guard.clear();
-        }
-
-        let custom_uri = "test://privileged-script";
-        let code = "function handler() { return { status: 200 }; }";
-        // Clean up any stale state from a prior run before testing
-        let _ = delete_script(custom_uri);
-        upsert_script(custom_uri, code).expect("Should upsert script");
-
-        let initial_profile =
-            get_script_security_profile(custom_uri).expect("custom profile available");
-        assert!(
-            !initial_profile.privileged,
-            "Custom scripts start restricted"
-        );
-
-        set_script_privileged(custom_uri, true).expect("Should toggle privileged flag");
-
-        let updated_profile =
-            get_script_security_profile(custom_uri).expect("updated profile available");
-        assert!(updated_profile.privileged, "Flag update must persist");
     }
 
     #[tokio::test(flavor = "multi_thread")]

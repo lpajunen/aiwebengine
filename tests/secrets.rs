@@ -47,10 +47,8 @@ async fn test_secrets_exists_returns_false_without_manager() {
 async fn test_secrets_list_returns_empty_without_manager() {
     setup_env().await;
     // Test that secretStorage.listForUri() returns empty array when no secrets are stored.
-    // The script must be privileged to have listForUri available.
+    // The calling user is an admin, so listForUri is authorized for any target.
     repository::upsert_script("test://secrets-list", "").expect("Failed to create script");
-    repository::set_script_privileged("test://secrets-list", true)
-        .expect("Failed to set privileged");
 
     let script = r#"
         const result = secretStorage.listForUri('test://secrets-list');

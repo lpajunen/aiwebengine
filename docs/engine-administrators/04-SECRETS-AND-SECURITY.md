@@ -547,7 +547,7 @@ These secrets are used by JavaScript scripts but never exposed to JavaScript cod
 Secrets are stored in the database and accessed via the `secretStorage` JavaScript API. Administrators set script-level secrets; users can set their own personal secrets.
 
 ```javascript
-// Privileged: set a secret available to a specific script
+// Admin or script owner: set a secret available to a specific script
 secretStorage.setSecretForUri(
   "https://example.com/my-script",
   "anthropic_api_key",
@@ -649,7 +649,7 @@ routeRegistry.registerRoute('/api/chat', 'aiChatHandler', 'POST');
 
 #### Common Application Secrets
 
-Set AI and service secrets via `secretStorage.setSecretForUri(scriptUri, key, value)` from a privileged admin script:
+Set AI and service secrets via `secretStorage.setSecretForUri(scriptUri, key, value)` as an administrator or an owner of the target script:
 
 ```javascript
 // AI Services

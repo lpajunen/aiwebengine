@@ -1,16 +1,17 @@
 //! API Boundary Tests
 //!
-//! This module verifies that public vs privileged API boundaries are correctly enforced.
-//! Tests ensure that:
-//! - Non-privileged users cannot access privileged APIs
+//! This module verifies that public vs engine-internal API boundaries are correctly enforced.
+//! All scripts are equal — every script sees the same API surface, and each call is
+//! authorized against the calling *user*. Tests ensure that:
+//! - Users without the required capability cannot access engine-internal APIs
 //! - All users can access public APIs
 //! - Any script can register routes on non-reserved paths; engine-owned
 //!   prefixes (/health, /graphql, /mcp, /auth, /.well-known, /engine) are rejected
-//! - Privileged scripts can access all functionality
+//! - Administrators and script owners can access cross-script functionality
 //!
 //! ## Test Coverage
 //!
-//! ### Privileged APIs (require specific capabilities):
+//! ### Engine-internal APIs (require specific capabilities):
 //! - **RouteRegistry**: listRoutes(), listStreams(), generateOpenApi() - require ReadScripts
 //! - **ScriptStorage**: all 11 methods - require ReadScripts/WriteScripts/DeleteScripts
 //! - **SecretStorage**: list() - requires admin privileges  
@@ -24,10 +25,10 @@
 //! - **Console**: log(), error(), warn(), info()
 //! - **SchedulerService**: registerOnce(), registerRecurring(), clearAll()
 //!
-//! ### Script Privilege Enforcement:
+//! ### Cross-script access enforcement:
 //! - Route/stream/asset registration is open to all scripts on non-reserved paths
-//! - Stream messaging requires privileged script status
-//! - SecretStorage *ForUri methods require privileged script OR admin user
+//! - SecretStorage *ForUri methods require the calling user to be an administrator
+//!   or an owner of the target script
 //!
 //! ## Ignored Tests
 //!
@@ -70,11 +71,11 @@ fn create_user_with_capabilities(user_id: &str, caps: Vec<Capability>) -> UserCo
 }
 
 // ============================================================================
-// Privileged API Tests - RouteRegistry
+// Engine-internal API Tests - RouteRegistry
 // ============================================================================
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_route_registry_list_routes_denied_for_non_privileged() {
+async fn test_route_registry_list_routes_denied_without_capability() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![]);
 
@@ -91,7 +92,7 @@ async fn test_route_registry_list_routes_denied_for_non_privileged() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_route_registry_list_streams_denied_for_non_privileged() {
+async fn test_route_registry_list_streams_denied_without_capability() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![]);
 
@@ -107,7 +108,7 @@ async fn test_route_registry_list_streams_denied_for_non_privileged() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_route_registry_generate_openapi_denied_for_non_privileged() {
+async fn test_route_registry_generate_openapi_denied_without_capability() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![]);
 
@@ -151,23 +152,17 @@ async fn test_route_registry_list_streams_allowed_with_read_scripts() {
     let admin = UserContext::admin("admin".to_string());
     let reader = create_user_with_capabilities("reader", vec![Capability::ReadScripts]);
 
-    repository::upsert_script("test://privileged-list-streams-source", "")
-        .expect("Failed to create script");
-    repository::set_script_privileged("test://privileged-list-streams-source", true)
-        .expect("Failed to set privileged");
+    repository::upsert_script("test://list-streams-source", "").expect("Failed to create script");
 
     let register_script = r#"
         routeRegistry.registerStreamRoute("/test-list-streams-readable", "streamCustomizer");
     "#;
 
-    let register_result = execute_script_secure(
-        "test://privileged-list-streams-source",
-        register_script,
-        admin,
-    );
+    let register_result =
+        execute_script_secure("test://list-streams-source", register_script, admin);
     assert!(
         register_result.success,
-        "Privileged script should register stream route: {:?}",
+        "Script should register stream route: {:?}",
         register_result.error
     );
 
@@ -179,7 +174,7 @@ async fn test_route_registry_list_streams_allowed_with_read_scripts() {
             throw new Error("Expected stream in listStreams output");
         }
 
-        if (stream.script_uri !== "test://privileged-list-streams-source") {
+        if (stream.script_uri !== "test://list-streams-source") {
             throw new Error("Expected stream script_uri in listStreams output");
         }
     "#;
@@ -194,11 +189,11 @@ async fn test_route_registry_list_streams_allowed_with_read_scripts() {
 }
 
 // ============================================================================
-// Privileged API Tests - ScriptStorage
+// Engine-internal API Tests - ScriptStorage
 // ============================================================================
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_script_storage_list_scripts_denied_for_non_privileged() {
+async fn test_script_storage_list_scripts_denied_without_capability() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![]);
 
@@ -214,7 +209,7 @@ async fn test_script_storage_list_scripts_denied_for_non_privileged() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_script_storage_get_script_denied_for_non_privileged() {
+async fn test_script_storage_get_script_denied_without_capability() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![]);
 
@@ -231,7 +226,7 @@ async fn test_script_storage_get_script_denied_for_non_privileged() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_script_storage_upsert_denied_for_non_privileged() {
+async fn test_script_storage_upsert_denied_without_capability() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![]);
 
@@ -247,7 +242,7 @@ async fn test_script_storage_upsert_denied_for_non_privileged() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_script_storage_delete_denied_for_non_privileged() {
+async fn test_script_storage_delete_denied_without_capability() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![]);
 
@@ -263,7 +258,7 @@ async fn test_script_storage_delete_denied_for_non_privileged() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_script_storage_get_init_status_denied_for_non_privileged() {
+async fn test_script_storage_get_init_status_denied_without_capability() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![]);
 
@@ -279,23 +274,7 @@ async fn test_script_storage_get_init_status_denied_for_non_privileged() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_script_storage_get_security_profile_denied_for_non_privileged() {
-    setup_env().await;
-    let user = create_user_with_capabilities("user", vec![]);
-
-    let script = r#"
-        const profile = scriptStorage.getScriptSecurityProfile("nonexistent_test_profile_99999");
-        if (profile !== undefined) {
-            throw new Error("Should return undefined without capability");
-        }
-    "#;
-
-    let result = execute_script_secure("test://api-test", script, user);
-    assert!(result.success, "Script should execute: {:?}", result.error);
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_script_storage_get_owners_denied_for_non_privileged() {
+async fn test_script_storage_get_owners_denied_without_capability() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![]);
 
@@ -311,45 +290,7 @@ async fn test_script_storage_get_owners_denied_for_non_privileged() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_script_storage_set_privileged_denied_for_non_privileged() {
-    setup_env().await;
-    let user = create_user_with_capabilities("user", vec![]);
-
-    let script = r#"
-        // This function requires DeleteScripts (admin) capability and should throw
-        try {
-            const result = scriptStorage.setScriptPrivileged("test", true);
-            // If it doesn't throw, it should at least return false
-            if (result !== false) {
-                throw new Error("Should deny access or return false");
-            }
-        } catch (e) {
-            // Expected - should throw an error
-        }
-    "#;
-
-    let result = execute_script_secure("test://api-test", script, user);
-    assert!(result.success, "Script should execute: {:?}", result.error);
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_script_storage_can_manage_privileges_denied_for_non_privileged() {
-    setup_env().await;
-    let user = create_user_with_capabilities("user", vec![]);
-
-    let script = r#"
-        const canManage = scriptStorage.canManageScriptPrivileges();
-        if (canManage !== false) {
-            throw new Error("Should deny access");
-        }
-    "#;
-
-    let result = execute_script_secure("test://api-test", script, user);
-    assert!(result.success, "Script should execute: {:?}", result.error);
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_script_storage_add_owner_denied_for_non_privileged() {
+async fn test_script_storage_add_owner_denied_without_capability() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![]);
 
@@ -365,7 +306,7 @@ async fn test_script_storage_add_owner_denied_for_non_privileged() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_script_storage_remove_owner_denied_for_non_privileged() {
+async fn test_script_storage_remove_owner_denied_without_capability() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![]);
 
@@ -390,7 +331,6 @@ async fn test_script_storage_available_for_admin() {
         const scripts = scriptStorage.listScripts();
         const content = scriptStorage.getScript("nonexistent");
         const owners = scriptStorage.getScriptOwners("nonexistent");
-        const canManage = scriptStorage.canManageScriptPrivileges();
         // Should not throw errors
     "#;
 
@@ -403,160 +343,158 @@ async fn test_script_storage_available_for_admin() {
 }
 
 // ============================================================================
-// Privileged API Tests - SecretStorage
+// Engine-internal API Tests - SecretStorage
 // ============================================================================
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_secret_storage_list_denied_for_non_privileged() {
+async fn test_secret_storage_for_uri_denied_without_admin_or_ownership() {
     setup_env().await;
-    let user = create_user_with_capabilities("user", vec![]);
+    let user = create_user_with_capabilities("outsider", vec![]);
 
-    repository::upsert_script("test://secret-list-nonpriv", "").expect("Failed to create script");
-
-    let script = r#"
-        try {
-            secretStorage.listForUri("test://api-test");
-            throw new Error("Should have been denied");
-        } catch (e) {
-            // Method should not exist at all (TypeError) or throw privilege error
-            if (e.message.includes("Should have been denied")) {
-                throw e;
-            }
-        }
-    "#;
-
-    let result = execute_script_secure("test://secret-list-nonpriv", script, user);
-    assert!(
-        result.success,
-        "Non-privileged script should be denied secretStorage.listForUri: {:?}",
-        result.error
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_secret_storage_list_available_for_privileged_script_with_admin() {
-    setup_env().await;
-    let admin = UserContext::admin("admin".to_string());
-
-    repository::upsert_script("test://secret-list-admin-priv", "")
+    repository::upsert_script("test://secret-foruri-outsider", "")
         .expect("Failed to create script");
-    repository::set_script_privileged("test://secret-list-admin-priv", true)
-        .expect("Failed to set privileged");
 
+    // The methods are always present; each call is authorized against the user.
     let script = r#"
-        const secrets = secretStorage.listForUri("test://secret-list-admin-priv");
-        // Should not throw error, returns array
-        if (!Array.isArray(secrets)) {
-            throw new Error('Expected array from listForUri');
+        const calls = [
+            ["listForUri", () => secretStorage.listForUri("test://secret-foruri-outsider")],
+            ["setSecretForUri", () => secretStorage.setSecretForUri("test://secret-foruri-outsider", "k", "v")],
+            ["removeSecretForUri", () => secretStorage.removeSecretForUri("test://secret-foruri-outsider", "k")],
+            ["clearForUri", () => secretStorage.clearForUri("test://secret-foruri-outsider")],
+        ];
+        for (const [name, call] of calls) {
+            if (typeof secretStorage[name] !== "function") {
+                throw new Error(name + " should be defined for every script");
+            }
+            let threw = false;
+            try {
+                call();
+            } catch (e) {
+                threw = true;
+            }
+            if (!threw) {
+                throw new Error(name + " should be denied for a non-owner, non-admin user");
+            }
         }
     "#;
 
-    let result = execute_script_secure("test://secret-list-admin-priv", script, admin);
+    let result = execute_script_secure("test://secret-foruri-outsider", script, user);
     assert!(
         result.success,
-        "Privileged script should have listForUri: {:?}",
+        "Non-owner should be denied all *ForUri methods: {:?}",
         result.error
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_secret_storage_for_uri_not_available_for_admin_on_non_privileged_script() {
+async fn test_secret_storage_for_uri_allowed_for_admin() {
     setup_env().await;
     let admin = UserContext::admin("admin".to_string());
 
-    repository::upsert_script("test://secret-admin-nonpriv", "").expect("Failed to create script");
+    repository::upsert_script("test://secret-foruri-admin", "").expect("Failed to create script");
 
-    // Admin role alone must NOT grant *ForUri methods on a non-privileged script
+    // An admin may manage secrets of any script, from any script.
     let script = r#"
-        const methods = ["listForUri", "setSecretForUri", "removeSecretForUri", "clearForUri"];
-        for (const name of methods) {
-            if (typeof secretStorage[name] !== "undefined") {
-                throw new Error(name + " should not be available on non-privileged script even for admin");
-            }
-        }
-    "#;
-
-    let result = execute_script_secure("test://secret-admin-nonpriv", script, admin);
-    assert!(
-        result.success,
-        "Admin on non-privileged script should not have *ForUri methods: {:?}",
-        result.error
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_secret_storage_for_uri_denied_for_non_privileged_script() {
-    setup_env().await;
-    let user = create_user_with_capabilities("user", vec![]);
-
-    repository::upsert_script("test://secret-foruri-nonpriv", "").expect("Failed to create script");
-
-    // All four *ForUri methods should not be available on a non-privileged script
-    let script = r#"
-        const methods = [
-            ["listForUri", () => secretStorage.listForUri("test://other")],
-            ["setSecretForUri", () => secretStorage.setSecretForUri("test://other", "k", "v")],
-            ["removeSecretForUri", () => secretStorage.removeSecretForUri("test://other", "k")],
-            ["clearForUri", () => secretStorage.clearForUri("test://other")],
-        ];
-        for (const [name, fn_] of methods) {
-            if (typeof secretStorage[name] !== "undefined") {
-                throw new Error(name + " should not be available on non-privileged script");
-            }
-        }
-    "#;
-
-    let result = execute_script_secure("test://secret-foruri-nonpriv", script, user);
-    assert!(
-        result.success,
-        "Non-privileged script should not have *ForUri methods available: {:?}",
-        result.error
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_secret_storage_for_uri_allowed_for_privileged_script() {
-    setup_env().await;
-    let user = create_user_with_capabilities("user", vec![]);
-
-    repository::upsert_script("test://secret-foruri-priv", "").expect("Failed to create script");
-    repository::set_script_privileged("test://secret-foruri-priv", true)
-        .expect("Failed to set privileged");
-
-    let script = r#"
-        // Privileged script can call *ForUri methods without throwing
-        const secrets = secretStorage.listForUri("test://secret-foruri-priv");
+        const target = "test://secret-foruri-admin";
+        const secrets = secretStorage.listForUri(target);
         if (!Array.isArray(secrets)) {
             throw new Error("Expected array from listForUri");
         }
-        const setResult = secretStorage.setSecretForUri("test://secret-foruri-priv", "test-key", "test-value");
+        const setResult = secretStorage.setSecretForUri(target, "test-key", "test-value");
         if (!setResult.includes("successfully")) {
             throw new Error("Expected success from setSecretForUri, got: " + setResult);
         }
-        const removeResult = secretStorage.removeSecretForUri("test://secret-foruri-priv", "test-key");
+        const removeResult = secretStorage.removeSecretForUri(target, "test-key");
         if (typeof removeResult !== "boolean") {
             throw new Error("Expected boolean from removeSecretForUri");
         }
-        const clearResult = secretStorage.clearForUri("test://secret-foruri-priv");
+        const clearResult = secretStorage.clearForUri(target);
         if (!clearResult.includes("successfully")) {
             throw new Error("Expected success from clearForUri, got: " + clearResult);
         }
     "#;
 
-    let result = execute_script_secure("test://secret-foruri-priv", script, user);
+    let result = execute_script_secure("test://secret-caller-admin", script, admin);
     assert!(
         result.success,
-        "Privileged script should be allowed all *ForUri methods: {:?}",
+        "Admin should be allowed all *ForUri methods: {:?}",
+        result.error
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_secret_storage_for_uri_allowed_for_script_owner() {
+    setup_env().await;
+    let owner = create_user_with_capabilities("secret-owner", vec![]);
+
+    repository::upsert_script("test://secret-foruri-owned", "").expect("Failed to create script");
+    repository::add_script_owner("test://secret-foruri-owned", "secret-owner")
+        .expect("Failed to add owner");
+
+    // Ownership of the *target* script grants secret management, without admin.
+    let script = r#"
+        const target = "test://secret-foruri-owned";
+        const secrets = secretStorage.listForUri(target);
+        if (!Array.isArray(secrets)) {
+            throw new Error("Expected array from listForUri");
+        }
+        const setResult = secretStorage.setSecretForUri(target, "test-key", "test-value");
+        if (!setResult.includes("successfully")) {
+            throw new Error("Expected success from setSecretForUri, got: " + setResult);
+        }
+        const clearResult = secretStorage.clearForUri(target);
+        if (!clearResult.includes("successfully")) {
+            throw new Error("Expected success from clearForUri, got: " + clearResult);
+        }
+    "#;
+
+    let result = execute_script_secure("test://secret-caller-owner", script, owner);
+    assert!(
+        result.success,
+        "Script owner should be allowed *ForUri methods on their script: {:?}",
+        result.error
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_secret_storage_for_uri_ownership_does_not_leak_to_other_scripts() {
+    setup_env().await;
+    let owner = create_user_with_capabilities("partial-owner", vec![]);
+
+    repository::upsert_script("test://secret-owned-by-partial", "")
+        .expect("Failed to create script");
+    repository::add_script_owner("test://secret-owned-by-partial", "partial-owner")
+        .expect("Failed to add owner");
+    repository::upsert_script("test://secret-owned-by-nobody", "")
+        .expect("Failed to create script");
+
+    // Owning one script must not grant access to another script's secrets.
+    let script = r#"
+        let threw = false;
+        try {
+            secretStorage.setSecretForUri("test://secret-owned-by-nobody", "k", "v");
+        } catch (e) {
+            threw = true;
+        }
+        if (!threw) {
+            throw new Error("Owning one script must not grant access to another");
+        }
+    "#;
+
+    let result = execute_script_secure("test://secret-owned-by-partial", script, owner);
+    assert!(
+        result.success,
+        "Ownership must not leak across scripts: {:?}",
         result.error
     );
 }
 
 // ============================================================================
-// Privileged API Tests - Console
+// Engine-internal API Tests - Console
 // ============================================================================
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_console_list_logs_denied_for_non_privileged() {
+async fn test_console_list_logs_denied_without_capability() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![]);
 
@@ -572,7 +510,7 @@ async fn test_console_list_logs_denied_for_non_privileged() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_console_list_logs_for_uri_denied_for_non_privileged() {
+async fn test_console_list_logs_for_uri_denied_without_capability() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![]);
 
@@ -588,7 +526,7 @@ async fn test_console_list_logs_for_uri_denied_for_non_privileged() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_console_prune_logs_denied_for_non_privileged() {
+async fn test_console_prune_logs_denied_without_capability() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![]);
 
@@ -606,7 +544,7 @@ async fn test_console_prune_logs_denied_for_non_privileged() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_console_privileged_methods_available_for_admin() {
+async fn test_console_engine_internal_methods_available_for_admin() {
     setup_env().await;
     let admin = UserContext::admin("admin".to_string());
 
@@ -625,11 +563,11 @@ async fn test_console_privileged_methods_available_for_admin() {
 }
 
 // ============================================================================
-// Privileged API Tests - UserStorage
+// Engine-internal API Tests - UserStorage
 // ============================================================================
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_user_storage_list_users_denied_for_non_privileged() {
+async fn test_user_storage_list_users_denied_without_capability() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![]);
 
@@ -647,7 +585,7 @@ async fn test_user_storage_list_users_denied_for_non_privileged() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_user_storage_add_role_denied_for_non_privileged() {
+async fn test_user_storage_add_role_denied_without_capability() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![]);
 
@@ -665,7 +603,7 @@ async fn test_user_storage_add_role_denied_for_non_privileged() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_user_storage_remove_role_denied_for_non_privileged() {
+async fn test_user_storage_remove_role_denied_without_capability() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![]);
 
@@ -701,11 +639,11 @@ async fn test_user_storage_available_for_admin() {
 }
 
 // ============================================================================
-// Privileged API Tests - AssetStorage
+// Engine-internal API Tests - AssetStorage
 // ============================================================================
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_asset_storage_list_for_uri_denied_for_non_privileged() {
+async fn test_asset_storage_list_for_uri_denied_without_capability() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![]);
 
@@ -721,7 +659,7 @@ async fn test_asset_storage_list_for_uri_denied_for_non_privileged() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_asset_storage_fetch_for_uri_denied_for_non_privileged() {
+async fn test_asset_storage_fetch_for_uri_denied_without_capability() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![]);
 
@@ -737,7 +675,7 @@ async fn test_asset_storage_fetch_for_uri_denied_for_non_privileged() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_asset_storage_upsert_for_uri_denied_for_non_privileged() {
+async fn test_asset_storage_upsert_for_uri_denied_without_capability() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![]);
 
@@ -754,7 +692,7 @@ async fn test_asset_storage_upsert_for_uri_denied_for_non_privileged() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_asset_storage_delete_for_uri_denied_for_non_privileged() {
+async fn test_asset_storage_delete_for_uri_denied_without_capability() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![]);
 
@@ -770,7 +708,7 @@ async fn test_asset_storage_delete_for_uri_denied_for_non_privileged() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_asset_storage_privileged_methods_available_for_admin() {
+async fn test_asset_storage_engine_internal_methods_available_for_admin() {
     setup_env().await;
     let admin = UserContext::admin("admin".to_string());
 
@@ -818,13 +756,11 @@ async fn test_secret_storage_exists_available_for_all() {
 // ============================================================================
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_scheduler_service_available_for_privileged_script() {
+async fn test_scheduler_service_available_for_admin() {
     setup_env().await;
     let admin = UserContext::admin("admin".to_string());
 
-    // Create a privileged script
-    repository::upsert_script("test://privileged", "").expect("Failed to create script");
-    repository::set_script_privileged("test://privileged", true).expect("Failed to set privileged");
+    repository::upsert_script("test://scheduler-admin", "").expect("Failed to create script");
 
     let script = r#"
         // SchedulerService should be available
@@ -837,22 +773,20 @@ async fn test_scheduler_service_available_for_privileged_script() {
         // Should not throw error
     "#;
 
-    let result = execute_script_secure("test://privileged", script, admin);
+    let result = execute_script_secure("test://scheduler-admin", script, admin);
     assert!(
         result.success,
-        "Privileged script should access schedulerService: {:?}",
+        "Script should access schedulerService: {:?}",
         result.error
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_scheduler_service_available_for_non_privileged_script() {
+async fn test_scheduler_service_available_for_any_script() {
     setup_env().await;
     let admin = UserContext::admin("admin".to_string());
 
-    // Create a non-privileged script
-    repository::upsert_script("test://non-privileged", "").expect("Failed to create script");
-    // Don't set privileged flag - defaults to false
+    repository::upsert_script("test://scheduler-any", "").expect("Failed to create script");
 
     let script = r#"
         if (typeof schedulerService === "undefined") {
@@ -868,16 +802,16 @@ async fn test_scheduler_service_available_for_non_privileged_script() {
         // Should not throw error
     "#;
 
-    let result = execute_script_secure("test://non-privileged", script, admin);
+    let result = execute_script_secure("test://scheduler-any", script, admin);
     assert!(
         result.success,
-        "Non-privileged script should access schedulerService: {:?}",
+        "Any script should access schedulerService: {:?}",
         result.error
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_scheduler_register_once_available_for_non_privileged_script() {
+async fn test_scheduler_register_once_available_for_any_script() {
     setup_env().await;
     let admin = UserContext::admin("admin".to_string());
 
@@ -902,7 +836,7 @@ async fn test_scheduler_register_once_available_for_non_privileged_script() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_scheduler_register_recurring_available_for_non_privileged_script() {
+async fn test_scheduler_register_recurring_available_for_any_script() {
     setup_env().await;
     let admin = UserContext::admin("admin".to_string());
 
@@ -1064,15 +998,14 @@ async fn test_register_route_allowed_for_any_script() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![Capability::WriteScripts]);
 
-    // Create non-privileged script
-    repository::upsert_script("test://non-privileged-routes", "").expect("Failed to create script");
+    repository::upsert_script("test://any-script-routes", "").expect("Failed to create script");
 
     let script = r#"
         routeRegistry.registerRoute("/test", "handler", "GET");
         // Should not throw
     "#;
 
-    let result = execute_script_secure("test://non-privileged-routes", script, user);
+    let result = execute_script_secure("test://any-script-routes", script, user);
     assert!(
         result.success,
         "Any script should be able to register non-reserved routes: {:?}",
@@ -1114,8 +1047,7 @@ async fn test_register_stream_route_allowed_for_any_script() {
     setup_env().await;
     let user = create_user_with_capabilities("user", vec![Capability::ManageStreams]);
 
-    repository::upsert_script("test://non-privileged-streams", "")
-        .expect("Failed to create script");
+    repository::upsert_script("test://any-script-streams", "").expect("Failed to create script");
 
     let script = r#"
         if (typeof routeRegistry === "undefined" || typeof routeRegistry.registerStreamRoute !== "function") {
@@ -1125,7 +1057,7 @@ async fn test_register_stream_route_allowed_for_any_script() {
         // Should not throw
     "#;
 
-    let result = execute_script_secure("test://non-privileged-streams", script, user);
+    let result = execute_script_secure("test://any-script-streams", script, user);
     assert!(
         result.success,
         "Any script should be able to register non-reserved stream routes: {:?}",
@@ -1186,26 +1118,24 @@ async fn test_register_asset_route_denied_for_reserved_path() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_register_routes_allowed_for_privileged_script() {
+async fn test_register_routes_allowed_for_any_script() {
     setup_env().await;
     let admin = UserContext::admin("admin".to_string());
 
-    repository::upsert_script("test://privileged-routes", "").expect("Failed to create script");
-    repository::set_script_privileged("test://privileged-routes", true)
-        .expect("Failed to set privileged");
+    repository::upsert_script("test://register-routes", "").expect("Failed to create script");
 
     let script = r#"
-        // Privileged script should be able to register routes
+        // Any script should be able to register routes
         routeRegistry.registerRoute("/test-priv", "handler", "GET");
         routeRegistry.registerStreamRoute("/test-stream-priv");
         routeRegistry.registerAssetRoute("/test-priv.css", "test.css");
         // Should not throw errors
     "#;
 
-    let result = execute_script_secure("test://privileged-routes", script, admin);
+    let result = execute_script_secure("test://register-routes", script, admin);
     assert!(
         result.success,
-        "Privileged script should register routes: {:?}",
+        "Script should register routes: {:?}",
         result.error
     );
 }
@@ -1215,16 +1145,13 @@ async fn test_route_registry_list_routes_includes_stream_and_asset_routes() {
     setup_env().await;
     let admin = UserContext::admin("admin".to_string());
 
-    repository::upsert_script("test://privileged-route-introspection", "")
-        .expect("Failed to create script");
-    repository::set_script_privileged("test://privileged-route-introspection", true)
-        .expect("Failed to set privileged");
+    repository::upsert_script("test://route-introspection", "").expect("Failed to create script");
     repository::upsert_asset(repository::Asset {
         uri: "test-introspection.css".to_string(),
         mimetype: "text/css".to_string(),
         content: b"body { color: red; }".to_vec(),
         name: Some("test-introspection.css".to_string()),
-        script_uri: "test://privileged-route-introspection".to_string(),
+        script_uri: "test://route-introspection".to_string(),
         created_at: std::time::SystemTime::now(),
         updated_at: std::time::SystemTime::now(),
     })
@@ -1259,36 +1186,34 @@ async fn test_route_registry_list_routes_includes_stream_and_asset_routes() {
         }
     "#;
 
-    let result = execute_script_secure("test://privileged-route-introspection", script, admin);
+    let result = execute_script_secure("test://route-introspection", script, admin);
     assert!(
         result.success,
-        "Privileged script should see stream routes in listRoutes: {:?}",
+        "Script should see stream routes in listRoutes: {:?}",
         result.error
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_send_stream_message_denied_for_non_privileged_script() {
+async fn test_send_stream_message_requires_manage_streams() {
     setup_env().await;
-    let admin = UserContext::admin("admin".to_string());
+    let user = create_user_with_capabilities("stream-user", vec![]);
 
-    repository::upsert_script("test://non-priv-msg", "").expect("Failed to create script");
+    repository::upsert_script("test://stream-msg-no-cap", "").expect("Failed to create script");
 
+    // The function is available to every script; the ManageStreams capability of
+    // the calling user is what decides the outcome.
     let script = r#"
         if (typeof routeRegistry === "undefined" || typeof routeRegistry.sendStreamMessage !== "function") {
             throw new Error("routeRegistry.sendStreamMessage should be defined");
         }
-        try {
-            routeRegistry.sendStreamMessage("/stream", "message");
-            throw new Error("Should have been denied");
-        } catch (e) {
-            if (!e.message.includes("privileged") && !e.message.includes("denied")) {
-                throw new Error("Expected privilege error, got: " + e.message);
-            }
+        const result = routeRegistry.sendStreamMessage("/stream", "message");
+        if (!result.startsWith("Error:")) {
+            throw new Error("Expected capability error, got: " + result);
         }
     "#;
 
-    let result = execute_script_secure("test://non-priv-msg", script, admin);
+    let result = execute_script_secure("test://stream-msg-no-cap", script, user);
     assert!(result.success, "Should be denied: {:?}", result.error);
 }
 
@@ -1300,10 +1225,7 @@ async fn test_send_stream_message_filtered_accepts_optional_match_mode() {
     }
     let admin = UserContext::admin("admin".to_string());
 
-    repository::upsert_script("test://privileged-filtered-stream-msg", "")
-        .expect("Failed to create script");
-    repository::set_script_privileged("test://privileged-filtered-stream-msg", true)
-        .expect("Failed to set privileged");
+    repository::upsert_script("test://filtered-stream-msg", "").expect("Failed to create script");
 
     let script = r#"
         const result = routeRegistry.sendStreamMessageFiltered(
@@ -1318,10 +1240,10 @@ async fn test_send_stream_message_filtered_accepts_optional_match_mode() {
         }
     "#;
 
-    let result = execute_script_secure("test://privileged-filtered-stream-msg", script, admin);
+    let result = execute_script_secure("test://filtered-stream-msg", script, admin);
     assert!(
         result.success,
-        "Privileged script should accept optional match mode: {:?}",
+        "Script should accept optional match mode: {:?}",
         result.error
     );
 }
@@ -1334,10 +1256,8 @@ async fn test_send_stream_message_filtered_rejects_invalid_match_mode() {
     }
     let admin = UserContext::admin("admin".to_string());
 
-    repository::upsert_script("test://privileged-filtered-stream-msg-invalid", "")
+    repository::upsert_script("test://filtered-stream-msg-invalid", "")
         .expect("Failed to create script");
-    repository::set_script_privileged("test://privileged-filtered-stream-msg-invalid", true)
-        .expect("Failed to set privileged");
 
     let script = r#"
         routeRegistry.sendStreamMessageFiltered(
@@ -1348,11 +1268,7 @@ async fn test_send_stream_message_filtered_rejects_invalid_match_mode() {
         );
     "#;
 
-    let result = execute_script_secure(
-        "test://privileged-filtered-stream-msg-invalid",
-        script,
-        admin,
-    );
+    let result = execute_script_secure("test://filtered-stream-msg-invalid", script, admin);
     assert!(!result.success, "Invalid match mode should fail");
     assert!(
         result
@@ -1371,10 +1287,8 @@ async fn test_send_subscription_message_filtered_accepts_optional_match_mode() {
     }
     let admin = UserContext::admin("admin".to_string());
 
-    repository::upsert_script("test://privileged-filtered-subscription-msg", "")
+    repository::upsert_script("test://filtered-subscription-msg", "")
         .expect("Failed to create script");
-    repository::set_script_privileged("test://privileged-filtered-subscription-msg", true)
-        .expect("Failed to set privileged");
 
     let script = r#"
         const result = graphQLRegistry.sendSubscriptionMessageFiltered(
@@ -1389,11 +1303,10 @@ async fn test_send_subscription_message_filtered_accepts_optional_match_mode() {
         }
     "#;
 
-    let result =
-        execute_script_secure("test://privileged-filtered-subscription-msg", script, admin);
+    let result = execute_script_secure("test://filtered-subscription-msg", script, admin);
     assert!(
         result.success,
-        "Privileged script should accept optional subscription match mode: {:?}",
+        "Script should accept optional subscription match mode: {:?}",
         result.error
     );
 }

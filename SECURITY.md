@@ -79,8 +79,8 @@ When deploying aiwebengine in production:
 ### 4. Script Security
 
 - Review all scripts before deployment
-- Use restricted (non-privileged) scripts whenever possible
-- Audit privileged script access regularly
+- Keep script ownership lists minimal — owners can manage a script's assets and secrets
+- Audit administrator role assignments regularly
 - Implement script approval workflows
 - Monitor script execution logs
 

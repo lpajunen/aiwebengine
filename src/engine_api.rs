@@ -342,35 +342,6 @@ fn script_init_status_json(metadata: &repository::ScriptMetadata) -> Value {
     })
 }
 
-/// Security profile for one script (privileged flag plus whether the calling
-/// user may change it); ReadScripts capability required. Covers both
-/// `scriptStorage.getScriptSecurityProfile` and `canManageScriptPrivileges`.
-pub fn security_profile_authorized(user: &UserContext, uri: &str) -> Option<Value> {
-    if user.require_capability(&Capability::ReadScripts).is_err() {
-        return None;
-    }
-    let profile = repository::get_script_security_profile(uri).ok()?;
-    Some(json!({
-        "uri": profile.uri,
-        "privileged": profile.privileged,
-        "defaultPrivileged": profile.default_privileged,
-        "canManagePrivileges": is_admin_user(user),
-    }))
-}
-
-/// Mark a script privileged/unprivileged; admin only — same rule as
-/// `scriptStorage.setScriptPrivileged`.
-pub fn set_privileged_authorized(
-    user: &UserContext,
-    uri: &str,
-    privileged: bool,
-) -> Result<(), String> {
-    if !is_admin_user(user) {
-        return Err("Administrator privileges required".to_string());
-    }
-    repository::set_script_privileged(uri, privileged).map_err(|e| format!("{}", e))
-}
-
 /// Why an owner change was rejected.
 pub enum OwnerChangeError {
     AccessDenied,
@@ -425,11 +396,10 @@ pub enum SecretAccessError {
     Storage(String),
 }
 
-/// Cross-script secret management (the `secretStorage.*ForUri` functions) was
-/// gated on the *calling script* being privileged. Over HTTP/MCP there is no
-/// calling script, so the rule maps to the calling user: admins and owners of
-/// the target script may manage its secret keys. Secret values are write-only
-/// through this surface — there is deliberately no read-value operation.
+/// Cross-script secret management (the `secretStorage.*ForUri` functions):
+/// admins and owners of the target script may manage its secret keys. Secret
+/// values are write-only through this surface — there is deliberately no
+/// read-value operation.
 fn can_manage_secrets(user: &UserContext, script_uri: &str) -> bool {
     is_admin_or_owner(user, script_uri)
 }
@@ -1343,7 +1313,6 @@ pub async fn list_scripts_route(auth_user: Option<Extension<AuthUser>>) -> Respo
                     "size": meta.content.len(),
                     "updatedAt": millis(meta.updated_at),
                     "createdAt": millis(meta.created_at),
-                    "privileged": meta.privileged,
                     "initialized": meta.initialized,
                     "initError": meta.init_error.as_deref(),
                 })
@@ -1408,103 +1377,6 @@ pub async fn script_init_status_route(
                 }),
             )
         }
-    }
-}
-
-/// Security profile of a script: privileged flag plus whether the calling
-/// user may change it.
-#[utoipa::path(
-    get,
-    path = "/engine/script_security_profile",
-    tags = ["Scripts"],
-    params(("uri" = String, Query, description = "Script URI")),
-    responses(
-        (status = 200, description = "Security profile"),
-        (status = 400, description = "Missing required parameter"),
-        (status = 403, description = "Access denied"),
-    )
-)]
-pub async fn script_security_profile_route(
-    auth_user: Option<Extension<AuthUser>>,
-    Query(query): Query<ScriptParams>,
-) -> Response {
-    let user = user_context_from(auth_user.as_deref());
-    let Some(uri) = query.uri else {
-        return missing_param_response("uri");
-    };
-
-    let uri_cl = uri.clone();
-    let profile = tokio::task::spawn_blocking(move || security_profile_authorized(&user, &uri_cl))
-        .await
-        .unwrap_or(None);
-
-    match profile {
-        Some(mut profile) => {
-            if let Some(obj) = profile.as_object_mut() {
-                obj.insert("timestamp".to_string(), json!(iso_timestamp()));
-            }
-            json_response(StatusCode::OK, profile)
-        }
-        None => json_response(
-            StatusCode::FORBIDDEN,
-            json!({ "error": "Access denied", "uri": uri, "timestamp": iso_timestamp() }),
-        ),
-    }
-}
-
-#[derive(Deserialize, Default)]
-pub struct PrivilegedParams {
-    uri: Option<String>,
-    privileged: Option<bool>,
-}
-
-/// Mark a script privileged/unprivileged (admin only).
-#[utoipa::path(
-    post,
-    path = "/engine/set_script_privileged",
-    tags = ["Scripts"],
-    request_body(content_type = "application/x-www-form-urlencoded",
-        description = "Form fields: uri (required), privileged (required, true/false)"),
-    responses(
-        (status = 200, description = "Privilege flag updated"),
-        (status = 400, description = "Missing required parameter"),
-        (status = 403, description = "Administrator privileges required"),
-    )
-)]
-pub async fn set_script_privileged_route(
-    auth_user: Option<Extension<AuthUser>>,
-    Query(query): Query<PrivilegedParams>,
-    body: axum::body::Bytes,
-) -> Response {
-    let user = user_context_from(auth_user.as_deref());
-    let form: PrivilegedParams = serde_urlencoded::from_bytes(&body).unwrap_or_default();
-    let Some(uri) = form.uri.or(query.uri) else {
-        return missing_param_response("uri");
-    };
-    let Some(privileged) = form.privileged.or(query.privileged) else {
-        return missing_param_response("privileged");
-    };
-
-    let uri_cl = uri.clone();
-    let result =
-        tokio::task::spawn_blocking(move || set_privileged_authorized(&user, &uri_cl, privileged))
-            .await
-            .unwrap_or_else(|e| Err(format!("join error: {}", e)));
-
-    match result {
-        Ok(()) => json_response(
-            StatusCode::OK,
-            json!({
-                "success": true,
-                "uri": uri,
-                "privileged": privileged,
-                "timestamp": iso_timestamp(),
-            }),
-        ),
-        Err(details) => json_response(
-            StatusCode::FORBIDDEN,
-            json!({ "error": details, "uri": uri, "timestamp": iso_timestamp() }),
-        ),
     }
 }
 
@@ -2521,35 +2393,6 @@ fn native_tools() -> &'static [NativeToolEntry] {
             tool_delete_asset,
         ),
         (
-            "read_security_profile",
-            "Read a script's security profile: privileged flag and whether the caller may change it",
-            || {
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "uri": { "type": "string", "description": "Script URI" }
-                    },
-                    "required": ["uri"]
-                })
-            },
-            tool_read_security_profile,
-        ),
-        (
-            "set_script_privileged",
-            "Mark a script privileged or unprivileged. Requires administrator privileges.",
-            || {
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "uri": { "type": "string", "description": "Script URI" },
-                        "privileged": { "type": "boolean", "description": "New privileged flag" }
-                    },
-                    "required": ["uri", "privileged"]
-                })
-            },
-            tool_set_script_privileged,
-        ),
-        (
             "list_script_owners",
             "List the owners of a script",
             || {
@@ -2977,34 +2820,6 @@ fn secret_error_json(error: SecretAccessError) -> Value {
         SecretAccessError::Validation(details) | SecretAccessError::Storage(details) => {
             json!({ "error": details })
         }
-    }
-}
-
-fn tool_read_security_profile(args: &Value, user: &UserContext) -> Value {
-    let Some(uri) = arg_str(args, "uri") else {
-        return missing_arg("uri");
-    };
-    match security_profile_authorized(user, uri) {
-        Some(profile) => profile,
-        None => json!({ "error": "Access denied" }),
-    }
-}
-
-fn tool_set_script_privileged(args: &Value, user: &UserContext) -> Value {
-    let Some(uri) = arg_str(args, "uri") else {
-        return missing_arg("uri");
-    };
-    let Some(privileged) = args.get("privileged").and_then(Value::as_bool) else {
-        return missing_arg("privileged");
-    };
-    match set_privileged_authorized(user, uri, privileged) {
-        Ok(()) => json!({
-            "success": true,
-            "uri": uri,
-            "privileged": privileged,
-            "timestamp": iso_timestamp(),
-        }),
-        Err(details) => json!({ "error": details }),
     }
 }
 

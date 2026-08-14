@@ -1,16 +1,18 @@
 /// <reference path="./aiwebengine.d.ts" />
 
 /**
- * TypeScript type definitions for aiwebengine privileged JavaScript API
+ * TypeScript type definitions for the aiwebengine engine-internal JavaScript API
  * @version 0.1.0
  *
- * These APIs are only available to scripts marked as privileged.
- * Add this reference to your privileged scripts for IDE autocomplete and type checking:
+ * These APIs are available to every script. Each call is authorized against the
+ * calling user — most require a specific capability, script ownership, or
+ * administrator rights, as noted per method.
+ * Add this reference to your scripts for IDE autocomplete and type checking:
  * /// <reference path="https://your-engine.com/engine/types/v0.1.0/aiwebengine-priv.d.ts" />
  */
 
 // ============================================================================
-// User Management API (Privileged Scripts Only)
+// User Management API (engine-internal)
 // ============================================================================
 
 /**
@@ -37,7 +39,7 @@ interface User {
 }
 
 /**
- * User storage API for managing users and roles (admin-only, privileged scripts only)
+ * User storage API for managing users and roles (admin only)
  */
 interface UserStorage {
   /**
@@ -75,12 +77,13 @@ interface UserStorage {
 }
 
 /**
- * Secret storage API extensions for privileged scripts
- * Allows managing secrets scoped to any script URI
+ * Secret storage API extensions for cross-script secret management.
+ * Each method requires the calling user to be an administrator or an owner of
+ * the target script.
  */
 interface SecretStorage {
   /**
-   * List all secret keys stored for a given script URI (privileged scripts only)
+   * List all secret keys stored for a given script URI (admin or script owner)
    * @param scriptUri - The URI of the script whose secret keys to list
    * @returns Array of key strings
    * @example
@@ -90,7 +93,7 @@ interface SecretStorage {
   listForUri(scriptUri: string): string[];
 
   /**
-   * Store a secret for a given script URI (privileged scripts only)
+   * Store a secret for a given script URI (admin or script owner)
    * @param scriptUri - The URI of the script to store the secret for
    * @param key - Secret key
    * @param value - Secret value
@@ -101,7 +104,7 @@ interface SecretStorage {
   setSecretForUri(scriptUri: string, key: string, value: string): string;
 
   /**
-   * Remove a secret for a given script URI (privileged scripts only)
+   * Remove a secret for a given script URI (admin or script owner)
    * @param scriptUri - The URI of the script to remove the secret from
    * @param key - Secret key to remove
    * @returns true if the secret was removed, false if it did not exist
@@ -111,7 +114,7 @@ interface SecretStorage {
   removeSecretForUri(scriptUri: string, key: string): boolean;
 
   /**
-   * Clear all secrets for a given script URI (privileged scripts only)
+   * Clear all secrets for a given script URI (admin or script owner)
    * @param scriptUri - The URI of the script whose secrets to clear
    * @returns Status message string
    * @example
@@ -121,11 +124,11 @@ interface SecretStorage {
 }
 
 // ============================================================================
-// Console API (Privileged Scripts Only)
+// Console API (engine-internal)
 // ============================================================================
 
 /**
- * Console logging interface extensions for privileged scripts
+ * Console logging interface extensions for engine-internal scripts
  * Requires ViewLogs capability (admin-level access)
  */
 interface Console {
@@ -161,7 +164,7 @@ interface Console {
 }
 
 // ============================================================================
-// Route Registry API (Privileged Scripts Only)
+// Route Registry API (engine-internal)
 // ============================================================================
 
 /**
@@ -348,7 +351,7 @@ interface OpenApiSpec {
 }
 
 /**
- * RouteRegistry interface extensions for privileged scripts
+ * RouteRegistry interface extensions for engine-internal scripts
  * Requires appropriate capabilities for global introspection
  */
 interface RouteRegistry {
@@ -379,7 +382,7 @@ interface RouteRegistry {
 }
 
 // ============================================================================
-// Script Storage API (Privileged Scripts Only)
+// Script Storage API (engine-internal)
 // ============================================================================
 
 /**
@@ -401,9 +404,6 @@ interface ScriptMetadata {
   /** Updated timestamp (milliseconds since epoch) */
   updatedAt: number;
 
-  /** Whether script has privileged access */
-  privileged: boolean;
-
   /** Whether script has been initialized */
   initialized: boolean;
 
@@ -412,7 +412,7 @@ interface ScriptMetadata {
 }
 
 /**
- * Script storage for managing JavaScript scripts (privileged scripts only)
+ * Script storage for managing JavaScript scripts
  * Requires appropriate capabilities for cross-script operations
  */
 interface ScriptStorage {
@@ -443,15 +443,6 @@ interface ScriptStorage {
   getScriptInitStatus(scriptName: string): string | null;
 
   /**
-   * Get script security profile (requires ReadScripts capability)
-   * @param scriptName - Script name/URI
-   * @returns JSON string with security profile or null
-   * @example
-   * const profile = JSON.parse(scriptStorage.getScriptSecurityProfile("my-script"));
-   */
-  getScriptSecurityProfile(scriptName: string): string | null;
-
-  /**
    * Create or update a script (requires WriteScripts capability)
    * @param scriptName - Script name/URI
    * @param content - Script content
@@ -469,24 +460,6 @@ interface ScriptStorage {
    * scriptStorage.deleteScript("old-script");
    */
   deleteScript(scriptName: string): boolean;
-
-  /**
-   * Set privileged status for a script (admin only)
-   * @param scriptName - Script name/URI
-   * @param privileged - Whether script should be privileged
-   * @returns True if successful
-   * @example
-   * scriptStorage.setScriptPrivileged("system-script", true);
-   */
-  setScriptPrivileged(scriptName: string, privileged: boolean): boolean;
-
-  /**
-   * Check if current user can manage script privileges (admin capability check)
-   * @returns True if user has admin capability
-   * @example
-   * if (scriptStorage.canManageScriptPrivileges()) { ... }
-   */
-  canManageScriptPrivileges(): boolean;
 
   /**
    * Get list of owner user IDs for a script
@@ -519,11 +492,11 @@ interface ScriptStorage {
 }
 
 // ============================================================================
-// Asset Storage API (Privileged Scripts Only)
+// Asset Storage API (engine-internal)
 // ============================================================================
 
 /**
- * AssetStorage interface extensions for privileged scripts
+ * AssetStorage interface extensions for engine-internal scripts
  * Requires ReadAssets/WriteAssets/DeleteAssets capabilities
  */
 interface AssetStorage {
@@ -584,7 +557,7 @@ interface AssetStorage {
 }
 
 // ============================================================================
-// Global Objects (Privileged Scripts Only)
+// Global Objects (engine-internal)
 // ============================================================================
 
 declare var userStorage: UserStorage;

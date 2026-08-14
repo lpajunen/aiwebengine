@@ -977,18 +977,20 @@ The engine SHOULD maintain comprehensive audit logs for compliance and security:
 - Audit log retention policies
 - Export audit logs for compliance reporting
 
-#### REQ-SCR-011: Script Privilege Controls
+#### REQ-SCR-011: Script Access Controls
 
 **Priority**: HIGH  
 **Status**: IMPLEMENTED
 
-The engine MUST protect public surface areas by gating them behind a privileged flag per script:
+All scripts are equal — there is no per-script privilege flag. The engine MUST
+authorize engine-internal operations against the *calling user* instead:
 
-- Bootstrap scripts (core, cli, editor, admin, auth) default to **privileged**
-- Newly-created/ uploaded scripts default to **restricted** until an administrator reviews them
-- Only administrators (DeleteScripts capability) may toggle the flag through the editor or API
-- Non-privileged scripts are blocked from registering HTTP routes, asset paths, or stream routes
-- The editor UI must display the current privilege status and expose an admin-only toggle action
+- Every script may call every engine-internal API; each call is authorized individually
+- Cross-script operations (assets, secrets, ownership) require the relevant capability,
+  ownership of the target script, or the administrator role
+- Scripts may not register HTTP, stream, or asset routes under a reserved engine
+  prefix (`RESERVED_ROUTE_PREFIXES` in `engine_api.rs`); every other path is open to any script
+- Ownership is managed through the `script_owners` table; a script's creator becomes its first owner
 
 ---
 

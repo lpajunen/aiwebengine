@@ -257,7 +257,7 @@ The client works with any MCP server that implements:
 Secrets are stored in the database via the `secretStorage` API and are **never** exposed to JavaScript code. An administrator sets script-level secrets; users can also set their own.
 
 ```javascript
-// Privileged: set a secret for a specific script
+// Admin or script owner: set a secret for a specific script
 secretStorage.setSecretForUri(
   "https://example.com/my-script",
   "github_token",
@@ -326,7 +326,7 @@ function callToolWithRetry(client, toolName, args, maxRetries = 3) {
 Ensure the secret has been stored in the database:
 
 ```javascript
-// Privileged script: store a script-level secret
+// As an admin or owner of the script: store a script-level secret
 secretStorage.setSecretForUri(
   "https://your-script-uri",
   "github_token",

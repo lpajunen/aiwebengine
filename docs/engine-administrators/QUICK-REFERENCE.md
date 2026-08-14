@@ -137,7 +137,7 @@ export APP_AUTH__BOOTSTRAP_ADMINS='["admin@example.com"]'
 Secrets are stored in the database via the `secretStorage` JavaScript API — no environment variables needed.
 
 ```javascript
-// From a privileged admin script
+// As an administrator or owner of the target script
 secretStorage.setSecretForUri(
   "https://example.com/my-script",
   "anthropic_api_key",

@@ -194,11 +194,7 @@ async fn test_engine_management_endpoints() {
     assert!(body["owners"].is_array());
 
     // Missing required parameters are rejected
-    for path in [
-        "/engine/secrets",
-        "/engine/script_security_profile",
-        "/engine/script_owners",
-    ] {
+    for path in ["/engine/secrets", "/engine/script_owners"] {
         let response = client
             .get(format!("{}{}", base, path))
             .send()
@@ -412,7 +408,6 @@ async fn test_head_request_on_asset_route_strips_body() {
 
     let script_uri = "https://example.com/head_asset_test";
     let _ = repository::upsert_script(script_uri, "function init() {}");
-    repository::set_script_privileged(script_uri, true).expect("Failed to set privileged");
     repository::upsert_asset(repository::Asset {
         uri: "head-test.css".to_string(),
         mimetype: "text/css".to_string(),

@@ -1398,7 +1398,8 @@ interface Database {
 
 /**
  * Console logging interface
- * Note: Privileged scripts have additional methods available (listLogs, listLogsForUri, pruneLogs)
+ * Note: additional methods (listLogs, listLogsForUri, pruneLogs) are available
+ * to callers with the required capabilities — see aiwebengine-priv.d.ts
  * defined in aiwebengine-priv.d.ts
  */
 interface Console {
