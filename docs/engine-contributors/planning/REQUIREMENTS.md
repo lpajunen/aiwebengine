@@ -983,7 +983,7 @@ The engine SHOULD maintain comprehensive audit logs for compliance and security:
 **Status**: IMPLEMENTED
 
 All scripts are equal — there is no per-script privilege flag. The engine MUST
-authorize engine-internal operations against the *calling user* instead:
+authorize engine-internal operations against the _calling user_ instead:
 
 - Every script may call every engine-internal API; each call is authorized individually
 - Cross-script operations (assets, secrets, ownership) require the relevant capability,
