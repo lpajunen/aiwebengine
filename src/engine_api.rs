@@ -65,6 +65,10 @@ pub const RESERVED_ROUTE_PREFIXES: &[&str] = &[
     "/graphql",
     "/mcp",
     "/auth",
+    // Legacy top-level OAuth2 endpoints. The canonical paths now live under
+    // `/auth/oauth2/*`; this stays reserved while the aliases are served so a
+    // script cannot register a route there that the static endpoint shadows.
+    "/oauth2",
     "/.well-known",
     "/engine",
 ];
@@ -2197,6 +2201,112 @@ pub async fn installed_page_route() -> Response {
         .into_response()
 }
 
+/// Detailed cluster diagnostics. Administrators only.
+///
+/// Unlike the unauthenticated `/health` liveness probe, this reports internal
+/// topology — connection-pool metrics, notification-listener state, and
+/// per-script scheduler job counts — so it lives under the authorized
+/// `/engine` prefix rather than being world-readable.
+///
+/// Like `/health`, it verifies the database with a real `SELECT 1` ping and
+/// returns 503 when that fails.
+#[utoipa::path(
+    get,
+    path = "/engine/health/cluster",
+    tags = ["Health"],
+    responses(
+        (status = 200, description = "Detailed cluster health information", body = crate::openapi_schemas::ClusterHealthResponse),
+        (status = 403, description = "Permission denied"),
+        (status = 503, description = "Cluster is unhealthy (database unreachable)", body = crate::openapi_schemas::ClusterHealthResponse),
+    )
+)]
+pub async fn cluster_health_route(auth_user: Option<Extension<AuthUser>>) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    // Deliberately the stricter `is_user_admin` check, not `is_admin_user`: the
+    // latter passes on capability alone, which development mode grants to
+    // anonymous callers. Topology diagnostics require a real admin session.
+    if !is_user_admin(&user) {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "Permission denied. You must be an administrator".to_string(),
+        );
+    }
+
+    let server_id = crate::notifications::get_server_id().unwrap_or_else(|| "unknown".to_string());
+
+    // Verify the database with a real query and report pool stats alongside it.
+    let (db_healthy, pool_stats) = if let Some(db) = crate::database::get_global_database() {
+        let connected = db.health_check().await.is_ok();
+        let pool = db.pool();
+        let size = pool.size() as usize;
+        let idle = pool.num_idle();
+        (
+            connected,
+            json!({
+                "available": true,
+                "connected": connected,
+                "active_connections": size.saturating_sub(idle),
+                "idle_connections": idle,
+                "max_connections": pool.options().get_max_connections(),
+            }),
+        )
+    } else {
+        (
+            false,
+            json!({
+                "available": false,
+                "connected": false,
+                "message": "Database not initialized (memory mode)"
+            }),
+        )
+    };
+
+    // Get notification listener status
+    let listener_status = if crate::notifications::get_global_listener().is_some() {
+        json!({
+            "active": true,
+            "server_id": server_id.clone(),
+        })
+    } else {
+        json!({
+            "active": false,
+            "message": "Notification listener not initialized"
+        })
+    };
+
+    // Get scheduler job counts per script
+    let scheduler = crate::scheduler::get_scheduler();
+    let job_counts = scheduler.get_job_counts();
+    let total_jobs: usize = job_counts.values().sum();
+
+    let status_code = if db_healthy {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+
+    json_response(
+        status_code,
+        json!({
+            "status": if db_healthy { "healthy" } else { "unhealthy" },
+            "instance_id": server_id,
+            "timestamp": iso_timestamp(),
+            "version": {
+                "cargo": env!("CARGO_PKG_VERSION"),
+                "git_commit": option_env!("VERGEN_GIT_SHA").unwrap_or(""),
+                "git_commit_timestamp": option_env!("VERGEN_GIT_COMMIT_TIMESTAMP").unwrap_or(""),
+                "build_timestamp": option_env!("VERGEN_BUILD_TIMESTAMP").unwrap_or("")
+            },
+            "database": pool_stats,
+            "notification_listener": listener_status,
+            "scheduler": {
+                "total_jobs": total_jobs,
+                "jobs_by_script": job_counts,
+            }
+        }),
+    )
+}
+
 fn html_escape(input: &str) -> String {
     input
         .replace('&', "&amp;")
@@ -3457,6 +3567,15 @@ mod tests {
         assert_eq!(reserved_route_prefix("/health"), Some("/health"));
         assert_eq!(reserved_route_prefix("/graphql/sse"), Some("/graphql"));
         assert_eq!(reserved_route_prefix("/mcp"), Some("/mcp"));
+        assert_eq!(
+            reserved_route_prefix("/engine/health/cluster"),
+            Some("/engine")
+        );
+        // Canonical OAuth2 paths are covered by /auth; the legacy top-level
+        // aliases are reserved in their own right.
+        assert_eq!(reserved_route_prefix("/auth/oauth2/token"), Some("/auth"));
+        assert_eq!(reserved_route_prefix("/oauth2/token"), Some("/oauth2"));
+        assert_eq!(reserved_route_prefix("/oauth2"), Some("/oauth2"));
     }
 
     #[test]
@@ -3467,5 +3586,10 @@ mod tests {
         assert_eq!(reserved_route_prefix("/healthcheck"), None);
         assert_eq!(reserved_route_prefix("/authors"), None);
         assert_eq!(reserved_route_prefix("/my/app"), None);
+        // The generic /authorize and /token aliases were dropped, so scripts
+        // may claim these names for their own endpoints.
+        assert_eq!(reserved_route_prefix("/authorize"), None);
+        assert_eq!(reserved_route_prefix("/token"), None);
+        assert_eq!(reserved_route_prefix("/oauth2app"), None);
     }
 }

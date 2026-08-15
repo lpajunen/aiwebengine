@@ -295,10 +295,10 @@ impl ClientRegistrationManager {
 }
 
 /// Axum handler for client registration endpoint
-/// POST /oauth2/register
+/// POST /auth/oauth2/register
 #[utoipa::path(
     post,
-    path = "/oauth2/register",
+    path = "/auth/oauth2/register",
     tags = ["Authentication"],
     request_body = ClientRegistrationRequest,
     responses(

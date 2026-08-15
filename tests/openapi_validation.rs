@@ -163,7 +163,7 @@ async fn test_openapi_contains_rust_endpoints() {
     // Check for Rust-implemented endpoints
     let required_endpoints = vec![
         "/health",
-        "/health/cluster",
+        "/engine/health/cluster",
         "/graphql",
         "/graphql/ws",
         "/graphql/sse",

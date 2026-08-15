@@ -1,5 +1,8 @@
+mod common;
+
 use aiwebengine::{notifications, scheduler};
 use chrono::Utc;
+use common::{TestContext, should_skip_integration_tests, wait_for_server};
 
 /// Test notification message structure includes timestamp and server_id
 #[test]
@@ -249,4 +252,56 @@ fn test_stream_broadcast_payload_deserialization() {
     assert_eq!(msg.server_id, "instance-456");
 
     println!("✓ Stream broadcast payloads can be correctly deserialized");
+}
+
+/// The cluster diagnostics endpoint moved under `/engine` because it reports
+/// internal topology (pool metrics, listener state, per-script job counts).
+/// The old unauthenticated `/health/cluster` path must be gone, and the new one
+/// must reject callers without administrator rights.
+#[tokio::test(flavor = "multi_thread")]
+async fn cluster_health_requires_admin_and_no_longer_serves_the_old_path() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    let context = TestContext::new();
+    let port = context
+        .start_server()
+        .await
+        .expect("server failed to start");
+    wait_for_server(port, 20).await.expect("Server not ready");
+
+    let client = reqwest::Client::new();
+    let base = format!("http://127.0.0.1:{}", port);
+
+    let response = client
+        .get(format!("{}/engine/health/cluster", base))
+        .send()
+        .await
+        .expect("cluster health request failed");
+    assert_eq!(
+        response.status(),
+        403,
+        "cluster diagnostics must not be readable without an admin session"
+    );
+
+    let response = client
+        .get(format!("{}/health/cluster", base))
+        .send()
+        .await
+        .expect("legacy cluster health request failed");
+    assert_ne!(
+        response.status(),
+        200,
+        "the unauthenticated /health/cluster path must no longer serve diagnostics"
+    );
+
+    // The plain liveness probe stays public and unauthenticated.
+    let response = client
+        .get(format!("{}/health", base))
+        .send()
+        .await
+        .expect("health request failed");
+    assert_eq!(response.status(), 200);
+
+    context.cleanup().await.expect("Failed to cleanup");
 }

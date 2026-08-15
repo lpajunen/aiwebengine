@@ -2,7 +2,9 @@
 
 ## Problem
 
-`/auth/status` shows authenticated, but `/editor` denies access with 401.
+`/auth/status` shows authenticated, but a script route that calls
+`auth.requireAuth()` denies access with 401. The examples below use
+`/your-protected-route` as a stand-in for that route.
 
 ## Root Causes to Check
 
@@ -32,12 +34,12 @@ Look for a cookie named `session` (or whatever `auth.cookie.name` is in your con
 
 **If NO cookie exists**: You're not actually authenticated, `/auth/status` might be cached or lying.
 
-### 3. Check the Actual Response from /editor
+### 3. Check the Actual Response from the Protected Route
 
 Run this command:
 
 ```bash
-curl -v -b cookies.txt http://localhost:3000/editor 2>&1 | grep -A 20 "^<"
+curl -v -b cookies.txt http://localhost:3000/your-protected-route 2>&1 | grep -A 20 "^<"
 ```
 
 Look for the JSON response body - it should now include a `debug` section:
@@ -45,7 +47,7 @@ Look for the JSON response body - it should now include a `debug` section:
 ```json
 {
   "error": "Authentication required",
-  "message": "Please login to access the editor",
+  "message": "Please login to access this resource",
   "loginUrl": "/auth/login",
   "debug": {
     "authExists": true,
@@ -63,7 +65,7 @@ This tells you if:
 
 ### 4. Check Server Logs
 
-When you request `/editor`, look for these log lines:
+When you request the protected route, look for these log lines:
 
 ```
 [request-id] No authentication context in request
@@ -75,10 +77,9 @@ OR
 [request-id] Authentication context found: user_id=..., provider=...
 ```
 
-Also check for:
+Also check for the script's own logging around its `auth` checks:
 
 ```
-=== Editor Authentication Check ===
 auth object exists: true/false
 auth.isAuthenticated: true/false
 ```
@@ -118,16 +119,16 @@ If `/auth/status` returns success with a cookie:
 curl -c cookies.txt http://localhost:3000/auth/status
 ```
 
-### Step 3: Use that cookie to access /editor
+### Step 3: Use that cookie to access the protected route
 
 ```bash
-curl -b cookies.txt http://localhost:3000/editor
+curl -b cookies.txt http://localhost:3000/your-protected-route
 ```
 
 ### Step 4: Check server logs
 
 ```bash
-tail -f logs/aiwebengine-dev.log | grep -E "(Authentication|Editor|auth\.)"
+tail -f logs/aiwebengine-dev.log | grep -E "(Authentication|auth\.)"
 ```
 
 ## Common Issues
@@ -169,18 +170,8 @@ If you see this but still get 401, then the JavaScript auth setup is broken.
 
 If you don't want to set up OAuth, you can create a test session manually.
 
-**Option A**: Add a test endpoint in `scripts/feature_scripts/core.js`:
-
-```javascript
-function createTestSession(req) {
-  // This is a DEVELOPMENT ONLY hack
-  return {
-    status: 200,
-    body: "Session creation not implemented in JavaScript - use /auth/login",
-    contentType: "text/plain",
-  };
-}
-```
+**Option A**: Run with `AIWEBENGINE_MODE=development`, which grants anonymous
+callers elevated capabilities (see `UserContext::anonymous_capabilities`).
 
 **Option B**: Implement a development-only authentication bypass in Rust.
 
@@ -189,8 +180,8 @@ function createTestSession(req) {
 If you're still stuck, provide:
 
 1. Output of: `curl -i http://localhost:3000/auth/status`
-2. Output of: `curl -i http://localhost:3000/editor`
-3. Server logs when accessing /editor
+2. Output of: `curl -i http://localhost:3000/your-protected-route`
+3. Server logs when accessing that route
 4. Your `auth` configuration from config.toml
 5. Browser cookies (if using browser instead of curl)
 

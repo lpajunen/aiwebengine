@@ -97,10 +97,13 @@ impl MetadataConfig {
 
         AuthorizationServerMetadata {
             issuer: issuer.clone(),
-            authorization_endpoint: format!("{}/oauth2/authorize", issuer),
-            token_endpoint: format!("{}/oauth2/token", issuer),
+            // Advertise the canonical paths under the reserved `/auth` prefix.
+            // The top-level `/oauth2/*` routes are still served for clients that
+            // registered before the move, but are no longer discoverable.
+            authorization_endpoint: format!("{}/auth/oauth2/authorize", issuer),
+            token_endpoint: format!("{}/auth/oauth2/token", issuer),
             registration_endpoint: if self.enable_registration {
-                Some(format!("{}/oauth2/register", issuer))
+                Some(format!("{}/auth/oauth2/register", issuer))
             } else {
                 None
             },
@@ -212,15 +215,15 @@ mod tests {
         assert_eq!(metadata.issuer, "https://auth.example.com");
         assert_eq!(
             metadata.authorization_endpoint,
-            "https://auth.example.com/oauth2/authorize"
+            "https://auth.example.com/auth/oauth2/authorize"
         );
         assert_eq!(
             metadata.token_endpoint,
-            "https://auth.example.com/oauth2/token"
+            "https://auth.example.com/auth/oauth2/token"
         );
         assert_eq!(
             metadata.registration_endpoint,
-            Some("https://auth.example.com/oauth2/register".to_string())
+            Some("https://auth.example.com/auth/oauth2/register".to_string())
         );
         assert_eq!(
             metadata.code_challenge_methods_supported,

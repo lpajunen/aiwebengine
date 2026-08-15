@@ -476,11 +476,13 @@ docker-compose logs --tail=50 aiwebengine | grep -i error
 ### Important Endpoints
 
 ```plaintext
-/health                     # Health check
+/health                     # Health check (public)
+/engine/health/cluster      # Cluster diagnostics (administrators only)
 /auth/login                 # OAuth login page
 /auth/callback/google       # Google OAuth callback
-/engine/admin               # Admin management UI
-/editor                     # Script editor (solution developers)
+/engine/users               # List users (administrators only)
+/engine/user_roles          # Grant/revoke roles (administrators only)
+/engine/scripts             # List installed scripts
 /graphql                    # GraphQL endpoint (if enabled)
 ```
 

@@ -184,8 +184,7 @@ tail -f logs/aiwebengine-dev.log
 # Access services
 open http://localhost:3000              # Main application
 open http://localhost:3000/auth/login   # Sign in
-open http://localhost:3000/engine/admin      # Admin UI
-open http://localhost:3000/editor       # Script editor
+open http://localhost:3000/engine/installed  # Installation status
 ```
 
 ### Local Docker Commands

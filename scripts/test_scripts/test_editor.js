@@ -42,7 +42,7 @@ function testEditorAPI(context) {
 
     // Test 4: Check if editor files exist
     testResults.push("Checking editor files...");
-    // Note: editor.html is not a public asset - it's served via /editor endpoint
+    // Note: editor.html is not a public asset, so it is not fetched here
     const editorCss =
       typeof assetStorage !== "undefined" &&
       typeof assetStorage.fetchAsset === "function"

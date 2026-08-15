@@ -258,15 +258,16 @@ docker-compose ps
 ### Step 8: Verify Admin Access
 
 ```bash
-# Access the management UI
-open http://localhost:3000/engine/admin
+# List users (requires an authenticated Administrator session)
+curl -b cookies.txt http://localhost:3000/engine/users
 ```
 
-You should see the management interface where you can:
+The engine exposes administration over HTTP rather than a built-in UI. As an
+administrator you can:
 
-- View all users
-- Manage user roles
-- View system status
+- View all users (`GET /engine/users`)
+- Manage user roles (`POST`/`DELETE /engine/user_roles`)
+- View system status (`GET /engine/health/cluster`)
 
 ---
 
@@ -418,9 +419,9 @@ When using Docker:
 
 Now that your instance is running:
 
-1. **Explore the Management UI:** `http://localhost:3000/engine/admin`
-2. **Write JavaScript scripts:** Use the web editor at `http://localhost:3000/editor`
-3. **Try example scripts:** Explore the built-in examples and templates
+1. **Explore the management API:** `http://localhost:3000/engine/openapi.json`
+2. **Write JavaScript scripts:** Install them with `POST /engine/upsert_script`
+3. **Try example scripts:** See the [aiwebengine-examples](https://github.com/lpajunen/aiwebengine-examples) repository
 
 ### Configure for Your Needs
 

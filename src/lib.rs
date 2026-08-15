@@ -61,7 +61,7 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
 #[openapi(
     paths(
         health_handler,
-        health_cluster_handler,
+        engine_api::cluster_health_route,
         engine_api::upsert_script_route,
         engine_api::delete_script_route,
         engine_api::read_script_route,
@@ -148,8 +148,11 @@ impl Modify for SecurityAddon {
 
         if let Some(components) = openapi.components.as_mut() {
             // OAuth2 Authorization Code Flow with PKCE
-            let auth_code_flow =
-                AuthorizationCode::new("/oauth2/authorize", "/oauth2/token", Scopes::new());
+            let auth_code_flow = AuthorizationCode::new(
+                "/auth/oauth2/authorize",
+                "/auth/oauth2/token",
+                Scopes::new(),
+            );
 
             let oauth2 = OAuth2::new([Flow::AuthorizationCode(auth_code_flow)]);
 
@@ -1253,96 +1256,6 @@ async fn health_handler() -> impl IntoResponse {
     (status_code, body)
 }
 
-/// Cluster health endpoint - returns detailed cluster status
-///
-/// Like `/health`, this verifies the database with a real `SELECT 1` ping and
-/// returns 503 when it fails; on top of that it reports pool metrics, the
-/// notification-listener state, and per-script scheduler job counts for
-/// operator diagnostics.
-#[utoipa::path(
-    get,
-    path = "/health/cluster",
-    tags = ["Health"],
-    responses(
-        (status = 200, description = "Detailed cluster health information", body = crate::openapi_schemas::ClusterHealthResponse),
-        (status = 503, description = "Cluster is unhealthy (database unreachable)", body = crate::openapi_schemas::ClusterHealthResponse),
-    )
-)]
-async fn health_cluster_handler() -> impl IntoResponse {
-    let server_id = notifications::get_server_id().unwrap_or_else(|| "unknown".to_string());
-
-    // Verify the database with a real query and report pool stats alongside it.
-    let (db_healthy, pool_stats) = if let Some(db) = database::get_global_database() {
-        let connected = db.health_check().await.is_ok();
-        let pool = db.pool();
-        let size = pool.size() as usize;
-        let idle = pool.num_idle();
-        (
-            connected,
-            serde_json::json!({
-                "available": true,
-                "connected": connected,
-                "active_connections": size.saturating_sub(idle),
-                "idle_connections": idle,
-                "max_connections": pool.options().get_max_connections(),
-            }),
-        )
-    } else {
-        (
-            false,
-            serde_json::json!({
-                "available": false,
-                "connected": false,
-                "message": "Database not initialized (memory mode)"
-            }),
-        )
-    };
-
-    // Get notification listener status
-    let listener_status = if let Some(_listener) = notifications::get_global_listener() {
-        serde_json::json!({
-            "active": true,
-            "server_id": server_id.clone(),
-        })
-    } else {
-        serde_json::json!({
-            "active": false,
-            "message": "Notification listener not initialized"
-        })
-    };
-
-    // Get scheduler job counts per script
-    let scheduler = scheduler::get_scheduler();
-    let job_counts = scheduler.get_job_counts();
-    let total_jobs: usize = job_counts.values().sum();
-
-    let status_code = if db_healthy {
-        axum::http::StatusCode::OK
-    } else {
-        axum::http::StatusCode::SERVICE_UNAVAILABLE
-    };
-
-    let body = axum::response::Json(serde_json::json!({
-        "status": if db_healthy { "healthy" } else { "unhealthy" },
-        "instance_id": server_id,
-        "timestamp": chrono::Utc::now().to_rfc3339(),
-        "version": {
-            "cargo": env!("CARGO_PKG_VERSION"),
-            "git_commit": option_env!("VERGEN_GIT_SHA").unwrap_or(""),
-            "git_commit_timestamp": option_env!("VERGEN_GIT_COMMIT_TIMESTAMP").unwrap_or(""),
-            "build_timestamp": option_env!("VERGEN_BUILD_TIMESTAMP").unwrap_or("")
-        },
-        "database": pool_stats,
-        "notification_listener": listener_status,
-        "scheduler": {
-            "total_jobs": total_jobs,
-            "jobs_by_script": job_counts,
-        }
-    }));
-
-    (status_code, body)
-}
-
 /// Initialize authentication manager if configured and enabled.
 ///
 /// Fails startup when authentication is explicitly enabled but cannot be
@@ -2230,6 +2143,10 @@ async fn setup_routes(
                 .delete(engine_api::user_roles_delete_route),
         )
         .route(
+            "/engine/health/cluster",
+            axum::routing::get(engine_api::cluster_health_route),
+        )
+        .route(
             "/engine/installed",
             axum::routing::get(engine_api::installed_page_route),
         )
@@ -2244,13 +2161,10 @@ async fn setup_routes(
         .layer(axum::extract::DefaultBodyLimit::max(max_request_body));
     app = app.merge(management_router);
 
-    // Add health check endpoints (no authentication required)
+    // Add health check endpoint (no authentication required). Detailed cluster
+    // diagnostics live at /engine/health/cluster and require administrator rights.
     app = app
         .route("/health", axum::routing::get(health_handler))
-        .route(
-            "/health/cluster",
-            axum::routing::get(health_cluster_handler),
-        )
         .route(
             "/.well-known/microsoft-identity-association.json",
             axum::routing::get(|| async {

@@ -58,7 +58,7 @@ Config files are environment-specific templates copied to `config.toml` (`config
 ### JavaScript-facing API surface
 
 - Script access is split into **script-internal** (only the script itself), **engine-internal** (any script in the same engine instance), and **external** (HTTP-exposed) — see README.md's API access model.
-- There are no built-in engine scripts: all engine endpoints — script/asset management REST, user administration (`/engine/users`, `/engine/user_roles`), the engine MCP tools, `/engine/installed`, `/engine/openapi.json`, `/auth/unauthorized`, `/favicon.ico`, and the `/script_updates` stream — are implemented natively in Rust (`src/engine_api.rs`). Engine assets (favicon, type definitions) are compiled into the binary and served via the static-asset fallback in `repository::fetch_asset`. Ad hoc test fixtures live in `scripts/test_scripts/`. Example/demo solution scripts live in the separate [aiwebengine-examples](https://github.com/lpajunen/aiwebengine-examples) repo, not in this repo.
+- There are no built-in engine scripts: all engine endpoints — script/asset management REST, user administration (`/engine/users`, `/engine/user_roles`), cluster diagnostics (`/engine/health/cluster`), the engine MCP tools, `/engine/installed`, `/engine/openapi.json`, `/auth/unauthorized`, `/favicon.ico`, and the `/script_updates` stream — are implemented natively in Rust (`src/engine_api.rs`). Engine assets (favicon, type definitions) are compiled into the binary and served via the static-asset fallback in `repository::fetch_asset`. Ad hoc test fixtures live in `scripts/test_scripts/`. Example/demo solution scripts live in the separate [aiwebengine-examples](https://github.com/lpajunen/aiwebengine-examples) repo, not in this repo.
 - TypeScript type declarations for the public/private JS APIs are served dynamically at `/api/types/v{version}/aiwebengine.d.ts` and `...-priv.d.ts` (generated, referenced in `lib.rs`'s OpenAPI setup). `tsconfig.typecheck.json` + `assets/**/*.d.ts` are what `make typecheck` validates scripts against.
 - `module_loader.rs` implements a minimal CommonJS-like bundler for asset-backed script imports (no dynamic `import()`); `transpiler.rs` handles TS/JSX/TSX transpilation via `oxc`.
 
@@ -71,7 +71,7 @@ Config files are environment-specific templates copied to `config.toml` (`config
 - `stream_manager.rs` / `stream_registry.rs`: Server-Sent Events connection management for real-time script-driven streams, with optional per-stream customization functions (JS callbacks that filter/authorize connections).
 - `dispatcher.rs`: pub/sub-style message dispatch between scripts (listeners registered by URI/handler, keyed by message type).
 - `error.rs` / `error/app_error.rs`: unified `AppError`/`AppResult` used across the whole crate; `error_to_response` in `lib.rs` converts these into HTTP responses.
-- Multi-instance deployments coordinate via Postgres LISTEN/NOTIFY (`notifications.rs`) rather than a separate message bus — each instance gets a generated server ID (`notifications::generate_server_id`) used for both notifications and `/health/cluster` reporting.
+- Multi-instance deployments coordinate via Postgres LISTEN/NOTIFY (`notifications.rs`) rather than a separate message bus — each instance gets a generated server ID (`notifications::generate_server_id`) used for both notifications and `/engine/health/cluster` reporting.
 
 ### Testing
 

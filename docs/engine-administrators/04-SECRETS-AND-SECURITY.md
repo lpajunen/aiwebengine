@@ -258,7 +258,7 @@ After setting up OAuth, you'll need administrator access to manage users. The bo
 
 Without bootstrap admins, you would face this dilemma:
 
-1. You need an admin to access `/engine/admin` to grant admin roles
+1. You need an admin to call `/engine/user_roles` to grant admin roles
 2. But how do you make the first user an admin?
 3. Without an initial admin, no one can manage user roles
 
@@ -314,7 +314,7 @@ When a user signs in for the first time via OAuth:
 2. System calls `user_repository::upsert_user()` with their email
 3. Email is compared (case-insensitive) with bootstrap admin list
 4. If match found, user automatically receives `Administrator` role
-5. User can now access `/engine/admin` and grant roles to others
+5. User can now call `/engine/user_roles` and grant roles to others
 
 ```
 2025-10-24T10:05:00.456Z DEBUG Created new user: abc-123-def (admin@example.com)
@@ -377,17 +377,23 @@ docker-compose up -d
 
 **4. Verify admin access:**
 
-- Navigate to `/engine/admin`
-- You should see the user management interface
+- Call `GET /engine/users` with your session cookie
+- You should get the user list back rather than a 403
 - You now have Administrator privileges
 
 #### Granting Admin to Others
 
 **5. Add more administrators:**
 
-- Access `/engine/admin`
-- Find the user you want to promote
-- Click "Add Admin" button
+- Find the target user's `user_id` in the `GET /engine/users` response
+- Grant the role:
+
+  ```bash
+  curl -b cookies.txt -X POST http://localhost:3000/engine/user_roles \
+    -H "Content-Type: application/json" \
+    -d '{"user_id": "abc-123-def", "role": "Administrator"}'
+  ```
+
 - They now have Administrator privileges
 
 **6. Remove bootstrap config (optional):**
