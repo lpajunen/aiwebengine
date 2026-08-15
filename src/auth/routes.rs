@@ -1384,15 +1384,10 @@ pub fn create_oauth2_router(
     let oauth2_state = OAuth2State::new(auth_manager, pool);
 
     let oauth2_protocol_router = Router::new()
-        // Canonical paths, under the reserved /auth prefix and advertised in
-        // the authorization server metadata.
+        // Under the reserved /auth prefix, and advertised in the authorization
+        // server metadata. Clients discover these per RFC 8414.
         .route("/auth/oauth2/authorize", get(oauth2_authorize))
         .route("/auth/oauth2/token", post(oauth2_token))
-        // Legacy top-level aliases, kept for clients that registered before the
-        // move and cached these endpoints. No longer advertised. The /oauth2
-        // prefix is reserved so scripts cannot register dead routes over them.
-        .route("/oauth2/authorize", get(oauth2_authorize))
-        .route("/oauth2/token", post(oauth2_token))
         .layer(cors)
         .with_state(oauth2_state);
 
@@ -1402,7 +1397,6 @@ pub fn create_oauth2_router(
     if let Some(manager) = registration_manager {
         let registration_router = Router::new()
             .route("/auth/oauth2/register", post(register_client_handler))
-            .route("/oauth2/register", post(register_client_handler))
             .with_state(manager);
 
         router.merge(registration_router)

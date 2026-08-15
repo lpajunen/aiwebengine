@@ -97,9 +97,8 @@ impl MetadataConfig {
 
         AuthorizationServerMetadata {
             issuer: issuer.clone(),
-            // Advertise the canonical paths under the reserved `/auth` prefix.
-            // The top-level `/oauth2/*` routes are still served for clients that
-            // registered before the move, but are no longer discoverable.
+            // The OAuth2 endpoints live under the reserved `/auth` prefix.
+            // These are the only paths served; clients discover them here.
             authorization_endpoint: format!("{}/auth/oauth2/authorize", issuer),
             token_endpoint: format!("{}/auth/oauth2/token", issuer),
             registration_endpoint: if self.enable_registration {

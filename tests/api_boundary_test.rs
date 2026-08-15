@@ -990,7 +990,7 @@ async fn test_console_logging_available_for_all() {
 //
 // Any script may register routes/streams/asset routes on non-reserved paths;
 // paths under the engine-owned prefixes (/health, /graphql, /mcp, /auth,
-// /oauth2, /.well-known, /engine) are rejected regardless of script privilege.
+// /.well-known, /engine) are rejected regardless of script privilege.
 // ============================================================================
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1002,10 +1002,11 @@ async fn test_register_route_allowed_for_any_script() {
 
     let script = r#"
         routeRegistry.registerRoute("/test", "handler", "GET");
-        // The generic OAuth2 compatibility aliases were withdrawn, so these
-        // names are available to solution developers again.
+        // OAuth2 now lives entirely under /auth, so the top-level names it
+        // used to occupy are available to solution developers.
         routeRegistry.registerRoute("/token", "handler", "GET");
         routeRegistry.registerRoute("/authorize", "handler", "GET");
+        routeRegistry.registerRoute("/oauth2/token", "handler", "GET");
         // Should not throw
     "#;
 
@@ -1025,7 +1026,7 @@ async fn test_register_route_denied_for_reserved_path() {
     repository::upsert_script("test://reserved-path-routes", "").expect("Failed to create script");
 
     let script = r#"
-        const reserved = ["/engine/fake", "/health", "/graphql", "/mcp", "/auth/login", "/.well-known/x", "/oauth2/token"];
+        const reserved = ["/engine/fake", "/health", "/graphql", "/mcp", "/auth/login", "/auth/oauth2/token", "/.well-known/x"];
         for (const path of reserved) {
             try {
                 routeRegistry.registerRoute(path, "handler", "GET");

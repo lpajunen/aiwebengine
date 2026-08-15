@@ -48,12 +48,22 @@ fn user_owns_script(user: &UserContext, script_uri: &str) -> bool {
     }
 }
 
-fn is_admin_user(user: &UserContext) -> bool {
+/// Capability-only admin check: does this caller hold `DeleteScripts`?
+///
+/// **This does not mean the caller is an authenticated administrator.**
+/// Development mode grants `DeleteScripts` to *anonymous* callers
+/// (`UserContext::anonymous_capabilities`), so this returns true with no
+/// session at all. It is the right check for script and asset operations,
+/// where that elevation is the point of development mode.
+///
+/// For anything that exposes user data, engine topology, or role changes, use
+/// [`is_user_admin`], which additionally requires an authenticated session.
+fn has_admin_capability(user: &UserContext) -> bool {
     user.has_capability(&Capability::DeleteScripts)
 }
 
 fn is_admin_or_owner(user: &UserContext, script_uri: &str) -> bool {
-    is_admin_user(user) || user_owns_script(user, script_uri)
+    has_admin_capability(user) || user_owns_script(user, script_uri)
 }
 
 /// Path prefixes owned by the engine. Scripts may not register HTTP, stream,
@@ -65,10 +75,6 @@ pub const RESERVED_ROUTE_PREFIXES: &[&str] = &[
     "/graphql",
     "/mcp",
     "/auth",
-    // Legacy top-level OAuth2 endpoints. The canonical paths now live under
-    // `/auth/oauth2/*`; this stays reserved while the aliases are served so a
-    // script cannot register a route there that the static endpoint shadows.
-    "/oauth2",
     "/.well-known",
     "/engine",
 ];
@@ -382,7 +388,7 @@ pub fn remove_owner_authorized(
     if !is_admin_or_owner(user, uri) {
         return Err(OwnerChangeError::AccessDenied);
     }
-    if !is_admin_user(user) {
+    if !has_admin_capability(user) {
         match repository::count_script_owners(uri) {
             Ok(count) if count <= 1 => return Err(OwnerChangeError::LastOwner),
             Err(e) => return Err(OwnerChangeError::Storage(format!("{}", e))),
@@ -483,7 +489,7 @@ pub enum UserAdminError {
 
 /// User administration is restricted to session-verified administrators.
 ///
-/// Deliberately stricter than [`is_admin_user`], which accepts any holder of
+/// Deliberately stricter than [`has_admin_capability`], which accepts any holder of
 /// `DeleteScripts` — a capability development mode also grants to *anonymous*
 /// callers. Requiring authentication as well means only a `UserContext::admin`
 /// passes, and that is built solely from a session whose `is_admin` flag is
@@ -2222,9 +2228,10 @@ pub async fn installed_page_route() -> Response {
 )]
 pub async fn cluster_health_route(auth_user: Option<Extension<AuthUser>>) -> Response {
     let user = user_context_from(auth_user.as_deref());
-    // Deliberately the stricter `is_user_admin` check, not `is_admin_user`: the
-    // latter passes on capability alone, which development mode grants to
-    // anonymous callers. Topology diagnostics require a real admin session.
+    // Deliberately the stricter `is_user_admin` check, not
+    // `has_admin_capability`: the latter passes on capability alone, which
+    // development mode grants to anonymous callers. Topology diagnostics
+    // require a real admin session.
     if !is_user_admin(&user) {
         return error_response(
             StatusCode::FORBIDDEN,
@@ -3571,11 +3578,8 @@ mod tests {
             reserved_route_prefix("/engine/health/cluster"),
             Some("/engine")
         );
-        // Canonical OAuth2 paths are covered by /auth; the legacy top-level
-        // aliases are reserved in their own right.
+        // OAuth2 lives entirely under /auth, so it needs no prefix of its own.
         assert_eq!(reserved_route_prefix("/auth/oauth2/token"), Some("/auth"));
-        assert_eq!(reserved_route_prefix("/oauth2/token"), Some("/oauth2"));
-        assert_eq!(reserved_route_prefix("/oauth2"), Some("/oauth2"));
     }
 
     #[test]
@@ -3586,10 +3590,11 @@ mod tests {
         assert_eq!(reserved_route_prefix("/healthcheck"), None);
         assert_eq!(reserved_route_prefix("/authors"), None);
         assert_eq!(reserved_route_prefix("/my/app"), None);
-        // The generic /authorize and /token aliases were dropped, so scripts
-        // may claim these names for their own endpoints.
+        // The top-level OAuth2 endpoints were withdrawn once clients migrated
+        // to /auth/oauth2/*, so scripts may claim these names themselves.
         assert_eq!(reserved_route_prefix("/authorize"), None);
         assert_eq!(reserved_route_prefix("/token"), None);
-        assert_eq!(reserved_route_prefix("/oauth2app"), None);
+        assert_eq!(reserved_route_prefix("/oauth2/token"), None);
+        assert_eq!(reserved_route_prefix("/oauth2"), None);
     }
 }
