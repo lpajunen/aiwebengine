@@ -27,9 +27,18 @@ retries = { backoff = "exponential", count = 2, delay = "1s" }
 [test-groups]
 serial-server-tests = { max-threads = 1 }
 
+#
+# This list must contain every binary that starts a server via
+# TestContext::start_server / with_test_server!. To check it, run:
+#
+#   grep -lE 'start_server|with_test_server' tests/*.rs
+#
+# A server-starting binary missing from this list races against the ones in it,
+# which is how user_admin flaked intermittently while passing in isolation.
 [[profile.default.overrides]]
 filter = '''
   binary(api_http)
+  or binary(cluster)
   or binary(dispatcher)
   or binary(openapi_validation)
   or binary(repository)
@@ -37,6 +46,7 @@ filter = '''
   or binary(scripts)
   or binary(streaming)
   or binary(test_utils)
+  or binary(user_admin)
 '''
 test-group = 'serial-server-tests'
 
