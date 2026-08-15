@@ -1376,3 +1376,47 @@ async fn test_script_update_broadcast_requires_capability() {
         result.error
     );
 }
+
+/// Both GraphQL subscription publish paths require `ManageGraphQL`.
+///
+/// They broadcast to the same `/engine/graphql/subscription/{name}` stream, and
+/// a null filter matches every connection, so exempting the filtered variant
+/// made it a drop-in bypass of the check on the unfiltered one.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_subscription_publish_requires_capability_on_both_paths() {
+    setup_env().await;
+    if database::get_global_database().is_none() {
+        return;
+    }
+    let user = create_user_with_capabilities("user", vec![]);
+
+    repository::upsert_script("test://subscription-publish-authz", "")
+        .expect("Failed to create script");
+
+    let script = r#"
+        const payload = JSON.stringify({ kind: "forged" });
+
+        const plain = graphQLRegistry.sendSubscriptionMessage("someSubscription", payload);
+        if (!plain.startsWith("Error:")) {
+            throw new Error("sendSubscriptionMessage should be denied, got: " + plain);
+        }
+
+        // Null filter: matches every connection, same reach as above.
+        const filtered = graphQLRegistry.sendSubscriptionMessageFiltered(
+            "someSubscription",
+            payload,
+            null,
+            null
+        );
+        if (!filtered.startsWith("Error:")) {
+            throw new Error("sendSubscriptionMessageFiltered should be denied, got: " + filtered);
+        }
+    "#;
+
+    let result = execute_script_secure("test://subscription-publish-authz", script, user);
+    assert!(
+        result.success,
+        "Subscription publishing without ManageGraphQL must be denied on both paths: {:?}",
+        result.error
+    );
+}

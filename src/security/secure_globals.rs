@@ -2216,29 +2216,27 @@ impl SecureGlobalContext {
                 };
                 let match_mode = parse_filter_match_mode(match_mode)?;
 
-                // Allow system-level GraphQL subscription broadcasting without capability checks
-                let is_system_broadcast = true; // GraphQL subscriptions are considered system-level
-
-                if !is_system_broadcast {
-                    // Check capability for non-system operations (future use)
-                    if let Err(e) = user_ctx_send_sub_filtered
-                        .require_capability(&crate::security::Capability::ManageGraphQL)
-                    {
-                        // Use spawn for fire-and-forget audit logging to avoid runtime conflicts
-                        let auditor_clone = auditor_send_sub_filtered.clone();
-                        let user_id = user_ctx_send_sub_filtered.user_id.clone();
-                        tokio::task::spawn(async move {
-                            let _ = auditor_clone
-                                .log_authz_failure(
-                                    user_id,
-                                    "graphql".to_string(),
-                                    "send_subscription_message_to_connections".to_string(),
-                                    "ManageGraphQL".to_string(),
-                                )
-                                .await;
-                        });
-                        return Ok(format!("Error: {}", e));
-                    }
+                // Same capability as the unfiltered `sendSubscriptionMessage`:
+                // both publish to /engine/graphql/subscription/{name}, and an
+                // empty filter matches every connection, so exempting this one
+                // would just be a bypass of the check on its sibling.
+                if let Err(e) = user_ctx_send_sub_filtered
+                    .require_capability(&crate::security::Capability::ManageGraphQL)
+                {
+                    // Use spawn for fire-and-forget audit logging to avoid runtime conflicts
+                    let auditor_clone = auditor_send_sub_filtered.clone();
+                    let user_id = user_ctx_send_sub_filtered.user_id.clone();
+                    tokio::task::spawn(async move {
+                        let _ = auditor_clone
+                            .log_authz_failure(
+                                user_id,
+                                "graphql".to_string(),
+                                "send_subscription_message_to_connections".to_string(),
+                                "ManageGraphQL".to_string(),
+                            )
+                            .await;
+                    });
+                    return Ok(format!("Error: {}", e));
                 }
 
                 // Log the operation attempt using spawn to avoid runtime conflicts
