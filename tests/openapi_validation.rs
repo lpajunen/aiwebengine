@@ -476,8 +476,8 @@ async fn test_openapi_javascript_routes_included() {
 
 /// Asset and stream routes registered without explicit tags must fall back to
 /// the "Assets" and "Streams" Swagger groups respectively. method_test.js
-/// registers `/method-test.css` (asset) and core.js registers
-/// `/script_updates` (stream) with no tags.
+/// registers `/method-test.css` (asset) and the engine registers
+/// `/engine/script_updates` (stream) with no tags.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_openapi_asset_and_stream_default_groups() {
     let ctx = TestContext::new();
@@ -530,7 +530,7 @@ async fn test_openapi_asset_and_stream_default_groups() {
             .expect("Failed to parse JSON");
 
         let asset_tags = get_tags(&spec, "/method-test.css");
-        let stream_tags = get_tags(&spec, "/script_updates");
+        let stream_tags = get_tags(&spec, "/engine/script_updates");
 
         if let (Some(asset_tags), Some(stream_tags)) = (asset_tags, stream_tags) {
             assert_eq!(
@@ -548,8 +548,8 @@ async fn test_openapi_asset_and_stream_default_groups() {
 
         if tokio::time::Instant::now() >= deadline {
             panic!(
-                "OpenAPI spec should include /method-test.css (asset) and /script_updates \
-                 (stream) routes (timed out waiting for JS init to complete)"
+                "OpenAPI spec should include /method-test.css (asset) and \
+                 /engine/script_updates (stream) routes (timed out waiting for JS init to complete)"
             );
         }
 

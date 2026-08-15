@@ -3140,8 +3140,13 @@ impl SecureGlobalContext {
         let send_stream_message = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>, path: String, message: String| -> JsResult<String> {
-                // Allow system-level broadcasting without capability checks for certain paths
-                let is_system_broadcast = path == "/script_updates" || path.starts_with("/system/");
+                // Allow system-level broadcasting without capability checks on
+                // the shared /system/ namespace. The engine's script-update
+                // stream is deliberately not exempt: it is broadcast to from
+                // Rust (`engine_api::broadcast_script_update`), which never
+                // passes through here, so exempting it only let any script
+                // forge engine notifications to every subscriber.
+                let is_system_broadcast = path.starts_with("/system/");
 
                 if !is_system_broadcast {
                     // Check capability for non-system operations
@@ -3239,8 +3244,9 @@ impl SecureGlobalContext {
                 };
                 let match_mode = parse_filter_match_mode(match_mode)?;
 
-                // Allow system-level broadcasting for certain paths
-                let is_system_broadcast = path == "/script_updates" || path.starts_with("/system/");
+                // Allow system-level broadcasting on the shared /system/
+                // namespace only; see the note in `sendStreamMessage`.
+                let is_system_broadcast = path.starts_with("/system/");
 
                 if !is_system_broadcast
                     && let Err(e) = user_ctx_filtered

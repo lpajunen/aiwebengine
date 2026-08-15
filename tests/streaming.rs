@@ -11,6 +11,7 @@
 mod common;
 
 use aiwebengine::{
+    engine_api::ENGINE_SCRIPT_UPDATES_STREAM,
     js_engine, repository,
     stream_registry::{BroadcastResult, GLOBAL_STREAM_REGISTRY, StreamConnection, StreamRegistry},
 };
@@ -54,14 +55,14 @@ async fn test_native_script_update_streaming() {
     // config would normally enable at startup).
     aiwebengine::security::set_development_mode(true);
 
-    info!("Testing native /script_updates streaming functionality");
+    info!("Testing native /engine/script_updates streaming functionality");
 
     // Register the engine streams, as server startup does
     aiwebengine::engine_api::register_engine_streams();
 
-    // Verify the /script_updates stream was registered
+    // Verify the engine script-updates stream was registered
     assert!(
-        GLOBAL_STREAM_REGISTRY.is_stream_registered("/script_updates"),
+        GLOBAL_STREAM_REGISTRY.is_stream_registered(ENGINE_SCRIPT_UPDATES_STREAM),
         "Script updates stream should be registered by the engine"
     );
 
@@ -69,7 +70,7 @@ async fn test_native_script_update_streaming() {
 
     // Create a connection to the stream
     let connection = aiwebengine::stream_manager::StreamConnectionManager::new()
-        .create_connection("/script_updates", None)
+        .create_connection(ENGINE_SCRIPT_UPDATES_STREAM, None)
         .await
         .expect("Failed to create stream connection");
 
@@ -77,7 +78,7 @@ async fn test_native_script_update_streaming() {
     let connection_id = connection.connection_id;
 
     info!(
-        "Created stream connection {} for /script_updates",
+        "Created stream connection {} for the engine script-updates stream",
         connection_id
     );
 
@@ -85,7 +86,7 @@ async fn test_native_script_update_streaming() {
     sleep(Duration::from_millis(200)).await;
 
     // Now upsert a script through the native engine API, which broadcasts
-    // the update to the /script_updates stream
+    // the update to the engine script-updates stream
     info!("Testing script upsert through the native engine API...");
 
     let user = aiwebengine::security::UserContext::anonymous();
@@ -159,7 +160,7 @@ async fn test_native_script_update_streaming() {
 
     // Clean up
     GLOBAL_STREAM_REGISTRY
-        .remove_connection("/script_updates", &connection_id)
+        .remove_connection(ENGINE_SCRIPT_UPDATES_STREAM, &connection_id)
         .expect("Failed to remove test connection");
 
     info!("Core.js script streaming test completed successfully!");
@@ -189,8 +190,8 @@ async fn test_script_stream_health_and_stats() {
 
     info!("Stream stats: {:?}", stats);
 
-    // Should have script_updates stream
-    assert!(stats.contains_key("/script_updates"));
+    // Should have the engine script-updates stream
+    assert!(stats.contains_key(ENGINE_SCRIPT_UPDATES_STREAM));
 
     info!("Script stream health and stats test completed successfully!");
 }
@@ -398,8 +399,9 @@ async fn test_script_update_streaming_integration() {
 
     // First, upsert the streaming test script
     let core_script_content = r#"
-        // Register script updates stream endpoint
-        routeRegistry.registerStreamRoute('/script_updates');
+        // A script-owned stream. The engine's own script-update stream lives at
+        // the reserved /engine/script_updates and cannot be registered here.
+        routeRegistry.registerStreamRoute('/my_script_updates');
 
         // Helper function to broadcast script update messages
         function broadcastScriptUpdate(uri, action, details = {}) {
@@ -412,7 +414,7 @@ async fn test_script_update_streaming_integration() {
                     ...details
                 };
                 
-                routeRegistry.sendStreamMessage('/script_updates', JSON.stringify(message));
+                routeRegistry.sendStreamMessage('/my_script_updates', JSON.stringify(message));
                 console.log(`Broadcasted script update: ${action} ${uri}`);
             } catch (error) {
                 console.error(`Failed to broadcast script update: ${error.message}`);
@@ -443,9 +445,9 @@ async fn test_script_update_streaming_integration() {
 
     let client = reqwest::Client::new();
 
-    // Note: SSE streaming from /script_updates would require a more complex setup
-    // For now, we verify the core.js script properly broadcasts updates
-    // when scripts are upserted via the /engine/upsert_script endpoint
+    // Note: consuming the SSE stream would require a more complex setup.
+    // For now, we verify that upserts via /engine/upsert_script succeed and
+    // drive the engine's broadcast path.
 
     // Test 1: Insert a new script via HTTP (this should trigger broadcast)
     let insert_request = client

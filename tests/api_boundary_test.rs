@@ -1315,3 +1315,64 @@ async fn test_send_subscription_message_filtered_accepts_optional_match_mode() {
         result.error
     );
 }
+
+/// The engine's script-update stream lives under the reserved `/engine` prefix
+/// so a script cannot register a stream on it. The stream registry replaces a
+/// registration that has no active connections, so an unreserved path would let
+/// any script take ownership of the engine's stream.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_engine_script_updates_stream_cannot_be_claimed() {
+    setup_env().await;
+    let user = create_user_with_capabilities("user", vec![Capability::ManageStreams]);
+
+    repository::upsert_script("test://engine-stream-claim", "").expect("Failed to create script");
+
+    let script = r#"
+        try {
+            routeRegistry.registerStreamRoute("/engine/script_updates");
+            throw new Error("Should have been denied");
+        } catch (e) {
+            if (!e.message.includes("reserved")) {
+                throw e;
+            }
+        }
+    "#;
+
+    let result = execute_script_secure("test://engine-stream-claim", script, user);
+    assert!(
+        result.success,
+        "The engine script-updates stream must be unclaimable: {:?}",
+        result.error
+    );
+}
+
+/// Broadcasting used to skip the `ManageStreams` check for `/script_updates`,
+/// which let a script with no capabilities forge engine script-change
+/// notifications to every subscriber. Only the shared `/system/` namespace is
+/// exempt now.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_script_update_broadcast_requires_capability() {
+    setup_env().await;
+    let user = create_user_with_capabilities("user", vec![]);
+
+    repository::upsert_script("test://forge-script-updates", "").expect("Failed to create script");
+
+    let script = r#"
+        const forged = JSON.stringify({ type: "script_update", uri: "victim.js", action: "deleted" });
+        const engineStream = routeRegistry.sendStreamMessage("/engine/script_updates", forged);
+        if (!engineStream.startsWith("Error:")) {
+            throw new Error("Engine stream broadcast should be denied, got: " + engineStream);
+        }
+        const legacyPath = routeRegistry.sendStreamMessage("/script_updates", forged);
+        if (!legacyPath.startsWith("Error:")) {
+            throw new Error("Legacy path broadcast should be denied, got: " + legacyPath);
+        }
+    "#;
+
+    let result = execute_script_secure("test://forge-script-updates", script, user);
+    assert!(
+        result.success,
+        "Broadcasting script updates without ManageStreams must be denied: {:?}",
+        result.error
+    );
+}

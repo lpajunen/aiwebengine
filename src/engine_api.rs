@@ -79,6 +79,14 @@ pub const RESERVED_ROUTE_PREFIXES: &[&str] = &[
     "/engine",
 ];
 
+/// The engine-owned SSE stream carrying script change notifications.
+///
+/// Lives under the reserved `/engine` prefix so that a script cannot register
+/// a stream on this path: [`crate::stream_registry::StreamRegistry`] replaces
+/// an existing registration that has no active connections, so an unreserved
+/// path would let a script take ownership of the engine's stream.
+pub const ENGINE_SCRIPT_UPDATES_STREAM: &str = "/engine/script_updates";
+
 /// Returns the reserved prefix that `path` falls under, if any.
 pub fn reserved_route_prefix(path: &str) -> Option<&'static str> {
     RESERVED_ROUTE_PREFIXES.iter().copied().find(|prefix| {
@@ -89,8 +97,8 @@ pub fn reserved_route_prefix(path: &str) -> Option<&'static str> {
     })
 }
 
-/// Broadcast a script update to the `/script_updates` stream, matching the
-/// message format core.js used. Extra `details` entries become message
+/// Broadcast a script update to the `/engine/script_updates` stream, matching
+/// the message format core.js used. Extra `details` entries become message
 /// metadata used for connection filtering.
 pub fn broadcast_script_update(uri: &str, action: &str, details: &[(&str, Value)]) {
     let mut message = json!({
@@ -106,7 +114,7 @@ pub fn broadcast_script_update(uri: &str, action: &str, details: &[(&str, Value)
     }
 
     match crate::stream_registry::GLOBAL_STREAM_REGISTRY
-        .broadcast_to_stream("/script_updates", &message.to_string())
+        .broadcast_to_stream(ENGINE_SCRIPT_UPDATES_STREAM, &message.to_string())
     {
         Ok(_) => debug!("Broadcasted script update: {} {}", action, uri),
         Err(e) => warn!("Failed to broadcast script update for {}: {}", uri, e),
@@ -115,17 +123,20 @@ pub fn broadcast_script_update(uri: &str, action: &str, details: &[(&str, Value)
 
 /// Register engine-provided streams. Called once at startup.
 ///
-/// `/script_updates` carries the script change notifications broadcast by
-/// [`broadcast_script_update`]. There is no customization function, so a
-/// connection's filter criteria come from its query parameters — a client
-/// connecting without any receives all messages, exactly as before.
+/// [`ENGINE_SCRIPT_UPDATES_STREAM`] carries the script change notifications
+/// broadcast by [`broadcast_script_update`]. There is no customization
+/// function, so a connection's filter criteria come from its query parameters —
+/// a client connecting without any receives all messages, exactly as before.
 pub fn register_engine_streams() {
     if let Err(e) = crate::stream_registry::GLOBAL_STREAM_REGISTRY.register_stream(
-        "/script_updates",
+        ENGINE_SCRIPT_UPDATES_STREAM,
         "engine://native",
         None,
     ) {
-        warn!("Failed to register /script_updates stream: {}", e);
+        warn!(
+            "Failed to register {} stream: {}",
+            ENGINE_SCRIPT_UPDATES_STREAM, e
+        );
     }
 }
 

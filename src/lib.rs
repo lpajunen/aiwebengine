@@ -1006,7 +1006,7 @@ async fn initialize_components(config: &config::Config) -> AppResult<()> {
         );
     }
 
-    // Register engine-provided streams (e.g. /script_updates) before any
+    // Register engine-provided streams (e.g. /engine/script_updates) before any
     // script or connection can reference them
     engine_api::register_engine_streams();
 
