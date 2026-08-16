@@ -891,3 +891,95 @@ async fn edited_imported_asset_invalidates_prepared_program_cache() {
     assert!(repository::delete_asset(script_uri, asset_uri));
     let _ = repository::delete_script(script_uri);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn two_scripts_can_own_the_same_asset_path() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let first_uri = "test://asset-path-sharing-first";
+    let second_uri = "test://asset-path-sharing-second";
+    let shared_path = "server/shared-name.ts";
+
+    ensure_script(first_uri);
+    ensure_script(second_uri);
+    repository::delete_asset(first_uri, shared_path);
+    repository::delete_asset(second_uri, shared_path);
+
+    repository::upsert_asset(test_asset(
+        first_uri,
+        shared_path,
+        "text/plain",
+        b"export const owner = 'first';",
+    ))
+    .expect("the first script's asset should store");
+
+    // The same path under a different script is a different asset, not a
+    // collision with the first script's row.
+    repository::upsert_asset(test_asset(
+        second_uri,
+        shared_path,
+        "text/plain",
+        b"export const owner = 'second';",
+    ))
+    .expect("the second script should be able to use the same path");
+
+    let first = repository::fetch_asset(first_uri, shared_path).expect("first asset should exist");
+    let second =
+        repository::fetch_asset(second_uri, shared_path).expect("second asset should exist");
+
+    assert_eq!(
+        String::from_utf8_lossy(&first.content),
+        "export const owner = 'first';",
+        "the second script's write must not have taken over the first script's asset"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&second.content),
+        "export const owner = 'second';"
+    );
+    assert_eq!(first.script_uri, first_uri);
+    assert_eq!(second.script_uri, second_uri);
+
+    // Deleting one leaves the other alone.
+    assert!(repository::delete_asset(second_uri, shared_path));
+    assert!(repository::fetch_asset(first_uri, shared_path).is_some());
+
+    repository::delete_asset(first_uri, shared_path);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rewriting_an_asset_keeps_it_with_its_script() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let script_uri = "test://asset-path-rewrite-owner";
+    let asset_path = "server/rewritten.ts";
+    ensure_script(script_uri);
+    repository::delete_asset(script_uri, asset_path);
+
+    repository::upsert_asset(test_asset(
+        script_uri,
+        asset_path,
+        "text/plain",
+        b"export const version = 1;",
+    ))
+    .expect("asset should store");
+
+    repository::upsert_asset(test_asset(
+        script_uri,
+        asset_path,
+        "text/plain",
+        b"export const version = 2;",
+    ))
+    .expect("asset should update in place");
+
+    let assets = repository::fetch_assets(script_uri);
+    let stored = assets.get(asset_path).expect("asset should still exist");
+    assert_eq!(
+        String::from_utf8_lossy(&stored.content),
+        "export const version = 2;",
+        "an upsert by the owning script updates rather than duplicating"
+    );
+
+    repository::delete_asset(script_uri, asset_path);
+}

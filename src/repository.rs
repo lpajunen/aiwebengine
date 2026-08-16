@@ -1960,20 +1960,23 @@ async fn db_upsert_asset(
 ) -> AppResult<()> {
     let now = chrono::Utc::now();
 
-    // Try to update existing asset
+    // Update the row this script owns. Matching on the path alone would let a
+    // write take over an asset belonging to another script — the UPDATE would
+    // find that script's row and overwrite it — so both halves of the key are
+    // required here, as they are in every other asset query.
     let update_result = match executor {
         crate::database::TransactionExecutor::Transaction(ref mut tx) => {
             sqlx::query(
                 r#"
                 UPDATE assets
-                SET mimetype = $1, content = $2, script_uri = $3, updated_at = $4
-                WHERE uri = $5
+                SET mimetype = $1, content = $2, updated_at = $3
+                WHERE script_uri = $4 AND uri = $5
                 "#,
             )
             .bind(&asset.mimetype)
             .bind(&asset.content)
-            .bind(&asset.script_uri)
             .bind(now)
+            .bind(&asset.script_uri)
             .bind(&asset.uri)
             .execute(&mut ***tx)
             .await
@@ -1982,14 +1985,14 @@ async fn db_upsert_asset(
             sqlx::query(
                 r#"
                 UPDATE assets
-                SET mimetype = $1, content = $2, script_uri = $3, updated_at = $4
-                WHERE uri = $5
+                SET mimetype = $1, content = $2, updated_at = $3
+                WHERE script_uri = $4 AND uri = $5
                 "#,
             )
             .bind(&asset.mimetype)
             .bind(&asset.content)
-            .bind(&asset.script_uri)
             .bind(now)
+            .bind(&asset.script_uri)
             .bind(&asset.uri)
             .execute(pool)
             .await
