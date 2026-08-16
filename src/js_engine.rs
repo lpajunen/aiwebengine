@@ -1562,6 +1562,10 @@ pub struct TestRunParams {
     /// runtime and so its own budget, which keeps one runaway file from
     /// spending the time the rest of them need.
     pub timeout_ms: u64,
+    /// Ceiling on the whole run. Without it a script with many test files
+    /// could hold a request open for modules × `timeout_ms`; with it the run
+    /// stops starting modules once the budget is gone and reports what it has.
+    pub run_timeout_ms: u64,
     /// Run only the cases whose name contains this substring.
     pub filter: Option<String>,
     /// Wrap each module's cases in a transaction that is always rolled back.
@@ -1588,11 +1592,30 @@ struct ModuleOutcome {
 /// results.
 pub fn execute_test_run(params: &TestRunParams, test_modules: &[String]) -> TestRunResult {
     let started = Instant::now();
+    let run_deadline = started + Duration::from_millis(params.run_timeout_ms);
     let mut cases = Vec::new();
     let mut timed_out = false;
 
     for module_path in test_modules {
-        match execute_test_module(params, module_path) {
+        // Stop starting work the run cannot finish. Modules already done keep
+        // their verdicts — the cap bounds the request, it does not discard
+        // results.
+        let remaining = run_deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            warn!(
+                script_uri = %params.script_uri,
+                "Test run hit its {}ms ceiling with modules left to run",
+                params.run_timeout_ms
+            );
+            timed_out = true;
+            break;
+        }
+
+        // No module gets more than the run has left, so the ceiling holds even
+        // when a single file would otherwise use its whole budget.
+        let module_budget = (remaining.as_millis() as u64).min(params.timeout_ms);
+
+        match execute_test_module(params, module_path, module_budget) {
             Ok(outcome) => {
                 timed_out |= outcome.timed_out;
                 cases.extend(outcome.cases);
@@ -1624,7 +1647,11 @@ pub fn execute_test_run(params: &TestRunParams, test_modules: &[String]) -> Test
 ///
 /// `Err` means the module never got as far as producing verdicts; individual
 /// case failures come back inside [`ModuleOutcome`].
-fn execute_test_module(params: &TestRunParams, module_path: &str) -> Result<ModuleOutcome, String> {
+fn execute_test_module(
+    params: &TestRunParams,
+    module_path: &str,
+    budget_ms: u64,
+) -> Result<ModuleOutcome, String> {
     // Bundle before arming the runtime's interrupt deadline (see
     // `execute_script_for_request_secure`): on a cold cache this fetches and
     // transpiles every module the test imports, which must not be charged to
@@ -1634,21 +1661,29 @@ fn execute_test_module(params: &TestRunParams, module_path: &str) -> Result<Modu
         .map_err(|e| format!("Failed to bundle test module: {}", e))?;
 
     let limits = ExecutionLimits {
-        timeout_ms: params.timeout_ms,
+        timeout_ms: budget_ms,
         ..current_execution_limits()
     };
     // Mirrors the deadline `create_sandboxed_runtime` arms the interrupt with,
     // so a failed call can be told apart from a call the interrupt stopped
     // without matching on QuickJS error text.
-    let deadline = Instant::now() + Duration::from_millis(params.timeout_ms);
+    let deadline = Instant::now() + Duration::from_millis(budget_ms);
 
     let rt = create_sandboxed_runtime(&limits)?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
     // Collection and execution both happen inside one `with`: the registered
     // test functions are bound to the context's lifetime and cannot outlive it.
-    let outcome =
-        ctx.with(|ctx| run_test_module(ctx, params, module_path, &prepared.code, deadline));
+    let outcome = ctx.with(|ctx| {
+        run_test_module(
+            ctx,
+            params,
+            module_path,
+            &prepared.code,
+            budget_ms,
+            deadline,
+        )
+    });
 
     // Context must drop before the runtime (see `ensure_clean_shutdown`).
     drop(ctx);
@@ -1664,6 +1699,7 @@ fn run_test_module<'js>(
     params: &TestRunParams,
     module_path: &str,
     code: &str,
+    budget_ms: u64,
     deadline: Instant,
 ) -> Result<ModuleOutcome, String> {
     let security_config = GlobalSecurityConfig {
@@ -1733,7 +1769,7 @@ fn run_test_module<'js>(
     // back when it drops, including on an early return.
     let _rollback_guard = if params.rollback {
         Some(
-            crate::database::Database::begin_transaction(Some(params.timeout_ms))
+            crate::database::Database::begin_transaction(Some(budget_ms))
                 .map_err(|e| format!("could not isolate the run in a transaction: {}", e))?,
         )
     } else {

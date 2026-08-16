@@ -1276,6 +1276,146 @@ pub async fn read_script_route(
     }
 }
 
+/// Why a test run was refused before it started.
+pub enum TestRunRefusal {
+    NotFound,
+    AccessDenied,
+}
+
+/// Whether `user` may run `uri`'s tests.
+///
+/// A run executes the script's own code with the caller's capabilities, so the
+/// bar is the one for changing the script: an administrator, or an owner who
+/// may write scripts. Anything looser would let someone with read access run
+/// arbitrary code as themselves.
+pub fn authorize_test_run(user: &UserContext, uri: &str) -> Result<(), TestRunRefusal> {
+    if repository::fetch_script(uri).is_none() {
+        return Err(TestRunRefusal::NotFound);
+    }
+    if user.require_capability(&Capability::WriteScripts).is_err() {
+        return Err(TestRunRefusal::AccessDenied);
+    }
+    let is_admin = user.has_capability(&Capability::DeleteScripts);
+    if !is_admin && !user_owns_script(user, uri) {
+        warn!(
+            user_id = ?user.user_id,
+            script_name = %uri,
+            "Permission denied: only an administrator or owner may run a script's tests"
+        );
+        return Err(TestRunRefusal::AccessDenied);
+    }
+    Ok(())
+}
+
+#[derive(Deserialize, Default)]
+pub struct TestRunParams {
+    uri: Option<String>,
+    filter: Option<String>,
+    rollback: Option<bool>,
+}
+
+/// Run a script's test modules and report the verdicts.
+#[utoipa::path(
+    post,
+    path = "/engine/run_tests",
+    tags = ["Scripts"],
+    params(
+        ("uri" = String, Query, description = "URI of the script whose tests to run"),
+        ("filter" = Option<String>, Query, description = "Run only cases whose name contains this text"),
+        ("rollback" = Option<bool>, Query, description = "Roll back database writes the tests make (default true)"),
+    ),
+    responses(
+        (status = 200, description = "Test report; `success` is false when any case failed"),
+        (status = 400, description = "Missing required parameter"),
+        (status = 403, description = "Not an administrator or owner of the script"),
+        (status = 404, description = "Script not found"),
+        (status = 500, description = "The run could not produce verdicts"),
+    )
+)]
+pub async fn run_tests_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<TestRunParams>,
+    body: axum::body::Bytes,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    let form: TestRunParams = serde_urlencoded::from_bytes(&body).unwrap_or_default();
+    let Some(uri) = form.uri.or(query.uri) else {
+        return missing_param_response("uri");
+    };
+    let filter = form.filter.or(query.filter);
+    // Isolation is the default: a test that writes should not leave rows behind
+    // unless the caller says so.
+    let rollback = form.rollback.or(query.rollback).unwrap_or(true);
+
+    let user_for_auth = user.clone();
+    let uri_for_auth = uri.clone();
+    let authorized =
+        tokio::task::spawn_blocking(move || authorize_test_run(&user_for_auth, &uri_for_auth))
+            .await;
+
+    match authorized {
+        Ok(Ok(())) => {}
+        Ok(Err(TestRunRefusal::NotFound)) => {
+            return json_response(
+                StatusCode::NOT_FOUND,
+                json!({
+                    "error": "Script not found",
+                    "uri": uri,
+                    "timestamp": iso_timestamp(),
+                }),
+            );
+        }
+        Ok(Err(TestRunRefusal::AccessDenied)) => {
+            return error_response(
+                StatusCode::FORBIDDEN,
+                format!(
+                    "Error: Permission denied. You must be an administrator or owner to run tests for script '{}'",
+                    uri
+                ),
+            );
+        }
+        Err(e) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to authorize test run: join error: {}", e),
+            );
+        }
+    }
+
+    let result = crate::script_test::TestRunner::with_configured_timeouts()
+        .run(crate::script_test::TestRunRequest {
+            script_uri: uri,
+            user_context: user,
+            filter,
+            rollback,
+        })
+        .await;
+
+    let status = if result.error().is_some() {
+        StatusCode::INTERNAL_SERVER_ERROR
+    } else {
+        // A failing test is a report, not a failed request.
+        StatusCode::OK
+    };
+
+    let mut report = result.to_json();
+    if let Some(object) = report.as_object_mut() {
+        object.insert("timestamp".to_string(), json!(iso_timestamp()));
+        if result.is_empty() && result.error().is_none() {
+            // Distinguish "nothing to run" from "everything passed": both
+            // report zero failures, and only one of them is good news.
+            object.insert(
+                "message".to_string(),
+                json!(
+                    "No test modules found. Tests are assets named '*.test.ts' (or .js/.jsx/.tsx)."
+                ),
+            );
+        }
+    }
+
+    json_response(status, report)
+}
+
 /// Get logs for a script.
 #[utoipa::path(
     get,

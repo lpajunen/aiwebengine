@@ -7,6 +7,39 @@
 //! endpoint and the engine's own tests can consume.
 
 use serde::Serialize;
+use std::sync::OnceLock;
+use std::time::Duration;
+use tracing::{debug, warn};
+
+/// Extra wall-clock time the outer timeout allows beyond the run's own ceiling,
+/// so the in-run ceiling is what normally stops a long suite — it reports the
+/// modules finished so far, the outer timeout cannot.
+const TEST_RUN_TIMEOUT_GRACE_MS: u64 = 5_000;
+
+/// Ceiling on a whole run when configuration does not set one.
+pub const DEFAULT_TEST_RUN_TIMEOUT_MS: u64 = 60_000;
+
+/// The per-module and whole-run budgets, set once at startup.
+static CONFIGURED_TIMEOUTS: OnceLock<(u64, u64)> = OnceLock::new();
+
+/// Record the test budgets: `(per module, whole run)`. Returns false if they
+/// were already set.
+pub fn configure_test_timeouts(module_timeout_ms: u64, run_timeout_ms: u64) -> bool {
+    CONFIGURED_TIMEOUTS
+        .set((module_timeout_ms, run_timeout_ms))
+        .is_ok()
+}
+
+/// The budgets in effect, falling back to the JavaScript execution limit for a
+/// module and [`DEFAULT_TEST_RUN_TIMEOUT_MS`] for a run.
+pub fn configured_test_timeouts() -> (u64, u64) {
+    CONFIGURED_TIMEOUTS.get().copied().unwrap_or_else(|| {
+        (
+            crate::js_engine::current_execution_limits().timeout_ms,
+            DEFAULT_TEST_RUN_TIMEOUT_MS,
+        )
+    })
+}
 
 /// How a single test case ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -193,6 +226,111 @@ impl TestRunResult {
         }
 
         report
+    }
+}
+
+/// What a caller asks for when running a script's tests.
+#[derive(Debug, Clone)]
+pub struct TestRunRequest {
+    pub script_uri: String,
+    pub user_context: crate::security::UserContext,
+    /// Run only the cases whose name contains this substring.
+    pub filter: Option<String>,
+    /// Roll back the database writes the tests make.
+    pub rollback: bool,
+}
+
+/// Runs a script's test modules off the async runtime and within a budget.
+pub struct TestRunner {
+    module_timeout_ms: u64,
+    run_timeout_ms: u64,
+}
+
+impl TestRunner {
+    pub fn new(module_timeout_ms: u64, run_timeout_ms: u64) -> Self {
+        Self {
+            module_timeout_ms,
+            run_timeout_ms,
+        }
+    }
+
+    /// A runner using the budgets configured at startup.
+    pub fn with_configured_timeouts() -> Self {
+        let (module_timeout_ms, run_timeout_ms) = configured_test_timeouts();
+        Self::new(module_timeout_ms, run_timeout_ms)
+    }
+
+    /// Discover and run `script_uri`'s test modules.
+    ///
+    /// Two budgets bound this call: the run ceiling the blocking loop enforces
+    /// itself, and the outer one here. The inner ceiling is the better of the
+    /// two — it returns the modules that finished, whereas expiring here
+    /// abandons the blocking task and every verdict with it. So the outer
+    /// budget gets a grace period and serves only as the backstop the interrupt
+    /// cannot cover: JavaScript blocked in a host call, where no bytecode runs
+    /// for the handler to interrupt.
+    pub async fn run(&self, request: TestRunRequest) -> TestRunResult {
+        let started = std::time::Instant::now();
+        let script_uri = request.script_uri.clone();
+
+        let params = crate::js_engine::TestRunParams {
+            script_uri: request.script_uri,
+            user_context: request.user_context,
+            timeout_ms: self.module_timeout_ms,
+            run_timeout_ms: self.run_timeout_ms,
+            filter: request.filter,
+            rollback: request.rollback,
+        };
+
+        let backstop = Duration::from_millis(
+            self.run_timeout_ms
+                .saturating_add(TEST_RUN_TIMEOUT_GRACE_MS),
+        );
+
+        let outcome = tokio::time::timeout(
+            backstop,
+            tokio::task::spawn_blocking(move || {
+                let modules = crate::module_loader::discover_test_modules(&params.script_uri);
+                debug!(
+                    script_uri = %params.script_uri,
+                    modules = modules.len(),
+                    "Running script tests"
+                );
+                crate::js_engine::execute_test_run(&params, &modules)
+            }),
+        )
+        .await;
+
+        let duration_ms = started.elapsed().as_millis() as u64;
+
+        match outcome {
+            Ok(Ok(result)) => result,
+            Ok(Err(join_error)) => {
+                warn!(script_uri = %script_uri, "Test run task failed: {}", join_error);
+                TestRunResult::failed(
+                    script_uri,
+                    format!("Test run task failed: {}", join_error),
+                    duration_ms,
+                )
+            }
+            Err(_elapsed) => {
+                // The backstop fired: the blocking task is abandoned mid-run,
+                // so there are no verdicts to recover here.
+                warn!(
+                    script_uri = %script_uri,
+                    "Test run exceeded its {}ms backstop (blocked in a host call?)",
+                    backstop.as_millis()
+                );
+                TestRunResult::failed(
+                    script_uri,
+                    format!(
+                        "Test run timeout ({}ms + {}ms grace)",
+                        self.run_timeout_ms, TEST_RUN_TIMEOUT_GRACE_MS
+                    ),
+                    duration_ms,
+                )
+            }
+        }
     }
 }
 

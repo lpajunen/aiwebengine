@@ -1,10 +1,12 @@
 //! Running a script's own test modules: discovery, execution, and reporting.
 
+use aiwebengine::engine_api::{TestRunRefusal, authorize_test_run, run_tests_route};
 use aiwebengine::js_engine::{TestRunParams, execute_test_run};
 use aiwebengine::module_loader;
 use aiwebengine::repository;
-use aiwebengine::script_test::{RunOutcome, TestRunResult};
+use aiwebengine::script_test::{RunOutcome, TestRunRequest, TestRunResult, TestRunner};
 use aiwebengine::security::UserContext;
+use axum::extract::Query;
 use std::sync::OnceLock;
 use tokio::sync::{Mutex, OnceCell};
 
@@ -59,6 +61,7 @@ fn params(script_uri: &str) -> TestRunParams {
         script_uri: script_uri.to_string(),
         user_context: UserContext::admin("test-runner".to_string()),
         timeout_ms: 5_000,
+        run_timeout_ms: 60_000,
         filter: None,
         rollback: true,
     }
@@ -464,5 +467,164 @@ async fn database_writes_made_by_a_test_are_rolled_back() {
         observing.all_passed(),
         "the write should not have survived the run: {:?}",
         observing.cases
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_run_ceiling_stops_further_modules_but_keeps_finished_verdicts() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let script_uri = "test://script-tests-run-ceiling";
+    script_with_test_modules(
+        script_uri,
+        &[
+            (
+                "tests/a-slow.test.ts",
+                r#"
+                test("burns the whole run budget", () => { while (true) {} });
+                "#,
+            ),
+            (
+                "tests/b-never-starts.test.ts",
+                r#"
+                test("never starts", () => { expect(1).toBe(1); });
+                "#,
+            ),
+        ],
+    );
+
+    let modules = module_loader::discover_test_modules(script_uri);
+    assert_eq!(modules.len(), 2, "both modules should be discovered");
+
+    let result = execute_test_run(
+        &TestRunParams {
+            // The module budget alone would allow both files to run; the run
+            // ceiling is what has to stop the second one.
+            timeout_ms: 400,
+            run_timeout_ms: 400,
+            ..params(script_uri)
+        },
+        &modules,
+    );
+
+    assert_eq!(result.outcome, RunOutcome::TimedOut);
+    assert!(
+        result.cases.iter().all(|case| case.name != "never starts"),
+        "the ceiling must stop the run before it starts work it cannot finish: {:?}",
+        result.cases
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_script_without_test_modules_reports_no_cases_rather_than_success() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let script_uri = "test://script-tests-empty";
+    script_with_test_modules(
+        script_uri,
+        &[("server/only-code.ts", "export const x = 1;")],
+    );
+
+    let result = TestRunner::new(5_000, 30_000)
+        .run(TestRunRequest {
+            script_uri: script_uri.to_string(),
+            user_context: UserContext::admin("test-runner".to_string()),
+            filter: None,
+            rollback: true,
+        })
+        .await;
+
+    assert!(result.is_empty());
+    assert!(
+        !result.all_passed(),
+        "a script with no tests has not passed anything"
+    );
+    assert!(result.error().is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn only_an_administrator_or_owner_may_run_a_scripts_tests() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let script_uri = "test://script-tests-authz";
+    repository::upsert_script(script_uri, "function init() {}").expect("script should be stored");
+
+    assert!(
+        authorize_test_run(&UserContext::admin("admin".to_string()), script_uri).is_ok(),
+        "an administrator may run any script's tests"
+    );
+
+    assert!(
+        matches!(
+            authorize_test_run(
+                &UserContext::authenticated("someone-else".to_string()),
+                script_uri
+            ),
+            Err(TestRunRefusal::AccessDenied)
+        ),
+        "a signed-in non-owner runs the script's code as themselves, so must be refused"
+    );
+
+    assert!(
+        matches!(
+            authorize_test_run(&UserContext::anonymous(), script_uri),
+            Err(TestRunRefusal::AccessDenied)
+        ),
+        "an anonymous caller must be refused"
+    );
+
+    assert!(
+        matches!(
+            authorize_test_run(
+                &UserContext::admin("admin".to_string()),
+                "test://script-tests-does-not-exist"
+            ),
+            Err(TestRunRefusal::NotFound)
+        ),
+        "an unknown script is a 404, not a permission problem"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_endpoint_maps_refusals_to_status_codes() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let script_uri = "test://script-tests-endpoint";
+    repository::upsert_script(script_uri, "function init() {}").expect("script should be stored");
+
+    let missing_uri = run_tests_route(
+        None,
+        Query(serde_urlencoded::from_str("").expect("empty query should parse")),
+        axum::body::Bytes::new(),
+    )
+    .await;
+    assert_eq!(missing_uri.status(), 400);
+
+    let unknown_script = run_tests_route(
+        None,
+        Query(
+            serde_urlencoded::from_str("uri=test://script-tests-nope").expect("query should parse"),
+        ),
+        axum::body::Bytes::new(),
+    )
+    .await;
+    assert_eq!(unknown_script.status(), 404);
+
+    let anonymous = run_tests_route(
+        None,
+        Query(
+            serde_urlencoded::from_str(&format!("uri={}", script_uri)).expect("query should parse"),
+        ),
+        axum::body::Bytes::new(),
+    )
+    .await;
+    assert_eq!(
+        anonymous.status(),
+        403,
+        "running a script's code must not be open to anonymous callers"
     );
 }

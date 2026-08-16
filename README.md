@@ -88,13 +88,13 @@ In the context of aiwebengine, a **solution** refers to any website, GraphQL API
 - PostgreSQL-based persistent storage
 - Script repository management
 - Authentication and security middleware
+- Test runner for solution scripts ([docs](docs/SCRIPT_TESTS.md))
 
 ### Roadmap
 
 The project roadmap includes planned enhancements such as:
 
 - Database integration
-- Testing framework integration for user generated scripts
 - Public cloud deployment guides like Terraform scripts
 - System monitoring and alerting
 

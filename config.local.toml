@@ -53,6 +53,10 @@ stack_size_bytes = 65536
 enable_init_functions = true
 # Init function timeout in milliseconds (defaults to execution_timeout_ms if not set)
 # init_timeout_ms = 2000
+# Budget for one test module in milliseconds (defaults to execution_timeout_ms)
+test_timeout_ms = 30000
+# Ceiling on a whole test run in milliseconds; the run then reports what it has
+test_run_timeout_ms = 120000
 # Fail server startup if any script init fails
 fail_startup_on_init_error = false
 

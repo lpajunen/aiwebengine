@@ -67,6 +67,7 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
         engine_api::delete_script_route,
         engine_api::read_script_route,
         engine_api::script_logs_route,
+        engine_api::run_tests_route,
         engine_api::assets_get_route,
         engine_api::assets_post_route,
         engine_api::assets_delete_route,
@@ -1158,6 +1159,19 @@ pub async fn start_server_with_config(
         debug!("Script init timeout was already configured");
     }
 
+    // Test budgets: one per test module, one for a whole run.
+    let test_timeout_ms = config
+        .javascript
+        .test_timeout_ms
+        .unwrap_or(config.javascript.execution_timeout_ms);
+    let test_run_timeout_ms = config
+        .javascript
+        .test_run_timeout_ms
+        .unwrap_or(script_test::DEFAULT_TEST_RUN_TIMEOUT_MS);
+    if !script_test::configure_test_timeouts(test_timeout_ms, test_run_timeout_ms) {
+        debug!("Script test timeouts were already configured");
+    }
+
     // Initialize all core components
     initialize_components(&config).await?;
 
@@ -2107,6 +2121,10 @@ async fn setup_routes(
         .route(
             "/engine/script_logs",
             axum::routing::get(engine_api::script_logs_route),
+        )
+        .route(
+            "/engine/run_tests",
+            axum::routing::post(engine_api::run_tests_route),
         )
         .route(
             "/engine/assets",

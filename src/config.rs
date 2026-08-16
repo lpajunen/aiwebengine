@@ -116,6 +116,19 @@ pub struct JavaScriptConfig {
     /// Init function timeout in milliseconds (defaults to execution_timeout_ms if not set)
     pub init_timeout_ms: Option<u64>,
 
+    /// Budget for one test module in milliseconds (defaults to
+    /// execution_timeout_ms if not set). Each module runs in its own runtime
+    /// and gets this budget of its own, so one slow file does not spend the
+    /// time the rest of them need.
+    #[serde(default)]
+    pub test_timeout_ms: Option<u64>,
+
+    /// Ceiling on a whole test run in milliseconds. Reached, the run stops
+    /// starting modules and reports what it has, so a script with many test
+    /// files cannot hold a request open for modules × test_timeout_ms.
+    #[serde(default)]
+    pub test_run_timeout_ms: Option<u64>,
+
     /// Fail server startup if any script init fails
     #[serde(default)]
     pub fail_startup_on_init_error: bool,
@@ -320,7 +333,9 @@ impl Default for JavaScriptConfig {
             max_cached_scripts: 1000,
             stack_size_bytes: 1024 * 1024, // 1MB
             enable_init_functions: true,
-            init_timeout_ms: None, // Use execution_timeout_ms by default
+            init_timeout_ms: None,     // Use execution_timeout_ms by default
+            test_timeout_ms: None,     // Use execution_timeout_ms by default
+            test_run_timeout_ms: None, // Use DEFAULT_TEST_RUN_TIMEOUT_MS
             fail_startup_on_init_error: false,
         }
     }
@@ -545,6 +560,14 @@ impl AppConfig {
 
         if self.javascript.max_concurrent_executions == 0 {
             anyhow::bail!("JavaScript max concurrent executions must be > 0");
+        }
+
+        if self.javascript.test_timeout_ms == Some(0) {
+            anyhow::bail!("JavaScript test timeout must be > 0");
+        }
+
+        if self.javascript.test_run_timeout_ms == Some(0) {
+            anyhow::bail!("JavaScript test run timeout must be > 0");
         }
 
         // PostgreSQL is the only supported storage backend - no validation needed

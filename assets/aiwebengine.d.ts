@@ -1547,6 +1547,94 @@ declare var dispatcher: MessageDispatcher;
 declare var convert: Convert;
 
 // ============================================================================
+// Testing
+// ============================================================================
+
+/**
+ * Assertions available on the value passed to `expect()`.
+ */
+interface Matchers {
+  /** Strict equality (`===`), with NaN considered equal to itself. */
+  toBe(expected: unknown): void;
+  /** Structural equality, comparing arrays and plain objects by their contents. */
+  toEqual(expected: unknown): void;
+  toBeTruthy(): void;
+  toBeFalsy(): void;
+  toBeNull(): void;
+  toBeUndefined(): void;
+  toBeDefined(): void;
+  /** Numeric comparison to `digits` decimal places (default 2). */
+  toBeCloseTo(expected: number, digits?: number): void;
+  toBeGreaterThan(expected: number): void;
+  toBeLessThan(expected: number): void;
+  toHaveLength(expected: number): void;
+  /** Substring of a string, or a structurally equal member of an array. */
+  toContain(item: unknown): void;
+  toMatch(pattern: string | RegExp): void;
+  /**
+   * Call the function under test and require that it throws. With an argument,
+   * the thrown message must contain the string, or match the regular expression.
+   */
+  toThrow(expected?: string | RegExp): void;
+  /** Every matcher above, inverted. */
+  not: Omit<Matchers, "not">;
+}
+
+/**
+ * Assert on a value inside a test case.
+ *
+ * @example
+ * expect(totalCents([])).toBe(0);
+ * expect(() => totalCents(null)).toThrow("items");
+ * expect(basket.items).not.toContain({ sku: "gone" });
+ */
+declare function expect(actual: unknown): Matchers;
+
+/**
+ * Register a test case. Available only while the engine is running a script's
+ * test modules — assets named `*.test.ts` (or `.js`, `.jsx`, `.tsx`) — which it
+ * does on request via `POST /engine/run_tests?uri=<script>`.
+ *
+ * The body must be synchronous: scripts run without a job queue here, so host
+ * calls like `fetch()` and `database.query()` block rather than yielding, and a
+ * test returning a promise fails rather than reporting a pass it never earned.
+ *
+ * Each test module runs in its own context, so one file cannot see globals set
+ * by another. Database writes are rolled back unless the run asks otherwise;
+ * asset writes, secret writes, and outbound HTTP are real.
+ *
+ * @example
+ * import { totalCents } from "../server/basket.ts";
+ *
+ * test("an empty basket totals zero", () => {
+ *   expect(totalCents([])).toBe(0);
+ * });
+ */
+declare function test(name: string, fn: () => void): void;
+
+/** Alias of {@link test}. */
+declare function it(name: string, fn: () => void): void;
+
+/**
+ * Group cases under a shared name. Nested groups compose, so a case inside
+ * `describe("basket")` is reported as `basket > an empty basket totals zero`.
+ */
+declare function describe(name: string, fn: () => void): void;
+
+/**
+ * Run before every case in the file. Hooks are file-scoped and apply to all of
+ * its cases regardless of where they are declared, including cases declared
+ * above the hook.
+ */
+declare function beforeEach(fn: () => void): void;
+
+/** Run after every case in the file, including after a case that failed. */
+declare function afterEach(fn: () => void): void;
+
+/** Fail the current case with `message` unless `condition` holds. */
+declare function assert(condition: unknown, message?: string): void;
+
+// ============================================================================
 // Response Builder Helpers
 // ============================================================================
 
