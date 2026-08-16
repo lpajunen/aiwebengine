@@ -10,6 +10,7 @@ use tracing::{debug, error, info, warn};
 use crate::module_loader;
 use crate::repository;
 use crate::scheduler::ScheduledInvocation;
+use crate::script_test::{TestCaseResult, TestRunResult};
 use crate::security::UserContext;
 
 // Use the enhanced secure globals implementation
@@ -187,6 +188,7 @@ pub enum HandlerInvocationKind {
     Init,
     Scheduled,
     McpTool,
+    Test,
 }
 
 impl HandlerInvocationKind {
@@ -200,6 +202,7 @@ impl HandlerInvocationKind {
             HandlerInvocationKind::Init => "init",
             HandlerInvocationKind::Scheduled => "scheduled",
             HandlerInvocationKind::McpTool => "mcpTool",
+            HandlerInvocationKind::Test => "test",
         }
     }
 }
@@ -1541,6 +1544,239 @@ pub fn execute_scheduled_handler(
 
     handler_result?;
     Ok(())
+}
+
+/// The JavaScript authoring API (`test`, `expect`, hooks) evaluated into a test
+/// context ahead of the test module, so the module can call it as it loads.
+const TEST_PRELUDE: &str = include_str!("../assets/test_prelude.js");
+
+/// Parameters for one run of a script's tests.
+#[derive(Debug, Clone)]
+pub struct TestRunParams {
+    pub script_uri: String,
+    /// The user who asked for the run. Tests execute with *their* capabilities
+    /// rather than the engine's: a suite that passes only because it ran as an
+    /// administrator has tested something production will never do.
+    pub user_context: UserContext,
+    /// Wall-clock budget for each test module. Every module gets its own
+    /// runtime and so its own budget, which keeps one runaway file from
+    /// spending the time the rest of them need.
+    pub timeout_ms: u64,
+    /// Run only the cases whose name contains this substring.
+    pub filter: Option<String>,
+    /// Wrap each module's cases in a transaction that is always rolled back.
+    /// This covers `database.*` and nothing else — asset writes, secret writes,
+    /// and outbound HTTP a test performs are real and survive the run.
+    pub rollback: bool,
+}
+
+/// What running one test module produced.
+struct ModuleOutcome {
+    cases: Vec<TestCaseResult>,
+    /// The module ran out of budget, so the cases after the interrupt never
+    /// ran and no verdict exists for them.
+    timed_out: bool,
+}
+
+/// Run every test case in each of `test_modules` and report what happened.
+///
+/// Each module gets its own runtime and context. That buys two things a single
+/// shared bundle cannot: every case can be attributed to the file it came from,
+/// and a global one test file leaks cannot reach the next one. A module that
+/// fails to bundle, or throws while loading, is reported as one failed case
+/// naming the file — so a single broken file cannot hide the other files'
+/// results.
+pub fn execute_test_run(params: &TestRunParams, test_modules: &[String]) -> TestRunResult {
+    let started = Instant::now();
+    let mut cases = Vec::new();
+    let mut timed_out = false;
+
+    for module_path in test_modules {
+        match execute_test_module(params, module_path) {
+            Ok(outcome) => {
+                timed_out |= outcome.timed_out;
+                cases.extend(outcome.cases);
+            }
+            Err(error) => {
+                warn!(
+                    script_uri = %params.script_uri,
+                    module = %module_path,
+                    "Test module could not run: {}",
+                    error
+                );
+                cases.push(
+                    TestCaseResult::failed(module_path.clone(), error, 0)
+                        .from_file(module_path.clone()),
+                );
+            }
+        }
+    }
+
+    let duration_ms = started.elapsed().as_millis() as u64;
+    if timed_out {
+        TestRunResult::timed_out(params.script_uri.as_str(), cases, duration_ms)
+    } else {
+        TestRunResult::completed(params.script_uri.as_str(), cases, duration_ms)
+    }
+}
+
+/// Bundle one test module, evaluate it to collect its cases, then run them.
+///
+/// `Err` means the module never got as far as producing verdicts; individual
+/// case failures come back inside [`ModuleOutcome`].
+fn execute_test_module(params: &TestRunParams, module_path: &str) -> Result<ModuleOutcome, String> {
+    // Bundle before arming the runtime's interrupt deadline (see
+    // `execute_script_for_request_secure`): on a cold cache this fetches and
+    // transpiles every module the test imports, which must not be charged to
+    // the budget meant for running the tests.
+    let modules = [module_path.to_string()];
+    let prepared = module_loader::prepare_test_program(&params.script_uri, &modules)
+        .map_err(|e| format!("Failed to bundle test module: {}", e))?;
+
+    let limits = ExecutionLimits {
+        timeout_ms: params.timeout_ms,
+        ..current_execution_limits()
+    };
+    // Mirrors the deadline `create_sandboxed_runtime` arms the interrupt with,
+    // so a failed call can be told apart from a call the interrupt stopped
+    // without matching on QuickJS error text.
+    let deadline = Instant::now() + Duration::from_millis(params.timeout_ms);
+
+    let rt = create_sandboxed_runtime(&limits)?;
+    let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
+
+    // Collection and execution both happen inside one `with`: the registered
+    // test functions are bound to the context's lifetime and cannot outlive it.
+    let outcome =
+        ctx.with(|ctx| run_test_module(ctx, params, module_path, &prepared.code, deadline));
+
+    // Context must drop before the runtime (see `ensure_clean_shutdown`).
+    drop(ctx);
+
+    outcome
+}
+
+/// Install the test globals into `ctx`, load `code`, and run the cases it
+/// registers. Split out from [`execute_test_module`] so the context lifetime
+/// has a name: the collected [`Function`]s are parameterized by it.
+fn run_test_module<'js>(
+    ctx: rquickjs::Ctx<'js>,
+    params: &TestRunParams,
+    module_path: &str,
+    code: &str,
+    deadline: Instant,
+) -> Result<ModuleOutcome, String> {
+    let security_config = GlobalSecurityConfig {
+        // A test must not mutate registries that outlive the run: routes,
+        // resolvers, streams, and jobs registered here would stay registered,
+        // and no rollback undoes them.
+        enable_graphql_registration: false,
+        enable_streams: false,
+        enable_scheduler: false,
+        enable_audit_logging: false,
+        ..Default::default()
+    };
+
+    setup_secure_global_functions(
+        &ctx,
+        &params.script_uri,
+        params.user_context.clone(),
+        &security_config,
+        None,
+        None,
+    )
+    .map_err(|e| format!("install test globals: {}", extract_error_details(&ctx, &e)))?;
+
+    let handler_context = JsHandlerContextBuilder::new(HandlerInvocationKind::Test)
+        .with_script_metadata(params.script_uri.clone(), module_path)
+        .build(&ctx)
+        .map_err(|e| format!("build context: {}", e))?;
+    // Set before evaluating the module, not just before calling a case:
+    // top-level code in the test file can already reach for `context`.
+    ctx.globals()
+        .set("context", handler_context)
+        .map_err(|e| format!("set context global: {}", e))?;
+
+    let registered = Rc::new(RefCell::new(Vec::<(String, Function<'js>)>::new()));
+    let sink = Rc::clone(&registered);
+    let register = Function::new(
+        ctx.clone(),
+        move |name: String, body: Function<'js>| -> Result<(), rquickjs::Error> {
+            if let Ok(mut cases) = sink.try_borrow_mut() {
+                cases.push((name, body));
+            }
+            Ok(())
+        },
+    )
+    .map_err(|e| format!("build test registry: {}", e))?;
+    ctx.globals()
+        .set("__registerTest__", register)
+        .map_err(|e| format!("install test registry: {}", e))?;
+
+    crate::bytecode::eval_program(&ctx, "engine://test-prelude", TEST_PRELUDE)
+        .map_err(|e| format!("test prelude: {}", extract_error_details(&ctx, &e)))?;
+
+    // The bytecode cache overwrites by key, so a test bundle stored under the
+    // script's own URI would evict the compiled program that serves requests.
+    // The key doubles as the filename QuickJS puts in stack traces, hence a
+    // readable separator rather than an exotic one.
+    let bytecode_key = format!("{}::tests::{}", params.script_uri, module_path);
+    crate::bytecode::eval_program(&ctx, &bytecode_key, code)
+        .map_err(|e| format!("load: {}", extract_error_details(&ctx, &e)))?;
+
+    // Take the cases out, so a `test()` call made from inside a running test
+    // lands in a fresh vector and is ignored rather than conflicting with the
+    // borrow this loop holds.
+    let collected = registered.take();
+
+    // Held for the whole loop and never committed: `TransactionGuard` rolls
+    // back when it drops, including on an early return.
+    let _rollback_guard = if params.rollback {
+        Some(
+            crate::database::Database::begin_transaction(Some(params.timeout_ms))
+                .map_err(|e| format!("could not isolate the run in a transaction: {}", e))?,
+        )
+    } else {
+        None
+    };
+
+    let mut cases = Vec::with_capacity(collected.len());
+    let mut timed_out = false;
+
+    for (name, body) in collected {
+        if let Some(filter) = &params.filter
+            && !name.contains(filter.as_str())
+        {
+            continue;
+        }
+
+        if Instant::now() >= deadline {
+            timed_out = true;
+            break;
+        }
+
+        let started = Instant::now();
+        let result = body.call::<_, Value>(());
+        let duration_ms = started.elapsed().as_millis() as u64;
+
+        match result {
+            Ok(_) => cases.push(TestCaseResult::passed(name, duration_ms).from_file(module_path)),
+            Err(error) => {
+                let details = extract_error_details(&ctx, &error);
+                if Instant::now() >= deadline {
+                    // The interrupt ended this call, not the test itself, so
+                    // there is no verdict to report for it.
+                    timed_out = true;
+                    break;
+                }
+                cases.push(
+                    TestCaseResult::failed(name, details, duration_ms).from_file(module_path),
+                );
+            }
+        }
+    }
+
+    Ok(ModuleOutcome { cases, timed_out })
 }
 
 /// Executes a JavaScript GraphQL resolver function and returns the result as a string.
