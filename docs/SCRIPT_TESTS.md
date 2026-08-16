@@ -85,6 +85,10 @@ nothing passed.
 Running tests executes the script's code, so it requires the same rights as
 changing the script — an administrator, or an owner who may write scripts.
 
+The same run is available over MCP as the `run_tests` tool, taking the same
+`uri`, `filter`, and `rollback` arguments and returning the same report — so an
+agent editing a script can check its work without leaving the protocol.
+
 ## What a run does and does not isolate
 
 Each test module gets its own runtime and context. One file cannot see globals

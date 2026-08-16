@@ -1,7 +1,10 @@
 //! Running a script's own test modules: discovery, execution, and reporting.
 
 use aiwebengine::auth::AuthUser;
-use aiwebengine::engine_api::{TestRunRefusal, authorize_test_run, run_tests_route};
+use aiwebengine::engine_api::{
+    TestRunRefusal, authorize_test_run, execute_native_mcp_tool, native_mcp_tool_descriptors,
+    run_tests_route,
+};
 use aiwebengine::js_engine::{TestRunParams, execute_test_run};
 use aiwebengine::module_loader;
 use aiwebengine::repository;
@@ -771,5 +774,107 @@ async fn the_endpoint_says_when_a_script_carries_no_tests() {
             .contains("No test modules found"),
         "an empty run should explain itself: {:?}",
         report["message"]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_mcp_tool_is_advertised_with_its_schema() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let descriptor = native_mcp_tool_descriptors()
+        .into_iter()
+        .find(|tool| tool.name == "run_tests")
+        .expect("run_tests should be a native tool");
+
+    let schema = &descriptor.input_schema;
+    assert_eq!(schema["required"], serde_json::json!(["uri"]));
+    assert_eq!(
+        schema["properties"]["uri"]["type"],
+        serde_json::json!("string")
+    );
+    assert_eq!(
+        schema["properties"]["rollback"]["default"],
+        serde_json::json!(true),
+        "isolation is the default over MCP as it is over HTTP"
+    );
+    assert!(
+        descriptor.description.contains("*.test.ts"),
+        "the description should tell an agent where tests live: {}",
+        descriptor.description
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_mcp_tool_reports_verdicts_and_refuses_the_unauthorized() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let script_uri = "test://script-tests-mcp";
+    script_with_test_modules(
+        script_uri,
+        &[(
+            "tests/mcp.test.ts",
+            r#"
+            test("passes", () => { expect(1).toBe(1); });
+            test("fails", () => { expect(1).toBe(2); });
+            "#,
+        )],
+    );
+
+    let args = serde_json::json!({ "uri": script_uri });
+    let report = execute_native_mcp_tool(
+        "run_tests",
+        &args,
+        &UserContext::admin("test-admin".to_string()),
+    )
+    .expect("run_tests should be a native tool");
+
+    assert_eq!(report["total"], serde_json::json!(2));
+    assert_eq!(report["passed"], serde_json::json!(1));
+    assert_eq!(report["failed"], serde_json::json!(1));
+    assert_eq!(report["success"], serde_json::json!(false));
+    assert!(report["cases"].as_array().is_some_and(|c| c.len() == 2));
+
+    // A filter reaches the runner the same way it does over HTTP.
+    let filtered = execute_native_mcp_tool(
+        "run_tests",
+        &serde_json::json!({ "uri": script_uri, "filter": "passes" }),
+        &UserContext::admin("test-admin".to_string()),
+    )
+    .expect("native tool");
+    assert_eq!(filtered["total"], serde_json::json!(1));
+    assert_eq!(filtered["success"], serde_json::json!(true));
+
+    // The tool runs the script's code as the caller, so it enforces the same
+    // bar as the endpoint rather than trusting the MCP session.
+    let refused = execute_native_mcp_tool(
+        "run_tests",
+        &args,
+        &UserContext::authenticated("someone-else".to_string()),
+    )
+    .expect("native tool");
+    assert!(
+        refused["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Permission denied"),
+        "unexpected result for a non-owner: {:?}",
+        refused
+    );
+
+    let missing = execute_native_mcp_tool(
+        "run_tests",
+        &serde_json::json!({}),
+        &UserContext::admin("test-admin".to_string()),
+    )
+    .expect("native tool");
+    assert!(
+        missing["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("uri"),
+        "a missing uri should name the parameter: {:?}",
+        missing
     );
 }

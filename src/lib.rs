@@ -1773,7 +1773,19 @@ async fn setup_routes(
                     .map(|session| create_js_auth_context_from_session(Some(session)));
                 let user_context = create_user_context_from_session(mcp_session.as_ref());
 
-                match mcp::execute_mcp_tool(&params.name, arguments, auth_context, user_context) {
+                // A tool runs JavaScript to completion — a script-registered
+                // handler, or the engine's own test runner — which is CPU-bound
+                // work with a budget measured in seconds. On the async thread
+                // that blocks a worker for the whole run, so it goes to the
+                // blocking pool like every other script execution path.
+                let tool_name = params.name.clone();
+                let execution = tokio::task::spawn_blocking(move || {
+                    mcp::execute_mcp_tool(&tool_name, arguments, auth_context, user_context)
+                })
+                .await
+                .unwrap_or_else(|join_error| Err(format!("tool task failed: {}", join_error)));
+
+                match execution {
                     Ok(result) => {
                         debug!("MCP tool '{}' executed successfully", params.name);
 

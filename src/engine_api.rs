@@ -3191,6 +3191,26 @@ fn native_tools() -> &'static [NativeToolEntry] {
             },
             tool_remove_user_role,
         ),
+        (
+            "run_tests",
+            "Run a script's test modules and report a verdict per case. Tests are the script's own assets named '*.test.ts' (or .js/.jsx/.tsx). Requires the user to own the script or be an administrator.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "uri": { "type": "string", "description": "URI of the script whose tests to run" },
+                        "filter": { "type": "string", "description": "Run only cases whose name contains this text" },
+                        "rollback": {
+                            "type": "boolean",
+                            "description": "Roll back the database writes the tests make (default true)",
+                            "default": true
+                        }
+                    },
+                    "required": ["uri"]
+                })
+            },
+            tool_run_tests,
+        ),
     ]
 }
 
@@ -3218,6 +3238,71 @@ pub fn execute_native_mcp_tool(
         .find(|(name, _, _, _)| *name == tool_name)
         .map(|(_, _, _, handler)| *handler)?;
     Some(handler(arguments, user_context))
+}
+
+/// Run a script's tests and return the same report the REST endpoint serves.
+///
+/// This runs on the blocking pool: the MCP dispatcher moves tool execution
+/// there, because a run is JavaScript executed to completion under a budget
+/// measured in seconds. That is also why the whole-run ceiling is enforced
+/// inside the run loop rather than by an outer timeout — there is no async
+/// backstop on this path, and the in-loop ceiling is the one that can still
+/// report the modules that finished.
+fn tool_run_tests(args: &Value, user: &UserContext) -> Value {
+    let Some(uri) = arg_str(args, "uri") else {
+        return missing_arg("uri");
+    };
+
+    match authorize_test_run(user, uri) {
+        Ok(()) => {}
+        Err(TestRunRefusal::NotFound) => {
+            return json!({ "error": format!("Script not found: {}", uri) });
+        }
+        Err(TestRunRefusal::AccessDenied) => {
+            return json!({
+                "error": format!(
+                    "Permission denied. You must be an administrator or owner to run tests for script '{}'",
+                    uri
+                )
+            });
+        }
+    }
+
+    let filter = arg_str(args, "filter").map(str::to_string);
+    // Isolation is the default here as it is over HTTP: a test that writes
+    // should not leave rows behind unless the caller says so.
+    let rollback = args
+        .get("rollback")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+
+    let (timeout_ms, run_timeout_ms) = crate::script_test::configured_test_timeouts();
+    let modules = crate::module_loader::discover_test_modules(uri);
+    let result = crate::js_engine::execute_test_run(
+        &crate::js_engine::TestRunParams {
+            script_uri: uri.to_string(),
+            user_context: user.clone(),
+            timeout_ms,
+            run_timeout_ms,
+            filter,
+            rollback,
+        },
+        &modules,
+    );
+
+    let mut report = result.to_json();
+    if let Some(object) = report.as_object_mut() {
+        object.insert("timestamp".to_string(), json!(iso_timestamp()));
+        if result.is_empty() && result.error().is_none() {
+            object.insert(
+                "message".to_string(),
+                json!(
+                    "No test modules found. Tests are assets named '*.test.ts' (or .js/.jsx/.tsx)."
+                ),
+            );
+        }
+    }
+    report
 }
 
 fn tool_read_file(args: &Value, user: &UserContext) -> Value {
