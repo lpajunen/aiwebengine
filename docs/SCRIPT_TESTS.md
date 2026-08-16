@@ -43,11 +43,11 @@ Every engine global the script normally has — `database`, `assetStorage`,
 curl -X POST "https://your-engine/engine/run_tests?uri=myapp"
 ```
 
-| Parameter  | Default | Meaning                                          |
-| ---------- | ------- | ------------------------------------------------ |
-| `uri`      | —       | The script whose tests to run (required)         |
-| `filter`   | none    | Run only cases whose name contains this text     |
-| `rollback` | `true`  | Roll back the database writes the tests make     |
+| Parameter  | Default | Meaning                                      |
+| ---------- | ------- | -------------------------------------------- |
+| `uri`      | —       | The script whose tests to run (required)     |
+| `filter`   | none    | Run only cases whose name contains this text |
+| `rollback` | `true`  | Roll back the database writes the tests make |
 
 The response is a report, and a failing test is still a `200` — the request
 succeeded, the tests did not:
