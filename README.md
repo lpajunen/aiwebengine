@@ -13,7 +13,7 @@ Supports JavaScript / TypeScript as the primary programming language. Also suppo
 
 Code first approach. Then provide tools for verification and testing.
 Verify code by providing automatic API descriptions such as OpenAPI, GraphQL schema, and MCP tool list.
-Test code by providing automatic test case generation and execution environment.
+Test code by providing automatic test case generation and execution environment. A script carries its own tests as assets named `*.test.ts`; `POST /engine/run_tests?uri=<script>` runs them inside the same sandbox that serves the script and reports a verdict per case — see [Testing Solution Scripts](docs/SCRIPT_TESTS.md).
 
 API access: script-internal, engine-internal, and external. Script-internal APIs are available only to the script itself. Engine-internal APIs are available to all scripts running in the same engine instance. External APIs are available to outside world.
 

@@ -1,11 +1,13 @@
 //! Running a script's own test modules: discovery, execution, and reporting.
 
+use aiwebengine::auth::AuthUser;
 use aiwebengine::engine_api::{TestRunRefusal, authorize_test_run, run_tests_route};
 use aiwebengine::js_engine::{TestRunParams, execute_test_run};
 use aiwebengine::module_loader;
 use aiwebengine::repository;
 use aiwebengine::script_test::{RunOutcome, TestRunRequest, TestRunResult, TestRunner};
 use aiwebengine::security::UserContext;
+use axum::Extension;
 use axum::extract::Query;
 use std::sync::OnceLock;
 use tokio::sync::{Mutex, OnceCell};
@@ -34,6 +36,10 @@ async fn setup_env() {
 
 /// Store a script with the given test modules as its assets, replacing whatever
 /// was there before so a rerun of the suite starts clean.
+///
+/// Asset paths must be unique across *every* test in this file, not just within
+/// one: the assets table keys on the path alone, so two scripts cannot hold the
+/// same one and the second write collides with the first.
 fn script_with_test_modules(script_uri: &str, modules: &[(&str, &str)]) {
     repository::upsert_script(script_uri, "function init() {}").expect("script should be stored");
 
@@ -626,5 +632,144 @@ async fn the_endpoint_maps_refusals_to_status_codes() {
         anonymous.status(),
         403,
         "running a script's code must not be open to anonymous callers"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_module_that_cannot_be_parsed_is_reported_as_one_failed_case() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let script_uri = "test://script-tests-syntax-error";
+    script_with_test_modules(
+        script_uri,
+        &[
+            (
+                "tests/unparseable.test.ts",
+                // Missing the closing brace and paren.
+                r#"test("never registers", () => { expect(1).toBe(1); "#,
+            ),
+            (
+                "tests/syntax-healthy.test.ts",
+                r#"test("still runs", () => { expect(true).toBeTruthy(); });"#,
+            ),
+        ],
+    );
+
+    let result = run(script_uri);
+
+    assert_eq!(result.cases.len(), 2, "cases: {:?}", result.cases);
+    assert!(!result.all_passed());
+
+    // A file the transpiler rejects must not take the rest of the run with it.
+    assert!(case(&result, "still runs").is_passed());
+
+    let broken = case(&result, "tests/unparseable.test.ts");
+    assert!(!broken.is_passed());
+    assert_eq!(broken.file.as_deref(), Some("tests/unparseable.test.ts"));
+    assert!(
+        broken
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Failed to bundle test module"),
+        "a parse failure should say so: {:?}",
+        broken.error
+    );
+}
+
+/// An administrator session, as the middleware would attach it.
+fn admin_session() -> Extension<AuthUser> {
+    Extension(AuthUser::new(
+        "test-admin".to_string(),
+        "test".to_string(),
+        "session-token".to_string(),
+        true,
+        true,
+        None,
+        None,
+    ))
+}
+
+fn query_of(raw: &str) -> Query<aiwebengine::engine_api::TestRunParams> {
+    Query(serde_urlencoded::from_str(raw).expect("query should parse"))
+}
+
+async fn endpoint_report(uri: &str) -> (u16, serde_json::Value) {
+    let response = run_tests_route(
+        Some(admin_session()),
+        query_of(&format!("uri={}", uri)),
+        axum::body::Bytes::new(),
+    )
+    .await;
+
+    let status = response.status().as_u16();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body should read");
+    (
+        status,
+        serde_json::from_slice(&body).expect("body should be JSON"),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_endpoint_serves_the_report_for_an_authorized_caller() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let script_uri = "test://script-tests-endpoint-report";
+    script_with_test_modules(
+        script_uri,
+        &[(
+            "tests/report.test.ts",
+            r#"
+            test("passes", () => { expect(1).toBe(1); });
+            test("fails", () => { expect(1).toBe(2); });
+            "#,
+        )],
+    );
+
+    let (status, report) = endpoint_report(script_uri).await;
+
+    // A failing test is a report, not a failed request.
+    assert_eq!(status, 200);
+    assert_eq!(report["success"], serde_json::json!(false));
+    assert_eq!(report["total"], serde_json::json!(2));
+    assert_eq!(report["passed"], serde_json::json!(1));
+    assert_eq!(report["failed"], serde_json::json!(1));
+    assert_eq!(report["timedOut"], serde_json::json!(false));
+    assert!(report["timestamp"].is_string());
+
+    let cases = report["cases"].as_array().expect("cases array");
+    assert_eq!(cases.len(), 2);
+    assert_eq!(cases[0]["file"], serde_json::json!("tests/report.test.ts"));
+    assert!(report.get("message").is_none(), "tests ran, so no message");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_endpoint_says_when_a_script_carries_no_tests() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let script_uri = "test://script-tests-endpoint-empty";
+    script_with_test_modules(
+        script_uri,
+        &[("server/endpoint-only-code.ts", "export const x = 1;")],
+    );
+
+    let (status, report) = endpoint_report(script_uri).await;
+
+    assert_eq!(status, 200);
+    assert_eq!(report["total"], serde_json::json!(0));
+    // Zero failures and zero tests must not read the same.
+    assert_eq!(report["success"], serde_json::json!(false));
+    assert!(
+        report["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("No test modules found"),
+        "an empty run should explain itself: {:?}",
+        report["message"]
     );
 }

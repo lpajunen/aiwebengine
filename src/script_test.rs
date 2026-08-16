@@ -49,15 +49,6 @@ pub enum TestStatus {
     Failed,
 }
 
-impl TestStatus {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            TestStatus::Passed => "passed",
-            TestStatus::Failed => "failed",
-        }
-    }
-}
-
 /// One executed test case.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]

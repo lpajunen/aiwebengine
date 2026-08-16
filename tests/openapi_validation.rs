@@ -164,6 +164,7 @@ async fn test_openapi_contains_rust_endpoints() {
     let required_endpoints = vec![
         "/health",
         "/engine/health/cluster",
+        "/engine/run_tests",
         "/graphql",
         "/graphql/ws",
         "/graphql/sse",
