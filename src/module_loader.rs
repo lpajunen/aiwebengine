@@ -34,6 +34,36 @@ fn prepared_cache() -> &'static Mutex<HashMap<String, CachedPrepared>> {
     PREPARED_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Which of a script's independently built programs a cache entry holds.
+///
+/// A script has one program that serves requests and one that runs its test
+/// modules. Sharing a cache slot would make every test run evict the
+/// request-serving program — and the next request evict the test program —
+/// so both rebuild from cold on every alternation. Test programs additionally
+/// vary by *which* modules a run bundles, so their key carries the root hash
+/// and one script can keep several cached at once.
+#[derive(Clone, Copy)]
+enum ProgramKind {
+    Runtime,
+    Test,
+}
+
+impl ProgramKind {
+    fn cache_key(self, script_uri: &str, root_hash: &str) -> String {
+        match self {
+            ProgramKind::Runtime => script_uri.to_string(),
+            ProgramKind::Test => format!("{}{}", test_key_prefix(script_uri), root_hash),
+        }
+    }
+}
+
+/// Prefix shared by every cached test program of `script_uri`. The separator is
+/// a control character, which no script URI contains, so a test key can never
+/// collide with the runtime key of another script.
+fn test_key_prefix(script_uri: &str) -> String {
+    format!("{}\u{1}test\u{1}", script_uri)
+}
+
 fn hash_root(content: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
@@ -70,11 +100,14 @@ pub fn invalidate(script_uri: &str) {
     }
 }
 
-/// Drop only the prepared program for `script_uri`, keeping its module sources.
-/// Use when the root script changed but its assets did not.
+/// Drop only the prepared programs for `script_uri` — the request-serving one
+/// and every cached test program — keeping its module sources. Use when the
+/// root script changed but its assets did not.
 pub fn invalidate_program(script_uri: &str) {
     if let Ok(mut guard) = prepared_cache().lock() {
         guard.remove(script_uri);
+        let test_prefix = test_key_prefix(script_uri);
+        guard.retain(|key, _| !key.starts_with(&test_prefix));
     }
 }
 
@@ -133,13 +166,22 @@ pub fn prepare_executable_program(
     script_uri: &str,
     root_content: &str,
 ) -> Result<PreparedExecutable, ModuleLoaderError> {
+    prepare_program(script_uri, root_content, ProgramKind::Runtime)
+}
+
+fn prepare_program(
+    script_uri: &str,
+    root_content: &str,
+    kind: ProgramKind,
+) -> Result<PreparedExecutable, ModuleLoaderError> {
     let root_hash = hash_root(root_content);
+    let cache_key = kind.cache_key(script_uri, &root_hash);
 
     // Fast path: return the cached prepared program when the root content is
     // unchanged. Asset edits (which the hash cannot see) drop the entry via
     // `invalidate`, so a present entry with a matching hash is safe to serve.
     if let Ok(guard) = prepared_cache().lock()
-        && let Some(entry) = guard.get(script_uri)
+        && let Some(entry) = guard.get(&cache_key)
         && entry.root_hash == root_hash
     {
         debug!(uri = script_uri, "Prepared-program cache hit");
@@ -153,7 +195,7 @@ pub fn prepare_executable_program(
 
     if let Ok(mut guard) = prepared_cache().lock() {
         guard.insert(
-            script_uri.to_string(),
+            cache_key,
             CachedPrepared {
                 root_hash,
                 code: Arc::from(prepared.code.as_str()),
@@ -162,6 +204,68 @@ pub fn prepare_executable_program(
     }
 
     Ok(prepared)
+}
+
+/// Bundle `test_modules` into one program that runs all of them when evaluated.
+///
+/// The modules are imported for their side effects: evaluating the program
+/// executes each test file top to bottom, which is what registers its cases.
+/// Callers pass paths from [`discover_test_modules`] — either all of them, for
+/// one shared run, or one at a time when each file needs its own context. An
+/// empty slice yields a program that does nothing, so report "no tests" from
+/// the discovery result rather than from this.
+pub fn prepare_test_program(
+    script_uri: &str,
+    test_modules: &[String],
+) -> Result<PreparedExecutable, ModuleLoaderError> {
+    let root_path = root_module_path(script_uri)?;
+    let root_content = build_test_root(&root_path, test_modules)?;
+    prepare_program(script_uri, &root_content, ProgramKind::Test)
+}
+
+/// Synthesize the root module that imports every test module in turn.
+fn build_test_root(root_path: &str, test_modules: &[String]) -> Result<String, ModuleLoaderError> {
+    let mut root = String::new();
+
+    for module_path in test_modules {
+        let specifier = format!("./{}", module_path);
+        // Resolve through the linker's own rules, so a path that cannot be
+        // imported fails here — naming the offending module — instead of
+        // producing a bundle that references a module the linker won't find.
+        let resolved = normalize_asset_module_specifier(root_path, &specifier)?;
+        if resolved != *module_path {
+            return Err(ModuleLoaderError::InvalidSpecifier(format!(
+                "Test module '{}' resolves to a different module ('{}')",
+                module_path, resolved
+            )));
+        }
+        root.push_str(&format!("import {:?};\n", specifier));
+    }
+
+    Ok(root)
+}
+
+/// Logical paths of the test modules owned by `script_uri`, in a stable order.
+///
+/// Order is alphabetical so a run reports its cases the same way twice, and so
+/// a bundle of the same files hits the prepared-program cache.
+pub fn discover_test_modules(script_uri: &str) -> Vec<String> {
+    let mut paths: Vec<String> = repository::fetch_assets(script_uri)
+        .into_keys()
+        .filter(|path| is_test_module(path))
+        .collect();
+    paths.sort();
+    paths
+}
+
+/// A test module is any asset named `*.test.<ext>` for an extension the bundler
+/// compiles. The suffix, rather than a reserved `tests/` directory, so tests can
+/// sit next to the code they cover and no existing asset folder becomes magic.
+fn is_test_module(logical_path: &str) -> bool {
+    matches!(
+        logical_path.rsplit_once('.'),
+        Some((stem, "js" | "ts" | "jsx" | "tsx")) if stem.ends_with(".test")
+    )
 }
 
 fn build_executable_program(
@@ -993,6 +1097,88 @@ export const WORLD_TYPE_FOREST: WorldType = "forest";
             ModuleLoaderError::UnsupportedImport(
                 "Dynamic import() is not supported for asset-backed modules".to_string(),
             )
+        );
+    }
+
+    #[test]
+    fn test_modules_are_recognized_by_suffix() {
+        assert!(is_test_module("tests/orders.test.ts"));
+        assert!(is_test_module("server/orders.test.js"));
+        assert!(is_test_module("orders.test.tsx"));
+
+        assert!(!is_test_module("server/orders.ts"));
+        assert!(!is_test_module("tests/fixtures.json"));
+        assert!(!is_test_module("tests/test.ts"));
+        assert!(!is_test_module("tests/orders.test.json"));
+        assert!(!is_test_module("orders.test"));
+    }
+
+    #[test]
+    fn build_test_root_imports_every_module_for_side_effects() {
+        let root = build_test_root(
+            "main.ts",
+            &[
+                "tests/orders.test.ts".to_string(),
+                "server/basket.test.ts".to_string(),
+            ],
+        )
+        .expect("test modules should resolve");
+
+        assert_eq!(
+            root,
+            "import \"./tests/orders.test.ts\";\nimport \"./server/basket.test.ts\";\n"
+        );
+    }
+
+    #[test]
+    fn build_test_root_rejects_a_module_outside_the_asset_tree() {
+        let error = build_test_root("main.ts", &["../elsewhere.test.ts".to_string()])
+            .expect_err("escaping paths should be rejected");
+
+        assert_eq!(
+            error,
+            ModuleLoaderError::InvalidSpecifier(
+                "Module specifier escapes the owning script assets".to_string(),
+            )
+        );
+    }
+
+    #[test]
+    fn build_test_root_of_no_modules_is_empty() {
+        let root = build_test_root("main.ts", &[]).expect("an empty set should build");
+        assert!(root.is_empty());
+    }
+
+    #[test]
+    fn synthesized_test_root_bundles_its_imports() {
+        let root = build_test_root("main.ts", &["tests/orders.test.ts".to_string()])
+            .expect("test module should resolve");
+        let transformed = transform_module_source(&root, "main.ts", true)
+            .expect("synthesized root should transform");
+
+        assert_eq!(
+            transformed.dependencies,
+            vec!["tests/orders.test.ts".to_string()]
+        );
+        assert!(
+            transformed
+                .code
+                .contains("__asset_module_require__(\"tests/orders.test.ts\");")
+        );
+    }
+
+    #[test]
+    fn test_programs_do_not_share_a_cache_slot_with_the_runtime_program() {
+        let runtime_key = ProgramKind::Runtime.cache_key("apps/main.ts", "abc");
+        let test_key = ProgramKind::Test.cache_key("apps/main.ts", "abc");
+
+        assert_eq!(runtime_key, "apps/main.ts");
+        assert_ne!(runtime_key, test_key);
+        assert!(test_key.starts_with(&test_key_prefix("apps/main.ts")));
+        assert_ne!(
+            test_key,
+            ProgramKind::Test.cache_key("apps/main.ts", "def"),
+            "bundles of different test modules need their own slots"
         );
     }
 }

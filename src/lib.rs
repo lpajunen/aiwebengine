@@ -36,6 +36,7 @@ pub mod route_index;
 pub mod safe_helpers;
 pub mod scheduler;
 pub mod script_init;
+pub mod script_test;
 pub mod security;
 pub mod stream_manager;
 pub mod stream_registry;
