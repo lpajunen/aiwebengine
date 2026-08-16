@@ -5963,20 +5963,36 @@ impl Repository for PostgresRepository {
         order_by: Option<&str>,
         order_dir: Option<&str>,
     ) -> AppResult<Vec<serde_json::Value>> {
-        let mut conn = self.pool.acquire().await.map_err(|e| AppError::Database {
-            message: format!("Failed to acquire connection: {}", e),
-            source: None,
-        })?;
-        db_query_table(
-            &mut conn,
-            script_uri,
-            logical_table_name,
-            filters,
-            limit,
-            order_by,
-            order_dir,
-        )
-        .await
+        match crate::database::get_current_executor(&self.pool) {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_query_table(
+                    tx,
+                    script_uri,
+                    logical_table_name,
+                    filters,
+                    limit,
+                    order_by,
+                    order_dir,
+                )
+                .await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                let mut conn = pool.acquire().await.map_err(|e| AppError::Database {
+                    message: format!("Failed to acquire connection: {}", e),
+                    source: None,
+                })?;
+                db_query_table(
+                    &mut conn,
+                    script_uri,
+                    logical_table_name,
+                    filters,
+                    limit,
+                    order_by,
+                    order_dir,
+                )
+                .await
+            }
+        }
     }
 
     async fn insert_row(
@@ -5985,11 +6001,18 @@ impl Repository for PostgresRepository {
         logical_table_name: &str,
         data: &HashMap<String, serde_json::Value>,
     ) -> AppResult<serde_json::Value> {
-        let mut conn = self.pool.acquire().await.map_err(|e| AppError::Database {
-            message: format!("Failed to acquire connection: {}", e),
-            source: None,
-        })?;
-        db_insert_row(&mut conn, script_uri, logical_table_name, data).await
+        match crate::database::get_current_executor(&self.pool) {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_insert_row(tx, script_uri, logical_table_name, data).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                let mut conn = pool.acquire().await.map_err(|e| AppError::Database {
+                    message: format!("Failed to acquire connection: {}", e),
+                    source: None,
+                })?;
+                db_insert_row(&mut conn, script_uri, logical_table_name, data).await
+            }
+        }
     }
 
     async fn update_row(
@@ -5999,11 +6022,18 @@ impl Repository for PostgresRepository {
         id: i32,
         data: &HashMap<String, serde_json::Value>,
     ) -> AppResult<serde_json::Value> {
-        let mut conn = self.pool.acquire().await.map_err(|e| AppError::Database {
-            message: format!("Failed to acquire connection: {}", e),
-            source: None,
-        })?;
-        db_update_row(&mut conn, script_uri, logical_table_name, id, data).await
+        match crate::database::get_current_executor(&self.pool) {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_update_row(tx, script_uri, logical_table_name, id, data).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                let mut conn = pool.acquire().await.map_err(|e| AppError::Database {
+                    message: format!("Failed to acquire connection: {}", e),
+                    source: None,
+                })?;
+                db_update_row(&mut conn, script_uri, logical_table_name, id, data).await
+            }
+        }
     }
 
     async fn delete_row(
@@ -6012,11 +6042,18 @@ impl Repository for PostgresRepository {
         logical_table_name: &str,
         id: i32,
     ) -> AppResult<bool> {
-        let mut conn = self.pool.acquire().await.map_err(|e| AppError::Database {
-            message: format!("Failed to acquire connection: {}", e),
-            source: None,
-        })?;
-        db_delete_row(&mut conn, script_uri, logical_table_name, id).await
+        match crate::database::get_current_executor(&self.pool) {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_delete_row(tx, script_uri, logical_table_name, id).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                let mut conn = pool.acquire().await.map_err(|e| AppError::Database {
+                    message: format!("Failed to acquire connection: {}", e),
+                    source: None,
+                })?;
+                db_delete_row(&mut conn, script_uri, logical_table_name, id).await
+            }
+        }
     }
 
     async fn upsert_row(
@@ -6026,11 +6063,18 @@ impl Repository for PostgresRepository {
         key_columns: &[String],
         data: &HashMap<String, serde_json::Value>,
     ) -> AppResult<serde_json::Value> {
-        let mut conn = self.pool.acquire().await.map_err(|e| AppError::Database {
-            message: format!("Failed to acquire connection: {}", e),
-            source: None,
-        })?;
-        db_upsert_row(&mut conn, script_uri, logical_table_name, key_columns, data).await
+        match crate::database::get_current_executor(&self.pool) {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_upsert_row(tx, script_uri, logical_table_name, key_columns, data).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                let mut conn = pool.acquire().await.map_err(|e| AppError::Database {
+                    message: format!("Failed to acquire connection: {}", e),
+                    source: None,
+                })?;
+                db_upsert_row(&mut conn, script_uri, logical_table_name, key_columns, data).await
+            }
+        }
     }
 
     async fn delete_where(
@@ -6039,13 +6083,24 @@ impl Repository for PostgresRepository {
         logical_table_name: &str,
         filters: &HashMap<String, serde_json::Value>,
     ) -> AppResult<u64> {
-        let mut conn = self.pool.acquire().await.map_err(|e| AppError::Database {
-            message: format!("Failed to acquire connection: {}", e),
-            source: None,
-        })?;
-        db_delete_where(&mut conn, script_uri, logical_table_name, filters).await
+        match crate::database::get_current_executor(&self.pool) {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_delete_where(tx, script_uri, logical_table_name, filters).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                let mut conn = pool.acquire().await.map_err(|e| AppError::Database {
+                    message: format!("Failed to acquire connection: {}", e),
+                    source: None,
+                })?;
+                db_delete_where(&mut conn, script_uri, logical_table_name, filters).await
+            }
+        }
     }
 
+    /// Leases run on their own pooled connection on purpose, unlike the row
+    /// operations above: a lease taken inside a caller's transaction would be
+    /// invisible to every other instance until that transaction committed, and
+    /// would vanish on rollback — which defeats the point of a lease.
     async fn acquire_lease(
         &self,
         script_uri: &str,
