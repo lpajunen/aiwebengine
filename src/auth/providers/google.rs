@@ -273,8 +273,11 @@ impl OAuth2Provider for GoogleProvider {
             query.append_pair("response_type", "code");
             query.append_pair("scope", &self.config.scopes.join(" "));
             query.append_pair("state", state);
-            query.append_pair("access_type", "offline"); // Request refresh token
-            query.append_pair("prompt", "consent"); // Force consent to get refresh token
+            // No `access_type=offline` / `prompt=consent`: Google is used for identity
+            // only, so a refresh token would never be spent, and requesting one both
+            // forces the consent screen on every single login and ties the session to
+            // Google's refresh-token expiry policy. Set them via `extra_params` if a
+            // deployment ever needs to call Google APIs on the user's behalf.
 
             if let Some(nonce) = nonce {
                 query.append_pair("nonce", nonce);

@@ -394,32 +394,15 @@ impl AuthManager {
             return Ok(session_data.into());
         }
 
-        let mut rotated_refresh_token: Option<String> = None;
-        if let Some(refresh_token) = session_data.refresh_token.clone() {
-            match self
-                .refresh_token(&session_data.provider, &refresh_token)
-                .await
-            {
-                Ok(refreshed) => {
-                    rotated_refresh_token = refreshed.refresh_token.or(Some(refresh_token));
-                }
-                Err(err) => {
-                    if Self::is_non_recoverable_refresh_error(&err) {
-                        let _ = self.session_manager.delete_session(session_token).await;
-                        return Err(AuthError::NoSession);
-                    }
-
-                    tracing::warn!(
-                        "OAuth refresh failed for provider {} (continuing with sliding session): {}",
-                        session_data.provider,
-                        err
-                    );
-                }
-            }
-        }
-
+        // Providers are used for identity only — the engine never calls a provider API
+        // on the user's behalf, and no provider access token is retained past login
+        // (see `SessionData`, which stores no access token). Session lifetime is
+        // therefore governed solely by our own sliding timeout and absolute max age,
+        // and renewal never contacts the IdP. Contacting it here bought nothing but a
+        // per-renewal round trip that could destroy an otherwise valid session when a
+        // provider expired the refresh token on its own schedule.
         self.session_manager
-            .refresh_session(session_token, ip_addr, user_agent, rotated_refresh_token)
+            .refresh_session(session_token, ip_addr, user_agent, None)
             .await
     }
 
@@ -487,17 +470,6 @@ impl AuthManager {
             .ok_or_else(|| AuthError::UnsupportedProvider(provider_name.to_string()))?;
 
         provider.refresh_token(refresh_token).await
-    }
-
-    fn is_non_recoverable_refresh_error(err: &AuthError) -> bool {
-        match err {
-            AuthError::OAuth2Error(msg) | AuthError::ProviderError(msg) => {
-                let lower = msg.to_lowercase();
-                lower.contains("invalid_grant") || lower.contains("invalid_token")
-            }
-            AuthError::UnsupportedProvider(_) => true,
-            _ => false,
-        }
     }
 
     /// Logout a user session
