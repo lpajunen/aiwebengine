@@ -1,48 +1,117 @@
 # Caddyfile for aiwebengine production
 # Handles HTTPS automatically with Let's Encrypt
+#
+# Three hostnames are served, all backed by the same engine cluster. Caddy
+# passes the client's Host header through unchanged, so the engine can tell
+# them apart via the Host header (see the host split notes at the bottom):
+#
+#   softagen.com         content served by ordinary solution scripts
+#   world.softagen.com   content served by one designated script
+#   manage.softagen.com  engine management APIs + management-only scripts
+#
+# The engine containers are only reachable on the internal Docker network,
+# so a Host header arriving at the engine has necessarily been matched by
+# one of the site blocks below and can be trusted.
 
-# Main production domain
+# Shared upstream definition for the engine cluster.
+(engine_upstream) {
+	reverse_proxy aiwebengine-1:3000 aiwebengine-2:3000 {
+		# Load balancing policy
+		lb_policy round_robin
+
+		# Health checks
+		health_uri /health
+		health_interval 10s
+		health_timeout 5s
+		health_status 2xx
+	}
+}
+
+# Response headers shared by every host.
+(common_headers) {
+	header {
+		# MIME sniffing protection
+		X-Content-Type-Options "nosniff"
+		# Referrer policy
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Remove Server header for security
+		-Server
+
+		# HSTS is deliberately not enabled yet. Turning it on with
+		# includeSubDomains covers world./manage. too, and browsers cache
+		# it for the full max-age, so enable it only once all three hosts
+		# are known-good over HTTPS.
+		# Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	}
+}
+
+# Access logging shared by every host. The JSON format records request.host,
+# so a single file still lets you separate traffic per hostname.
+(common_log) {
+	log {
+		output file /var/log/caddy/access.log
+		format json
+	}
+}
+
+# Main production domain - content from ordinary solution scripts
 softagen.com {
-    # Reverse proxy with load balancing to both aiwebengine instances
-    reverse_proxy aiwebengine-1:3000 aiwebengine-2:3000 {
-        # Load balancing policy
-        lb_policy round_robin
-        
-        # Health checks
-        health_uri /health
-        health_interval 10s
-        health_timeout 5s
-        health_status 2xx
-    }
-    
-    # Enable gzip compression
-    encode gzip
-    
-    # Security headers
-    header {
-        # Prevent clickjacking
-        X-Frame-Options "SAMEORIGIN"
-        # XSS protection
-        X-Content-Type-Options "nosniff"
-        # Referrer policy
-        Referrer-Policy "strict-origin-when-cross-origin"
-        # Remove Server header for security
-        -Server
-    }
-    
-    # Access logging (optional, remove in production if not needed)
-    log {
-        output file /var/log/caddy/access.log
-        format json
-    }
+	import engine_upstream
+	encode gzip
+	import common_headers
+	import common_log
+
+	header {
+		X-Frame-Options "SAMEORIGIN"
+	}
+
+	# Once the editor UI is reachable on manage.softagen.com, uncomment to
+	# stop the management API from being callable on the content origin.
+	# This is what actually closes the same-origin escalation path: without
+	# it, all three hostnames expose /engine/* identically and the split is
+	# cosmetic. Note that `/` currently redirects to /engine/installed, so
+	# enabling this needs a landing page for the content host first.
+	# handle /engine/* {
+	#     respond "Not found" 404
+	# }
+}
+
+# Designated single-script host
+world.softagen.com {
+	import engine_upstream
+	encode gzip
+	import common_headers
+	import common_log
+
+	header {
+		X-Frame-Options "SAMEORIGIN"
+	}
+
+	# Same as above - the management API has no business on this host.
+	# handle /engine/* {
+	#     respond "Not found" 404
+	# }
+}
+
+# Management host - engine management APIs and management-only scripts
+manage.softagen.com {
+	import engine_upstream
+	encode gzip
+	import common_headers
+	import common_log
+
+	header {
+		# Management UI must never be framed, not even by itself
+		X-Frame-Options "DENY"
+	}
 }
 
 # Redirect www to apex domain
 www.softagen.com {
-    redir https://softagen.com{uri} permanent
+	redir https://softagen.com{uri} permanent
 }
 
 # Redirect test subdomain to main domain
 test.softagen.com {
-    redir https://softagen.com{uri} permanent
+	redir https://softagen.com{uri} permanent
 }

@@ -83,6 +83,14 @@ impl Default for AuthManagerConfig {
 pub struct AuthManager {
     config: AuthManagerConfig,
     providers: HashMap<String, Arc<Box<dyn OAuth2Provider>>>,
+    /// Providers bound to a specific request host, keyed by (host, provider).
+    ///
+    /// Each entry is a separate provider instance carrying the redirect URI for
+    /// that host, so an OAuth flow started on `manage.example.com` comes back to
+    /// `manage.example.com` and sets its session cookie there. Instances are
+    /// built at startup from configuration, so a request's Host header is only
+    /// ever used as a lookup key here — never to construct a redirect URI.
+    host_providers: HashMap<(String, String), Arc<Box<dyn OAuth2Provider>>>,
     session_manager: Arc<AuthSessionManager>,
     security_context: Arc<AuthSecurityContext>,
     api_key: Option<String>,
@@ -101,6 +109,7 @@ impl AuthManager {
         Self {
             config,
             providers: HashMap::new(),
+            host_providers: HashMap::new(),
             session_manager,
             security_context,
             api_key,
@@ -119,9 +128,76 @@ impl AuthManager {
         Ok(())
     }
 
+    /// Register an OAuth2 provider bound to one request host.
+    ///
+    /// `host` is matched against the request's Host header, so it must be the
+    /// hostname on its own, or `hostname:port` when the port is non-default.
+    pub fn register_provider_for_host(
+        &mut self,
+        host: &str,
+        provider_name: &str,
+        provider_config: OAuth2ProviderConfig,
+    ) -> Result<(), AuthError> {
+        let provider = ProviderFactory::create_provider(provider_name, provider_config)?;
+        self.host_providers.insert(
+            (host.to_lowercase(), provider_name.to_string()),
+            Arc::new(provider),
+        );
+        Ok(())
+    }
+
     /// Get a registered provider
     pub fn get_provider(&self, provider_name: &str) -> Option<Arc<Box<dyn OAuth2Provider>>> {
         self.providers.get(provider_name).cloned()
+    }
+
+    /// Get the provider to use for a request arriving on `host`.
+    ///
+    /// Falls back to the host-independent registration when the host has no
+    /// dedicated instance, which keeps single-host deployments and requests
+    /// with an unrecognised Host header on the configured base URL.
+    pub fn get_provider_for_host(
+        &self,
+        host: Option<&str>,
+        provider_name: &str,
+    ) -> Option<Arc<Box<dyn OAuth2Provider>>> {
+        if let Some(host) = host
+            && let Some(provider) = self
+                .host_providers
+                .get(&(host.to_lowercase(), provider_name.to_string()))
+        {
+            return Some(Arc::clone(provider));
+        }
+
+        // Falling back is correct, but on a deployment that configures extra
+        // hosts it usually means one was missed: the user lands back on the
+        // base URL and their session cookie is set on the wrong host. Say so,
+        // rather than letting it look like the flow simply misbehaved.
+        if !self.host_providers.is_empty() {
+            tracing::warn!(
+                "No {} OAuth2 provider registered for host {:?}; falling back to the \
+                 base URL redirect URI, so this login will complete on a different host. \
+                 Registered hosts: {:?}. Add the host to server.additional_base_urls \
+                 (and its redirect URI to the provider) if it should log in on its own.",
+                provider_name,
+                host.unwrap_or("<no Host header>"),
+                self.hosts_with_providers()
+            );
+        }
+
+        self.get_provider(provider_name)
+    }
+
+    /// Hosts that have at least one dedicated provider instance registered.
+    pub fn hosts_with_providers(&self) -> Vec<String> {
+        let mut hosts: Vec<String> = self
+            .host_providers
+            .keys()
+            .map(|(host, _)| host.clone())
+            .collect();
+        hosts.sort();
+        hosts.dedup();
+        hosts
     }
 
     /// List all registered providers
@@ -134,6 +210,7 @@ impl AuthManager {
     /// # Arguments
     /// * `provider_name` - Name of the OAuth2 provider
     /// * `ip_addr` - Client IP address for CSRF state tracking
+    /// * `host` - Host the login was started on, selecting the redirect URI
     ///
     /// # Returns
     /// Tuple of (authorization_url, csrf_state_token)
@@ -141,9 +218,10 @@ impl AuthManager {
         &self,
         provider_name: &str,
         ip_addr: &str,
+        host: Option<&str>,
     ) -> Result<(String, String), AuthError> {
         let provider = self
-            .get_provider(provider_name)
+            .get_provider_for_host(host, provider_name)
             .ok_or_else(|| AuthError::UnsupportedProvider(provider_name.to_string()))?;
 
         // Generate CSRF state token
@@ -172,6 +250,7 @@ impl AuthManager {
     /// * `provider_name` - Name of the OAuth2 provider
     /// * `ip_addr` - Client IP address for CSRF state tracking
     /// * `redirect_url` - URL to redirect to after successful authentication
+    /// * `host` - Host the login was started on, selecting the redirect URI
     ///
     /// # Returns
     /// Tuple of (authorization_url, csrf_state_token)
@@ -180,9 +259,10 @@ impl AuthManager {
         provider_name: &str,
         ip_addr: &str,
         redirect_url: String,
+        host: Option<&str>,
     ) -> Result<(String, String), AuthError> {
         let provider = self
-            .get_provider(provider_name)
+            .get_provider_for_host(host, provider_name)
             .ok_or_else(|| AuthError::UnsupportedProvider(provider_name.to_string()))?;
 
         // Generate CSRF state token with redirect URL
@@ -213,6 +293,9 @@ impl AuthManager {
     /// * `state` - CSRF state token to validate
     /// * `ip_addr` - Client IP address
     /// * `user_agent` - Client user agent string
+    /// * `host` - Host the callback arrived on; must be the host the flow was
+    ///   started on, since the token exchange has to repeat the same
+    ///   redirect URI the authorization request used
     ///
     /// # Returns
     /// Session token for the authenticated user
@@ -223,6 +306,7 @@ impl AuthManager {
         state: &str,
         ip_addr: &str,
         user_agent: &str,
+        host: Option<&str>,
     ) -> Result<String, AuthError> {
         // Validate CSRF state
         if !self
@@ -238,7 +322,7 @@ impl AuthManager {
 
         // Get provider
         let provider = self
-            .get_provider(provider_name)
+            .get_provider_for_host(host, provider_name)
             .ok_or_else(|| AuthError::UnsupportedProvider(provider_name.to_string()))?;
 
         // Check rate limiting
@@ -598,7 +682,99 @@ mod tests {
     #[tokio::test]
     async fn test_unsupported_provider() {
         let manager = create_test_manager().await;
-        let result = manager.start_login("nonexistent", "127.0.0.1").await;
+        let result = manager.start_login("nonexistent", "127.0.0.1", None).await;
         assert!(matches!(result, Err(AuthError::UnsupportedProvider(_))));
+    }
+
+    fn test_provider_config(redirect_uri: &str) -> OAuth2ProviderConfig {
+        OAuth2ProviderConfig {
+            client_id: "test-client".to_string(),
+            client_secret: "test-secret".to_string(),
+            scopes: vec!["openid".to_string(), "email".to_string()],
+            redirect_uri: redirect_uri.to_string(),
+            auth_url: None,
+            token_url: None,
+            userinfo_url: None,
+            extra_params: HashMap::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_host_provider_selects_matching_redirect_uri() {
+        let mut manager = create_test_manager().await;
+        manager
+            .register_provider(
+                "google",
+                test_provider_config("https://example.com/callback"),
+            )
+            .expect("default registration should succeed");
+        manager
+            .register_provider_for_host(
+                "manage.example.com",
+                "google",
+                test_provider_config("https://manage.example.com/callback"),
+            )
+            .expect("host registration should succeed");
+
+        let (auth_url, _) = manager
+            .start_login("google", "127.0.0.1", Some("manage.example.com"))
+            .await
+            .expect("login should start");
+        assert!(
+            auth_url.contains("manage.example.com%2Fcallback"),
+            "authorization URL should carry the manage host redirect URI: {}",
+            auth_url
+        );
+    }
+
+    #[tokio::test]
+    async fn test_host_lookup_is_case_insensitive() {
+        let mut manager = create_test_manager().await;
+        manager
+            .register_provider_for_host(
+                "Manage.Example.Com",
+                "google",
+                test_provider_config("https://manage.example.com/callback"),
+            )
+            .expect("host registration should succeed");
+
+        assert!(
+            manager
+                .get_provider_for_host(Some("MANAGE.example.com"), "google")
+                .is_some()
+        );
+        assert_eq!(manager.hosts_with_providers(), vec!["manage.example.com"]);
+    }
+
+    #[tokio::test]
+    async fn test_unknown_host_falls_back_to_default_provider() {
+        let mut manager = create_test_manager().await;
+        manager
+            .register_provider(
+                "google",
+                test_provider_config("https://example.com/callback"),
+            )
+            .expect("default registration should succeed");
+        manager
+            .register_provider_for_host(
+                "manage.example.com",
+                "google",
+                test_provider_config("https://manage.example.com/callback"),
+            )
+            .expect("host registration should succeed");
+
+        // A Host header naming somewhere we never registered must not steer the
+        // flow anywhere new — it gets the configured base URL's provider.
+        let (auth_url, _) = manager
+            .start_login("google", "127.0.0.1", Some("attacker.test"))
+            .await
+            .expect("login should start");
+        assert!(
+            auth_url.contains("example.com%2Fcallback")
+                && !auth_url.contains("attacker.test")
+                && !auth_url.contains("manage.example.com"),
+            "unknown host should fall back to the default redirect URI: {}",
+            auth_url
+        );
     }
 }

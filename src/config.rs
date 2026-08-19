@@ -47,6 +47,16 @@ pub struct ServerConfig {
     #[serde(default)]
     pub base_url: Option<String>,
 
+    /// Additional base URLs this engine answers to, one per extra hostname
+    /// (e.g. ["https://manage.softagen.com", "https://world.softagen.com"]).
+    ///
+    /// A login started on one of these hosts completes on that same host, so
+    /// its session cookie is set there rather than on `base_url`. Every entry
+    /// must have its callback path registered with each OAuth provider, and a
+    /// hostname absent from this list gets the `base_url` behaviour.
+    #[serde(default)]
+    pub additional_base_urls: Vec<String>,
+
     /// Request timeout in seconds
     pub request_timeout_secs: u64,
 
@@ -272,6 +282,7 @@ impl Default for ServerConfig {
             host: "127.0.0.1".to_string(),
             port: 8080,
             base_url: None,
+            additional_base_urls: Vec::new(),
             request_timeout_secs: 30,
             keep_alive_timeout_secs: 60,
             max_connections: 10000,
@@ -306,6 +317,30 @@ impl ServerConfig {
                 format!("{}://{}:{}", scheme, host, self.port)
             }
         }
+    }
+
+    /// Every base URL this engine answers to: the primary one first, then any
+    /// configured extras, with duplicates removed.
+    pub fn all_base_urls(&self) -> Vec<String> {
+        let mut urls = vec![self.get_base_url()];
+        for extra in &self.additional_base_urls {
+            if !urls.iter().any(|u| u == extra) {
+                urls.push(extra.clone());
+            }
+        }
+        urls
+    }
+}
+
+/// Extract the `Host` header form of a base URL: lowercase hostname, plus the
+/// port when it is not the scheme's default (browsers omit default ports, and
+/// so does `Url::port`). Returns `None` for a URL without a host.
+pub fn base_url_authority(base_url: &str) -> Option<String> {
+    let url = url::Url::parse(base_url).ok()?;
+    let host = url.host_str()?.to_lowercase();
+    match url.port() {
+        Some(port) => Some(format!("{}:{}", host, port)),
+        None => Some(host),
     }
 }
 
@@ -528,6 +563,17 @@ impl AppConfig {
             anyhow::bail!("Max connections must be > 0");
         }
 
+        // Every additional base URL must name a host we can match a request's
+        // Host header against, otherwise per-host login cannot be wired up.
+        for extra in &self.server.additional_base_urls {
+            if base_url_authority(extra).is_none() {
+                anyhow::bail!(
+                    "Invalid server.additional_base_urls entry '{}': must be an absolute URL with a host, e.g. https://manage.example.com",
+                    extra
+                );
+            }
+        }
+
         // Validate logging configuration
         match self.logging.level.as_str() {
             "trace" | "debug" | "info" | "warn" | "error" => {}
@@ -683,6 +729,51 @@ impl AppConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_base_url_authority_omits_default_ports() {
+        assert_eq!(
+            base_url_authority("https://Manage.Softagen.com"),
+            Some("manage.softagen.com".to_string())
+        );
+        assert_eq!(
+            base_url_authority("https://softagen.com:443/ignored"),
+            Some("softagen.com".to_string())
+        );
+        assert_eq!(
+            base_url_authority("http://localhost:3000"),
+            Some("localhost:3000".to_string())
+        );
+        assert_eq!(base_url_authority("not-a-url"), None);
+    }
+
+    #[test]
+    fn test_all_base_urls_dedupes_and_leads_with_primary() {
+        let mut server = ServerConfig {
+            base_url: Some("https://softagen.com".to_string()),
+            ..ServerConfig::default()
+        };
+        server.additional_base_urls = vec![
+            "https://manage.softagen.com".to_string(),
+            "https://softagen.com".to_string(),
+        ];
+
+        assert_eq!(
+            server.all_base_urls(),
+            vec!["https://softagen.com", "https://manage.softagen.com"]
+        );
+    }
+
+    #[test]
+    fn test_validation_rejects_hostless_additional_base_url() {
+        let mut config = AppConfig::default();
+        config.server.additional_base_urls = vec!["manage.softagen.com".to_string()];
+
+        let err = config
+            .validate()
+            .expect_err("a URL without a scheme has no host to match on");
+        assert!(err.to_string().contains("additional_base_urls"));
+    }
 
     #[test]
     fn test_default_config() {

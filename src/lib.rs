@@ -517,11 +517,32 @@ struct OAuthProviderConfig {
     extra_params: HashMap<String, String>,
 }
 
+/// Point a provider's configured redirect URI at a different base URL, keeping
+/// its path and query so each host uses the same callback route.
+///
+/// Returns `None` when either URL fails to parse; the caller then leaves that
+/// host without a dedicated provider instead of guessing a redirect URI.
+fn redirect_uri_for_base(redirect_uri: &str, base_url: &str) -> Option<String> {
+    let source = url::Url::parse(redirect_uri).ok()?;
+    let mut target = url::Url::parse(base_url).ok()?;
+    target.set_path(source.path());
+    target.set_query(source.query());
+    target.set_fragment(None);
+    Some(target.to_string())
+}
+
 /// Helper: Register an OAuth2 provider with common configuration pattern
+///
+/// Registers the host-independent instance built from the configured redirect
+/// URI, then one instance per entry in `additional_base_urls` so a login
+/// started on those hosts returns there instead of to the base URL. Every
+/// derived redirect URI has to be registered with the provider as well, so
+/// each is logged at startup.
 fn register_oauth_provider(
     auth_manager: &mut auth::AuthManager,
     provider_name: &str,
     config: OAuthProviderConfig,
+    additional_base_urls: &[String],
 ) -> Result<(), auth::AuthError> {
     info!("Registering {} OAuth2 provider", provider_name);
     let oauth_config = auth::OAuth2ProviderConfig {
@@ -542,6 +563,34 @@ fn register_oauth_provider(
         userinfo_url: None,
         extra_params: config.extra_params,
     };
+
+    for base_url in additional_base_urls {
+        let Some(host) = config::base_url_authority(base_url) else {
+            warn!(
+                "Skipping {} provider for '{}': not a URL with a host",
+                provider_name, base_url
+            );
+            continue;
+        };
+        let Some(redirect_uri) = redirect_uri_for_base(&oauth_config.redirect_uri, base_url) else {
+            warn!(
+                "Skipping {} provider for '{}': could not derive a redirect URI from '{}'",
+                provider_name, base_url, oauth_config.redirect_uri
+            );
+            continue;
+        };
+        info!(
+            "Registering {} OAuth2 provider for host '{}' with redirect URI {} \
+             (must be registered with the provider)",
+            provider_name, host, redirect_uri
+        );
+        let host_config = auth::OAuth2ProviderConfig {
+            redirect_uri,
+            ..oauth_config.clone()
+        };
+        auth_manager.register_provider_for_host(&host, provider_name, host_config)?;
+    }
+
     auth_manager.register_provider(provider_name, oauth_config)
 }
 
@@ -902,6 +951,10 @@ async fn initialize_auth_manager(
         security_config.api_key.clone(),
     );
 
+    // Extra hostnames this engine answers to; each gets its own provider
+    // instance so a login there completes there.
+    let additional_base_urls = server_config.additional_base_urls.clone();
+
     // Register OAuth2 providers if configured
     if let Some(google_config) = auth_config.providers.google {
         register_oauth_provider(
@@ -915,6 +968,7 @@ async fn initialize_auth_manager(
                 default_scopes: vec!["openid", "profile", "email"],
                 extra_params: HashMap::new(),
             },
+            &additional_base_urls,
         )?;
     }
 
@@ -934,6 +988,7 @@ async fn initialize_auth_manager(
                 default_scopes: vec!["openid", "profile", "email"],
                 extra_params,
             },
+            &additional_base_urls,
         )?;
     }
 
@@ -959,6 +1014,7 @@ async fn initialize_auth_manager(
                 default_scopes: vec!["name", "email"],
                 extra_params,
             },
+            &additional_base_urls,
         )?;
     }
 
@@ -2821,6 +2877,40 @@ mod tests {
     use super::*;
     use crate::route_index::{calculate_route_specificity, match_route_pattern};
     use std::sync::{Once, OnceLock};
+
+    #[test]
+    fn test_redirect_uri_for_base_swaps_origin_only() {
+        assert_eq!(
+            redirect_uri_for_base(
+                "https://softagen.com/auth/callback/google",
+                "https://manage.softagen.com"
+            ),
+            Some("https://manage.softagen.com/auth/callback/google".to_string())
+        );
+    }
+
+    #[test]
+    fn test_redirect_uri_for_base_keeps_query_and_port() {
+        assert_eq!(
+            redirect_uri_for_base(
+                "https://softagen.com/auth/callback/google?flow=web",
+                "http://localhost:3000"
+            ),
+            Some("http://localhost:3000/auth/callback/google?flow=web".to_string())
+        );
+    }
+
+    #[test]
+    fn test_redirect_uri_for_base_rejects_unparseable_input() {
+        assert_eq!(
+            redirect_uri_for_base("not-a-url", "https://manage.softagen.com"),
+            None
+        );
+        assert_eq!(
+            redirect_uri_for_base("https://softagen.com/auth/callback/google", "not-a-url"),
+            None
+        );
+    }
 
     static INIT_DB: Once = Once::new();
     static DB_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();

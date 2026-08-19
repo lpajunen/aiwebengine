@@ -57,6 +57,15 @@ services:
       - ./data:/app/data:ro
     environment:
       - RUST_LOG=info
+      # Extra hostnames served alongside server.base_url are configured in
+      # config.production.toml (server.additional_base_urls), which the image
+      # bakes in as /app/config.toml. Deliberately NOT set here: an env value
+      # overrides the file wholesale, so a default of [] would silently drop
+      # every extra host. To override per-deployment instead of editing the
+      # file, uncomment the line below and set the variable in .env to a full
+      # JSON array — a partial list here means the hosts you omit fall back to
+      # base_url.
+      # - APP_SERVER__ADDITIONAL_BASE_URLS=${APP_SERVER__ADDITIONAL_BASE_URLS}
       # Auth configuration
       - APP_AUTH__JWT_SECRET=${APP_AUTH__JWT_SECRET:-change-this-in-production}
       - APP_AUTH__BOOTSTRAP_ADMINS=${APP_AUTH__BOOTSTRAP_ADMINS:-["admin@example.com"]}
@@ -112,6 +121,15 @@ services:
       - ./data:/app/data:ro
     environment:
       - RUST_LOG=info
+      # Extra hostnames served alongside server.base_url are configured in
+      # config.production.toml (server.additional_base_urls), which the image
+      # bakes in as /app/config.toml. Deliberately NOT set here: an env value
+      # overrides the file wholesale, so a default of [] would silently drop
+      # every extra host. To override per-deployment instead of editing the
+      # file, uncomment the line below and set the variable in .env to a full
+      # JSON array — a partial list here means the hosts you omit fall back to
+      # base_url.
+      # - APP_SERVER__ADDITIONAL_BASE_URLS=${APP_SERVER__ADDITIONAL_BASE_URLS}
       # Auth configuration
       - APP_AUTH__JWT_SECRET=${APP_AUTH__JWT_SECRET:-change-this-in-production}
       - APP_AUTH__BOOTSTRAP_ADMINS=${APP_AUTH__BOOTSTRAP_ADMINS:-["admin@example.com"]}

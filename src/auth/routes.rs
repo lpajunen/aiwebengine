@@ -136,6 +136,46 @@ fn get_user_agent(headers: &HeaderMap) -> String {
         .to_string()
 }
 
+/// Extract the host a request was addressed to, used to pick the OAuth
+/// redirect URI so a login completes on the host it started on.
+///
+/// The value is only ever used as a lookup key against hosts registered at
+/// startup, so an unrecognised or spoofed Host header degrades to the
+/// configured base URL rather than steering the flow anywhere new.
+fn get_request_host(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+}
+
+/// Reduce a caller-supplied post-login redirect to a same-host relative path.
+///
+/// The OAuth state carrying this value is not authenticated, and the value
+/// itself originates in a query parameter, so an absolute URL here would let
+/// anyone bounce a freshly authenticated user to another origin. Keeping it
+/// relative also keeps the user on the host whose session cookie was just set.
+fn safe_redirect_target(candidate: Option<&str>) -> String {
+    let fallback = "/".to_string();
+    let Some(target) = candidate else {
+        return fallback;
+    };
+    let target = target.trim();
+
+    // Must be an absolute path. Reject protocol-relative ("//host") and
+    // backslash variants that some browsers normalise into an authority.
+    if !target.starts_with('/')
+        || target.starts_with("//")
+        || target.starts_with("/\\")
+        || target.contains(['\r', '\n'])
+    {
+        return fallback;
+    }
+
+    target.to_string()
+}
+
 /// Login page parameters
 #[derive(Debug, Deserialize)]
 pub struct LoginPageParams {
@@ -160,7 +200,7 @@ pub async fn login_page(
     Query(params): Query<LoginPageParams>,
 ) -> Html<String> {
     let providers = auth_manager.list_providers();
-    let redirect_param = params.redirect.unwrap_or_else(|| "/".to_string());
+    let redirect_param = safe_redirect_target(params.redirect.as_deref());
     let encoded_redirect = urlencoding::encode(&redirect_param);
 
     let html = format!(
@@ -303,12 +343,16 @@ pub async fn start_login(
     headers: HeaderMap,
 ) -> Result<Redirect, ErrorResponse> {
     let ip_addr = get_client_ip(&headers);
+    // Selects the redirect URI, so the flow returns to the host it began on
+    // and sets its session cookie there.
+    let host = get_request_host(&headers);
 
     // Generate authorization URL with or without redirect
     let (auth_url, _state) = if let Some(ref redirect_url) = params.redirect {
+        let redirect_url = safe_redirect_target(Some(redirect_url));
         tracing::info!("Starting login with redirect URL: {}", redirect_url);
         auth_manager
-            .start_login_with_redirect(&provider, &ip_addr, redirect_url.clone())
+            .start_login_with_redirect(&provider, &ip_addr, redirect_url, host.as_deref())
             .await
             .map_err(|e| ErrorResponse {
                 error: "login_failed".to_string(),
@@ -317,7 +361,7 @@ pub async fn start_login(
     } else {
         tracing::info!("Starting login without redirect URL");
         auth_manager
-            .start_login(&provider, &ip_addr)
+            .start_login(&provider, &ip_addr, host.as_deref())
             .await
             .map_err(|e| ErrorResponse {
                 error: "login_failed".to_string(),
@@ -373,6 +417,10 @@ pub async fn oauth_callback(
 
     let ip_addr = get_client_ip(&headers);
     let user_agent = get_user_agent(&headers);
+    // The callback necessarily lands on the redirect URI's host, so this
+    // reselects the provider instance the authorization request used and the
+    // token exchange repeats the matching redirect URI.
+    let host = get_request_host(&headers);
 
     // Provider comes from the URL path parameter
     // Extract redirect URL from state (stateless approach)
@@ -387,7 +435,14 @@ pub async fn oauth_callback(
 
     // Handle callback
     let session_token = auth_manager
-        .handle_callback(&provider, &code, &state, &ip_addr, &user_agent)
+        .handle_callback(
+            &provider,
+            &code,
+            &state,
+            &ip_addr,
+            &user_agent,
+            host.as_deref(),
+        )
         .await
         .map_err(|e| ErrorResponse {
             error: "authentication_failed".to_string(),
@@ -405,11 +460,12 @@ pub async fn oauth_callback(
         if config.cookie_secure { "; Secure" } else { "" }
     );
 
-    // Redirect to stored URL or default to home
-    let redirect_target = redirect_url.as_deref().unwrap_or("/");
+    // Redirect to stored URL or default to home, keeping the user on the host
+    // whose session cookie was just set
+    let redirect_target = safe_redirect_target(redirect_url.as_deref());
 
     // Return redirect with cookie
-    let response = Redirect::to(redirect_target).into_response();
+    let response = Redirect::to(&redirect_target).into_response();
     let (mut parts, body) = response.into_parts();
     let cookie_header = cookie_value.parse().map_err(|_| ErrorResponse {
         error: "internal_error".to_string(),
@@ -475,8 +531,8 @@ pub async fn logout(
     );
 
     // Redirect to specified location or home
-    let redirect_url = params.redirect.as_deref().unwrap_or("/");
-    let response = Redirect::to(redirect_url).into_response();
+    let redirect_url = safe_redirect_target(params.redirect.as_deref());
+    let response = Redirect::to(&redirect_url).into_response();
     let (mut parts, body) = response.into_parts();
     let cookie_header = cookie_value.parse().map_err(|_| ErrorResponse {
         error: "internal_error".to_string(),
@@ -1441,5 +1497,70 @@ mod tests {
 
         let ua = get_user_agent(&headers);
         assert_eq!(ua, "Mozilla/5.0 Test");
+    }
+
+    #[test]
+    fn test_get_request_host_normalises_case() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::HOST,
+            HeaderValue::from_static("Manage.Softagen.Com"),
+        );
+
+        assert_eq!(
+            get_request_host(&headers),
+            Some("manage.softagen.com".to_string())
+        );
+    }
+
+    #[test]
+    fn test_get_request_host_keeps_port() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("localhost:3000"));
+
+        assert_eq!(
+            get_request_host(&headers),
+            Some("localhost:3000".to_string())
+        );
+    }
+
+    #[test]
+    fn test_get_request_host_absent() {
+        assert_eq!(get_request_host(&HeaderMap::new()), None);
+    }
+
+    #[test]
+    fn test_safe_redirect_target_keeps_relative_paths() {
+        assert_eq!(
+            safe_redirect_target(Some("/engine/installed")),
+            "/engine/installed"
+        );
+        assert_eq!(safe_redirect_target(Some("/a?b=c#d")), "/a?b=c#d");
+    }
+
+    #[test]
+    fn test_safe_redirect_target_rejects_other_origins() {
+        // Absolute, protocol-relative and backslash forms would all take a
+        // freshly authenticated user off the host that just set their cookie.
+        for hostile in [
+            "https://evil.test/",
+            "http://evil.test/",
+            "//evil.test/",
+            "/\\evil.test/",
+            "/ok\r\nLocation: https://evil.test/",
+        ] {
+            assert_eq!(
+                safe_redirect_target(Some(hostile)),
+                "/",
+                "expected '{}' to be rejected",
+                hostile
+            );
+        }
+    }
+
+    #[test]
+    fn test_safe_redirect_target_defaults_to_root() {
+        assert_eq!(safe_redirect_target(None), "/");
+        assert_eq!(safe_redirect_target(Some("")), "/");
     }
 }
