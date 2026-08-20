@@ -1,10 +1,9 @@
 //! Tests for the native user-administration surface.
 //!
-//! `listUsers`/`addUserRole`/`removeUserRole` used to be reachable only through
-//! the deprecated `userStorage` JS globals. They are now engine functionality
-//! exposed over HTTP (`/engine/users`, `/engine/user_roles`) and MCP
-//! (`list_users`, `add_user_role`, `remove_user_role`); these tests cover the
-//! shared authorization layer both entry points call into.
+//! Listing users and changing their roles is engine functionality, exposed over
+//! HTTP (`/engine/users`, `/engine/user_roles`) and MCP (`list_users`,
+//! `add_user_role`, `remove_user_role`); these tests cover the shared
+//! authorization layer both entry points call into.
 
 mod common;
 

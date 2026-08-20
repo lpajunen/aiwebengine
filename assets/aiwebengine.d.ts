@@ -1398,9 +1398,8 @@ interface Database {
 
 /**
  * Console logging interface
- * Note: additional methods (listLogs, listLogsForUri, pruneLogs) are available
- * to callers with the required capabilities — see aiwebengine-priv.d.ts
- * defined in aiwebengine-priv.d.ts
+ * Note: reading and pruning stored log entries is engine administration, not a
+ * script API — use `GET|DELETE /engine/script_logs` or the equivalent MCP tools.
  */
 interface Console {
   /**

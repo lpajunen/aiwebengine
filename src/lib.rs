@@ -406,27 +406,6 @@ pub fn get_rust_openapi_spec() -> String {
                     }
                 }));
 
-                let type_defs_priv_path =
-                    format!("/engine/types/v{}/aiwebengine-priv.d.ts", version);
-                paths.insert(type_defs_priv_path.clone(), serde_json::json!({
-                    "get": {
-                        "tags": ["Documentation"],
-                        "summary": "TypeScript private type definitions",
-                        "description": "TypeScript type definitions for the AIWebEngine private/internal API",
-                        "responses": {
-                            "200": {
-                                "description": "TypeScript type definitions file",
-                                "content": {
-                                    "text/plain": {}
-                                }
-                            },
-                            "404": {
-                                "description": "Type definitions not found"
-                            }
-                        }
-                    }
-                }));
-
                 // Documentation routes are now handled by docs.js feature script
                 // OpenAPI spec is automatically generated from route registrations
                 // So these static entries are no longer needed:
@@ -2421,15 +2400,10 @@ async fn setup_routes(
     }
 
     let version = env!("CARGO_PKG_VERSION");
-    app = app
-        .route(
-            &format!("/engine/types/v{}/aiwebengine.d.ts", version),
-            axum::routing::get(|| serve_type_defs("aiwebengine.d.ts")),
-        )
-        .route(
-            &format!("/engine/types/v{}/aiwebengine-priv.d.ts", version),
-            axum::routing::get(|| serve_type_defs("aiwebengine-priv.d.ts")),
-        );
+    app = app.route(
+        &format!("/engine/types/v{}/aiwebengine.d.ts", version),
+        axum::routing::get(|| serve_type_defs("aiwebengine.d.ts")),
+    );
 
     // Documentation routes are now handled by docs.js feature script
     // Commented out to avoid conflicts with JavaScript implementation

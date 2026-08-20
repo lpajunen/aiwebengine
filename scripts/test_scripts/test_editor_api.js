@@ -5,17 +5,17 @@ function testEditorAPI(context) {
   let result = "Testing editor API endpoints...\n\n";
 
   try {
-    // Test 1: List scripts
-    const scriptsJson =
-      typeof scriptStorage !== "undefined" &&
-      typeof scriptStorage.listScripts === "function"
-        ? scriptStorage.listScripts()
+    // Test 1: List this script's assets
+    const assetsJson =
+      typeof assetStorage !== "undefined" &&
+      typeof assetStorage.listAssets === "function"
+        ? assetStorage.listAssets()
         : "[]";
-    const scriptMetadata = JSON.parse(scriptsJson);
-    const scripts = scriptMetadata.map((meta) => meta.uri);
-    result += "Available scripts: " + JSON.stringify(scripts) + "\n\n";
+    const assetMetadata = JSON.parse(assetsJson);
+    const assets = assetMetadata.map((meta) => meta.name);
+    result += "Available assets: " + JSON.stringify(assets) + "\n\n";
   } catch (error) {
-    result += "Error listing scripts: " + error.message + "\n\n";
+    result += "Error listing assets: " + error.message + "\n\n";
   }
 
   result += "Basic test completed.";

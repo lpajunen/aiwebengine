@@ -574,9 +574,6 @@ async fn test_secure_script_execution_authenticated() {
     let script_content = r#"
         console.log("Hello from secure context!");
         
-        // Try to upsert a script (should work with WriteScripts capability)
-        scriptStorage.upsertScript("test_script", "console.log('test');");
-        
         routeRegistry.registerRoute("/test", "handleTest", "GET");
         
         function handleTest(request) {
@@ -612,16 +609,16 @@ async fn test_secure_script_execution_anonymous() {
     // Test with anonymous user (limited capabilities)
     let user_context = UserContext::anonymous();
     let script_content = r#"
-        // Anonymous users can view logs
-        console.listLogs();
+        // Anonymous users can write logs
+        console.log("hello from an anonymous script");
         
-        // But cannot upsert scripts (should fail with capability error)
-        scriptStorage.upsertScript("test_script", "console.log('test');");
+        // But cannot delete assets (should fail with capability error)
+        assetStorage.deleteAsset("some_asset");
     "#;
 
     let result = execute_script_secure("/test_anonymous", script_content, user_context);
 
-    // Script should still execute, but upsertScript should return error message
+    // Script should still execute, but deleteAsset should return error message
     assert!(
         result.success,
         "Script execution should succeed even with capability failures"
@@ -714,16 +711,16 @@ async fn test_capability_enforcement() {
         return;
     }
     setup_env().await;
-    let user_context = UserContext::anonymous(); // No DeleteScripts capability
+    let user_context = UserContext::anonymous(); // No DeleteAssets capability
 
     let script_content = r#"
         // This should fail due to insufficient capabilities
-        scriptStorage.deleteScript("some_script");
+        assetStorage.deleteAsset("some_asset");
     "#;
 
     let result = execute_script_secure("/test_capabilities", script_content, user_context);
 
-    // Script should execute, but deleteScript should return capability error
+    // Script should execute, but deleteAsset should return capability error
     assert!(
         result.success,
         "Script should execute despite capability failures"

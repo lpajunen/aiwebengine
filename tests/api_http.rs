@@ -154,7 +154,7 @@ async fn test_script_logs_all_scripts_and_filters() {
     let base = format!("http://127.0.0.1:{}", port);
 
     // Omitting uri spans every script, and each entry names the script that
-    // logged it — the all-scripts view console.listLogs() had no HTTP twin for.
+    // logged it.
     let body: serde_json::Value = client
         .get(format!("{}/engine/script_logs", base))
         .send()
@@ -318,8 +318,8 @@ async fn test_routes_endpoint() {
     let routes = body["routes"].as_array().expect("routes is not an array");
     assert_eq!(body["count"], routes.len());
     assert!(body["host"].is_null());
-    // Every entry carries the introspection shape routeRegistry.listRoutes()
-    // returns, so a client needs no transform.
+    // Every entry carries the full introspection shape, so a client needs no
+    // transform.
     for route in routes {
         assert!(route["path"].is_string(), "route without a path: {}", route);
         assert!(

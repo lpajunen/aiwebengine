@@ -2843,11 +2843,11 @@ mod tests {
 
         let script_uri = unique_test_id("test-mcp-caller-capabilities");
         let user_id = unique_test_id("user");
-        let target_script = unique_test_id("script-owned-by-someone-else");
+        let target_asset = unique_test_id("asset");
         let content = r#"
             function toolHandler(context) {
                 return {
-                    deleted: scriptStorage.deleteScript(context.args.targetScript),
+                    deleteResult: assetStorage.deleteAsset(context.args.targetAsset),
                     isAdmin: context.request.auth.isAdmin,
                     userId: context.request.auth.userId
                 };
@@ -2860,7 +2860,7 @@ mod tests {
             "toolHandler",
             "delete-check",
             serde_json::json!({
-                "targetScript": target_script,
+                "targetAsset": target_asset,
             }),
             Some(crate::auth::JsAuthContext::authenticated(
                 user_id.clone(),
@@ -2879,7 +2879,16 @@ mod tests {
 
         assert_eq!(parsed["isAdmin"], false);
         assert_eq!(parsed["userId"], user_id);
-        assert_eq!(parsed["deleted"], false);
+        // The caller holds no DeleteAssets capability, so the handler's delete
+        // is refused rather than running with the engine's own rights.
+        let delete_result = parsed["deleteResult"]
+            .as_str()
+            .expect("deleteResult should be a string");
+        assert!(
+            delete_result.starts_with("Error:"),
+            "expected a capability error, got: {}",
+            delete_result
+        );
     }
 
     #[test]

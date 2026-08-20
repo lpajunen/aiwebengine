@@ -134,31 +134,25 @@ export APP_AUTH__BOOTSTRAP_ADMINS='["admin@example.com"]'
 
 ### Secrets (AI Integration)
 
-Secrets are stored in the database via the `secretStorage` JavaScript API — no environment variables needed.
+Secrets are stored in the database and managed over the engine API — no environment variables needed.
 
-```javascript
-// As an administrator or owner of the target script
-secretStorage.setSecretForUri(
-  "https://example.com/my-script",
-  "anthropic_api_key",
-  "sk-ant-api03-...",
-);
-secretStorage.setSecretForUri(
-  "https://example.com/my-script",
-  "openai_api_key",
-  "sk-...",
-);
-secretStorage.setSecretForUri(
-  "https://example.com/my-script",
-  "stripe_api_key",
-  "sk_live_...",
-);
-secretStorage.setSecretForUri(
-  "https://example.com/my-script",
-  "sendgrid_api_key",
-  "SG...",
-);
+```bash
+# As an administrator or owner of the target script
+SCRIPT="https://example.com/my-script"
+for pair in \
+  "anthropic_api_key:sk-ant-api03-..." \
+  "openai_api_key:sk-..." \
+  "stripe_api_key:sk_live_..." \
+  "sendgrid_api_key:SG..."
+do
+  curl -X POST "https://your-engine.com/engine/secrets?script=$SCRIPT" \
+    -H "Content-Type: application/json" \
+    -d "{\"key\": \"${pair%%:*}\", \"value\": \"${pair#*:}\"}"
+done
 ```
+
+The same operations are available as MCP tools: `list_secrets`, `write_secret`,
+`delete_secret`, `clear_secrets`.
 
 ---
 

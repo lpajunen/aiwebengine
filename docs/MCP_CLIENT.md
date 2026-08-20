@@ -254,16 +254,16 @@ The client works with any MCP server that implements:
 
 ### Secret Configuration
 
-Secrets are stored in the database via the `secretStorage` API and are **never** exposed to JavaScript code. An administrator sets script-level secrets; users can also set their own.
+Secrets are stored in the database and are **never** exposed to JavaScript code. An administrator or script owner sets script-level secrets over the engine API; users can also set their own from JavaScript.
+
+```bash
+# Admin or script owner: set a secret for a specific script
+curl -X POST "https://your-engine.com/engine/secrets?script=https://example.com/my-script" \
+  -H "Content-Type: application/json" \
+  -d '{"key": "github_token", "value": "ghp_abc123..."}'
+```
 
 ```javascript
-// Admin or script owner: set a secret for a specific script
-secretStorage.setSecretForUri(
-  "https://example.com/my-script",
-  "github_token",
-  "ghp_abc123...",
-);
-
 // Per-user: set a secret scoped to the current user
 secretStorage.setSecret("github_token", "ghp_abc123...");
 ```
@@ -325,14 +325,14 @@ function callToolWithRetry(client, toolName, args, maxRetries = 3) {
 
 Ensure the secret has been stored in the database:
 
-```javascript
-// As an admin or owner of the script: store a script-level secret
-secretStorage.setSecretForUri(
-  "https://your-script-uri",
-  "github_token",
-  "ghp_...",
-);
+```bash
+# As an admin or owner of the script: store a script-level secret
+curl -X POST "https://your-engine.com/engine/secrets?script=https://your-script-uri" \
+  -H "Content-Type: application/json" \
+  -d '{"key": "github_token", "value": "ghp_..."}'
+```
 
+```javascript
 // Or each user stores their own
 secretStorage.setSecret("github_token", "ghp_...");
 ```

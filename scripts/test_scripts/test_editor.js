@@ -7,18 +7,7 @@ function testEditorAPI(context) {
   const testResults = [];
 
   try {
-    // Test 1: List scripts
-    testResults.push("Testing script listing...");
-    const scriptsJson =
-      typeof scriptStorage !== "undefined" &&
-      typeof scriptStorage.listScripts === "function"
-        ? scriptStorage.listScripts()
-        : "[]";
-    const scriptMetadata = JSON.parse(scriptsJson);
-    const scripts = scriptMetadata.map((meta) => meta.uri);
-    testResults.push(`Found ${scripts.length} scripts: ${scripts.join(", ")}`);
-
-    // Test 2: List assets
+    // Test 1: List assets
     testResults.push("Testing asset listing...");
     const assetsJson =
       typeof assetStorage !== "undefined" &&
@@ -31,16 +20,7 @@ function testEditorAPI(context) {
       `Found ${assetNames.length} assets: ${assetNames.join(", ")}`,
     );
 
-    // Test 3: List logs
-    testResults.push("Testing log listing...");
-    const logsJson =
-      typeof console !== "undefined" && typeof console.listLogs === "function"
-        ? console.listLogs()
-        : "[]";
-    const logs = JSON.parse(logsJson);
-    testResults.push(`Found ${logs.length} log entries`);
-
-    // Test 4: Check if editor files exist
+    // Test 2: Check if editor files exist
     testResults.push("Checking editor files...");
     // Note: editor.html is not a public asset, so it is not fetched here
     const editorCss =

@@ -1,11 +1,10 @@
 //! Native engine management API for scripts and assets.
 //!
-//! These REST routes and MCP tools were previously implemented by the
-//! bootstrapped `core.js` and `cli.js` scripts. They are engine
-//! functionality, so they live in Rust: the HTTP contract and MCP tool
-//! names/shapes are kept identical to the script implementations they
-//! replace. Authorization mirrors the checks that `secure_globals`
-//! applies to the equivalent `scriptStorage`/`assetStorage` functions.
+//! These REST routes and MCP tools are engine functionality, so they live in
+//! Rust. They are the only way to administer scripts, assets, users, secrets
+//! and logs: the JavaScript sandbox exposes no engine-management API, and every
+//! call here is authorized against the calling user's capabilities, ownership
+//! of the target script, and role.
 
 use axum::extract::{Extension, Query};
 use axum::http::StatusCode;
@@ -179,7 +178,6 @@ pub fn register_engine_streams() {
 
 /// Re-initialize a script in the background after an upsert: clear its
 /// GraphQL/MCP registrations, run init(), and rebuild the GraphQL schema.
-/// Mirrors the behavior of the sandboxed `scriptStorage.upsertScript`.
 fn spawn_script_init(script_uri: String) {
     tokio::task::spawn(async move {
         crate::graphql::clear_script_graphql_registrations(&script_uri);
@@ -228,9 +226,8 @@ impl UpsertAction {
     }
 }
 
-/// Create or update a script with the same authorization semantics as
-/// `scriptStorage.upsertScript`: WriteScripts capability required, and
-/// existing scripts can only be modified by an admin or an owner.
+/// Create or update a script: WriteScripts capability required, and existing
+/// scripts can only be modified by an admin or an owner.
 /// Broadcasts the update and re-initializes the script on success.
 pub fn upsert_script_authorized(
     user: &UserContext,
@@ -284,9 +281,9 @@ pub fn upsert_script_authorized(
     Ok(action)
 }
 
-/// Delete a script with the same semantics as `scriptStorage.deleteScript`:
-/// DeleteScripts capability required. Returns false when the capability is
-/// missing or the script does not exist. Broadcasts the removal on success.
+/// Delete a script: DeleteScripts capability required. Returns false when the
+/// capability is missing or the script does not exist. Broadcasts the removal
+/// on success.
 pub fn delete_script_authorized(user: &UserContext, uri: &str, via: Option<&str>) -> bool {
     if let Err(e) = user.require_capability(&Capability::DeleteScripts) {
         let auditor = auditor();
@@ -391,10 +388,8 @@ const PRUNE_KEEPS_PER_SCRIPT: u32 = 20;
 
 /// Delete logs; DeleteLogs capability required.
 ///
-/// With a `uri` this clears that script's logs outright, the operation the
-/// repository has always had but no JS or HTTP caller could reach. Without one
-/// it prunes every script back to its newest entries, matching
-/// `console.pruneLogs()`.
+/// With a `uri` this clears that script's logs outright. Without one it prunes
+/// every script back to its newest entries.
 pub fn delete_logs_authorized(user: &UserContext, uri: Option<&str>) -> AppResult<Value> {
     user.require_capability(&Capability::DeleteLogs)?;
     match uri {
@@ -449,8 +444,7 @@ pub enum OwnerChangeError {
     Storage(String),
 }
 
-/// List a script's owners. Anyone may view owners (for transparency), same
-/// as `scriptStorage.getScriptOwners`.
+/// List a script's owners. Anyone may view owners, for transparency.
 pub fn owners_authorized(uri: &str) -> Result<Vec<String>, String> {
     repository::get_script_owners(uri).map_err(|e| format!("{}", e))
 }
@@ -490,16 +484,16 @@ pub fn remove_owner_authorized(
 }
 
 /// Why a secret operation was rejected.
+#[derive(Debug)]
 pub enum SecretAccessError {
     AccessDenied,
     Validation(String),
     Storage(String),
 }
 
-/// Cross-script secret management (the `secretStorage.*ForUri` functions):
-/// admins and owners of the target script may manage its secret keys. Secret
-/// values are write-only through this surface — there is deliberately no
-/// read-value operation.
+/// Cross-script secret management: admins and owners of the target script may
+/// manage its secret keys. Secret values are write-only through this surface —
+/// there is deliberately no read-value operation.
 fn can_manage_secrets(user: &UserContext, script_uri: &str) -> bool {
     is_admin_or_owner(user, script_uri)
 }
@@ -515,7 +509,7 @@ pub fn list_secrets_authorized(
     Ok(repository::list_script_secrets(script_uri).unwrap_or_default())
 }
 
-/// Store a secret for a script. Same validation as `setSecretForUri`.
+/// Store a secret for a script.
 pub fn set_secret_authorized(
     user: &UserContext,
     script_uri: &str,
@@ -686,9 +680,8 @@ fn user_to_json(user: &crate::user_repository::User) -> Value {
 
 /// List every user in the directory; administrators only.
 ///
-/// Unlike the deprecated `userStorage.listUsers()`, an unauthorized caller is
-/// denied rather than handed an empty array — "denied" and "no users" must not
-/// look alike.
+/// An unauthorized caller is denied rather than handed an empty array —
+/// "denied" and "no users" must not look alike.
 pub fn list_users_authorized(user: &UserContext) -> Result<Vec<Value>, UserAdminError> {
     if !is_user_admin(user) {
         audit_user_admin_denied(user, "list");
@@ -774,8 +767,7 @@ fn count_administrators() -> Result<usize, UserAdminError> {
 }
 
 /// Whether the user may access assets of `script_uri` given the per-operation
-/// capability: capability holders, script owners, and admins all qualify —
-/// same rule as the `assetStorage.*ForUri` functions.
+/// capability: capability holders, script owners, and admins all qualify.
 fn can_access_assets(user: &UserContext, script_uri: &str, capability: &Capability) -> bool {
     user.has_capability(capability)
         || user.has_capability(&Capability::DeleteScripts)
@@ -959,9 +951,8 @@ pub fn delete_asset_authorized(
 /// routes, then SSE streams as `STREAM` rows, then asset routes as `ASSET`
 /// rows. ReadScripts capability required (empty otherwise).
 ///
-/// Backs both `routeRegistry.listRoutes()` and `GET /engine/routes`, so the two
-/// can never drift. Host bindings are not applied here — this is the whole
-/// engine's view; callers that care filter by `script_uri` (see
+/// Backs `GET /engine/routes`. Host bindings are not applied here — this is the
+/// whole engine's view; callers that care filter by `script_uri` (see
 /// [`crate::route_index::script_serves_host`]).
 pub fn routes_introspection_authorized(user: &UserContext) -> AppResult<Vec<Value>> {
     user.require_capability(&Capability::ReadScripts)?;
@@ -1605,10 +1596,10 @@ pub struct RoutesParams {
 /// List every registration in the engine: script routes, SSE streams
 /// (`STREAM`) and asset routes (`ASSET`).
 ///
-/// The flat list `routeRegistry.listRoutes()` returns, without the transform a
-/// client would need to rebuild it from `/engine/openapi.json`. Unfiltered by
-/// default, since the management host need not be a host scripts publish on;
-/// pass `host` to see only what is live on one host.
+/// A flat list, without the transform a client would need to rebuild it from
+/// `/engine/openapi.json`. Unfiltered by default, since the management host
+/// need not be a host scripts publish on; pass `host` to see only what is live
+/// on one host.
 #[utoipa::path(
     get,
     path = "/engine/routes",
@@ -1683,9 +1674,8 @@ fn parse_since(raw: &str) -> Option<std::time::SystemTime> {
 /// Get logs for one script (`uri` given) or across every script.
 ///
 /// Entries come back oldest-first for a single script and newest-first for the
-/// all-scripts view, matching `console.listLogsForUri()` and
-/// `console.listLogs()` respectively. `level`, `since` and `limit` filter in
-/// SQL; `limit` keeps the newest matching entries.
+/// all-scripts view. `level`, `since` and `limit` filter in SQL; `limit` keeps
+/// the newest matching entries.
 #[utoipa::path(
     get,
     path = "/engine/script_logs",
@@ -2016,7 +2006,7 @@ pub async fn assets_delete_route(
     }
 }
 
-/// List all scripts with metadata (same shape as `scriptStorage.listScripts`).
+/// List all scripts with metadata.
 #[utoipa::path(
     get,
     path = "/engine/scripts",

@@ -21,6 +21,8 @@ External API access: public, authenticated, role based. There are engine provide
 
 All scripts are equal: every script has access to the same engine-internal APIs. What a call is allowed to do depends on the calling user — their capabilities, whether they own the target script, and whether they hold the editor or administrator role.
 
+Engine administration — managing scripts, assets, users, secrets, logs, and route introspection — is not part of the JavaScript API. It is available over the `/engine/*` HTTP endpoints and the engine's MCP tools, which apply the same capability, ownership, and role rules.
+
 Users with editor and administrator roles can force all script APIs to be external for debugging and testing purposes. This done only per script basis.
 
 Engine supports user authentication and authorization. Engine supports user role and permission management. Engine supports script management and deployment. Engine supports logging and monitoring. (In the future, it could be possible to separate user authentication and authorization to a separate service if some cloud environment is used and they provide such capabilities. In that case, the engine would focus on script management and deployment, logging and monitoring, and API access control.)

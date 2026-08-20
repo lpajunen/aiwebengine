@@ -1,6 +1,5 @@
-/// Test to verify that error messages from scriptStorage.upsertScript are properly detected
-/// This addresses the bug where error strings were treated as success because JavaScript
-/// treats non-empty strings as truthy values.
+/// Test to verify that failures reported by `POST /engine/upsert_script` are
+/// surfaced as errors rather than being reported as a successful write.
 mod common;
 
 #[cfg(test)]
@@ -74,31 +73,5 @@ function init(context) {
         // which is complex in integration tests
 
         println!("✓ Error detection mechanism is in place");
-    }
-
-    #[test]
-    fn test_javascript_error_string_detection() {
-        // This test verifies the logic for detecting error strings
-        // Simulating JavaScript behavior in Rust
-
-        let success_message = "Script 'test' upserted successfully";
-        let error_message = "Error: Permission denied. You must be an administrator or owner to modify script 'test'";
-        let another_error = "Error: Script name and content cannot be empty";
-
-        // In the fixed JavaScript code, we check result.startsWith("Error:")
-        assert!(
-            !success_message.starts_with("Error:"),
-            "Success message should not start with Error:"
-        );
-        assert!(
-            error_message.starts_with("Error:"),
-            "Error message should start with Error:"
-        );
-        assert!(
-            another_error.starts_with("Error:"),
-            "Another error should start with Error:"
-        );
-
-        println!("✓ Error string detection pattern verified");
     }
 }
