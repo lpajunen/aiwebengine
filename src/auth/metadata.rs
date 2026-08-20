@@ -2,8 +2,14 @@
 ///
 /// Implements the .well-known/oauth-authorization-server endpoint
 /// for automatic discovery of authorization server capabilities.
-use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
+use axum::{
+    Json,
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
+};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// OAuth 2.0 Authorization Server Metadata (RFC 8414 Section 2)
@@ -75,10 +81,21 @@ pub struct AuthorizationServerMetadata {
 }
 
 /// Metadata configuration for the authorization server
+///
+/// A multi-host deployment is one authorization server per host rather than
+/// one shared with the default host: RFC 8414 §3.3 requires the `issuer` in a
+/// discovery document to be identical to the URL the document was fetched
+/// from, and a client that sees otherwise must discard the response. Every
+/// host serves the same `/auth/oauth2/*` endpoints and completes logins on
+/// itself, so each one advertises itself.
 #[derive(Debug, Clone)]
 pub struct MetadataConfig {
-    /// Base URL of the authorization server (e.g., "https://auth.example.com")
-    pub issuer: String,
+    /// Base URL of the authorization server (e.g., "https://auth.example.com").
+    /// Also what a request to an unconfigured host is answered with.
+    default_issuer: String,
+
+    /// Issuer per configured host, keyed the way request Host headers arrive.
+    issuers_by_host: HashMap<String, String>,
 
     /// Whether dynamic client registration is enabled
     pub enable_registration: bool,
@@ -91,9 +108,56 @@ pub struct MetadataConfig {
 }
 
 impl MetadataConfig {
-    /// Create OAuth 2.0 authorization server metadata
-    pub fn to_metadata(&self) -> AuthorizationServerMetadata {
-        let issuer = self.issuer.trim_end_matches('/').to_string();
+    /// Build from every base URL the engine answers to, primary first.
+    pub fn new(
+        base_urls: &[String],
+        enable_registration: bool,
+        require_pkce: bool,
+        resource_indicators_supported: bool,
+    ) -> Self {
+        let mut default_issuer = String::new();
+        let mut issuers_by_host = HashMap::new();
+
+        for base_url in base_urls {
+            let issuer = base_url.trim().trim_end_matches('/').to_string();
+            if issuer.is_empty() {
+                continue;
+            }
+            if default_issuer.is_empty() {
+                default_issuer = issuer.clone();
+            }
+            if let Some(host) = crate::config::base_url_authority(&issuer) {
+                issuers_by_host.entry(host).or_insert(issuer);
+            }
+        }
+
+        Self {
+            default_issuer,
+            issuers_by_host,
+            enable_registration,
+            require_pkce,
+            resource_indicators_supported,
+        }
+    }
+
+    /// The issuer a request addressed to `request_host` should be told about.
+    ///
+    /// The Host header is only ever a lookup key into the issuers built at
+    /// startup, never interpolated into the URLs handed back, so a spoofed or
+    /// unconfigured value falls back to the primary base URL instead of
+    /// pointing a client at an endpoint of the caller's choosing.
+    pub fn issuer_for_host(&self, request_host: Option<&str>) -> &str {
+        request_host
+            .map(|host| host.trim().to_lowercase())
+            .and_then(|host| self.issuers_by_host.get(&host))
+            .map(String::as_str)
+            .unwrap_or(&self.default_issuer)
+    }
+
+    /// Create OAuth 2.0 authorization server metadata for the host a request
+    /// was addressed to.
+    pub fn to_metadata(&self, request_host: Option<&str>) -> AuthorizationServerMetadata {
+        let issuer = self.issuer_for_host(request_host).to_string();
 
         AuthorizationServerMetadata {
             issuer: issuer.clone(),
@@ -148,8 +212,12 @@ impl MetadataConfig {
         (status = 200, description = "OAuth 2.0 authorization server metadata (RFC 8414)", body = AuthorizationServerMetadata),
     )
 )]
-pub async fn metadata_handler(State(config): State<Arc<MetadataConfig>>) -> impl IntoResponse {
-    let metadata = config.to_metadata();
+pub async fn metadata_handler(
+    State(config): State<Arc<MetadataConfig>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let host = crate::auth::routes::get_request_host(&headers);
+    let metadata = config.to_metadata(host.as_deref());
     (StatusCode::OK, Json(metadata))
 }
 
@@ -183,8 +251,13 @@ pub struct ProtectedResourceMetadata {
 )]
 pub async fn protected_resource_metadata_handler(
     State(config): State<Arc<MetadataConfig>>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
-    let issuer = config.issuer.trim_end_matches('/').to_string();
+    // The resource identifier is the host the client actually addressed, not
+    // the engine's default one, or a client validating the document against
+    // the URL it requested rejects it (RFC 9728 §3.3).
+    let host = crate::auth::routes::get_request_host(&headers);
+    let issuer = config.issuer_for_host(host.as_deref()).to_string();
 
     let metadata = ProtectedResourceMetadata {
         resource: issuer.clone(),
@@ -200,16 +273,16 @@ pub async fn protected_resource_metadata_handler(
 mod tests {
     use super::*;
 
+    fn config(base_urls: &[&str], enable_registration: bool, require_pkce: bool) -> MetadataConfig {
+        let urls: Vec<String> = base_urls.iter().map(|u| u.to_string()).collect();
+        MetadataConfig::new(&urls, enable_registration, require_pkce, true)
+    }
+
     #[test]
     fn test_metadata_generation() {
-        let config = MetadataConfig {
-            issuer: "https://auth.example.com".to_string(),
-            enable_registration: true,
-            require_pkce: true,
-            resource_indicators_supported: true,
-        };
+        let config = config(&["https://auth.example.com"], true, true);
 
-        let metadata = config.to_metadata();
+        let metadata = config.to_metadata(None);
 
         assert_eq!(metadata.issuer, "https://auth.example.com");
         assert_eq!(
@@ -233,14 +306,10 @@ mod tests {
 
     #[test]
     fn test_metadata_without_registration() {
-        let config = MetadataConfig {
-            issuer: "https://auth.example.com/".to_string(),
-            enable_registration: false,
-            require_pkce: false,
-            resource_indicators_supported: false,
-        };
+        let mut config = config(&["https://auth.example.com/"], false, false);
+        config.resource_indicators_supported = false;
 
-        let metadata = config.to_metadata();
+        let metadata = config.to_metadata(None);
 
         assert_eq!(metadata.issuer, "https://auth.example.com");
         assert_eq!(metadata.registration_endpoint, None);
@@ -253,14 +322,77 @@ mod tests {
 
     #[test]
     fn test_issuer_normalization() {
-        let config = MetadataConfig {
-            issuer: "https://auth.example.com///".to_string(),
-            enable_registration: false,
-            require_pkce: true,
-            resource_indicators_supported: true,
-        };
+        let config = config(&["https://auth.example.com///"], false, true);
 
-        let metadata = config.to_metadata();
+        let metadata = config.to_metadata(None);
         assert_eq!(metadata.issuer, "https://auth.example.com");
+    }
+
+    /// Every configured host is its own issuer, so the document a client
+    /// fetches matches the URL it fetched it from (RFC 8414 §3.3).
+    #[test]
+    fn additional_host_issues_for_itself() {
+        let config = config(
+            &["https://softagen.com", "https://manage.softagen.com"],
+            true,
+            true,
+        );
+
+        let metadata = config.to_metadata(Some("manage.softagen.com"));
+
+        assert_eq!(metadata.issuer, "https://manage.softagen.com");
+        assert_eq!(
+            metadata.authorization_endpoint,
+            "https://manage.softagen.com/auth/oauth2/authorize"
+        );
+        assert_eq!(
+            metadata.token_endpoint,
+            "https://manage.softagen.com/auth/oauth2/token"
+        );
+        assert_eq!(
+            metadata.registration_endpoint,
+            Some("https://manage.softagen.com/auth/oauth2/register".to_string())
+        );
+    }
+
+    #[test]
+    fn host_lookup_ignores_case_and_whitespace() {
+        let config = config(
+            &["https://softagen.com", "https://manage.softagen.com"],
+            true,
+            true,
+        );
+
+        assert_eq!(
+            config.issuer_for_host(Some(" Manage.Softagen.com ")),
+            "https://manage.softagen.com"
+        );
+    }
+
+    /// A Host header naming somewhere the engine was not configured for gets
+    /// the primary base URL rather than a URL built from the header itself.
+    #[test]
+    fn unconfigured_host_falls_back_to_the_primary_base_url() {
+        let config = config(
+            &["https://softagen.com", "https://manage.softagen.com"],
+            true,
+            true,
+        );
+
+        for host in [Some("attacker.example.com"), Some("127.0.0.1:3000"), None] {
+            assert_eq!(config.issuer_for_host(host), "https://softagen.com");
+        }
+    }
+
+    /// A base URL with a port keeps it, since that is how the Host header
+    /// arrives on a local or non-standard-port deployment.
+    #[test]
+    fn host_with_port_is_matched() {
+        let config = config(&["http://localhost:3000"], true, true);
+
+        assert_eq!(
+            config.issuer_for_host(Some("localhost:3000")),
+            "http://localhost:3000"
+        );
     }
 }

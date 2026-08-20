@@ -2244,12 +2244,12 @@ async fn setup_routes(
 
         // Mount OAuth2 metadata and dynamic client registration endpoints
         // These provide RFC 8414 authorization server metadata and RFC 7591 client registration
-        let metadata_config = Arc::new(auth::MetadataConfig {
-            issuer: config.server.get_base_url(),
-            enable_registration: true,
-            require_pkce: true,
-            resource_indicators_supported: true,
-        });
+        let metadata_config = Arc::new(auth::MetadataConfig::new(
+            &config.server.all_base_urls(),
+            true, // enable_registration
+            true, // require_pkce
+            true, // resource_indicators_supported
+        ));
 
         let registration_manager = Arc::new(auth::ClientRegistrationManager::new(90)); // 90 day secret expiry
 

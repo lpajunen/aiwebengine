@@ -137,12 +137,13 @@ fn get_user_agent(headers: &HeaderMap) -> String {
 }
 
 /// Extract the host a request was addressed to, used to pick the OAuth
-/// redirect URI so a login completes on the host it started on.
+/// redirect URI so a login completes on the host it started on, and the issuer
+/// the discovery documents advertise.
 ///
 /// The value is only ever used as a lookup key against hosts registered at
 /// startup, so an unrecognised or spoofed Host header degrades to the
 /// configured base URL rather than steering the flow anywhere new.
-fn get_request_host(headers: &HeaderMap) -> Option<String> {
+pub(crate) fn get_request_host(headers: &HeaderMap) -> Option<String> {
     headers
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
