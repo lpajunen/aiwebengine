@@ -16,6 +16,7 @@ use serde_json::{Value, json};
 use tracing::{debug, info, warn};
 
 use crate::auth::AuthUser;
+use crate::error::AppResult;
 use crate::repository;
 use crate::security::{
     Capability, SecurityAuditor, SecurityEvent, SecurityEventType, SecuritySeverity, UserContext,
@@ -351,27 +352,69 @@ pub fn list_scripts_authorized(user: &UserContext) -> Vec<repository::ScriptMeta
     repository::get_all_script_metadata().unwrap_or_default()
 }
 
-/// Fetch logs for a script as JSON objects; ViewLogs capability required
-/// (empty otherwise) — same as `console.listLogsForUri`.
-pub fn logs_authorized(user: &UserContext, uri: &str) -> Vec<Value> {
-    if user.require_capability(&Capability::ViewLogs).is_err() {
-        return Vec::new();
-    }
-    repository::fetch_log_messages(uri)
+/// One log entry as JSON. `scriptUri` is what lets an all-scripts listing
+/// attribute each line to the script that logged it.
+pub fn log_entry_json(entry: &repository::LogEntry) -> Value {
+    let timestamp_ms = entry
+        .timestamp
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as f64;
+    json!({
+        "scriptUri": entry.script_uri,
+        "message": entry.message,
+        "level": entry.level,
+        "timestamp": timestamp_ms
+    })
+}
+
+/// Run a filtered log query, newest first; ViewLogs capability required.
+///
+/// Denial is an error, not an empty result: over HTTP a caller has to be able
+/// to tell "you may not read these" from "there is nothing to read". The
+/// sandbox convention of answering `[]` belongs to the JS globals, where the
+/// script has no status code to receive.
+pub fn query_logs_authorized(
+    user: &UserContext,
+    query: &repository::LogQuery,
+) -> AppResult<Vec<Value>> {
+    user.require_capability(&Capability::ViewLogs)?;
+    Ok(repository::query_log_messages(query)?
         .iter()
-        .map(|entry| {
-            let timestamp_ms = entry
-                .timestamp
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as f64;
-            json!({
-                "message": entry.message,
-                "level": entry.level,
-                "timestamp": timestamp_ms
-            })
-        })
-        .collect()
+        .map(log_entry_json)
+        .collect())
+}
+
+/// Number of entries per script that a prune keeps; mirrors the repository's
+/// prune statement so callers can report what happened.
+const PRUNE_KEEPS_PER_SCRIPT: u32 = 20;
+
+/// Delete logs; DeleteLogs capability required.
+///
+/// With a `uri` this clears that script's logs outright, the operation the
+/// repository has always had but no JS or HTTP caller could reach. Without one
+/// it prunes every script back to its newest entries, matching
+/// `console.pruneLogs()`.
+pub fn delete_logs_authorized(user: &UserContext, uri: Option<&str>) -> AppResult<Value> {
+    user.require_capability(&Capability::DeleteLogs)?;
+    match uri {
+        Some(uri) => {
+            repository::clear_log_messages(uri)?;
+            Ok(json!({
+                "uri": uri,
+                "cleared": true,
+                "timestamp": iso_timestamp(),
+            }))
+        }
+        None => {
+            repository::prune_log_messages()?;
+            Ok(json!({
+                "pruned": true,
+                "keptPerScript": PRUNE_KEEPS_PER_SCRIPT,
+                "timestamp": iso_timestamp(),
+            }))
+        }
+    }
 }
 
 /// Init status for one script; ReadScripts capability required.
@@ -911,6 +954,108 @@ pub fn delete_asset_authorized(
 // ============================================================================
 // OpenAPI spec generation
 // ============================================================================
+
+/// Every registration in the engine as an introspection entry: script HTTP
+/// routes, then SSE streams as `STREAM` rows, then asset routes as `ASSET`
+/// rows. ReadScripts capability required (empty otherwise).
+///
+/// Backs both `routeRegistry.listRoutes()` and `GET /engine/routes`, so the two
+/// can never drift. Host bindings are not applied here — this is the whole
+/// engine's view; callers that care filter by `script_uri` (see
+/// [`crate::route_index::script_serves_host`]).
+pub fn routes_introspection_authorized(user: &UserContext) -> AppResult<Vec<Value>> {
+    user.require_capability(&Capability::ReadScripts)?;
+
+    let metadata_list = repository::get_all_script_metadata()?;
+
+    let mut all_routes = Vec::new();
+    for metadata in metadata_list {
+        if metadata.initialized && !metadata.registrations.is_empty() {
+            for ((path, method), route_meta) in metadata.registrations {
+                all_routes.push(json!({
+                    "path": path,
+                    "method": method,
+                    "handler": route_meta.handler_name,
+                    "script_uri": metadata.uri,
+                    "summary": route_meta.summary,
+                    "description": route_meta.description,
+                    "tags": route_meta.tags,
+                }));
+            }
+        }
+    }
+
+    for (path, script_uri, metadata) in
+        crate::stream_registry::GLOBAL_STREAM_REGISTRY.get_all_registrations()
+    {
+        let handler = crate::stream_registry::GLOBAL_STREAM_REGISTRY
+            .get_stream_info(&path)
+            .and_then(|(_, customization_function)| customization_function);
+        let tags = if metadata.tags.is_empty() {
+            vec!["Streams".to_string()]
+        } else {
+            metadata.tags
+        };
+        all_routes.push(json!({
+            "path": path,
+            "method": "STREAM",
+            "handler": handler,
+            "script_uri": script_uri,
+            "summary": metadata.summary,
+            "description": metadata.description,
+            "tags": tags,
+        }));
+    }
+
+    for (path, registration) in crate::asset_registry::get_global_registry().get_all_registrations()
+    {
+        let tags = if registration.metadata.tags.is_empty() {
+            vec!["Assets".to_string()]
+        } else {
+            registration.metadata.tags.clone()
+        };
+        all_routes.push(json!({
+            "path": path,
+            "method": "ASSET",
+            "handler": registration.asset_name,
+            "script_uri": registration.script_uri,
+            "summary": registration.metadata.summary,
+            "description": registration.metadata.description,
+            "tags": tags,
+        }));
+    }
+
+    Ok(all_routes)
+}
+
+/// Keep only entries whose owning script publishes on `host`.
+///
+/// Registrations are published per host, so an unfiltered listing shows routes
+/// that are not live on the host the caller is looking at. Each distinct script
+/// is checked once.
+async fn filter_routes_by_host(routes: Vec<Value>, host: &str) -> Vec<Value> {
+    let mut verdicts: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    let mut filtered = Vec::with_capacity(routes.len());
+    for route in routes {
+        let script_uri = route
+            .get("script_uri")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let serves = match verdicts.get(&script_uri) {
+            Some(serves) => *serves,
+            None => {
+                let serves = crate::route_index::script_serves_host(&script_uri, host).await;
+                verdicts.insert(script_uri, serves);
+                serves
+            }
+        };
+        if serves {
+            filtered.push(route);
+        }
+    }
+    filtered
+}
 
 /// Generate the full OpenAPI spec: the Rust (utoipa) spec merged with
 /// script-registered routes, asset routes, and SSE stream routes. Returns
@@ -1452,30 +1597,171 @@ pub async fn run_tests_route(
     json_response(status, report)
 }
 
-/// Get logs for a script.
+#[derive(Deserialize, Default)]
+pub struct RoutesParams {
+    host: Option<String>,
+}
+
+/// List every registration in the engine: script routes, SSE streams
+/// (`STREAM`) and asset routes (`ASSET`).
+///
+/// The flat list `routeRegistry.listRoutes()` returns, without the transform a
+/// client would need to rebuild it from `/engine/openapi.json`. Unfiltered by
+/// default, since the management host need not be a host scripts publish on;
+/// pass `host` to see only what is live on one host.
+#[utoipa::path(
+    get,
+    path = "/engine/routes",
+    tags = ["Scripts"],
+    params(("host" = Option<String>, Query, description = "Only registrations published on this host; omit for every host")),
+    responses(
+        (status = 200, description = "Route, stream and asset registrations"),
+        (status = 403, description = "Access denied"),
+    )
+)]
+pub async fn routes_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(params): Query<RoutesParams>,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+
+    let result = tokio::task::spawn_blocking(move || routes_introspection_authorized(&user)).await;
+
+    let routes = match result {
+        Ok(Ok(routes)) => routes,
+        Ok(Err(e)) => {
+            let status =
+                StatusCode::from_u16(e.status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            return error_response(status, format!("Failed to list routes: {}", e));
+        }
+        Err(e) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to list routes: {}", e),
+            );
+        }
+    };
+
+    let routes = match params.host.as_deref() {
+        Some(host) => {
+            filter_routes_by_host(routes, &crate::hosts::canonical_host(Some(host))).await
+        }
+        None => routes,
+    };
+
+    json_response(
+        StatusCode::OK,
+        json!({
+            "host": params.host,
+            "routes": routes,
+            "count": routes.len(),
+            "timestamp": iso_timestamp(),
+        }),
+    )
+}
+
+#[derive(Deserialize, Default)]
+pub struct LogParams {
+    uri: Option<String>,
+    level: Option<String>,
+    /// Milliseconds since the Unix epoch, or an RFC 3339 timestamp.
+    since: Option<String>,
+    limit: Option<i64>,
+}
+
+/// Parse a `since` bound given either as epoch milliseconds or RFC 3339.
+fn parse_since(raw: &str) -> Option<std::time::SystemTime> {
+    if let Ok(millis) = raw.parse::<i64>() {
+        let millis = u64::try_from(millis).ok()?;
+        return Some(std::time::UNIX_EPOCH + std::time::Duration::from_millis(millis));
+    }
+    chrono::DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|dt| std::time::SystemTime::from(dt.with_timezone(&chrono::Utc)))
+}
+
+/// Get logs for one script (`uri` given) or across every script.
+///
+/// Entries come back oldest-first for a single script and newest-first for the
+/// all-scripts view, matching `console.listLogsForUri()` and
+/// `console.listLogs()` respectively. `level`, `since` and `limit` filter in
+/// SQL; `limit` keeps the newest matching entries.
 #[utoipa::path(
     get,
     path = "/engine/script_logs",
     tags = ["Logging"],
-    params(("uri" = String, Query, description = "Script URI")),
+    params(
+        ("uri" = Option<String>, Query, description = "Script URI; omit for logs across all scripts"),
+        ("level" = Option<String>, Query, description = "Only entries at this level, e.g. ERROR"),
+        ("since" = Option<String>, Query, description = "Only entries at or after this time (epoch millis or RFC 3339)"),
+        ("limit" = Option<i64>, Query, description = "Keep at most this many of the newest matching entries"),
+    ),
     responses(
-        (status = 200, description = "Log entries for the script"),
-        (status = 400, description = "Missing required parameter"),
+        (status = 200, description = "Log entries for one script or all scripts"),
+        (status = 400, description = "Invalid query parameter"),
+        (status = 403, description = "Access denied"),
     )
 )]
 pub async fn script_logs_route(
     auth_user: Option<Extension<AuthUser>>,
-    Query(query): Query<ScriptParams>,
+    Query(params): Query<LogParams>,
 ) -> Response {
     let user = user_context_from(auth_user.as_deref());
-    let Some(uri) = query.uri else {
-        return missing_param_response("uri");
+
+    let since = match params.since.as_deref() {
+        Some(raw) => match parse_since(raw) {
+            Some(since) => Some(since),
+            None => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    format!("Invalid 'since' value: {}", raw),
+                );
+            }
+        },
+        None => None,
+    };
+    if params.limit.is_some_and(|limit| limit <= 0) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "Parameter 'limit' must be greater than zero".to_string(),
+        );
+    }
+
+    let uri = params.uri.clone();
+    let single_script = uri.is_some();
+    let query = repository::LogQuery {
+        script_uri: params.uri,
+        level: params.level,
+        since,
+        limit: params.limit,
     };
 
-    let uri_for_task = uri.clone();
-    let logs = tokio::task::spawn_blocking(move || logs_authorized(&user, &uri_for_task))
-        .await
-        .unwrap_or_default();
+    let result = tokio::task::spawn_blocking(move || {
+        query_logs_authorized(&user, &query).map(|mut logs| {
+            // A single script reads oldest-first, the order its own log view
+            // has always used; the limit still selected the newest entries.
+            if single_script {
+                logs.reverse();
+            }
+            logs
+        })
+    })
+    .await;
+
+    let logs = match result {
+        Ok(Ok(logs)) => logs,
+        Ok(Err(e)) => {
+            let status =
+                StatusCode::from_u16(e.status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            return error_response(status, format!("Failed to fetch logs: {}", e));
+        }
+        Err(e) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to fetch logs: {}", e),
+            );
+        }
+    };
 
     json_response(
         StatusCode::OK,
@@ -1486,6 +1772,42 @@ pub async fn script_logs_route(
             "timestamp": iso_timestamp(),
         }),
     )
+}
+
+/// Delete logs for one script, or prune every script back to its newest
+/// entries when `uri` is omitted.
+#[utoipa::path(
+    delete,
+    path = "/engine/script_logs",
+    tags = ["Logging"],
+    params(("uri" = Option<String>, Query, description = "Script URI to clear; omit to prune every script")),
+    responses(
+        (status = 200, description = "Logs cleared or pruned"),
+        (status = 403, description = "Access denied"),
+    )
+)]
+pub async fn script_logs_delete_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(params): Query<ScriptParams>,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    let uri = params.uri.clone();
+
+    let result =
+        tokio::task::spawn_blocking(move || delete_logs_authorized(&user, uri.as_deref())).await;
+
+    match result {
+        Ok(Ok(body)) => json_response(StatusCode::OK, body),
+        Ok(Err(e)) => {
+            let status =
+                StatusCode::from_u16(e.status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            error_response(status, format!("Failed to delete logs: {}", e))
+        }
+        Err(e) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to delete logs: {}", e),
+        ),
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -3256,17 +3578,43 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "read_logs",
-            "Read log messages for a specific script (useful for debugging)",
+            "Read log messages (useful for debugging). Returns logs for one script when uri is given, otherwise across all scripts.",
             || {
                 json!({
                     "type": "object",
                     "properties": {
-                        "uri": { "type": "string", "description": "Script URI to retrieve logs for" }
-                    },
-                    "required": ["uri"]
+                        "uri": { "type": "string", "description": "Optional script URI to retrieve logs for; omit for all scripts" },
+                        "level": { "type": "string", "description": "Only entries at this level, e.g. ERROR" },
+                        "since": { "type": "string", "description": "Only entries at or after this time (epoch millis or RFC 3339)" },
+                        "limit": { "type": "integer", "description": "Keep at most this many of the newest matching entries" }
+                    }
                 })
             },
             tool_read_logs,
+        ),
+        (
+            "prune_logs",
+            "Delete log messages. Clears one script's logs when uri is given, otherwise prunes every script back to its 20 newest entries.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "uri": { "type": "string", "description": "Optional script URI whose logs to clear; omit to prune every script" }
+                    }
+                })
+            },
+            tool_prune_logs,
+        ),
+        (
+            "list_routes",
+            "List every registration in the engine: script HTTP routes, SSE streams (method STREAM) and asset routes (method ASSET).",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {}
+                })
+            },
+            tool_list_routes,
         ),
         (
             "read_init_status",
@@ -3809,16 +4157,59 @@ fn tool_search_files(args: &Value, user: &UserContext) -> Value {
 }
 
 fn tool_read_logs(args: &Value, user: &UserContext) -> Value {
-    let Some(uri) = arg_str(args, "uri") else {
-        return missing_arg("uri");
+    let uri = arg_str(args, "uri");
+    let since = match arg_str(args, "since") {
+        Some(raw) => match parse_since(raw) {
+            Some(since) => Some(since),
+            None => return json!({ "error": format!("Invalid 'since' value: {}", raw) }),
+        },
+        None => None,
     };
-    let logs = logs_authorized(user, uri);
-    json!({
-        "uri": uri,
-        "logs": logs,
-        "count": logs.len(),
-        "timestamp": iso_timestamp(),
-    })
+    let limit = args.get("limit").and_then(Value::as_i64);
+    if limit.is_some_and(|limit| limit <= 0) {
+        return json!({ "error": "Parameter 'limit' must be greater than zero" });
+    }
+
+    let query = repository::LogQuery {
+        script_uri: uri.map(str::to_string),
+        level: arg_str(args, "level").map(str::to_string),
+        since,
+        limit,
+    };
+
+    match query_logs_authorized(user, &query) {
+        Ok(mut logs) => {
+            // Oldest-first for a single script, as its own log view reads.
+            if uri.is_some() {
+                logs.reverse();
+            }
+            json!({
+                "uri": uri,
+                "logs": logs,
+                "count": logs.len(),
+                "timestamp": iso_timestamp(),
+            })
+        }
+        Err(e) => json!({ "error": format!("Failed to fetch logs: {}", e) }),
+    }
+}
+
+fn tool_prune_logs(args: &Value, user: &UserContext) -> Value {
+    match delete_logs_authorized(user, arg_str(args, "uri")) {
+        Ok(body) => body,
+        Err(e) => json!({ "error": format!("Failed to delete logs: {}", e) }),
+    }
+}
+
+fn tool_list_routes(_args: &Value, user: &UserContext) -> Value {
+    match routes_introspection_authorized(user) {
+        Ok(routes) => json!({
+            "routes": routes,
+            "count": routes.len(),
+            "timestamp": iso_timestamp(),
+        }),
+        Err(e) => json!({ "error": format!("Failed to list routes: {}", e) }),
+    }
 }
 
 fn tool_read_init_status(args: &Value, user: &UserContext) -> Value {

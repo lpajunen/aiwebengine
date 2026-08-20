@@ -140,20 +140,28 @@ interface SecretStorage {
  */
 interface Console {
   /**
-   * List all log entries (requires ViewLogs capability)
-   * @returns JSON string array of log entries
+   * List all log entries across every script (requires ViewLogs capability)
+   *
+   * Superseded by `GET /engine/script_logs` (omit `uri`), which also accepts
+   * `level`, `since` and `limit` filters rather than returning the whole table.
+   * Note that the endpoint answers 403 where this method answers `[]`.
+   *
+   * @returns JSON string array of log entries, newest first
    * @example
    * const logs = JSON.parse(console.listLogs());
    * logs.forEach(log => {
-   *   console.log(`${log.timestamp} [${log.level}] ${log.message}`);
+   *   console.log(`${log.timestamp} [${log.level}] ${log.scriptUri}: ${log.message}`);
    * });
    */
   listLogs(): string;
 
   /**
    * List log entries for a specific script URI (requires ViewLogs capability)
+   *
+   * Superseded by `GET /engine/script_logs?uri=...`.
+   *
    * @param uri - Script URI to filter logs
-   * @returns JSON string array of log entries
+   * @returns JSON string array of log entries, oldest first
    * @example
    * const logs = JSON.parse(console.listLogsForUri("my-script"));
    * console.log(`Found ${logs.length} log entries for my-script`);
@@ -161,13 +169,36 @@ interface Console {
   listLogsForUri(uri: string): string;
 
   /**
-   * Prune old log entries (requires ViewLogs capability)
+   * Prune logs back to the 20 newest entries per script (requires DeleteLogs
+   * capability)
+   *
+   * Superseded by `DELETE /engine/script_logs`, which additionally clears a
+   * single script's logs outright when given a `uri`.
+   *
    * @returns Prune operation result message
    * @example
    * const result = console.pruneLogs();
-   * console.log(result); // "Pruned 150 old log entries"
+   * console.log(result); // "Pruned logs"
    */
   pruneLogs(): string;
+}
+
+/**
+ * Parsed entry from JSON returned by console.listLogs() / listLogsForUri(),
+ * and by `GET /engine/script_logs`
+ */
+interface LogIntrospectionEntry {
+  /** URI of the script that logged the message */
+  scriptUri: string;
+
+  /** Logged message */
+  message: string;
+
+  /** Log level, e.g. "LOG", "INFO", "WARN", "ERROR", "DEBUG" */
+  level: string;
+
+  /** Milliseconds since the Unix epoch */
+  timestamp: number;
 }
 
 // ============================================================================
@@ -175,7 +206,8 @@ interface Console {
 // ============================================================================
 
 /**
- * Parsed entry from JSON returned by routeRegistry.listRoutes()
+ * Parsed entry from JSON returned by routeRegistry.listRoutes(), and by
+ * `GET /engine/routes`
  */
 interface RouteIntrospectionEntry {
   /** Registered HTTP, stream, or asset path */
@@ -364,6 +396,10 @@ interface OpenApiSpec {
 interface RouteRegistry {
   /**
    * List all registered routes (requires ReadScripts capability)
+   *
+   * Superseded by `GET /engine/routes`, which returns the same entries under a
+   * `routes` key and accepts a `host` filter.
+   *
    * @returns JSON string encoding RouteIntrospectionEntry[]
    * @example
    * const routes = JSON.parse(routeRegistry.listRoutes()) as RouteIntrospectionEntry[];
@@ -372,6 +408,10 @@ interface RouteRegistry {
 
   /**
    * List all registered streams (requires ReadScripts capability)
+   *
+   * Superseded by the `method: "STREAM"` entries of `GET /engine/routes`, which
+   * carry the handler, summary, description and tags this listing omits.
+   *
    * @returns JSON string encoding StreamIntrospectionEntry[]
    * @example
    * const streams = JSON.parse(routeRegistry.listStreams()) as StreamIntrospectionEntry[];

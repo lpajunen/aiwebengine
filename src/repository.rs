@@ -94,17 +94,44 @@ pub type RouteRegistrations = HashMap<(String, String), RouteMetadata>;
 /// Log entry with timestamp information
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LogEntry {
+    /// Script the message was logged by. Callers that fetch logs across every
+    /// script rely on this to attribute each entry.
+    pub script_uri: String,
     pub message: String,
     pub level: String,
     pub timestamp: SystemTime,
 }
 
 impl LogEntry {
-    pub fn new(message: String, level: String, timestamp: SystemTime) -> Self {
+    pub fn new(script_uri: String, message: String, level: String, timestamp: SystemTime) -> Self {
         Self {
+            script_uri,
             message,
             level,
             timestamp,
+        }
+    }
+}
+
+/// Filters for a log query. Every field is optional; `None` means "no filter".
+#[derive(Debug, Clone, Default)]
+pub struct LogQuery {
+    /// Restrict to one script; `None` spans every script.
+    pub script_uri: Option<String>,
+    /// Restrict to one log level, e.g. `ERROR`. Matched case-insensitively.
+    pub level: Option<String>,
+    /// Keep only entries logged at or after this instant.
+    pub since: Option<SystemTime>,
+    /// Keep at most this many of the *newest* matching entries.
+    pub limit: Option<i64>,
+}
+
+impl LogQuery {
+    /// All logs for one script, unfiltered.
+    pub fn for_uri(script_uri: &str) -> Self {
+        Self {
+            script_uri: Some(script_uri.to_string()),
+            ..Self::default()
         }
     }
 }
@@ -1972,19 +1999,33 @@ where
     Ok(())
 }
 
-/// Database-backed fetch log messages for a script
-async fn db_fetch_log_messages<'e, E>(executor: E, script_uri: &str) -> AppResult<Vec<LogEntry>>
+/// Database-backed log query. Filters are applied in SQL so callers never pull
+/// the whole table just to throw most of it away, and `limit` keeps the
+/// *newest* matching entries — rows come back newest-first.
+async fn db_query_log_messages<'e, E>(executor: E, query: &LogQuery) -> AppResult<Vec<LogEntry>>
 where
     E: sqlx::Executor<'e, Database = sqlx::Postgres>,
 {
+    // Levels are stored upper-case; normalise so `?level=error` matches.
+    let level = query.level.as_ref().map(|l| l.to_uppercase());
+    let since = query.since.map(DateTime::<Utc>::from);
+
+    // A NULL bind disables the corresponding filter, and `LIMIT NULL` means
+    // "no limit" in Postgres, so one statement covers every combination.
     let rows = sqlx::query(
         r#"
-        SELECT message, log_level, created_at FROM logs
-        WHERE script_uri = $1
-        ORDER BY created_at ASC
+        SELECT script_uri, message, log_level, created_at FROM logs
+        WHERE ($1::text IS NULL OR script_uri = $1)
+          AND ($2::text IS NULL OR log_level = $2)
+          AND ($3::timestamptz IS NULL OR created_at >= $3)
+        ORDER BY created_at DESC
+        LIMIT $4::bigint
         "#,
     )
-    .bind(script_uri)
+    .bind(query.script_uri.as_deref())
+    .bind(level.as_deref())
+    .bind(since)
+    .bind(query.limit)
     .fetch_all(executor)
     .await
     .map_err(|e| {
@@ -1998,12 +2039,13 @@ where
     let messages = rows
         .into_iter()
         .map(|row| {
+            let script_uri: String = row.try_get("script_uri")?;
             let message: String = row.try_get("message")?;
             let log_level: String = row.try_get("log_level")?;
             let created_at: DateTime<Utc> = row.try_get("created_at")?;
             // Convert chrono DateTime to SystemTime
             let system_time = SystemTime::from(created_at);
-            Ok(LogEntry::new(message, log_level, system_time))
+            Ok(LogEntry::new(script_uri, message, log_level, system_time))
         })
         .collect::<Result<Vec<LogEntry>, sqlx::Error>>()
         .map_err(|e| {
@@ -2017,47 +2059,22 @@ where
     Ok(messages)
 }
 
-/// Database-backed fetch all log messages
+/// Database-backed fetch log messages for a script, oldest first.
+async fn db_fetch_log_messages<'e, E>(executor: E, script_uri: &str) -> AppResult<Vec<LogEntry>>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    let mut messages = db_query_log_messages(executor, &LogQuery::for_uri(script_uri)).await?;
+    messages.reverse();
+    Ok(messages)
+}
+
+/// Database-backed fetch all log messages, newest first.
 async fn db_fetch_all_log_messages<'e, E>(executor: E) -> AppResult<Vec<LogEntry>>
 where
     E: sqlx::Executor<'e, Database = sqlx::Postgres>,
 {
-    let rows = sqlx::query(
-        r#"
-        SELECT message, log_level, created_at FROM logs
-        ORDER BY created_at DESC
-        "#,
-    )
-    .fetch_all(executor)
-    .await
-    .map_err(|e| {
-        error!("Database error fetching all log messages: {}", e);
-        AppError::Database {
-            message: format!("Database error: {}", e),
-            source: None,
-        }
-    })?;
-
-    let messages = rows
-        .into_iter()
-        .map(|row| {
-            let message: String = row.try_get("message")?;
-            let log_level: String = row.try_get("log_level")?;
-            let created_at: DateTime<Utc> = row.try_get("created_at")?;
-            // Convert chrono DateTime to SystemTime
-            let system_time = SystemTime::from(created_at);
-            Ok(LogEntry::new(message, log_level, system_time))
-        })
-        .collect::<Result<Vec<LogEntry>, sqlx::Error>>()
-        .map_err(|e| {
-            error!("Database error getting message/level/timestamp: {}", e);
-            AppError::Database {
-                message: format!("Database error: {}", e),
-                source: None,
-            }
-        })?;
-
-    Ok(messages)
+    db_query_log_messages(executor, &LogQuery::default()).await
 }
 
 /// Database-backed clear log messages for a script
@@ -4202,6 +4219,7 @@ pub fn fetch_log_messages(script_uri: &str) -> Vec<LogEntry> {
             error!("Failed to fetch log messages for {}: {}", script_uri, e);
             let now = SystemTime::now();
             vec![LogEntry::new(
+                script_uri.to_string(),
                 format!("Error: Could not retrieve logs - {}", e),
                 "ERROR".to_string(),
                 now,
@@ -4221,12 +4239,23 @@ pub fn fetch_all_log_messages() -> Vec<LogEntry> {
         Err(e) => {
             error!("Failed to fetch all log messages: {}", e);
             vec![LogEntry::new(
+                String::new(),
                 format!("Error: Could not retrieve logs - {}", e),
                 "ERROR".to_string(),
                 SystemTime::now(),
             )]
         }
     }
+}
+
+/// Fetch log messages matching `query`, newest first.
+///
+/// Unlike [`fetch_log_messages`] this surfaces database errors instead of
+/// folding them into a synthetic entry, so HTTP callers can answer with a real
+/// status code.
+pub fn query_log_messages(query: &LogQuery) -> AppResult<Vec<LogEntry>> {
+    let repo = get_repository();
+    run_blocking(async { repo.query_logs(query).await })
 }
 
 /// Clear log messages for a script
@@ -5279,6 +5308,7 @@ pub trait Repository: Send + Sync {
     async fn insert_log(&self, script_uri: &str, message: &str, level: &str) -> AppResult<()>;
     async fn fetch_logs(&self, script_uri: &str) -> AppResult<Vec<LogEntry>>;
     async fn fetch_all_logs(&self) -> AppResult<Vec<LogEntry>>;
+    async fn query_logs(&self, query: &LogQuery) -> AppResult<Vec<LogEntry>>;
     async fn clear_logs(&self, script_uri: &str) -> AppResult<()>;
     async fn prune_logs(&self) -> AppResult<()>;
 
@@ -5783,6 +5813,18 @@ impl Repository for PostgresRepository {
             }
             crate::database::TransactionExecutor::Pool(pool) => {
                 db_fetch_all_log_messages(pool).await
+            }
+        }
+    }
+
+    async fn query_logs(&self, query: &LogQuery) -> AppResult<Vec<LogEntry>> {
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_query_log_messages(&mut **tx, query).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_query_log_messages(pool, query).await
             }
         }
     }

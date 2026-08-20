@@ -129,6 +129,215 @@ async fn test_script_logs_endpoint() {
     context.cleanup().await.expect("Failed to cleanup");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn test_script_logs_all_scripts_and_filters() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    let context = TestContext::new();
+
+    let port = context
+        .start_server()
+        .await
+        .expect("server failed to start");
+    wait_for_server(port, 20).await.expect("Server not ready");
+
+    let first = "test_script_logs_filters_one";
+    let second = "test_script_logs_filters_two";
+    let _ = repository::clear_log_messages(first);
+    let _ = repository::clear_log_messages(second);
+    repository::insert_log_message(first, "first-info", "INFO");
+    repository::insert_log_message(first, "first-error", "ERROR");
+    repository::insert_log_message(second, "second-info", "INFO");
+
+    let client = reqwest::Client::new();
+    let base = format!("http://127.0.0.1:{}", port);
+
+    // Omitting uri spans every script, and each entry names the script that
+    // logged it — the all-scripts view console.listLogs() had no HTTP twin for.
+    let body: serde_json::Value = client
+        .get(format!("{}/engine/script_logs", base))
+        .send()
+        .await
+        .expect("all-scripts logs request failed")
+        .json()
+        .await
+        .expect("all-scripts logs response not JSON");
+    let logs = body["logs"].as_array().expect("logs is not an array");
+    assert!(body["uri"].is_null());
+    let uris: Vec<&str> = logs
+        .iter()
+        .filter_map(|entry| entry["scriptUri"].as_str())
+        .collect();
+    assert!(uris.contains(&first), "expected logs from {}", first);
+    assert!(uris.contains(&second), "expected logs from {}", second);
+
+    // level filters, case-insensitively
+    let body: serde_json::Value = client
+        .get(format!(
+            "{}/engine/script_logs?uri={}&level=error",
+            base, first
+        ))
+        .send()
+        .await
+        .expect("level-filtered logs request failed")
+        .json()
+        .await
+        .expect("level-filtered logs response not JSON");
+    let logs = body["logs"].as_array().expect("logs is not an array");
+    assert_eq!(logs.len(), 1, "expected only the ERROR entry");
+    assert_eq!(logs[0]["message"], "first-error");
+
+    // limit keeps the newest entries
+    let body: serde_json::Value = client
+        .get(format!("{}/engine/script_logs?uri={}&limit=1", base, first))
+        .send()
+        .await
+        .expect("limited logs request failed")
+        .json()
+        .await
+        .expect("limited logs response not JSON");
+    let logs = body["logs"].as_array().expect("logs is not an array");
+    assert_eq!(logs.len(), 1);
+    assert_eq!(logs[0]["message"], "first-error");
+
+    // since excludes everything logged before it
+    let future_millis = chrono::Utc::now().timestamp_millis() + 60_000;
+    let body: serde_json::Value = client
+        .get(format!(
+            "{}/engine/script_logs?since={}",
+            base, future_millis
+        ))
+        .send()
+        .await
+        .expect("since-filtered logs request failed")
+        .json()
+        .await
+        .expect("since-filtered logs response not JSON");
+    assert_eq!(body["count"], 0);
+
+    // invalid filters are refused rather than silently ignored
+    let response = client
+        .get(format!("{}/engine/script_logs?since=not-a-time", base))
+        .send()
+        .await
+        .expect("bad since request failed");
+    assert_eq!(response.status(), 400);
+
+    let response = client
+        .get(format!("{}/engine/script_logs?limit=0", base))
+        .send()
+        .await
+        .expect("bad limit request failed");
+    assert_eq!(response.status(), 400);
+
+    let _ = repository::clear_log_messages(first);
+    let _ = repository::clear_log_messages(second);
+    context.cleanup().await.expect("Failed to cleanup");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_script_logs_delete_clears_and_prunes() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    let context = TestContext::new();
+
+    let port = context
+        .start_server()
+        .await
+        .expect("server failed to start");
+    wait_for_server(port, 20).await.expect("Server not ready");
+
+    let cleared = "test_script_logs_delete_cleared";
+    let kept = "test_script_logs_delete_kept";
+    let _ = repository::clear_log_messages(cleared);
+    let _ = repository::clear_log_messages(kept);
+    repository::insert_log_message(cleared, "to-be-cleared", "INFO");
+    repository::insert_log_message(kept, "to-be-kept", "INFO");
+
+    let client = reqwest::Client::new();
+    let base = format!("http://127.0.0.1:{}", port);
+
+    // A uri clears that script's logs and leaves every other script alone.
+    let response = client
+        .delete(format!("{}/engine/script_logs?uri={}", base, cleared))
+        .send()
+        .await
+        .expect("clear logs request failed");
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.expect("clear response not JSON");
+    assert_eq!(body["cleared"], true);
+    assert!(repository::fetch_log_messages(cleared).is_empty());
+    assert!(!repository::fetch_log_messages(kept).is_empty());
+
+    // Without a uri it prunes every script back to its newest entries.
+    for i in 0..25 {
+        repository::insert_log_message(cleared, &format!("prune-{}", i), "INFO");
+    }
+    let response = client
+        .delete(format!("{}/engine/script_logs", base))
+        .send()
+        .await
+        .expect("prune logs request failed");
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.expect("prune response not JSON");
+    assert_eq!(body["pruned"], true);
+    assert!(repository::fetch_log_messages(cleared).len() <= 20);
+
+    let _ = repository::clear_log_messages(cleared);
+    let _ = repository::clear_log_messages(kept);
+    context.cleanup().await.expect("Failed to cleanup");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_routes_endpoint() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    let context = TestContext::new();
+
+    let port = context
+        .start_server()
+        .await
+        .expect("server failed to start");
+    wait_for_server(port, 20).await.expect("Server not ready");
+
+    let client = reqwest::Client::new();
+    let base = format!("http://127.0.0.1:{}", port);
+
+    let body: serde_json::Value = client
+        .get(format!("{}/engine/routes", base))
+        .send()
+        .await
+        .expect("routes request failed")
+        .json()
+        .await
+        .expect("routes response not JSON");
+
+    let routes = body["routes"].as_array().expect("routes is not an array");
+    assert_eq!(body["count"], routes.len());
+    assert!(body["host"].is_null());
+    // Every entry carries the introspection shape routeRegistry.listRoutes()
+    // returns, so a client needs no transform.
+    for route in routes {
+        assert!(route["path"].is_string(), "route without a path: {}", route);
+        assert!(
+            route["method"].is_string(),
+            "route without a method: {}",
+            route
+        );
+        assert!(
+            route["script_uri"].is_string(),
+            "route without a script_uri: {}",
+            route
+        );
+        assert!(route["tags"].is_array(), "route without tags: {}", route);
+    }
+
+    context.cleanup().await.expect("Failed to cleanup");
+}
+
 // ============================================================================
 // Engine Management Endpoint Tests (/engine/*)
 // ============================================================================

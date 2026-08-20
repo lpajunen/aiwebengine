@@ -287,23 +287,8 @@ impl SecureGlobalContext {
                 let logs = repository::fetch_all_log_messages();
 
                 // Create JSON array of log objects
-                let log_objects: Vec<serde_json::Value> = logs
-                    .iter()
-                    .map(|log_entry| {
-                        // Convert SystemTime to milliseconds since UNIX_EPOCH
-                        let timestamp_ms = log_entry
-                            .timestamp
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis() as f64;
-
-                        serde_json::json!({
-                            "message": log_entry.message,
-                            "level": log_entry.level,
-                            "timestamp": timestamp_ms
-                        })
-                    })
-                    .collect();
+                let log_objects: Vec<serde_json::Value> =
+                    logs.iter().map(crate::engine_api::log_entry_json).collect();
 
                 // Serialize to JSON string
                 match serde_json::to_string(&log_objects) {
@@ -338,23 +323,8 @@ impl SecureGlobalContext {
                 let logs = repository::fetch_log_messages(&uri);
 
                 // Create JSON array of log objects (same format as listLogs)
-                let log_objects: Vec<serde_json::Value> = logs
-                    .iter()
-                    .map(|log_entry| {
-                        // Convert SystemTime to milliseconds since UNIX_EPOCH
-                        let timestamp_ms = log_entry
-                            .timestamp
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis() as f64;
-
-                        serde_json::json!({
-                            "message": log_entry.message,
-                            "level": log_entry.level,
-                            "timestamp": timestamp_ms
-                        })
-                    })
-                    .collect();
+                let log_objects: Vec<serde_json::Value> =
+                    logs.iter().map(crate::engine_api::log_entry_json).collect();
 
                 // Serialize to JSON string
                 match serde_json::to_string(&log_objects) {
@@ -3326,84 +3296,21 @@ impl SecureGlobalContext {
         )?;
         route_registry.set("sendStreamMessageFiltered", send_stream_message_filtered)?;
 
-        // 6. listRoutes function
+        // 6. listRoutes function — delegates to the shared engine
+        // implementation (also served natively at /engine/routes)
         let user_ctx_list_routes = user_context.clone();
         let list_routes = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
-                // Check capability
-                if let Err(_e) = user_ctx_list_routes
-                    .require_capability(&crate::security::Capability::ReadScripts)
-                {
-                    return Ok("[]".to_string());
-                }
-
-                // Get all script metadata
-                match repository::get_all_script_metadata() {
-                    Ok(metadata_list) => {
-                        let mut all_routes = Vec::new();
-                        for metadata in metadata_list {
-                            if metadata.initialized && !metadata.registrations.is_empty() {
-                                for ((path, method), route_meta) in metadata.registrations {
-                                    all_routes.push(serde_json::json!({
-                                        "path": path,
-                                        "method": method,
-                                        "handler": route_meta.handler_name,
-                                        "script_uri": metadata.uri,
-                                        "summary": route_meta.summary,
-                                        "description": route_meta.description,
-                                        "tags": route_meta.tags,
-                                    }));
-                                }
-                            }
-                        }
-
-                        for (path, script_uri, metadata) in
-                            crate::stream_registry::GLOBAL_STREAM_REGISTRY.get_all_registrations()
-                        {
-                            let handler = crate::stream_registry::GLOBAL_STREAM_REGISTRY
-                                .get_stream_info(&path)
-                                .and_then(|(_, customization_function)| customization_function);
-                            let tags = if metadata.tags.is_empty() {
-                                vec!["Streams".to_string()]
-                            } else {
-                                metadata.tags
-                            };
-                            all_routes.push(serde_json::json!({
-                                "path": path,
-                                "method": "STREAM",
-                                "handler": handler,
-                                "script_uri": script_uri,
-                                "summary": metadata.summary,
-                                "description": metadata.description,
-                                "tags": tags,
-                            }));
-                        }
-
-                        for (path, registration) in
-                            crate::asset_registry::get_global_registry().get_all_registrations()
-                        {
-                            let tags = if registration.metadata.tags.is_empty() {
-                                vec!["Assets".to_string()]
-                            } else {
-                                registration.metadata.tags.clone()
-                            };
-                            all_routes.push(serde_json::json!({
-                                "path": path,
-                                "method": "ASSET",
-                                "handler": registration.asset_name,
-                                "script_uri": registration.script_uri,
-                                "summary": registration.metadata.summary,
-                                "description": registration.metadata.description,
-                                "tags": tags,
-                            }));
-                        }
-
-                        match serde_json::to_string(&all_routes) {
-                            Ok(json) => Ok(json),
-                            Err(e) => Ok(format!("Error serializing routes: {}", e)),
-                        }
-                    }
+                // The sandbox answers an empty list rather than throwing when
+                // the capability is missing, as this global always has; only
+                // the HTTP surface turns denial into a status code.
+                match crate::engine_api::routes_introspection_authorized(&user_ctx_list_routes) {
+                    Ok(routes) => match serde_json::to_string(&routes) {
+                        Ok(json) => Ok(json),
+                        Err(e) => Ok(format!("Error serializing routes: {}", e)),
+                    },
+                    Err(crate::error::AppError::Security { .. }) => Ok("[]".to_string()),
                     Err(e) => Ok(format!("Error fetching routes: {}", e)),
                 }
             },

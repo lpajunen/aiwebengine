@@ -770,3 +770,68 @@ async fn test_asset_upsert_sets_script_uri() {
     assert_eq!(asset.mimetype, "text/plain");
     assert_eq!(String::from_utf8(asset.content).unwrap(), "test content");
 }
+
+// ============================================================================
+// Engine API denial semantics
+// ============================================================================
+
+#[tokio::test(flavor = "multi_thread")]
+async fn engine_log_reads_refuse_rather_than_answer_empty() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    setup_env().await;
+
+    // A caller without ViewLogs must be refused outright. Answering an empty
+    // list would be indistinguishable from a script that has logged nothing,
+    // and it disagreed with DELETE on the same path, which has always refused.
+    let denied = create_user_with_capabilities("no-view-logs", vec![]);
+    let error = aiwebengine::engine_api::query_logs_authorized(
+        &denied,
+        &aiwebengine::repository::LogQuery::default(),
+    )
+    .expect_err("log read without ViewLogs should be refused");
+    assert_eq!(error.status_code(), 403, "expected a forbidden status");
+
+    // The same query succeeds once the capability is held.
+    let allowed = create_user_with_capabilities("view-logs", vec![Capability::ViewLogs]);
+    aiwebengine::engine_api::query_logs_authorized(
+        &allowed,
+        &aiwebengine::repository::LogQuery::default(),
+    )
+    .expect("log read with ViewLogs should be allowed");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn engine_log_deletes_refuse_without_capability() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    setup_env().await;
+
+    let denied = create_user_with_capabilities("no-delete-logs", vec![Capability::ViewLogs]);
+    let error = aiwebengine::engine_api::delete_logs_authorized(&denied, None)
+        .expect_err("prune without DeleteLogs should be refused");
+    assert_eq!(error.status_code(), 403, "expected a forbidden status");
+
+    let error = aiwebengine::engine_api::delete_logs_authorized(&denied, Some("some-script"))
+        .expect_err("clear without DeleteLogs should be refused");
+    assert_eq!(error.status_code(), 403, "expected a forbidden status");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn engine_route_listing_refuses_rather_than_answers_empty() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    setup_env().await;
+
+    let denied = create_user_with_capabilities("no-read-scripts", vec![]);
+    let error = aiwebengine::engine_api::routes_introspection_authorized(&denied)
+        .expect_err("route listing without ReadScripts should be refused");
+    assert_eq!(error.status_code(), 403, "expected a forbidden status");
+
+    let allowed = create_user_with_capabilities("read-scripts", vec![Capability::ReadScripts]);
+    aiwebengine::engine_api::routes_introspection_authorized(&allowed)
+        .expect("route listing with ReadScripts should be allowed");
+}
