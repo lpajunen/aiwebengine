@@ -226,6 +226,10 @@ pub fn clear_script_mcp_registrations(script_uri: &str) {
     }
 }
 
+/// Script URI stamped on the engine's own tools, which have no script behind
+/// them. Distinguishes them from script-registered tools when filtering.
+pub const NATIVE_TOOL_URI: &str = "engine://native";
+
 /// List all registered MCP tools: native engine tools first, then
 /// script-registered tools. A script tool whose name collides with a native
 /// tool is omitted — native tools always win at dispatch time.
@@ -237,7 +241,7 @@ pub fn list_tools() -> Vec<McpTool> {
             description: descriptor.description.to_string(),
             input_schema: descriptor.input_schema,
             handler_function: String::new(),
-            script_uri: "engine://native".to_string(),
+            script_uri: NATIVE_TOOL_URI.to_string(),
         })
         .collect();
 
@@ -260,17 +264,29 @@ pub fn list_tools() -> Vec<McpTool> {
 ///
 /// Script tools are dropped unless their script publishes on that host, so a
 /// tool registered by an admin-only script is absent from the listing on a
-/// content host. The engine's own native tools are not script-backed and are
-/// always listed; they are scoped by `server.management_hosts` at the HTTP
-/// layer instead.
-pub async fn list_tools_for_host(host: &str) -> Vec<McpTool> {
+/// content host.
+///
+/// `native_allowed` decides the engine's own tools — script CRUD, secrets,
+/// user roles — which are not script-backed and so have no binding of their
+/// own. It comes from `server.management_hosts`, the same list that governs
+/// `/engine/*`, so the management surface is reachable on the same hostnames
+/// whichever protocol is used to get at it.
+pub async fn list_tools_for_host(host: &str, native_allowed: bool) -> Vec<McpTool> {
     let tools = list_tools();
-    let Some(allowed) = crate::route_index::scripts_for_host(host).await else {
-        return tools;
-    };
+    let host_scripts = crate::route_index::scripts_for_host(host).await;
+
     tools
         .into_iter()
-        .filter(|tool| tool.script_uri == "engine://native" || allowed.contains(&tool.script_uri))
+        .filter(|tool| {
+            if tool.script_uri == NATIVE_TOOL_URI {
+                return native_allowed;
+            }
+            match &host_scripts {
+                Some(allowed) => allowed.contains(&tool.script_uri),
+                // Host binding not in force; every script publishes everywhere
+                None => true,
+            }
+        })
         .collect()
 }
 
@@ -290,14 +306,20 @@ pub async fn list_prompts_for_host(host: &str) -> Vec<McpPrompt> {
 /// Whether a tool may be called from `host`.
 ///
 /// Dispatch has to repeat the listing's filter: a client that learned a tool
-/// name elsewhere must not be able to reach a script that does not publish
-/// here just by naming it.
-pub async fn tool_is_available_on_host(tool_name: &str, host: &str) -> bool {
+/// name elsewhere must not be able to reach a tool that is not published here
+/// just by naming it.
+pub async fn tool_is_available_on_host(tool_name: &str, host: &str, native_allowed: bool) -> bool {
+    // Asked before the script registry because native tools win at dispatch
+    // ([`execute_mcp_tool`]): a script registering a colliding name would
+    // otherwise decide, with its own binding, whether the native tool runs.
+    if crate::engine_api::is_native_mcp_tool(tool_name) {
+        return native_allowed;
+    }
+
     let script_uri = match get_registry().read() {
         Ok(registry) => match registry.get_tool(tool_name) {
             Some(tool) => tool.script_uri.clone(),
-            // Not a script tool: either native, or unknown and about to fail
-            // with "tool not found" anyway.
+            // Unknown tool; about to fail with "tool not found" anyway.
             None => return true,
         },
         Err(e) => {

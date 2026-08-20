@@ -1748,7 +1748,12 @@ async fn setup_routes(
             .get::<auth::McpAuthSession>()
             .map(|auth_session| auth_session.session.clone());
         // Which host's script registrations this client sees
-        let canonical_host = hosts::canonical_host(request_host(req.headers()).as_deref());
+        let raw_host = request_host(req.headers());
+        let canonical_host = hosts::canonical_host(raw_host.as_deref());
+        // The engine's own tools follow `server.management_hosts`, matched
+        // against the Host header itself rather than the canonicalised host —
+        // a management host need not be one of the hosts scripts publish on.
+        let native_tools_allowed = engine_api::is_management_host(raw_host.as_deref());
 
         let body_bytes = match axum::body::to_bytes(req.into_body(), max_request_body).await {
             Ok(bytes) => bytes,
@@ -1848,7 +1853,7 @@ async fn setup_routes(
                 }))
             }
             "tools/list" => {
-                let tools = mcp::list_tools_for_host(&canonical_host).await;
+                let tools = mcp::list_tools_for_host(&canonical_host, native_tools_allowed).await;
 
                 let tools_list: Vec<serde_json::Value> = tools
                     .iter()
@@ -1918,7 +1923,13 @@ async fn setup_routes(
 
                 // Repeat the listing's host filter at dispatch, so naming a
                 // tool that is not published here does not reach its script.
-                if !mcp::tool_is_available_on_host(&tool_name, &canonical_host).await {
+                if !mcp::tool_is_available_on_host(
+                    &tool_name,
+                    &canonical_host,
+                    native_tools_allowed,
+                )
+                .await
+                {
                     warn!(
                         "MCP tool '{}' is not published on host {}; refusing the call",
                         tool_name, canonical_host

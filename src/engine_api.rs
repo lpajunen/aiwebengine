@@ -3550,6 +3550,16 @@ fn native_tools() -> &'static [NativeToolEntry] {
     ]
 }
 
+/// Whether `name` is one of the engine's own MCP tools.
+///
+/// Native tools take precedence over script-registered ones at dispatch
+/// ([`crate::mcp::execute_mcp_tool`]), so anything deciding whether a call is
+/// allowed has to ask this before consulting the script registry — otherwise a
+/// script registering a colliding name would answer for the native tool.
+pub fn is_native_mcp_tool(name: &str) -> bool {
+    native_tools().iter().any(|(tool, _, _, _)| *tool == name)
+}
+
 /// Descriptors of all native MCP tools, for tools/list.
 pub fn native_mcp_tool_descriptors() -> Vec<NativeToolDescriptor> {
     native_tools()

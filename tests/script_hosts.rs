@@ -13,6 +13,7 @@ use aiwebengine::engine_api::{
     native_mcp_tool_descriptors, set_script_hosts_authorized,
 };
 use aiwebengine::hosts::{self, ALL_HOSTS, HostConfig};
+use aiwebengine::mcp;
 use aiwebengine::repository;
 use aiwebengine::security::{Capability, UserContext};
 use common::should_skip_integration_tests;
@@ -300,6 +301,102 @@ async fn mcp_set_script_hosts_binds_for_an_admin() {
     let (stored, _) = get_script_hosts_authorized(&admin(), &uri).expect("admin may read bindings");
     assert_eq!(stored, vec!["world.softagen.com".to_string()]);
 
+    repository::delete_script(&uri);
+}
+
+/// The engine's own MCP tools are the same management surface as `/engine/*`,
+/// so they follow the same `server.management_hosts` setting rather than being
+/// reachable from every host's `/mcp`.
+#[tokio::test(flavor = "multi_thread")]
+async fn native_mcp_tools_are_listed_only_where_management_is_allowed() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    setup_env().await;
+
+    let listed = mcp::list_tools_for_host("manage.softagen.com", true).await;
+    assert!(
+        listed.iter().any(|tool| tool.name == "write_file"),
+        "a management host must still offer the engine's tools"
+    );
+
+    let listed = mcp::list_tools_for_host("softagen.com", false).await;
+    for name in [
+        "write_file",
+        "delete_file",
+        "set_script_hosts",
+        "list_users",
+    ] {
+        assert!(
+            !listed.iter().any(|tool| tool.name == name),
+            "{} must not be listed on a content host",
+            name
+        );
+    }
+    assert!(
+        listed
+            .iter()
+            .all(|tool| tool.script_uri != mcp::NATIVE_TOOL_URI),
+        "no native tool should survive the filter on a content host"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn native_mcp_tools_are_refused_at_dispatch_off_the_management_host() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    setup_env().await;
+
+    // Listing and dispatch must agree; a client that learned the name
+    // elsewhere must not get through by naming it.
+    for name in [
+        "write_file",
+        "delete_file",
+        "set_script_hosts",
+        "list_users",
+    ] {
+        assert!(
+            mcp::tool_is_available_on_host(name, "manage.softagen.com", true).await,
+            "{} should be callable on a management host",
+            name
+        );
+        assert!(
+            !mcp::tool_is_available_on_host(name, "softagen.com", false).await,
+            "{} should be refused on a content host",
+            name
+        );
+    }
+}
+
+/// Native tools win at dispatch, so a script registering a colliding name must
+/// not be able to decide — via its own host binding — whether the native tool
+/// runs. Without this the gate above could be walked around by publishing a
+/// script named after a management tool on a content host.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_script_cannot_reopen_a_native_tool_by_registering_its_name() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    setup_env().await;
+
+    let uri = create_script("collide");
+    aiwebengine::mcp::register_mcp_tool(
+        "write_file".to_string(),
+        "impostor".to_string(),
+        json!({ "type": "object" }),
+        "handler".to_string(),
+        uri.clone(),
+    );
+
+    // The script publishes on the default host, but the name is native, so the
+    // management-host rule decides and the call is still refused there.
+    assert!(
+        !mcp::tool_is_available_on_host("write_file", "softagen.com", false).await,
+        "a colliding script registration must not reopen the native tool"
+    );
+
+    aiwebengine::mcp::clear_script_mcp_registrations(&uri);
     repository::delete_script(&uri);
 }
 
