@@ -57,6 +57,22 @@ pub struct ServerConfig {
     #[serde(default)]
     pub additional_base_urls: Vec<String>,
 
+    /// Hosts allowed to serve the engine's management APIs — every `/engine/*`
+    /// endpoint except the static `/engine/installed` page, which stays
+    /// available everywhere as the landing page for `/`.
+    ///
+    /// Entries are matched against the request's Host header and may be
+    /// written either bare (`manage.example.com`, `localhost:3000`) or as a
+    /// full base URL. Requests for a management endpoint on any other host are
+    /// answered with 404, as though the endpoint did not exist there.
+    ///
+    /// Leaving this empty serves management on every host, which is the
+    /// behaviour of a single-host deployment. Set it as soon as scripts serve
+    /// content on a host that should not be able to reach these APIs from a
+    /// logged-in administrator's browser.
+    #[serde(default)]
+    pub management_hosts: Vec<String>,
+
     /// Request timeout in seconds
     pub request_timeout_secs: u64,
 
@@ -283,6 +299,7 @@ impl Default for ServerConfig {
             port: 8080,
             base_url: None,
             additional_base_urls: Vec::new(),
+            management_hosts: Vec::new(),
             request_timeout_secs: 30,
             keep_alive_timeout_secs: 60,
             max_connections: 10000,
@@ -330,6 +347,35 @@ impl ServerConfig {
         }
         urls
     }
+
+    /// `management_hosts` in the form request Host headers take, with entries
+    /// that name no host dropped (configuration validation rejects those, so
+    /// this only skips them if validation was bypassed).
+    pub fn normalized_management_hosts(&self) -> Vec<String> {
+        self.management_hosts
+            .iter()
+            .filter_map(|entry| normalize_host_entry(entry))
+            .collect()
+    }
+}
+
+/// Normalize a configured host to the form a request's Host header takes.
+///
+/// Accepts either a bare `host[:port]` or a full base URL, so the host
+/// settings can be written in whichever style reads better. Returns `None`
+/// when the entry names no host or carries a path or credentials.
+pub fn normalize_host_entry(entry: &str) -> Option<String> {
+    let entry = entry.trim();
+    if entry.is_empty() {
+        return None;
+    }
+    if entry.contains("://") {
+        return base_url_authority(entry);
+    }
+    if entry.contains('/') || entry.contains('@') {
+        return None;
+    }
+    Some(entry.to_lowercase())
 }
 
 /// Extract the `Host` header form of a base URL: lowercase hostname, plus the
@@ -574,6 +620,18 @@ impl AppConfig {
             }
         }
 
+        // A management host that never matches a Host header would silently
+        // take the management APIs offline, so reject it at startup instead.
+        for entry in &self.server.management_hosts {
+            if normalize_host_entry(entry).is_none() {
+                anyhow::bail!(
+                    "Invalid server.management_hosts entry '{}': must be a hostname, \
+                     optionally with a port, e.g. manage.example.com or localhost:3000",
+                    entry
+                );
+            }
+        }
+
         // Validate logging configuration
         match self.logging.level.as_str() {
             "trace" | "debug" | "info" | "warn" | "error" => {}
@@ -761,6 +819,77 @@ mod tests {
         assert_eq!(
             server.all_base_urls(),
             vec!["https://softagen.com", "https://manage.softagen.com"]
+        );
+    }
+
+    #[test]
+    fn test_normalize_host_entry_accepts_bare_hosts_and_urls() {
+        assert_eq!(
+            normalize_host_entry("Manage.Softagen.com"),
+            Some("manage.softagen.com".to_string())
+        );
+        assert_eq!(
+            normalize_host_entry("https://manage.softagen.com"),
+            Some("manage.softagen.com".to_string())
+        );
+        assert_eq!(
+            normalize_host_entry("localhost:3000"),
+            Some("localhost:3000".to_string())
+        );
+        assert_eq!(
+            normalize_host_entry("  manage.softagen.com  "),
+            Some("manage.softagen.com".to_string())
+        );
+    }
+
+    #[test]
+    fn test_normalize_host_entry_rejects_non_hosts() {
+        // A path or credentials would never match a Host header.
+        assert_eq!(normalize_host_entry("manage.softagen.com/engine"), None);
+        assert_eq!(normalize_host_entry("user@manage.softagen.com"), None);
+        assert_eq!(normalize_host_entry(""), None);
+        assert_eq!(normalize_host_entry("   "), None);
+    }
+
+    #[test]
+    fn test_normalized_management_hosts_uses_host_header_form() {
+        let server = ServerConfig {
+            management_hosts: vec![
+                "https://manage.softagen.com".to_string(),
+                "Localhost:3000".to_string(),
+            ],
+            ..ServerConfig::default()
+        };
+
+        assert_eq!(
+            server.normalized_management_hosts(),
+            vec!["manage.softagen.com", "localhost:3000"]
+        );
+    }
+
+    #[test]
+    fn test_validation_rejects_unmatchable_management_host() {
+        let mut config = AppConfig::default();
+        config.server.management_hosts = vec!["manage.softagen.com/engine".to_string()];
+
+        // Accepted silently, this would take the management APIs offline.
+        let err = config
+            .validate()
+            .expect_err("a bare entry with a path can never match a Host header");
+        assert!(err.to_string().contains("management_hosts"));
+    }
+
+    #[test]
+    fn test_validation_accepts_full_url_management_host() {
+        // A full URL is forgiving input: its path is irrelevant once the entry
+        // is reduced to the authority a Host header carries.
+        let mut config = AppConfig::default();
+        config.server.management_hosts = vec!["https://manage.softagen.com/ignored".to_string()];
+
+        assert!(config.validate().is_ok());
+        assert_eq!(
+            config.server.normalized_management_hosts(),
+            vec!["manage.softagen.com"]
         );
     }
 

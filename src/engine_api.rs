@@ -87,6 +87,42 @@ pub const RESERVED_ROUTE_PREFIXES: &[&str] = &[
 /// path would let a script take ownership of the engine's stream.
 pub const ENGINE_SCRIPT_UPDATES_STREAM: &str = "/engine/script_updates";
 
+/// Hosts allowed to serve the management APIs, normalized to Host-header form.
+/// Empty (or unset) means every host serves them, which is what a single-host
+/// deployment wants. Set once at startup from `server.management_hosts`.
+static MANAGEMENT_HOSTS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+
+/// Record which hosts may serve the management APIs. Called once at startup;
+/// later calls are ignored so the boundary cannot be widened at runtime.
+pub fn init_management_hosts(hosts: Vec<String>) {
+    let _ = MANAGEMENT_HOSTS.set(hosts);
+}
+
+/// Whether `host` may serve the management APIs, given the configured list.
+///
+/// An empty list allows every host. Otherwise the match is exact against the
+/// normalized entries, and a request without a Host header is refused — HTTP
+/// requires one, so its absence should not open the boundary.
+fn host_is_allowed(allowed: &[String], host: Option<&str>) -> bool {
+    if allowed.is_empty() {
+        return true;
+    }
+    match host {
+        Some(host) => allowed.contains(&host.trim().to_lowercase()),
+        None => false,
+    }
+}
+
+/// Whether a request arriving on `host` may reach the management APIs.
+pub fn is_management_host(host: Option<&str>) -> bool {
+    match MANAGEMENT_HOSTS.get() {
+        Some(allowed) => host_is_allowed(allowed, host),
+        // Not configured yet (tests constructing routers directly, or startup
+        // ordering) — behave as an unrestricted single-host deployment.
+        None => true,
+    }
+}
+
 /// Returns the reserved prefix that `path` falls under, if any.
 pub fn reserved_route_prefix(path: &str) -> Option<&'static str> {
     RESERVED_ROUTE_PREFIXES.iter().copied().find(|prefix| {
@@ -3796,7 +3832,7 @@ fn tool_remove_user_role(args: &Value, user: &UserContext) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::reserved_route_prefix;
+    use super::{host_is_allowed, reserved_route_prefix};
 
     #[test]
     fn reserved_prefixes_match_exact_and_subpaths() {
@@ -3832,5 +3868,49 @@ mod tests {
         assert_eq!(reserved_route_prefix("/token"), None);
         assert_eq!(reserved_route_prefix("/oauth2/token"), None);
         assert_eq!(reserved_route_prefix("/oauth2"), None);
+    }
+
+    #[test]
+    fn empty_management_host_list_allows_every_host() {
+        // A single-host deployment leaves the setting unset and must keep
+        // serving the management APIs wherever it is reached.
+        assert!(host_is_allowed(&[], Some("softagen.com")));
+        assert!(host_is_allowed(&[], None));
+    }
+
+    #[test]
+    fn configured_management_hosts_match_exactly_and_case_insensitively() {
+        let allowed = vec!["manage.softagen.com".to_string()];
+
+        assert!(host_is_allowed(&allowed, Some("manage.softagen.com")));
+        assert!(host_is_allowed(&allowed, Some("MANAGE.Softagen.com")));
+        assert!(host_is_allowed(&allowed, Some("  manage.softagen.com  ")));
+
+        assert!(!host_is_allowed(&allowed, Some("softagen.com")));
+        assert!(!host_is_allowed(&allowed, Some("world.softagen.com")));
+        // Not a suffix or prefix match: neither a parent domain nor an
+        // attacker-controlled name that merely ends with the allowed host.
+        assert!(!host_is_allowed(&allowed, Some("evil-manage.softagen.com")));
+        assert!(!host_is_allowed(
+            &allowed,
+            Some("manage.softagen.com.evil.test")
+        ));
+    }
+
+    #[test]
+    fn missing_host_header_is_refused_when_restricted() {
+        let allowed = vec!["manage.softagen.com".to_string()];
+        assert!(!host_is_allowed(&allowed, None));
+    }
+
+    #[test]
+    fn management_host_list_may_name_several_hosts() {
+        let allowed = vec![
+            "manage.softagen.com".to_string(),
+            "localhost:3000".to_string(),
+        ];
+        assert!(host_is_allowed(&allowed, Some("manage.softagen.com")));
+        assert!(host_is_allowed(&allowed, Some("localhost:3000")));
+        assert!(!host_is_allowed(&allowed, Some("localhost")));
     }
 }

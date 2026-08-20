@@ -517,6 +517,43 @@ struct OAuthProviderConfig {
     extra_params: HashMap<String, String>,
 }
 
+/// Read the host a request was addressed to, for host-scoped routing.
+fn request_host(headers: &axum::http::HeaderMap) -> Option<String> {
+    headers
+        .get(axum::http::header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .map(|host| host.trim().to_lowercase())
+        .filter(|host| !host.is_empty())
+}
+
+/// Refuse management endpoints on hosts that are not allowed to serve them.
+///
+/// Answers 404 rather than 403: on a host where these endpoints are not
+/// offered, "not found" is the truthful answer and it does not confirm to a
+/// script's page that the management API exists elsewhere.
+async fn management_host_guard(
+    req: Request<Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let host = request_host(req.headers());
+    if !engine_api::is_management_host(host.as_deref()) {
+        let path = req.uri().path().to_string();
+        let request_id = req
+            .extensions()
+            .get::<middleware::RequestId>()
+            .map(|rid| rid.0.clone())
+            .unwrap_or_else(|| "unknown".to_string());
+        warn!(
+            "[{}] Management endpoint {} refused on host {:?}: not in server.management_hosts",
+            request_id,
+            path,
+            host.as_deref().unwrap_or("<no Host header>")
+        );
+        return error_to_response(error::errors::not_found(&path, &request_id));
+    }
+    next.run(req).await
+}
+
 /// Point a provider's configured redirect URI at a different base URL, keeping
 /// its path and query so each host uses the same callback route.
 ///
@@ -1227,6 +1264,25 @@ pub async fn start_server_with_config(
     if !script_test::configure_test_timeouts(test_timeout_ms, test_run_timeout_ms) {
         debug!("Script test timeouts were already configured");
     }
+
+    // Scope the management APIs to their hosts before the server can serve a
+    // request. Logged either way: which hosts answer /engine/* is exactly the
+    // kind of thing that should be visible in the startup output.
+    let management_hosts = config.server.normalized_management_hosts();
+    if management_hosts.is_empty() {
+        warn!(
+            "server.management_hosts is not set — the /engine management APIs are served on \
+             every host. Set it to restrict them once scripts serve content on a host that \
+             should not reach them from an administrator's browser."
+        );
+    } else {
+        info!(
+            "Management APIs (/engine/*, except the static /engine/installed page) restricted \
+             to hosts: {:?}",
+            management_hosts
+        );
+    }
+    engine_api::init_management_hosts(management_hosts);
 
     // Initialize all core components
     initialize_components(&config).await?;
@@ -2172,7 +2228,8 @@ async fn setup_routes(
     // Script and asset management endpoints (engine functionality,
     // previously provided by the built-in core.js/cli.js scripts).
     // The configured request body limit applies, same as dynamic routes.
-    // These paths live under the reserved /engine prefix.
+    // These paths live under the reserved /engine prefix, and are served only
+    // on the hosts in `server.management_hosts` (see `management_host_guard`).
     let management_router = Router::new()
         .route(
             "/engine/upsert_script",
@@ -2234,19 +2291,27 @@ async fn setup_routes(
             axum::routing::get(engine_api::cluster_health_route),
         )
         .route(
+            "/engine/openapi.json",
+            axum::routing::get(engine_api::openapi_route),
+        )
+        .layer(axum::middleware::from_fn(management_host_guard))
+        .layer(axum::extract::DefaultBodyLimit::max(max_request_body));
+    app = app.merge(management_router);
+
+    // Served on every host, so they stay outside the guard above rather than
+    // being carved back out of it by path: `/engine/installed` is a static
+    // page with no data and the landing target for `/`, and
+    // `/auth/unauthorized` is where a failed authorization lands wherever it
+    // happened.
+    app = app
+        .route(
             "/engine/installed",
             axum::routing::get(engine_api::installed_page_route),
         )
         .route(
-            "/engine/openapi.json",
-            axum::routing::get(engine_api::openapi_route),
-        )
-        .route(
             "/auth/unauthorized",
             axum::routing::get(engine_api::unauthorized_page_route),
-        )
-        .layer(axum::extract::DefaultBodyLimit::max(max_request_body));
-    app = app.merge(management_router);
+        );
 
     // Add health check endpoint (no authentication required). Detailed cluster
     // diagnostics live at /engine/health/cluster and require administrator rights.
@@ -2379,6 +2444,25 @@ async fn handle_dynamic_request(
 ) -> impl IntoResponse {
     let path = req.uri().path().to_string();
     let request_method = req.method().to_string();
+
+    // The management router's guard does not cover engine endpoints reached
+    // through this fallback — notably the /engine/script_updates stream, which
+    // is served by the stream registry below. /engine is a reserved prefix, so
+    // refusing the whole prefix here cannot shadow a script's own route.
+    if path.starts_with("/engine/")
+        && !engine_api::is_management_host(request_host(req.headers()).as_deref())
+    {
+        let request_id = req
+            .extensions()
+            .get::<middleware::RequestId>()
+            .map(|rid| rid.0.clone())
+            .unwrap_or_else(|| "unknown".to_string());
+        warn!(
+            "[{}] Engine endpoint {} refused: host is not in server.management_hosts",
+            request_id, path
+        );
+        return error_to_response(error::errors::not_found(&path, &request_id));
+    }
 
     // Check for registered asset paths first if it's a GET request
     if let Some(asset_response) = try_serve_asset(&path, &request_method).await {

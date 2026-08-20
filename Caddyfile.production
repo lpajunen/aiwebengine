@@ -65,15 +65,10 @@ softagen.com {
 		X-Frame-Options "SAMEORIGIN"
 	}
 
-	# Once the editor UI is reachable on manage.softagen.com, uncomment to
-	# stop the management API from being callable on the content origin.
-	# This is what actually closes the same-origin escalation path: without
-	# it, all three hostnames expose /engine/* identically and the split is
-	# cosmetic. Note that `/` currently redirects to /engine/installed, so
-	# enabling this needs a landing page for the content host first.
-	# handle /engine/* {
-	#     respond "Not found" 404
-	# }
+	# The management API is refused on this host by the engine itself, via
+	# server.management_hosts in config.production.toml — not here, because
+	# /engine/installed has to stay reachable as the landing page for `/`
+	# and a rule duplicated in both places would drift.
 }
 
 # Designated single-script host
@@ -87,10 +82,7 @@ world.softagen.com {
 		X-Frame-Options "SAMEORIGIN"
 	}
 
-	# Same as above - the management API has no business on this host.
-	# handle /engine/* {
-	#     respond "Not found" 404
-	# }
+	# As above, the management API is refused here by server.management_hosts.
 }
 
 # Management host - engine management APIs and management-only scripts

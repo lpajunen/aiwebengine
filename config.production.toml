@@ -21,6 +21,13 @@ additional_base_urls = [
   "https://manage.softagen.com",
   "https://world.softagen.com",
 ]
+# Hosts allowed to serve the management APIs. Every /engine/* endpoint except
+# the static /engine/installed page (kept everywhere as the landing page for /)
+# answers 404 on any other host, so a script serving content on softagen.com
+# cannot drive them from a logged-in administrator's browser.
+# Leave empty to serve management everywhere, which is what a single-host
+# deployment wants. Override with APP_SERVER__MANAGEMENT_HOSTS='["host", ...]'.
+management_hosts = ["manage.softagen.com"]
 # Longer timeout for production reliability
 request_timeout_secs = 30
 # Keep-alive timeout in seconds
