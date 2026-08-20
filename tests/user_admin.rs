@@ -447,3 +447,55 @@ async fn user_endpoints_are_documented_in_openapi() {
 
     context.cleanup().await.expect("Failed to cleanup");
 }
+
+// ============================================================================
+// Roles on sessions minted by the OAuth token exchange
+// ============================================================================
+
+/// The `/auth/token` exchange used to hardcode `is_admin: false`, so a Bearer
+/// token obtained through the PKCE flow never reached the administrator-only
+/// engine APIs even for an administrator. The roles must come from the user
+/// repository, like they do for a browser login.
+#[tokio::test(flavor = "multi_thread")]
+async fn session_identity_carries_repository_roles() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    setup_env().await;
+
+    let user_id = create_user("session-identity").await;
+    let plain = aiwebengine::auth::routes::session_identity_for_user(&user_id).await;
+    assert!(!plain.is_admin, "a new user is not an administrator");
+    assert!(!plain.is_editor, "a new user is not an editor");
+    assert!(plain.email.is_some(), "identity should carry the email");
+
+    user_repository::add_user_role(&user_id, UserRole::Administrator)
+        .expect("failed to grant Administrator");
+    user_repository::add_user_role(&user_id, UserRole::Editor).expect("failed to grant Editor");
+
+    let elevated = aiwebengine::auth::routes::session_identity_for_user(&user_id).await;
+    assert!(
+        elevated.is_admin,
+        "an Administrator's session must be marked admin"
+    );
+    assert!(
+        elevated.is_editor,
+        "an Editor's session must be marked editor"
+    );
+}
+
+/// A user the repository cannot resolve gets a session with no roles rather
+/// than one that guesses at them.
+#[tokio::test(flavor = "multi_thread")]
+async fn session_identity_for_unknown_user_has_no_roles() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    setup_env().await;
+
+    let identity = aiwebengine::auth::routes::session_identity_for_user("no-such-user-id").await;
+    assert_eq!(
+        identity,
+        aiwebengine::auth::routes::SessionIdentity::default()
+    );
+}

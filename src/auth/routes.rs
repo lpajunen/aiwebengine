@@ -1206,16 +1206,19 @@ pub async fn oauth2_token(
     let ip_addr = extract_client_ip_from_headers(&headers);
     let user_agent = extract_user_agent_from_headers(&headers);
 
-    // Get user info from the user repository to get email, name, is_admin, is_editor
-    // For now, we'll use defaults since we don't have direct access to user repo here
-    // In production, pass user repository or fetch this info during code storage
+    // Carry the user's identity and roles onto the session. Downstream nothing
+    // distinguishes a session minted here from a browser login — the
+    // administrator-only engine APIs read `is_admin` straight off it — so the
+    // roles have to come from the user repository instead of defaulting to none.
+    let identity = session_identity_for_user(&code_data.user_id).await;
+
     let session_params = crate::auth::session::CreateAuthSessionParams {
         user_id: code_data.user_id.clone(),
         provider: "oauth2".to_string(),
-        email: None,      // TODO: Store with code or fetch from user repo
-        name: None,       // TODO: Store with code or fetch from user repo
-        is_admin: false,  // TODO: Store with code or fetch from user repo
-        is_editor: false, // TODO: Store with code or fetch from user repo
+        email: identity.email,
+        name: identity.name,
+        is_admin: identity.is_admin,
+        is_editor: identity.is_editor,
         ip_addr: ip_addr.clone(),
         user_agent: user_agent.clone(),
         refresh_token: None,
@@ -1254,6 +1257,44 @@ pub async fn oauth2_token(
                 }),
             )
                 .into_response()
+        }
+    }
+}
+
+/// Identity and roles to stamp onto a session minted for a user.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct SessionIdentity {
+    pub email: Option<String>,
+    pub name: Option<String>,
+    pub is_admin: bool,
+    pub is_editor: bool,
+}
+
+/// Look up the roles a session for `user_id` should carry.
+///
+/// A user whose record cannot be read gets a session with no roles rather than
+/// no session at all: the token exchange has already verified the
+/// authorization code, and failing closed on roles keeps a transient database
+/// error from handing out privileges it could not confirm.
+pub async fn session_identity_for_user(user_id: &str) -> SessionIdentity {
+    match crate::user_repository::get_user_async(user_id).await {
+        Ok(user) => SessionIdentity {
+            email: Some(user.email),
+            name: user.name,
+            is_admin: user
+                .roles
+                .contains(&crate::user_repository::UserRole::Administrator),
+            is_editor: user
+                .roles
+                .contains(&crate::user_repository::UserRole::Editor),
+        },
+        Err(e) => {
+            tracing::warn!(
+                "Could not load user {} while minting a session; issuing it with no roles: {}",
+                user_id,
+                e
+            );
+            SessionIdentity::default()
         }
     }
 }
