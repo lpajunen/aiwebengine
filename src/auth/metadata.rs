@@ -161,12 +161,13 @@ impl MetadataConfig {
 
         AuthorizationServerMetadata {
             issuer: issuer.clone(),
-            // The OAuth2 endpoints live under the reserved `/auth` prefix.
+            // The OAuth2 endpoints live under the reserved `/auth` prefix, and
+            // are advertised from the same constants they are mounted from.
             // These are the only paths served; clients discover them here.
-            authorization_endpoint: format!("{}/auth/oauth2/authorize", issuer),
-            token_endpoint: format!("{}/auth/oauth2/token", issuer),
+            authorization_endpoint: format!("{}{}", issuer, super::routes::AUTHORIZE_PATH),
+            token_endpoint: format!("{}{}", issuer, super::routes::TOKEN_PATH),
             registration_endpoint: if self.enable_registration {
-                Some(format!("{}/auth/oauth2/register", issuer))
+                Some(format!("{}{}", issuer, super::routes::REGISTRATION_PATH))
             } else {
                 None
             },

@@ -698,6 +698,17 @@ pub async fn refresh_session(
     }
 }
 
+/// Paths the OAuth 2.0 protocol endpoints are served at.
+///
+/// These are used to mount the routes, to build the return URL an
+/// unauthenticated caller comes back to after logging in, and to advertise the
+/// endpoints in the discovery documents, so those cannot drift apart — the
+/// return URL did drift once, when the generic `/authorize` alias was
+/// withdrawn in favour of the reserved `/auth` prefix.
+pub(crate) const AUTHORIZE_PATH: &str = "/auth/oauth2/authorize";
+pub(crate) const TOKEN_PATH: &str = "/auth/oauth2/token";
+pub(crate) const REGISTRATION_PATH: &str = "/auth/oauth2/register";
+
 /// OAuth 2.0 authorization request parameters (RFC 6749)
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct AuthorizeParams {
@@ -730,6 +741,40 @@ pub struct AuthorizeParams {
     /// Resource indicator (RFC 8707)
     #[serde(default)]
     resource: Option<String>,
+}
+
+/// Rebuild the authorization request as a relative URL, for a caller who has
+/// to log in first and should land back on the request they made.
+///
+/// The parameters are re-encoded from the parsed request rather than the raw
+/// query string being passed through, so nothing the caller appended survives
+/// into the URL the login flow will bounce them to.
+fn authorize_return_url(params: &AuthorizeParams) -> String {
+    let mut query_params = vec![
+        format!(
+            "response_type={}",
+            urlencoding::encode(&params.response_type)
+        ),
+        format!("client_id={}", urlencoding::encode(&params.client_id)),
+    ];
+
+    let optional = [
+        ("redirect_uri", &params.redirect_uri),
+        ("scope", &params.scope),
+        ("state", &params.state),
+        ("code_challenge", &params.code_challenge),
+        ("code_challenge_method", &params.code_challenge_method),
+        ("resource", &params.resource),
+    ];
+    for (name, value) in optional {
+        if let Some(value) = value
+            && !value.is_empty()
+        {
+            query_params.push(format!("{}={}", name, urlencoding::encode(value)));
+        }
+    }
+
+    format!("{}?{}", AUTHORIZE_PATH, query_params.join("&"))
 }
 
 /// OAuth 2.0 authorization endpoint
@@ -788,56 +833,7 @@ pub async fn oauth2_authorize(
 
     // If not authenticated, redirect to login with return URL
     if !is_authenticated {
-        // Build query string with only non-empty parameters
-        let mut query_params = vec![
-            format!(
-                "response_type={}",
-                urlencoding::encode(&params.response_type)
-            ),
-            format!("client_id={}", urlencoding::encode(&params.client_id)),
-        ];
-
-        if let Some(ref uri) = params.redirect_uri
-            && !uri.is_empty()
-        {
-            query_params.push(format!("redirect_uri={}", urlencoding::encode(uri)));
-        }
-        if let Some(ref scope) = params.scope
-            && !scope.is_empty()
-        {
-            query_params.push(format!("scope={}", urlencoding::encode(scope)));
-        }
-        if let Some(ref state) = params.state
-            && !state.is_empty()
-        {
-            query_params.push(format!("state={}", urlencoding::encode(state)));
-        }
-        if let Some(ref challenge) = params.code_challenge
-            && !challenge.is_empty()
-        {
-            query_params.push(format!("code_challenge={}", urlencoding::encode(challenge)));
-        }
-        if let Some(ref method) = params.code_challenge_method
-            && !method.is_empty()
-        {
-            query_params.push(format!(
-                "code_challenge_method={}",
-                urlencoding::encode(method)
-            ));
-        }
-        if let Some(ref resource) = params.resource
-            && !resource.is_empty()
-        {
-            query_params.push(format!("resource={}", urlencoding::encode(resource)));
-        }
-
-        let query_string = if query_params.is_empty() {
-            String::new()
-        } else {
-            format!("?{}", query_params.join("&"))
-        };
-
-        let return_url = format!("/authorize{}", query_string);
+        let return_url = authorize_return_url(&params);
         let encoded_return = urlencoding::encode(&return_url);
 
         return Redirect::to(&format!("/auth/login?redirect={}", encoded_return)).into_response();
@@ -1484,8 +1480,8 @@ pub fn create_oauth2_router(
     let oauth2_protocol_router = Router::new()
         // Under the reserved /auth prefix, and advertised in the authorization
         // server metadata. Clients discover these per RFC 8414.
-        .route("/auth/oauth2/authorize", get(oauth2_authorize))
-        .route("/auth/oauth2/token", post(oauth2_token))
+        .route(AUTHORIZE_PATH, get(oauth2_authorize))
+        .route(TOKEN_PATH, post(oauth2_token))
         .layer(cors)
         .with_state(oauth2_state);
 
@@ -1494,7 +1490,7 @@ pub fn create_oauth2_router(
 
     if let Some(manager) = registration_manager {
         let registration_router = Router::new()
-            .route("/auth/oauth2/register", post(register_client_handler))
+            .route(REGISTRATION_PATH, post(register_client_handler))
             .with_state(manager);
 
         router.merge(registration_router)
@@ -1539,6 +1535,59 @@ mod tests {
 
         let ua = get_user_agent(&headers);
         assert_eq!(ua, "Mozilla/5.0 Test");
+    }
+
+    fn authorize_params(state: Option<&str>) -> AuthorizeParams {
+        AuthorizeParams {
+            response_type: "code".to_string(),
+            client_id: "client-1".to_string(),
+            redirect_uri: Some("http://127.0.0.1:6274/callback".to_string()),
+            scope: None,
+            state: state.map(|s| s.to_string()),
+            code_challenge: Some("abc123".to_string()),
+            code_challenge_method: Some("S256".to_string()),
+            resource: None,
+        }
+    }
+
+    /// The login bounce has to return the caller to the path the authorization
+    /// endpoint is actually mounted at. It once pointed at the withdrawn
+    /// `/authorize` alias, which sent everyone who had to log in to a 404.
+    #[test]
+    fn test_authorize_return_url_uses_the_mounted_path() {
+        let url = authorize_return_url(&authorize_params(Some("xyz")));
+
+        assert!(
+            url.starts_with(&format!("{}?", AUTHORIZE_PATH)),
+            "return URL {} should start with the mounted authorize path",
+            url
+        );
+        assert_eq!(
+            safe_redirect_target(Some(&url)),
+            url,
+            "must survive sanitisation"
+        );
+    }
+
+    #[test]
+    fn test_authorize_return_url_encodes_and_skips_empty_params() {
+        let url = authorize_return_url(&authorize_params(None));
+
+        assert!(url.contains("response_type=code"));
+        assert!(url.contains("client_id=client-1"));
+        assert!(url.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A6274%2Fcallback"));
+        assert!(url.contains("code_challenge=abc123"));
+        assert!(url.contains("code_challenge_method=S256"));
+        assert!(
+            !url.contains("state="),
+            "absent state should be omitted: {}",
+            url
+        );
+        assert!(
+            !url.contains("scope="),
+            "absent scope should be omitted: {}",
+            url
+        );
     }
 
     #[test]
