@@ -22,6 +22,7 @@ pub mod error;
 pub mod graphql;
 pub mod graphql_schema_gen;
 pub mod graphql_ws;
+pub mod hosts;
 pub mod http_client;
 pub mod js_engine;
 pub mod mcp;
@@ -73,6 +74,9 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
         engine_api::assets_delete_route,
         engine_api::list_scripts_route,
         engine_api::script_init_status_route,
+        engine_api::script_hosts_get_route,
+        engine_api::script_hosts_post_route,
+        engine_api::script_hosts_delete_route,
         engine_api::script_owners_get_route,
         engine_api::script_owners_post_route,
         engine_api::script_owners_delete_route,
@@ -1265,6 +1269,19 @@ pub async fn start_server_with_config(
         debug!("Script test timeouts were already configured");
     }
 
+    // Resolve the hosts this engine serves before anything reads them: script
+    // host bindings, route indexing and the management guard all depend on it.
+    let host_config = hosts::HostConfig::new(
+        &config.server.get_base_url(),
+        &config.server.additional_base_urls,
+    );
+    info!(
+        "Serving hosts: {:?} (scripts publish on {:?} unless bound otherwise)",
+        host_config.all_hosts(),
+        host_config.default_host()
+    );
+    hosts::init(host_config);
+
     // Scope the management APIs to their hosts before the server can serve a
     // request. Logged either way: which hosts answer /engine/* is exactly the
     // kind of thing that should be visible in the startup output.
@@ -1525,8 +1542,9 @@ async fn setup_routes(
             }
         };
 
-        // Get the current schema (rebuilds if necessary)
-        let schema = match graphql::get_schema() {
+        // Schema for this host: only operations from scripts published here
+        let canonical_host = hosts::canonical_host(request_host(&parts.headers).as_deref());
+        let schema = match graphql::get_schema_for_host(&canonical_host).await {
             Ok(schema) => schema,
             Err(e) => {
                 return axum::response::Json(
@@ -1547,8 +1565,11 @@ async fn setup_routes(
         |ws: axum::extract::ws::WebSocketUpgrade, req: axum::http::Request<axum::body::Body>| async move {
             // Extract authentication context before upgrade
             let auth_user = req.extensions().get::<auth::AuthUser>().cloned();
+            let canonical_host = hosts::canonical_host(request_host(req.headers()).as_deref());
 
-            ws.on_upgrade(move |socket| graphql_ws::handle_websocket_connection(socket, auth_user))
+            ws.on_upgrade(move |socket| {
+                graphql_ws::handle_websocket_connection(socket, auth_user, canonical_host)
+            })
         };
 
     // GraphQL SSE handler - handles subscriptions over Server-Sent Events using execute_stream
@@ -1650,8 +1671,9 @@ async fn setup_routes(
             }
         };
 
-        // Get the current schema (rebuilds if necessary)
-        let schema = match graphql::get_schema() {
+        // Schema for this host: only operations from scripts published here
+        let canonical_host = hosts::canonical_host(request_host(&parts.headers).as_deref());
+        let schema = match graphql::get_schema_for_host(&canonical_host).await {
             Ok(schema) => schema,
             Err(e) => {
                 error!("GraphQL SSE: Failed to get schema: {:?}", e);
@@ -1725,6 +1747,8 @@ async fn setup_routes(
             .extensions()
             .get::<auth::McpAuthSession>()
             .map(|auth_session| auth_session.session.clone());
+        // Which host's script registrations this client sees
+        let canonical_host = hosts::canonical_host(request_host(req.headers()).as_deref());
 
         let body_bytes = match axum::body::to_bytes(req.into_body(), max_request_body).await {
             Ok(bytes) => bytes,
@@ -1824,7 +1848,7 @@ async fn setup_routes(
                 }))
             }
             "tools/list" => {
-                let tools = mcp::list_tools();
+                let tools = mcp::list_tools_for_host(&canonical_host).await;
 
                 let tools_list: Vec<serde_json::Value> = tools
                     .iter()
@@ -1891,6 +1915,24 @@ async fn setup_routes(
                 // that blocks a worker for the whole run, so it goes to the
                 // blocking pool like every other script execution path.
                 let tool_name = params.name.clone();
+
+                // Repeat the listing's host filter at dispatch, so naming a
+                // tool that is not published here does not reach its script.
+                if !mcp::tool_is_available_on_host(&tool_name, &canonical_host).await {
+                    warn!(
+                        "MCP tool '{}' is not published on host {}; refusing the call",
+                        tool_name, canonical_host
+                    );
+                    return axum::response::Json(serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": rpc_request.id,
+                        "error": {
+                            "code": -32601,
+                            "message": format!("Tool not found: {}", tool_name)
+                        }
+                    }));
+                }
+
                 let execution = tokio::task::spawn_blocking(move || {
                     mcp::execute_mcp_tool(&tool_name, arguments, auth_context, user_context)
                 })
@@ -1949,7 +1991,7 @@ async fn setup_routes(
                 }
             }
             "prompts/list" => {
-                let prompts = mcp::list_prompts();
+                let prompts = mcp::list_prompts_for_host(&canonical_host).await;
 
                 let prompts_list: Vec<serde_json::Value> = prompts
                     .iter()
@@ -2266,6 +2308,12 @@ async fn setup_routes(
             axum::routing::get(engine_api::script_init_status_route),
         )
         .route(
+            "/engine/script_hosts",
+            axum::routing::get(engine_api::script_hosts_get_route)
+                .post(engine_api::script_hosts_post_route)
+                .delete(engine_api::script_hosts_delete_route),
+        )
+        .route(
             "/engine/script_owners",
             axum::routing::get(engine_api::script_owners_get_route)
                 .post(engine_api::script_owners_post_route)
@@ -2444,6 +2492,9 @@ async fn handle_dynamic_request(
 ) -> impl IntoResponse {
     let path = req.uri().path().to_string();
     let request_method = req.method().to_string();
+    // Which host's registrations this request sees. Anything unrecognised
+    // resolves to the default host, so direct-IP and dev access keep working.
+    let canonical_host = hosts::canonical_host(request_host(req.headers()).as_deref());
 
     // The management router's guard does not cover engine endpoints reached
     // through this fallback — notably the /engine/script_updates stream, which
@@ -2465,17 +2516,18 @@ async fn handle_dynamic_request(
     }
 
     // Check for registered asset paths first if it's a GET request
-    if let Some(asset_response) = try_serve_asset(&path, &request_method).await {
+    if let Some(asset_response) = try_serve_asset(&path, &request_method, &canonical_host).await {
         return asset_response;
     }
 
     // Check if this is a request to a registered stream path
-    if should_route_to_stream(&path, &request_method) {
+    if should_route_to_stream(&path, &request_method, &canonical_host).await {
         return handle_stream_request(req).await;
     }
 
-    // Match against the cached route index (rebuilt lazily on script changes)
-    let route_lookup = match route_index::lookup(&path, &request_method).await {
+    // Match against the cached route index (rebuilt lazily on script changes),
+    // scoped to the host this request came in on
+    let route_lookup = match route_index::lookup(&canonical_host, &path, &request_method).await {
         Ok(lookup) => lookup,
         Err(e) => {
             // Treat lookup failure as no match, mirroring the previous behavior
@@ -2869,7 +2921,7 @@ pub async fn start_server_without_shutdown_with_config(config: config::Config) -
 // ============================================================================
 
 /// Try to serve an asset if the path matches a registered asset
-async fn try_serve_asset(path: &str, method: &str) -> Option<Response> {
+async fn try_serve_asset(path: &str, method: &str, host: &str) -> Option<Response> {
     // Asset routes have no per-method registration (see `AssetPathRegistration`),
     // so HEAD is served the same way as GET with the body dropped afterward.
     if method != "GET" && method != "HEAD" {
@@ -2877,6 +2929,13 @@ async fn try_serve_asset(path: &str, method: &str) -> Option<Response> {
     }
 
     let registration = asset_registry::get_global_registry().get_asset_registration(path)?;
+
+    // An asset route belongs to its script, so it is published on the same
+    // hosts. Returning None lets the caller fall through to normal route
+    // matching and, failing that, a 404.
+    if !route_index::script_serves_host(&registration.script_uri, host).await {
+        return None;
+    }
 
     if let Some(asset) =
         repository::fetch_asset_async(&registration.script_uri, &registration.asset_name).await
@@ -2910,7 +2969,7 @@ async fn try_serve_asset(path: &str, method: &str) -> Option<Response> {
 }
 
 /// Check if request should be routed to a stream handler
-fn should_route_to_stream(path: &str, method: &str) -> bool {
+async fn should_route_to_stream(path: &str, method: &str, host: &str) -> bool {
     let is_get = method == "GET";
     let is_stream_registered = stream_registry::GLOBAL_STREAM_REGISTRY.is_stream_registered(path);
 
@@ -2920,6 +2979,20 @@ fn should_route_to_stream(path: &str, method: &str) -> bool {
     );
 
     if is_get && is_stream_registered {
+        // A stream is published on the hosts of the script that registered it.
+        // The engine's own streams have no script behind them, so they are left
+        // to the management host guard rather than checked here.
+        if let Some(script_uri) =
+            stream_registry::GLOBAL_STREAM_REGISTRY.get_stream_script_uri(path)
+            && !script_uri.starts_with("engine://")
+            && !route_index::script_serves_host(&script_uri, host).await
+        {
+            info!(
+                "Stream {} is not published on host {}; not routing to it",
+                path, host
+            );
+            return false;
+        }
         info!("Routing to stream handler for path: {}", path);
         return true;
     }

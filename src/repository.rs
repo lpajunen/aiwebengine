@@ -123,6 +123,11 @@ pub struct ScriptMetadata {
     /// Cached route registrations from init() function
     pub registrations: RouteRegistrations,
     pub owners: Vec<String>,
+    /// Hosts this script's registrations are published on, as stored in
+    /// `script_hosts`. Empty means the default host; a `*` entry means every
+    /// configured host. Resolve with [`crate::hosts::effective_hosts`] rather
+    /// than reading it directly.
+    pub hosts: Vec<String>,
 }
 
 impl ScriptMetadata {
@@ -142,6 +147,7 @@ impl ScriptMetadata {
             last_init_time: None,
             registrations: HashMap::new(),
             owners: Vec::new(),
+            hosts: Vec::new(),
         }
     }
 
@@ -298,6 +304,34 @@ fn refresh_cached_script_source(uri: &str, content: &str) {
         && let Some(metadata) = guard.get_mut(uri)
     {
         metadata.update_content(content.to_string());
+    }
+}
+
+/// Re-read a script's host bindings into its cached metadata.
+///
+/// The cache is what the route index and the host filters are built from, so
+/// an instance that learns of a binding change from another one has to refresh
+/// this or keep publishing the script where it used to be.
+pub async fn refresh_cached_script_hosts_from_db(uri: &str) {
+    let repo = get_repository();
+    match repo.get_script_hosts(uri).await {
+        Ok(script_hosts) => {
+            if let Ok(mut guard) = safe_lock_scripts()
+                && let Some(metadata) = guard.get_mut(uri)
+            {
+                metadata.hosts = script_hosts;
+            }
+        }
+        Err(e) => {
+            // Evict rather than keep a binding we can no longer confirm.
+            warn!(
+                "Could not refresh host bindings for {} ({}); dropping its cached metadata",
+                uri, e
+            );
+            if let Ok(mut guard) = safe_lock_scripts() {
+                guard.remove(uri);
+            }
+        }
     }
 }
 
@@ -802,6 +836,140 @@ where
     }
 
     Ok(owners_map)
+}
+
+/// Database-backed get the hosts a script is bound to
+async fn db_get_script_hosts<'e, E>(executor: E, uri: &str) -> AppResult<Vec<String>>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    let rows = sqlx::query(
+        r#"
+        SELECT host
+        FROM script_hosts
+        WHERE script_uri = $1
+        ORDER BY host ASC
+        "#,
+    )
+    .bind(uri)
+    .fetch_all(executor)
+    .await
+    .map_err(|e| {
+        error!("Database error getting script hosts: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    rows.into_iter()
+        .map(|row| {
+            row.try_get("host").map_err(|e| {
+                error!("Database error parsing host: {}", e);
+                AppError::Database {
+                    message: format!("Database error: {}", e),
+                    source: None,
+                }
+            })
+        })
+        .collect()
+}
+
+/// Database-backed get all script host bindings (uri -> hosts)
+async fn db_get_all_script_hosts<'e, E>(executor: E) -> AppResult<HashMap<String, Vec<String>>>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    let rows = sqlx::query(
+        r#"
+        SELECT script_uri, host
+        FROM script_hosts
+        ORDER BY script_uri, host ASC
+        "#,
+    )
+    .fetch_all(executor)
+    .await
+    .map_err(|e| {
+        error!("Database error getting all script hosts: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    let mut hosts_map: HashMap<String, Vec<String>> = HashMap::new();
+    for row in rows {
+        let uri: String = row.try_get("script_uri").map_err(|e| {
+            error!("Database error parsing script_uri: {}", e);
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
+        })?;
+        let host: String = row.try_get("host").map_err(|e| {
+            error!("Database error parsing host: {}", e);
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
+        })?;
+        hosts_map.entry(uri).or_default().push(host);
+    }
+
+    Ok(hosts_map)
+}
+
+/// Database-backed replace of a script's host bindings.
+///
+/// Replaces rather than merges: the caller states the complete set, so an
+/// empty list clears the bindings and returns the script to the default host.
+async fn db_set_script_hosts(
+    mut executor: crate::database::TransactionExecutor<'_>,
+    uri: &str,
+    hosts: &[String],
+) -> AppResult<()> {
+    let delete = sqlx::query("DELETE FROM script_hosts WHERE script_uri = $1").bind(uri);
+    match executor {
+        crate::database::TransactionExecutor::Transaction(ref mut tx) => {
+            delete.execute(&mut ***tx).await
+        }
+        crate::database::TransactionExecutor::Pool(pool) => delete.execute(pool).await,
+    }
+    .map_err(|e| {
+        error!("Database error clearing script hosts: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    for host in hosts {
+        let insert = sqlx::query(
+            r#"
+            INSERT INTO script_hosts (script_uri, host, created_at)
+            VALUES ($1, $2, NOW())
+            ON CONFLICT (script_uri, host) DO NOTHING
+            "#,
+        )
+        .bind(uri)
+        .bind(host);
+
+        match executor {
+            crate::database::TransactionExecutor::Transaction(ref mut tx) => {
+                insert.execute(&mut ***tx).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => insert.execute(pool).await,
+        }
+        .map_err(|e| {
+            error!("Database error inserting script host: {}", e);
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
+        })?;
+    }
+
+    Ok(())
 }
 
 /// Database-backed set shared storage item
@@ -4309,6 +4477,24 @@ pub fn get_script_owners(uri: &str) -> AppResult<Vec<String>> {
     run_blocking(async { repo.get_script_owners(uri).await })
 }
 
+/// Get the hosts a script's registrations are published on.
+///
+/// Returns the stored bindings: empty means the default host, and a `*` entry
+/// means every configured host. Resolve with [`crate::hosts::effective_hosts`].
+pub fn get_script_hosts(uri: &str) -> AppResult<Vec<String>> {
+    let repo = get_repository();
+    run_blocking(async { repo.get_script_hosts(uri).await })
+}
+
+/// Replace the hosts a script's registrations are published on.
+///
+/// The list is the complete set, so passing an empty one returns the script to
+/// the default host.
+pub fn set_script_hosts(uri: &str, hosts: &[String]) -> AppResult<()> {
+    let repo = get_repository();
+    run_blocking(async { repo.set_script_hosts(uri, hosts).await })
+}
+
 /// Check if a user owns a script
 pub fn user_owns_script(uri: &str, user_id: &str) -> AppResult<bool> {
     let repo = get_repository();
@@ -5168,6 +5354,10 @@ pub trait Repository: Send + Sync {
     async fn user_owns_script(&self, uri: &str, user_id: &str) -> AppResult<bool>;
     async fn count_script_owners(&self, uri: &str) -> AppResult<i64>;
 
+    // Host binding operations
+    async fn get_script_hosts(&self, uri: &str) -> AppResult<Vec<String>>;
+    async fn set_script_hosts(&self, uri: &str, hosts: &[String]) -> AppResult<()>;
+
     // Script database schema operations
     async fn create_script_table(
         &self,
@@ -5384,8 +5574,18 @@ impl Repository for PostgresRepository {
             }
         };
 
+        let script_hosts = match crate::database::get_current_executor(&self.pool) {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_get_script_hosts(&mut **tx, uri).await?
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_get_script_hosts(pool, uri).await?
+            }
+        };
+
         let mut metadata = ScriptMetadata::new(uri.to_string(), content);
         metadata.owners = owners;
+        metadata.hosts = script_hosts;
 
         // Cache it
         if let Ok(mut guard) = safe_lock_scripts() {
@@ -5410,6 +5610,16 @@ impl Repository for PostgresRepository {
             }
         };
 
+        // Fetch all host bindings in one query, same as owners above
+        let all_hosts = match crate::database::get_current_executor(&self.pool) {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_get_all_script_hosts(&mut **tx).await?
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_get_all_script_hosts(pool).await?
+            }
+        };
+
         let mut metadata_list = Vec::new();
 
         // Scope for mutex lock
@@ -5425,6 +5635,10 @@ impl Repository for PostgresRepository {
                     // Set owners from bulk query
                     if let Some(owners) = all_owners.get(&uri) {
                         metadata.owners = owners.clone();
+                    }
+                    // Set host bindings from bulk query
+                    if let Some(script_hosts) = all_hosts.get(&uri) {
+                        metadata.hosts = script_hosts.clone();
                     }
                     guard.insert(uri.clone(), metadata.clone());
                     metadata_list.push(metadata);
@@ -5870,6 +6084,41 @@ impl Repository for PostgresRepository {
                 db_count_script_owners(pool, uri).await
             }
         }
+    }
+
+    async fn get_script_hosts(&self, uri: &str) -> AppResult<Vec<String>> {
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_get_script_hosts(&mut **tx, uri).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_get_script_hosts(pool, uri).await
+            }
+        }
+    }
+
+    async fn set_script_hosts(&self, uri: &str, hosts: &[String]) -> AppResult<()> {
+        let executor = crate::database::get_current_executor(&self.pool);
+        db_set_script_hosts(executor, uri, hosts).await?;
+
+        // The cached metadata carries the old bindings, and the route index was
+        // built from them, so both have to go.
+        if let Ok(mut guard) = safe_lock_scripts()
+            && let Some(metadata) = guard.get_mut(uri)
+        {
+            metadata.hosts = hosts.to_vec();
+        }
+        crate::route_index::invalidate();
+        // The per-host GraphQL schemas were built from the old bindings
+        crate::graphql::invalidate_host_schemas();
+
+        // Other instances cache the old bindings and would keep publishing the
+        // script where it used to be. Reuse the upsert channel: their handler
+        // refreshes the bindings along with the source.
+        send_script_notification(&self.pool, uri, "upserted", &self.server_id).await?;
+
+        Ok(())
     }
 
     async fn create_script_table(

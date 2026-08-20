@@ -256,6 +256,58 @@ pub fn list_tools() -> Vec<McpTool> {
     tools
 }
 
+/// The tools a client connecting on `host` should see.
+///
+/// Script tools are dropped unless their script publishes on that host, so a
+/// tool registered by an admin-only script is absent from the listing on a
+/// content host. The engine's own native tools are not script-backed and are
+/// always listed; they are scoped by `server.management_hosts` at the HTTP
+/// layer instead.
+pub async fn list_tools_for_host(host: &str) -> Vec<McpTool> {
+    let tools = list_tools();
+    let Some(allowed) = crate::route_index::scripts_for_host(host).await else {
+        return tools;
+    };
+    tools
+        .into_iter()
+        .filter(|tool| tool.script_uri == "engine://native" || allowed.contains(&tool.script_uri))
+        .collect()
+}
+
+/// The prompts a client connecting on `host` should see. Filtered like
+/// [`list_tools_for_host`].
+pub async fn list_prompts_for_host(host: &str) -> Vec<McpPrompt> {
+    let prompts = list_prompts();
+    let Some(allowed) = crate::route_index::scripts_for_host(host).await else {
+        return prompts;
+    };
+    prompts
+        .into_iter()
+        .filter(|prompt| allowed.contains(&prompt.script_uri))
+        .collect()
+}
+
+/// Whether a tool may be called from `host`.
+///
+/// Dispatch has to repeat the listing's filter: a client that learned a tool
+/// name elsewhere must not be able to reach a script that does not publish
+/// here just by naming it.
+pub async fn tool_is_available_on_host(tool_name: &str, host: &str) -> bool {
+    let script_uri = match get_registry().read() {
+        Ok(registry) => match registry.get_tool(tool_name) {
+            Some(tool) => tool.script_uri.clone(),
+            // Not a script tool: either native, or unknown and about to fail
+            // with "tool not found" anyway.
+            None => return true,
+        },
+        Err(e) => {
+            error!("Failed to read MCP registry for host check: {}", e);
+            return false;
+        }
+    };
+    crate::route_index::script_serves_host(&script_uri, host).await
+}
+
 /// List all registered MCP prompts
 pub fn list_prompts() -> Vec<McpPrompt> {
     if let Ok(registry) = get_registry().read() {

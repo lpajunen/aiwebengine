@@ -258,6 +258,10 @@ impl NotificationListener {
         // instance until the reinitialization below completed.
         repository::refresh_cached_script_source_from_db(uri).await;
 
+        // Host bindings live alongside the source and are equally stale here:
+        // an administrator may have republished the script on other hosts.
+        repository::refresh_cached_script_hosts_from_db(uri).await;
+
         // Initialize the script (this will call init() and register routes/GraphQL)
         let initializer = script_init::ScriptInitializer::with_configured_timeout();
         match initializer.initialize_script(uri, false).await {

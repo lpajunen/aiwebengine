@@ -189,6 +189,12 @@ impl GraphQLRegistry {
 lazy_static::lazy_static! {
     pub static ref GRAPHQL_REGISTRY: Arc<RwLock<GraphQLRegistry>> = Arc::new(RwLock::new(GraphQLRegistry::new()));
     pub static ref GRAPHQL_SCHEMA: Arc<RwLock<Option<Schema>>> = Arc::new(RwLock::new(None));
+    /// Per-host schemas, used when scripts are bound to hosts. Each exposes
+    /// only the operations of the scripts publishing on that host, so building
+    /// one per request would be wasteful; they are dropped whenever the
+    /// registry or a script's host binding changes.
+    static ref GRAPHQL_SCHEMA_BY_HOST: Arc<RwLock<HashMap<String, Schema>>> =
+        Arc::new(RwLock::new(HashMap::new()));
 }
 
 /// Get a reference to the global GraphQL registry
@@ -221,6 +227,39 @@ pub fn rebuild_schema() -> Result<Schema, async_graphql::Error> {
         error!("Failed to store rebuilt GraphQL schema");
     }
 
+    invalidate_host_schemas();
+
+    Ok(schema)
+}
+
+/// Drop the cached per-host schemas; the next request for a host rebuilds it.
+/// Called whenever the operations or the host bindings behind them change.
+pub fn invalidate_host_schemas() {
+    if let Ok(mut guard) = GRAPHQL_SCHEMA_BY_HOST.write() {
+        guard.clear();
+    }
+}
+
+/// The schema a request arriving on `host` should see.
+///
+/// Exposes only the operations of scripts publishing on that host. Falls back
+/// to the single global schema when host binding is not in force, so
+/// single-host deployments keep using the schema they always did.
+pub async fn get_schema_for_host(host: &str) -> Result<Schema, async_graphql::Error> {
+    let Some(host_scripts) = crate::route_index::scripts_for_host(host).await else {
+        return get_schema();
+    };
+
+    if let Ok(guard) = GRAPHQL_SCHEMA_BY_HOST.read()
+        && let Some(schema) = guard.get(host)
+    {
+        return Ok(schema.clone());
+    }
+
+    let schema = build_schema_filtered(SchemaContext::External, None, Some(&host_scripts))?;
+    if let Ok(mut guard) = GRAPHQL_SCHEMA_BY_HOST.write() {
+        guard.insert(host.to_string(), schema.clone());
+    }
     Ok(schema)
 }
 
@@ -650,6 +689,22 @@ pub fn build_schema_with_context(
     context: SchemaContext,
     script_filter: Option<&str>,
 ) -> Result<Schema, async_graphql::Error> {
+    build_schema_filtered(context, script_filter, None)
+}
+
+/// Build a dynamic GraphQL schema, optionally restricted to the scripts
+/// publishing on one host.
+///
+/// `host_scripts` of `None` means no host filtering, which is what a
+/// single-host deployment and every script-internal caller want. Otherwise only
+/// operations registered by a script in the set are exposed, so a resolver from
+/// an admin-only script is absent from the schema on a content host rather than
+/// present and failing at execution time.
+pub fn build_schema_filtered(
+    context: SchemaContext,
+    script_filter: Option<&str>,
+    host_scripts: Option<&std::collections::HashSet<String>>,
+) -> Result<Schema, async_graphql::Error> {
     let registry_arc = get_registry();
     let registry_guard = registry_arc.read().map_err(|e| {
         async_graphql::Error::new(format!("Failed to read GraphQL registry: {}", e))
@@ -657,6 +712,11 @@ pub fn build_schema_with_context(
 
     // Collect and filter operations based on context
     let filter_operation = |op: &GraphQLOperation| -> bool {
+        if let Some(allowed) = host_scripts
+            && !allowed.contains(&op.script_uri)
+        {
+            return false;
+        }
         match context {
             SchemaContext::External => op.visibility == OperationVisibility::External,
             SchemaContext::Internal => {

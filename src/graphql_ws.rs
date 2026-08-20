@@ -168,9 +168,12 @@ impl SubscriptionState {
 }
 
 /// WebSocket connection handler for GraphQL subscriptions
+/// `host` is the request's host resolved onto a configured one; subscriptions
+/// see only the operations of scripts published there.
 pub async fn handle_websocket_connection(
     socket: WebSocket,
     auth_user: Option<crate::auth::AuthUser>,
+    host: String,
 ) {
     info!(
         "New GraphQL WebSocket connection - authenticated: {}",
@@ -301,8 +304,8 @@ pub async fn handle_websocket_connection(
                                 }
                             };
 
-                        // Get schema
-                        let schema = match crate::graphql::get_schema() {
+                        // Get the schema for the host this socket arrived on
+                        let schema = match crate::graphql::get_schema_for_host(&host).await {
                             Ok(s) => s,
                             Err(e) => {
                                 error!("Failed to get GraphQL schema: {:?}", e);

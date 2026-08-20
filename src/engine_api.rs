@@ -13,7 +13,7 @@ use axum::response::{IntoResponse, Response};
 use base64::Engine as _;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::auth::AuthUser;
 use crate::repository;
@@ -2194,6 +2194,273 @@ fn user_admin_error_response(user_id: Option<&str>, error: UserAdminError) -> Re
     json_response(status, body)
 }
 
+// ---------------------------------------------------------------------------
+// Script host bindings
+// ---------------------------------------------------------------------------
+
+/// Failure modes of the script host binding APIs.
+#[derive(Debug)]
+pub enum ScriptHostError {
+    AccessDenied,
+    ScriptNotFound(String),
+    Validation(String),
+    Storage(String),
+}
+
+fn script_host_error_response(uri: Option<&str>, error: ScriptHostError) -> Response {
+    let (status, message) = match error {
+        ScriptHostError::AccessDenied => (
+            StatusCode::FORBIDDEN,
+            "Permission denied. Administrator privileges are required to change where a script is published".to_string(),
+        ),
+        ScriptHostError::ScriptNotFound(uri) => {
+            (StatusCode::NOT_FOUND, format!("Script not found: {}", uri))
+        }
+        ScriptHostError::Validation(details) => (StatusCode::BAD_REQUEST, details),
+        ScriptHostError::Storage(details) => (StatusCode::INTERNAL_SERVER_ERROR, details),
+    };
+    let mut body = json!({ "error": message, "timestamp": iso_timestamp() });
+    if let (Some(obj), Some(uri)) = (body.as_object_mut(), uri) {
+        obj.insert("uri".to_string(), json!(uri));
+    }
+    json_response(status, body)
+}
+
+/// Check each requested host against the ones this engine serves.
+///
+/// A binding to a host the engine does not serve would silently take the
+/// script's registrations offline, so it is rejected with the served hosts
+/// listed rather than stored and left to puzzle over later.
+fn validate_hosts(requested: &[String]) -> Result<Vec<String>, ScriptHostError> {
+    let served = crate::hosts::all_hosts();
+    let mut hosts = Vec::new();
+
+    for entry in requested {
+        let host = entry.trim().to_lowercase();
+        if host.is_empty() {
+            continue;
+        }
+        if host == crate::hosts::ALL_HOSTS {
+            // Stored as-is so the binding keeps following the configured set
+            // as hosts are added or removed.
+            return Ok(vec![crate::hosts::ALL_HOSTS.to_string()]);
+        }
+        if !served.contains(&host) {
+            return Err(ScriptHostError::Validation(format!(
+                "Unknown host '{}'. This engine serves: {}. Use '{}' to publish on all of them.",
+                entry,
+                if served.is_empty() {
+                    "(none configured)".to_string()
+                } else {
+                    served.join(", ")
+                },
+                crate::hosts::ALL_HOSTS
+            )));
+        }
+        if !hosts.contains(&host) {
+            hosts.push(host);
+        }
+    }
+
+    Ok(hosts)
+}
+
+/// Read a script's host bindings, resolved to the hosts it actually serves.
+/// Administrators only, matching the write path.
+pub fn get_script_hosts_authorized(
+    user: &UserContext,
+    uri: &str,
+) -> Result<(Vec<String>, Vec<String>), ScriptHostError> {
+    if !is_user_admin(user) {
+        audit_user_admin_denied(user, "get_script_hosts");
+        return Err(ScriptHostError::AccessDenied);
+    }
+    if repository::fetch_script(uri).is_none() {
+        return Err(ScriptHostError::ScriptNotFound(uri.to_string()));
+    }
+
+    let stored = repository::get_script_hosts(uri)
+        .map_err(|e| ScriptHostError::Storage(format!("Failed to read script hosts: {}", e)))?;
+    let effective = crate::hosts::effective_hosts(&stored);
+    Ok((stored, effective))
+}
+
+/// Replace a script's host bindings. Administrators only.
+///
+/// Where a script's routes, assets, streams, GraphQL operations and MCP tools
+/// are published decides which origins can reach them, so this is an
+/// administrator's call rather than a script owner's — an owner could
+/// otherwise move their own script onto the management host.
+pub fn set_script_hosts_authorized(
+    user: &UserContext,
+    uri: &str,
+    requested: &[String],
+) -> Result<(Vec<String>, Vec<String>), ScriptHostError> {
+    if !is_user_admin(user) {
+        audit_user_admin_denied(user, "set_script_hosts");
+        return Err(ScriptHostError::AccessDenied);
+    }
+    if repository::fetch_script(uri).is_none() {
+        return Err(ScriptHostError::ScriptNotFound(uri.to_string()));
+    }
+
+    let hosts = validate_hosts(requested)?;
+    repository::set_script_hosts(uri, &hosts)
+        .map_err(|e| ScriptHostError::Storage(format!("Failed to store script hosts: {}", e)))?;
+
+    let effective = crate::hosts::effective_hosts(&hosts);
+    info!(
+        "Script {} host binding set to {:?} (publishing on {:?})",
+        uri, hosts, effective
+    );
+    Ok((hosts, effective))
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct ScriptHostParams {
+    uri: Option<String>,
+    /// Comma-separated host list; `*` publishes on every configured host and
+    /// an empty value returns the script to the default host.
+    hosts: Option<String>,
+}
+
+/// Split the `hosts` parameter, which is comma-separated in both the query
+/// string and the form body.
+fn parse_host_list(hosts: &str) -> Vec<String> {
+    hosts
+        .split(',')
+        .map(|host| host.trim().to_string())
+        .filter(|host| !host.is_empty())
+        .collect()
+}
+
+fn script_hosts_response(uri: &str, stored: Vec<String>, effective: Vec<String>) -> Response {
+    json_response(
+        StatusCode::OK,
+        json!({
+            "uri": uri,
+            // What is stored: empty for "default host", ["*"] for all
+            "hosts": stored,
+            // What that resolves to right now
+            "publishedOn": effective,
+            "servedHosts": crate::hosts::all_hosts(),
+            "defaultHost": crate::hosts::default_host(),
+            "timestamp": iso_timestamp(),
+        }),
+    )
+}
+
+/// Read where a script is published. Administrators only.
+#[utoipa::path(
+    get,
+    path = "/engine/script_hosts",
+    tags = ["Scripts"],
+    params(
+        ("uri" = String, Query, description = "URI of the script to inspect"),
+    ),
+    responses(
+        (status = 200, description = "The script's stored host binding and the hosts it resolves to"),
+        (status = 403, description = "Administrator privileges required"),
+        (status = 404, description = "Script not found"),
+    )
+)]
+pub async fn script_hosts_get_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<ScriptHostParams>,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    let Some(uri) = query.uri else {
+        return missing_param_response("uri");
+    };
+
+    let uri_cl = uri.clone();
+    let result = tokio::task::spawn_blocking(move || get_script_hosts_authorized(&user, &uri_cl))
+        .await
+        .unwrap_or_else(|e| Err(ScriptHostError::Storage(format!("join error: {}", e))));
+
+    match result {
+        Ok((stored, effective)) => script_hosts_response(&uri, stored, effective),
+        Err(error) => script_host_error_response(Some(&uri), error),
+    }
+}
+
+/// Set where a script is published. Administrators only.
+#[utoipa::path(
+    post,
+    path = "/engine/script_hosts",
+    tags = ["Scripts"],
+    params(
+        ("uri" = String, Query, description = "URI of the script to modify"),
+        ("hosts" = String, Query, description = "Comma-separated hosts, '*' for every configured host, or empty for the default host"),
+    ),
+    responses(
+        (status = 200, description = "Binding replaced; returns the resulting hosts"),
+        (status = 400, description = "A host this engine does not serve"),
+        (status = 403, description = "Administrator privileges required"),
+        (status = 404, description = "Script not found"),
+    )
+)]
+pub async fn script_hosts_post_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<ScriptHostParams>,
+    body: axum::body::Bytes,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    let form: ScriptHostParams = serde_urlencoded::from_bytes(&body).unwrap_or_default();
+    let Some(uri) = form.uri.or(query.uri) else {
+        return missing_param_response("uri");
+    };
+    // An explicitly empty value is meaningful: it clears the binding.
+    let hosts = parse_host_list(&form.hosts.or(query.hosts).unwrap_or_default());
+
+    let uri_cl = uri.clone();
+    let result =
+        tokio::task::spawn_blocking(move || set_script_hosts_authorized(&user, &uri_cl, &hosts))
+            .await
+            .unwrap_or_else(|e| Err(ScriptHostError::Storage(format!("join error: {}", e))));
+
+    match result {
+        Ok((stored, effective)) => script_hosts_response(&uri, stored, effective),
+        Err(error) => script_host_error_response(Some(&uri), error),
+    }
+}
+
+/// Clear a script's host binding, returning it to the default host.
+/// Administrators only.
+#[utoipa::path(
+    delete,
+    path = "/engine/script_hosts",
+    tags = ["Scripts"],
+    params(
+        ("uri" = String, Query, description = "URI of the script to reset"),
+    ),
+    responses(
+        (status = 200, description = "Binding cleared; the script publishes on the default host"),
+        (status = 403, description = "Administrator privileges required"),
+        (status = 404, description = "Script not found"),
+    )
+)]
+pub async fn script_hosts_delete_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<ScriptHostParams>,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    let Some(uri) = query.uri else {
+        return missing_param_response("uri");
+    };
+
+    let uri_cl = uri.clone();
+    let result =
+        tokio::task::spawn_blocking(move || set_script_hosts_authorized(&user, &uri_cl, &[]))
+            .await
+            .unwrap_or_else(|e| Err(ScriptHostError::Storage(format!("join error: {}", e))));
+
+    match result {
+        Ok((stored, effective)) => script_hosts_response(&uri, stored, effective),
+        Err(error) => script_host_error_response(Some(&uri), error),
+    }
+}
+
 /// List all users. Administrators only.
 #[utoipa::path(
     get,
@@ -3228,6 +3495,39 @@ fn native_tools() -> &'static [NativeToolEntry] {
             tool_remove_user_role,
         ),
         (
+            "get_script_hosts",
+            "Read which hostnames a script's registrations are published on. Administrator privileges required.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "uri": { "type": "string", "description": "URI of the script to inspect" }
+                    },
+                    "required": ["uri"]
+                })
+            },
+            tool_get_script_hosts,
+        ),
+        (
+            "set_script_hosts",
+            "Set which hostnames a script's registrations are published on. Administrator privileges required. Pass '*' to publish on every configured host, or an empty list to return the script to the default host.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "uri": { "type": "string", "description": "URI of the script to modify" },
+                        "hosts": {
+                            "type": "array",
+                            "description": "Hostnames to publish on. ['*'] means every configured host; [] returns the script to the default host.",
+                            "items": { "type": "string" }
+                        }
+                    },
+                    "required": ["uri", "hosts"]
+                })
+            },
+            tool_set_script_hosts,
+        ),
+        (
             "run_tests",
             "Run a script's test modules and report a verdict per case. Tests are the script's own assets named '*.test.ts' (or .js/.jsx/.tsx). Requires the user to own the script or be an administrator.",
             || {
@@ -3789,6 +4089,64 @@ fn tool_list_users(_args: &Value, user: &UserContext) -> Value {
             "timestamp": iso_timestamp(),
         }),
         Err(error) => user_admin_error_json(error),
+    }
+}
+
+fn script_host_error_json(error: ScriptHostError) -> Value {
+    let message = match error {
+        ScriptHostError::AccessDenied => {
+            "Permission denied. Administrator privileges are required to change where a script is published".to_string()
+        }
+        ScriptHostError::ScriptNotFound(uri) => format!("Script not found: {}", uri),
+        ScriptHostError::Validation(details) => details,
+        ScriptHostError::Storage(details) => details,
+    };
+    json!({ "error": message, "timestamp": iso_timestamp() })
+}
+
+fn script_hosts_json(uri: &str, stored: Vec<String>, effective: Vec<String>) -> Value {
+    json!({
+        "uri": uri,
+        "hosts": stored,
+        "publishedOn": effective,
+        "servedHosts": crate::hosts::all_hosts(),
+        "defaultHost": crate::hosts::default_host(),
+        "timestamp": iso_timestamp(),
+    })
+}
+
+fn tool_get_script_hosts(args: &Value, user: &UserContext) -> Value {
+    let Some(uri) = arg_str(args, "uri") else {
+        return missing_arg("uri");
+    };
+    match get_script_hosts_authorized(user, uri) {
+        Ok((stored, effective)) => script_hosts_json(uri, stored, effective),
+        Err(error) => script_host_error_json(error),
+    }
+}
+
+fn tool_set_script_hosts(args: &Value, user: &UserContext) -> Value {
+    let Some(uri) = arg_str(args, "uri") else {
+        return missing_arg("uri");
+    };
+    // An explicit empty array is meaningful: it clears the binding.
+    let Some(hosts) = args.get("hosts").and_then(|value| value.as_array()) else {
+        return missing_arg("hosts");
+    };
+    let hosts: Vec<String> = hosts
+        .iter()
+        .filter_map(|host| host.as_str().map(str::to_string))
+        .collect();
+
+    match set_script_hosts_authorized(user, uri, &hosts) {
+        Ok((stored, effective)) => {
+            let mut body = script_hosts_json(uri, stored, effective);
+            if let Some(obj) = body.as_object_mut() {
+                obj.insert("success".to_string(), json!(true));
+            }
+            body
+        }
+        Err(error) => script_host_error_json(error),
     }
 }
 

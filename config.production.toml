@@ -28,6 +28,9 @@ additional_base_urls = [
 # Leave empty to serve management everywhere, which is what a single-host
 # deployment wants. Override with APP_SERVER__MANAGEMENT_HOSTS='["host", ...]'.
 management_hosts = ["manage.softagen.com"]
+# Individual scripts publish on base_url's host unless an administrator binds
+# them elsewhere via /engine/script_hosts or the set_script_hosts MCP tool.
+# Bindings live in the database, not here.
 # Longer timeout for production reliability
 request_timeout_secs = 30
 # Keep-alive timeout in seconds
