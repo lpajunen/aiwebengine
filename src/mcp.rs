@@ -433,6 +433,27 @@ pub fn execute_mcp_completion(
     Ok(result)
 }
 
+/// Wall-clock slack the dispatcher's backstop allows on top of whatever ceiling
+/// a tool enforces for itself.
+///
+/// The tool's own limit is the better stop — it returns a result, where the
+/// backstop can only abandon the call — so it gets first refusal and this
+/// covers only what it cannot: JavaScript blocked in a *host* call, where the
+/// interrupt handler never runs because no bytecode is executing.
+const TOOL_CALL_GRACE_MS: u64 = 5_000;
+
+/// How long the dispatcher waits for one tool call before giving up on it.
+///
+/// Per tool rather than one ceiling for all of them: a script-registered tool
+/// is bounded by the JavaScript execution budget, and holding a request open
+/// for the sixty seconds a full test run may need would be the wrong answer for
+/// a handler whose own budget is two.
+pub fn tool_call_backstop_ms(tool_name: &str) -> u64 {
+    crate::engine_api::native_tool_ceiling_ms(tool_name)
+        .unwrap_or_else(|| crate::js_engine::current_execution_limits().timeout_ms)
+        .saturating_add(TOOL_CALL_GRACE_MS)
+}
+
 /// Execute an MCP tool by calling its JavaScript handler
 pub fn execute_mcp_tool(
     tool_name: &str,

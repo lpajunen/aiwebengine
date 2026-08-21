@@ -18,11 +18,12 @@
 
 use serde::Serialize;
 use serde_json::{Value, json};
+use std::time::Duration;
 
 use crate::js_engine::{DryRunParams, MissingHandler, RegistrationPassOutcome};
 use crate::module_loader::ModuleLoaderError;
 use crate::repository;
-use crate::security::secure_globals::{CollectedRegistration, RegistrationKind};
+use crate::security::secure_globals::{CollectedRegistration, RegistrationKind, RegistrationSink};
 
 /// Fraction of the `init()` budget a script may spend before the check says so.
 ///
@@ -31,6 +32,34 @@ use crate::security::secure_globals::{CollectedRegistration, RegistrationKind};
 /// mode is a script that comes up with no routes. The margin is what makes the
 /// warning actionable while the script still works.
 const INIT_BUDGET_WARN_RATIO: f64 = 0.7;
+
+/// How much longer than the deploy budget a check lets `init()` run.
+///
+/// A check *measures* the init cost; it does not enforce it. Capping the run at
+/// the deploy budget makes the one script that most needs an answer — the one
+/// that is over budget — the one that cannot get it: the run is interrupted at
+/// the ceiling, and all the report can say is "interrupted", never "took 12s,
+/// which is 2.5x the budget". Headroom buys the measurement, and the deploy
+/// budget is still what the verdict is stated against.
+const INIT_HEADROOM_MULTIPLE: u32 = 4;
+
+/// Hard ceiling on one check, however large the budget or the caller's request.
+///
+/// A check holds a blocking thread for its whole duration, so this bounds what
+/// one caller can occupy. Reached only by an `init()` that is already far past
+/// anything deployable.
+pub const MAX_CHECK_TIMEOUT_MS: u64 = 60_000;
+
+/// The ceiling to run `init()` under, given the deploy budget and whatever the
+/// caller asked for.
+pub fn check_timeout_ms(budget_ms: u64, requested_ms: Option<u64>) -> u64 {
+    let default = budget_ms.saturating_mul(INIT_HEADROOM_MULTIPLE as u64);
+    requested_ms
+        .unwrap_or(default)
+        // Never below the budget itself: a ceiling under the budget would
+        // report a script as over-budget that a deploy would have accepted.
+        .clamp(budget_ms.max(1), MAX_CHECK_TIMEOUT_MS.max(budget_ms))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -107,8 +136,16 @@ pub struct InitReport {
     /// instance has them, which is what a redeploy of unchanged assets gets;
     /// a first deploy on a cold instance pays more.
     pub duration_ms: u64,
-    /// The budget a real deploy enforces (`javascript.init_timeout_ms`).
+    /// The budget a real deploy enforces (`javascript.init_timeout_ms`). The
+    /// verdict is stated against this, whatever ceiling the run itself used.
     pub budget_ms: u64,
+    /// The ceiling this run was given — headroom above the budget, so that a
+    /// script over budget still produces a measurement instead of a timeout.
+    pub ceiling_ms: u64,
+    /// True when even the ceiling was not enough and the run was stopped, in
+    /// which case `duration_ms` is where it was cut off rather than what it
+    /// costs.
+    pub timed_out: bool,
 }
 
 /// Everything one check produced.
@@ -170,6 +207,10 @@ impl CheckReport {
 /// What to check.
 pub struct CheckRequest {
     pub script_uri: String,
+    /// Ceiling for the `init()` run, clamped by [`check_timeout_ms`]. Raise it
+    /// when a script's `init()` is slow enough that even the default headroom
+    /// cannot measure it.
+    pub timeout_ms: Option<u64>,
     /// Candidate source to check instead of what is deployed.
     ///
     /// The point of the whole endpoint: an agent can check the code it is about
@@ -177,6 +218,18 @@ pub struct CheckRequest {
     pub content: Option<String>,
     /// Roll back the database writes `init()` makes. On by default.
     pub rollback: bool,
+}
+
+/// Extra wall-clock time the outer timeout allows beyond the run's own ceiling.
+///
+/// The in-run interrupt is the better of the two stops — it leaves the pass to
+/// finish reporting — so it gets first refusal, and this backstop covers only
+/// what it cannot: JavaScript blocked in a *host* call, a `fetch` or a query,
+/// where no bytecode executes for the interrupt handler to run between.
+const CHECK_BACKSTOP_GRACE_MS: u64 = 5_000;
+
+fn new_sink() -> RegistrationSink {
+    std::sync::Arc::new(std::sync::Mutex::new(Vec::new()))
 }
 
 /// Runs checks under the engine's configured `init()` budget.
@@ -198,14 +251,27 @@ impl ScriptChecker {
 
     pub async fn run(&self, request: CheckRequest) -> CheckReport {
         let script_uri = request.script_uri.clone();
-        let init_timeout_ms = self.init_timeout_ms;
+        let budget_ms = self.init_timeout_ms;
+        let ceiling_ms = check_timeout_ms(budget_ms, request.timeout_ms);
 
-        let checked =
-            tokio::task::spawn_blocking(move || check_blocking(request, init_timeout_ms)).await;
+        // The sink is made here and shared with the run, so that a run this
+        // timeout gives up on can still be reported from what it collected.
+        let sink = new_sink();
+        let sink_for_run = std::sync::Arc::clone(&sink);
+
+        let started = std::time::Instant::now();
+        let backstop = Duration::from_millis(ceiling_ms.saturating_add(CHECK_BACKSTOP_GRACE_MS));
+        let checked = tokio::time::timeout(
+            backstop,
+            tokio::task::spawn_blocking(move || {
+                check_blocking_into(request, budget_ms, sink_for_run)
+            }),
+        )
+        .await;
 
         match checked {
-            Ok(report) => report,
-            Err(join_error) => {
+            Ok(Ok(report)) => report,
+            Ok(Err(join_error)) => {
                 let mut report = CheckReport::new(script_uri.clone());
                 report.diagnostics.push(Diagnostic::error(
                     script_uri,
@@ -214,8 +280,66 @@ impl ScriptChecker {
                 ));
                 report.finish()
             }
+            Err(_) => abandoned_report(
+                script_uri,
+                budget_ms,
+                ceiling_ms,
+                started.elapsed().as_millis() as u64,
+                &sink,
+            ),
         }
     }
+}
+
+/// What to report when the backstop fired and the run was left behind.
+///
+/// The blocking task is still out there — nothing can cancel a thread parked in
+/// a host call — but its registrations were being written to a sink this side
+/// still holds, so the answer is the partial one rather than no answer at all.
+/// Reporting that is the whole point: a script whose `init()` blocks is
+/// precisely the script whose author needs to know which registrations it got
+/// through before it stalled.
+fn abandoned_report(
+    script_uri: String,
+    budget_ms: u64,
+    ceiling_ms: u64,
+    // How long the run actually got before being abandoned: the ceiling plus
+    // the backstop's grace, not the ceiling alone — the ceiling is the point it
+    // *failed* to stop at.
+    waited_ms: u64,
+    sink: &RegistrationSink,
+) -> CheckReport {
+    let collected = sink
+        .lock()
+        .ok()
+        .map(|collected| collected.clone())
+        .unwrap_or_default();
+
+    let mut report = CheckReport::new(script_uri.clone());
+    report.diagnostics.push(Diagnostic::error(
+        script_uri,
+        "init-blocked",
+        format!(
+            "init() was still running after {}ms and did not respond to being stopped, which \
+            means it is blocked in a host call — a fetch, a database query, an MCP call — rather \
+            than in JavaScript. The engine can only interrupt JavaScript, so a deploy would hit \
+            the same wall at its {}ms budget and bring the script up with no route table. The {} \
+            registration(s) listed here are the ones it made before it stalled. Look for an \
+            unbounded call in init(): a request with no timeout, or a query without a limit.",
+            ceiling_ms,
+            budget_ms,
+            collected.len()
+        ),
+    ));
+    report.init = Some(InitReport {
+        ran: true,
+        duration_ms: waited_ms,
+        budget_ms,
+        ceiling_ms,
+        timed_out: true,
+    });
+    report.registrations = collected;
+    report.finish()
 }
 
 /// Run a check on the current thread.
@@ -225,13 +349,29 @@ impl ScriptChecker {
 /// holding the answers about delegates lives only as long as the run. Callers
 /// on an async task go through [`ScriptChecker::run`], which moves this to the
 /// blocking pool; the MCP dispatcher is already there and calls it directly.
-pub fn check_blocking(request: CheckRequest, init_timeout_ms: u64) -> CheckReport {
+pub fn check_blocking(request: CheckRequest, init_budget_ms: u64) -> CheckReport {
+    let sink = new_sink();
+    check_blocking_into(request, init_budget_ms, sink)
+}
+
+/// [`check_blocking`], recording registrations into a sink the caller keeps.
+///
+/// Only [`ScriptChecker::run`] needs this: it holds the other end so that a run
+/// its outer timeout gives up on can still be reported from what the abandoned
+/// thread collected before it stopped.
+fn check_blocking_into(
+    request: CheckRequest,
+    init_budget_ms: u64,
+    sink: RegistrationSink,
+) -> CheckReport {
     let CheckRequest {
         script_uri,
         content,
         rollback,
+        timeout_ms,
     } = request;
 
+    let ceiling_ms = check_timeout_ms(init_budget_ms, timeout_ms);
     let mut report = CheckReport::new(script_uri.clone());
 
     let checking_candidate = content.is_some();
@@ -275,8 +415,9 @@ pub fn check_blocking(request: CheckRequest, init_timeout_ms: u64) -> CheckRepor
     let outcome = crate::js_engine::dry_run_registration_pass(&DryRunParams {
         script_uri: script_uri.clone(),
         script_content: content,
-        timeout_ms: init_timeout_ms,
+        timeout_ms: ceiling_ms,
         rollback,
+        sink,
     });
 
     if checking_candidate {
@@ -287,7 +428,13 @@ pub fn check_blocking(request: CheckRequest, init_timeout_ms: u64) -> CheckRepor
         crate::module_loader::invalidate_program(&script_uri);
     }
 
-    collect_diagnostics(&script_uri, &outcome, init_timeout_ms, &mut report);
+    collect_diagnostics(
+        &script_uri,
+        &outcome,
+        init_budget_ms,
+        ceiling_ms,
+        &mut report,
+    );
     report.registrations = outcome.pass.collected;
     report
         .diagnostics
@@ -301,6 +448,7 @@ fn collect_diagnostics(
     script_uri: &str,
     outcome: &RegistrationPassOutcome,
     budget_ms: u64,
+    ceiling_ms: u64,
     report: &mut CheckReport,
 ) {
     let pass = &outcome.pass;
@@ -309,9 +457,30 @@ fn collect_diagnostics(
         ran: pass.had_init,
         duration_ms: pass.duration_ms,
         budget_ms,
+        ceiling_ms,
+        timed_out: pass.timed_out,
     });
 
-    if let Some(error) = &outcome.error {
+    if pass.timed_out {
+        // The run hit the check's own ceiling, which is already headroom above
+        // the deploy budget — so there is no measurement to report, only the
+        // fact that there isn't one, and what was salvaged on the way.
+        report.diagnostics.push(Diagnostic::error(
+            script_uri,
+            "init-timeout",
+            format!(
+                "init() was still running after {}ms and was stopped, so its cost could not be \
+                measured. The deploy budget is {}ms, so this script would come up with only the \
+                {} registration(s) listed here — the ones it made before it stopped. Move the \
+                slow work out of init(), or raise the check's ceiling with timeout_ms (max {}ms) \
+                to find out how long it really takes.",
+                ceiling_ms,
+                budget_ms,
+                pass.collected.len(),
+                MAX_CHECK_TIMEOUT_MS
+            ),
+        ));
+    } else if let Some(error) = &outcome.error {
         report.diagnostics.push(
             Diagnostic::error(script_uri, "init-failed", error.clone())
                 .at(source_location(script_uri, error)),
@@ -340,25 +509,56 @@ fn collect_diagnostics(
         ));
     }
 
-    // Only worth saying when init() actually ran to completion: a run cut short
-    // by an error is not a measurement of what the script costs.
+    // A run cut short measured nothing, so there is no cost to report against
+    // the budget — `init-timeout` above has already said so.
     if pass.had_init && outcome.error.is_none() {
-        let spent = pass.duration_ms as f64 / budget_ms.max(1) as f64;
-        if spent >= INIT_BUDGET_WARN_RATIO {
-            report.diagnostics.push(Diagnostic::warning(
-                script_uri,
-                "init-budget",
-                format!(
-                    "init() took {}ms of the {}ms budget ({:.0}%). A deploy that exceeds the \
-                     budget brings the script up with no routes registered. Move slow work out \
-                     of init() — into a scheduled job, or behind the first request that needs it.",
-                    pass.duration_ms,
-                    budget_ms,
-                    spent * 100.0
-                ),
-            ));
-        }
+        report
+            .diagnostics
+            .extend(budget_diagnostic(script_uri, pass.duration_ms, budget_ms));
     }
+}
+
+/// What the measured `init()` cost means for a deploy.
+///
+/// Over the budget is an error, not a warning: the deploy will interrupt
+/// `init()` there and the script comes up with whatever subset of its routes it
+/// had registered by then. The check can say this precisely *because* it runs
+/// with headroom — under the budget as a ceiling, this case is unreachable and
+/// shows up as a timeout instead.
+fn budget_diagnostic(script_uri: &str, duration_ms: u64, budget_ms: u64) -> Option<Diagnostic> {
+    let spent = duration_ms as f64 / budget_ms.max(1) as f64;
+
+    if duration_ms >= budget_ms {
+        return Some(Diagnostic::error(
+            script_uri,
+            "init-budget",
+            format!(
+                "init() took {}ms, over the {}ms deploy budget ({:.1}x). A deploy interrupts \
+                 init() at the budget, so this script would come up with only the registrations \
+                 it had made by then. Move the slow work out of init() — into a scheduled job, or \
+                 behind the first request that needs it.",
+                duration_ms, budget_ms, spent
+            ),
+        ));
+    }
+
+    if spent >= INIT_BUDGET_WARN_RATIO {
+        return Some(Diagnostic::warning(
+            script_uri,
+            "init-budget",
+            format!(
+                "init() took {}ms of the {}ms deploy budget ({:.0}%). Exceeding it brings the \
+                 script up with only the registrations init() made before the interrupt. Move \
+                 slow work out of init() — into a scheduled job, or behind the first request \
+                 that needs it.",
+                duration_ms,
+                budget_ms,
+                spent * 100.0
+            ),
+        ));
+    }
+
+    None
 }
 
 fn missing_handler_diagnostic(script_uri: &str, missing: &MissingHandler) -> Diagnostic {
@@ -688,6 +888,7 @@ mod tests {
                 error: None,
             },
             5_000,
+            check_timeout_ms(5_000, None),
             &mut report,
         );
         assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
@@ -708,6 +909,7 @@ mod tests {
                 error: None,
             },
             5_000,
+            check_timeout_ms(5_000, None),
             &mut report,
         );
         let budget = report
@@ -720,6 +922,126 @@ mod tests {
     }
 
     #[test]
+    fn an_init_over_the_budget_is_an_error_not_a_warning() {
+        let mut report = CheckReport::new("s".to_string());
+        collect_diagnostics(
+            "s",
+            &RegistrationPassOutcome {
+                pass: crate::js_engine::RegistrationPass {
+                    had_init: true,
+                    // Measurable only because the run had headroom above the
+                    // 5s budget; under the budget as a ceiling this is a
+                    // timeout instead, and says nothing about how far over.
+                    duration_ms: 12_400,
+                    collected: vec![route("/a", "GET", "h")],
+                    ..Default::default()
+                },
+                error: None,
+            },
+            5_000,
+            check_timeout_ms(5_000, None),
+            &mut report,
+        );
+
+        let budget = report
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "init-budget")
+            .expect("an over-budget run should be reported");
+        assert_eq!(budget.severity, Severity::Error);
+        assert!(budget.message.contains("12400ms"), "{}", budget.message);
+        assert!(budget.message.contains("2.5x"), "{}", budget.message);
+    }
+
+    #[test]
+    fn a_run_that_hit_the_ceiling_reports_a_timeout_rather_than_a_measurement() {
+        let mut report = CheckReport::new("s".to_string());
+        collect_diagnostics(
+            "s",
+            &RegistrationPassOutcome {
+                pass: crate::js_engine::RegistrationPass {
+                    had_init: true,
+                    duration_ms: 20_000,
+                    timed_out: true,
+                    collected: vec![route("/a", "GET", "h")],
+                    ..Default::default()
+                },
+                error: Some("Init function error: interrupted".to_string()),
+            },
+            5_000,
+            20_000,
+            &mut report,
+        );
+
+        let codes: Vec<&str> = report
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code)
+            .collect();
+        // Not the bare "interrupted" the runtime reports, and not a budget
+        // measurement either — nothing was measured.
+        assert_eq!(codes, vec!["init-timeout"]);
+        assert!(report.diagnostics[0].message.contains("timeout_ms"));
+        assert!(
+            report.diagnostics[0].message.contains("1 registration"),
+            "{}",
+            report.diagnostics[0].message
+        );
+    }
+
+    /// Multi-line message literals are joined with `\` continuations, which are
+    /// easy to lose in an edit — and losing one leaves a run of indentation
+    /// embedded in prose a user reads. Cheap to assert, invisible otherwise.
+    #[test]
+    fn no_diagnostic_message_carries_leftover_indentation() {
+        let messages = [
+            missing_handler_diagnostic(
+                "s",
+                &MissingHandler {
+                    kind: RegistrationKind::Route,
+                    name: "/a".to_string(),
+                    handler: "h".to_string(),
+                    found_type: Some("object".to_string()),
+                },
+            )
+            .message,
+            bundle_diagnostic(
+                "s",
+                &ModuleLoaderError::CircularImport("a -> b -> a".to_string()),
+            )
+            .message,
+            budget_diagnostic("s", 12_400, 5_000)
+                .expect("over budget")
+                .message,
+            budget_diagnostic("s", 4_000, 5_000)
+                .expect("near budget")
+                .message,
+        ];
+
+        for message in messages {
+            assert!(
+                !message.contains("  "),
+                "a lost line continuation left indentation in: {:?}",
+                message
+            );
+        }
+    }
+
+    #[test]
+    fn the_ceiling_gives_headroom_and_is_bounded_at_both_ends() {
+        // Headroom by default, so an over-budget init() is measured.
+        assert!(check_timeout_ms(5_000, None) > 5_000);
+        // Never below the budget: a ceiling under it would fail scripts a
+        // deploy would have accepted.
+        assert_eq!(check_timeout_ms(5_000, Some(10)), 5_000);
+        // And bounded, since a check holds a blocking thread throughout.
+        assert_eq!(
+            check_timeout_ms(5_000, Some(u64::MAX)),
+            MAX_CHECK_TIMEOUT_MS
+        );
+    }
+
+    #[test]
     fn a_script_without_an_init_is_reported_as_registering_nothing() {
         let mut report = CheckReport::new("s".to_string());
         collect_diagnostics(
@@ -729,6 +1051,7 @@ mod tests {
                 error: None,
             },
             5_000,
+            check_timeout_ms(5_000, None),
             &mut report,
         );
         assert_eq!(report.diagnostics.len(), 1);
@@ -749,6 +1072,7 @@ mod tests {
                 error: None,
             },
             5_000,
+            check_timeout_ms(5_000, None),
             &mut report,
         );
         assert_eq!(report.diagnostics.len(), 1);
@@ -769,6 +1093,7 @@ mod tests {
                 error: Some("Init function error: boom".to_string()),
             },
             5_000,
+            check_timeout_ms(5_000, None),
             &mut report,
         );
         let codes: Vec<&str> = report

@@ -1929,11 +1929,43 @@ async fn setup_routes(
                     }));
                 }
 
-                let execution = tokio::task::spawn_blocking(move || {
-                    mcp::execute_mcp_tool(&tool_name, arguments, auth_context, user_context)
-                })
+                // Every tool bounds its own run, but those bounds are enforced
+                // by the JavaScript interrupt handler, which only fires between
+                // bytecode instructions. A handler parked in a *host* call — a
+                // fetch with no timeout, an unbounded query — executes no
+                // bytecode, so nothing inside the run can stop it and without a
+                // backstop here the request never answers. The blocking thread
+                // is still lost either way; what this recovers is the response.
+                let backstop =
+                    std::time::Duration::from_millis(mcp::tool_call_backstop_ms(&tool_name));
+                let tool_name_for_error = tool_name.clone();
+                let execution = match tokio::time::timeout(
+                    backstop,
+                    tokio::task::spawn_blocking(move || {
+                        mcp::execute_mcp_tool(&tool_name, arguments, auth_context, user_context)
+                    }),
+                )
                 .await
-                .unwrap_or_else(|join_error| Err(format!("tool task failed: {}", join_error)));
+                {
+                    Ok(joined) => joined.unwrap_or_else(|join_error| {
+                        Err(format!("tool task failed: {}", join_error))
+                    }),
+                    Err(_) => {
+                        error!(
+                            "MCP tool '{}' did not answer within {:?}; abandoning the call",
+                            tool_name_for_error, backstop
+                        );
+                        Err(format!(
+                            "Tool '{}' did not answer within {}ms and was abandoned. It is \
+                            blocked in a host call — a fetch, a database query, an MCP call — \
+                            which the engine cannot interrupt, rather than in JavaScript. Look \
+                            for an unbounded call: a request with no timeout, or a query without \
+                            a limit.",
+                            tool_name_for_error,
+                            backstop.as_millis()
+                        ))
+                    }
+                };
 
                 match execution {
                     Ok(result) => {

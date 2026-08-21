@@ -1631,6 +1631,7 @@ pub fn authorize_check(
 pub struct CheckParams {
     uri: Option<String>,
     rollback: Option<bool>,
+    timeout_ms: Option<u64>,
 }
 
 /// A JSON check request body.
@@ -1639,6 +1640,7 @@ struct CheckBody {
     uri: Option<String>,
     content: Option<String>,
     rollback: Option<bool>,
+    timeout_ms: Option<u64>,
 }
 
 /// Check what a script would do if it were deployed.
@@ -1649,6 +1651,7 @@ struct CheckBody {
     params(
         ("uri" = String, Query, description = "URI of the script to check"),
         ("rollback" = Option<bool>, Query, description = "Roll back database writes init() makes (default true)"),
+        ("timeout_ms" = Option<u64>, Query, description = "Ceiling for the init() run. Defaults to several times the deploy budget so a slow init() is measured rather than interrupted; raise it for one slower still."),
     ),
     request_body(
         description = "Optional candidate source to check instead of what is deployed. Send it as \
@@ -1713,6 +1716,7 @@ pub async fn check_route(
     // Isolation is the default, as it is for a test run: a check should not
     // leave rows behind.
     let rollback = parsed.rollback.or(query.rollback).unwrap_or(true);
+    let timeout_ms = parsed.timeout_ms.or(query.timeout_ms);
     let content = parsed.content;
 
     let user_for_auth = user.clone();
@@ -1758,6 +1762,7 @@ pub async fn check_route(
             script_uri: uri,
             content,
             rollback,
+            timeout_ms,
         })
         .await;
 
@@ -4238,7 +4243,14 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "check_script",
-            "Check what a script would do if it were deployed, without deploying it: resolve its              asset-backed imports the way the engine does, run its init() with every registration              withheld and database writes rolled back, and report diagnostics as              {file, line, severity, code, message}. Catches what a local tsc cannot — import              cycles the bundler rejects, registrations whose handler name is not defined as a              global, an init() close to its deploy budget, and paths another script already              claims. Pass 'content' to check code before writing it. Requires the user to own the              script or be an administrator.",
+            "Check what a script would do if it were deployed, without deploying it: resolve its \
+            asset-backed imports the way the engine does, run its init() with every registration \
+            withheld and database writes rolled back, and report diagnostics as {file, line, \
+            severity, code, message}. Catches what a local tsc cannot — import cycles the \
+            bundler rejects, registrations whose handler name is not defined as a global, an \
+            init() close to its deploy budget, and paths another script already claims. Pass \
+            'content' to check code before writing it. Requires the user to own the script or be \
+            an administrator.",
             || {
                 json!({
                     "type": "object",
@@ -4252,6 +4264,10 @@ fn native_tools() -> &'static [NativeToolEntry] {
                             "type": "boolean",
                             "description": "Roll back the database writes init() makes (default true)",
                             "default": true
+                        },
+                        "timeoutMs": {
+                            "type": "integer",
+                            "description": "Ceiling for the init() run. Defaults to several times the deploy budget so a slow init() is measured rather than interrupted; raise it for one slower still."
                         }
                     },
                     "required": ["uri"]
@@ -4261,7 +4277,13 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "eval_script",
-            "Evaluate a JavaScript snippet against a deployed script's sandbox and return its              value plus everything it logged. The script's own program is loaded first, so the              snippet can call its functions, use the bindings its entrypoint imported, and reach              any module through __asset_module_require__(path). Use this to inspect data or try              an expression without authoring, deploying and deleting a throwaway test. Database              writes roll back by default; registrations do nothing. Requires the user to own the              script or be an administrator.",
+            "Evaluate a JavaScript snippet against a deployed script's sandbox and return its \
+            value plus everything it logged. The script's own program is loaded first, so the \
+            snippet can call its functions, use the bindings its entrypoint imported, and reach \
+            any module through __asset_module_require__(path). Use this to inspect data or try \
+            an expression without authoring, deploying and deleting a throwaway test. Database \
+            writes roll back by default; registrations do nothing. Requires the user to own the \
+            script or be an administrator.",
             || {
                 json!({
                     "type": "object",
@@ -4287,6 +4309,33 @@ fn native_tools() -> &'static [NativeToolEntry] {
             tool_eval_script,
         ),
     ]
+}
+
+/// Ceiling for a native tool that does nothing but read or write the
+/// repository.
+///
+/// Generous, because it is a backstop rather than a budget: these tools are
+/// database round trips that finish in milliseconds, and the only way to reach
+/// this is a connection that will never answer.
+const NATIVE_TOOL_CEILING_MS: u64 = 30_000;
+
+/// The longest a native tool can legitimately run, for the MCP dispatcher's
+/// backstop.
+///
+/// Returns `None` for a name that is not a native tool, so the dispatcher falls
+/// back to the JavaScript execution budget that bounds a script-registered one.
+/// Each tool that enforces its own ceiling reports that ceiling here, so the
+/// backstop never cuts short a call the tool would have completed — it only
+/// fires once a tool is past every limit it sets for itself, which means it is
+/// blocked somewhere no interrupt can reach.
+pub fn native_tool_ceiling_ms(tool_name: &str) -> Option<u64> {
+    match tool_name {
+        "run_tests" => Some(crate::script_test::configured_test_timeouts().1),
+        "check_script" => Some(crate::script_check::MAX_CHECK_TIMEOUT_MS),
+        "eval_script" => Some(crate::script_eval::default_eval_timeout_ms()),
+        name if is_native_mcp_tool(name) => Some(NATIVE_TOOL_CEILING_MS),
+        _ => None,
+    }
 }
 
 /// Whether `name` is one of the engine's own MCP tools.
@@ -4407,13 +4456,24 @@ fn tool_check_script(args: &Value, user: &UserContext) -> Value {
         .and_then(Value::as_bool)
         .unwrap_or(true);
 
-    let report = crate::script_check::check_blocking(
-        crate::script_check::CheckRequest {
-            script_uri: uri.to_string(),
-            content,
-            rollback,
-        },
-        crate::script_init::configured_init_timeout_ms(),
+    // Through the async runner rather than straight to `check_blocking`, so a
+    // call over MCP gets the same answer one over HTTP does when `init()` will
+    // not stop: the registrations collected before it stalled, rather than only
+    // the dispatcher's report that nothing came back. That is the half of the
+    // answer worth having — it says how far `init()` got.
+    //
+    // Bridging back to async from this blocking thread costs a second one while
+    // the check runs, and the dispatcher's own backstop bounds how long that
+    // can last.
+    let report = crate::database::run_blocking(
+        crate::script_check::ScriptChecker::with_configured_timeout().run(
+            crate::script_check::CheckRequest {
+                script_uri: uri.to_string(),
+                content,
+                rollback,
+                timeout_ms: args.get("timeoutMs").and_then(Value::as_u64),
+            },
+        ),
     );
 
     let mut body = report.to_json();

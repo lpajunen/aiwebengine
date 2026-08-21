@@ -2705,6 +2705,14 @@ pub struct DryRunParams {
     /// Roll back the database writes `init()` makes. On by default for the same
     /// reason it is for a test run: a check should not leave rows behind.
     pub rollback: bool,
+    /// Where registrations are recorded, supplied by the caller rather than
+    /// made here.
+    ///
+    /// The caller keeps a clone, which is the only way partial results survive
+    /// an abandoned run: when an outer timeout gives up on the blocking thread,
+    /// the thread — and every local it owns — goes with it, but an `Arc` the
+    /// caller still holds does not.
+    pub sink: RegistrationSink,
 }
 
 /// Run a script's registration pass for its findings alone, changing nothing.
@@ -2720,8 +2728,6 @@ pub struct DryRunParams {
 /// thread-local, so the rollback only covers work done on the thread that
 /// opened it — the same constraint the test runner works under.
 pub fn dry_run_registration_pass(params: &DryRunParams) -> RegistrationPassOutcome {
-    let sink: RegistrationSink = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-
     // Held for the whole pass and never committed: `TransactionGuard` rolls
     // back when it drops, including on an early return.
     let rollback_guard = if params.rollback {
@@ -2751,7 +2757,7 @@ pub fn dry_run_registration_pass(params: &DryRunParams) -> RegistrationPassOutco
         &params.script_content,
         context,
         params.timeout_ms,
-        Some(sink),
+        Some(std::sync::Arc::clone(&params.sink)),
     );
 
     drop(rollback_guard);
@@ -2794,6 +2800,12 @@ pub struct RegistrationPass {
     /// Wall-clock time the pass took, covering the bundle, the program's top
     /// level and `init()` — the same three steps a deploy pays for.
     pub duration_ms: u64,
+    /// True when the run hit its ceiling and was interrupted part-way.
+    ///
+    /// Decided by comparing the elapsed time against the deadline the interrupt
+    /// was armed with, not by matching on the runtime's error text — which is
+    /// the bare word "interrupted" and tells a caller nothing it can act on.
+    pub timed_out: bool,
 }
 
 /// A registration pass and how it ended.
@@ -2864,6 +2876,14 @@ fn run_registration_pass(
         Ok(rt) => rt,
         Err(e) => fail_early!(e),
     };
+    // Mirrors the deadline `create_sandboxed_runtime` just armed the interrupt
+    // with, so a run the interrupt stopped can be told apart from one that
+    // simply failed — without matching on QuickJS error text, which is the bare
+    // word "interrupted". Taken here rather than from `started` because the
+    // interrupt's own deadline runs from *after* the bundle: measuring from
+    // before it would call a genuine failure a timeout whenever bundling was
+    // slow. Same approach as `execute_test_module`.
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
 
     let ctx = match Context::full(&rt) {
         Ok(ctx) => ctx,
@@ -3077,6 +3097,7 @@ fn run_registration_pass(
                 .unwrap_or_default(),
             missing_handlers: missing_handlers.take(),
             duration_ms: started.elapsed().as_millis() as u64,
+            timed_out: error.is_some() && Instant::now() >= deadline,
         },
         error,
     };

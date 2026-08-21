@@ -80,6 +80,7 @@ fn check(script_uri: &str) -> CheckReport {
             script_uri: script_uri.to_string(),
             content: None,
             rollback: true,
+            timeout_ms: None,
         },
         INIT_BUDGET_MS,
     )
@@ -91,6 +92,7 @@ fn check_candidate(script_uri: &str, content: &str) -> CheckReport {
             script_uri: script_uri.to_string(),
             content: Some(content.to_string()),
             rollback: true,
+            timeout_ms: None,
         },
         INIT_BUDGET_MS,
     )
@@ -794,4 +796,228 @@ async fn the_endpoint_reports_its_missing_parameters_and_refusals() {
         403,
         "running a script's code must not be open to anonymous callers"
     );
+}
+
+/// A script whose `init()` runs well past the deploy budget. Slow in
+/// JavaScript, so the interrupt can stop it — the common case.
+fn deploy_slow_init(uri: &str, path: &str, spin_ms: u64) {
+    deploy(
+        uri,
+        &format!(
+            r#"
+            function serve(context) {{ return ResponseBuilder.json({{}}); }}
+            function init() {{
+                routeRegistry.registerRoute("{}", "serve", "GET");
+                const until = Date.now() + {};
+                while (Date.now() < until) {{}}
+            }}
+            "#,
+            path, spin_ms
+        ),
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_init_over_the_budget_is_measured_rather_than_interrupted() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    // The failure this fixes: with the run capped at the deploy budget, the one
+    // script that most needs an answer — the one over budget — was the one that
+    // could not get it. All it produced was "Init function error: interrupted".
+    let budget_ms = 500;
+    let uri = "test://check/over-budget";
+    deploy_slow_init(uri, "/check-over-budget/a", 1_200);
+
+    let report = check_blocking(
+        CheckRequest {
+            script_uri: uri.to_string(),
+            content: None,
+            rollback: true,
+            timeout_ms: None,
+        },
+        budget_ms,
+    );
+
+    assert!(!report.ok, "over budget must not pass");
+
+    let budget = report
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "init-budget")
+        .unwrap_or_else(|| panic!("expected a measurement, got {:?}", codes(&report)));
+    assert_eq!(budget.severity, aiwebengine::script_check::Severity::Error);
+
+    let init = report.init.expect("init should have been reported");
+    assert!(init.ran);
+    assert!(!init.timed_out, "the headroom should have been enough");
+    assert!(
+        init.duration_ms >= 1_200,
+        "the real cost should be measured, not the ceiling: {}ms",
+        init.duration_ms
+    );
+    assert_eq!(init.budget_ms, budget_ms);
+    assert!(init.ceiling_ms > budget_ms);
+
+    // And what it registered before the budget would have cut it off is still
+    // reported, because that is what a deploy would install.
+    assert_eq!(report.registrations.len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_init_past_even_the_ceiling_reports_what_it_registered() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://check/past-ceiling";
+    deploy_slow_init(uri, "/check-past-ceiling/a", 30_000);
+
+    let started = std::time::Instant::now();
+    let report = check_blocking(
+        CheckRequest {
+            script_uri: uri.to_string(),
+            content: None,
+            rollback: true,
+            // Deliberately below what init() needs, so the ceiling is reached.
+            timeout_ms: Some(600),
+        },
+        600,
+    );
+
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "the ceiling should have stopped it, took {:?}",
+        started.elapsed()
+    );
+    assert!(!report.ok);
+
+    // A timeout, named as one — not the runtime's bare "interrupted".
+    let timeout = message_for(&report, "init-timeout");
+    assert!(timeout.contains("600ms"), "{}", timeout);
+    assert!(
+        timeout.contains("1 registration"),
+        "the partial result is the point: {}",
+        timeout
+    );
+    assert!(
+        !codes(&report).contains(&"init-failed"),
+        "a timeout should not also be reported as a generic failure: {:?}",
+        codes(&report)
+    );
+
+    // The registrations made before the stop are reported, not discarded.
+    assert_eq!(report.registrations.len(), 1);
+    assert_eq!(report.registrations[0].name, "/check-past-ceiling/a");
+    assert!(report.init.expect("init reported").timed_out);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_slow_init_answers_over_http_instead_of_hanging() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://check/http-slow";
+    deploy_slow_init(uri, "/check-http-slow/a", 30_000);
+
+    let started = std::time::Instant::now();
+    let (status, body) = post_check(&format!("uri={}&timeout_ms=600", uri), None, "").await;
+
+    assert_eq!(status, 200, "a slow init() must still answer");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(20),
+        "the request should not outlive the ceiling and its grace, took {:?}",
+        started.elapsed()
+    );
+    assert_eq!(body["ok"], json!(false));
+    assert_eq!(body["init"]["timedOut"], json!(true));
+    assert_eq!(
+        body["registrations"][0]["name"],
+        json!("/check-http-slow/a"),
+        "{}",
+        body
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_mcp_dispatcher_bounds_each_tool_by_what_that_tool_can_need() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let execution_ms = aiwebengine::js_engine::current_execution_limits().timeout_ms;
+
+    // A tool that only reads the repository is bounded generously — it is a
+    // backstop, not a budget.
+    let read = aiwebengine::mcp::tool_call_backstop_ms("read_file");
+    assert!(read > execution_ms, "{}ms", read);
+
+    // A check may legitimately run to its own ceiling, so the backstop must sit
+    // above it or it would cut short calls the tool would have completed.
+    let check = aiwebengine::mcp::tool_call_backstop_ms("check_script");
+    assert!(
+        check > aiwebengine::script_check::MAX_CHECK_TIMEOUT_MS,
+        "{}ms",
+        check
+    );
+
+    // A full test run needs the most of any tool.
+    let tests = aiwebengine::mcp::tool_call_backstop_ms("run_tests");
+    assert!(
+        tests >= check,
+        "a test run needs at least as long as a check"
+    );
+
+    // A script-registered tool is bounded by the JavaScript execution budget,
+    // not by the sixty seconds a test run may take — one ceiling for all tools
+    // would hold a request open far past anything that handler could need.
+    let script_tool = aiwebengine::mcp::tool_call_backstop_ms("some-script-registered-tool");
+    assert!(script_tool < tests, "{}ms vs {}ms", script_tool, tests);
+    assert!(script_tool > execution_ms, "{}ms", script_tool);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_slow_init_answers_over_mcp_with_what_it_registered() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://check/mcp-slow";
+    deploy_slow_init(uri, "/check-mcp-slow/a", 30_000);
+
+    let started = std::time::Instant::now();
+    let result = execute_native_mcp_tool(
+        "check_script",
+        &json!({ "uri": uri, "timeoutMs": 600 }),
+        &UserContext::admin("checker".to_string()),
+    )
+    .expect("check_script should dispatch");
+
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(20),
+        "a slow init() must not hold the tool call open, took {:?}",
+        started.elapsed()
+    );
+    assert_eq!(result["ok"], json!(false));
+    assert_eq!(result["init"]["timedOut"], json!(true));
+    // The same partial answer the HTTP endpoint gives, which is the point of
+    // routing the tool through the async runner.
+    assert_eq!(
+        result["registrations"][0]["name"],
+        json!("/check-mcp-slow/a"),
+        "{}",
+        result
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn no_native_tool_description_carries_leftover_indentation() {
+    // These are the first thing an agent reads about a tool, and they are
+    // written as multi-line literals joined with `\` continuations. Losing one
+    // embeds a run of source indentation in the description.
+    for descriptor in native_mcp_tool_descriptors() {
+        assert!(
+            !descriptor.description.contains("  "),
+            "'{}' has a lost line continuation in its description: {:?}",
+            descriptor.name,
+            descriptor.description
+        );
+    }
 }
