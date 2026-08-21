@@ -1780,7 +1780,7 @@ impl SecureGlobalContext {
                       handler: String,
                       method: Option<String>,
                       metadata: Opt<rquickjs::Object>|
-                      -> Result<(), rquickjs::Error> {
+                      -> JsResult<String> {
                     // Engine-owned prefixes are off-limits; any script may
                     // register any other path.
                     if let Some(prefix) = crate::engine_api::reserved_route_prefix(&path) {
@@ -1835,12 +1835,20 @@ impl SecureGlobalContext {
                     }
 
                     let method_ref = method.as_deref();
-                    register_impl(&path, &route_meta, method_ref)
+                    register_impl(&path, &route_meta, method_ref)?;
+                    Ok(format!(
+                        "Route '{} {}' registered to handler '{}'",
+                        method_ref.unwrap_or("GET"),
+                        path,
+                        route_meta.handler_name
+                    ))
                 },
             )?;
             route_registry.set("registerRoute", register_route)?;
         } else {
-            // No-op register function with the same reserved-path check
+            // Outside the registration phase there is nothing to register into,
+            // but the reserved-path check still applies so a bad path is
+            // reported the same way in every context.
             let reg_noop = Function::new(
                 ctx.clone(),
                 move |_c: rquickjs::Ctx<'_>,
@@ -1848,7 +1856,7 @@ impl SecureGlobalContext {
                       _h: String,
                       _m: Option<String>,
                       _meta: Opt<rquickjs::Object>|
-                      -> Result<(), rquickjs::Error> {
+                      -> JsResult<String> {
                     if let Some(prefix) = crate::engine_api::reserved_route_prefix(&path) {
                         return Err(rquickjs::Error::new_from_js_message(
                             "routeRegistry.registerRoute",
@@ -1860,7 +1868,7 @@ impl SecureGlobalContext {
                         ));
                     }
 
-                    Ok(())
+                    Ok(registration_inactive("routeRegistry.registerRoute", &path))
                 },
             )?;
             route_registry.set("registerRoute", reg_noop)?;
@@ -4587,6 +4595,7 @@ mod api_surface_tests {
     #[test]
     fn registration_methods_report_instead_of_throwing_or_registering() {
         for (call, subject) in [
+            ("routeRegistry.registerRoute('/r', 'h', 'GET')", "/r"),
             ("routeRegistry.registerStreamRoute('/s')", "/s"),
             ("routeRegistry.registerAssetRoute('/a', 'a.txt')", "/a"),
             (

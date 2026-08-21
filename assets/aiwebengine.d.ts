@@ -284,7 +284,7 @@ interface RouteRegistry {
    * });
    *
    * Only takes effect during startup and `init()`. Called from a handler it
-   * does nothing, and does not throw.
+   * returns a message saying nothing was registered, and does not throw.
    */
   registerRoute(
     path: string,
