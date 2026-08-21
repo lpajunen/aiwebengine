@@ -36,6 +36,7 @@ pub mod repository;
 pub mod route_index;
 pub mod safe_helpers;
 pub mod scheduler;
+pub mod script_check;
 pub mod script_init;
 pub mod script_test;
 pub mod security;
@@ -71,6 +72,7 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
         engine_api::script_logs_delete_route,
         engine_api::routes_route,
         engine_api::run_tests_route,
+        engine_api::check_route,
         engine_api::assets_get_route,
         engine_api::assets_post_route,
         engine_api::assets_delete_route,
@@ -2289,6 +2291,10 @@ async fn setup_routes(
         .route(
             "/engine/run_tests",
             axum::routing::post(engine_api::run_tests_route),
+        )
+        .route(
+            "/engine/check",
+            axum::routing::post(engine_api::check_route),
         )
         .route(
             "/engine/assets",

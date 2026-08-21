@@ -1588,6 +1588,189 @@ pub async fn run_tests_route(
     json_response(status, report)
 }
 
+/// Why a check was refused before it started.
+pub enum CheckRefusal {
+    NotFound,
+    AccessDenied,
+}
+
+/// Whether `user` may check `uri`.
+///
+/// A check executes the script's own code with the caller's capabilities — the
+/// same thing a test run does — so it takes the same bar: an administrator, or
+/// an owner who may write scripts. When the caller supplies candidate content
+/// there is no deployed script to own, and writing that content is the only
+/// thing the check is a preview of, so `WriteScripts` alone is the bar there.
+pub fn authorize_check(
+    user: &UserContext,
+    uri: &str,
+    has_candidate: bool,
+) -> Result<(), CheckRefusal> {
+    let deployed = repository::fetch_script(uri).is_some();
+    if !deployed && !has_candidate {
+        return Err(CheckRefusal::NotFound);
+    }
+    if user.require_capability(&Capability::WriteScripts).is_err() {
+        return Err(CheckRefusal::AccessDenied);
+    }
+    if deployed {
+        let is_admin = user.has_capability(&Capability::DeleteScripts);
+        if !is_admin && !user_owns_script(user, uri) {
+            warn!(
+                user_id = ?user.user_id,
+                script_name = %uri,
+                "Permission denied: only an administrator or owner may check a script"
+            );
+            return Err(CheckRefusal::AccessDenied);
+        }
+    }
+    Ok(())
+}
+
+#[derive(Deserialize, Default)]
+pub struct CheckParams {
+    uri: Option<String>,
+    rollback: Option<bool>,
+}
+
+/// A JSON check request body.
+#[derive(Deserialize, Default)]
+struct CheckBody {
+    uri: Option<String>,
+    content: Option<String>,
+    rollback: Option<bool>,
+}
+
+/// Check what a script would do if it were deployed.
+#[utoipa::path(
+    post,
+    path = "/engine/check",
+    tags = ["Scripts"],
+    params(
+        ("uri" = String, Query, description = "URI of the script to check"),
+        ("rollback" = Option<bool>, Query, description = "Roll back database writes init() makes (default true)"),
+    ),
+    request_body(
+        description = "Optional candidate source to check instead of what is deployed. Send it as \
+                       `application/json` (`{uri, content, rollback}`) or as a raw body under any \
+                       other content type.",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Check report; `ok` is false when any diagnostic is an error"),
+        (status = 400, description = "Missing required parameter"),
+        (status = 403, description = "Not an administrator or owner of the script"),
+        (status = 404, description = "Script not found and no candidate content supplied"),
+    )
+)]
+pub async fn check_route(
+    auth_user: Option<Extension<AuthUser>>,
+    headers: axum::http::HeaderMap,
+    Query(query): Query<CheckParams>,
+    body: axum::body::Bytes,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+
+    // A script is source text, so the body cannot be sniffed for structure the
+    // way a form can — `{}` is a valid program. The content type is the only
+    // honest signal, and it lets the common case stay a plain
+    // `--data-binary @script.ts`.
+    let is_json = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("application/json"));
+
+    let parsed: CheckBody = if body.is_empty() {
+        CheckBody::default()
+    } else if is_json {
+        match serde_json::from_slice(&body) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    format!("Invalid JSON body: {}", e),
+                );
+            }
+        }
+    } else {
+        match String::from_utf8(body.to_vec()) {
+            Ok(content) => CheckBody {
+                content: Some(content),
+                ..CheckBody::default()
+            },
+            Err(_) => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "Request body is not valid UTF-8 source text".to_string(),
+                );
+            }
+        }
+    };
+
+    let Some(uri) = parsed.uri.or(query.uri) else {
+        return missing_param_response("uri");
+    };
+    // Isolation is the default, as it is for a test run: a check should not
+    // leave rows behind.
+    let rollback = parsed.rollback.or(query.rollback).unwrap_or(true);
+    let content = parsed.content;
+
+    let user_for_auth = user.clone();
+    let uri_for_auth = uri.clone();
+    let has_candidate = content.is_some();
+    let authorized = tokio::task::spawn_blocking(move || {
+        authorize_check(&user_for_auth, &uri_for_auth, has_candidate)
+    })
+    .await;
+
+    match authorized {
+        Ok(Ok(())) => {}
+        Ok(Err(CheckRefusal::NotFound)) => {
+            return json_response(
+                StatusCode::NOT_FOUND,
+                json!({
+                    "error": "Script not found",
+                    "uri": uri,
+                    "message": "Pass candidate source in the request body to check a script that is not deployed yet",
+                    "timestamp": iso_timestamp(),
+                }),
+            );
+        }
+        Ok(Err(CheckRefusal::AccessDenied)) => {
+            return error_response(
+                StatusCode::FORBIDDEN,
+                format!(
+                    "Error: Permission denied. You must be an administrator or owner to check script '{}'",
+                    uri
+                ),
+            );
+        }
+        Err(e) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to authorize check: join error: {}", e),
+            );
+        }
+    }
+
+    let report = crate::script_check::ScriptChecker::with_configured_timeout()
+        .run(crate::script_check::CheckRequest {
+            script_uri: uri,
+            content,
+            rollback,
+        })
+        .await;
+
+    let mut body = report.to_json();
+    if let Some(object) = body.as_object_mut() {
+        object.insert("timestamp".to_string(), json!(iso_timestamp()));
+    }
+
+    // A diagnostic is a report, not a failed request — the same way a failing
+    // test is. Callers read `ok`.
+    json_response(StatusCode::OK, body)
+}
+
 #[derive(Deserialize, Default)]
 pub struct RoutesParams {
     host: Option<String>,
@@ -3885,6 +4068,29 @@ fn native_tools() -> &'static [NativeToolEntry] {
             },
             tool_run_tests,
         ),
+        (
+            "check_script",
+            "Check what a script would do if it were deployed, without deploying it: resolve its              asset-backed imports the way the engine does, run its init() with every registration              withheld and database writes rolled back, and report diagnostics as              {file, line, severity, code, message}. Catches what a local tsc cannot — import              cycles the bundler rejects, registrations whose handler name is not defined as a              global, an init() close to its deploy budget, and paths another script already              claims. Pass 'content' to check code before writing it. Requires the user to own the              script or be an administrator.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "uri": { "type": "string", "description": "URI of the script to check" },
+                        "content": {
+                            "type": "string",
+                            "description": "Candidate source to check instead of what is deployed. Use this to check code before writing it."
+                        },
+                        "rollback": {
+                            "type": "boolean",
+                            "description": "Roll back the database writes init() makes (default true)",
+                            "default": true
+                        }
+                    },
+                    "required": ["uri"]
+                })
+            },
+            tool_check_script,
+        ),
     ]
 }
 
@@ -3922,6 +4128,56 @@ pub fn execute_native_mcp_tool(
         .find(|(name, _, _, _)| *name == tool_name)
         .map(|(_, _, _, handler)| *handler)?;
     Some(handler(arguments, user_context))
+}
+
+/// Check a script and return the same report the REST endpoint serves.
+///
+/// Runs on the blocking pool, like every native tool: a check evaluates the
+/// script's program and calls its `init()` under the deploy budget, and the
+/// transaction that isolates it is bound to the thread that opens it.
+fn tool_check_script(args: &Value, user: &UserContext) -> Value {
+    let Some(uri) = arg_str(args, "uri") else {
+        return missing_arg("uri");
+    };
+    let content = arg_str(args, "content").map(str::to_string);
+
+    match authorize_check(user, uri, content.is_some()) {
+        Ok(()) => {}
+        Err(CheckRefusal::NotFound) => {
+            return json!({
+                "error": format!("Script not found: {}", uri),
+                "message": "Pass 'content' to check a script that is not deployed yet",
+            });
+        }
+        Err(CheckRefusal::AccessDenied) => {
+            return json!({
+                "error": format!(
+                    "Permission denied. You must be an administrator or owner to check script '{}'",
+                    uri
+                )
+            });
+        }
+    }
+
+    let rollback = args
+        .get("rollback")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+
+    let report = crate::script_check::check_blocking(
+        crate::script_check::CheckRequest {
+            script_uri: uri.to_string(),
+            content,
+            rollback,
+        },
+        crate::script_init::configured_init_timeout_ms(),
+    );
+
+    let mut body = report.to_json();
+    if let Some(object) = body.as_object_mut() {
+        object.insert("timestamp".to_string(), json!(iso_timestamp()));
+    }
+    body
 }
 
 /// Run a script's tests and return the same report the REST endpoint serves.

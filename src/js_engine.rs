@@ -14,7 +14,10 @@ use crate::script_test::{TestCaseResult, TestRunResult};
 use crate::security::UserContext;
 
 // Use the enhanced secure globals implementation
-use crate::security::secure_globals::{GlobalSecurityConfig, SecureGlobalContext};
+use crate::security::secure_globals::{
+    CollectedRegistration, GlobalSecurityConfig, RegistrationKind, RegistrationSink,
+    SecureGlobalContext,
+};
 
 // Type alias for route registrations map
 type RouteRegistrations = repository::RouteRegistrations;
@@ -827,6 +830,8 @@ pub fn execute_script_secure(
                         // collect what the script registers.
                         registration_phase: true,
                         enable_audit_logging: false, // Disable for startup to reduce noise
+                        // Startup registers for real; nothing to withhold.
+                        dry_run_sink: None,
                     };
 
                     // Create the register function that captures registrations
@@ -1712,6 +1717,7 @@ fn run_test_module<'js>(
         // nothing, rather than disappearing from the test's global scope.
         registration_phase: false,
         enable_audit_logging: false,
+        dry_run_sink: None,
     };
 
     setup_secure_global_functions(
@@ -2316,16 +2322,6 @@ pub struct InitFailure {
     pub registrations: RouteRegistrations,
 }
 
-impl InitFailure {
-    /// A failure that happened before the script could register anything.
-    fn new(error: String) -> Self {
-        Self {
-            error,
-            registrations: RouteRegistrations::new(),
-        }
-    }
-}
-
 impl std::fmt::Display for InitFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.error)
@@ -2364,10 +2360,169 @@ pub fn call_init_if_exists_with_timeout(
     context: crate::script_init::InitContext,
     timeout_ms: u64,
 ) -> Result<Option<RouteRegistrations>, InitFailure> {
+    let outcome = run_registration_pass(script_uri, script_content, context, timeout_ms, None);
+
+    match outcome.error {
+        Some(error) => Err(InitFailure {
+            error,
+            registrations: outcome.pass.registrations,
+        }),
+        None if outcome.pass.had_init => Ok(Some(outcome.pass.registrations)),
+        None => Ok(None),
+    }
+}
+
+/// What to dry-run, and under which budget.
+pub struct DryRunParams {
+    pub script_uri: String,
+    /// The source to check. Taken as a parameter rather than read from the
+    /// repository so a candidate can be checked *before* it is deployed — the
+    /// difference between finding a broken `init()` and shipping one.
+    pub script_content: String,
+    pub timeout_ms: u64,
+    /// Roll back the database writes `init()` makes. On by default for the same
+    /// reason it is for a test run: a check should not leave rows behind.
+    pub rollback: bool,
+}
+
+/// Run a script's registration pass for its findings alone, changing nothing.
+///
+/// Every registry write is withheld and recorded instead (see
+/// [`GlobalSecurityConfig::dry_run_sink`]), message dispatch is suppressed, and
+/// database writes are rolled back when `rollback` is set. What that does *not*
+/// cover is everything else `init()` can reach: an outbound `fetch`, a secret
+/// read, a write to another system. A dry run executes the script's own code, so
+/// side effects the engine does not mediate still happen.
+///
+/// Must run on a blocking thread: the transaction that isolates the run is
+/// thread-local, so the rollback only covers work done on the thread that
+/// opened it — the same constraint the test runner works under.
+pub fn dry_run_registration_pass(params: &DryRunParams) -> RegistrationPassOutcome {
+    let sink: RegistrationSink = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+
+    // Held for the whole pass and never committed: `TransactionGuard` rolls
+    // back when it drops, including on an early return.
+    let rollback_guard = if params.rollback {
+        match crate::database::Database::begin_transaction(Some(params.timeout_ms)) {
+            Ok(guard) => Some(guard),
+            Err(e) => {
+                return RegistrationPassOutcome {
+                    pass: RegistrationPass::default(),
+                    error: Some(format!(
+                        "could not isolate the check in a transaction: {}",
+                        e
+                    )),
+                };
+            }
+        }
+    } else {
+        None
+    };
+
+    let context = crate::script_init::InitContext::new(
+        params.script_uri.clone(),
+        /* is_startup */ false,
+    );
+
+    let outcome = run_registration_pass(
+        &params.script_uri,
+        &params.script_content,
+        context,
+        params.timeout_ms,
+        Some(sink),
+    );
+
+    drop(rollback_guard);
+    outcome
+}
+
+/// A registration a script made that names a script function the program does
+/// not define — the delegate every dispatch path resolves by name at call time
+/// (`globals.get::<_, Function>(handler_name)`), so a name that is not there is
+/// a 500 on the first request rather than an error at deploy.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MissingHandler {
+    pub kind: RegistrationKind,
+    /// What the registration is keyed by — the path, operation or tool name.
+    pub name: String,
+    /// The delegate name that could not be resolved.
+    pub handler: String,
+    /// What the global turned out to be, when a global of that name exists but
+    /// is not callable. `None` when nothing of that name is defined at all.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub found_type: Option<String>,
+}
+
+/// What one registration pass produced.
+#[derive(Debug, Default)]
+pub struct RegistrationPass {
+    /// Routes `routeRegistry.registerRoute` collected, keyed by `(path, method)`.
+    pub registrations: RouteRegistrations,
+    /// False when the script defines no `init()` — in which case nothing after
+    /// the program's top level ran.
+    pub had_init: bool,
+    /// Every registration the pass saw, in the order the script made them.
+    /// Populated only on a dry run, which is the only mode that records the
+    /// registries beyond `registerRoute`.
+    pub collected: Vec<CollectedRegistration>,
+    /// Registrations whose delegate the program does not define. Checked only
+    /// on a dry run.
+    pub missing_handlers: Vec<MissingHandler>,
+    /// Wall-clock time the pass took, covering the bundle, the program's top
+    /// level and `init()` — the same three steps a deploy pays for.
+    pub duration_ms: u64,
+}
+
+/// A registration pass and how it ended.
+///
+/// The pass is reported whether or not it failed: a script that registers its
+/// routes and *then* throws has still told the caller what it registered, and
+/// both callers want that — the deploy path installs partial routes so a first
+/// deploy with a slow `init()` is reachable, and the check reports them as
+/// findings.
+#[derive(Debug)]
+pub struct RegistrationPassOutcome {
+    pub pass: RegistrationPass,
+    /// `None` when the pass completed.
+    pub error: Option<String>,
+}
+
+/// Evaluate `script_content` and run its `init()`, collecting what it registers.
+///
+/// With `dry_run_sink` set, no registry that outlives this call is written to
+/// and every registration is recorded in the sink instead — see
+/// [`GlobalSecurityConfig::dry_run_sink`]. That mode also resolves each
+/// registration's delegate against the program's globals, which is the check
+/// `/engine/check` exists for and which costs nothing here because the context
+/// that would answer the question is still alive.
+fn run_registration_pass(
+    script_uri: &str,
+    script_content: &str,
+    context: crate::script_init::InitContext,
+    timeout_ms: u64,
+    dry_run_sink: Option<RegistrationSink>,
+) -> RegistrationPassOutcome {
     use std::cell::RefCell;
     use std::rc::Rc;
 
     debug!("Checking for init() function in script: {}", script_uri);
+
+    let started = Instant::now();
+    let sink_for_report = dry_run_sink.clone();
+    let missing_handlers: Rc<RefCell<Vec<MissingHandler>>> = Rc::new(RefCell::new(Vec::new()));
+
+    macro_rules! fail_early {
+        ($error:expr) => {
+            return RegistrationPassOutcome {
+                pass: RegistrationPass {
+                    duration_ms: started.elapsed().as_millis() as u64,
+                    ..RegistrationPass::default()
+                },
+                error: Some($error),
+            }
+        };
+    }
 
     let limits = ExecutionLimits {
         timeout_ms,
@@ -2378,13 +2533,20 @@ pub fn call_init_if_exists_with_timeout(
     // a deploy depends on, and it runs with the caches cold by definition — with
     // the bundle inside the budget, a script with many imported modules could
     // spend its whole init() allowance fetching and transpiling them.
-    let executable_code = transpile_if_needed(script_uri, script_content)
-        .map_err(|e| InitFailure::new(format!("Transpilation failed: {}", e)))?;
+    let executable_code = match transpile_if_needed(script_uri, script_content) {
+        Ok(code) => code,
+        Err(e) => fail_early!(format!("Transpilation failed: {}", e)),
+    };
 
-    let rt = create_sandboxed_runtime(&limits).map_err(InitFailure::new)?;
+    let rt = match create_sandboxed_runtime(&limits) {
+        Ok(rt) => rt,
+        Err(e) => fail_early!(e),
+    };
 
-    let ctx = Context::full(&rt)
-        .map_err(|e| InitFailure::new(format!("Failed to create context: {}", e)))?;
+    let ctx = match Context::full(&rt) {
+        Ok(ctx) => ctx,
+        Err(e) => fail_early!(format!("Failed to create context: {}", e)),
+    };
 
     // Create registrations map to capture routeRegistry.registerRoute() calls during init
     let registrations = Rc::new(RefCell::new(HashMap::new()));
@@ -2402,11 +2564,17 @@ pub fn call_init_if_exists_with_timeout(
                 // top-level program runs under it too.
                 registration_phase: true,
                 enable_audit_logging: false,
+                dry_run_sink: dry_run_sink.clone(),
             };
 
             // Create the register function that captures registrations
             let regs_clone = Rc::clone(&registrations);
             let uri_clone = uri_owned.clone();
+            // Routes are collected through this closure rather than through the
+            // sink, so on a dry run they have to be mirrored into it — the
+            // delegate check downstream reads the sink, and a route handler is
+            // the delegate most worth checking.
+            let route_sink = dry_run_sink.clone();
             let register_impl = Box::new(
                 move |path: &str,
                       route_metadata: &repository::RouteMetadata,
@@ -2421,6 +2589,15 @@ pub fn call_init_if_exists_with_timeout(
                         regs.insert(
                             (path.to_string(), method.to_string()),
                             route_metadata.clone(),
+                        );
+                    }
+                    if let Some(sink) = route_sink.as_ref()
+                        && let Ok(mut collected) = sink.lock()
+                    {
+                        collected.push(
+                            CollectedRegistration::new(RegistrationKind::Route, path)
+                                .with_method(method)
+                                .with_handler(route_metadata.handler_name.clone()),
                         );
                     }
                     Ok(())
@@ -2507,6 +2684,14 @@ pub fn call_init_if_exists_with_timeout(
                     *error_ref = Some(details);
                 }
             }
+            // Resolve delegates before propagating a failure: a script whose
+            // init() registered a handful of routes and then threw still has
+            // those handler names worth reporting on, and the context that can
+            // answer holds only until this closure returns.
+            if dry_run_sink.is_some() {
+                record_missing_handlers(&ctx, &dry_run_sink, &missing_handlers);
+            }
+
             call_result?;
 
             info!("Successfully called init() for script: {}", script_uri);
@@ -2531,16 +2716,17 @@ pub fn call_init_if_exists_with_timeout(
         .map(|regs| regs.clone())
         .unwrap_or_default();
 
-    let final_result = match result {
-        Ok(true) => {
-            info!(
-                "Init() for script {} registered {} routes",
-                script_uri,
-                registered.len()
-            );
-            Ok(Some(registered))
+    let (had_init, error) = match result {
+        Ok(had_init) => {
+            if had_init {
+                info!(
+                    "Init() for script {} registered {} routes",
+                    script_uri,
+                    registered.len()
+                );
+            }
+            (had_init, None)
         }
-        Ok(false) => Ok(None),
         Err(error) => {
             if !registered.is_empty() {
                 warn!(
@@ -2550,15 +2736,81 @@ pub fn call_init_if_exists_with_timeout(
                     error
                 );
             }
-            Err(InitFailure {
-                error,
-                registrations: registered,
-            })
+            // The script has an init() - reaching a failure is proof it was
+            // called - so a caller that distinguishes "no init()" from "init()
+            // failed" gets the second answer, not the first.
+            (true, Some(error))
         }
     };
 
+    let outcome = RegistrationPassOutcome {
+        pass: RegistrationPass {
+            registrations: registered,
+            had_init,
+            collected: sink_for_report
+                .and_then(|sink| sink.lock().ok().map(|collected| collected.clone()))
+                .unwrap_or_default(),
+            missing_handlers: missing_handlers.take(),
+            duration_ms: started.elapsed().as_millis() as u64,
+        },
+        error,
+    };
+
     // Ensure clean shutdown: drop Context before Runtime
-    ensure_clean_shutdown(ctx, final_result)
+    match ensure_clean_shutdown(ctx, Ok::<_, String>(outcome)) {
+        Ok(outcome) => outcome,
+        // `ensure_clean_shutdown` only ever propagates the value it was handed,
+        // which is `Ok` here; this arm exists to satisfy the type.
+        Err(error) => RegistrationPassOutcome {
+            pass: RegistrationPass::default(),
+            error: Some(error),
+        },
+    }
+}
+
+/// Resolve every delegate the sink recorded against the program's globals,
+/// appending the ones that do not answer to `missing`.
+///
+/// This mirrors dispatch exactly: each entry point looks its handler up as a
+/// global function by name (`globals.get::<_, Function>(handler_name)`), so a
+/// name that is absent here is a 500 on the first request that reaches it. Doing
+/// it by execution rather than by parsing is what makes it exact — a handler
+/// name assembled at runtime is checked the same as a literal one.
+fn record_missing_handlers(
+    ctx: &rquickjs::Ctx<'_>,
+    sink: &Option<RegistrationSink>,
+    missing: &std::rc::Rc<std::cell::RefCell<Vec<MissingHandler>>>,
+) {
+    let Some(sink) = sink.as_ref() else {
+        return;
+    };
+    let Ok(collected) = sink.lock() else {
+        return;
+    };
+    let Ok(mut missing) = missing.try_borrow_mut() else {
+        return;
+    };
+
+    let globals = ctx.globals();
+    for registration in collected.iter() {
+        let Some(handler) = registration.handler.as_deref() else {
+            continue;
+        };
+        let found_type = match globals.get::<_, rquickjs::Value>(handler) {
+            Ok(value) if value.is_function() => continue,
+            // A global of that name exists but is not callable — a config object
+            // where a function was meant, usually. Naming what it is turns out
+            // to be the whole fix.
+            Ok(value) => Some(format!("{:?}", value.type_of()).to_lowercase()),
+            Err(_) => None,
+        };
+        missing.push(MissingHandler {
+            kind: registration.kind,
+            name: registration.name.clone(),
+            handler: handler.to_string(),
+            found_type,
+        });
+    }
 }
 
 #[cfg(test)]

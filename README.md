@@ -15,6 +15,8 @@ Code first approach. Then provide tools for verification and testing.
 Verify code by providing automatic API descriptions such as OpenAPI, GraphQL schema, and MCP tool list.
 Test code by providing automatic test case generation and execution environment. A script carries its own tests as assets named `*.test.ts`; `POST /engine/run_tests?uri=<script>` runs them inside the same sandbox that serves the script and reports a verdict per case — see [Testing Solution Scripts](docs/SCRIPT_TESTS.md).
 
+Check code before deploying it. `POST /engine/check?uri=<script>` bundles a script with the engine's own module resolution and runs its `init()` with every registration withheld, reporting what a local `tsc` cannot see: import cycles the bundler refuses, registrations whose handler name does not resolve, an `init()` close to its deploy budget, and paths another script already serves — see [Checking Solution Scripts](docs/SCRIPT_CHECKS.md).
+
 API access: script-internal, engine-internal, and external. Script-internal APIs are available only to the script itself. Engine-internal APIs are available to all scripts running in the same engine instance. External APIs are available to outside world.
 
 External API access: public, authenticated, role based. There are engine provided roles such as editor and adinistrator. Scripts can provide additional roles for authenticated users. When API endpoint required authentication, there can be a handler that checks user roles before proceeding.

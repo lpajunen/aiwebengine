@@ -14,6 +14,88 @@ use crate::security::{
 type RouteRegisterFn =
     Box<dyn Fn(&str, &repository::RouteMetadata, Option<&str>) -> Result<(), rquickjs::Error>>;
 
+/// Which registry a [`CollectedRegistration`] would have been written to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RegistrationKind {
+    Route,
+    Stream,
+    AssetRoute,
+    GraphqlQuery,
+    GraphqlMutation,
+    GraphqlSubscription,
+    McpTool,
+    McpPrompt,
+    ScheduledJob,
+    MessageListener,
+}
+
+impl RegistrationKind {
+    /// The registering API's name, for messages that have to say what was
+    /// skipped.
+    pub fn api(self) -> &'static str {
+        match self {
+            RegistrationKind::Route => "routeRegistry.registerRoute",
+            RegistrationKind::Stream => "routeRegistry.registerStreamRoute",
+            RegistrationKind::AssetRoute => "routeRegistry.registerAssetRoute",
+            RegistrationKind::GraphqlQuery => "graphQLRegistry.registerQuery",
+            RegistrationKind::GraphqlMutation => "graphQLRegistry.registerMutation",
+            RegistrationKind::GraphqlSubscription => "graphQLRegistry.registerSubscription",
+            RegistrationKind::McpTool => "mcpRegistry.registerTool",
+            RegistrationKind::McpPrompt => "mcpRegistry.registerPrompt",
+            RegistrationKind::ScheduledJob => "schedulerService",
+            RegistrationKind::MessageListener => "dispatcher.registerListener",
+        }
+    }
+}
+
+/// One registration a script made, recorded instead of applied.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectedRegistration {
+    pub kind: RegistrationKind,
+    /// What the registration is keyed by: a path, an operation name, a tool
+    /// name, a message type, or a scheduled job's key.
+    pub name: String,
+    /// HTTP method, for the registrations that have one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+    /// The script function the engine would call. `None` where a registration
+    /// names no delegate — an asset route serves bytes, not code, and a stream
+    /// without a customization function has nothing to call.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handler: Option<String>,
+}
+
+impl CollectedRegistration {
+    pub fn new(kind: RegistrationKind, name: impl Into<String>) -> Self {
+        Self {
+            kind,
+            name: name.into(),
+            method: None,
+            handler: None,
+        }
+    }
+
+    pub fn with_method(mut self, method: impl Into<String>) -> Self {
+        self.method = Some(method.into());
+        self
+    }
+
+    pub fn with_handler(mut self, handler: impl Into<String>) -> Self {
+        self.handler = Some(handler.into());
+        self
+    }
+}
+
+/// Where a dry run's registrations accumulate.
+///
+/// `Arc<Mutex<_>>` rather than `Rc<RefCell<_>>` because it is held in
+/// [`GlobalSecurityConfig`], which callers build outside the JavaScript context
+/// and move in; the contention is nil either way, since only the one QuickJS
+/// thread ever touches it.
+pub type RegistrationSink = std::sync::Arc<std::sync::Mutex<Vec<CollectedRegistration>>>;
+
 fn parse_filter_match_mode(
     match_mode: Option<String>,
 ) -> JsResult<crate::stream_registry::FilterMatchMode> {
@@ -81,6 +163,22 @@ pub struct GlobalSecurityConfig {
     pub registration_phase: bool,
     /// Disabled where there is no Tokio runtime to spawn the audit writer onto.
     pub enable_audit_logging: bool,
+    /// When set, registration calls are validated as usual and then *recorded
+    /// here* instead of reaching the engine's live registries.
+    ///
+    /// This is what makes `/engine/check` safe to run against a deployed
+    /// script. Only `registerRoute` collects by design — every other registry
+    /// (GraphQL, streams, asset routes, MCP, scheduler, dispatcher) is a
+    /// process-wide singleton written to directly, so a candidate's `init()`
+    /// would otherwise replace the deployed script's resolvers, listeners and
+    /// jobs with its own, and a broken candidate would take the live script
+    /// down with it. Nothing undoes those writes afterwards, which is why the
+    /// test runner opts out of the registration phase entirely
+    /// (`registration_phase: false`) rather than isolating it.
+    ///
+    /// Set only together with `registration_phase: true`: the phase check runs
+    /// first, so a sink on an inactive context would never be reached.
+    pub dry_run_sink: Option<RegistrationSink>,
 }
 
 impl Default for GlobalSecurityConfig {
@@ -90,7 +188,36 @@ impl Default for GlobalSecurityConfig {
             // registries that outlive its own invocation.
             registration_phase: false,
             enable_audit_logging: true,
+            dry_run_sink: None,
         }
+    }
+}
+
+impl GlobalSecurityConfig {
+    /// Record `registration` and return the reply to give JavaScript, or `None`
+    /// when this context registers for real and the caller should carry on to
+    /// the live registry.
+    ///
+    /// Call this *after* the validation and capability checks of the API it
+    /// guards, so a dry run reports the same refusals a real registration
+    /// would, and immediately before the registry write, so nothing that
+    /// outlives the run has happened yet.
+    fn collect(&self, registration: CollectedRegistration) -> Option<String> {
+        let sink = self.dry_run_sink.as_ref()?;
+        let reply = format!(
+            "{}: '{}' checked but not registered - this is a dry run",
+            registration.kind.api(),
+            registration.name
+        );
+        if let Ok(mut collected) = sink.lock() {
+            collected.push(registration);
+        }
+        Some(reply)
+    }
+
+    /// True when registration calls are being recorded rather than applied.
+    fn is_dry_run(&self) -> bool {
+        self.dry_run_sink.is_some()
     }
 }
 
@@ -743,6 +870,13 @@ impl SecureGlobalContext {
                     "Secure registerGraphQLQuery called"
                 );
 
+                if let Some(reply) = config_query.collect(
+                    CollectedRegistration::new(RegistrationKind::GraphqlQuery, name.clone())
+                        .with_handler(resolver_function.clone()),
+                ) {
+                    return Ok(reply);
+                }
+
                 // Actually register the GraphQL query
                 match crate::graphql::register_graphql_query(
                     name.clone(),
@@ -845,6 +979,13 @@ impl SecureGlobalContext {
                     visibility = %visibility,
                     "Secure registerGraphQLMutation called"
                 );
+
+                if let Some(reply) = config_mutation.collect(
+                    CollectedRegistration::new(RegistrationKind::GraphqlMutation, name.clone())
+                        .with_handler(resolver_function.clone()),
+                ) {
+                    return Ok(reply);
+                }
 
                 // Actually register the GraphQL mutation
                 match crate::graphql::register_graphql_mutation(
@@ -955,6 +1096,13 @@ impl SecureGlobalContext {
                     visibility = %visibility,
                     "Secure registerGraphQLSubscription called"
                 );
+
+                if let Some(reply) = config_subscription.collect(
+                    CollectedRegistration::new(RegistrationKind::GraphqlSubscription, name.clone())
+                        .with_handler(resolver_function.clone()),
+                ) {
+                    return Ok(reply);
+                }
 
                 // Actually register the GraphQL subscription
                 match crate::graphql::register_graphql_subscription(
@@ -1316,6 +1464,7 @@ impl SecureGlobalContext {
         let user_ctx_register = user_context.clone();
         let auditor_register = auditor.clone();
         let script_uri_register = script_uri_owned.clone();
+        let config_register = config.clone();
         let register_tool = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>,
@@ -1324,7 +1473,7 @@ impl SecureGlobalContext {
                   input_schema_json: String,
                   handler_function: String|
                   -> JsResult<String> {
-                if !config.registration_phase {
+                if !config_register.registration_phase {
                     return Ok(registration_inactive("mcpRegistry.registerTool", &name));
                 }
 
@@ -1402,6 +1551,13 @@ impl SecureGlobalContext {
                     name = %name,
                     "Secure registerTool called for MCP"
                 );
+
+                if let Some(reply) = config_register.collect(
+                    CollectedRegistration::new(RegistrationKind::McpTool, name.clone())
+                        .with_handler(handler_function.clone()),
+                ) {
+                    return Ok(reply);
+                }
 
                 // Actually register the MCP tool
                 crate::mcp::register_mcp_tool(
@@ -1504,6 +1660,13 @@ impl SecureGlobalContext {
                     handler = %handler_function,
                     "Secure registerPrompt called for MCP"
                 );
+
+                if let Some(reply) = config_prompt.collect(
+                    CollectedRegistration::new(RegistrationKind::McpPrompt, name.clone())
+                        .with_handler(handler_function.clone()),
+                ) {
+                    return Ok(reply);
+                }
 
                 // Actually register the MCP prompt
                 match crate::mcp::register_mcp_prompt(
@@ -2003,6 +2166,17 @@ impl SecureGlobalContext {
                     });
                 }
 
+                if let Some(reply) = config_stream.collect({
+                    let registration =
+                        CollectedRegistration::new(RegistrationKind::Stream, path.clone());
+                    match customization_function.as_ref() {
+                        Some(function) => registration.with_handler(function.clone()),
+                        None => registration,
+                    }
+                }) {
+                    return Ok(reply);
+                }
+
                 // Register the stream
                 match crate::stream_registry::GLOBAL_STREAM_REGISTRY.register_stream_with_metadata(
                     &path,
@@ -2090,6 +2264,13 @@ impl SecureGlobalContext {
 
                 // Extract optional OpenAPI metadata (tags/summary/description)
                 let (tags, summary, description) = extract_route_metadata(metadata.0.as_ref());
+
+                if let Some(reply) = config_asset_route.collect(CollectedRegistration::new(
+                    RegistrationKind::AssetRoute,
+                    path.clone(),
+                )) {
+                    return Ok(reply);
+                }
 
                 // Register the path in the global asset registry
                 match crate::asset_registry::get_global_registry().register_path_with_metadata(
@@ -3166,6 +3347,7 @@ impl SecureGlobalContext {
         // database.generateGraphQLForTable
         let script_uri_graphql = script_uri_owned.clone();
         let user_ctx_graphql = user_context.clone();
+        let config_graphql = self.config.clone();
         let generate_graphql = Function::new(
             ctx.clone(),
             move |ctx_inner: rquickjs::Ctx<'_>,
@@ -3253,6 +3435,31 @@ impl SecureGlobalContext {
                 }
 
                 // Register queries
+                if config_graphql.is_dry_run() {
+                    for query in &operations.queries {
+                        config_graphql.collect(
+                            CollectedRegistration::new(
+                                RegistrationKind::GraphqlQuery,
+                                query.name.clone(),
+                            )
+                            .with_handler(query.resolver_function_name.clone()),
+                        );
+                    }
+                    for mutation in &operations.mutations {
+                        config_graphql.collect(
+                            CollectedRegistration::new(
+                                RegistrationKind::GraphqlMutation,
+                                mutation.name.clone(),
+                            )
+                            .with_handler(mutation.resolver_function_name.clone()),
+                        );
+                    }
+                    return Ok(format!(
+                        "{{\"dryRun\": true, \"table\": \"{}\"}}",
+                        table_name
+                    ));
+                }
+
                 for query in &operations.queries {
                     if let Err(e) = crate::graphql::register_graphql_query(
                         query.name.clone(),
@@ -3941,6 +4148,16 @@ impl SecureGlobalContext {
 
                     let name = options.get::<_, String>("name").ok();
 
+                    if let Some(reply) = config_once.collect(
+                        CollectedRegistration::new(
+                            RegistrationKind::ScheduledJob,
+                            name.clone().unwrap_or_else(|| handler_name.to_string()),
+                        )
+                        .with_handler(handler_name),
+                    ) {
+                        return Ok(reply);
+                    }
+
                     match register_once_handle.register_one_off(
                         &script_uri_once,
                         handler_name,
@@ -4039,6 +4256,16 @@ impl SecureGlobalContext {
                     None
                 };
 
+                if let Some(reply) = config_recurring.collect(
+                    CollectedRegistration::new(
+                        RegistrationKind::ScheduledJob,
+                        name.clone().unwrap_or_else(|| handler_name.to_string()),
+                    )
+                    .with_handler(handler_name),
+                ) {
+                    return Ok(reply);
+                }
+
                 match register_recurring_handle.register_recurring(
                     &script_uri_recurring,
                     handler_name,
@@ -4071,6 +4298,17 @@ impl SecureGlobalContext {
                          only take effect during script startup and init()"
                             .to_string(),
                     );
+                }
+
+                if config_clear.is_dry_run() {
+                    // Clearing mutates the live scheduler exactly as registering
+                    // does, and there is nothing to record: a dry run reports
+                    // what a script *would* register, and an emptied job table
+                    // is not part of that.
+                    return Ok(format!(
+                        "schedulerService.clearAll: no jobs cleared for {} - this is a dry run",
+                        script_uri_clear
+                    ));
                 }
 
                 let removed = scheduler::clear_script_jobs(&script_uri_clear);
@@ -4132,6 +4370,16 @@ impl SecureGlobalContext {
                     ));
                 }
 
+                if let Some(reply) = config_register.collect(
+                    CollectedRegistration::new(
+                        RegistrationKind::MessageListener,
+                        message_type.clone(),
+                    )
+                    .with_handler(handler_name.clone()),
+                ) {
+                    return Ok(reply);
+                }
+
                 // Register the listener
                 match crate::dispatcher::GLOBAL_DISPATCHER.register_listener(
                     message_type.clone(),
@@ -4161,6 +4409,7 @@ impl SecureGlobalContext {
 
         // sendMessage(messageType, messageData)
         // Note: messageData should be a JSON string or will be converted to empty object
+        let config_send = self.config.clone();
         let send_message = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>,
@@ -4170,6 +4419,17 @@ impl SecureGlobalContext {
                 // Validate message type
                 if message_type.is_empty() {
                     return Ok("dispatcher.sendMessage: message type cannot be empty".to_string());
+                }
+
+                if config_send.is_dry_run() {
+                    // Dispatching runs *other* scripts' listeners against live
+                    // data, and no transaction rolls that back. A check that
+                    // deploys nothing must not set the rest of the engine in
+                    // motion either.
+                    return Ok(format!(
+                        "dispatcher.sendMessage: '{}' not dispatched - this is a dry run",
+                        message_type
+                    ));
                 }
 
                 // Get message data as JSON string
@@ -4305,6 +4565,7 @@ fn execute_message_handler(
         let security_config = GlobalSecurityConfig {
             registration_phase: false,
             enable_audit_logging: false,
+            dry_run_sink: None,
         };
 
         let secure_context = SecureGlobalContext::new_with_config(user_context, security_config);
@@ -4545,6 +4806,7 @@ mod api_surface_tests {
             let config = GlobalSecurityConfig {
                 registration_phase: false,
                 enable_audit_logging: false,
+                dry_run_sink: None,
             };
             let context =
                 SecureGlobalContext::new_with_config(UserContext::admin("t".into()), config);
