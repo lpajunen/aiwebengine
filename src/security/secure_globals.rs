@@ -96,6 +96,38 @@ impl CollectedRegistration {
 /// thread ever touches it.
 pub type RegistrationSink = std::sync::Arc<std::sync::Mutex<Vec<CollectedRegistration>>>;
 
+/// One line a script wrote through `console`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsoleLine {
+    /// `LOG`, `INFO`, `WARN`, `ERROR` or `DEBUG` — the level the `console`
+    /// method maps to, unchanged.
+    pub level: String,
+    pub message: String,
+    /// Milliseconds since the epoch, so an interleaved read stays ordered even
+    /// when the caller merges several runs.
+    pub timestamp_ms: u64,
+}
+
+/// Captured `console` output and what did not fit.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ConsoleCapture {
+    pub lines: Vec<ConsoleLine>,
+    /// Lines dropped once [`MAX_CAPTURED_CONSOLE_LINES`] was reached. Counted
+    /// rather than inferred, so a caller can tell a capture that happens to sit
+    /// exactly on the cap from one that was truncated.
+    pub dropped: usize,
+}
+
+/// Where captured `console` output accumulates. See
+/// [`GlobalSecurityConfig::console_sink`].
+pub type ConsoleSink = std::sync::Arc<std::sync::Mutex<ConsoleCapture>>;
+
+/// Cap on captured lines, so a snippet that logs in a loop cannot grow the
+/// response without bound. Lines past the cap are dropped and the caller is
+/// told how many.
+pub const MAX_CAPTURED_CONSOLE_LINES: usize = 1_000;
+
 fn parse_filter_match_mode(
     match_mode: Option<String>,
 ) -> JsResult<crate::stream_registry::FilterMatchMode> {
@@ -179,6 +211,14 @@ pub struct GlobalSecurityConfig {
     /// Set only together with `registration_phase: true`: the phase check runs
     /// first, so a sink on an inactive context would never be reached.
     pub dry_run_sink: Option<RegistrationSink>,
+    /// When set, `console` output is captured here as well as written to the
+    /// script's log.
+    ///
+    /// Capture is what makes `/engine/eval` usable, not a convenience on top of
+    /// it: `console` writes go through the repository, so they join whatever
+    /// transaction is open — and an evaluation that rolls back would otherwise
+    /// roll back its own output, losing exactly what the caller asked for.
+    pub console_sink: Option<ConsoleSink>,
 }
 
 impl Default for GlobalSecurityConfig {
@@ -189,6 +229,7 @@ impl Default for GlobalSecurityConfig {
             registration_phase: false,
             enable_audit_logging: true,
             dry_run_sink: None,
+            console_sink: None,
         }
     }
 }
@@ -218,6 +259,28 @@ impl GlobalSecurityConfig {
     /// True when registration calls are being recorded rather than applied.
     fn is_dry_run(&self) -> bool {
         self.dry_run_sink.is_some()
+    }
+
+    /// Record one `console` line if this context is capturing.
+    fn capture_console(&self, level: &str, message: &str) {
+        let Some(sink) = self.console_sink.as_ref() else {
+            return;
+        };
+        let Ok(mut capture) = sink.lock() else {
+            return;
+        };
+        if capture.lines.len() >= MAX_CAPTURED_CONSOLE_LINES {
+            capture.dropped += 1;
+            return;
+        }
+        capture.lines.push(ConsoleLine {
+            level: level.to_string(),
+            message: message.to_string(),
+            timestamp_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|since| since.as_millis() as u64)
+                .unwrap_or_default(),
+        });
     }
 }
 
@@ -372,6 +435,11 @@ impl SecureGlobalContext {
                     message_len = message.len(),
                     "Secure writeLog called"
                 );
+
+                // Capture before the repository write, and independently of it:
+                // the write joins the caller's transaction and disappears with
+                // it on a rollback, which is the case capture exists for.
+                config_write.capture_console(&level, &message);
 
                 // Call actual repository function
                 repository::insert_log_message(&script_uri_write, &message, &level);
@@ -4566,6 +4634,7 @@ fn execute_message_handler(
             registration_phase: false,
             enable_audit_logging: false,
             dry_run_sink: None,
+            console_sink: None,
         };
 
         let secure_context = SecureGlobalContext::new_with_config(user_context, security_config);
@@ -4807,6 +4876,7 @@ mod api_surface_tests {
                 registration_phase: false,
                 enable_audit_logging: false,
                 dry_run_sink: None,
+                console_sink: None,
             };
             let context =
                 SecureGlobalContext::new_with_config(UserContext::admin("t".into()), config);

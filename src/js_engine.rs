@@ -15,8 +15,8 @@ use crate::security::UserContext;
 
 // Use the enhanced secure globals implementation
 use crate::security::secure_globals::{
-    CollectedRegistration, GlobalSecurityConfig, RegistrationKind, RegistrationSink,
-    SecureGlobalContext,
+    CollectedRegistration, ConsoleLine, ConsoleSink, GlobalSecurityConfig, RegistrationKind,
+    RegistrationSink, SecureGlobalContext,
 };
 
 // Type alias for route registrations map
@@ -192,6 +192,8 @@ pub enum HandlerInvocationKind {
     Scheduled,
     McpTool,
     Test,
+    /// An ad hoc snippet run against a script's sandbox by `/engine/eval`.
+    Eval,
 }
 
 impl HandlerInvocationKind {
@@ -206,6 +208,7 @@ impl HandlerInvocationKind {
             HandlerInvocationKind::Scheduled => "scheduled",
             HandlerInvocationKind::McpTool => "mcpTool",
             HandlerInvocationKind::Test => "test",
+            HandlerInvocationKind::Eval => "eval",
         }
     }
 }
@@ -832,6 +835,7 @@ pub fn execute_script_secure(
                         enable_audit_logging: false, // Disable for startup to reduce noise
                         // Startup registers for real; nothing to withhold.
                         dry_run_sink: None,
+                        console_sink: None,
                     };
 
                     // Create the register function that captures registrations
@@ -1718,6 +1722,7 @@ fn run_test_module<'js>(
         registration_phase: false,
         enable_audit_logging: false,
         dry_run_sink: None,
+        console_sink: None,
     };
 
     setup_secure_global_functions(
@@ -2312,6 +2317,323 @@ pub fn execute_stream_customization_function(
     Ok(filter_criteria)
 }
 
+/// What to evaluate, and under which budget.
+pub struct EvalParams {
+    pub script_uri: String,
+    /// The snippet. Evaluated after the script's own program, in the same
+    /// context, so it sees what that program defined.
+    pub source: String,
+    /// The identity the snippet runs as. The *caller's*, not the engine's — an
+    /// evaluation is the caller executing code in a sandbox they may already
+    /// write to, so it must not hand them capabilities they do not have. This
+    /// is where an evaluation differs from `init()`, which a deploy runs as an
+    /// administrator by definition.
+    pub user_context: UserContext,
+    pub timeout_ms: u64,
+    /// Roll back the database writes the snippet makes. On by default.
+    pub rollback: bool,
+}
+
+/// What one evaluation produced.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvalOutcome {
+    /// The snippet's value, run through `JSON.stringify` and re-parsed.
+    ///
+    /// Absent when the value has no JSON form — `undefined`, a function, a
+    /// symbol — which `value_type` tells apart from a value that really was
+    /// `null`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<serde_json::Value>,
+    /// The value's kind, always reported: `undefined`, `null`, `boolean`,
+    /// `number`, `string`, `symbol`, `function`, `array` or `object`.
+    ///
+    /// `undefined` and `null` are indistinguishable in `value` alone — the
+    /// first is absent, the second is a JSON null — and telling them apart is
+    /// usually the whole question.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value_type: Option<String>,
+    /// Why the value could not be serialized, when it could not — a circular
+    /// structure, most often.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value_error: Option<String>,
+    /// Everything the snippet and the script's program wrote through `console`.
+    pub console: Vec<ConsoleLine>,
+    /// Lines dropped after [`MAX_CAPTURED_CONSOLE_LINES`], so a truncated
+    /// capture is never mistaken for the whole of it.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub console_dropped: usize,
+    pub duration_ms: u64,
+    /// Whether the run's transaction was rolled back. False when the caller
+    /// asked for no rollback *and* when the snippet committed the transaction
+    /// itself — this reports what happened, not what was requested.
+    pub rolled_back: bool,
+    /// The failure, when the snippet threw or ran out of budget.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+fn is_zero(value: &usize) -> bool {
+    *value == 0
+}
+
+/// Evaluate `source` against `script_uri`'s program, capturing its output.
+///
+/// The script's prepared program is evaluated first, in the same context, so
+/// the snippet sees what it defined: the script's own functions, the bindings
+/// its entrypoint imported (the linker rewrites those into top-level
+/// declarations), and `__asset_module_require__` for reaching a module the
+/// entrypoint never exposed. Compilation uses `JS_EVAL_TYPE_GLOBAL`, which is
+/// what puts those declarations in the realm rather than in a module scope.
+///
+/// Registrations do not take effect (`registration_phase: false`), for the
+/// reason a test run does not either: a route or job registered here would
+/// outlive the request and nothing would undo it.
+///
+/// Must run on a blocking thread — the isolating transaction is thread-local.
+pub fn evaluate_snippet(params: &EvalParams) -> EvalOutcome {
+    let started = Instant::now();
+
+    macro_rules! fail_early {
+        ($error:expr) => {
+            return EvalOutcome {
+                duration_ms: started.elapsed().as_millis() as u64,
+                error: Some($error),
+                ..EvalOutcome::default()
+            }
+        };
+    }
+
+    let Some(content) = repository::fetch_script(&params.script_uri) else {
+        fail_early!(format!("Script '{}' not found", params.script_uri));
+    };
+
+    // Bundle before arming the interrupt deadline, as every other entry point
+    // does: on a cold cache this fetches and transpiles every module the script
+    // imports, which must not be charged to the budget meant for the snippet.
+    let prepared = match module_loader::prepare_executable_program(&params.script_uri, &content) {
+        Ok(prepared) => prepared,
+        Err(e) => fail_early!(format!("Failed to bundle script: {}", e)),
+    };
+
+    let limits = ExecutionLimits {
+        timeout_ms: params.timeout_ms,
+        ..current_execution_limits()
+    };
+
+    let rt = match create_sandboxed_runtime(&limits) {
+        Ok(rt) => rt,
+        Err(e) => fail_early!(e),
+    };
+    let ctx = match Context::full(&rt) {
+        Ok(ctx) => ctx,
+        Err(e) => fail_early!(format!("Failed to create context: {}", e)),
+    };
+
+    let console: ConsoleSink = std::sync::Arc::new(std::sync::Mutex::new(
+        crate::security::secure_globals::ConsoleCapture::default(),
+    ));
+
+    // Held for the whole evaluation and never committed: `TransactionGuard`
+    // rolls back when it drops, including on an early return.
+    let rollback_guard = if params.rollback {
+        match crate::database::Database::begin_transaction(Some(params.timeout_ms)) {
+            Ok(guard) => Some(guard),
+            Err(e) => fail_early!(format!(
+                "could not isolate the evaluation in a transaction: {}",
+                e
+            )),
+        }
+    } else {
+        None
+    };
+
+    let mut outcome = ctx.with(|ctx| run_snippet(ctx, params, &prepared.code, &console));
+
+    // A snippet that called `database.commitTransaction()` itself has already
+    // committed the guard's transaction, so the guard has nothing left to roll
+    // back. Report what is true rather than echoing the request.
+    let still_open = crate::database::get_current_transaction_active();
+    outcome.rolled_back = rollback_guard.is_some() && still_open;
+    drop(rollback_guard);
+
+    if let Ok(capture) = console.lock() {
+        outcome.console = capture.lines.clone();
+        outcome.console_dropped = capture.dropped;
+    }
+    outcome.duration_ms = started.elapsed().as_millis() as u64;
+
+    // Context must drop before the runtime (see `ensure_clean_shutdown`).
+    drop(ctx);
+    drop(rt);
+    outcome
+}
+
+/// Install the globals, load the script's program, and evaluate the snippet.
+///
+/// Split out so the context lifetime has a name, as `run_test_module` is.
+fn run_snippet(
+    ctx: rquickjs::Ctx<'_>,
+    params: &EvalParams,
+    program: &str,
+    console: &ConsoleSink,
+) -> EvalOutcome {
+    let security_config = GlobalSecurityConfig {
+        // Same rule as a test run: the APIs stay callable and report that they
+        // did nothing, rather than installing registrations that outlive the
+        // request with no rollback to undo them.
+        registration_phase: false,
+        enable_audit_logging: false,
+        dry_run_sink: None,
+        console_sink: Some(std::sync::Arc::clone(console)),
+    };
+
+    let mut outcome = EvalOutcome::default();
+
+    if let Err(e) = setup_secure_global_functions(
+        &ctx,
+        &params.script_uri,
+        params.user_context.clone(),
+        &security_config,
+        None,
+        None,
+    ) {
+        outcome.error = Some(format!(
+            "install globals: {}",
+            extract_error_details(&ctx, &e)
+        ));
+        return outcome;
+    }
+
+    match JsHandlerContextBuilder::new(HandlerInvocationKind::Eval)
+        .with_script_metadata(params.script_uri.clone(), "eval")
+        .build(&ctx)
+    {
+        // Set before the program runs: its top level can already reach for
+        // `context`, exactly as a test module's can.
+        Ok(handler_context) => {
+            if let Err(e) = ctx.globals().set("context", handler_context) {
+                outcome.error = Some(format!("set context global: {}", e));
+                return outcome;
+            }
+        }
+        Err(e) => {
+            outcome.error = Some(format!("build context: {}", e));
+            return outcome;
+        }
+    }
+
+    if let Err(e) = crate::bytecode::eval_program(&ctx, &params.script_uri, program) {
+        outcome.error = Some(format!(
+            "the script's own program failed to load: {}",
+            extract_error_details(&ctx, &e)
+        ));
+        return outcome;
+    }
+
+    // The snippet is compiled fresh every time and deliberately not cached: it
+    // is different on essentially every call, and caching it would evict the
+    // script programs the cache exists for.
+    let value = match ctx.eval::<rquickjs::Value, _>(params.source.as_bytes()) {
+        Ok(value) => value,
+        Err(e) => {
+            outcome.error = Some(extract_error_details(&ctx, &e));
+            return outcome;
+        }
+    };
+
+    outcome.value_type = Some(js_type_of(&value));
+
+    // Scripts run synchronously — host calls block rather than yielding — so a
+    // snippet that returns a promise would never settle. Say so, rather than
+    // reporting the opaque object the caller did not mean to ask for.
+    if is_thenable(&value) {
+        outcome.error = Some(
+            "The snippet returned a promise. Scripts run synchronously here — host calls \
+             like fetch() and database queries block rather than yielding — so it will never \
+             settle. Drop the async/await."
+                .to_string(),
+        );
+        return outcome;
+    }
+
+    match json_stringify(&ctx, &value) {
+        // `JSON.stringify` yields no string at all for `undefined`, a function
+        // or a symbol. That is not an error: `valueType` already said what it
+        // was, and forcing a null here would claim the snippet returned one.
+        Ok(None) => {}
+        Ok(Some(json)) => match serde_json::from_str(&json) {
+            Ok(parsed) => outcome.value = Some(parsed),
+            Err(e) => outcome.value_error = Some(format!("value is not valid JSON: {}", e)),
+        },
+        Err(e) => {
+            outcome.value_error = Some(format!(
+                "value could not be serialized (a circular structure, most likely): {}",
+                e
+            ));
+        }
+    }
+
+    outcome
+}
+
+/// The value's kind, as JavaScript names it.
+///
+/// Close to `typeof`, with the two deviations that make it useful in a report:
+/// `null` and `array` are named rather than both collapsing into `"object"`.
+/// Built from the predicates rather than the runtime's own type enum, which
+/// splits `number` into int and float — an engine-internal distinction that
+/// would only puzzle the reader.
+fn js_type_of(value: &rquickjs::Value<'_>) -> String {
+    if value.is_undefined() {
+        "undefined"
+    } else if value.is_null() {
+        "null"
+    } else if value.is_bool() {
+        "boolean"
+    } else if value.is_number() {
+        "number"
+    } else if value.is_string() {
+        "string"
+    } else if value.is_symbol() {
+        "symbol"
+    } else if value.is_function() {
+        "function"
+    } else if value.is_array() {
+        "array"
+    } else if value.is_object() {
+        "object"
+    } else {
+        // BigInt and anything the runtime adds later.
+        return format!("{:?}", value.type_of()).to_lowercase();
+    }
+    .to_string()
+}
+
+fn is_thenable(value: &rquickjs::Value<'_>) -> bool {
+    value
+        .as_object()
+        .and_then(|object| object.get::<_, rquickjs::Value>("then").ok())
+        .is_some_and(|then| then.is_function())
+}
+
+/// `JSON.stringify(value)`, or `None` where it yields nothing.
+fn json_stringify<'js>(
+    ctx: &rquickjs::Ctx<'js>,
+    value: &rquickjs::Value<'js>,
+) -> Result<Option<String>, String> {
+    let json: rquickjs::Object<'js> = ctx
+        .globals()
+        .get("JSON")
+        .map_err(|e| format!("JSON global missing: {}", e))?;
+    let stringify: Function<'js> = json
+        .get("stringify")
+        .map_err(|e| format!("JSON.stringify missing: {}", e))?;
+    stringify
+        .call::<_, Option<String>>((value.clone(),))
+        .map_err(|e| extract_error_details(ctx, &e))
+}
+
 /// A failed init() attempt, carrying whatever the script managed to register
 /// before it failed.
 #[derive(Debug, Clone)]
@@ -2565,6 +2887,9 @@ fn run_registration_pass(
                 registration_phase: true,
                 enable_audit_logging: false,
                 dry_run_sink: dry_run_sink.clone(),
+                // A check reports diagnostics, not output; console writes go to
+                // the script's log as they would on a deploy.
+                console_sink: None,
             };
 
             // Create the register function that captures registrations

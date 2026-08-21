@@ -1772,6 +1772,174 @@ pub async fn check_route(
 }
 
 #[derive(Deserialize, Default)]
+pub struct EvalParams {
+    uri: Option<String>,
+    rollback: Option<bool>,
+    timeout_ms: Option<u64>,
+}
+
+/// A JSON evaluation request body.
+#[derive(Deserialize, Default)]
+struct EvalBody {
+    uri: Option<String>,
+    source: Option<String>,
+    rollback: Option<bool>,
+    timeout_ms: Option<u64>,
+}
+
+/// Whether `user` may evaluate a snippet against `uri`.
+///
+/// The same bar as a test run, because it is the same act: caller-authored
+/// JavaScript executed in the script's sandbox with the caller's own
+/// capabilities. Anything looser would let someone with read access run
+/// arbitrary code as themselves.
+pub fn authorize_eval(user: &UserContext, uri: &str) -> Result<(), CheckRefusal> {
+    if repository::fetch_script(uri).is_none() {
+        return Err(CheckRefusal::NotFound);
+    }
+    if user.require_capability(&Capability::WriteScripts).is_err() {
+        return Err(CheckRefusal::AccessDenied);
+    }
+    let is_admin = user.has_capability(&Capability::DeleteScripts);
+    if !is_admin && !user_owns_script(user, uri) {
+        warn!(
+            user_id = ?user.user_id,
+            script_name = %uri,
+            "Permission denied: only an administrator or owner may evaluate against a script"
+        );
+        return Err(CheckRefusal::AccessDenied);
+    }
+    Ok(())
+}
+
+/// Evaluate a snippet against a script's sandbox.
+#[utoipa::path(
+    post,
+    path = "/engine/eval",
+    tags = ["Scripts"],
+    params(
+        ("uri" = String, Query, description = "URI of the script whose sandbox to evaluate in"),
+        ("rollback" = Option<bool>, Query, description = "Roll back the database writes the snippet makes (default true)"),
+        ("timeout_ms" = Option<u64>, Query, description = "Budget for the evaluation, clamped to the engine's execution timeout"),
+    ),
+    request_body(
+        description = "The snippet. Send it as `application/json` (`{uri, source, rollback, timeoutMs}`) \
+                       or as a raw body under any other content type.",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Evaluation report; `ok` is false when the snippet threw"),
+        (status = 400, description = "Missing required parameter"),
+        (status = 403, description = "Not an administrator or owner of the script"),
+        (status = 404, description = "Script not found"),
+    )
+)]
+pub async fn eval_route(
+    auth_user: Option<Extension<AuthUser>>,
+    headers: axum::http::HeaderMap,
+    Query(query): Query<EvalParams>,
+    body: axum::body::Bytes,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+
+    // Same rule as `/engine/check`: a snippet is source text, so only the
+    // content type can say whether the body is a request envelope or the code
+    // itself. Raw is the common case — `--data 'someHelper(1)'`.
+    let is_json = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("application/json"));
+
+    let parsed: EvalBody = if body.is_empty() {
+        EvalBody::default()
+    } else if is_json {
+        match serde_json::from_slice(&body) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    format!("Invalid JSON body: {}", e),
+                );
+            }
+        }
+    } else {
+        match String::from_utf8(body.to_vec()) {
+            Ok(source) => EvalBody {
+                source: Some(source),
+                ..EvalBody::default()
+            },
+            Err(_) => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "Request body is not valid UTF-8 source text".to_string(),
+                );
+            }
+        }
+    };
+
+    let Some(uri) = parsed.uri.or(query.uri) else {
+        return missing_param_response("uri");
+    };
+    let Some(source) = parsed.source.filter(|source| !source.trim().is_empty()) else {
+        return missing_param_response("source");
+    };
+    let rollback = parsed.rollback.or(query.rollback).unwrap_or(true);
+    let timeout_ms = parsed.timeout_ms.or(query.timeout_ms);
+
+    let user_for_auth = user.clone();
+    let uri_for_auth = uri.clone();
+    let authorized =
+        tokio::task::spawn_blocking(move || authorize_eval(&user_for_auth, &uri_for_auth)).await;
+
+    match authorized {
+        Ok(Ok(())) => {}
+        Ok(Err(CheckRefusal::NotFound)) => {
+            return json_response(
+                StatusCode::NOT_FOUND,
+                json!({
+                    "error": "Script not found",
+                    "uri": uri,
+                    "timestamp": iso_timestamp(),
+                }),
+            );
+        }
+        Ok(Err(CheckRefusal::AccessDenied)) => {
+            return error_response(
+                StatusCode::FORBIDDEN,
+                format!(
+                    "Error: Permission denied. You must be an administrator or owner to evaluate against script '{}'",
+                    uri
+                ),
+            );
+        }
+        Err(e) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to authorize evaluation: join error: {}", e),
+            );
+        }
+    }
+
+    let report = crate::script_eval::ScriptEvaluator::run(crate::script_eval::EvalRequest {
+        script_uri: uri,
+        source,
+        user_context: user,
+        timeout_ms,
+        rollback,
+    })
+    .await;
+
+    let mut body = report.to_json();
+    if let Some(object) = body.as_object_mut() {
+        object.insert("timestamp".to_string(), json!(iso_timestamp()));
+    }
+
+    // A snippet that threw is a report, not a failed request — the caller asked
+    // what the code does, and "it throws" is the answer.
+    json_response(StatusCode::OK, body)
+}
+
+#[derive(Deserialize, Default)]
 pub struct RoutesParams {
     host: Option<String>,
 }
@@ -4091,6 +4259,33 @@ fn native_tools() -> &'static [NativeToolEntry] {
             },
             tool_check_script,
         ),
+        (
+            "eval_script",
+            "Evaluate a JavaScript snippet against a deployed script's sandbox and return its              value plus everything it logged. The script's own program is loaded first, so the              snippet can call its functions, use the bindings its entrypoint imported, and reach              any module through __asset_module_require__(path). Use this to inspect data or try              an expression without authoring, deploying and deleting a throwaway test. Database              writes roll back by default; registrations do nothing. Requires the user to own the              script or be an administrator.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "uri": { "type": "string", "description": "URI of the script whose sandbox to evaluate in" },
+                        "source": {
+                            "type": "string",
+                            "description": "The snippet. Its last expression is the returned value; scripts run synchronously, so do not use async/await."
+                        },
+                        "rollback": {
+                            "type": "boolean",
+                            "description": "Roll back the database writes the snippet makes (default true)",
+                            "default": true
+                        },
+                        "timeoutMs": {
+                            "type": "integer",
+                            "description": "Budget for the evaluation, clamped to the engine's execution timeout"
+                        }
+                    },
+                    "required": ["uri", "source"]
+                })
+            },
+            tool_eval_script,
+        ),
     ]
 }
 
@@ -4128,6 +4323,54 @@ pub fn execute_native_mcp_tool(
         .find(|(name, _, _, _)| *name == tool_name)
         .map(|(_, _, _, handler)| *handler)?;
     Some(handler(arguments, user_context))
+}
+
+/// Evaluate a snippet and return the same report the REST endpoint serves.
+///
+/// Runs on the blocking pool, like every native tool — which is also what the
+/// isolating transaction needs, being thread-local.
+fn tool_eval_script(args: &Value, user: &UserContext) -> Value {
+    let Some(uri) = arg_str(args, "uri") else {
+        return missing_arg("uri");
+    };
+    let Some(source) = arg_str(args, "source").filter(|source| !source.trim().is_empty()) else {
+        return missing_arg("source");
+    };
+
+    match authorize_eval(user, uri) {
+        Ok(()) => {}
+        Err(CheckRefusal::NotFound) => {
+            return json!({ "error": format!("Script not found: {}", uri) });
+        }
+        Err(CheckRefusal::AccessDenied) => {
+            return json!({
+                "error": format!(
+                    "Permission denied. You must be an administrator or owner to evaluate against script '{}'",
+                    uri
+                )
+            });
+        }
+    }
+
+    let rollback = args
+        .get("rollback")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let timeout_ms = args.get("timeoutMs").and_then(Value::as_u64);
+
+    let report = crate::script_eval::eval_blocking(crate::script_eval::EvalRequest {
+        script_uri: uri.to_string(),
+        source: source.to_string(),
+        user_context: user.clone(),
+        timeout_ms,
+        rollback,
+    });
+
+    let mut body = report.to_json();
+    if let Some(object) = body.as_object_mut() {
+        object.insert("timestamp".to_string(), json!(iso_timestamp()));
+    }
+    body
 }
 
 /// Check a script and return the same report the REST endpoint serves.
