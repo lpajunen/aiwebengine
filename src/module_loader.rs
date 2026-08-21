@@ -2,7 +2,7 @@ use crate::repository;
 use crate::transpiler;
 use regex::Regex;
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Component, Path};
 use std::sync::{Arc, Mutex, OnceLock};
 use tracing::debug;
@@ -135,6 +135,13 @@ pub fn clear() {
 pub enum ModuleLoaderError {
     InvalidSpecifier(String),
     UnsupportedImport(String),
+    /// An import chain that leads back to a module already being compiled.
+    ///
+    /// Separate from [`ModuleLoaderError::UnsupportedImport`] because it is the
+    /// one bundling failure a solution developer's own toolchain cannot see:
+    /// `tsc` resolves a cycle happily, and only the engine's linker rejects it.
+    /// Callers that report diagnostics classify on this variant.
+    CircularImport(String),
     Transpilation(String),
 }
 
@@ -143,6 +150,7 @@ impl std::fmt::Display for ModuleLoaderError {
         match self {
             ModuleLoaderError::InvalidSpecifier(message)
             | ModuleLoaderError::UnsupportedImport(message)
+            | ModuleLoaderError::CircularImport(message)
             | ModuleLoaderError::Transpilation(message) => write!(f, "{}", message),
         }
     }
@@ -332,7 +340,14 @@ struct ModuleLinker<'a> {
     root_script_uri: &'a str,
     compiled_modules: HashMap<String, String>,
     module_order: Vec<String>,
-    visiting: HashSet<String>,
+    /// The chain of modules currently being compiled, outermost first.
+    ///
+    /// A stack rather than a set: membership is what detects a cycle, but the
+    /// *order* is what lets the error name the whole chain
+    /// (`a.ts -> b.ts -> a.ts`) instead of only the module the cycle closed on.
+    /// Chains are short — the depth of one import path — so the linear
+    /// membership scan costs less than maintaining a second index.
+    visiting: Vec<String>,
 }
 
 impl<'a> ModuleLinker<'a> {
@@ -341,7 +356,7 @@ impl<'a> ModuleLinker<'a> {
             root_script_uri,
             compiled_modules: HashMap::new(),
             module_order: Vec::new(),
-            visiting: HashSet::new(),
+            visiting: Vec::new(),
         }
     }
 
@@ -351,7 +366,16 @@ impl<'a> ModuleLinker<'a> {
         root_content: &str,
     ) -> Result<String, ModuleLoaderError> {
         let transformed = transform_module_source(root_content, root_path, true)?;
-        self.resolve_dependencies(root_path, &transformed)?;
+        // The root belongs on the stack for the same reason every other module
+        // does. Without it, a dependency importing the root back is not seen as
+        // a cycle here: the root is not in `compiled_modules` either, so it gets
+        // fetched and compiled a second time as if it were an ordinary asset,
+        // and the cycle is only reported one level deeper, naming the wrong
+        // module.
+        self.visiting.push(root_path.to_string());
+        let resolved = self.resolve_dependencies(root_path, &transformed);
+        self.visiting.pop();
+        resolved?;
 
         transpiler::transpile_if_needed(root_path, &transformed.code).map_err(|error| {
             ModuleLoaderError::Transpilation(format!(
@@ -370,34 +394,47 @@ impl<'a> ModuleLinker<'a> {
             return Ok(());
         }
 
-        if !self.visiting.insert(module_path.to_string()) {
-            return Err(ModuleLoaderError::UnsupportedImport(format!(
-                "Circular asset-backed module import detected at '{}'",
-                module_path
-            )));
+        self.visiting.push(module_path.to_string());
+        let transformed = match transform_module_source(&module_source.content, module_path, false)
+        {
+            Ok(transformed) => transformed,
+            Err(error) => {
+                self.visiting.pop();
+                return Err(error);
+            }
+        };
+        if let Err(error) = self.resolve_dependencies(module_path, &transformed) {
+            self.visiting.pop();
+            return Err(error);
         }
 
-        let transformed = transform_module_source(&module_source.content, module_path, false)?;
-        self.resolve_dependencies(module_path, &transformed)?;
-
         let compiled = if module_path.ends_with(".json") {
-            transform_json_module(&module_source.content, module_path)?
+            transform_json_module(&module_source.content, module_path)
         } else {
-            let transpiled = transpiler::transpile_if_needed(module_path, &transformed.code)
+            transpiler::transpile_if_needed(module_path, &transformed.code)
                 .map_err(|error| {
                     ModuleLoaderError::Transpilation(format!(
                         "Failed transpiling asset module '{}': {}\nTransformed module source:\n{}",
                         module_path, error, transformed.code
                     ))
-                })?;
-            if transformed.export_footer.is_empty() {
-                transpiled
-            } else {
-                format!("{}\n{}", transpiled, transformed.export_footer.join("\n"))
+                })
+                .map(|transpiled| {
+                    if transformed.export_footer.is_empty() {
+                        transpiled
+                    } else {
+                        format!("{}\n{}", transpiled, transformed.export_footer.join("\n"))
+                    }
+                })
+        };
+        let compiled = match compiled {
+            Ok(compiled) => compiled,
+            Err(error) => {
+                self.visiting.pop();
+                return Err(error);
             }
         };
 
-        self.visiting.remove(module_path);
+        self.visiting.pop();
         self.compiled_modules
             .insert(module_path.to_string(), compiled);
         self.module_order.push(module_path.to_string());
@@ -414,6 +451,13 @@ impl<'a> ModuleLinker<'a> {
                 continue;
             }
 
+            // Before the fetch, not after: a module already on the stack has no
+            // asset to load in the cycle-through-the-root case, so loading first
+            // would report "asset not found" for what is really a cycle.
+            if let Some(chain) = self.cycle_through(dependency) {
+                return Err(ModuleLoaderError::CircularImport(chain));
+            }
+
             let asset_source = load_owned_asset_module_by_path(
                 self.root_script_uri,
                 dependency,
@@ -424,6 +468,22 @@ impl<'a> ModuleLinker<'a> {
         }
 
         Ok(())
+    }
+
+    /// The import chain that closes on `dependency`, or `None` when importing
+    /// it opens no cycle.
+    ///
+    /// Rendered from the point the cycle starts, so the message shows the loop
+    /// itself rather than the whole path from the root:
+    /// `server/a.ts -> server/b.ts -> server/a.ts`.
+    fn cycle_through(&self, dependency: &str) -> Option<String> {
+        let start = self.visiting.iter().position(|path| path == dependency)?;
+        let mut chain: Vec<&str> = self.visiting[start..].iter().map(String::as_str).collect();
+        chain.push(dependency);
+        Some(format!(
+            "Circular asset-backed module import: {}",
+            chain.join(" -> ")
+        ))
     }
 }
 
