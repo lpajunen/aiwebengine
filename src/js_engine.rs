@@ -2531,10 +2531,34 @@ fn run_snippet(
         return outcome;
     }
 
+    // The bundler's module lookup is an implementation detail with an
+    // implementation detail's name. Alias it so a snippet has something
+    // reasonable to call, for the cases `import` cannot express — reaching a
+    // module by a path computed at run time, say.
+    install_require_alias(&ctx);
+
+    // Rewrite the snippet's imports the way every module's are rewritten, so
+    // `import` means in a snippet exactly what it means in the script.
+    let snippet = match module_loader::prepare_snippet(&params.script_uri, &params.source) {
+        Ok(snippet) => snippet,
+        Err(e) => {
+            outcome.error = Some(e.to_string());
+            return outcome;
+        }
+    };
+
+    // Check the imports against the graph before running, so a path that is not
+    // in the bundle is reported as what it is rather than as an unknown module
+    // thrown from inside the prelude.
+    if let Some(error) = unresolvable_imports(&ctx, &snippet.dependencies) {
+        outcome.error = Some(error);
+        return outcome;
+    }
+
     // The snippet is compiled fresh every time and deliberately not cached: it
     // is different on essentially every call, and caching it would evict the
     // script programs the cache exists for.
-    let value = match ctx.eval::<rquickjs::Value, _>(params.source.as_bytes()) {
+    let value = match ctx.eval::<rquickjs::Value, _>(snippet.code.as_bytes()) {
         Ok(value) => value,
         Err(e) => {
             outcome.error = Some(extract_error_details(&ctx, &e));
@@ -2575,6 +2599,73 @@ fn run_snippet(
     }
 
     outcome
+}
+
+/// Give the snippet a `require()` for the bundler's module table.
+///
+/// Absent when the script imports nothing: the bundle only emits its module
+/// prelude for a program that has modules, so there is nothing to alias and
+/// nothing to import either.
+fn install_require_alias(ctx: &rquickjs::Ctx<'_>) {
+    let _ = ctx.eval::<(), _>(
+        r#"
+        if (typeof __asset_module_require__ === "function" && typeof globalThis.require !== "function") {
+            globalThis.require = __asset_module_require__;
+        }
+        "#,
+    );
+}
+
+/// Module paths the bundle holds, or an empty list when it has no modules.
+fn bundled_module_paths(ctx: &rquickjs::Ctx<'_>) -> Vec<String> {
+    ctx.eval::<Vec<String>, _>(
+        r#"
+        typeof __asset_module_factories__ === "object"
+            ? Object.keys(__asset_module_factories__)
+            : []
+        "#,
+    )
+    .unwrap_or_default()
+}
+
+/// Explain any import the bundle cannot satisfy, or `None` when all resolve.
+///
+/// The bundle holds every module reachable from the entrypoint, so a path that
+/// is missing is one nothing the script imports leads to — dead code, or a
+/// typo. Listing what *is* there turns the second case into a one-line fix.
+fn unresolvable_imports(ctx: &rquickjs::Ctx<'_>, dependencies: &[String]) -> Option<String> {
+    if dependencies.is_empty() {
+        return None;
+    }
+
+    let available = bundled_module_paths(ctx);
+    let missing: Vec<&str> = dependencies
+        .iter()
+        .filter(|dependency| !available.contains(dependency))
+        .map(String::as_str)
+        .collect();
+
+    if missing.is_empty() {
+        return None;
+    }
+
+    let available_list = if available.is_empty() {
+        "this script imports no modules at all".to_string()
+    } else {
+        format!("importable here: {}", available.join(", "))
+    };
+
+    Some(format!(
+        "Cannot import {} - not part of this script's module graph. A snippet can import any \
+         module the script's entrypoint reaches, directly or through another module; one it \
+         never reaches is not in the bundle. {}.",
+        missing
+            .iter()
+            .map(|path| format!("'{}'", path))
+            .collect::<Vec<_>>()
+            .join(", "),
+        available_list
+    ))
 }
 
 /// The value's kind, as JavaScript names it.

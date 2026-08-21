@@ -581,3 +581,182 @@ async fn the_eval_tool_is_advertised_and_dispatches_over_mcp() {
     assert_eq!(result["ok"], json!(true), "{}", result);
     assert_eq!(result["value"], json!(42));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_snippet_can_import_a_module_the_entrypoint_imports() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://eval/import-direct";
+    deploy_with_assets(
+        uri,
+        r#"
+        import { total } from "./eval_import/basket.ts";
+        function init() { console.log(total([])); }
+        "#,
+        &[(
+            "eval_import/basket.ts",
+            "export function total(items) { return items.reduce((n, i) => n + i.cents, 0); }",
+        )],
+    );
+
+    let report = eval(
+        uri,
+        r#"
+        import { total } from "./eval_import/basket.ts";
+        total([{ cents: 300 }, { cents: 45 }]);
+        "#,
+    );
+
+    assert!(report.ok, "{:?}", report.outcome.error);
+    assert_eq!(report.outcome.value, Some(json!(345)));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_one_line_snippet_import_works() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    // The shape that actually gets typed into a request body.
+    let uri = "test://eval/import-oneline";
+    deploy_with_assets(
+        uri,
+        r#"
+        import { double } from "./eval_oneline/math.ts";
+        function init() { console.log(double(1)); }
+        "#,
+        &[(
+            "eval_oneline/math.ts",
+            "export function double(n) { return n * 2; }",
+        )],
+    );
+
+    let report = eval(
+        uri,
+        r#"import { double } from "./eval_oneline/math.ts"; double(21)"#,
+    );
+
+    assert!(report.ok, "{:?}", report.outcome.error);
+    assert_eq!(report.outcome.value, Some(json!(42)));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_snippet_can_import_a_module_only_reached_through_another() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    // The entrypoint never names `deep.ts`; it reaches it through `mid.ts`.
+    // The bundle is the transitive closure, so a snippet can import it — which
+    // is what makes "importable" mean "part of the running application" rather
+    // than "named by the entrypoint".
+    let uri = "test://eval/import-transitive";
+    deploy_with_assets(
+        uri,
+        r#"
+        import { mid } from "./eval_deep/mid.ts";
+        function init() { console.log(mid()); }
+        "#,
+        &[
+            (
+                "eval_deep/mid.ts",
+                "import { deep } from \"./deep.ts\";\nexport function mid() { return deep() + 1; }",
+            ),
+            ("eval_deep/deep.ts", "export function deep() { return 41; }"),
+        ],
+    );
+
+    let report = eval(uri, r#"import { deep } from "./eval_deep/deep.ts"; deep()"#);
+
+    assert!(report.ok, "{:?}", report.outcome.error);
+    assert_eq!(report.outcome.value, Some(json!(41)));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn importing_a_module_outside_the_graph_says_what_is_importable() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://eval/import-missing";
+    deploy_with_assets(
+        uri,
+        r#"
+        import { used } from "./eval_missing/used.ts";
+        function init() { console.log(used); }
+        "#,
+        &[
+            ("eval_missing/used.ts", "export const used = 1;"),
+            (
+                "eval_missing/orphan.ts",
+                "export function orphan() { return 1; }",
+            ),
+        ],
+    );
+
+    let report = eval(
+        uri,
+        r#"import { orphan } from "./eval_missing/orphan.ts"; orphan()"#,
+    );
+
+    assert!(!report.ok);
+    let error = report.outcome.error.as_deref().unwrap_or_default();
+    assert!(error.contains("eval_missing/orphan.ts"), "{}", error);
+    assert!(error.contains("module graph"), "{}", error);
+    // Naming what *is* importable turns a typo into a one-line fix.
+    assert!(error.contains("eval_missing/used.ts"), "{}", error);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn require_is_available_as_an_alias() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://eval/require-alias";
+    deploy_with_assets(
+        uri,
+        r#"
+        import { value } from "./eval_alias/mod.ts";
+        function init() { console.log(value); }
+        "#,
+        &[("eval_alias/mod.ts", "export const value = 7;")],
+    );
+
+    let report = eval(uri, r#"require("eval_alias/mod.ts").value"#);
+    assert!(report.ok, "{:?}", report.outcome.error);
+    assert_eq!(report.outcome.value, Some(json!(7)));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unsupported_import_form_names_the_ones_that_work() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://eval/import-namespace";
+    deploy(uri, "function init() {}");
+
+    let report = eval(uri, r#"import * as everything from "./m.ts"; everything.x"#);
+
+    assert!(!report.ok);
+    let error = report.outcome.error.as_deref().unwrap_or_default();
+    assert!(error.contains("import { a, b }"), "{}", error);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_snippet_cannot_export() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://eval/export";
+    deploy(uri, "function init() {}");
+
+    let report = eval(uri, "export const x = 1;");
+    assert!(!report.ok);
+    assert!(
+        report
+            .outcome
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("export syntax")),
+        "{:?}",
+        report.outcome.error
+    );
+}

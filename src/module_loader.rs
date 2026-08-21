@@ -970,6 +970,119 @@ fn contains_dynamic_import(source: &str) -> bool {
     source.contains("import(")
 }
 
+/// A snippet rewritten so it can run against a script's prepared program.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedSnippet {
+    /// The snippet with its imports rewritten into `__asset_module_require__`
+    /// calls. Evaluating this in a context that already holds the script's
+    /// program gives the snippet the same view of the module graph the script
+    /// has.
+    pub code: String,
+    /// Logical paths the snippet imported, in source order, so the caller can
+    /// say which one is missing before the runtime says only that one is.
+    pub dependencies: Vec<String>,
+}
+
+/// Rewrite an ad hoc snippet's imports the way the linker rewrites a module's.
+///
+/// `/engine/eval` runs a snippet against a script's already-evaluated program.
+/// The program was bundled, so its modules live in a factory table rather than
+/// in the module system, and `import` in a snippet is a syntax error — the
+/// snippet is evaluated as a script. Passing it through the same rewrite every
+/// module gets means `import { x } from "./server/m.ts"` resolves by exactly
+/// the engine's rules, against exactly the graph the script itself sees.
+///
+/// This reaches every module the entrypoint imports, transitively — which is
+/// every module the running application uses. A module nothing reaches from the
+/// entrypoint is not in the bundle, and the caller reports that from
+/// [`PreparedSnippet::dependencies`] rather than leaving it to fail as an
+/// unknown module at run time.
+pub fn prepare_snippet(
+    root_script_uri: &str,
+    source: &str,
+) -> Result<PreparedSnippet, ModuleLoaderError> {
+    let root_path = root_module_path(root_script_uri)?;
+    let normalized = split_leading_imports(source);
+    let transformed = transform_module_source(&normalized, &root_path, false)?;
+
+    // A snippet has no module record to export into: `rewrite_exports` emits a
+    // footer assigning to `module.exports`, which is not bound here. Say so
+    // rather than letting it fail as an unbound identifier.
+    if !transformed.export_footer.is_empty() || contains_static_export(&transformed.code) {
+        return Err(ModuleLoaderError::UnsupportedImport(
+            "A snippet cannot use export syntax - it is evaluated for its value, not imported"
+                .to_string(),
+        ));
+    }
+
+    // Anything still starting with `import` is a form the linker does not
+    // rewrite anywhere: namespace imports (`import * as ns`) and side-effect
+    // imports of a non-asset specifier. Left in place it becomes an opaque
+    // syntax error, so name the forms that do work.
+    if let Some(line) = transformed
+        .code
+        .lines()
+        .find(|line| line.trim_start().starts_with("import "))
+    {
+        return Err(ModuleLoaderError::UnsupportedImport(format!(
+            "Unsupported import in snippet: {}. Supported forms are \
+             `import x from \"./m.ts\"`, `import {{ a, b }} from \"./m.ts\"`, \
+             `import x, {{ a }} from \"./m.ts\"` and `import \"./m.ts\"`.",
+            line.trim()
+        )));
+    }
+
+    Ok(PreparedSnippet {
+        // A block, so the snippet's declarations cannot collide with the
+        // program's. The script's top level runs in the same realm, and the
+        // linker turns its imports into top-level `const` bindings — so a
+        // snippet importing the same name the entrypoint already imported,
+        // which is the common case for anything worth poking at, would fail
+        // with `redeclaration of 'x'` and nothing to act on. A block nests
+        // inside the global lexical scope, where shadowing is legal, and a
+        // block's completion value is still its last expression's, so the
+        // caller gets the value it asked for.
+        code: format!("{{\n{}\n}}", transformed.code),
+        dependencies: transformed.dependencies,
+    })
+}
+
+/// Put each leading `import` statement on a line of its own.
+///
+/// The import patterns are line-anchored, because in a module file an import
+/// occupies its whole line. A snippet is typically one line — `import { total }
+/// from "./basket.ts"; total(items)` is exactly what someone types into a
+/// request body — and without this the import is not recognised, survives the
+/// rewrite, and fails as a syntax error naming nothing useful.
+fn split_leading_imports(source: &str) -> String {
+    static PATTERN: OnceLock<Regex> = OnceLock::new();
+    let pattern = PATTERN.get_or_init(|| {
+        Regex::new(
+            r#"^[ \t]*import\s+(?:[A-Za-z_$][\w$]*\s*,\s*)?(?:\{[^}]*\}|[A-Za-z_$][\w$]*)\s+from\s+['"][^'"]+['"]\s*;|^[ \t]*import\s+['"][^'"]+['"]\s*;"#,
+        )
+        .expect("leading import regex should compile")
+    });
+
+    let mut remaining = source;
+    let mut out = String::with_capacity(source.len());
+
+    loop {
+        // Only leading whitespace may precede the next import; once real code
+        // has started, an `import` is not a leading one and is left alone.
+        let offset = remaining.len() - remaining.trim_start().len();
+        let Some(found) = pattern.find(&remaining[offset..]) else {
+            break;
+        };
+        let end = offset + found.end();
+        out.push_str(&remaining[..end]);
+        out.push('\n');
+        remaining = &remaining[end..];
+    }
+
+    out.push_str(remaining);
+    out
+}
+
 fn contains_static_export(source: &str) -> bool {
     source
         .lines()
@@ -979,6 +1092,127 @@ fn contains_static_export(source: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The snippet body inside the scope block `prepare_snippet` wraps it in.
+    fn snippet_body(prepared: &PreparedSnippet) -> String {
+        prepared
+            .code
+            .trim()
+            .trim_start_matches('{')
+            .trim_end_matches('}')
+            .trim()
+            .to_string()
+    }
+
+    #[test]
+    fn a_snippet_import_on_its_own_line_is_rewritten() {
+        let prepared = prepare_snippet(
+            "https://example.com/app",
+            "import { total } from \"./basket.ts\";\ntotal([])",
+        )
+        .expect("a supported import should rewrite");
+        assert!(
+            prepared
+                .code
+                .contains("__asset_module_require__(\"basket.ts\")"),
+            "{}",
+            prepared.code
+        );
+        assert_eq!(prepared.dependencies, vec!["basket.ts".to_string()]);
+        // The value the caller wants must stay the last expression.
+        assert!(
+            snippet_body(&prepared).ends_with("total([])"),
+            "{}",
+            prepared.code
+        );
+    }
+
+    #[test]
+    fn a_one_line_snippet_import_is_rewritten_too() {
+        // The shape someone actually types into a request body.
+        let prepared = prepare_snippet(
+            "https://example.com/app",
+            "import { total } from \"./basket.ts\"; total([{ cents: 1 }])",
+        )
+        .expect("a one-line import should rewrite");
+        assert!(
+            prepared
+                .code
+                .contains("__asset_module_require__(\"basket.ts\")"),
+            "{}",
+            prepared.code
+        );
+        assert!(
+            !prepared.code.contains("import "),
+            "the import must not survive the rewrite: {}",
+            prepared.code
+        );
+        assert!(
+            snippet_body(&prepared).ends_with("total([{ cents: 1 }])"),
+            "{}",
+            prepared.code
+        );
+    }
+
+    #[test]
+    fn several_one_line_snippet_imports_are_split_apart() {
+        let prepared = prepare_snippet(
+            "https://example.com/app",
+            "import a from \"./a.ts\"; import { b } from \"./b.ts\"; a(b)",
+        )
+        .expect("both imports should rewrite");
+        assert_eq!(
+            prepared.dependencies,
+            vec!["a.ts".to_string(), "b.ts".to_string()]
+        );
+        assert!(
+            snippet_body(&prepared).ends_with("a(b)"),
+            "{}",
+            prepared.code
+        );
+    }
+
+    #[test]
+    fn an_import_after_real_code_is_left_alone() {
+        // Not a leading import, so splitting it would change what the snippet
+        // means. It fails as an unsupported form instead.
+        let error = prepare_snippet(
+            "https://example.com/app",
+            "const x = 1;\nimport { b } from \"./b.ts\"; b(x)",
+        )
+        .expect_err("an import after code is not a leading import");
+        assert!(
+            matches!(error, ModuleLoaderError::UnsupportedImport(_)),
+            "{:?}",
+            error
+        );
+    }
+
+    #[test]
+    fn a_snippet_without_imports_is_unchanged() {
+        let prepared = prepare_snippet("https://example.com/app", "1 + 1")
+            .expect("a plain expression is a valid snippet");
+        assert_eq!(snippet_body(&prepared), "1 + 1");
+        assert!(prepared.dependencies.is_empty());
+    }
+
+    #[test]
+    fn a_namespace_import_names_the_forms_that_work() {
+        let error = prepare_snippet(
+            "https://example.com/app",
+            "import * as basket from \"./basket.ts\";\nbasket.total([])",
+        )
+        .expect_err("namespace imports are not supported by the linker");
+        let message = error.to_string();
+        assert!(message.contains("import { a, b }"), "{}", message);
+    }
+
+    #[test]
+    fn a_snippet_cannot_export() {
+        let error = prepare_snippet("https://example.com/app", "export const x = 1;")
+            .expect_err("a snippet has no module record to export into");
+        assert!(error.to_string().contains("export syntax"), "{}", error);
+    }
 
     #[test]
     fn normalize_relative_specifier_in_same_folder() {

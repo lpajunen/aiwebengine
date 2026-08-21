@@ -4279,11 +4279,12 @@ fn native_tools() -> &'static [NativeToolEntry] {
             "eval_script",
             "Evaluate a JavaScript snippet against a deployed script's sandbox and return its \
             value plus everything it logged. The script's own program is loaded first, so the \
-            snippet can call its functions, use the bindings its entrypoint imported, and reach \
-            any module through __asset_module_require__(path). Use this to inspect data or try \
-            an expression without authoring, deploying and deleting a throwaway test. Database \
-            writes roll back by default; registrations do nothing. Requires the user to own the \
-            script or be an administrator.",
+            snippet can call its functions and use the bindings its entrypoint imported. It can \
+            also import any module the entrypoint reaches, directly or through another module - \
+            `import { x } from \"./server/m.ts\"; x()` - or reach one with require(path). Use \
+            this to inspect data or try an expression without authoring, deploying and deleting \
+            a throwaway test. Database writes roll back by default; registrations do nothing. \
+            Requires the user to own the script or be an administrator.",
             || {
                 json!({
                     "type": "object",

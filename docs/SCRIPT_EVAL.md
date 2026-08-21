@@ -38,20 +38,61 @@ the same act.
 ## What the snippet can see
 
 The script's prepared program is evaluated first, in the same context, so the
-snippet reaches:
+snippet reaches its top-level functions and the bindings its entrypoint
+imported.
 
-- the script's own top-level functions,
-- the bindings its entrypoint imported — the bundler rewrites `import { x } from
-"./m.ts"` into a top-level declaration, so `x` is simply in scope,
-- `__asset_module_require__("path/to/module.ts")`, for a module the entrypoint
-  imported but did not re-expose.
+It can also `import`, exactly as the script does:
 
-`__asset_module_require__` only knows modules that are actually in the bundle. A
-module nothing imports is not compiled into it, and asking for it throws
-`Unknown asset module`.
+```bash
+curl -X POST "https://your-engine/engine/eval?uri=myapp" \
+     --data-binary 'import { totalCents } from "./server/basket.ts"; totalCents(items)'
+```
+
+Snippet imports go through the same rewrite every module's imports do, so a
+specifier means here what it means in the script — relative or root-relative
+asset paths, extension included, no bare package names. Supported forms are the
+ones the engine supports anywhere:
+
+```ts
+import basket from "./server/basket.ts";
+import { totalCents, VAT } from "./server/basket.ts";
+import basket, { VAT } from "./server/basket.ts";
+import "./server/setup.ts";
+```
+
+Namespace imports (`import * as basket from …`) are not supported by the
+engine's bundler, in a snippet or in a script.
+
+An import may be on its own line or inline — `import { x } from "./m.ts"; x()`
+works, which is what a one-line request body usually looks like.
+
+### What is importable
+
+Any module the script's entrypoint reaches, **directly or through another
+module**. The bundle is the transitive closure from the entrypoint, so in
+practice that is every module the running application uses:
+
+```ts
+// entrypoint imports ./server/mid.ts, which imports ./server/deep.ts
+import { deep } from "./server/deep.ts"; // works — deep.ts is in the bundle
+```
+
+A module nothing reaches from the entrypoint is not in the bundle and cannot be
+imported. That is dead code or a test-only helper, and the error names the
+modules that _are_ importable so a mistyped path is a one-line fix.
+
+`require("path/to/module.ts")` is available too, for the cases `import` cannot
+express — a path computed at run time, say. It is the bundler's own module
+lookup, so it resolves against the same graph.
+
+A snippet cannot see a module's **non-exported** internals. That is the module
+boundary working as it does everywhere else, not a limitation of `eval`.
+
+A snippet cannot `export`; it is evaluated for its value, not imported.
 
 The last expression is the value. Write `someHelper(1)`, not
-`return someHelper(1)`.
+`return someHelper(1)`. The snippet runs in its own scope, so a name it declares
+never collides with one the script already declared.
 
 ## The report
 
