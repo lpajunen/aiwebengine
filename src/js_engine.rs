@@ -823,11 +823,10 @@ pub fn execute_script_secure(
                 let result = ctx.with(|ctx| -> Result<(), rquickjs::Error> {
                     // Set up all secure global functions with audit logging disabled for startup
                     let security_config = GlobalSecurityConfig {
+                        // Startup is the registration phase: this pass exists to
+                        // collect what the script registers.
+                        registration_phase: true,
                         enable_audit_logging: false, // Disable for startup to reduce noise
-                        // Re-enable GraphQL and streams now that block_on calls are fixed
-                        enable_graphql_registration: true,
-                        enable_streams: true,
-                        ..Default::default()
                     };
 
                     // Create the register function that captures registrations
@@ -946,8 +945,14 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                 Ok(ctx) => {
                     let result =
                         ctx.with(|ctx| -> Result<(), rquickjs::Error> {
-                            // Set up all global functions using the secure helper function
-                            let config = GlobalSecurityConfig::default();
+                            // This entry point exists to run a script and
+                            // collect what it registers - it passes a real
+                            // register function below - so it is a
+                            // registration pass like startup and init().
+                            let config = GlobalSecurityConfig {
+                                registration_phase: true,
+                                ..Default::default()
+                            };
 
                             // Create the register function that captures registrations
                             let regs_clone = Rc::clone(&registrations);
@@ -1117,7 +1122,6 @@ pub fn execute_script_for_request_secure(
         // Set up all secure global functions
         // For request handling, we don't need GraphQL registration but enable everything else
         let security_config = GlobalSecurityConfig {
-            enable_graphql_registration: false,
             enable_audit_logging: false, // Disable for tests to avoid runtime conflicts
             ..Default::default()
         };
@@ -1370,7 +1374,6 @@ pub fn execute_script_for_request(
         // Set up all global functions using the secure helper function
         // For request handling, we don't need full GraphQL registration (no-ops)
         let config = GlobalSecurityConfig {
-            enable_graphql_registration: false,
             enable_audit_logging: false, // Disable audit logging to avoid runtime conflicts
             ..Default::default()
         };
@@ -1472,7 +1475,6 @@ pub fn execute_scheduled_handler(
 
     ctx.with(|ctx| -> Result<(), rquickjs::Error> {
         let security_config = GlobalSecurityConfig {
-            enable_graphql_registration: false,
             enable_audit_logging: false,
             ..Default::default()
         };
@@ -1705,12 +1707,11 @@ fn run_test_module<'js>(
     let security_config = GlobalSecurityConfig {
         // A test must not mutate registries that outlive the run: routes,
         // resolvers, streams, and jobs registered here would stay registered,
-        // and no rollback undoes them.
-        enable_graphql_registration: false,
-        enable_streams: false,
-        enable_scheduler: false,
+        // and no rollback undoes them. `registration_phase: false` is what
+        // enforces that - the APIs stay callable and report that they did
+        // nothing, rather than disappearing from the test's global scope.
+        registration_phase: false,
         enable_audit_logging: false,
-        ..Default::default()
     };
 
     setup_secure_global_functions(
@@ -1837,8 +1838,6 @@ pub fn execute_graphql_resolver(params: GraphqlResolverExecutionParams) -> Resul
         // Set up all global functions using the secure helper function
         // For GraphQL resolvers, we don't need GraphQL registration (no-ops) or stream registration
         let config = GlobalSecurityConfig {
-            enable_graphql_registration: false,
-            enable_streams: false,
             enable_audit_logging: false, // Disable audit logging to avoid runtime conflicts
             ..Default::default()
         };
@@ -1977,8 +1976,6 @@ pub fn execute_mcp_prompt_handler(
         // Set up all global functions using the secure helper function
         // For MCP prompt handlers, we enable minimal features
         let config = GlobalSecurityConfig {
-            enable_graphql_registration: false,
-            enable_streams: false,
             enable_audit_logging: false,
             ..Default::default()
         };
@@ -2062,8 +2059,6 @@ pub fn execute_mcp_tool_handler(
         // Set up all global functions using the secure helper function
         // For MCP tool handlers, we enable minimal features
         let config = GlobalSecurityConfig {
-            enable_graphql_registration: false,
-            enable_streams: false,
             enable_audit_logging: false,
             ..Default::default()
         };
@@ -2198,8 +2193,6 @@ pub fn execute_stream_customization_function(
         |ctx| -> Result<std::collections::HashMap<String, String>, rquickjs::Error> {
             // Set up global functions with minimal security for customization function
             let config = GlobalSecurityConfig {
-                enable_graphql_registration: false,
-                enable_streams: false,
                 enable_audit_logging: false,
                 ..Default::default()
             };
@@ -2405,10 +2398,10 @@ pub fn call_init_if_exists_with_timeout(
         .with(|ctx| -> Result<bool, rquickjs::Error> {
             // Set up secure global functions with minimal config for init
             let config = GlobalSecurityConfig {
+                // `init()` is the registration phase, and the script's
+                // top-level program runs under it too.
+                registration_phase: true,
                 enable_audit_logging: false,
-                enable_graphql_registration: true,
-                enable_streams: true,
-                ..Default::default()
             };
 
             // Create the register function that captures registrations

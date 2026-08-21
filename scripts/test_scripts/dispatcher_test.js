@@ -124,8 +124,8 @@ function testRegisterListener(context) {
 function testSendMessage(context) {
   const results = [];
 
-  // First register a listener
-  dispatcher.registerListener("test.message", "handleMessageSent");
+  // Listeners are registered in init() - registration only takes effect
+  // during the registration phase.
 
   try {
     // Send a message with data
@@ -201,9 +201,7 @@ function testMultipleHandlers(context) {
   receivedMessages = [];
 
   try {
-    // Register multiple handlers for same message type
-    dispatcher.registerListener("user.created", "handleUserCreated");
-    dispatcher.registerListener("user.created", "handleUserCreatedSecondary");
+    // Both "user.created" handlers are registered in init().
 
     // Send a message
     const messageData = JSON.stringify({
@@ -252,7 +250,7 @@ function testMessageDataSerialization(context) {
   // Clear received messages
   receivedMessages = [];
 
-  dispatcher.registerListener("data.test", "handleMessageSent");
+  // The "data.test" listener is registered in init().
 
   try {
     // Test with complex data structure
@@ -304,8 +302,7 @@ function testErrorHandling(context) {
   const results = [];
 
   try {
-    // Register a handler that will throw an error
-    dispatcher.registerListener("error.test", "handleErrorTest");
+    // The throwing handler is registered in init().
 
     // Send a message that will trigger the error
     const result = dispatcher.sendMessage(
@@ -520,7 +517,16 @@ function init(context) {
   );
   routeRegistry.registerRoute("/test-dispatcher/run-all", "runAllTests", "GET");
 
-  console.log("Dispatcher test routes registered");
+  // Message listeners are registered here rather than inside the handlers:
+  // registration only takes effect during startup and init(), because a
+  // script's top-level program re-runs on every invocation.
+  dispatcher.registerListener("test.message", "handleMessageSent");
+  dispatcher.registerListener("user.created", "handleUserCreated");
+  dispatcher.registerListener("user.created", "handleUserCreatedSecondary");
+  dispatcher.registerListener("data.test", "handleMessageSent");
+  dispatcher.registerListener("error.test", "handleErrorTest");
+
+  console.log("Dispatcher test routes and listeners registered");
 
   return { success: true };
 }

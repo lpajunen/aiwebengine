@@ -38,7 +38,12 @@
  *   routeRegistry.registerRoute("/api/users/:id", "getUser", "GET");
  *
  *   // Register GraphQL queries
- *   graphQLRegistry.registerQuery("getUser", "getUser(id: ID!): User", "getUserResolver");
+ *   graphQLRegistry.registerQuery(
+ *     "getUser",
+ *     "getUser(id: ID!): User",
+ *     "getUserResolver",
+ *     "external",
+ *   );
  *
  *   // Register streams
  *   routeRegistry.registerStreamRoute("/events/notifications");
@@ -48,6 +53,42 @@
  * }
  */
 declare function init(context?: HandlerContext): void;
+
+// ============================================================================
+// When registration takes effect
+// ============================================================================
+
+/**
+ * Every global in this file is present in every execution context. A script
+ * sees the same API whether it was entered through an HTTP route, a GraphQL
+ * resolver, an MCP tool, a scheduled job, a stream customizer, a message
+ * listener or a test, so shared helpers never need `typeof x === "undefined"`
+ * guards. What a call is *allowed* to do still depends on the caller's
+ * capabilities, and what it *does* depends on the phase described here.
+ *
+ * A script's top-level program is re-evaluated on every invocation, and only
+ * `init()` runs in the registration phase. So these methods:
+ *
+ * - `routeRegistry.registerRoute` / `registerAssetRoute` / `registerStreamRoute`
+ * - `graphQLRegistry.registerQuery` / `registerMutation` / `registerSubscription`
+ * - `mcpRegistry.registerTool` / `registerPrompt`
+ * - `schedulerService.registerOnce` / `registerRecurring` / `clearAll`
+ * - `dispatcher.registerListener`
+ *
+ * take effect during startup and `init()`, and elsewhere return a string saying
+ * the entry was not registered. They never throw for being called at the wrong
+ * time — a script that registers at top level rather than inside `init()` would
+ * otherwise fail on every request. Argument validation is unaffected: a bad
+ * path or an empty name is reported the same way in every context.
+ *
+ * Everything else — `database`, `assetStorage`, `secretStorage`,
+ * `sharedStorage`, `personalStorage`, `fetch`, `convert`, `console`,
+ * `McpClient`, `dispatcher.sendMessage`, `graphQLRegistry.executeGraphQL`,
+ * `routeRegistry.sendStreamMessage` — works in every context.
+ *
+ * Register in `init()`. Registering from a request handler silently does
+ * nothing, which is rarely what the script intended.
+ */
 
 // ============================================================================
 // HTTP Request and Response Types
@@ -183,8 +224,11 @@ interface HandlerContext {
     | "graphqlQuery"
     | "graphqlMutation"
     | "graphqlSubscription"
-    | "scheduledJob"
-    | "mcpTool";
+    | "streamCustomization"
+    | "init"
+    | "scheduled"
+    | "mcpTool"
+    | "test";
 
   /** Additional metadata */
   metadata?: Record<string, any>;
@@ -238,6 +282,9 @@ interface RouteRegistry {
    *     }
    *   })
    * });
+   *
+   * Only takes effect during startup and `init()`. Called from a handler it
+   * does nothing, and does not throw.
    */
   registerRoute(
     path: string,
@@ -267,6 +314,9 @@ interface RouteRegistry {
    *   tags: ["Alerts"],
    *   summary: "Alert stream",
    * });
+   *
+   * Only takes effect during startup and `init()`. Called from a handler it
+   * returns a message saying nothing was registered, and does not throw.
    */
   registerStreamRoute(
     path: string,
@@ -292,6 +342,9 @@ interface RouteRegistry {
    *   tags: ["Branding"],
    *   summary: "Company logo",
    * });
+   *
+   * Only takes effect during startup and `init()`. Called from a handler it
+   * returns a message saying nothing was registered, and does not throw.
    */
   registerAssetRoute(
     httpPath: string,
@@ -569,6 +622,9 @@ interface SchedulerService {
    *   runAt: oneHourFromNow,
    *   name: "reminder-job"
    * });
+   *
+   * Only takes effect during startup and `init()`. Called from a handler it
+   * returns a message saying nothing was registered, and does not throw.
    */
   registerOnce(options: {
     handler: string;
@@ -591,6 +647,9 @@ interface SchedulerService {
    *   intervalMilliseconds: 5000,
    *   name: "cleanup-job"
    * });
+   *
+   * Only takes effect during startup and `init()`. Called from a handler it
+   * returns a message saying nothing was registered, and does not throw.
    */
   registerRecurring(options: {
     handler: string;
@@ -605,6 +664,9 @@ interface SchedulerService {
    * @returns Result message with count of cleared jobs
    * @example
    * schedulerService.clearAll();
+   *
+   * Only takes effect during startup and `init()`. Called from a handler it
+   * clears nothing and says so in the returned message, and does not throw.
    */
   clearAll(): string;
 }
@@ -631,6 +693,9 @@ interface GraphQLRegistry {
    *   "getUserResolver",
    *   "external"
    * );
+   *
+   * Only takes effect during startup and `init()`. Called from a handler it
+   * returns a message saying nothing was registered, and does not throw.
    */
   registerQuery(
     name: string,
@@ -653,6 +718,9 @@ interface GraphQLRegistry {
    *   "createUserResolver",
    *   "external"
    * );
+   *
+   * Only takes effect during startup and `init()`. Called from a handler it
+   * returns a message saying nothing was registered, and does not throw.
    */
   registerMutation(
     name: string,
@@ -675,6 +743,9 @@ interface GraphQLRegistry {
    *   "messageAddedResolver",
    *   "external"
    * );
+   *
+   * Only takes effect during startup and `init()`. Called from a handler it
+   * returns a message saying nothing was registered, and does not throw.
    */
   registerSubscription(
     name: string,
@@ -761,6 +832,9 @@ interface McpRegistry {
    *   }),
    *   "handleCalculateSum"
    * );
+   *
+   * Only takes effect during startup and `init()`. Called from a handler it
+   * returns a message saying nothing was registered, and does not throw.
    */
   registerTool(
     name: string,
@@ -786,6 +860,9 @@ interface McpRegistry {
    *   }),
    *   "handleGenerateCode"
    * );
+   *
+   * Only takes effect during startup and `init()`. Called from a handler it
+   * returns a message saying nothing was registered, and does not throw.
    */
   registerPrompt(
     name: string,
@@ -900,7 +977,7 @@ interface McpClientConstructor {
    * const response = JSON.parse(toolsJson);
    *
    * if (response.error) {
-   *   console.error("Failed to list tools:", response.error);
+   *   console.error(`Failed to list tools: ${response.error}`);
    *   return;
    * }
    *
@@ -928,11 +1005,11 @@ interface McpClientConstructor {
    * const response = JSON.parse(resultJson);
    *
    * if (response.error) {
-   *   console.error("Tool error:", response.error);
+   *   console.error(`Tool error: ${response.error}`);
    *   return;
    * }
    *
-   * console.log("Tool result:", response);
+   * console.log(`Tool result: ${JSON.stringify(response)}`);
    */
   _callTool(clientDataJson: string, toolName: string, argsJson: string): string;
 }
@@ -1312,7 +1389,7 @@ interface Database {
    * // Start transaction with 5 second timeout
    * const result = JSON.parse(database.beginTransaction(5000));
    * if (result.error) {
-   *   console.error("Failed to start transaction:", result.error);
+   *   console.error(`Failed to start transaction: ${result.error}`);
    *   return ResponseBuilder.error(500, "Transaction error");
    * }
    *
@@ -1328,7 +1405,7 @@ interface Database {
    * @example
    * const result = JSON.parse(database.commitTransaction());
    * if (result.error) {
-   *   console.error("Failed to commit:", result.error);
+   *   console.error(`Failed to commit: ${result.error}`);
    * }
    */
   commitTransaction(): string;
@@ -1354,7 +1431,7 @@ interface Database {
    * @example
    * // Auto-generated savepoint
    * const sp = JSON.parse(database.createSavepoint());
-   * console.log("Savepoint:", sp.savepoint); // "sp_1"
+   * console.log(`Savepoint: ${sp.savepoint}`); // "sp_1"
    *
    * // Named savepoint
    * database.createSavepoint("checkpoint_before_insert");
@@ -1404,49 +1481,48 @@ interface Database {
 interface Console {
   /**
    * Write a log message
-   * @param message - Message to log (multiple arguments will be concatenated)
-   * @param optionalParams - Additional parameters to log
+   *
+   * Takes exactly one string. Unlike the browser/Node console, there is no
+   * variadic form and no automatic stringification — pass a template literal
+   * or `JSON.stringify` the value yourself.
+   * @param message - Message to log
    * @example
-   * console.log("Request received:", req.path);
-   * console.log("User:", user.id, user.name);
+   * console.log(`Request received: ${req.path}`);
+   * console.log(`User: ${JSON.stringify(user)}`);
    */
-  log(message?: any, ...optionalParams: any[]): void;
+  log(message: string): void;
 
   /**
    * Write an info log message
    * @param message - Info message to log
-   * @param optionalParams - Additional parameters to log
    * @example
-   * console.info("User logged in:", userId);
+   * console.info(`User logged in: ${userId}`);
    */
-  info(message?: any, ...optionalParams: any[]): void;
+  info(message: string): void;
 
   /**
    * Write a warning log message
    * @param message - Warning message to log
-   * @param optionalParams - Additional parameters to log
    * @example
-   * console.warn("Deprecated API usage detected:", apiName);
+   * console.warn(`Deprecated API usage detected: ${apiName}`);
    */
-  warn(message?: any, ...optionalParams: any[]): void;
+  warn(message: string): void;
 
   /**
    * Write an error log message
    * @param message - Error message to log
-   * @param optionalParams - Additional parameters to log
    * @example
-   * console.error("Failed to process request:", error);
+   * console.error(`Failed to process request: ${error}`);
    */
-  error(message?: any, ...optionalParams: any[]): void;
+  error(message: string): void;
 
   /**
    * Write a debug log message
    * @param message - Debug message to log
-   * @param optionalParams - Additional parameters to log
    * @example
-   * console.debug("Processing item:", item.id);
+   * console.debug(`Processing item: ${item.id}`);
    */
-  debug(message?: any, ...optionalParams: any[]): void;
+  debug(message: string): void;
 }
 
 // ============================================================================
@@ -1465,6 +1541,9 @@ interface MessageDispatcher {
    * @throws If messageType or handlerName is empty
    * @example
    * dispatcher.registerListener("user.created", "handleUserCreated");
+   *
+   * Only takes effect during startup and `init()`. Called from a handler it
+   * returns a message saying nothing was registered, and does not throw.
    */
   registerListener(messageType: string, handlerName: string): string;
 

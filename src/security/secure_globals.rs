@@ -62,31 +62,48 @@ pub struct SecureGlobalContext {
     config: GlobalSecurityConfig,
 }
 
+/// Controls the parts of the JavaScript API whose behaviour depends on *when* a
+/// script runs rather than on who is calling it.
+///
+/// Every global and every method is installed in every context, so a script
+/// never has to feature-detect. These flags only decide whether a registration
+/// call takes effect.
 #[derive(Debug, Clone)]
 pub struct GlobalSecurityConfig {
-    pub enable_graphql_registration: bool,
-    pub enable_asset_management: bool,
-    pub enable_streams: bool,
-    pub enable_scheduler: bool,
-    pub enable_logging: bool,
-    pub enable_secrets: bool,
-    pub enforce_strict_validation: bool,
-    pub enable_audit_logging: bool, // New flag to disable audit logging in tests
+    /// True only while a script's registrations are being collected: engine
+    /// startup and the `init()` call that follows it.
+    ///
+    /// A script's top-level program is re-evaluated on *every* invocation, so
+    /// registration calls written at top level run again on each request. In
+    /// the registration phase they take effect; everywhere else they are
+    /// no-ops that report what happened. They must not throw — that would
+    /// break every script that registers at top level rather than in `init()`.
+    pub registration_phase: bool,
+    /// Disabled where there is no Tokio runtime to spawn the audit writer onto.
+    pub enable_audit_logging: bool,
 }
 
 impl Default for GlobalSecurityConfig {
     fn default() -> Self {
         Self {
-            enable_streams: true,
-            enable_graphql_registration: true,
-            enable_asset_management: true,
-            enable_scheduler: true,
-            enable_logging: true,
-            enable_secrets: true,
-            enforce_strict_validation: true,
-            enable_audit_logging: true, // Enable by default
+            // Fail closed: a caller that does not opt in cannot mutate
+            // registries that outlive its own invocation.
+            registration_phase: false,
+            enable_audit_logging: true,
         }
     }
+}
+
+/// Reply for a registration call made outside the registration phase.
+///
+/// Registration APIs stay callable everywhere so that top-level script code
+/// keeps working, but only the registration phase writes to the registry.
+fn registration_inactive(api: &str, name: &str) -> String {
+    format!(
+        "{}: '{}' not registered - registration only takes effect during script \
+         startup and init()",
+        api, name
+    )
 }
 
 impl SecureGlobalContext {
@@ -128,46 +145,25 @@ impl SecureGlobalContext {
         script_uri: &str,
         register_fn: Option<RouteRegisterFn>,
     ) -> JsResult<()> {
-        // Setup routeRegistry object with all route-related functions
+        // Every global below is installed in every execution context. A script's
+        // API surface must not depend on how it was entered: the same helper
+        // may be reached from an HTTP handler, a scheduled job and a message
+        // listener, and `typeof x === "undefined"` guards are not something
+        // solution developers should have to write. Where an operation is
+        // meaningless outside the registration phase, the method is still
+        // present and still callable - see `registration_inactive`.
         self.setup_route_registry(ctx, script_uri, register_fn)?;
-
-        if self.config.enable_logging {
-            self.setup_logging_functions(ctx, script_uri)?;
-        }
-
-        if self.config.enable_asset_management {
-            self.setup_asset_management_functions(ctx, script_uri)?;
-        }
-
-        if self.config.enable_secrets {
-            self.setup_secrets_functions(ctx, script_uri)?;
-        }
-
-        // Setup fetch() function for HTTP requests
+        self.setup_logging_functions(ctx, script_uri)?;
+        self.setup_asset_management_functions(ctx, script_uri)?;
+        self.setup_secrets_functions(ctx, script_uri)?;
         self.setup_fetch_function(ctx, script_uri)?;
-
-        // Setup database functions
         self.setup_database_functions(ctx, script_uri)?;
-
-        // Setup conversion functions (always enabled)
         self.setup_conversion_functions(ctx, script_uri)?;
-
-        // Setup script storage functions
         self.setup_script_properties_functions(ctx, script_uri)?;
-
-        // Setup personal storage functions
         self.setup_user_properties_functions(ctx, script_uri)?;
-
-        // Always setup GraphQL functions, but they will be no-ops if disabled
         self.setup_graphql_functions(ctx, script_uri)?;
-
-        // Setup MCP (Model Context Protocol) functions
         self.setup_mcp_functions(ctx, script_uri)?;
-
-        // Setup scheduler service bindings
         self.setup_scheduler_functions(ctx, script_uri)?;
-
-        // Setup message dispatcher bindings
         self.setup_dispatcher_functions(ctx, script_uri)?;
 
         // Setup JSX factory functions for server-side HTML generation
@@ -668,21 +664,14 @@ impl SecureGlobalContext {
                   resolver_function: String,
                   visibility: String|
                   -> JsResult<String> {
-                // If GraphQL registration is disabled, return success without doing anything
-                tracing::info!(
-                    "registerGraphQLQuery called: name={}, visibility={}, enable_graphql_registration={}",
-                    name,
-                    visibility,
-                    config_query.enable_graphql_registration
+                debug!(
+                    "registerGraphQLQuery called: name={}, visibility={}",
+                    name, visibility
                 );
-                if !config_query.enable_graphql_registration {
-                    tracing::info!(
-                        "GraphQL registration disabled, skipping query registration for: {}",
-                        name
-                    );
-                    return Ok(format!(
-                        "GraphQL query '{}' registration skipped (disabled)",
-                        name
+                if !config_query.registration_phase {
+                    return Ok(registration_inactive(
+                        "graphQLRegistry.registerQuery",
+                        &name,
                     ));
                 }
 
@@ -782,19 +771,14 @@ impl SecureGlobalContext {
                   resolver_function: String,
                   visibility: String|
                   -> JsResult<String> {
-                // If GraphQL registration is disabled, return success without doing anything
                 debug!(
-                    "registerGraphQLMutation called: name={}, visibility={}, enable_graphql_registration={}",
-                    name, visibility, config_mutation.enable_graphql_registration
+                    "registerGraphQLMutation called: name={}, visibility={}",
+                    name, visibility
                 );
-                if !config_mutation.enable_graphql_registration {
-                    debug!(
-                        "GraphQL registration disabled, skipping mutation registration for: {}",
-                        name
-                    );
-                    return Ok(format!(
-                        "GraphQL mutation '{}' registration skipped (disabled)",
-                        name
+                if !config_mutation.registration_phase {
+                    return Ok(registration_inactive(
+                        "graphQLRegistry.registerMutation",
+                        &name,
                     ));
                 }
 
@@ -896,19 +880,14 @@ impl SecureGlobalContext {
                   resolver_function: String,
                   visibility: String|
                   -> JsResult<String> {
-                // If GraphQL registration is disabled, return success without doing anything
                 debug!(
-                    "registerGraphQLSubscription called: name={}, visibility={}, enable_graphql_registration={}",
-                    name, visibility, config_subscription.enable_graphql_registration
+                    "registerGraphQLSubscription called: name={}, visibility={}",
+                    name, visibility
                 );
-                if !config_subscription.enable_graphql_registration {
-                    debug!(
-                        "GraphQL registration disabled, skipping subscription registration for: {}",
-                        name
-                    );
-                    return Ok(format!(
-                        "GraphQL subscription '{}' registration skipped (disabled)",
-                        name
+                if !config_subscription.registration_phase {
+                    return Ok(registration_inactive(
+                        "graphQLRegistry.registerSubscription",
+                        &name,
                     ));
                 }
 
@@ -1001,26 +980,18 @@ impl SecureGlobalContext {
         let user_ctx_execute = user_context.clone();
         let auditor_execute = auditor.clone();
         let script_uri_execute = script_uri_owned.clone();
-        let config_execute = self.config.clone();
         let execute_graphql = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>,
                   query: String,
                   variables_json: Option<String>|
                   -> JsResult<String> {
-                // If GraphQL execution is disabled, return error
-                debug!(
-                    "executeGraphQL called: query_length={}, enable_graphql_execution={}",
-                    query.len(),
-                    config_execute.enable_graphql_registration // Reuse existing config for now
-                );
-                if !config_execute.enable_graphql_registration {
-                    debug!("GraphQL execution disabled, rejecting executeGraphQL call");
-                    return Ok(
-                        "{\"errors\": [{\"message\": \"GraphQL execution is disabled\"}]}"
-                            .to_string(),
-                    );
-                }
+                // Executing a query is a read of the live schema, not a
+                // registration, so it works in every context. It was previously
+                // gated on the registration flag, which left it usable only
+                // during startup - the one phase where a script has least
+                // reason to run one.
+                debug!("executeGraphQL called: query_length={}", query.len());
 
                 // Check capability
                 if let Err(e) =
@@ -1353,16 +1324,8 @@ impl SecureGlobalContext {
                   input_schema_json: String,
                   handler_function: String|
                   -> JsResult<String> {
-                // Check if MCP is enabled (we can use the same config flag as GraphQL for now)
-                if !config.enable_graphql_registration {
-                    debug!(
-                        "MCP tool registration disabled, skipping tool registration for: {}",
-                        name
-                    );
-                    return Ok(format!(
-                        "MCP tool '{}' registration skipped (disabled)",
-                        name
-                    ));
+                if !config.registration_phase {
+                    return Ok(registration_inactive("mcpRegistry.registerTool", &name));
                 }
 
                 // Check capability - reuse ManageGraphQL for MCP tools
@@ -1466,16 +1429,8 @@ impl SecureGlobalContext {
                   arguments_json: String,
                   handler_function: String|
                   -> JsResult<String> {
-                // Check if MCP is enabled
-                if !config_prompt.enable_graphql_registration {
-                    debug!(
-                        "MCP prompt registration disabled, skipping prompt registration for: {}",
-                        name
-                    );
-                    return Ok(format!(
-                        "MCP prompt '{}' registration skipped (disabled)",
-                        name
-                    ));
+                if !config_prompt.registration_phase {
+                    return Ok(registration_inactive("mcpRegistry.registerPrompt", &name));
                 }
 
                 // Check capability - reuse ManageGraphQL for MCP prompts
@@ -1927,14 +1882,9 @@ impl SecureGlobalContext {
                 let customization_function = customization_function.0;
                 // Extract optional OpenAPI metadata (tags/summary/description)
                 let (tags, summary, description) = extract_route_metadata(metadata.0.as_ref());
-                // If streams are disabled, return success without doing anything
-                if !config_stream.enable_streams {
-                    return Ok(format!(
-                        "Stream registration disabled (stream '{}' not registered)",
-                        path
-                    ));
-                }
-
+                // Argument validation runs in every context, so a malformed
+                // path is reported the same way wherever the call is made.
+                //
                 // Engine-owned prefixes are off-limits; any script may
                 // register any other stream path.
                 if let Some(prefix) = crate::engine_api::reserved_route_prefix(&path) {
@@ -1953,6 +1903,13 @@ impl SecureGlobalContext {
                     return Ok(format!(
                         "Invalid stream path '{}': path must start with '/' and not be empty",
                         path
+                    ));
+                }
+
+                if !config_stream.registration_phase {
+                    return Ok(registration_inactive(
+                        "routeRegistry.registerStreamRoute",
+                        &path,
                     ));
                 }
 
@@ -2059,6 +2016,7 @@ impl SecureGlobalContext {
         // 3. registerAssetRoute function
         let user_ctx_asset = user_context.clone();
         let script_uri_asset = script_uri_owned.clone();
+        let config_asset_route = self.config.clone();
         let register_asset_route = Function::new(
             ctx.clone(),
             move |_c: rquickjs::Ctx<'_>,
@@ -2100,6 +2058,13 @@ impl SecureGlobalContext {
                 }
                 if asset_name.contains("..") || asset_name.contains('\\') {
                     return Ok("Invalid asset name: path characters not allowed".to_string());
+                }
+
+                if !config_asset_route.registration_phase {
+                    return Ok(registration_inactive(
+                        "routeRegistry.registerAssetRoute",
+                        &path,
+                    ));
                 }
 
                 // Verify the asset exists and belongs to this script
@@ -2332,25 +2297,6 @@ impl SecureGlobalContext {
             },
         )?;
         route_registry.set("sendStreamMessageFiltered", send_stream_message_filtered)?;
-
-        // 6. listAssets function
-        let user_ctx_list_assets = user_context.clone();
-        let list_assets = Function::new(
-            ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<Vec<String>> {
-                // Check capability
-                if let Err(_e) = user_ctx_list_assets
-                    .require_capability(&crate::security::Capability::ReadAssets)
-                {
-                    return Ok(Vec::new());
-                }
-
-                let assets = repository::fetch_assets("https://example.com/core");
-                let asset_names: Vec<String> = assets.keys().cloned().collect();
-                Ok(asset_names)
-            },
-        )?;
-        route_registry.set("listAssets", list_assets)?;
 
         // Set the routeRegistry object on global scope
         global.set("routeRegistry", route_registry)?;
@@ -3935,16 +3881,18 @@ impl SecureGlobalContext {
     }
 
     fn setup_scheduler_functions(&self, ctx: &rquickjs::Ctx<'_>, script_uri: &str) -> JsResult<()> {
-        if !self.config.enable_scheduler {
-            return Ok(());
-        }
-
+        // `schedulerService` used to be omitted entirely outside the
+        // registration phase, which made a shared helper that touches it throw
+        // `ReferenceError` when reached from a message listener or a test. The
+        // object is now always present; the three registration methods below
+        // are the part that depends on the phase.
         let global = ctx.globals();
         let scheduler_obj = rquickjs::Object::new(ctx.clone())?;
         let scheduler_handle = scheduler::get_scheduler();
 
         let register_once_handle = scheduler_handle.clone();
         let script_uri_once = script_uri.to_string();
+        let config_once = self.config.clone();
         let register_once =
             Function::new(
                 ctx.clone(),
@@ -3962,6 +3910,13 @@ impl SecureGlobalContext {
                             "schedulerService.registerOnce requires a non-empty handler name"
                                 .to_string(),
                         );
+                    }
+
+                    if !config_once.registration_phase {
+                        return Ok(registration_inactive(
+                            "schedulerService.registerOnce",
+                            handler_name,
+                        ));
                     }
 
                     let run_at_value: String = match options.get("runAt") {
@@ -3997,6 +3952,7 @@ impl SecureGlobalContext {
 
         let register_recurring_handle = scheduler_handle.clone();
         let script_uri_recurring = script_uri.to_string();
+        let config_recurring = self.config.clone();
         let register_recurring = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>, options: rquickjs::Object| -> JsResult<String> {
@@ -4015,6 +3971,13 @@ impl SecureGlobalContext {
                         "schedulerService.registerRecurring requires a non-empty handler name"
                             .to_string(),
                     );
+                }
+
+                if !config_recurring.registration_phase {
+                    return Ok(registration_inactive(
+                        "schedulerService.registerRecurring",
+                        handler_name,
+                    ));
                 }
 
                 let interval_ms_opt = options.get::<_, f64>("intervalMilliseconds").ok();
@@ -4088,9 +4051,20 @@ impl SecureGlobalContext {
         )?;
 
         let script_uri_clear = script_uri.to_string();
+        let config_clear = self.config.clone();
         let clear_all = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
+                // Clearing is the inverse of registering and mutates the same
+                // registry, so it follows the same phase rule.
+                if !config_clear.registration_phase {
+                    return Ok(
+                        "schedulerService.clearAll: no jobs cleared - scheduled job changes \
+                         only take effect during script startup and init()"
+                            .to_string(),
+                    );
+                }
+
                 let removed = scheduler::clear_script_jobs(&script_uri_clear);
                 Ok(format!(
                     "Cleared {} scheduled job(s) for {}",
@@ -4118,6 +4092,7 @@ impl SecureGlobalContext {
 
         // registerListener(messageType, handlerName)
         let script_uri_register = script_uri.to_string();
+        let config_register = self.config.clone();
         let register_listener = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>,
@@ -4134,6 +4109,19 @@ impl SecureGlobalContext {
                     return Ok(
                         "dispatcher.registerListener: handler name cannot be empty".to_string()
                     );
+                }
+
+                // The dispatcher appends listeners without de-duplicating, so a
+                // registration made outside the registration phase added one
+                // more copy of the same listener on every invocation - a script
+                // registering at top level ended up handling each message once
+                // per request it had ever served. Same phase rule as every
+                // other registry.
+                if !config_register.registration_phase {
+                    return Ok(registration_inactive(
+                        "dispatcher.registerListener",
+                        &message_type,
+                    ));
                 }
 
                 // Register the listener
@@ -4301,14 +4289,13 @@ fn execute_message_handler(
     ctx.with(|ctx| -> Result<(), String> {
         // Set up minimal secure global functions for handler execution
         let user_context = UserContext::admin("dispatcher".to_string());
+        // A listener is a plain handler invocation: it gets the same globals as
+        // any other, and only registration is off. It used to run without
+        // `assetStorage`, `secretStorage` or `schedulerService` in scope at all,
+        // which made shared helpers fail with `ReferenceError` depending on
+        // which entry point reached them.
         let security_config = GlobalSecurityConfig {
-            enable_graphql_registration: false,
-            enable_asset_management: false,
-            enable_streams: false,
-            enable_scheduler: false,
-            enable_logging: true,
-            enable_secrets: false,
-            enforce_strict_validation: false,
+            registration_phase: false,
             enable_audit_logging: false,
         };
 
@@ -4532,5 +4519,118 @@ mod metadata_tests {
         assert!(tags.is_empty());
         assert_eq!(summary, None);
         assert_eq!(description, None);
+    }
+}
+
+#[cfg(test)]
+mod api_surface_tests {
+    use super::*;
+    use rquickjs::{Context, Runtime};
+
+    /// Evaluate `expr` against the globals a handler sees outside the
+    /// registration phase — an HTTP handler, a scheduled job, a message
+    /// listener or a test all get this surface.
+    fn eval_outside_registration_phase(expr: &str) -> String {
+        let rt = Runtime::new().expect("runtime");
+        let ctx = Context::full(&rt).expect("context");
+        ctx.with(|ctx| {
+            let config = GlobalSecurityConfig {
+                registration_phase: false,
+                enable_audit_logging: false,
+            };
+            let context =
+                SecureGlobalContext::new_with_config(UserContext::admin("t".into()), config);
+            context
+                .setup_secure_functions(&ctx, "test://script", None)
+                .expect("install globals");
+            ctx.eval::<String, _>(expr).expect("eval")
+        })
+    }
+
+    /// The whole API surface is present regardless of how a script was entered,
+    /// so shared helpers never need `typeof x === "undefined"` guards.
+    #[test]
+    fn every_global_is_installed_outside_the_registration_phase() {
+        for global in [
+            "routeRegistry",
+            "assetStorage",
+            "sharedStorage",
+            "personalStorage",
+            "secretStorage",
+            "schedulerService",
+            "graphQLRegistry",
+            "mcpRegistry",
+            "database",
+            "console",
+            "dispatcher",
+            "convert",
+            "McpClient",
+            "fetch",
+        ] {
+            assert_eq!(
+                eval_outside_registration_phase(&format!("typeof {}", global)),
+                if global == "fetch" {
+                    "function"
+                } else {
+                    "object"
+                },
+                "global `{}` is missing outside the registration phase",
+                global
+            );
+        }
+    }
+
+    /// Registration methods stay callable everywhere. They must not throw: a
+    /// script's top-level program re-runs on every invocation, so a script that
+    /// registers at top level rather than in `init()` would fail on every
+    /// request if these raised.
+    #[test]
+    fn registration_methods_report_instead_of_throwing_or_registering() {
+        for (call, subject) in [
+            ("routeRegistry.registerStreamRoute('/s')", "/s"),
+            ("routeRegistry.registerAssetRoute('/a', 'a.txt')", "/a"),
+            (
+                "graphQLRegistry.registerQuery('q', 'q: String', 'h', 'external')",
+                "q",
+            ),
+            (
+                "graphQLRegistry.registerMutation('m', 'm: String', 'h', 'external')",
+                "m",
+            ),
+            (
+                "graphQLRegistry.registerSubscription('s', 's: String', 'h', 'external')",
+                "s",
+            ),
+            ("mcpRegistry.registerTool('t', 'd', '{}', 'h')", "t"),
+            ("mcpRegistry.registerPrompt('p', 'd', '[]', 'h')", "p"),
+            (
+                "schedulerService.registerOnce({handler: 'h', runAt: ''})",
+                "h",
+            ),
+            ("schedulerService.registerRecurring({handler: 'h'})", "h"),
+            ("dispatcher.registerListener('type', 'h')", "type"),
+        ] {
+            let result = eval_outside_registration_phase(&format!("String({})", call));
+            assert!(
+                result.contains("not registered") && result.contains(subject),
+                "`{}` should report that it did not register, got: {}",
+                call,
+                result
+            );
+        }
+    }
+
+    /// Argument validation is context-independent: a malformed call is reported
+    /// the same way wherever it is made, rather than being masked by the phase.
+    #[test]
+    fn argument_validation_runs_before_the_phase_check() {
+        assert!(
+            eval_outside_registration_phase("dispatcher.registerListener('', 'h')")
+                .contains("cannot be empty")
+        );
+        assert!(
+            eval_outside_registration_phase("routeRegistry.registerStreamRoute('no-slash')")
+                .contains("must start with"),
+        );
     }
 }
