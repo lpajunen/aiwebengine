@@ -201,6 +201,81 @@ async fn test_script_logs_all_scripts_and_filters() {
     assert_eq!(logs.len(), 1);
     assert_eq!(logs[0]["message"], "first-error");
 
+    // contains matches a substring of the message, case-insensitively
+    let body: serde_json::Value = client
+        .get(format!(
+            "{}/engine/script_logs?uri={}&contains=ERR",
+            base, first
+        ))
+        .send()
+        .await
+        .expect("contains-filtered logs request failed")
+        .json()
+        .await
+        .expect("contains-filtered logs response not JSON");
+    let logs = body["logs"].as_array().expect("logs is not an array");
+    assert_eq!(logs.len(), 1, "expected only the entry containing 'err'");
+    assert_eq!(logs[0]["message"], "first-error");
+
+    // a substring nothing contains matches nothing, rather than everything
+    let body: serde_json::Value = client
+        .get(format!("{}/engine/script_logs?contains=no-such-text", base))
+        .send()
+        .await
+        .expect("contains-miss logs request failed")
+        .json()
+        .await
+        .expect("contains-miss logs response not JSON");
+    assert_eq!(body["count"], 0);
+
+    // after_seq reads forward from an entry the caller already has
+    let body: serde_json::Value = client
+        .get(format!("{}/engine/script_logs?uri={}", base, first))
+        .send()
+        .await
+        .expect("seq logs request failed")
+        .json()
+        .await
+        .expect("seq logs response not JSON");
+    let logs = body["logs"].as_array().expect("logs is not an array");
+    let first_seq = logs[0]["seq"].as_i64().expect("entry has no seq");
+    let body: serde_json::Value = client
+        .get(format!(
+            "{}/engine/script_logs?uri={}&after_seq={}",
+            base, first, first_seq
+        ))
+        .send()
+        .await
+        .expect("after_seq logs request failed")
+        .json()
+        .await
+        .expect("after_seq logs response not JSON");
+    let logs = body["logs"].as_array().expect("logs is not an array");
+    assert_eq!(logs.len(), 1, "expected only the entry after the first");
+    assert_eq!(logs[0]["message"], "first-error");
+
+    // with a cursor, the limit takes the next page rather than the newest
+    // entries — otherwise reading forward would skip what falls between pages.
+    let body: serde_json::Value = client
+        .get(format!(
+            "{}/engine/script_logs?uri={}&after_seq={}&limit=1",
+            base,
+            first,
+            first_seq - 1
+        ))
+        .send()
+        .await
+        .expect("paged logs request failed")
+        .json()
+        .await
+        .expect("paged logs response not JSON");
+    let logs = body["logs"].as_array().expect("logs is not an array");
+    assert_eq!(logs.len(), 1);
+    assert_eq!(
+        logs[0]["message"], "first-info",
+        "a limited page after a cursor must start at the cursor, not at the newest entry"
+    );
+
     // since excludes everything logged before it
     let future_millis = chrono::Utc::now().timestamp_millis() + 60_000;
     let body: serde_json::Value = client
@@ -1277,5 +1352,493 @@ async fn test_oversized_request_body_is_rejected() {
         body
     );
 
+    context.cleanup().await.expect("Failed to cleanup");
+}
+
+/// A request's log lines can be pulled out of the shared stream by the request
+/// id the caller was handed back, which is the whole point of the correlation
+/// columns: two calls to the same route are otherwise indistinguishable.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_script_logs_correlate_with_the_request_that_emitted_them() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    let context = TestContext::new();
+
+    let script_uri = "test_script_logs_correlation";
+    let _ = repository::clear_log_messages(script_uri);
+    let script = r#"
+        function move_handler(context) {
+          console.log("moving " + context.request.params.id);
+          console.error("move failed for " + context.request.params.id);
+          return { status: 200, body: context.invocationId };
+        }
+        function init(context) {
+          routeRegistry.registerRoute("/vw/:id/move", "move_handler", "GET");
+          return { success: true };
+        }
+    "#;
+    let _ = repository::upsert_script(script_uri, script);
+
+    let port = context
+        .start_server()
+        .await
+        .expect("server failed to start");
+    wait_for_server(port, 20).await.expect("Server not ready");
+
+    let client = reqwest::Client::new();
+    let base = format!("http://127.0.0.1:{}", port);
+
+    // Two calls to the same route, so filtering has something to separate.
+    let first = client
+        .get(format!("{}/vw/alpha/move", base))
+        .send()
+        .await
+        .expect("first route request failed");
+    assert_eq!(first.status(), 200);
+    let first_request_id = first
+        .headers()
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .expect("response carries no x-request-id")
+        .to_string();
+    // The handler is told the same id the response carries, so a script can
+    // report it to the client itself.
+    let echoed = first.text().await.expect("first response body");
+    assert_eq!(echoed, first_request_id);
+
+    let second = client
+        .get(format!("{}/vw/beta/move", base))
+        .send()
+        .await
+        .expect("second route request failed");
+    assert_eq!(second.status(), 200);
+
+    // Filtering by request id returns that call's lines and nothing else.
+    let body: serde_json::Value = client
+        .get(format!(
+            "{}/engine/script_logs?uri={}&request_id={}",
+            base, script_uri, first_request_id
+        ))
+        .send()
+        .await
+        .expect("request-id-filtered logs request failed")
+        .json()
+        .await
+        .expect("request-id-filtered logs response not JSON");
+    let logs = body["logs"].as_array().expect("logs is not an array");
+    assert_eq!(logs.len(), 2, "expected both lines from the first call");
+    assert_eq!(logs[0]["message"], "moving alpha");
+    assert_eq!(logs[1]["message"], "move failed for alpha");
+    for entry in logs {
+        assert_eq!(entry["requestId"], first_request_id.as_str());
+        assert_eq!(entry["kind"], "httpRoute");
+        // The registered pattern, not the concrete path: that is what makes
+        // one filter cover every call to the handler.
+        assert_eq!(entry["route"], "/vw/:id/move");
+    }
+
+    // Filtering by route collects both calls, parameter values and all.
+    let body: serde_json::Value = client
+        .get(format!(
+            "{}/engine/script_logs?uri={}&route=/vw/:id/move",
+            base, script_uri
+        ))
+        .send()
+        .await
+        .expect("route-filtered logs request failed")
+        .json()
+        .await
+        .expect("route-filtered logs response not JSON");
+    let logs = body["logs"].as_array().expect("logs is not an array");
+    assert_eq!(logs.len(), 4, "expected the lines from both calls");
+
+    // kind narrows to one sort of invocation; init() ran for this script too,
+    // and its output must not come back under httpRoute.
+    let body: serde_json::Value = client
+        .get(format!(
+            "{}/engine/script_logs?uri={}&kind=httproute&contains=failed",
+            base, script_uri
+        ))
+        .send()
+        .await
+        .expect("kind-filtered logs request failed")
+        .json()
+        .await
+        .expect("kind-filtered logs response not JSON");
+    let logs = body["logs"].as_array().expect("logs is not an array");
+    assert_eq!(logs.len(), 2, "expected one failure line per call");
+
+    let _ = repository::clear_log_messages(script_uri);
+    context.cleanup().await.expect("Failed to cleanup");
+}
+
+/// Reads SSE events from a streaming response until `stop` says enough has
+/// arrived, or the deadline passes. Returns the raw text read so far.
+///
+/// Kept deliberately simple: it accumulates chunks rather than parsing the SSE
+/// framing, because what the assertions care about is which events arrived, not
+/// how they were split across packets.
+async fn read_sse_until(
+    response: &mut reqwest::Response,
+    stop: impl Fn(&str) -> bool,
+    timeout: std::time::Duration,
+) -> String {
+    let mut text = String::new();
+    let deadline = tokio::time::Instant::now() + timeout;
+    while tokio::time::Instant::now() < deadline {
+        let remaining = deadline - tokio::time::Instant::now();
+        match tokio::time::timeout(remaining, response.chunk()).await {
+            Ok(Ok(Some(chunk))) => {
+                text.push_str(&String::from_utf8_lossy(&chunk));
+                if stop(&text) {
+                    return text;
+                }
+            }
+            // Stream ended, or the read failed: nothing more is coming.
+            Ok(Ok(None)) | Ok(Err(_)) => break,
+            Err(_) => break,
+        }
+    }
+    text
+}
+
+/// A tail delivers what a script logs while a client is watching, which is what
+/// makes a live session debuggable: the alternative is refreshing a listing and
+/// guessing which lines are new.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_script_logs_stream_tails_entries_as_they_are_written() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    let context = TestContext::new();
+
+    let script_uri = "test_script_logs_stream";
+    let _ = repository::clear_log_messages(script_uri);
+    let script = r#"
+        function tick_handler(context) {
+          console.log("tailed-line-one");
+          console.warn("tailed-line-two");
+          return { status: 200, body: "ok" };
+        }
+        function init(context) {
+          routeRegistry.registerRoute("/tail/tick", "tick_handler", "GET");
+          return { success: true };
+        }
+    "#;
+    let _ = repository::upsert_script(script_uri, script);
+
+    let port = context
+        .start_server()
+        .await
+        .expect("server failed to start");
+    wait_for_server(port, 20).await.expect("Server not ready");
+
+    let client = reqwest::Client::new();
+    let base = format!("http://127.0.0.1:{}", port);
+
+    let mut tail = client
+        .get(format!(
+            "{}/engine/script_logs/stream?uri={}",
+            base, script_uri
+        ))
+        .send()
+        .await
+        .expect("tail request failed");
+    assert_eq!(tail.status(), 200);
+    assert_eq!(
+        tail.headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("text/event-stream")
+    );
+
+    // The open event means the tail is live and names the seq it starts after,
+    // so what follows is everything logged from here on.
+    let opened = read_sse_until(
+        &mut tail,
+        |text| text.contains("event: open"),
+        std::time::Duration::from_secs(10),
+    )
+    .await;
+    assert!(
+        opened.contains("event: open"),
+        "tail should announce where it starts, got: {:?}",
+        opened
+    );
+
+    // Nothing has been logged since the tail opened, so it must not have
+    // replayed the script's own init output.
+    assert!(
+        !opened.contains("tailed-line"),
+        "a tail without a backlog must not replay, got: {:?}",
+        opened
+    );
+
+    let response = client
+        .get(format!("{}/tail/tick", base))
+        .send()
+        .await
+        .expect("route request failed");
+    assert_eq!(response.status(), 200);
+    let request_id = response
+        .headers()
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .expect("response carries no x-request-id")
+        .to_string();
+
+    let tailed = read_sse_until(
+        &mut tail,
+        |text| text.contains("tailed-line-two"),
+        std::time::Duration::from_secs(15),
+    )
+    .await;
+    assert!(
+        tailed.contains("tailed-line-one") && tailed.contains("tailed-line-two"),
+        "tail should carry both lines the request logged, got: {:?}",
+        tailed
+    );
+    // Each entry arrives with the invocation that emitted it, so a tail can be
+    // narrowed the same way a listing can.
+    assert!(
+        tailed.contains(&request_id),
+        "tailed entries should carry the request id that emitted them, got: {:?}",
+        tailed
+    );
+    assert!(tailed.contains("/tail/tick"), "got: {:?}", tailed);
+    drop(tail);
+
+    // A backlog replays what is already there, for a session joining late.
+    let mut replay = client
+        .get(format!(
+            "{}/engine/script_logs/stream?uri={}&backlog=2",
+            base, script_uri
+        ))
+        .send()
+        .await
+        .expect("backlog tail request failed");
+    let replayed = read_sse_until(
+        &mut replay,
+        |text| text.contains("tailed-line-two"),
+        std::time::Duration::from_secs(10),
+    )
+    .await;
+    assert!(
+        replayed.contains("tailed-line-one") && replayed.contains("tailed-line-two"),
+        "a backlog should replay the newest entries, got: {:?}",
+        replayed
+    );
+    drop(replay);
+
+    // Filters apply to a tail exactly as they do to a listing.
+    let mut filtered = client
+        .get(format!(
+            "{}/engine/script_logs/stream?uri={}&backlog=10&level=warn",
+            base, script_uri
+        ))
+        .send()
+        .await
+        .expect("filtered tail request failed");
+    let filtered_text = read_sse_until(
+        &mut filtered,
+        |text| text.contains("tailed-line-two"),
+        std::time::Duration::from_secs(10),
+    )
+    .await;
+    assert!(
+        filtered_text.contains("tailed-line-two") && !filtered_text.contains("tailed-line-one"),
+        "a level-filtered tail should carry only that level, got: {:?}",
+        filtered_text
+    );
+    drop(filtered);
+
+    // `since` in the past replays from there, so a session can pick up the run
+    // it just missed and then follow along.
+    let mut from_past = client
+        .get(format!(
+            "{}/engine/script_logs/stream?uri={}&since=0",
+            base, script_uri
+        ))
+        .send()
+        .await
+        .expect("since tail request failed");
+    let from_past_text = read_sse_until(
+        &mut from_past,
+        |text| text.contains("tailed-line-two"),
+        std::time::Duration::from_secs(10),
+    )
+    .await;
+    assert!(
+        from_past_text.contains("tailed-line-one"),
+        "a tail starting in the past should replay from there, got: {:?}",
+        from_past_text
+    );
+    drop(from_past);
+
+    // `since` in the future has nothing to replay, and a tail with nothing to
+    // replay starts at the end of the log rather than at the beginning of it.
+    let future_millis = chrono::Utc::now().timestamp_millis() + 60_000;
+    let mut from_future = client
+        .get(format!(
+            "{}/engine/script_logs/stream?uri={}&since={}",
+            base, script_uri, future_millis
+        ))
+        .send()
+        .await
+        .expect("future since tail request failed");
+    let from_future_text = read_sse_until(
+        &mut from_future,
+        |text| text.contains("tailed-line"),
+        std::time::Duration::from_secs(3),
+    )
+    .await;
+    assert!(
+        from_future_text.contains("event: open") && !from_future_text.contains("tailed-line"),
+        "a tail with nothing to replay must not dredge up the whole log, got: {:?}",
+        from_future_text
+    );
+    drop(from_future);
+
+    // Invalid parameters are refused before a stream is opened, so a client is
+    // told rather than left watching a tail that will never carry anything.
+    let response = client
+        .get(format!(
+            "{}/engine/script_logs/stream?since=not-a-time",
+            base
+        ))
+        .send()
+        .await
+        .expect("bad since tail request failed");
+    assert_eq!(response.status(), 400);
+
+    let _ = repository::clear_log_messages(script_uri);
+    context.cleanup().await.expect("Failed to cleanup");
+}
+
+/// What the engine writes about a request has to be filed under that request
+/// too. The failure line is the one a developer reaches for first, and a line
+/// that cannot be tied to the run it describes sends them back to guessing.
+///
+/// Also covers the two shapes a real script has that a one-file fixture does
+/// not: output from an imported module, and a handler that fails.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_script_logs_correlate_what_the_engine_reports_about_a_request() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    let context = TestContext::new();
+
+    let script_uri = "test_script_logs_engine_reported";
+    let _ = repository::clear_log_messages(script_uri);
+
+    // The script row has to exist before its assets can reference it.
+    let script = r#"
+        import { diag } from "./server/diag.ts";
+
+        async function moveHandler(context) {
+          diag("entering move");
+          await Promise.resolve();
+          console.log("never reached");
+          return { status: 200, body: "ok" };
+        }
+
+        function init(context) {
+          routeRegistry.registerRoute("/vw-engine/:id/move", "moveHandler", "POST");
+          return { success: true };
+        }
+    "#;
+    let _ = repository::upsert_script(script_uri, script);
+    repository::upsert_asset(repository::Asset {
+        uri: "server/diag.ts".to_string(),
+        mimetype: "text/typescript".to_string(),
+        content: b"export function diag(what: string): void { console.log(\"diag: \" + what); }"
+            .to_vec(),
+        name: Some("server/diag.ts".to_string()),
+        script_uri: script_uri.to_string(),
+        created_at: std::time::SystemTime::now(),
+        updated_at: std::time::SystemTime::now(),
+    })
+    .expect("asset should be stored");
+
+    let port = context
+        .start_server()
+        .await
+        .expect("server failed to start");
+    wait_for_server(port, 20).await.expect("Server not ready");
+
+    let client = reqwest::Client::new();
+    let base = format!("http://127.0.0.1:{}", port);
+
+    let response = client
+        .post(format!("{}/vw-engine/alpha/move", base))
+        .send()
+        .await
+        .expect("route request failed");
+    assert_eq!(response.status(), 500);
+    let request_id = response
+        .headers()
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .expect("response carries no x-request-id")
+        .to_string();
+    let body = response.text().await.expect("failure response body");
+    // Scripts run synchronously, so an async handler never settles. The failure
+    // has to name that, not the type error that reading `status` off a promise
+    // happens to produce.
+    assert!(
+        body.contains("returned a promise") && body.contains("moveHandler"),
+        "a promise-returning handler should be diagnosed by name, got: {}",
+        body
+    );
+
+    let body: serde_json::Value = client
+        .get(format!(
+            "{}/engine/script_logs?uri={}&request_id={}",
+            base, script_uri, request_id
+        ))
+        .send()
+        .await
+        .expect("logs request failed")
+        .json()
+        .await
+        .expect("logs response not JSON");
+    let logs = body["logs"].as_array().expect("logs is not an array");
+
+    // Output from an imported module is the script's output, filed the same way.
+    assert!(
+        logs.iter()
+            .any(|entry| entry["message"] == "diag: entering move"),
+        "a module's output should be filed under the request too, got: {:?}",
+        logs
+    );
+
+    // The engine's own account of the failure joins the lines that led to it.
+    let failure = logs
+        .iter()
+        .find(|entry| entry["level"] == "FATAL")
+        .expect("the failure should be in the script's log");
+    assert!(
+        failure["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("moveHandler")),
+        "the failure should name the handler, got: {:?}",
+        failure
+    );
+    for entry in logs {
+        assert_eq!(entry["requestId"], request_id.as_str());
+        assert_eq!(entry["kind"], "httpRoute");
+        assert_eq!(entry["route"], "/vw-engine/:id/move");
+    }
+
+    // Nothing after the first await runs, so a handler that logs only there
+    // leaves no trace of its own — which is why the engine's line matters.
+    assert!(
+        !logs.iter().any(|entry| entry["message"] == "never reached"),
+        "nothing after an await should have run, got: {:?}",
+        logs
+    );
+
+    let _ = repository::clear_log_messages(script_uri);
     context.cleanup().await.expect("Failed to cleanup");
 }

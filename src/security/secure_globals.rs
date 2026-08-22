@@ -219,6 +219,11 @@ pub struct GlobalSecurityConfig {
     /// transaction is open — and an evaluation that rolls back would otherwise
     /// roll back its own output, losing exactly what the caller asked for.
     pub console_sink: Option<ConsoleSink>,
+    /// Which invocation the script's `console` output is attributed to.
+    ///
+    /// Empty for contexts with no invocation to name; a line written under an
+    /// empty context is stored exactly as it was before this existed.
+    pub log_context: repository::LogContext,
 }
 
 impl Default for GlobalSecurityConfig {
@@ -230,6 +235,7 @@ impl Default for GlobalSecurityConfig {
             enable_audit_logging: true,
             dry_run_sink: None,
             console_sink: None,
+            log_context: repository::LogContext::default(),
         }
     }
 }
@@ -442,7 +448,12 @@ impl SecureGlobalContext {
                 config_write.capture_console(&level, &message);
 
                 // Call actual repository function
-                repository::insert_log_message(&script_uri_write, &message, &level);
+                repository::insert_log_message_in_context(
+                    &script_uri_write,
+                    &message,
+                    &level,
+                    &config_write.log_context,
+                );
                 Ok("Log written successfully".to_string())
             },
         )?;
@@ -4635,6 +4646,13 @@ fn execute_message_handler(
             enable_audit_logging: false,
             dry_run_sink: None,
             console_sink: None,
+            // A dispatched message is its own invocation: without this its
+            // output is indistinguishable from whatever request happened to
+            // send the message.
+            log_context: crate::js_engine::HandlerInvocationKind::MessageListener.log_context(
+                crate::middleware::generate_request_id(),
+                Some(message_type.to_string()),
+            ),
         };
 
         let secure_context = SecureGlobalContext::new_with_config(user_context, security_config);
@@ -4877,6 +4895,7 @@ mod api_surface_tests {
                 enable_audit_logging: false,
                 dry_run_sink: None,
                 console_sink: None,
+                log_context: repository::LogContext::default(),
             };
             let context =
                 SecureGlobalContext::new_with_config(UserContext::admin("t".into()), config);

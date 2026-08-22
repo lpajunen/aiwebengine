@@ -23,6 +23,8 @@ Deploy a change as a change. `POST /engine/assets/batch?script=<script>` writes 
 
 Edit a file without resending it. `PATCH /engine/assets?script=<script>&asset=<path>` applies string replacements to an asset the engine already has, refusing an ambiguous match and — when the caller passes the `base_sha256` it read — a version that has moved on since. `GET /engine/assets` reads back the same way: `lines=120-180` for a range, `grep=<pattern>` to locate without downloading: see [Editing a Script's Files Without Resending Them](docs/ASSET_EDIT.md).
 
+Debug a running solution by what it says. Every line a script logs records the invocation that emitted it, so `GET /engine/script_logs?request_id=<id>` returns exactly the lines one request, scheduler tick or message listener produced, and `route=`, `kind=`, `contains=` and a `seq` cursor narrow the rest. `GET /engine/script_logs/stream` follows the same, filtered, as it is written — a live tail of a real session: see [Reading a Script's Log](docs/SCRIPT_LOGS.md).
+
 API access: script-internal, engine-internal, and external. Script-internal APIs are available only to the script itself. Engine-internal APIs are available to all scripts running in the same engine instance. External APIs are available to outside world.
 
 External API access: public, authenticated, role based. There are engine provided roles such as editor and adinistrator. Scripts can provide additional roles for authenticated users. When API endpoint required authentication, there can be a handler that checks user roles before proceeding.
@@ -100,6 +102,7 @@ In the context of aiwebengine, a **solution** refers to any website, GraphQL API
 - Authentication and security middleware
 - Test runner for solution scripts ([docs](docs/SCRIPT_TESTS.md))
 - Atomic multi-file writes for a script's assets ([docs](docs/ASSET_BATCH.md))
+- Correlated script logs with filtering and a live tail ([docs](docs/SCRIPT_LOGS.md))
 
 ### Roadmap
 

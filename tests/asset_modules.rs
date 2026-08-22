@@ -256,6 +256,8 @@ async fn imported_asset_module_executes_in_request_path() {
         route_params: None,
         auth_context: None,
         uploaded_files: None,
+        request_id: None,
+        route_pattern: None,
     })
     .expect("request execution should succeed");
 
@@ -306,6 +308,8 @@ async fn cached_module_sources_track_asset_edits() {
             route_params: None,
             auth_context: None,
             uploaded_files: None,
+            request_id: None,
+            route_pattern: None,
         })
         .expect("request execution should succeed");
         String::from_utf8(response.body).expect("response should be utf-8 text")
@@ -392,6 +396,8 @@ async fn imported_asset_root_module_executes_in_request_path() {
         route_params: None,
         auth_context: None,
         uploaded_files: None,
+        request_id: None,
+        route_pattern: None,
     })
     .expect("request execution should succeed");
 
@@ -456,6 +462,8 @@ async fn imported_multiline_asset_root_module_executes_in_request_path() {
         route_params: None,
         auth_context: None,
         uploaded_files: None,
+        request_id: None,
+        route_pattern: None,
     })
     .expect("request execution should succeed");
 
@@ -539,6 +547,8 @@ async fn imported_typescript_asset_module_with_type_exports_executes() {
         route_params: None,
         auth_context: None,
         uploaded_files: None,
+        request_id: None,
+        route_pattern: None,
     })
     .expect("request execution should succeed");
 
@@ -669,6 +679,7 @@ async fn imported_asset_module_executes_in_scheduled_path() {
     repository::clear_log_messages(script_uri).expect("logs should be clearable");
 
     let invocation = ScheduledInvocation {
+        invocation_id: "test-invocation".to_string(),
         job_id: Uuid::new_v4(),
         key: "asset-module-schedule".to_string(),
         script_uri: script_uri.to_string(),
@@ -687,6 +698,19 @@ async fn imported_asset_module_executes_in_scheduled_path() {
         logs.iter()
             .any(|entry| entry.message.contains("hello-from-scheduled")),
         "scheduled path should log imported helper output"
+    );
+
+    // A tick's output carries the run it came from, so one tick can be pulled
+    // out of a job that has run hundreds of times.
+    let entry = logs
+        .iter()
+        .find(|entry| entry.message.contains("hello-from-scheduled"))
+        .expect("logged entry should be present");
+    assert_eq!(entry.context.request_id.as_deref(), Some("test-invocation"));
+    assert_eq!(entry.context.kind.as_deref(), Some("scheduled"));
+    assert_eq!(
+        entry.context.route.as_deref(),
+        Some("asset-module-schedule")
     );
 
     assert!(repository::delete_asset(script_uri, asset_uri));
@@ -766,6 +790,8 @@ async fn nested_asset_relative_import_chain_executes_in_request_path() {
         route_params: None,
         auth_context: None,
         uploaded_files: None,
+        request_id: None,
+        route_pattern: None,
     })
     .expect("request execution should succeed");
 
@@ -864,6 +890,8 @@ async fn edited_imported_asset_invalidates_prepared_program_cache() {
             route_params: None,
             auth_context: None,
             uploaded_files: None,
+            request_id: None,
+            route_pattern: None,
         })
         .expect("request execution should succeed");
         String::from_utf8(response.body).expect("utf-8 body")

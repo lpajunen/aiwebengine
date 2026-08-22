@@ -19,6 +19,11 @@ pub enum RouteLookup {
     Handler {
         script_uri: String,
         handler_name: String,
+        /// The registered pattern that matched, e.g. `/things/:id`. The caller
+        /// has the concrete path already; what it cannot reconstruct is which
+        /// registration served it, which is what attributes a request's logs
+        /// and metrics to a handler rather than to one parameter value.
+        pattern: String,
         /// Parameters extracted from `:param` path segments
         params: HashMap<String, String>,
         /// True when a HEAD request was served by falling back to the path's
@@ -267,6 +272,7 @@ fn resolve(index: &IndexInner, host: &str, path: &str, method: &str) -> RouteLoo
         && let RouteLookup::Handler {
             script_uri,
             handler_name,
+            pattern,
             params,
             ..
         } = match_index(index, host, path, "GET")
@@ -274,6 +280,7 @@ fn resolve(index: &IndexInner, host: &str, path: &str, method: &str) -> RouteLoo
         return RouteLookup::Handler {
             script_uri,
             handler_name,
+            pattern,
             params,
             strip_body: true,
         };
@@ -289,6 +296,8 @@ fn match_index(index: &IndexInner, host: &str, path: &str, method: &str) -> Rout
         return RouteLookup::Handler {
             script_uri: target.script_uri.clone(),
             handler_name: target.handler_name.clone(),
+            // An exact registration is its own pattern.
+            pattern: path.to_string(),
             params: HashMap::new(),
             strip_body: false,
         };
@@ -312,6 +321,7 @@ fn match_index(index: &IndexInner, host: &str, path: &str, method: &str) -> Rout
         return RouteLookup::Handler {
             script_uri: route.target.script_uri.clone(),
             handler_name: route.target.handler_name.clone(),
+            pattern: route.pattern.clone(),
             params,
             strip_body: false,
         };

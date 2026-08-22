@@ -81,6 +81,11 @@ impl ScheduledJob {
 #[derive(Debug, Clone)]
 pub struct ScheduledInvocation {
     pub job_id: Uuid,
+    /// Identifies this one run of the job, as distinct from `job_id`, which is
+    /// the same for every run. Both the engine's own lines about the run and
+    /// the lines the job itself logs are filed under it, so a single tick can
+    /// be pulled out of a busy script's log.
+    pub invocation_id: String,
     pub key: String,
     pub script_uri: String,
     pub handler_name: String,
@@ -500,6 +505,7 @@ impl Scheduler {
     fn build_invocation(job: &ScheduledJob, scheduled_for: DateTime<Utc>) -> ScheduledInvocation {
         ScheduledInvocation {
             job_id: job.id,
+            invocation_id: crate::middleware::generate_request_id(),
             key: job.key.clone(),
             script_uri: job.script_uri.clone(),
             handler_name: job.handler_name.clone(),
@@ -508,6 +514,15 @@ impl Scheduler {
             interval_seconds: None,
             interval_milliseconds: None,
         }
+    }
+
+    /// File a line the engine writes about a run under the same invocation the
+    /// job's own output is filed under.
+    fn invocation_log_context(invocation: &ScheduledInvocation) -> repository::LogContext {
+        js_engine::HandlerInvocationKind::Scheduled.log_context(
+            invocation.invocation_id.clone(),
+            Some(invocation.key.clone()),
+        )
     }
 
     /// Generate a unique lock key for a job
@@ -652,6 +667,7 @@ impl Scheduler {
 
             claimed.push(ScheduledInvocation {
                 job_id: row.get("job_id"),
+                invocation_id: crate::middleware::generate_request_id(),
                 key: row.get("job_key"),
                 script_uri: row.get("script_uri"),
                 handler_name: row.get("handler_name"),
@@ -806,7 +822,7 @@ impl Scheduler {
                     error = %err,
                     "Scheduler job failed"
                 );
-                repository::insert_log_message_async(
+                repository::insert_log_message_async_in_context(
                     &invocation.script_uri,
                     &format!(
                         "scheduler job '{}' failed at {}: {}",
@@ -815,6 +831,7 @@ impl Scheduler {
                         err
                     ),
                     "FATAL",
+                    &Self::invocation_log_context(&invocation),
                 )
                 .await;
             }
@@ -826,7 +843,7 @@ impl Scheduler {
                     error = %join_err,
                     "Scheduler job panicked"
                 );
-                repository::insert_log_message_async(
+                repository::insert_log_message_async_in_context(
                     &invocation.script_uri,
                     &format!(
                         "scheduler job '{}' panicked at {}: {}",
@@ -835,6 +852,7 @@ impl Scheduler {
                         join_err
                     ),
                     "FATAL",
+                    &Self::invocation_log_context(&invocation),
                 )
                 .await;
             }

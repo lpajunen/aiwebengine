@@ -668,6 +668,8 @@ async fn test_secure_request_execution() {
         route_params: None,
         auth_context: None,
         uploaded_files: None,
+        request_id: None,
+        route_pattern: None,
     };
     let request_result = execute_script_for_request_secure(request_params);
 

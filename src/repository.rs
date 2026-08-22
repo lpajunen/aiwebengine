@@ -100,6 +100,12 @@ pub struct LogEntry {
     pub message: String,
     pub level: String,
     pub timestamp: SystemTime,
+    /// Monotonic write order. Breaks `timestamp` ties, and doubles as the
+    /// cursor a caller pages or tails from. Zero for entries that were never
+    /// read back from the database (error placeholders).
+    pub seq: i64,
+    /// Which invocation emitted this line, when one did. See [`LogContext`].
+    pub context: LogContext,
 }
 
 impl LogEntry {
@@ -109,7 +115,50 @@ impl LogEntry {
             message,
             level,
             timestamp,
+            seq: 0,
+            context: LogContext::default(),
         }
+    }
+
+    /// Attach the invocation this entry was emitted by.
+    pub fn with_context(mut self, seq: i64, context: LogContext) -> Self {
+        self.seq = seq;
+        self.context = context;
+        self
+    }
+}
+
+/// Identifies the invocation a log line was emitted by.
+///
+/// A script's output is otherwise one undifferentiated stream: the lines from a
+/// route call, a scheduler tick and a stream connection interleave and cannot be
+/// separated again. Carrying this down to each write is what lets a caller ask
+/// for "the lines this one request produced" or "everything this route logged".
+///
+/// Every field is optional because engine-internal writes — startup, transpiler
+/// diagnostics — have no invocation to name.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct LogContext {
+    /// Groups the lines one invocation emitted. For HTTP this is the request's
+    /// `x-request-id`, so a client holding the response header can ask for
+    /// exactly the lines its own call produced; other invocation kinds generate
+    /// one per run.
+    pub request_id: Option<String>,
+    /// What sort of invocation this was: `httpRoute`, `scheduled`,
+    /// `streamCustomization`, … — the names
+    /// `js_engine::HandlerInvocationKind` uses.
+    pub kind: Option<String>,
+    /// The registered route pattern (`/things/:id`), not the concrete path, so
+    /// that filtering by it aggregates every call to the same handler. For
+    /// invocations that are not HTTP routes this names the job, stream or tool.
+    pub route: Option<String>,
+}
+
+impl LogContext {
+    /// True when this context names nothing, i.e. there is no invocation to
+    /// attribute the line to.
+    pub fn is_empty(&self) -> bool {
+        self.request_id.is_none() && self.kind.is_none() && self.route.is_none()
     }
 }
 
@@ -122,6 +171,23 @@ pub struct LogQuery {
     pub level: Option<String>,
     /// Keep only entries logged at or after this instant.
     pub since: Option<SystemTime>,
+    /// Keep only entries written after this [`LogEntry::seq`]. Used to page or
+    /// tail forward without re-reading what the caller already has, and unlike
+    /// `since` it cannot repeat or skip entries that share a timestamp. Set
+    /// with `limit`, it takes the *oldest* entries past the cursor, so reading
+    /// forward one page at a time cannot skip what falls between pages.
+    pub after_seq: Option<i64>,
+    /// Keep only entries whose message contains this substring, matched
+    /// case-insensitively.
+    pub contains: Option<String>,
+    /// Keep only the entries one invocation emitted. See
+    /// [`LogContext::request_id`].
+    pub request_id: Option<String>,
+    /// Keep only entries from invocations of this kind, e.g. `scheduled`.
+    /// Matched case-insensitively.
+    pub kind: Option<String>,
+    /// Keep only entries logged while serving this registered route pattern.
+    pub route: Option<String>,
     /// Keep at most this many of the *newest* matching entries.
     pub limit: Option<i64>,
 }
@@ -1969,19 +2035,27 @@ async fn db_insert_log_message<'e, E>(
     script_uri: &str,
     message: &str,
     log_level: &str,
+    context: &LogContext,
 ) -> AppResult<()>
 where
     E: sqlx::Executor<'e, Database = sqlx::Postgres>,
 {
     sqlx::query(
+        // `clock_timestamp()`, not `NOW()`: `NOW()` is the *transaction's*
+        // start time, so every line a script wrote inside one transaction —
+        // which is how `/engine/eval` and the test runner execute — would carry
+        // the same timestamp and lose its order.
         r#"
-        INSERT INTO logs (script_uri, message, log_level, created_at)
-        VALUES ($1, $2, $3, NOW())
+        INSERT INTO logs (script_uri, message, log_level, created_at, request_id, kind, route)
+        VALUES ($1, $2, $3, clock_timestamp(), $4, $5, $6)
         "#,
     )
     .bind(script_uri)
     .bind(message)
     .bind(log_level)
+    .bind(context.request_id.as_deref())
+    .bind(context.kind.as_deref())
+    .bind(context.route.as_deref())
     .execute(executor)
     .await
     .map_err(|e| {
@@ -2002,6 +2076,11 @@ where
 /// Database-backed log query. Filters are applied in SQL so callers never pull
 /// the whole table just to throw most of it away, and `limit` keeps the
 /// *newest* matching entries — rows come back newest-first.
+///
+/// With `after_seq` the limit works the other way round, keeping the *oldest*
+/// entries past the cursor: a caller reading forward wants the next page after
+/// what it has, and keeping the newest would silently skip everything in
+/// between. Rows still come back newest-first either way.
 async fn db_query_log_messages<'e, E>(executor: E, query: &LogQuery) -> AppResult<Vec<LogEntry>>
 where
     E: sqlx::Executor<'e, Database = sqlx::Postgres>,
@@ -2009,22 +2088,56 @@ where
     // Levels are stored upper-case; normalise so `?level=error` matches.
     let level = query.level.as_ref().map(|l| l.to_uppercase());
     let since = query.since.map(DateTime::<Utc>::from);
+    // `contains` is a literal substring, not a pattern: escape what LIKE would
+    // otherwise read as wildcards so searching for `a_b` or `100%` works.
+    let contains = query.contains.as_ref().map(|needle| {
+        format!(
+            "%{}%",
+            needle
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_")
+        )
+    });
 
     // A NULL bind disables the corresponding filter, and `LIMIT NULL` means
     // "no limit" in Postgres, so one statement covers every combination.
     let rows = sqlx::query(
+        // `seq` breaks `created_at` ties, so a listing has one stable order
+        // rather than an arbitrary one per query — which is what makes paging
+        // and tailing by `seq` reliable.
         r#"
-        SELECT script_uri, message, log_level, created_at FROM logs
-        WHERE ($1::text IS NULL OR script_uri = $1)
-          AND ($2::text IS NULL OR log_level = $2)
-          AND ($3::timestamptz IS NULL OR created_at >= $3)
-        ORDER BY created_at DESC
-        LIMIT $4::bigint
+        WITH matching AS (
+            SELECT script_uri, message, log_level, created_at, seq, request_id, kind, route
+            FROM logs
+            WHERE ($1::text IS NULL OR script_uri = $1)
+              AND ($2::text IS NULL OR log_level = $2)
+              AND ($3::timestamptz IS NULL OR created_at >= $3)
+              AND ($4::text IS NULL OR message ILIKE $4)
+              AND ($5::text IS NULL OR request_id = $5)
+              AND ($6::text IS NULL OR lower(kind) = lower($6))
+              AND ($7::text IS NULL OR route = $7)
+              AND ($8::bigint IS NULL OR seq > $8)
+            -- Without a cursor the constant leaves the ordering to the keys
+            -- that follow, so the limit keeps the newest entries; with one it
+            -- orders oldest-first, so the limit keeps the next page instead.
+            ORDER BY
+              CASE WHEN $8::bigint IS NULL THEN 0 ELSE seq END ASC,
+              created_at DESC,
+              seq DESC
+            LIMIT $9::bigint
+        )
+        SELECT * FROM matching ORDER BY created_at DESC, seq DESC
         "#,
     )
     .bind(query.script_uri.as_deref())
     .bind(level.as_deref())
     .bind(since)
+    .bind(contains.as_deref())
+    .bind(query.request_id.as_deref())
+    .bind(query.kind.as_deref())
+    .bind(query.route.as_deref())
+    .bind(query.after_seq)
     .bind(query.limit)
     .fetch_all(executor)
     .await
@@ -2043,9 +2156,16 @@ where
             let message: String = row.try_get("message")?;
             let log_level: String = row.try_get("log_level")?;
             let created_at: DateTime<Utc> = row.try_get("created_at")?;
+            let seq: i64 = row.try_get("seq")?;
+            let context = LogContext {
+                request_id: row.try_get("request_id")?,
+                kind: row.try_get("kind")?,
+                route: row.try_get("route")?,
+            };
             // Convert chrono DateTime to SystemTime
             let system_time = SystemTime::from(created_at);
-            Ok(LogEntry::new(script_uri, message, log_level, system_time))
+            Ok(LogEntry::new(script_uri, message, log_level, system_time)
+                .with_context(seq, context))
         })
         .collect::<Result<Vec<LogEntry>, sqlx::Error>>()
         .map_err(|e| {
@@ -4192,13 +4312,43 @@ pub fn mark_script_initialized_with_registrations(
 
 /// Insert log message with error handling
 pub fn insert_log_message(script_uri: &str, message: &str, log_level: &str) {
-    run_blocking(insert_log_message_async(script_uri, message, log_level))
+    insert_log_message_in_context(script_uri, message, log_level, &LogContext::default())
+}
+
+/// Insert a log message attributed to the invocation that emitted it.
+///
+/// Engine-internal writes keep using [`insert_log_message`]; a line written on
+/// behalf of a script's `console` should come through here so it can be traced
+/// back to the request, tick or connection it belongs to.
+pub fn insert_log_message_in_context(
+    script_uri: &str,
+    message: &str,
+    log_level: &str,
+    context: &LogContext,
+) {
+    run_blocking(insert_log_message_async_in_context(
+        script_uri, message, log_level, context,
+    ))
 }
 
 /// Async variant of [`insert_log_message`] for callers already in async context
 pub async fn insert_log_message_async(script_uri: &str, message: &str, log_level: &str) {
+    insert_log_message_async_in_context(script_uri, message, log_level, &LogContext::default())
+        .await
+}
+
+/// Async variant of [`insert_log_message_in_context`].
+pub async fn insert_log_message_async_in_context(
+    script_uri: &str,
+    message: &str,
+    log_level: &str,
+    context: &LogContext,
+) {
     let repo = get_repository();
-    if let Err(e) = repo.insert_log(script_uri, message, log_level).await {
+    if let Err(e) = repo
+        .insert_log(script_uri, message, log_level, context)
+        .await
+    {
         error!(
             "Failed to insert log message for {}: {}. Message: {}",
             script_uri, e, message
@@ -5329,7 +5479,13 @@ pub trait Repository: Send + Sync {
     async fn delete_asset(&self, script_uri: &str, uri: &str) -> AppResult<bool>;
 
     // Log operations
-    async fn insert_log(&self, script_uri: &str, message: &str, level: &str) -> AppResult<()>;
+    async fn insert_log(
+        &self,
+        script_uri: &str,
+        message: &str,
+        level: &str,
+        context: &LogContext,
+    ) -> AppResult<()>;
     async fn fetch_logs(&self, script_uri: &str) -> AppResult<Vec<LogEntry>>;
     async fn fetch_all_logs(&self) -> AppResult<Vec<LogEntry>>;
     async fn query_logs(&self, query: &LogQuery) -> AppResult<Vec<LogEntry>>;
@@ -5857,14 +6013,20 @@ impl Repository for PostgresRepository {
         Ok(result)
     }
 
-    async fn insert_log(&self, script_uri: &str, message: &str, level: &str) -> AppResult<()> {
+    async fn insert_log(
+        &self,
+        script_uri: &str,
+        message: &str,
+        level: &str,
+        context: &LogContext,
+    ) -> AppResult<()> {
         let executor = crate::database::get_current_executor(&self.pool);
         match executor {
             crate::database::TransactionExecutor::Transaction(tx) => {
-                db_insert_log_message(&mut **tx, script_uri, message, level).await
+                db_insert_log_message(&mut **tx, script_uri, message, level, context).await
             }
             crate::database::TransactionExecutor::Pool(pool) => {
-                db_insert_log_message(pool, script_uri, message, level).await
+                db_insert_log_message(pool, script_uri, message, level, context).await
             }
         }
     }

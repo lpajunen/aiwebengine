@@ -71,6 +71,7 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
         engine_api::read_script_route,
         engine_api::script_logs_route,
         engine_api::script_logs_delete_route,
+        engine_api::script_logs_stream_route,
         engine_api::routes_route,
         engine_api::run_tests_route,
         engine_api::check_route,
@@ -345,6 +346,18 @@ pub fn get_rust_openapi_spec() -> String {
                         "security": [{"oauth2": []}]
                     }
                 }));
+
+                // The log tail is annotated on its handler like every other
+                // engine endpoint; what the annotation cannot say is that the
+                // response is an event stream rather than a single document.
+                if let Some(operation) = paths
+                    .get_mut("/engine/script_logs/stream")
+                    .and_then(|path| path.get_mut("get"))
+                    .and_then(|get| get.as_object_mut())
+                {
+                    operation.insert("x-protocol".to_string(), "text/event-stream".into());
+                    operation.insert("x-transport".to_string(), "sse".into());
+                }
 
                 // MCP endpoint
                 paths.insert("/mcp".to_string(), serde_json::json!({
@@ -1142,7 +1155,7 @@ async fn execute_startup_scripts() -> AppResult<()> {
                 .map(|e| format!("Script execution failed: {}", e))
                 .unwrap_or_else(|| "Script execution failed".to_string());
             if let Err(e) = repository::get_repository()
-                .insert_log(uri, &error_msg, "FATAL")
+                .insert_log(uri, &error_msg, "FATAL", &repository::LogContext::default())
                 .await
             {
                 warn!("Failed to log error to database: {}", e);
@@ -2321,6 +2334,10 @@ async fn setup_routes(
                 .delete(engine_api::script_logs_delete_route),
         )
         .route(
+            "/engine/script_logs/stream",
+            axum::routing::get(engine_api::script_logs_stream_route),
+        )
+        .route(
             "/engine/routes",
             axum::routing::get(engine_api::routes_route),
         )
@@ -2583,13 +2600,14 @@ async fn handle_dynamic_request(
         }
     };
 
-    let (owner_uri, handler_name, route_params, strip_body) = match route_lookup {
+    let (owner_uri, handler_name, route_pattern, route_params, strip_body) = match route_lookup {
         route_index::RouteLookup::Handler {
             script_uri,
             handler_name,
+            pattern,
             params,
             strip_body,
-        } => (script_uri, handler_name, params, strip_body),
+        } => (script_uri, handler_name, pattern, params, strip_body),
         no_handler => {
             // Extract request ID from extensions
             let request_id = req
@@ -2741,6 +2759,8 @@ async fn handle_dynamic_request(
 
     let path_clone = path.clone();
     let headers_for_worker = header_map;
+    let request_id_worker = request_id.clone();
+    let route_pattern_worker = route_pattern.clone();
     let worker = move || -> Result<js_engine::JsHttpResponse, String> {
         // Create authentication context for JavaScript
         let auth_context = if let Some(ref auth_user) = auth_user {
@@ -2781,10 +2801,21 @@ async fn handle_dynamic_request(
             auth_context: Some(auth_context),
             route_params: Some(route_params.clone()),
             uploaded_files: Some(uploaded_files.clone()),
+            // Files this handler's log lines under the same id the caller got
+            // back in `x-request-id`, and under the registration that matched
+            // rather than the concrete path.
+            request_id: Some(request_id_worker.clone()),
+            route_pattern: Some(route_pattern_worker.clone()),
         };
 
         js_engine::execute_script_for_request_secure(params)
     };
+
+    // What the engine itself writes about this request belongs with what the
+    // handler wrote: a failure, a timeout or a panic is the line a developer
+    // most needs, and it is useless if it cannot be tied to the run it describes.
+    let request_log_context = js_engine::HandlerInvocationKind::HttpRoute
+        .log_context(request_id.clone(), Some(route_pattern.clone()));
 
     // The timeout must wrap the un-awaited join handle: awaiting spawn_blocking first
     // would block until the script finishes and the timeout could never fire. On
@@ -2798,6 +2829,20 @@ async fn handle_dynamic_request(
     {
         Ok(join) => join.map_err(|e| format!("join error: {}", e)),
         Err(_) => {
+            // A timed-out request left no trace in the script's own log before
+            // this: the handler was abandoned mid-run, so unless the engine
+            // says what happened, the log simply stops mid-invocation.
+            let error_msg = format!(
+                "Handler '{}' exceeded its {}ms budget and was stopped",
+                handler_name, script_timeout_ms
+            );
+            repository::insert_log_message_async_in_context(
+                &owner_uri,
+                &error_msg,
+                "FATAL",
+                &request_log_context,
+            )
+            .await;
             return error_to_response(error::errors::script_timeout(&path, &request_id));
         }
     };
@@ -2828,7 +2873,13 @@ async fn handle_dynamic_request(
                 "Script execution failed for handler '{}': {}",
                 handler_name, e
             );
-            repository::insert_log_message_async(&owner_uri, &error_msg, "FATAL").await;
+            repository::insert_log_message_async_in_context(
+                &owner_uri,
+                &error_msg,
+                "FATAL",
+                &request_log_context,
+            )
+            .await;
 
             error_to_response(error::errors::script_execution_failed(
                 &path,
@@ -2841,6 +2892,14 @@ async fn handle_dynamic_request(
                 "[{}] ❌ Task/runtime error for {} {}: {} (handler: {}, script: {})",
                 request_id, method_log, path_log, e, handler_name, owner_uri
             );
+            let error_msg = format!("Handler '{}' did not run: {}", handler_name, e);
+            repository::insert_log_message_async_in_context(
+                &owner_uri,
+                &error_msg,
+                "FATAL",
+                &request_log_context,
+            )
+            .await;
             error_to_response(error::errors::internal_server_error(&path, &e, &request_id))
         }
     }

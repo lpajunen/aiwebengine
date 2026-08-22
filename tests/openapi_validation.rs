@@ -165,6 +165,8 @@ async fn test_openapi_contains_rust_endpoints() {
         "/health",
         "/engine/health/cluster",
         "/engine/run_tests",
+        "/engine/script_logs",
+        "/engine/script_logs/stream",
         "/graphql",
         "/graphql/ws",
         "/graphql/sse",
@@ -556,4 +558,38 @@ async fn test_openapi_asset_and_stream_default_groups() {
 
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
+}
+
+/// The log tail answers with an event stream, not a document. A client reading
+/// the spec has to be able to tell that apart before it opens the connection,
+/// the same way it can for the GraphQL subscription endpoints.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_openapi_log_tail_is_marked_as_an_event_stream() {
+    let ctx = TestContext::new();
+    let port = ctx.start_server().await.expect("Failed to start server");
+    wait_for_server(port, 30)
+        .await
+        .expect("Server failed to start");
+
+    let client = reqwest::Client::new();
+    let url = format!("http://localhost:{}/engine/openapi.json", port);
+
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .expect("Failed to fetch OpenAPI spec");
+
+    let spec: Value = response.json().await.expect("Failed to parse JSON");
+    let operation = &spec["paths"]["/engine/script_logs/stream"]["get"];
+    assert!(
+        operation.is_object(),
+        "the log tail should be documented in the OpenAPI spec"
+    );
+    assert_eq!(
+        operation["x-protocol"].as_str(),
+        Some("text/event-stream"),
+        "the log tail should be marked as an event stream"
+    );
+    assert_eq!(operation["x-transport"].as_str(), Some("sse"));
 }

@@ -419,7 +419,11 @@ pub fn list_scripts_authorized(user: &UserContext) -> Vec<repository::ScriptMeta
 }
 
 /// One log entry as JSON. `scriptUri` is what lets an all-scripts listing
-/// attribute each line to the script that logged it.
+/// attribute each line to the script that logged it, and `requestId`/`kind`/
+/// `route` are what let a caller pull one invocation's lines out of it.
+///
+/// `seq` is the entry's position in the engine's write order: pass the last one
+/// seen back as `after_seq` to read only what has been written since.
 pub fn log_entry_json(entry: &repository::LogEntry) -> Value {
     let timestamp_ms = entry
         .timestamp
@@ -430,7 +434,11 @@ pub fn log_entry_json(entry: &repository::LogEntry) -> Value {
         "scriptUri": entry.script_uri,
         "message": entry.message,
         "level": entry.level,
-        "timestamp": timestamp_ms
+        "timestamp": timestamp_ms,
+        "seq": entry.seq,
+        "requestId": entry.context.request_id,
+        "kind": entry.context.kind,
+        "route": entry.context.route,
     })
 }
 
@@ -444,11 +452,23 @@ pub fn query_logs_authorized(
     user: &UserContext,
     query: &repository::LogQuery,
 ) -> AppResult<Vec<Value>> {
-    user.require_capability(&Capability::ViewLogs)?;
-    Ok(repository::query_log_messages(query)?
+    Ok(query_log_entries_authorized(user, query)?
         .iter()
         .map(log_entry_json)
         .collect())
+}
+
+/// As [`query_logs_authorized`], but answering with the entries themselves.
+///
+/// The live tail needs each entry's `seq` to advance its cursor, and reading it
+/// back out of the JSON would be a worse kind of coupling. Both functions go
+/// through this one so the capability check exists once.
+pub fn query_log_entries_authorized(
+    user: &UserContext,
+    query: &repository::LogQuery,
+) -> AppResult<Vec<repository::LogEntry>> {
+    user.require_capability(&Capability::ViewLogs)?;
+    repository::query_log_messages(query)
 }
 
 /// Number of entries per script that a prune keeps; mirrors the repository's
@@ -2840,6 +2860,18 @@ pub struct LogParams {
     level: Option<String>,
     /// Milliseconds since the Unix epoch, or an RFC 3339 timestamp.
     since: Option<String>,
+    /// Only entries written after this `seq`, for reading forward from where a
+    /// previous response ended.
+    after_seq: Option<i64>,
+    /// Only entries whose message contains this substring.
+    contains: Option<String>,
+    /// Only the entries one invocation emitted, by `x-request-id` or the id a
+    /// non-HTTP invocation was given.
+    request_id: Option<String>,
+    /// Only entries from invocations of this kind, e.g. `scheduled`.
+    kind: Option<String>,
+    /// Only entries logged while serving this registered route pattern.
+    route: Option<String>,
     limit: Option<i64>,
 }
 
@@ -2867,6 +2899,11 @@ fn parse_since(raw: &str) -> Option<std::time::SystemTime> {
         ("uri" = Option<String>, Query, description = "Script URI; omit for logs across all scripts"),
         ("level" = Option<String>, Query, description = "Only entries at this level, e.g. ERROR"),
         ("since" = Option<String>, Query, description = "Only entries at or after this time (epoch millis or RFC 3339)"),
+        ("after_seq" = Option<i64>, Query, description = "Only entries written after this seq; read forward from where a previous response ended"),
+        ("contains" = Option<String>, Query, description = "Only entries whose message contains this substring"),
+        ("request_id" = Option<String>, Query, description = "Only the entries one invocation emitted, by x-request-id or a non-HTTP invocation's id"),
+        ("kind" = Option<String>, Query, description = "Only entries from invocations of this kind, e.g. httpRoute, scheduled, streamCustomization"),
+        ("route" = Option<String>, Query, description = "Only entries logged while serving this registered route pattern, e.g. /things/:id"),
         ("limit" = Option<i64>, Query, description = "Keep at most this many of the newest matching entries"),
     ),
     responses(
@@ -2906,6 +2943,11 @@ pub async fn script_logs_route(
         script_uri: params.uri,
         level: params.level,
         since,
+        after_seq: params.after_seq,
+        contains: params.contains,
+        request_id: params.request_id,
+        kind: params.kind,
+        route: params.route,
         limit: params.limit,
     };
 
@@ -2945,6 +2987,293 @@ pub async fn script_logs_route(
             "timestamp": iso_timestamp(),
         }),
     )
+}
+
+/// How often a live tail looks for entries written since its cursor.
+///
+/// Short enough that a person driving a client sees their own actions land,
+/// long enough that an idle tail is a negligible query.
+const LOG_TAIL_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Entries one poll may carry. A burst larger than this is delivered over the
+/// following polls rather than in one unbounded write, and nothing is dropped:
+/// the cursor only advances past what was actually sent.
+const LOG_TAIL_BATCH_LIMIT: i64 = 500;
+
+/// Consecutive failed polls tolerated before the tail gives up and says so.
+/// One failure is a blip worth riding out; a run of them is a tail that has
+/// stopped being a tail, and a client that is told can reconnect from its last
+/// seq instead of silently missing everything.
+const LOG_TAIL_MAX_CONSECUTIVE_ERRORS: u32 = 3;
+
+/// Most entries a tail will replay before going live.
+const LOG_TAIL_MAX_BACKLOG: i64 = 1000;
+
+/// Filters and starting point for a live tail. The filters are the ones
+/// [`LogParams`] carries; what differs is where the stream starts.
+#[derive(Deserialize, Default)]
+pub struct LogTailParams {
+    uri: Option<String>,
+    level: Option<String>,
+    contains: Option<String>,
+    request_id: Option<String>,
+    kind: Option<String>,
+    route: Option<String>,
+    /// Start after this `seq`, replaying everything written since. This is how
+    /// a dropped tail resumes without a gap: the client reconnects with the
+    /// last seq it saw.
+    after_seq: Option<i64>,
+    /// Start at this time (epoch millis or RFC 3339) instead of at the end of
+    /// the log. Ignored when `after_seq` says where to start.
+    since: Option<String>,
+    /// Replay this many of the newest matching entries before going live.
+    /// Ignored when `after_seq` or `since` says where to start.
+    backlog: Option<i64>,
+}
+
+impl LogTailParams {
+    /// The filters, with the starting point left to the caller.
+    fn to_query(&self) -> repository::LogQuery {
+        repository::LogQuery {
+            script_uri: self.uri.clone(),
+            level: self.level.clone(),
+            since: None,
+            after_seq: None,
+            contains: self.contains.clone(),
+            request_id: self.request_id.clone(),
+            kind: self.kind.clone(),
+            route: self.route.clone(),
+            limit: None,
+        }
+    }
+}
+
+/// One SSE event carrying a log entry.
+fn log_tail_event(entry: &repository::LogEntry) -> axum::response::sse::Event {
+    axum::response::sse::Event::default()
+        .event("log")
+        .data(log_entry_json(entry).to_string())
+}
+
+/// Run one filtered log query off the async runtime.
+///
+/// The repository's query is blocking, and a tail runs one every poll for as
+/// long as the client stays connected — running them inline would park a
+/// runtime worker for the lifetime of every open tail.
+async fn query_logs_off_runtime(
+    user: UserContext,
+    query: repository::LogQuery,
+) -> AppResult<Vec<repository::LogEntry>> {
+    match tokio::task::spawn_blocking(move || query_log_entries_authorized(&user, &query)).await {
+        Ok(result) => result,
+        Err(e) => Err(crate::error::AppError::internal(format!(
+            "Log query task failed: {}",
+            e
+        ))),
+    }
+}
+
+/// Follow a script's log as it is written, as Server-Sent Events.
+///
+/// Answers the question a one-shot listing cannot: what is this script doing
+/// *now*. The tick, lease and stream paths are the hardest to debug precisely
+/// because their output interleaves with every other invocation's, so the same
+/// filters the listing takes apply here — narrowing a tail to one route, one
+/// invocation kind or one request id is what makes watching a live session
+/// legible.
+///
+/// Entries are delivered oldest-first as `log` events whose data is the same
+/// JSON the listing returns. Each carries a `seq`; reconnecting with
+/// `after_seq` set to the last one seen resumes without a gap.
+///
+/// Polls the database rather than being pushed to from the write path: every
+/// instance in a cluster writes to the same table, so a tail sees the whole
+/// cluster's output without a message bus, and it shows what was actually
+/// committed rather than lines a rolled-back transaction never kept.
+#[utoipa::path(
+    get,
+    path = "/engine/script_logs/stream",
+    tags = ["Logging"],
+    params(
+        ("uri" = Option<String>, Query, description = "Script URI; omit to tail every script"),
+        ("level" = Option<String>, Query, description = "Only entries at this level, e.g. ERROR"),
+        ("contains" = Option<String>, Query, description = "Only entries whose message contains this substring"),
+        ("request_id" = Option<String>, Query, description = "Only the entries one invocation emits"),
+        ("kind" = Option<String>, Query, description = "Only entries from invocations of this kind, e.g. httpRoute, scheduled"),
+        ("route" = Option<String>, Query, description = "Only entries logged while serving this registered route pattern"),
+        ("after_seq" = Option<i64>, Query, description = "Resume after this seq, replaying everything written since"),
+        ("since" = Option<String>, Query, description = "Start at this time (epoch millis or RFC 3339) instead of at the end of the log"),
+        ("backlog" = Option<i64>, Query, description = "Replay this many of the newest matching entries before going live"),
+    ),
+    responses(
+        (status = 200, description = "Event stream of log entries"),
+        (status = 400, description = "Invalid query parameter"),
+        (status = 403, description = "Access denied"),
+    )
+)]
+pub async fn script_logs_stream_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(params): Query<LogTailParams>,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+
+    let since = match params.since.as_deref() {
+        Some(raw) => match parse_since(raw) {
+            Some(since) => Some(since),
+            None => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    format!("Invalid 'since' value: {}", raw),
+                );
+            }
+        },
+        None => None,
+    };
+    if params.backlog.is_some_and(|backlog| backlog < 0) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "Parameter 'backlog' must not be negative".to_string(),
+        );
+    }
+    if params.after_seq.is_some_and(|seq| seq < 0) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "Parameter 'after_seq' must not be negative".to_string(),
+        );
+    }
+
+    // The opening query doubles as the authorization check: a caller without
+    // ViewLogs is refused with a status code here, rather than being handed an
+    // event stream that would never carry anything.
+    let opening = {
+        let mut query = params.to_query();
+        match (params.after_seq, since) {
+            // Resuming: everything written since the cursor, oldest first.
+            (Some(after_seq), _) => {
+                query.after_seq = Some(after_seq);
+                query.limit = Some(LOG_TAIL_BATCH_LIMIT);
+            }
+            // Starting from a time. The cursor makes the batch the *oldest*
+            // entries at or after it, which is what lets the poll loop carry
+            // the rest forward; taking the newest instead would silently drop
+            // everything between the requested time and the last page.
+            (None, Some(since)) => {
+                query.since = Some(since);
+                query.after_seq = Some(0);
+                query.limit = Some(LOG_TAIL_BATCH_LIMIT);
+            }
+            // Starting at the end: the requested backlog, or nothing at all.
+            // Even a backlog of zero reads one entry, which is what tells the
+            // tail the seq to start after; that entry is not sent on.
+            (None, None) => {
+                query.limit = Some(params.backlog.unwrap_or(0).clamp(1, LOG_TAIL_MAX_BACKLOG))
+            }
+        }
+        query
+    };
+    let replay_opening =
+        params.after_seq.is_some() || since.is_some() || params.backlog.unwrap_or(0) > 0;
+
+    let mut opening_entries = match query_logs_off_runtime(user.clone(), opening).await {
+        Ok(entries) => entries,
+        Err(e) => {
+            let status =
+                StatusCode::from_u16(e.status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            return error_response(status, format!("Failed to fetch logs: {}", e));
+        }
+    };
+    // Queries answer newest-first; a tail reads in the order things happened.
+    opening_entries.reverse();
+
+    // Where the live tail picks up: after the last entry the opening query
+    // named. With nothing to replay, finding that entry was all the opening
+    // query was for, so it is not sent on.
+    let opening_cursor = opening_entries.last().map(|entry| entry.seq);
+    if !replay_opening {
+        opening_entries.clear();
+    }
+
+    let mut cursor = match opening_cursor {
+        Some(cursor) => cursor,
+        // The opening query matched nothing, so it named no entry to start
+        // after. Starting at zero would make the first poll replay the log from
+        // the beginning, so the tail starts at the end of it instead — a filter
+        // that has not matched yet waits for a line that does. The fallback
+        // reads the newest entry written by anyone, since the filters have
+        // already been shown to match nothing that exists.
+        None => {
+            let newest = repository::LogQuery {
+                limit: Some(1),
+                ..Default::default()
+            };
+            match query_logs_off_runtime(user.clone(), newest).await {
+                Ok(entries) => entries.first().map(|entry| entry.seq).unwrap_or_default(),
+                Err(e) => {
+                    let status = StatusCode::from_u16(e.status_code())
+                        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                    return error_response(status, format!("Failed to fetch logs: {}", e));
+                }
+            }
+        }
+    };
+
+    let filters = params.to_query();
+    let stream = async_stream::stream! {
+        // Tells the client the tail is live and where it starts, so it can
+        // resume from here even if nothing is ever logged.
+        yield Ok::<_, std::convert::Infallible>(
+            axum::response::sse::Event::default()
+                .event("open")
+                .data(json!({ "seq": cursor, "timestamp": iso_timestamp() }).to_string()),
+        );
+
+        for entry in &opening_entries {
+            yield Ok(log_tail_event(entry));
+        }
+
+        let mut consecutive_errors = 0u32;
+        loop {
+            tokio::time::sleep(LOG_TAIL_POLL_INTERVAL).await;
+
+            let mut query = filters.clone();
+            query.after_seq = Some(cursor);
+            query.limit = Some(LOG_TAIL_BATCH_LIMIT);
+
+            let mut entries = match query_logs_off_runtime(user.clone(), query).await {
+                Ok(entries) => {
+                    consecutive_errors = 0;
+                    entries
+                }
+                Err(e) => {
+                    consecutive_errors += 1;
+                    warn!("Log tail query failed ({}): {}", consecutive_errors, e);
+                    if consecutive_errors >= LOG_TAIL_MAX_CONSECUTIVE_ERRORS {
+                        yield Ok(axum::response::sse::Event::default().event("error").data(
+                            json!({
+                                "error": format!("Log tail stopped: {}", e),
+                                "seq": cursor,
+                            })
+                            .to_string(),
+                        ));
+                        break;
+                    }
+                    continue;
+                }
+            };
+
+            entries.reverse();
+            for entry in &entries {
+                // Advance only past what has been sent, so a batch cut short by
+                // the limit resumes at the right place on the next poll.
+                cursor = entry.seq;
+                yield Ok(log_tail_event(entry));
+            }
+        }
+    };
+
+    axum::response::Sse::new(stream)
+        .keep_alive(axum::response::sse::KeepAlive::default())
+        .into_response()
 }
 
 /// Delete logs for one script, or prune every script back to its newest
@@ -5123,7 +5452,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "read_logs",
-            "Read log messages (useful for debugging). Returns logs for one script when uri is given, otherwise across all scripts.",
+            "Read log messages (useful for debugging). Returns logs for one script when uri is given, otherwise across all scripts. Each entry carries the invocation that emitted it (requestId, kind, route), so the lines from one request, scheduler tick or stream connection can be read on their own.",
             || {
                 json!({
                     "type": "object",
@@ -5131,6 +5460,11 @@ fn native_tools() -> &'static [NativeToolEntry] {
                         "uri": { "type": "string", "description": "Optional script URI to retrieve logs for; omit for all scripts" },
                         "level": { "type": "string", "description": "Only entries at this level, e.g. ERROR" },
                         "since": { "type": "string", "description": "Only entries at or after this time (epoch millis or RFC 3339)" },
+                        "after_seq": { "type": "integer", "description": "Only entries written after this seq; pass the highest seq from a previous read to see only what is new" },
+                        "contains": { "type": "string", "description": "Only entries whose message contains this substring" },
+                        "request_id": { "type": "string", "description": "Only the entries one invocation emitted, by x-request-id or a non-HTTP invocation's id" },
+                        "kind": { "type": "string", "description": "Only entries from invocations of this kind: httpRoute, graphqlQuery, graphqlMutation, graphqlSubscription, scheduled, streamCustomization, mcpTool, mcpPrompt, init, eval, test" },
+                        "route": { "type": "string", "description": "Only entries logged while serving this registered route pattern, e.g. /things/:id" },
                         "limit": { "type": "integer", "description": "Keep at most this many of the newest matching entries" }
                     }
                 })
@@ -5984,6 +6318,11 @@ fn tool_read_logs(args: &Value, user: &UserContext) -> Value {
         script_uri: uri.map(str::to_string),
         level: arg_str(args, "level").map(str::to_string),
         since,
+        after_seq: args.get("after_seq").and_then(Value::as_i64),
+        contains: arg_str(args, "contains").map(str::to_string),
+        request_id: arg_str(args, "request_id").map(str::to_string),
+        kind: arg_str(args, "kind").map(str::to_string),
+        route: arg_str(args, "route").map(str::to_string),
         limit,
     };
 

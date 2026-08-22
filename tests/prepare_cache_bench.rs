@@ -103,6 +103,8 @@ fn one_request(uri: &str) {
         route_params: None,
         auth_context: None,
         uploaded_files: None,
+        request_id: None,
+        route_pattern: None,
     })
     .expect("request execution");
 }

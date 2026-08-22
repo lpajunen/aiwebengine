@@ -51,6 +51,24 @@ fn init_concurrency() -> usize {
         .clamp(4, 16)
 }
 
+/// Attribute an init failure the engine reports to the script's startup.
+///
+/// It carries no invocation id: the run it describes either never reached the
+/// sandbox or was abandoned mid-run, so there is no id from that run to share.
+/// `kind` still puts the line with the rest of what bringing the script up
+/// produced.
+fn init_log_context() -> repository::LogContext {
+    repository::LogContext {
+        request_id: None,
+        kind: Some(
+            crate::js_engine::HandlerInvocationKind::Init
+                .as_str()
+                .to_string(),
+        ),
+        route: None,
+    }
+}
+
 /// Result of a script initialization attempt
 #[derive(Debug, Clone)]
 pub struct InitResult {
@@ -236,7 +254,7 @@ impl ScriptInitializer {
                     }
                     // Log FATAL error to database
                     if let Err(err) = repository::get_repository()
-                        .insert_log(script_uri, &e, "FATAL")
+                        .insert_log(script_uri, &e, "FATAL", &init_log_context())
                         .await
                     {
                         warn!("Failed to log error to database: {}", err);
@@ -256,7 +274,7 @@ impl ScriptInitializer {
                 }
                 // Log FATAL error to database
                 if let Err(err) = repository::get_repository()
-                    .insert_log(script_uri, &error_msg, "FATAL")
+                    .insert_log(script_uri, &error_msg, "FATAL", &init_log_context())
                     .await
                 {
                     warn!("Failed to log error to database: {}", err);
@@ -283,7 +301,7 @@ impl ScriptInitializer {
                 }
                 // Log FATAL error to database
                 if let Err(err) = repository::get_repository()
-                    .insert_log(script_uri, &error_msg, "FATAL")
+                    .insert_log(script_uri, &error_msg, "FATAL", &init_log_context())
                     .await
                 {
                     warn!("Failed to log error to database: {}", err);

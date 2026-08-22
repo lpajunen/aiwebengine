@@ -178,6 +178,14 @@ pub struct RequestExecutionParams {
     pub route_params: Option<HashMap<String, String>>,
     /// Uploaded files from multipart form data
     pub uploaded_files: Option<Vec<crate::parsers::UploadedFile>>,
+    /// The request's `x-request-id`, if it came through the HTTP stack. Every
+    /// log line the handler writes is filed under it, so a caller holding the
+    /// response header can ask for exactly the lines its own call produced.
+    pub request_id: Option<String>,
+    /// The registered route pattern that matched (`/things/:id`), as opposed to
+    /// the concrete `path`. Filtering logs by it aggregates every call to the
+    /// handler instead of splitting them per parameter value.
+    pub route_pattern: Option<String>,
 }
 
 /// Kinds of handler invocations supported by the runtime.
@@ -188,27 +196,52 @@ pub enum HandlerInvocationKind {
     GraphqlMutation,
     GraphqlSubscription,
     StreamCustomization,
+    /// A listener invoked by `dispatcher.sendMessage`.
+    MessageListener,
     Init,
     Scheduled,
     McpTool,
+    /// An MCP prompt handler. Unlike the other kinds it is never given a
+    /// handler context object, but its output is still attributable.
+    McpPrompt,
     Test,
     /// An ad hoc snippet run against a script's sandbox by `/engine/eval`.
     Eval,
 }
 
 impl HandlerInvocationKind {
-    fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             HandlerInvocationKind::HttpRoute => "httpRoute",
             HandlerInvocationKind::GraphqlQuery => "graphqlQuery",
             HandlerInvocationKind::GraphqlMutation => "graphqlMutation",
             HandlerInvocationKind::GraphqlSubscription => "graphqlSubscription",
             HandlerInvocationKind::StreamCustomization => "streamCustomization",
+            HandlerInvocationKind::MessageListener => "messageListener",
             HandlerInvocationKind::Init => "init",
             HandlerInvocationKind::Scheduled => "scheduled",
             HandlerInvocationKind::McpTool => "mcpTool",
+            HandlerInvocationKind::McpPrompt => "mcpPrompt",
             HandlerInvocationKind::Test => "test",
             HandlerInvocationKind::Eval => "eval",
+        }
+    }
+
+    /// Attribute a script's log output to one invocation of this kind.
+    ///
+    /// `route` names what was being served — the registered route pattern for
+    /// an HTTP route, otherwise the job, stream, resolver or tool name — so
+    /// that filtering by it collects every run of the same handler rather than
+    /// one concrete path per parameter value.
+    pub fn log_context(
+        self,
+        invocation_id: impl Into<String>,
+        route: Option<String>,
+    ) -> repository::LogContext {
+        repository::LogContext {
+            request_id: Some(invocation_id.into()),
+            kind: Some(self.as_str().to_string()),
+            route,
         }
     }
 }
@@ -239,6 +272,7 @@ pub struct JsHandlerContextBuilder {
     auth_context: Option<crate::auth::JsAuthContext>,
     connection_metadata: Option<HashMap<String, String>>,
     metadata: HashMap<String, JsonValue>,
+    invocation_id: Option<String>,
 }
 
 impl JsHandlerContextBuilder {
@@ -252,7 +286,15 @@ impl JsHandlerContextBuilder {
             auth_context: None,
             connection_metadata: None,
             metadata: HashMap::new(),
+            invocation_id: None,
         }
+    }
+
+    /// Identify this invocation to the script, so a handler can echo the id
+    /// that its log lines are filed under into a response or an error report.
+    pub fn with_invocation_id(mut self, invocation_id: impl Into<String>) -> Self {
+        self.invocation_id = Some(invocation_id.into());
+        self
     }
 
     pub fn with_script_metadata(
@@ -386,12 +428,19 @@ impl JsHandlerContextBuilder {
             auth_context,
             connection_metadata,
             metadata,
+            invocation_id,
         } = self;
 
         let request_obj = Self::build_request_object(request, auth_context, ctx)?;
 
         let context_obj = rquickjs::Object::new(ctx.clone())?;
         context_obj.set("kind", kind.as_str())?;
+
+        // The id this invocation's log lines are filed under; `/engine/script_logs`
+        // takes it as `request_id`.
+        if let Some(invocation_id) = invocation_id {
+            context_obj.set("invocationId", invocation_id)?;
+        }
 
         if let Some(script_uri) = script_uri {
             context_obj.set("scriptUri", script_uri)?;
@@ -836,6 +885,10 @@ pub fn execute_script_secure(
                         // Startup registers for real; nothing to withhold.
                         dry_run_sink: None,
                         console_sink: None,
+                        // Bringing the script up is one invocation, so its
+                        // output groups under one id like any other.
+                        log_context: HandlerInvocationKind::Init
+                            .log_context(crate::middleware::generate_request_id(), None),
                     };
 
                     // Create the register function that captures registrations
@@ -960,6 +1013,8 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                             // registration pass like startup and init().
                             let config = GlobalSecurityConfig {
                                 registration_phase: true,
+                                log_context: HandlerInvocationKind::Init
+                                    .log_context(crate::middleware::generate_request_id(), None),
                                 ..Default::default()
                             };
 
@@ -1094,10 +1149,28 @@ impl JsHttpResponse {
 ///
 /// All global functions are secured with capability checking and input validation.
 pub fn execute_script_for_request_secure(
-    params: RequestExecutionParams,
+    mut params: RequestExecutionParams,
 ) -> Result<JsHttpResponse, String> {
     let script_uri_owned = params.script_uri.clone();
     let auth_context = params.auth_context.clone(); // Clone for later use
+
+    // Everything this handler logs is filed under the request's own id, so the
+    // lines it produced can be separated from every other request's. Callers
+    // outside the HTTP stack (tests) pass none, and get a generated one.
+    let invocation_id = params
+        .request_id
+        .clone()
+        .unwrap_or_else(crate::middleware::generate_request_id);
+    // Hand the handler the same id its log lines are filed under, whether it
+    // came from the HTTP stack or was generated here.
+    params.request_id = Some(invocation_id.clone());
+    let log_context = HandlerInvocationKind::HttpRoute.log_context(
+        invocation_id.clone(),
+        params
+            .route_pattern
+            .clone()
+            .or_else(|| Some(params.path.clone())),
+    );
 
     // Per-request phase profiling (gated by AIWEBENGINE_PROFILE_REQUESTS). The
     // Instant::now() calls are always taken (they cost nanoseconds); only the
@@ -1132,6 +1205,7 @@ pub fn execute_script_for_request_secure(
         // For request handling, we don't need GraphQL registration but enable everything else
         let security_config = GlobalSecurityConfig {
             enable_audit_logging: false, // Disable for tests to avoid runtime conflicts
+            log_context: log_context.clone(),
             ..Default::default()
         };
 
@@ -1232,6 +1306,10 @@ fn invoke_handler_and_build_response(
         .with_script_metadata(&params.script_uri, &params.handler_name)
         .with_request(request_context);
 
+    if let Some(invocation_id) = params.request_id.as_ref() {
+        context_builder = context_builder.with_invocation_id(invocation_id.clone());
+    }
+
     if let Some(auth_ctx) = auth_context {
         context_builder = context_builder.with_auth_context(auth_ctx.clone());
     }
@@ -1259,6 +1337,20 @@ fn invoke_handler_and_build_response(
     if crate::database::get_current_transaction_active() {
         crate::database::Database::commit_transaction()
             .map_err(|e| format!("transaction commit failed: {}", e))?;
+    }
+
+    // A handler that returns a promise never settles, since scripts run
+    // synchronously: reading `status` off it yields `undefined` and the request
+    // fails with a type error that names neither the handler nor the cause.
+    // `/engine/eval` already refuses a promise in these words; a route handler
+    // is where the mistake is far likelier to be made.
+    if is_thenable(&result) {
+        return Err(format!(
+            "Handler '{}' returned a promise. Scripts run synchronously here — host calls \
+             like fetch() and database queries block rather than yielding — so it will never \
+             settle, and nothing after the first await runs. Drop the async/await.",
+            params.handler_name
+        ));
     }
 
     // Parse the response
@@ -1369,6 +1461,9 @@ pub fn execute_script_for_request(
 ) -> Result<(u16, String, Option<String>), String> {
     let script_uri_owned = script_uri.to_string();
     let auth_ctx = crate::auth::JsAuthContext::anonymous();
+    let invocation_id = crate::middleware::generate_request_id();
+    let log_context =
+        HandlerInvocationKind::HttpRoute.log_context(invocation_id.clone(), Some(path.to_string()));
 
     // Fetch and bundle before arming the runtime's interrupt deadline (see
     // `execute_script_for_request_secure`).
@@ -1384,6 +1479,7 @@ pub fn execute_script_for_request(
         // For request handling, we don't need full GraphQL registration (no-ops)
         let config = GlobalSecurityConfig {
             enable_audit_logging: false, // Disable audit logging to avoid runtime conflicts
+            log_context: log_context.clone(),
             ..Default::default()
         };
 
@@ -1425,7 +1521,8 @@ pub fn execute_script_for_request(
             let mut context_builder =
                 JsHandlerContextBuilder::new(HandlerInvocationKind::HttpRoute)
                     .with_script_metadata(script_uri, handler_name)
-                    .with_request(request_context);
+                    .with_request(request_context)
+                    .with_invocation_id(invocation_id.clone());
 
             context_builder = context_builder.with_auth_context(auth_ctx.clone());
 
@@ -1472,6 +1569,12 @@ pub fn execute_scheduled_handler(
     invocation: &ScheduledInvocation,
 ) -> Result<(), String> {
     let script_uri_owned = script_uri.to_string();
+    // The scheduler generated this id when it claimed the run, so the lines the
+    // engine wrote about the run and the lines the job itself wrote share it.
+    let log_context = HandlerInvocationKind::Scheduled.log_context(
+        invocation.invocation_id.clone(),
+        Some(invocation.key.clone()),
+    );
 
     // Fetch and bundle before arming the runtime's interrupt deadline (see
     // `execute_script_for_request_secure`).
@@ -1485,6 +1588,7 @@ pub fn execute_scheduled_handler(
     ctx.with(|ctx| -> Result<(), rquickjs::Error> {
         let security_config = GlobalSecurityConfig {
             enable_audit_logging: false,
+            log_context: log_context.clone(),
             ..Default::default()
         };
 
@@ -1524,6 +1628,7 @@ pub fn execute_scheduled_handler(
         let handler_context = JsHandlerContextBuilder::new(HandlerInvocationKind::Scheduled)
             .with_script_metadata(script_uri, handler_name)
             .with_metadata_value("schedule", schedule_meta)
+            .with_invocation_id(invocation.invocation_id.clone())
             .build(&ctx)
             .map_err(|e| format!("build context: {}", e))?;
 
@@ -1713,6 +1818,7 @@ fn run_test_module<'js>(
     budget_ms: u64,
     deadline: Instant,
 ) -> Result<ModuleOutcome, String> {
+    let invocation_id = crate::middleware::generate_request_id();
     let security_config = GlobalSecurityConfig {
         // A test must not mutate registries that outlive the run: routes,
         // resolvers, streams, and jobs registered here would stay registered,
@@ -1723,6 +1829,8 @@ fn run_test_module<'js>(
         enable_audit_logging: false,
         dry_run_sink: None,
         console_sink: None,
+        log_context: HandlerInvocationKind::Test
+            .log_context(invocation_id.clone(), Some(module_path.to_string())),
     };
 
     setup_secure_global_functions(
@@ -1737,6 +1845,7 @@ fn run_test_module<'js>(
 
     let handler_context = JsHandlerContextBuilder::new(HandlerInvocationKind::Test)
         .with_script_metadata(params.script_uri.clone(), module_path)
+        .with_invocation_id(invocation_id.clone())
         .build(&ctx)
         .map_err(|e| format!("build context: {}", e))?;
     // Set before evaluating the module, not just before calling a case:
@@ -1835,6 +1944,8 @@ pub fn execute_graphql_resolver(params: GraphqlResolverExecutionParams) -> Resul
     let args_owned = params.args.clone();
     let auth_context = params.auth_context.clone();
 
+    let invocation_id = crate::middleware::generate_request_id();
+
     // Fetch and bundle before arming the runtime's interrupt deadline (see
     // `execute_script_for_request_secure`). This path previously evaluated the
     // raw source, which cannot work for a TypeScript or asset-importing script.
@@ -1850,6 +1961,10 @@ pub fn execute_graphql_resolver(params: GraphqlResolverExecutionParams) -> Resul
         // For GraphQL resolvers, we don't need GraphQL registration (no-ops) or stream registration
         let config = GlobalSecurityConfig {
             enable_audit_logging: false, // Disable audit logging to avoid runtime conflicts
+            log_context: params
+                .operation_kind
+                .as_handler_kind()
+                .log_context(invocation_id.clone(), Some(params.field_name.clone())),
             ..Default::default()
         };
 
@@ -1890,6 +2005,7 @@ pub fn execute_graphql_resolver(params: GraphqlResolverExecutionParams) -> Resul
             JsHandlerContextBuilder::new(params.operation_kind.as_handler_kind())
                 .with_script_metadata(&params.script_uri, &params.resolver_function)
                 .with_request(request_context)
+                .with_invocation_id(invocation_id.clone())
                 .with_metadata_value(
                     "graphql",
                     serde_json::json!({
@@ -1988,6 +2104,10 @@ pub fn execute_mcp_prompt_handler(
         // For MCP prompt handlers, we enable minimal features
         let config = GlobalSecurityConfig {
             enable_audit_logging: false,
+            log_context: HandlerInvocationKind::McpPrompt.log_context(
+                crate::middleware::generate_request_id(),
+                Some(handler_function_owned.clone()),
+            ),
             ..Default::default()
         };
 
@@ -2056,6 +2176,9 @@ pub fn execute_mcp_tool_handler(
     let arguments_owned = arguments.clone();
     let auth_context_owned = auth_context;
     let user_context_owned = user_context;
+    let invocation_id = crate::middleware::generate_request_id();
+    let log_context = HandlerInvocationKind::McpTool
+        .log_context(invocation_id.clone(), Some(tool_name_owned.clone()));
 
     // Fetch and bundle before arming the runtime's interrupt deadline (see
     // `execute_script_for_request_secure`).
@@ -2071,6 +2194,7 @@ pub fn execute_mcp_tool_handler(
         // For MCP tool handlers, we enable minimal features
         let config = GlobalSecurityConfig {
             enable_audit_logging: false,
+            log_context: log_context.clone(),
             ..Default::default()
         };
 
@@ -2106,6 +2230,7 @@ pub fn execute_mcp_tool_handler(
         let mut context_builder = JsHandlerContextBuilder::new(HandlerInvocationKind::McpTool)
             .with_script_metadata(&script_uri_owned, &handler_function_owned)
             .with_request(request_context)
+            .with_invocation_id(invocation_id.clone())
             .with_args(arguments_owned)
             .with_metadata_value(
                 "mcp",
@@ -2190,6 +2315,9 @@ pub fn execute_stream_customization_function(
     let function_name_owned = function_name.to_string();
     let path_owned = path.to_string();
     let query_params_owned = query_params.clone();
+    let invocation_id = crate::middleware::generate_request_id();
+    let log_context = HandlerInvocationKind::StreamCustomization
+        .log_context(invocation_id.clone(), Some(path_owned.clone()));
 
     // Fetch and bundle before arming the runtime's interrupt deadline (see
     // `execute_script_for_request_secure`).
@@ -2205,6 +2333,7 @@ pub fn execute_stream_customization_function(
             // Set up global functions with minimal security for customization function
             let config = GlobalSecurityConfig {
                 enable_audit_logging: false,
+                log_context: log_context.clone(),
                 ..Default::default()
             };
 
@@ -2236,6 +2365,7 @@ pub fn execute_stream_customization_function(
                 JsHandlerContextBuilder::new(HandlerInvocationKind::StreamCustomization)
                     .with_script_metadata(&script_uri_owned, &function_name_owned)
                     .with_request(request_context)
+                    .with_invocation_id(invocation_id.clone())
                     .with_metadata_value("stream", serde_json::json!({ "path": path_owned }));
 
             if !query_params_owned.is_empty() {
@@ -2478,6 +2608,7 @@ fn run_snippet(
     program: &str,
     console: &ConsoleSink,
 ) -> EvalOutcome {
+    let invocation_id = crate::middleware::generate_request_id();
     let security_config = GlobalSecurityConfig {
         // Same rule as a test run: the APIs stay callable and report that they
         // did nothing, rather than installing registrations that outlive the
@@ -2486,6 +2617,7 @@ fn run_snippet(
         enable_audit_logging: false,
         dry_run_sink: None,
         console_sink: Some(std::sync::Arc::clone(console)),
+        log_context: HandlerInvocationKind::Eval.log_context(invocation_id.clone(), None),
     };
 
     let mut outcome = EvalOutcome::default();
@@ -2507,6 +2639,7 @@ fn run_snippet(
 
     match JsHandlerContextBuilder::new(HandlerInvocationKind::Eval)
         .with_script_metadata(params.script_uri.clone(), "eval")
+        .with_invocation_id(invocation_id.clone())
         .build(&ctx)
     {
         // Set before the program runs: its top level can already reach for
@@ -2984,6 +3117,9 @@ fn run_registration_pass(
     // Create registrations map to capture routeRegistry.registerRoute() calls during init
     let registrations = Rc::new(RefCell::new(HashMap::new()));
     let uri_owned = script_uri.to_string();
+    // One id for the whole init pass, so the program's top-level output and
+    // init()'s own output read as the single startup they are.
+    let invocation_id = crate::middleware::generate_request_id();
 
     // Shared location for detailed error message
     let error_details: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
@@ -3001,6 +3137,7 @@ fn run_registration_pass(
                 // A check reports diagnostics, not output; console writes go to
                 // the script's log as they would on a deploy.
                 console_sink: None,
+                log_context: HandlerInvocationKind::Init.log_context(invocation_id.clone(), None),
             };
 
             // Create the register function that captures registrations
@@ -3108,6 +3245,7 @@ fn run_registration_pass(
             let handler_context = JsHandlerContextBuilder::new(HandlerInvocationKind::Init)
                 .with_script_metadata(script_uri.to_string(), "init")
                 .with_metadata_value("init", init_metadata)
+                .with_invocation_id(invocation_id.clone())
                 .build(&ctx)?;
 
             // Call init function with context
@@ -4219,6 +4357,8 @@ mod tests {
             route_params: None,
             auth_context: None,
             uploaded_files: None,
+            request_id: None,
+            route_pattern: None,
         };
         let result = execute_script_for_request_secure(params);
 
@@ -4253,6 +4393,8 @@ mod tests {
             route_params: None,
             auth_context: None,
             uploaded_files: None,
+            request_id: None,
+            route_pattern: None,
         };
         let result = execute_script_for_request_secure(params);
 
@@ -4288,6 +4430,8 @@ mod tests {
             route_params: None,
             auth_context: None,
             uploaded_files: None,
+            request_id: None,
+            route_pattern: None,
         };
         let result = execute_script_for_request_secure(params);
 
@@ -4334,6 +4478,8 @@ This is **bold** text.`;
             route_params: None,
             auth_context: None,
             uploaded_files: None,
+            request_id: None,
+            route_pattern: None,
         };
         let result = execute_script_for_request_secure(params);
 
@@ -4387,6 +4533,8 @@ This is **bold** text.`;
             route_params: None,
             auth_context: None,
             uploaded_files: None,
+            request_id: None,
+            route_pattern: None,
         };
         let result = execute_script_for_request_secure(params);
 
@@ -4437,6 +4585,8 @@ This is **bold** text.`;
             route_params: None,
             auth_context: None,
             uploaded_files: None,
+            request_id: None,
+            route_pattern: None,
         };
         let result = execute_script_for_request_secure(params);
 
@@ -4487,6 +4637,8 @@ This is **bold** text.`;
             route_params: None,
             auth_context: None,
             uploaded_files: None,
+            request_id: None,
+            route_pattern: None,
         };
         let result = execute_script_for_request_secure(params);
 
@@ -4541,6 +4693,8 @@ This is **bold** text.`;
             route_params: None,
             auth_context: None,
             uploaded_files: None,
+            request_id: None,
+            route_pattern: None,
         };
         let result = execute_script_for_request_secure(params);
 
@@ -4609,6 +4763,8 @@ function hello() {
             route_params: None,
             auth_context: None,
             uploaded_files: None,
+            request_id: None,
+            route_pattern: None,
         };
         let result = execute_script_for_request_secure(params);
 
@@ -4700,6 +4856,8 @@ function hello() {
             auth_context: None,
             uploaded_files: None,
             route_params: None,
+            request_id: None,
+            route_pattern: None,
         };
 
         let result = execute_script_for_request_secure(params);
@@ -4765,6 +4923,8 @@ function hello() {
             auth_context: None,
             uploaded_files: None,
             route_params: None,
+            request_id: None,
+            route_pattern: None,
         };
 
         let result = execute_script_for_request_secure(params);
@@ -4818,6 +4978,8 @@ function hello() {
             auth_context: None,
             uploaded_files: None,
             route_params: None,
+            request_id: None,
+            route_pattern: None,
         };
 
         let result = execute_script_for_request_secure(params);
@@ -4878,6 +5040,8 @@ function hello() {
                 ("userId".to_string(), "123".to_string()),
                 ("postId".to_string(), "456".to_string()),
             ])),
+            request_id: None,
+            route_pattern: None,
         };
 
         let result = execute_script_for_request_secure(params);
@@ -4988,6 +5152,8 @@ function hello() {
             auth_context: None,
             uploaded_files: None,
             route_params: Some(HashMap::from([("userId".to_string(), "123".to_string())])),
+            request_id: None,
+            route_pattern: None,
         };
 
         let result = execute_script_for_request_secure(params);

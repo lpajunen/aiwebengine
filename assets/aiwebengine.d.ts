@@ -208,6 +208,21 @@ interface HttpResponse {
   headers?: Record<string, string>;
 }
 
+/** What sort of invocation a handler is running under */
+type HandlerInvocationKind =
+  | "httpRoute"
+  | "graphqlQuery"
+  | "graphqlMutation"
+  | "graphqlSubscription"
+  | "streamCustomization"
+  | "messageListener"
+  | "init"
+  | "scheduled"
+  | "mcpTool"
+  | "mcpPrompt"
+  | "test"
+  | "eval";
+
 /**
  * Context object passed to all handler functions
  */
@@ -219,16 +234,18 @@ interface HandlerContext {
   args?: Record<string, any>;
 
   /** Handler invocation type */
-  invocationType?:
-    | "httpRoute"
-    | "graphqlQuery"
-    | "graphqlMutation"
-    | "graphqlSubscription"
-    | "streamCustomization"
-    | "init"
-    | "scheduled"
-    | "mcpTool"
-    | "test";
+  invocationType?: HandlerInvocationKind;
+
+  /** What kind of invocation this is */
+  kind?: HandlerInvocationKind;
+
+  /**
+   * Identifies this invocation. Every log line the handler writes is filed
+   * under it, so `GET /engine/script_logs?request_id=<id>` returns exactly the
+   * lines this run produced. For an HTTP route it is the request's
+   * `x-request-id`, which the response carries back to the caller.
+   */
+  invocationId?: string;
 
   /** Additional metadata */
   metadata?: Record<string, any>;
