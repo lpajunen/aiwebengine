@@ -21,6 +21,8 @@ Inspect a running solution without deploying anything to do it. `POST /engine/ev
 
 Deploy a change as a change. `POST /engine/assets/batch?script=<script>` writes a script's files in one request — one transaction, one `init()` at the end, each file's sha256 echoed back — so a multi-file change is never applied halfway and the rest of the cluster hears about it once: see [Writing a Script's Files as One Change](docs/ASSET_BATCH.md).
 
+Edit a file without resending it. `PATCH /engine/assets?script=<script>&asset=<path>` applies string replacements to an asset the engine already has, refusing an ambiguous match and — when the caller passes the `base_sha256` it read — a version that has moved on since. `GET /engine/assets` reads back the same way: `lines=120-180` for a range, `grep=<pattern>` to locate without downloading: see [Editing a Script's Files Without Resending Them](docs/ASSET_EDIT.md).
+
 API access: script-internal, engine-internal, and external. Script-internal APIs are available only to the script itself. Engine-internal APIs are available to all scripts running in the same engine instance. External APIs are available to outside world.
 
 External API access: public, authenticated, role based. There are engine provided roles such as editor and adinistrator. Scripts can provide additional roles for authenticated users. When API endpoint required authentication, there can be a handler that checks user roles before proceeding.

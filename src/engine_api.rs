@@ -39,6 +39,19 @@ const MAX_BATCH_BYTES: usize = MAX_ASSET_BYTES;
 /// the batch route overrides it (see `lib.rs`).
 pub const MAX_BATCH_BODY_BYTES: usize = MAX_BATCH_BYTES * 4 / 3 + 1024 * 1024;
 
+/// Maximum number of edits one patch may carry.
+const MAX_ASSET_EDITS: usize = 128;
+
+/// How many matching lines a `grep=` read reports before it stops looking.
+const MAX_GREP_MATCHES: usize = 200;
+
+/// How much of a matching line a `grep=` read echoes back.
+const MAX_GREP_LINE_CHARS: usize = 512;
+
+/// Longest `grep=` pattern accepted, so a read cannot hand the regex engine an
+/// arbitrarily large program to compile.
+const MAX_GREP_PATTERN_CHARS: usize = 512;
+
 fn iso_timestamp() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
@@ -73,6 +86,24 @@ fn user_owns_script(user: &UserContext, script_uri: &str) -> bool {
 ///
 /// For anything that exposes user data, engine topology, or role changes, use
 /// [`is_user_admin`], which additionally requires an authenticated session.
+/// Whether a caller may reach the engine's administration surface at all.
+///
+/// Capabilities alone do not answer this. An anonymous caller holds
+/// `ReadScripts` and `ReadAssets` on purpose: a script serving a public
+/// request runs with the requesting user's context, and reads its own modules
+/// and assets through the sandbox with those capabilities, so a public page
+/// would stop working without them. Who may read a script's tree *through*
+/// `/engine/*` is a different question, and this is where the two part —
+/// otherwise an unauthenticated caller can list, download, and now search
+/// every script's files, and a script that carries an embedded credential
+/// carries it in public.
+///
+/// Development mode stays open: it grants anonymous callers elevated
+/// capabilities by design, so a local instance can be driven without a login.
+fn may_administer(user: &UserContext) -> bool {
+    user.is_authenticated || crate::security::is_development_mode()
+}
+
 fn has_admin_capability(user: &UserContext) -> bool {
     user.has_capability(&Capability::DeleteScripts)
 }
@@ -372,15 +403,16 @@ pub fn delete_script_authorized(user: &UserContext, uri: &str, via: Option<&str>
 
 /// Fetch script content; ReadScripts capability required (None otherwise).
 pub fn get_script_authorized(user: &UserContext, uri: &str) -> Option<String> {
-    if user.require_capability(&Capability::ReadScripts).is_err() {
+    if !may_administer(user) || user.require_capability(&Capability::ReadScripts).is_err() {
         return None;
     }
     repository::fetch_script(uri)
 }
 
-/// List script metadata; ReadScripts capability required (empty otherwise).
+/// List script metadata; an authenticated caller with the ReadScripts
+/// capability (empty otherwise).
 pub fn list_scripts_authorized(user: &UserContext) -> Vec<repository::ScriptMetadata> {
-    if user.require_capability(&Capability::ReadScripts).is_err() {
+    if !may_administer(user) || user.require_capability(&Capability::ReadScripts).is_err() {
         return Vec::new();
     }
     repository::get_all_script_metadata().unwrap_or_default()
@@ -449,9 +481,10 @@ pub fn delete_logs_authorized(user: &UserContext, uri: Option<&str>) -> AppResul
     }
 }
 
-/// Init status for one script; ReadScripts capability required.
+/// Init status for one script; an authenticated caller with the ReadScripts
+/// capability.
 pub fn init_status_authorized(user: &UserContext, uri: &str) -> Option<Value> {
-    if user.require_capability(&Capability::ReadScripts).is_err() {
+    if !may_administer(user) || user.require_capability(&Capability::ReadScripts).is_err() {
         return None;
     }
     let metadata = repository::get_script_metadata(uri).ok()?;
@@ -806,9 +839,10 @@ fn count_administrators() -> Result<usize, UserAdminError> {
 /// Whether the user may access assets of `script_uri` given the per-operation
 /// capability: capability holders, script owners, and admins all qualify.
 fn can_access_assets(user: &UserContext, script_uri: &str, capability: &Capability) -> bool {
-    user.has_capability(capability)
-        || user.has_capability(&Capability::DeleteScripts)
-        || user_owns_script(user, script_uri)
+    may_administer(user)
+        && (user.has_capability(capability)
+            || user.has_capability(&Capability::DeleteScripts)
+            || user_owns_script(user, script_uri))
 }
 
 /// List asset metadata for a script (empty when access is denied).
@@ -841,20 +875,298 @@ pub enum AssetFetchError {
     NotFound,
 }
 
-/// Fetch an asset's content as base64 (same transfer encoding the sandbox
-/// used, which the /assets and MCP contracts expose).
-pub fn fetch_asset_authorized(
+/// An inclusive, 1-based range of lines, as `lines=120-180` spells it. An
+/// absent `end` means "to the end of the file".
+#[derive(Clone, Copy)]
+pub struct LineRange {
+    pub start: usize,
+    pub end: Option<usize>,
+}
+
+impl LineRange {
+    /// Parse the `lines=` parameter: `120-180`, `120-` (to the end of the
+    /// file), or `120` (that line alone).
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        let raw = raw.trim();
+        let (start_raw, end_raw) = match raw.split_once('-') {
+            Some((start, end)) => (start.trim(), end.trim()),
+            None => (raw, raw),
+        };
+        let number = |value: &str| -> Result<usize, String> {
+            value
+                .parse::<usize>()
+                .ok()
+                .filter(|line| *line > 0)
+                .ok_or_else(|| {
+                    format!(
+                        "Invalid lines range '{}': expected 'start-end', 'start-', or 'start', \
+                         counting from 1",
+                        raw
+                    )
+                })
+        };
+        let start = number(start_raw)?;
+        let end = if end_raw.is_empty() {
+            None
+        } else {
+            Some(number(end_raw)?)
+        };
+        if let Some(end) = end
+            && end < start
+        {
+            return Err(format!(
+                "Invalid lines range '{}': end is before start",
+                raw
+            ));
+        }
+        Ok(LineRange { start, end })
+    }
+}
+
+/// How a read of one asset is scoped. The two filters compose: a `grep` inside
+/// a `lines` range searches only that range.
+#[derive(Default)]
+pub struct AssetReadOptions {
+    pub lines: Option<LineRange>,
+    pub grep: Option<String>,
+}
+
+impl AssetReadOptions {
+    /// Whether the caller asked for a view of part of the file rather than the
+    /// whole of it.
+    fn is_scoped(&self) -> bool {
+        self.lines.is_some() || self.grep.is_some()
+    }
+}
+
+/// One line a `grep=` read matched.
+pub struct GrepMatch {
+    pub line: usize,
+    pub text: String,
+    /// Whether `text` is only the beginning of a longer line.
+    pub truncated: bool,
+}
+
+impl GrepMatch {
+    fn to_json(&self) -> Value {
+        json!({
+            "line": self.line,
+            "text": self.text,
+            "truncated": self.truncated,
+        })
+    }
+}
+
+/// What a read returned: the whole file, a range of it, or the places a
+/// pattern matched.
+pub enum AssetView {
+    Full {
+        content_base64: String,
+    },
+    Range {
+        content: String,
+        start_line: usize,
+        end_line: usize,
+    },
+    Matches {
+        matches: Vec<GrepMatch>,
+        truncated: bool,
+    },
+}
+
+/// One asset as read, whole or scoped.
+pub struct AssetRead {
+    pub view: AssetView,
+    /// Digest of the whole stored asset, whichever part of it was returned —
+    /// this is what a following patch sends as `base_sha256`.
+    pub sha256: String,
+    /// Size of the whole stored asset, in bytes.
+    pub bytes: usize,
+    /// Line count of the whole asset; absent from a whole-file read, which
+    /// does not require the content to be text at all.
+    pub total_lines: Option<usize>,
+}
+
+impl AssetRead {
+    /// The response fields for this read, to be merged with the script and
+    /// asset the caller named.
+    pub fn to_json(&self) -> Value {
+        let mut body = match &self.view {
+            AssetView::Full { content_base64 } => json!({ "content": content_base64 }),
+            AssetView::Range {
+                content,
+                start_line,
+                end_line,
+            } => json!({
+                "encoding": "utf8",
+                "content": content,
+                "start_line": start_line,
+                "end_line": end_line,
+            }),
+            AssetView::Matches { matches, truncated } => json!({
+                "encoding": "utf8",
+                "matches": matches.iter().map(GrepMatch::to_json).collect::<Vec<Value>>(),
+                "match_count": matches.len(),
+                "truncated": truncated,
+            }),
+        };
+        if let Some(object) = body.as_object_mut() {
+            object.insert("sha256".to_string(), json!(self.sha256));
+            object.insert("bytes".to_string(), json!(self.bytes));
+            if let Some(total_lines) = self.total_lines {
+                object.insert("total_lines".to_string(), json!(total_lines));
+            }
+        }
+        body
+    }
+}
+
+pub enum AssetReadError {
+    AccessDenied,
+    NotFound,
+    /// The read asked for a text view of something that is not text, or asked
+    /// for it in a way that does not parse.
+    Validation(String),
+}
+
+/// Compile a `grep=` pattern, with the bounds a request-time regex needs.
+fn compile_grep(pattern: &str) -> Result<regex::Regex, AssetReadError> {
+    if pattern.is_empty() {
+        return Err(AssetReadError::Validation(
+            "Empty grep pattern: there is nothing to search for".to_string(),
+        ));
+    }
+    if pattern.chars().count() > MAX_GREP_PATTERN_CHARS {
+        return Err(AssetReadError::Validation(format!(
+            "grep pattern too long (max {} characters)",
+            MAX_GREP_PATTERN_CHARS
+        )));
+    }
+    regex::RegexBuilder::new(pattern)
+        .size_limit(1 << 20)
+        .dfa_size_limit(1 << 20)
+        .build()
+        .map_err(|e| AssetReadError::Validation(format!("Invalid grep pattern: {}", e)))
+}
+
+/// Cut a line down to what a match listing echoes back, on a character
+/// boundary. Reports whether anything was cut.
+fn truncate_chars(line: &str, max: usize) -> (String, bool) {
+    match line.char_indices().nth(max) {
+        Some((index, _)) => (line[..index].to_string(), true),
+        None => (line.to_string(), false),
+    }
+}
+
+/// Read one asset, whole or scoped to a line range and/or a pattern.
+///
+/// The unscoped read is the original contract — the whole file, base64 — and
+/// stays that way for callers already parsing it. `lines` and `grep` are for a
+/// caller that wants to look at part of a file, or to find out where to look,
+/// without pulling the whole thing across; both require the asset to be UTF-8
+/// text, since neither means anything otherwise.
+///
+/// Every read reports the digest of the whole asset, not of the part
+/// returned, because that digest is what a following patch has to send to
+/// prove it edited the version it read.
+pub fn read_asset_authorized(
     user: &UserContext,
     script_uri: &str,
     asset_uri: &str,
-) -> Result<String, AssetFetchError> {
+    options: &AssetReadOptions,
+) -> Result<AssetRead, AssetReadError> {
     if !can_access_assets(user, script_uri, &Capability::ReadAssets) {
-        return Err(AssetFetchError::AccessDenied);
+        return Err(AssetReadError::AccessDenied);
     }
-    match repository::fetch_asset(script_uri, asset_uri) {
-        Some(asset) => Ok(base64::engine::general_purpose::STANDARD.encode(asset.content)),
-        None => Err(AssetFetchError::NotFound),
+    let Some(asset) = repository::fetch_asset(script_uri, asset_uri) else {
+        return Err(AssetReadError::NotFound);
+    };
+
+    let sha256 = sha256_hex(&asset.content);
+    let bytes = asset.content.len();
+
+    if !options.is_scoped() {
+        return Ok(AssetRead {
+            view: AssetView::Full {
+                content_base64: base64::engine::general_purpose::STANDARD.encode(&asset.content),
+            },
+            sha256,
+            bytes,
+            total_lines: None,
+        });
     }
+
+    let text = std::str::from_utf8(&asset.content).map_err(|_| {
+        AssetReadError::Validation(format!(
+            "Asset '{}' is not UTF-8 text, so it has no lines to read: fetch it without \
+             'lines' or 'grep' to get its bytes",
+            asset_uri
+        ))
+    })?;
+
+    let lines: Vec<&str> = text.lines().collect();
+    let range = options.lines.unwrap_or(LineRange {
+        start: 1,
+        end: None,
+    });
+    // A `start` past the end of the file asks for a part that is not there —
+    // most often a range computed against a version that has since shrunk —
+    // and an empty 200 would leave the caller to work that out for itself. An
+    // `end` past the end is a different request: "through line 1000" of a
+    // 400-line file plainly means the rest of it, so it clamps.
+    if options.lines.is_some() && range.start > lines.len() {
+        return Err(AssetReadError::Validation(format!(
+            "Asset '{}' has {} lines, so there is no line {} to read",
+            asset_uri,
+            lines.len(),
+            range.start
+        )));
+    }
+    let start = range.start;
+    let end = range.end.unwrap_or(lines.len()).min(lines.len());
+    // Only an empty file reaches this, and only through the default range: an
+    // explicit one was bounded above.
+    let selected: &[&str] = if start > end {
+        &[]
+    } else {
+        &lines[start - 1..end]
+    };
+
+    let view = match &options.grep {
+        None => AssetView::Range {
+            content: selected.join("\n"),
+            start_line: start,
+            end_line: end,
+        },
+        Some(pattern) => {
+            let regex = compile_grep(pattern)?;
+            let mut matches = Vec::new();
+            let mut truncated = false;
+            for (offset, line) in selected.iter().enumerate() {
+                if !regex.is_match(line) {
+                    continue;
+                }
+                if matches.len() >= MAX_GREP_MATCHES {
+                    truncated = true;
+                    break;
+                }
+                let (text, line_truncated) = truncate_chars(line, MAX_GREP_LINE_CHARS);
+                matches.push(GrepMatch {
+                    line: start + offset,
+                    text,
+                    truncated: line_truncated,
+                });
+            }
+            AssetView::Matches { matches, truncated }
+        }
+    };
+
+    Ok(AssetRead {
+        view,
+        sha256,
+        bytes,
+        total_lines: Some(lines.len()),
+    })
 }
 
 pub enum AssetWriteError {
@@ -1187,6 +1499,227 @@ pub fn upsert_assets_authorized(
     Ok(BatchWriteOutcome { results, written })
 }
 
+/// One string replacement of a patch.
+pub struct AssetEdit {
+    /// Text to find. It must be present, and unique unless `replace_all`.
+    pub old_string: String,
+    /// Text to put in its place.
+    pub new_string: String,
+    /// Replace every occurrence rather than requiring exactly one.
+    pub replace_all: bool,
+}
+
+/// What a patch did to an asset.
+pub struct AssetPatchOutcome {
+    /// Digest of the content as it now stands, which the next patch can send
+    /// back as `base_sha256`.
+    pub sha256: String,
+    pub bytes: usize,
+    /// How many occurrences the edits replaced in total.
+    pub replacements: usize,
+    /// `updated`, or `unchanged` when the edits cancelled each other out.
+    pub status: &'static str,
+}
+
+impl AssetPatchOutcome {
+    fn to_json(&self) -> Value {
+        json!({
+            "sha256": self.sha256,
+            "bytes": self.bytes,
+            "replacements": self.replacements,
+            "status": self.status,
+        })
+    }
+}
+
+pub enum AssetPatchError {
+    AccessDenied,
+    NotFound,
+    Validation(String),
+    /// The stored asset is not the one the caller edited: `base_sha256` names
+    /// content it no longer has.
+    Conflict {
+        expected: String,
+        actual: String,
+    },
+    Storage(String),
+}
+
+/// Edit an asset in place, by replacing strings within it.
+///
+/// This exists so a caller that wants to change three lines of a file does not
+/// have to send the file back. That makes it the one asset write whose request
+/// does not carry the content being stored — so it has to be careful about
+/// two things the full writes get for free.
+///
+/// The first is *what* is being edited: `base_sha256`, when given, is checked
+/// against the stored bytes before anything is applied, so a patch computed
+/// against a version someone has since replaced is refused rather than merged
+/// blind.
+///
+/// The second is *where*: an `old_string` that appears more than once is
+/// refused unless the caller said `replace_all`, because an edit meant for one
+/// of three identical lines cannot be aimed by content alone. Every edit is
+/// checked and applied in memory before the asset is written, so a patch whose
+/// third edit does not match leaves the stored file exactly as it was.
+pub fn patch_asset_authorized(
+    user: &UserContext,
+    script_uri: &str,
+    asset_uri: &str,
+    edits: &[AssetEdit],
+    base_sha256: Option<&str>,
+) -> Result<AssetPatchOutcome, AssetPatchError> {
+    if !can_access_assets(user, script_uri, &Capability::WriteAssets) {
+        return Err(AssetPatchError::AccessDenied);
+    }
+    if edits.is_empty() {
+        return Err(AssetPatchError::Validation(
+            "No edits to apply: 'edits' must contain at least one entry".to_string(),
+        ));
+    }
+    if edits.len() > MAX_ASSET_EDITS {
+        return Err(AssetPatchError::Validation(format!(
+            "Too many edits in one patch: {} (max {})",
+            edits.len(),
+            MAX_ASSET_EDITS
+        )));
+    }
+
+    let Some(asset) = repository::fetch_asset(script_uri, asset_uri) else {
+        return Err(AssetPatchError::NotFound);
+    };
+
+    let original_digest = sha256_hex(&asset.content);
+    if let Some(expected) = base_sha256
+        && !expected.eq_ignore_ascii_case(&original_digest)
+    {
+        return Err(AssetPatchError::Conflict {
+            expected: expected.to_string(),
+            actual: original_digest,
+        });
+    }
+
+    let mut text = String::from_utf8(asset.content.clone()).map_err(|_| {
+        AssetPatchError::Validation(format!(
+            "Asset '{}' is not UTF-8 text, so it cannot be edited as strings: write it whole \
+             with POST /engine/assets or /engine/assets/batch",
+            asset_uri
+        ))
+    })?;
+
+    let mut replacements = 0usize;
+    for (index, edit) in edits.iter().enumerate() {
+        if edit.old_string.is_empty() {
+            return Err(AssetPatchError::Validation(format!(
+                "edits[{}]: old_string must not be empty",
+                index
+            )));
+        }
+        if edit.old_string == edit.new_string {
+            return Err(AssetPatchError::Validation(format!(
+                "edits[{}]: old_string and new_string are identical, so the edit would do nothing",
+                index
+            )));
+        }
+
+        let occurrences = text.matches(edit.old_string.as_str()).count();
+        match (occurrences, edit.replace_all) {
+            (0, _) => {
+                return Err(AssetPatchError::Validation(format!(
+                    "edits[{}]: old_string was not found in '{}'{}",
+                    index,
+                    asset_uri,
+                    if index > 0 {
+                        " as the earlier edits left it"
+                    } else {
+                        ""
+                    }
+                )));
+            }
+            (count, false) if count > 1 => {
+                return Err(AssetPatchError::Validation(format!(
+                    "edits[{}]: old_string appears {} times in '{}'; include enough surrounding \
+                     text to make it unique, or pass replace_all",
+                    index, count, asset_uri
+                )));
+            }
+            (count, true) => {
+                text = text.replace(edit.old_string.as_str(), &edit.new_string);
+                replacements += count;
+            }
+            (_, false) => {
+                text = text.replacen(edit.old_string.as_str(), &edit.new_string, 1);
+                replacements += 1;
+            }
+        }
+    }
+
+    if text.len() > MAX_ASSET_BYTES {
+        return Err(AssetPatchError::Validation(
+            "Asset too large after the edits (max 10MB)".to_string(),
+        ));
+    }
+
+    let content = text.into_bytes();
+    let unchanged = content == asset.content;
+    let digest = if unchanged {
+        original_digest
+    } else {
+        sha256_hex(&content)
+    };
+    let bytes = content.len();
+
+    if !unchanged {
+        let now = std::time::SystemTime::now();
+        // Through the batch write, so a patch reaches storage the same way a
+        // deploy does: one transaction, one notification to the cluster.
+        repository::upsert_assets(
+            script_uri,
+            vec![repository::Asset {
+                uri: asset.uri.clone(),
+                name: asset.name.clone(),
+                mimetype: asset.mimetype.clone(),
+                content,
+                created_at: asset.created_at,
+                updated_at: now,
+                script_uri: script_uri.to_string(),
+            }],
+        )
+        .map_err(|e| AssetPatchError::Storage(format!("Error patching asset: {}", e)))?;
+    }
+
+    let auditor = auditor();
+    let user_id = user.user_id.clone();
+    let script_uri_owned = script_uri.to_string();
+    let asset_uri_owned = asset_uri.to_string();
+    let edit_count = edits.len();
+    tokio::task::spawn(async move {
+        let _ = auditor
+            .log_event(
+                SecurityEvent::new(
+                    SecurityEventType::SystemSecurityEvent,
+                    SecuritySeverity::Medium,
+                    user_id,
+                )
+                .with_resource("asset".to_string())
+                .with_action("patch_for_uri".to_string())
+                .with_detail("uri", &asset_uri_owned)
+                .with_detail("script_uri", &script_uri_owned)
+                .with_detail("edits", edit_count.to_string())
+                .with_detail("replacements", replacements.to_string())
+                .with_detail("content_size", bytes.to_string()),
+            )
+            .await;
+    });
+
+    Ok(AssetPatchOutcome {
+        sha256: digest,
+        bytes,
+        replacements,
+        status: if unchanged { "unchanged" } else { "updated" },
+    })
+}
+
 /// Delete an asset.
 pub fn delete_asset_authorized(
     user: &UserContext,
@@ -1244,6 +1777,11 @@ pub fn delete_asset_authorized(
 /// whole engine's view; callers that care filter by `script_uri` (see
 /// [`crate::route_index::script_serves_host`]).
 pub fn routes_introspection_authorized(user: &UserContext) -> AppResult<Vec<Value>> {
+    if !may_administer(user) {
+        return Err(crate::error::AppError::AuthorizationFailed {
+            message: "Engine route introspection is not open to anonymous callers".to_string(),
+        });
+    }
     user.require_capability(&Capability::ReadScripts)?;
 
     let metadata_list = repository::get_all_script_metadata()?;
@@ -2449,6 +2987,32 @@ pub async fn script_logs_delete_route(
 pub struct AssetQuery {
     script: Option<String>,
     asset: Option<String>,
+    /// Inclusive 1-based line range to read, e.g. `120-180`, `120-`, or `120`.
+    lines: Option<String>,
+    /// Regular expression: answers with the lines that match it instead of
+    /// with the file.
+    grep: Option<String>,
+}
+
+/// One edit of a patch request.
+#[derive(Deserialize, Default)]
+pub struct AssetEditBody {
+    old_string: Option<String>,
+    new_string: Option<String>,
+    #[serde(default)]
+    replace_all: bool,
+}
+
+#[derive(Deserialize, Default)]
+pub struct AssetPatchBody {
+    script: Option<String>,
+    asset: Option<String>,
+    edits: Option<Vec<AssetEditBody>>,
+    /// Digest the caller believes the asset currently has; the patch is
+    /// refused if it has moved on.
+    #[serde(alias = "sha256")]
+    base_sha256: Option<String>,
+    reinit: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -2505,7 +3069,20 @@ fn error_response(status: StatusCode, message: String) -> Response {
     json_response(status, json!({ "error": message }))
 }
 
-/// List assets for a script, or fetch one asset when `asset` is given.
+/// The scoping a read asked for, or why it does not parse.
+fn read_options(lines: Option<&str>, grep: Option<String>) -> Result<AssetReadOptions, String> {
+    let lines = match lines {
+        Some(raw) => Some(LineRange::parse(raw)?),
+        None => None,
+    };
+    Ok(AssetReadOptions { lines, grep })
+}
+
+/// List assets for a script, or read one asset when `asset` is given.
+///
+/// A read is whole-file base64 by default. `lines` and `grep` narrow it to
+/// part of a text asset, so a caller looking for one function in a large
+/// module does not have to transfer the module to find it.
 #[utoipa::path(
     get,
     path = "/engine/assets",
@@ -2513,10 +3090,12 @@ fn error_response(status: StatusCode, message: String) -> Response {
     params(
         ("script" = String, Query, description = "URI of the script whose assets to manage"),
         ("asset" = Option<String>, Query, description = "Asset URI to fetch; omit to list all"),
+        ("lines" = Option<String>, Query, description = "Inclusive 1-based line range of a text asset, e.g. '120-180', '120-', or '120'"),
+        ("grep" = Option<String>, Query, description = "Regular expression; answers with matching line numbers instead of the file"),
     ),
     responses(
-        (status = 200, description = "Asset list or asset content (base64)"),
-        (status = 400, description = "Missing required parameter"),
+        (status = 200, description = "Asset list, asset content (base64), a line range, or matching lines"),
+        (status = 400, description = "Missing required parameter, an unreadable or out-of-range 'lines', an invalid 'grep', or a text view of a non-text asset"),
         (status = 404, description = "Asset not found or access denied"),
     )
 )]
@@ -2534,28 +3113,46 @@ pub async fn assets_get_route(
 
     match query.asset {
         Some(asset) => {
+            let options = match read_options(query.lines.as_deref(), query.grep) {
+                Ok(options) => options,
+                Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
+            };
             let (user, script_cl, asset_cl) = (user, script.clone(), asset.clone());
             let result = tokio::task::spawn_blocking(move || {
-                fetch_asset_authorized(&user, &script_cl, &asset_cl)
+                read_asset_authorized(&user, &script_cl, &asset_cl, &options)
             })
             .await
-            .unwrap_or(Err(AssetFetchError::NotFound));
+            .unwrap_or(Err(AssetReadError::NotFound));
 
             match result {
-                Ok(content) => json_response(
-                    StatusCode::OK,
-                    json!({ "script": script, "asset": asset, "content": content }),
-                ),
-                Err(AssetFetchError::AccessDenied) => {
+                Ok(read) => {
+                    let mut body = read.to_json();
+                    if let Some(object) = body.as_object_mut() {
+                        object.insert("script".to_string(), json!(script));
+                        object.insert("asset".to_string(), json!(asset));
+                    }
+                    json_response(StatusCode::OK, body)
+                }
+                Err(AssetReadError::AccessDenied) => {
                     error_response(StatusCode::NOT_FOUND, "Error: Access denied".to_string())
                 }
-                Err(AssetFetchError::NotFound) => error_response(
+                Err(AssetReadError::NotFound) => error_response(
                     StatusCode::NOT_FOUND,
                     format!("Asset '{}' not found", asset),
                 ),
+                Err(AssetReadError::Validation(message)) => {
+                    error_response(StatusCode::BAD_REQUEST, message)
+                }
             }
         }
         None => {
+            if query.lines.is_some() || query.grep.is_some() {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "'lines' and 'grep' read one asset: name it with the 'asset' parameter"
+                        .to_string(),
+                );
+            }
             let script_cl = script.clone();
             let assets =
                 tokio::task::spawn_blocking(move || list_assets_authorized(&user, &script_cl))
@@ -2749,6 +3346,160 @@ pub async fn assets_batch_route(
             "timestamp": iso_timestamp(),
         }),
     )
+}
+
+/// Edit one of a script's assets in place.
+///
+/// The point of it is what is *not* in the request: a caller changing three
+/// lines of a module sends those three lines, not the module. That keeps a
+/// small change small — and, with `base_sha256`, makes it a change to a known
+/// version rather than to whatever happens to be stored.
+#[utoipa::path(
+    patch,
+    path = "/engine/assets",
+    tags = ["Assets"],
+    params(
+        ("script" = Option<String>, Query, description = "URI of the script that owns the asset (may also be given in the body)"),
+        ("asset" = Option<String>, Query, description = "Asset URI to edit (may also be given in the body)"),
+    ),
+    request_body(content_type = "application/json",
+        description = "JSON fields: edits (required, array of { old_string, new_string, replace_all? }), \
+                       base_sha256 (optional precondition on the stored content), \
+                       reinit ('after' by default, or 'never')"),
+    responses(
+        (status = 200, description = "The content that resulted: sha256, bytes, replacements, and the init() run that followed"),
+        (status = 400, description = "Missing or invalid parameters, or an edit that does not match; nothing was written"),
+        (status = 403, description = "Access denied"),
+        (status = 404, description = "Asset not found"),
+        (status = 409, description = "The asset no longer has the content named by base_sha256; nothing was written"),
+    )
+)]
+pub async fn assets_patch_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<AssetQuery>,
+    body: axum::body::Bytes,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+
+    let parsed: AssetPatchBody = match serde_json::from_slice(&body) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            return error_response(StatusCode::BAD_REQUEST, format!("Invalid JSON body: {}", e));
+        }
+    };
+
+    let Some(script) = parsed.script.or(query.script) else {
+        return missing_param_response("script");
+    };
+    let Some(asset) = parsed.asset.or(query.asset) else {
+        return missing_param_response("asset");
+    };
+    let reinit = match ReinitMode::parse(parsed.reinit.as_deref()) {
+        Ok(reinit) => reinit,
+        Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
+    };
+    let Some(edits) = parsed.edits else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "Missing required field: edits".to_string(),
+        );
+    };
+
+    let mut prepared = Vec::with_capacity(edits.len());
+    for (index, edit) in edits.into_iter().enumerate() {
+        let Some(old_string) = edit.old_string else {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                format!("edits[{}]: missing required field: old_string", index),
+            );
+        };
+        // Required rather than defaulted to empty, so a misspelled field name
+        // cannot quietly turn a replacement into a deletion.
+        let Some(new_string) = edit.new_string else {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "edits[{}]: missing required field: new_string (pass \"\" to delete the text)",
+                    index
+                ),
+            );
+        };
+        prepared.push(AssetEdit {
+            old_string,
+            new_string,
+            replace_all: edit.replace_all,
+        });
+    }
+
+    let (script_cl, asset_cl) = (script.clone(), asset.clone());
+    let base_sha256 = parsed.base_sha256.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        patch_asset_authorized(
+            &user,
+            &script_cl,
+            &asset_cl,
+            &prepared,
+            base_sha256.as_deref(),
+        )
+    })
+    .await
+    .unwrap_or_else(|e| Err(AssetPatchError::Storage(format!("join error: {}", e))));
+
+    let outcome = match result {
+        Ok(outcome) => outcome,
+        Err(AssetPatchError::AccessDenied) => {
+            return error_response(StatusCode::FORBIDDEN, "Error: Access denied".to_string());
+        }
+        Err(AssetPatchError::NotFound) => {
+            return error_response(
+                StatusCode::NOT_FOUND,
+                format!("Asset '{}' not found", asset),
+            );
+        }
+        Err(AssetPatchError::Validation(message)) => {
+            return error_response(StatusCode::BAD_REQUEST, message);
+        }
+        Err(AssetPatchError::Conflict { expected, actual }) => {
+            // The current digest comes back with the refusal, so a caller can
+            // re-read, rebase its edits, and retry without a second round trip
+            // to find out what it is now working against.
+            return json_response(
+                StatusCode::CONFLICT,
+                json!({
+                    "error": format!(
+                        "Asset '{}' has changed since it was read (expected {}, stored {})",
+                        asset, expected, actual
+                    ),
+                    "script": script,
+                    "asset": asset,
+                    "expected_sha256": expected,
+                    "sha256": actual,
+                    "timestamp": iso_timestamp(),
+                }),
+            );
+        }
+        Err(AssetPatchError::Storage(message)) => {
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, message);
+        }
+    };
+
+    // Edits that cancelled out changed no file, so there is nothing for
+    // init() to pick up and re-registering would only churn what is already
+    // right.
+    let init = match (reinit, outcome.status) {
+        (ReinitMode::Never, _) => json!({ "ran": false, "reason": "reinit=never" }),
+        (_, "unchanged") => json!({ "ran": false, "reason": "no change" }),
+        (ReinitMode::After, _) => init_result_json(&reinitialize_script(&script).await),
+    };
+
+    let mut body = outcome.to_json();
+    if let Some(object) = body.as_object_mut() {
+        object.insert("script".to_string(), json!(script));
+        object.insert("asset".to_string(), json!(asset));
+        object.insert("init".to_string(), init);
+        object.insert("timestamp".to_string(), json!(iso_timestamp()));
+    }
+    json_response(StatusCode::OK, body)
 }
 
 /// Delete an asset from a script.
@@ -4439,13 +5190,15 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "read_asset",
-            "Fetch the base64-encoded content of a specific asset owned by a script. Requires the user to own the script, have ReadAssets capability, or be an administrator.",
+            "Fetch an asset owned by a script: the whole file base64-encoded, or, with 'lines' or 'grep', part of a text asset. Every reply carries the sha256 of the whole asset, which edit_asset takes as base_sha256. Requires the user to own the script, have ReadAssets capability, or be an administrator.",
             || {
                 json!({
                     "type": "object",
                     "properties": {
                         "script": { "type": "string", "description": "URI of the script that owns the asset" },
-                        "asset": { "type": "string", "description": "URI/path of the asset to fetch (e.g., '/images/logo.png')" }
+                        "asset": { "type": "string", "description": "URI/path of the asset to fetch (e.g., '/images/logo.png')" },
+                        "lines": { "type": "string", "description": "Inclusive 1-based line range of a text asset, e.g. '120-180', '120-' to the end, or '120' alone. Answers with text rather than base64." },
+                        "grep": { "type": "string", "description": "Regular expression; answers with the matching line numbers and their text instead of the file. Searches within 'lines' when both are given." }
                     },
                     "required": ["script", "asset"]
                 })
@@ -4497,6 +5250,36 @@ fn native_tools() -> &'static [NativeToolEntry] {
                 })
             },
             tool_write_assets,
+        ),
+        (
+            "edit_asset",
+            "Edit one of a script's assets in place by replacing strings in it, without resending the file, then run the script's init() once. Each old_string must be present and unique unless replace_all is set; nothing is written unless every edit applies. Requires the user to own the script, have WriteAssets capability, or be an administrator.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "script": { "type": "string", "description": "URI of the script that owns the asset" },
+                        "asset": { "type": "string", "description": "URI/path of the asset to edit (e.g., '/lib/util.ts')" },
+                        "edits": {
+                            "type": "array",
+                            "description": "Edits to apply in order (max 128). Each is checked and applied in memory before anything is stored.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "old_string": { "type": "string", "description": "Text to find. Must appear exactly once unless replace_all is set." },
+                                    "new_string": { "type": "string", "description": "Text to put in its place; empty string deletes." },
+                                    "replace_all": { "type": "boolean", "description": "Replace every occurrence rather than requiring exactly one (default false)" }
+                                },
+                                "required": ["old_string", "new_string"]
+                            }
+                        },
+                        "base_sha256": { "type": "string", "description": "SHA-256 the asset is expected to have right now, as read_asset reported it. The patch is refused if the stored content has moved on." },
+                        "reinit": { "type": "string", "enum": ["after", "never"], "description": "Run the script's init() once the edits land (default 'after'), or leave it alone" }
+                    },
+                    "required": ["script", "asset", "edits"]
+                })
+            },
+            tool_edit_asset,
         ),
         (
             "delete_asset",
@@ -5280,17 +6063,28 @@ fn tool_read_asset(args: &Value, user: &UserContext) -> Value {
     let Some(asset) = arg_str(args, "asset") else {
         return missing_arg("asset");
     };
-    match fetch_asset_authorized(user, script, asset) {
-        Ok(content) => json!({
-            "script": script,
-            "asset": asset,
-            "content": content,
-            "timestamp": iso_timestamp(),
-        }),
-        Err(AssetFetchError::AccessDenied) => json!({ "error": "Error: Access denied" }),
-        Err(AssetFetchError::NotFound) => {
+    let options = match read_options(
+        arg_str(args, "lines"),
+        arg_str(args, "grep").map(str::to_string),
+    ) {
+        Ok(options) => options,
+        Err(message) => return json!({ "error": message }),
+    };
+    match read_asset_authorized(user, script, asset, &options) {
+        Ok(read) => {
+            let mut body = read.to_json();
+            if let Some(object) = body.as_object_mut() {
+                object.insert("script".to_string(), json!(script));
+                object.insert("asset".to_string(), json!(asset));
+                object.insert("timestamp".to_string(), json!(iso_timestamp()));
+            }
+            body
+        }
+        Err(AssetReadError::AccessDenied) => json!({ "error": "Error: Access denied" }),
+        Err(AssetReadError::NotFound) => {
             json!({ "error": format!("Asset not found: {}", asset) })
         }
+        Err(AssetReadError::Validation(message)) => json!({ "error": message }),
     }
 }
 
@@ -5389,6 +6183,95 @@ fn tool_write_assets(args: &Value, user: &UserContext) -> Value {
         }
         Err(AssetWriteError::Validation(msg)) | Err(AssetWriteError::Storage(msg)) => {
             json!({ "error": format!("Failed to write assets: {}", msg) })
+        }
+    }
+}
+
+fn tool_edit_asset(args: &Value, user: &UserContext) -> Value {
+    let Some(script) = arg_str(args, "script") else {
+        return missing_arg("script");
+    };
+    let Some(asset) = arg_str(args, "asset") else {
+        return missing_arg("asset");
+    };
+    let Some(edits) = args.get("edits").and_then(Value::as_array) else {
+        return missing_arg("edits");
+    };
+    let reinit = match ReinitMode::parse(arg_str(args, "reinit")) {
+        Ok(reinit) => reinit,
+        Err(message) => return json!({ "error": message }),
+    };
+
+    let mut prepared = Vec::with_capacity(edits.len());
+    for (index, edit) in edits.iter().enumerate() {
+        let Some(old_string) = arg_str(edit, "old_string") else {
+            return json!({
+                "error": format!("edits[{}]: missing required field: old_string", index)
+            });
+        };
+        let Some(new_string) = arg_str(edit, "new_string") else {
+            return json!({
+                "error": format!(
+                    "edits[{}]: missing required field: new_string (pass \"\" to delete the text)",
+                    index
+                )
+            });
+        };
+        prepared.push(AssetEdit {
+            old_string: old_string.to_string(),
+            new_string: new_string.to_string(),
+            replace_all: edit
+                .get("replace_all")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        });
+    }
+
+    match patch_asset_authorized(
+        user,
+        script,
+        asset,
+        &prepared,
+        arg_str(args, "base_sha256").or_else(|| arg_str(args, "sha256")),
+    ) {
+        Ok(outcome) => {
+            // Bridging back to async, as write_assets does, so the caller is
+            // told what init() did rather than that it was started.
+            let init = match (reinit, outcome.status) {
+                (ReinitMode::Never, _) => json!({ "ran": false, "reason": "reinit=never" }),
+                (_, "unchanged") => json!({ "ran": false, "reason": "no change" }),
+                (ReinitMode::After, _) => {
+                    init_result_json(&crate::database::run_blocking(reinitialize_script(script)))
+                }
+            };
+            let mut body = outcome.to_json();
+            if let Some(object) = body.as_object_mut() {
+                object.insert("success".to_string(), json!(true));
+                object.insert("script".to_string(), json!(script));
+                object.insert("asset".to_string(), json!(asset));
+                object.insert("init".to_string(), init);
+                object.insert("timestamp".to_string(), json!(iso_timestamp()));
+            }
+            body
+        }
+        Err(AssetPatchError::AccessDenied) => {
+            json!({ "error": "Failed to edit asset: Access denied" })
+        }
+        Err(AssetPatchError::NotFound) => {
+            json!({ "error": format!("Asset not found: {}", asset) })
+        }
+        Err(AssetPatchError::Conflict { expected, actual }) => json!({
+            "error": format!(
+                "Asset '{}' has changed since it was read (expected {}, stored {})",
+                asset, expected, actual
+            ),
+            "script": script,
+            "asset": asset,
+            "expected_sha256": expected,
+            "sha256": actual,
+        }),
+        Err(AssetPatchError::Validation(message)) | Err(AssetPatchError::Storage(message)) => {
+            json!({ "error": format!("Failed to edit asset: {}", message) })
         }
     }
 }

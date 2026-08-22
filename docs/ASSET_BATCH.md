@@ -47,6 +47,10 @@ Each entry in `files`:
 so a caller written against the single-asset route does not have to rename its
 fields. One batch may carry 10MB of content in total.
 
+A batch carries the content it writes. To change part of a file the engine
+already has, without sending the file back, see
+[Editing a Script's Files Without Resending Them](ASSET_EDIT.md).
+
 Writing assets takes the same rights as writing one at a time: the
 `WriteAssets` capability, ownership of the script, or administrator.
 
