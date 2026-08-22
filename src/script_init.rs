@@ -32,6 +32,25 @@ pub fn configured_init_timeout_ms() -> u64 {
         .unwrap_or_else(|| crate::js_engine::current_execution_limits().timeout_ms)
 }
 
+/// How many `init()` calls may be in flight at once.
+///
+/// Sequential initialization makes startup cost the *sum* of every script's
+/// `init()`, and a script that blocks costs its whole timeout budget. Several
+/// such scripts therefore delay every script behind them, and the delay grows
+/// with the number of scripts deployed — a per-instance cost paid on every boot
+/// in the cluster. Running them concurrently makes startup cost roughly the
+/// slowest `init()` instead of the total.
+///
+/// Bounded rather than unlimited because each concurrent init holds a blocking
+/// thread and its own QuickJS runtime: the ceiling here is memory, not
+/// scheduling.
+fn init_concurrency() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .clamp(4, 16)
+}
+
 /// Result of a script initialization attempt
 #[derive(Debug, Clone)]
 pub struct InitResult {
@@ -304,29 +323,62 @@ impl ScriptInitializer {
 
         info!("Found {} scripts to initialize", all_metadata.len());
 
-        let mut results = Vec::new();
+        let concurrency = init_concurrency();
+        let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency));
+        let mut running = tokio::task::JoinSet::new();
 
-        // Initialize scripts sequentially for now
-        // TODO: Consider parallel initialization for independent scripts
-        for metadata in all_metadata {
-            match self.initialize_script(&metadata.uri, true).await {
-                Ok(result) => {
-                    results.push(result);
-                }
-                Err(e) => {
-                    error!("Failed to initialize script {}: {}", metadata.uri, e);
-                    results.push(InitResult::failed(metadata.uri.clone(), e.to_string(), 0));
-                }
+        // One task per script, bounded by a semaphore — not a combinator over a
+        // single task.
+        //
+        // `initialize_script` blocks its thread twice: `clear_script_jobs` runs
+        // a query through `block_in_place`, and the `init()` call itself is a
+        // `spawn_blocking` this future waits on. Both need the future to *own* a
+        // task. Driven as futures inside one task (`buffer_unordered` and
+        // friends), the first one to block holds the only poll slot, so the rest
+        // — including their timeouts — never get polled, and initialization
+        // stalls outright rather than merely running in sequence.
+        for (position, metadata) in all_metadata.into_iter().enumerate() {
+            let permits = permits.clone();
+            let timeout_ms = self.timeout_ms;
+            running.spawn(async move {
+                // Held for the script's whole initialization, so `concurrency`
+                // bounds the QuickJS runtimes alive at once rather than the
+                // tasks queued.
+                let _permit = permits.acquire_owned().await;
+                let initializer = ScriptInitializer::new(timeout_ms);
+                let result = match initializer.initialize_script(&metadata.uri, true).await {
+                    Ok(result) => result,
+                    Err(e) => {
+                        error!("Failed to initialize script {}: {}", metadata.uri, e);
+                        InitResult::failed(metadata.uri.clone(), e.to_string(), 0)
+                    }
+                };
+                (position, result)
+            });
+        }
+
+        let mut indexed: Vec<(usize, InitResult)> = Vec::new();
+        while let Some(joined) = running.join_next().await {
+            match joined {
+                Ok(pair) => indexed.push(pair),
+                // Only a panic or a cancellation lands here: `initialize_script`
+                // reports a script's own failures as an `InitResult`.
+                Err(e) => error!("Script initialization task failed: {}", e),
             }
         }
+
+        // Back into metadata order, so the summary and its logs read the same
+        // from one boot to the next.
+        indexed.sort_by_key(|(position, _)| *position);
+        let results: Vec<InitResult> = indexed.into_iter().map(|(_, result)| result).collect();
 
         let total_duration = start_time.elapsed().as_millis();
         let successful = results.iter().filter(|r| r.success).count();
         let failed = results.iter().filter(|r| !r.success).count();
 
         info!(
-            "Script initialization complete: {} successful, {} failed, {}ms total",
-            successful, failed, total_duration
+            "Script initialization complete: {} successful, {} failed, {}ms total ({} at a time)",
+            successful, failed, total_duration, concurrency
         );
 
         Ok(results)

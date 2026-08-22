@@ -1046,6 +1046,79 @@ async fn test_failed_first_init_keeps_routes_it_registered() {
     );
 }
 
+/// Startup initializes scripts concurrently, so one blocked `init()` does not
+/// delay the ones behind it.
+///
+/// Guards a regression that is silent: swapping the concurrency for a loop —
+/// or for an *ordered* combinator like `buffered`, where a pending head blocks
+/// the queue from pulling further work — still initializes every script and
+/// still passes every other test. Only the clock shows it.
+#[tokio::test(flavor = "multi_thread")]
+async fn slow_inits_run_alongside_each_other_rather_than_in_sequence() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    setup_env().await;
+
+    // Spin rather than sleep: the budget these burn is the interrupt handler's,
+    // which is what a genuinely stuck init() consumes.
+    const SPINNERS: usize = 6;
+    const SPIN_MS: u64 = 2_000;
+    for n in 0..SPINNERS {
+        upsert_script(
+            &format!("test://init-concurrency/{}", n),
+            &format!(
+                r#"function init() {{
+                       const until = Date.now() + {};
+                       while (Date.now() < until) {{}}
+                   }}"#,
+                SPIN_MS
+            ),
+        )
+        .expect("Should upsert spinner");
+    }
+
+    let initializer = ScriptInitializer::new(SPIN_MS + 1_000);
+    let started = std::time::Instant::now();
+    let results = initializer
+        .initialize_all_scripts()
+        .await
+        .expect("Should initialize all");
+    let elapsed = started.elapsed();
+
+    // Spinners left in the shared database would burn their budget again on
+    // every later server startup, which is the very cost this test exists to
+    // keep out of startup. Removed before the assertions, so a failure below
+    // does not leave them behind.
+    for n in 0..SPINNERS {
+        repository::delete_script(&format!("test://init-concurrency/{}", n));
+    }
+
+    for n in 0..SPINNERS {
+        let uri = format!("test://init-concurrency/{}", n);
+        assert!(
+            results.iter().any(|r| r.script_uri == uri),
+            "every spinner should be reported, missing {}",
+            uri
+        );
+    }
+
+    // Run in sequence the spinners alone cost SPINNERS * SPIN_MS (12s). The
+    // ceiling leaves room for the other scripts in the shared database and for
+    // a loaded machine, while staying well under that.
+    let sequential_floor = std::time::Duration::from_millis(SPIN_MS * SPINNERS as u64);
+    let ceiling = std::time::Duration::from_secs(8);
+    assert!(
+        elapsed < ceiling,
+        "{} spinners of {}ms took {:?}; in sequence they alone would cost {:?}, \
+         so initialization is not running them concurrently",
+        SPINNERS,
+        SPIN_MS,
+        elapsed,
+        sequential_floor
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_script_initializer_all_scripts() {
     if should_skip_integration_tests() {
