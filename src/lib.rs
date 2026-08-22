@@ -77,6 +77,7 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
         engine_api::eval_route,
         engine_api::assets_get_route,
         engine_api::assets_post_route,
+        engine_api::assets_batch_route,
         engine_api::assets_delete_route,
         engine_api::list_scripts_route,
         engine_api::script_init_status_route,
@@ -2336,6 +2337,16 @@ async fn setup_routes(
             axum::routing::get(engine_api::assets_get_route)
                 .post(engine_api::assets_post_route)
                 .delete(engine_api::assets_delete_route),
+        )
+        // A batch carries a script's whole module tree, which the management
+        // router's `max_request_body_bytes` (1MB by default) is far too small
+        // for. The inner layer wins, so this route gets the ceiling the batch
+        // write actually enforces on its content.
+        .route(
+            "/engine/assets/batch",
+            axum::routing::post(engine_api::assets_batch_route).layer(
+                axum::extract::DefaultBodyLimit::max(engine_api::MAX_BATCH_BODY_BYTES),
+            ),
         )
         .route(
             "/engine/scripts",

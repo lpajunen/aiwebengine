@@ -4898,8 +4898,9 @@ pub fn upsert_asset(asset: Asset) -> AppResult<()> {
     run_blocking(upsert_asset_async(asset))
 }
 
-/// Async variant of [`upsert_asset`] for callers already in async context
-pub async fn upsert_asset_async(asset: Asset) -> AppResult<()> {
+/// The storage-level checks every asset write passes, whether it arrives
+/// alone or as part of a batch.
+fn validate_asset(asset: &Asset) -> AppResult<()> {
     if asset.uri.trim().is_empty() {
         return Err(RepositoryError::InvalidData("Asset URI cannot be empty".to_string()).into());
     }
@@ -4915,8 +4916,40 @@ pub async fn upsert_asset_async(asset: Asset) -> AppResult<()> {
         return Err(RepositoryError::InvalidData("MIME type cannot be empty".to_string()).into());
     }
 
+    Ok(())
+}
+
+/// Async variant of [`upsert_asset`] for callers already in async context
+pub async fn upsert_asset_async(asset: Asset) -> AppResult<()> {
+    validate_asset(&asset)?;
+
     let repo = get_repository();
     repo.upsert_asset(asset).await
+}
+
+/// Upsert several of one script's assets as a single unit.
+pub fn upsert_assets(script_uri: &str, assets: Vec<Asset>) -> AppResult<()> {
+    run_blocking(upsert_assets_async(script_uri, assets))
+}
+
+/// Async variant of [`upsert_assets`] for callers already in async context.
+///
+/// Every asset is validated before any of them is written, so a rejected entry
+/// costs nothing: the transaction underneath never opens.
+pub async fn upsert_assets_async(script_uri: &str, assets: Vec<Asset>) -> AppResult<()> {
+    for asset in &assets {
+        validate_asset(asset)?;
+        if asset.script_uri != script_uri {
+            return Err(RepositoryError::InvalidData(format!(
+                "Asset '{}' belongs to script '{}', not '{}'",
+                asset.uri, asset.script_uri, script_uri
+            ))
+            .into());
+        }
+    }
+
+    let repo = get_repository();
+    repo.upsert_assets(script_uri, assets).await
 }
 
 /// Delete asset with error handling  
@@ -5290,6 +5323,9 @@ pub trait Repository: Send + Sync {
     async fn get_asset(&self, script_uri: &str, uri: &str) -> AppResult<Option<Asset>>;
     async fn list_assets(&self, script_uri: &str) -> AppResult<HashMap<String, Asset>>;
     async fn upsert_asset(&self, asset: Asset) -> AppResult<()>;
+    /// Write several of one script's assets as a unit: one transaction, one
+    /// cache invalidation pass, one change notification.
+    async fn upsert_assets(&self, script_uri: &str, assets: Vec<Asset>) -> AppResult<()>;
     async fn delete_asset(&self, script_uri: &str, uri: &str) -> AppResult<bool>;
 
     // Log operations
@@ -5748,6 +5784,58 @@ impl Repository for PostgresRepository {
         invalidate_script_asset_caches(&asset.script_uri, &asset.uri);
         send_script_notification(&self.pool, &asset.script_uri, "upserted", &self.server_id)
             .await?;
+        Ok(())
+    }
+
+    /// The batch counterpart of [`Repository::upsert_asset`].
+    ///
+    /// Two things make this more than a loop over that method. The rows go in
+    /// under one transaction, so a failure partway through leaves none of them
+    /// behind. And the cache invalidation and the `script_upserted`
+    /// notification happen once for the whole set: per-file notifications
+    /// would make every other cluster node reinitialize the script once per
+    /// file, each time from a set that is still being written.
+    async fn upsert_assets(&self, script_uri: &str, assets: Vec<Asset>) -> AppResult<()> {
+        if assets.is_empty() {
+            return Ok(());
+        }
+
+        if crate::database::get_current_transaction_active() {
+            // The caller already owns a transaction (a script writing inside
+            // `transaction()`). Joining it is what every other repository
+            // method does here, and committing our own would end theirs early.
+            for asset in &assets {
+                let executor = crate::database::get_current_executor(&self.pool);
+                db_upsert_asset(executor, asset).await?;
+            }
+        } else {
+            let mut tx = self.pool.begin().await.map_err(|e| {
+                error!("Database error opening asset batch transaction: {}", e);
+                AppError::Database {
+                    message: format!("Database error: {}", e),
+                    source: None,
+                }
+            })?;
+            for asset in &assets {
+                db_upsert_asset(
+                    crate::database::TransactionExecutor::Transaction(&mut tx),
+                    asset,
+                )
+                .await?;
+            }
+            tx.commit().await.map_err(|e| {
+                error!("Database error committing asset batch: {}", e);
+                AppError::Database {
+                    message: format!("Database error: {}", e),
+                    source: None,
+                }
+            })?;
+        }
+
+        for asset in &assets {
+            invalidate_script_asset_caches(script_uri, &asset.uri);
+        }
+        send_script_notification(&self.pool, script_uri, "upserted", &self.server_id).await?;
         Ok(())
     }
 

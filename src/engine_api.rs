@@ -24,6 +24,21 @@ use crate::security::{
 /// Maximum asset size accepted by the write paths (same limit as the sandbox).
 const MAX_ASSET_BYTES: usize = 10 * 1024 * 1024;
 
+/// Maximum number of files one batch write may carry.
+const MAX_BATCH_FILES: usize = 256;
+
+/// Maximum total decoded size of one batch write. The per-file ceiling still
+/// applies to each file, so a batch cannot smuggle in an oversized asset.
+const MAX_BATCH_BYTES: usize = MAX_ASSET_BYTES;
+
+/// Request body ceiling for the batch route: the decoded ceiling, plus the
+/// third base64 adds, plus room for the JSON envelope around it.
+///
+/// The management router's own limit is `security.max_request_body_bytes`,
+/// which defaults to 1MB — far below what a batch of source files needs — so
+/// the batch route overrides it (see `lib.rs`).
+pub const MAX_BATCH_BODY_BYTES: usize = MAX_BATCH_BYTES * 4 / 3 + 1024 * 1024;
+
 fn iso_timestamp() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
@@ -176,35 +191,57 @@ pub fn register_engine_streams() {
     }
 }
 
-/// Re-initialize a script in the background after an upsert: clear its
-/// GraphQL/MCP registrations, run init(), and rebuild the GraphQL schema.
+/// Re-initialize a script after an upsert: clear its GraphQL/MCP
+/// registrations, run init(), and rebuild the GraphQL schema.
+///
+/// Every local deploy path funnels through here, so what a script upsert does
+/// to a script's registrations and what a batch asset write does to them
+/// cannot drift apart.
+async fn reinitialize_script(script_uri: &str) -> crate::script_init::InitResult {
+    crate::graphql::clear_script_graphql_registrations(script_uri);
+    crate::mcp::clear_script_mcp_registrations(script_uri);
+
+    let initializer = crate::script_init::ScriptInitializer::with_configured_timeout();
+    match initializer.initialize_script(script_uri, false).await {
+        Ok(result) => {
+            if result.success {
+                if let Err(e) = crate::graphql::rebuild_schema() {
+                    warn!(
+                        "Failed to rebuild GraphQL schema after script '{}' initialization: {:?}",
+                        script_uri, e
+                    );
+                }
+            } else if let Some(err) = &result.error {
+                warn!("Script '{}' init failed after upsert: {}", script_uri, err);
+            }
+            result
+        }
+        Err(e) => {
+            warn!(
+                "Failed to initialize script '{}' after upsert: {}",
+                script_uri, e
+            );
+            crate::script_init::InitResult::failed(script_uri.to_string(), e.to_string(), 0)
+        }
+    }
+}
+
+/// [`reinitialize_script`] in the background, for the callers that answer
+/// before init() finishes.
 fn spawn_script_init(script_uri: String) {
     tokio::task::spawn(async move {
-        crate::graphql::clear_script_graphql_registrations(&script_uri);
-        crate::mcp::clear_script_mcp_registrations(&script_uri);
-
-        let initializer = crate::script_init::ScriptInitializer::with_configured_timeout();
-        match initializer.initialize_script(&script_uri, false).await {
-            Ok(result) => {
-                if result.success {
-                    if let Err(e) = crate::graphql::rebuild_schema() {
-                        warn!(
-                            "Failed to rebuild GraphQL schema after script '{}' initialization: {:?}",
-                            script_uri, e
-                        );
-                    }
-                } else if let Some(err) = result.error {
-                    warn!("Script '{}' init failed after upsert: {}", script_uri, err);
-                }
-            }
-            Err(e) => {
-                warn!(
-                    "Failed to initialize script '{}' after upsert: {}",
-                    script_uri, e
-                );
-            }
-        }
+        reinitialize_script(&script_uri).await;
     });
+}
+
+/// An init() run reported back to whoever triggered it.
+fn init_result_json(result: &crate::script_init::InitResult) -> Value {
+    json!({
+        "ran": true,
+        "success": result.success,
+        "durationMs": result.duration_ms,
+        "error": result.error,
+    })
 }
 
 // ============================================================================
@@ -826,6 +863,67 @@ pub enum AssetWriteError {
     Storage(String),
 }
 
+/// The shape checks an asset path has to pass before it can be stored.
+fn validate_asset_uri(asset_uri: &str) -> Result<(), AssetWriteError> {
+    if asset_uri.is_empty() || asset_uri.len() > 255 {
+        return Err(AssetWriteError::Validation(format!(
+            "Invalid asset URI '{}': must be 1-255 characters",
+            asset_uri
+        )));
+    }
+    if asset_uri.contains("..") || asset_uri.contains('\\') {
+        return Err(AssetWriteError::Validation(format!(
+            "Invalid asset URI '{}': path traversal not allowed",
+            asset_uri
+        )));
+    }
+    Ok(())
+}
+
+/// Lowercase hex SHA-256 of an asset's decoded bytes — the digest the batch
+/// write echoes back so a caller can verify what was stored without reading it
+/// again.
+fn sha256_hex(content: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(content);
+    hex::encode(hasher.finalize())
+}
+
+/// MIME type inferred from an asset's extension, for batch callers that push a
+/// directory of source files and have nothing to say about each one's type.
+///
+/// Deliberately narrow: it covers what scripts are actually made of, and
+/// anything else falls back to a type that will be served as a download rather
+/// than guessed at.
+fn mimetype_for(asset_uri: &str) -> &'static str {
+    let extension = asset_uri
+        .rsplit_once('.')
+        .map(|(_, ext)| ext.to_ascii_lowercase())
+        .unwrap_or_default();
+    match extension.as_str() {
+        "js" | "mjs" | "cjs" | "jsx" => "text/javascript",
+        "ts" | "tsx" | "mts" | "cts" => "text/typescript",
+        "json" => "application/json",
+        "html" | "htm" => "text/html",
+        "css" => "text/css",
+        "md" => "text/markdown",
+        "txt" => "text/plain",
+        "csv" => "text/csv",
+        "xml" => "application/xml",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "ico" => "image/x-icon",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        "wasm" => "application/wasm",
+        _ => "application/octet-stream",
+    }
+}
+
 /// Create or update an asset from base64 content.
 pub fn upsert_asset_authorized(
     user: &UserContext,
@@ -844,16 +942,7 @@ pub fn upsert_asset_authorized(
         return Err(AssetWriteError::AccessDenied);
     }
 
-    if asset_uri.is_empty() || asset_uri.len() > 255 {
-        return Err(AssetWriteError::Validation(
-            "Invalid asset URI: must be 1-255 characters".to_string(),
-        ));
-    }
-    if asset_uri.contains("..") || asset_uri.contains('\\') {
-        return Err(AssetWriteError::Validation(
-            "Invalid asset URI: path traversal not allowed".to_string(),
-        ));
-    }
+    validate_asset_uri(asset_uri)?;
     if content.len() > MAX_ASSET_BYTES {
         return Err(AssetWriteError::Validation(
             "Asset too large (max 10MB)".to_string(),
@@ -896,6 +985,206 @@ pub fn upsert_asset_authorized(
     };
     repository::upsert_asset(asset)
         .map_err(|e| AssetWriteError::Storage(format!("Error upserting asset: {}", e)))
+}
+
+/// One file of a batch asset write.
+pub struct AssetWrite {
+    /// Path of the asset within the script, e.g. `/lib/util.ts`.
+    pub name: String,
+    /// MIME type; inferred from the extension when the caller omits it.
+    pub mimetype: Option<String>,
+    /// Base64-encoded content, the same transfer encoding the single-asset
+    /// write and the MCP tools use.
+    pub content_base64: String,
+    /// Digest the caller believes the decoded bytes have, lowercase hex. When
+    /// present it is checked before anything is written.
+    pub expected_sha256: Option<String>,
+}
+
+/// What a batch write did with one file.
+pub struct AssetWriteOutcome {
+    pub name: String,
+    pub sha256: String,
+    pub bytes: usize,
+    /// `created`, `updated`, or `unchanged`.
+    pub status: &'static str,
+}
+
+impl AssetWriteOutcome {
+    fn to_json(&self) -> Value {
+        json!({
+            "name": self.name,
+            "sha256": self.sha256,
+            "bytes": self.bytes,
+            "status": self.status,
+        })
+    }
+}
+
+/// What a batch write did overall.
+pub struct BatchWriteOutcome {
+    pub results: Vec<AssetWriteOutcome>,
+    /// How many files reached the database. Zero when every file already held
+    /// the content it was sent with, which is also when re-initializing the
+    /// script afterwards would be pure cost.
+    pub written: usize,
+}
+
+/// Write several of a script's assets as one unit.
+///
+/// Every file is decoded and checked before any of them is stored, so a batch
+/// with one bad entry writes nothing: the caller's tree never lands in the
+/// engine half-applied. Files whose stored content already matches are
+/// reported as `unchanged` and skipped, because rewriting one would invalidate
+/// the script's prepared program for no change.
+///
+/// The authorization is the single-write rule applied once, not per file:
+/// WriteAssets capability, ownership of the script, or admin.
+pub fn upsert_assets_authorized(
+    user: &UserContext,
+    script_uri: &str,
+    files: &[AssetWrite],
+) -> Result<BatchWriteOutcome, AssetWriteError> {
+    if !can_access_assets(user, script_uri, &Capability::WriteAssets) {
+        return Err(AssetWriteError::AccessDenied);
+    }
+    if files.is_empty() {
+        return Err(AssetWriteError::Validation(
+            "No files to write: 'files' must contain at least one entry".to_string(),
+        ));
+    }
+    if files.len() > MAX_BATCH_FILES {
+        return Err(AssetWriteError::Validation(format!(
+            "Too many files in one batch: {} (max {})",
+            files.len(),
+            MAX_BATCH_FILES
+        )));
+    }
+
+    let mut prepared: Vec<(String, String, Vec<u8>, String)> = Vec::with_capacity(files.len());
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut total_bytes: usize = 0;
+
+    for file in files {
+        validate_asset_uri(&file.name)?;
+        if !seen.insert(file.name.as_str()) {
+            return Err(AssetWriteError::Validation(format!(
+                "Duplicate file '{}' in batch",
+                file.name
+            )));
+        }
+
+        let content = base64::engine::general_purpose::STANDARD
+            .decode(&file.content_base64)
+            .map_err(|e| {
+                AssetWriteError::Validation(format!(
+                    "Error decoding base64 content for '{}': {}",
+                    file.name, e
+                ))
+            })?;
+
+        if content.len() > MAX_ASSET_BYTES {
+            return Err(AssetWriteError::Validation(format!(
+                "Asset '{}' too large (max 10MB)",
+                file.name
+            )));
+        }
+        total_bytes = total_bytes.saturating_add(content.len());
+        if total_bytes > MAX_BATCH_BYTES {
+            return Err(AssetWriteError::Validation(format!(
+                "Batch too large: over {} bytes of content in one request",
+                MAX_BATCH_BYTES
+            )));
+        }
+
+        let digest = sha256_hex(&content);
+        if let Some(expected) = &file.expected_sha256
+            && !expected.eq_ignore_ascii_case(&digest)
+        {
+            return Err(AssetWriteError::Validation(format!(
+                "Content of '{}' does not match the sha256 supplied for it (expected {}, got {})",
+                file.name, expected, digest
+            )));
+        }
+
+        let mimetype = match &file.mimetype {
+            Some(mimetype) if !mimetype.trim().is_empty() => mimetype.clone(),
+            _ => mimetype_for(&file.name).to_string(),
+        };
+
+        prepared.push((file.name.clone(), mimetype, content, digest));
+    }
+
+    // One read of what is stored, rather than one per file, to classify each
+    // write and to drop the files that would rewrite identical bytes.
+    let existing = repository::fetch_assets(script_uri);
+
+    let now = std::time::SystemTime::now();
+    let mut results = Vec::with_capacity(prepared.len());
+    let mut to_write = Vec::new();
+
+    for (name, mimetype, content, digest) in prepared {
+        let current = existing.get(&name);
+        let status = match current {
+            Some(asset) if asset.content == content && asset.mimetype == mimetype => "unchanged",
+            Some(_) => "updated",
+            None => "created",
+        };
+        results.push(AssetWriteOutcome {
+            name: name.clone(),
+            sha256: digest,
+            bytes: content.len(),
+            status,
+        });
+        if status != "unchanged" {
+            to_write.push(repository::Asset {
+                uri: name.clone(),
+                name: Some(name),
+                mimetype,
+                content,
+                created_at: current.map(|asset| asset.created_at).unwrap_or(now),
+                updated_at: now,
+                script_uri: script_uri.to_string(),
+            });
+        }
+    }
+
+    let written = to_write.len();
+    if written > 0 {
+        repository::upsert_assets(script_uri, to_write)
+            .map_err(|e| AssetWriteError::Storage(format!("Error upserting assets: {}", e)))?;
+    }
+
+    // One audit event for the batch, not one per file: the batch is the act.
+    let auditor = auditor();
+    let user_id = user.user_id.clone();
+    let script_uri_owned = script_uri.to_string();
+    let names = results
+        .iter()
+        .map(|result| result.name.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    let file_count = results.len();
+    tokio::task::spawn(async move {
+        let _ = auditor
+            .log_event(
+                SecurityEvent::new(
+                    SecurityEventType::SystemSecurityEvent,
+                    SecuritySeverity::Medium,
+                    user_id,
+                )
+                .with_resource("asset".to_string())
+                .with_action("batch_upsert_for_uri".to_string())
+                .with_detail("script_uri", &script_uri_owned)
+                .with_detail("file_count", file_count.to_string())
+                .with_detail("written", written.to_string())
+                .with_detail("content_size", total_bytes.to_string())
+                .with_detail("uris", &names),
+            )
+            .await;
+    });
+
+    Ok(BatchWriteOutcome { results, written })
 }
 
 /// Delete an asset.
@@ -2169,6 +2458,49 @@ pub struct AssetBody {
     content: Option<String>,
 }
 
+/// One file of a batch write request. `name`/`content_base64` are the batch
+/// spelling; `asset`/`content` are accepted too, so a caller already written
+/// against the single-asset route does not have to rename its fields.
+#[derive(Deserialize, Default)]
+pub struct AssetBatchFile {
+    #[serde(alias = "asset")]
+    name: Option<String>,
+    mimetype: Option<String>,
+    #[serde(alias = "content")]
+    content_base64: Option<String>,
+    sha256: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+pub struct AssetBatchBody {
+    script: Option<String>,
+    files: Option<Vec<AssetBatchFile>>,
+    reinit: Option<String>,
+}
+
+/// Whether a batch write runs the script's init() when it is done.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReinitMode {
+    /// Run init() once, after the whole batch has landed, and report it.
+    After,
+    /// Leave init() alone — for a caller pushing one part of a larger change
+    /// that is not coherent yet.
+    Never,
+}
+
+impl ReinitMode {
+    fn parse(value: Option<&str>) -> Result<Self, String> {
+        match value {
+            None | Some("after") => Ok(ReinitMode::After),
+            Some("never") => Ok(ReinitMode::Never),
+            Some(other) => Err(format!(
+                "Invalid reinit mode '{}': expected 'after' or 'never'",
+                other
+            )),
+        }
+    }
+}
+
 fn error_response(status: StatusCode, message: String) -> Response {
     json_response(status, json!({ "error": message }))
 }
@@ -2301,6 +2633,122 @@ pub async fn assets_post_route(
             error_response(StatusCode::INTERNAL_SERVER_ERROR, msg)
         }
     }
+}
+
+/// Write several of a script's assets in one request.
+///
+/// A script's modules are one unit of change, and writing them one request at
+/// a time makes the engine act on each partial state: every single-asset write
+/// invalidates the script's prepared program and notifies the rest of the
+/// cluster, so every other instance reinitializes the script once per file,
+/// each time from a tree that is still being uploaded. One batch is one
+/// transaction, one notification, and one init().
+#[utoipa::path(
+    post,
+    path = "/engine/assets/batch",
+    tags = ["Assets"],
+    params(("script" = String, Query, description = "URI of the script that will own these assets")),
+    request_body(content_type = "application/json",
+        description = "JSON fields: script (required here or as a query parameter), \
+                       files (required, array of { name, content_base64, mimetype?, sha256? }), \
+                       reinit ('after' by default, or 'never')"),
+    responses(
+        (status = 200, description = "Per-file result and the init() run that followed"),
+        (status = 400, description = "Missing or invalid parameters; nothing was written"),
+        (status = 403, description = "Access denied"),
+    )
+)]
+pub async fn assets_batch_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<AssetQuery>,
+    body: axum::body::Bytes,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+
+    let parsed: AssetBatchBody = match serde_json::from_slice(&body) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            return error_response(StatusCode::BAD_REQUEST, format!("Invalid JSON body: {}", e));
+        }
+    };
+
+    let Some(script) = parsed.script.or(query.script) else {
+        return missing_param_response("script");
+    };
+    let reinit = match ReinitMode::parse(parsed.reinit.as_deref()) {
+        Ok(reinit) => reinit,
+        Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
+    };
+    let Some(files) = parsed.files else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "Missing required field: files".to_string(),
+        );
+    };
+
+    let mut writes = Vec::with_capacity(files.len());
+    for (index, file) in files.into_iter().enumerate() {
+        let Some(name) = file.name else {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                format!("files[{}]: missing required field: name", index),
+            );
+        };
+        let Some(content_base64) = file.content_base64 else {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "files[{}] ('{}'): missing required field: content_base64",
+                    index, name
+                ),
+            );
+        };
+        writes.push(AssetWrite {
+            name,
+            mimetype: file.mimetype,
+            content_base64,
+            expected_sha256: file.sha256,
+        });
+    }
+
+    let script_cl = script.clone();
+    let result =
+        tokio::task::spawn_blocking(move || upsert_assets_authorized(&user, &script_cl, &writes))
+            .await
+            .unwrap_or_else(|e| Err(AssetWriteError::Storage(format!("join error: {}", e))));
+
+    let outcome = match result {
+        Ok(outcome) => outcome,
+        Err(AssetWriteError::AccessDenied) => {
+            return error_response(StatusCode::FORBIDDEN, "Error: Access denied".to_string());
+        }
+        Err(AssetWriteError::Validation(msg)) => {
+            return error_response(StatusCode::BAD_REQUEST, msg);
+        }
+        Err(AssetWriteError::Storage(msg)) => {
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, msg);
+        }
+    };
+
+    // A batch that changed nothing has nothing to re-register, and running
+    // init() anyway would drop and rebuild registrations that are already
+    // correct.
+    let init = match (reinit, outcome.written) {
+        (ReinitMode::Never, _) => json!({ "ran": false, "reason": "reinit=never" }),
+        (ReinitMode::After, 0) => json!({ "ran": false, "reason": "no files changed" }),
+        (ReinitMode::After, _) => init_result_json(&reinitialize_script(&script).await),
+    };
+
+    json_response(
+        StatusCode::OK,
+        json!({
+            "script": script,
+            "results": outcome.results.iter().map(AssetWriteOutcome::to_json).collect::<Vec<Value>>(),
+            "written": outcome.written,
+            "init": init,
+            "timestamp": iso_timestamp(),
+        }),
+    )
 }
 
 /// Delete an asset from a script.
@@ -4022,6 +4470,35 @@ fn native_tools() -> &'static [NativeToolEntry] {
             tool_write_asset,
         ),
         (
+            "write_assets",
+            "Create or update several of a script's assets in one atomic write, then run the script's init() once. Nothing is written if any file is rejected. Requires the user to own the script, have WriteAssets capability, or be an administrator.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "script": { "type": "string", "description": "URI of the script that will own these assets" },
+                        "files": {
+                            "type": "array",
+                            "description": "Files to write (max 256, 10MB of content in total)",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "name": { "type": "string", "description": "URI/path of the asset (e.g., '/lib/util.ts')" },
+                                    "content_base64": { "type": "string", "description": "Base64-encoded content of the asset (max 10MB)" },
+                                    "mimetype": { "type": "string", "description": "MIME type; inferred from the file extension when omitted" },
+                                    "sha256": { "type": "string", "description": "Expected SHA-256 of the decoded content, lowercase hex. The batch is rejected if it does not match." }
+                                },
+                                "required": ["name", "content_base64"]
+                            }
+                        },
+                        "reinit": { "type": "string", "enum": ["after", "never"], "description": "Run the script's init() once after the batch lands (default 'after'), or leave it alone" }
+                    },
+                    "required": ["script", "files"]
+                })
+            },
+            tool_write_assets,
+        ),
+        (
             "delete_asset",
             "Delete an asset from a script. Requires the user to own the script, have DeleteAssets capability, or be an administrator.",
             || {
@@ -4844,6 +5321,74 @@ fn tool_write_asset(args: &Value, user: &UserContext) -> Value {
         }
         Err(AssetWriteError::Validation(msg)) | Err(AssetWriteError::Storage(msg)) => {
             json!({ "error": format!("Failed to write asset: {}", msg) })
+        }
+    }
+}
+
+/// Write several of a script's assets as one unit — the MCP face of
+/// [`assets_batch_route`], down to the shape of its answer.
+fn tool_write_assets(args: &Value, user: &UserContext) -> Value {
+    let Some(script) = arg_str(args, "script") else {
+        return missing_arg("script");
+    };
+    let Some(files) = args.get("files").and_then(Value::as_array) else {
+        return missing_arg("files");
+    };
+    let reinit = match ReinitMode::parse(arg_str(args, "reinit")) {
+        Ok(reinit) => reinit,
+        Err(message) => return json!({ "error": message }),
+    };
+
+    let mut writes = Vec::with_capacity(files.len());
+    for (index, file) in files.iter().enumerate() {
+        let Some(name) = arg_str(file, "name").or_else(|| arg_str(file, "asset")) else {
+            return json!({
+                "error": format!("files[{}]: missing required field: name", index)
+            });
+        };
+        let Some(content_base64) =
+            arg_str(file, "content_base64").or_else(|| arg_str(file, "content"))
+        else {
+            return json!({
+                "error": format!(
+                    "files[{}] ('{}'): missing required field: content_base64",
+                    index, name
+                )
+            });
+        };
+        writes.push(AssetWrite {
+            name: name.to_string(),
+            mimetype: arg_str(file, "mimetype").map(str::to_string),
+            content_base64: content_base64.to_string(),
+            expected_sha256: arg_str(file, "sha256").map(str::to_string),
+        });
+    }
+
+    match upsert_assets_authorized(user, script, &writes) {
+        Ok(outcome) => {
+            // Bridging back to async, as `check_script` does, so the caller is
+            // told what init() did rather than that it was started.
+            let init = match (reinit, outcome.written) {
+                (ReinitMode::Never, _) => json!({ "ran": false, "reason": "reinit=never" }),
+                (ReinitMode::After, 0) => json!({ "ran": false, "reason": "no files changed" }),
+                (ReinitMode::After, _) => {
+                    init_result_json(&crate::database::run_blocking(reinitialize_script(script)))
+                }
+            };
+            json!({
+                "success": true,
+                "script": script,
+                "results": outcome.results.iter().map(AssetWriteOutcome::to_json).collect::<Vec<Value>>(),
+                "written": outcome.written,
+                "init": init,
+                "timestamp": iso_timestamp(),
+            })
+        }
+        Err(AssetWriteError::AccessDenied) => {
+            json!({ "error": "Failed to write assets: Access denied" })
+        }
+        Err(AssetWriteError::Validation(msg)) | Err(AssetWriteError::Storage(msg)) => {
+            json!({ "error": format!("Failed to write assets: {}", msg) })
         }
     }
 }
