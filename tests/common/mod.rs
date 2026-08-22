@@ -43,21 +43,38 @@ pub fn init_tracing() {
     });
 }
 
-/// Initialize test database and repository using DATABASE_URL.
+/// Initialize test database and repository.
+///
+/// Resolves the connection string exactly the way the test server does, via
+/// `Config::test_config_postgres` — `DATABASE_URL` when set, the default local
+/// connection string otherwise. Resolving it here rather than reading
+/// `DATABASE_URL` directly keeps the harness and the server pointed at the same
+/// database: previously an unset `DATABASE_URL` made this function return
+/// without initializing anything, while the server still came up on the default
+/// string, so a test that touched the repository *before* starting its server
+/// panicked in `get_repository()` with no hint of the real cause.
+///
 /// Uses a persistent global runtime so the pool maintenance tasks stay alive.
 /// Safe to call multiple times — only runs once per process.
 #[allow(dead_code)]
 pub fn init_test_db() {
     DB_INIT.call_once(|| {
-        let Ok(url) = std::env::var("DATABASE_URL") else {
-            return;
-        };
+        if std::env::var("DATABASE_URL").is_err() {
+            eprintln!(
+                "warning: DATABASE_URL is not set; falling back to the default local \
+                 connection string. Run `source .env` (or use `make test`) to choose \
+                 the database explicitly."
+            );
+        }
+        let url = config::Config::test_config_postgres(0)
+            .repository
+            .connection_string;
 
         /// Inner helper that must be called with an active tokio context.
         fn do_init(url: String) {
             // connect_lazy requires a tokio context to spawn maintenance tasks.
             let pool = sqlx::PgPool::connect_lazy(&url)
-                .expect("Failed to create lazy connection pool from DATABASE_URL");
+                .expect("Failed to create lazy connection pool for the test database");
             let db = Arc::new(aiwebengine::database::Database::from_pool(pool.clone()));
             let _ = aiwebengine::database::initialize_global_database(db);
             let server_id = aiwebengine::notifications::generate_server_id();

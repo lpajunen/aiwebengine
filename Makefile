@@ -69,12 +69,14 @@ dev-local:
 	@bash -c 'source .env && export APP_AUTH__PROVIDERS__GOOGLE__REDIRECT_URI=http://localhost:3000/auth/callback/google && cargo run'
 
 # Run tests with cargo-nextest (better output)
+# Sources .env (when present) so DATABASE_URL reaches the test harness; without
+# it the integration tests fall back to the default local connection string.
 test:
-	cargo nextest run --all-features --no-fail-fast
+	@bash -c 'if [ -f .env ]; then source .env; fi; cargo nextest run --all-features --no-fail-fast'
 
 # Run tests with standard cargo test
 test-simple:
-	cargo test --all-features
+	@bash -c 'if [ -f .env ]; then source .env; fi; cargo test --all-features'
 
 # Run performance/load tests against production
 perf-test:

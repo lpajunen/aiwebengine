@@ -26,6 +26,50 @@ fn test_mutex() -> &'static Mutex<()> {
     TEST_MUTEX.get_or_init(|| Mutex::new(()))
 }
 
+/// Script URIs the running test has stored, drained by its [`Fixtures`] guard.
+static DEPLOYED: OnceLock<std::sync::Mutex<Vec<String>>> = OnceLock::new();
+
+fn deployed() -> &'static std::sync::Mutex<Vec<String>> {
+    DEPLOYED.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
+/// Holds the serialization lock and deletes whatever the test deployed.
+///
+/// These fixtures live in the shared database, so any left behind are executed
+/// again by every later server startup — including the deliberately slow
+/// `init()`s below, which then cost their full timeout on every boot in every
+/// test binary that starts a server. Cleaning up on drop covers panicking tests
+/// too, which is where the leftovers came from.
+struct Fixtures {
+    _lock: tokio::sync::MutexGuard<'static, ()>,
+}
+
+impl Drop for Fixtures {
+    fn drop(&mut self) {
+        let uris: Vec<String> = match deployed().lock() {
+            Ok(mut names) => names.drain(..).collect(),
+            Err(_) => return,
+        };
+        // A `setup_env` that could not reach the database leaves no repository
+        // to delete through, and `get_repository` would panic rather than say so.
+        if repository::get_repository_opt().is_none() {
+            return;
+        }
+        for uri in uris {
+            repository::delete_script(&uri);
+        }
+    }
+}
+
+/// Serialize against the other tests in this file, and clean up on the way out.
+async fn fixtures() -> Fixtures {
+    let lock = test_mutex().lock().await;
+    if let Ok(mut names) = deployed().lock() {
+        names.clear();
+    }
+    Fixtures { _lock: lock }
+}
+
 async fn setup_env() {
     INIT.get_or_init(|| async {
         let config = aiwebengine::config::AppConfig::test_config_postgres(0);
@@ -45,6 +89,9 @@ const INIT_BUDGET_MS: u64 = 5_000;
 
 fn deploy(script_uri: &str, content: &str) {
     repository::upsert_script(script_uri, content).expect("script should be stored");
+    if let Ok(mut names) = deployed().lock() {
+        names.push(script_uri.to_string());
+    }
 }
 
 /// Store a script plus the asset modules it imports, clearing anything a
@@ -117,7 +164,7 @@ fn message_for<'a>(report: &'a CheckReport, code: &str) -> &'a str {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_working_script_reports_its_registrations_and_no_errors() {
-    let _guard = test_mutex().lock().await;
+    let _guard = fixtures().await;
     setup_env().await;
 
     let uri = "test://check/clean";
@@ -152,7 +199,7 @@ async fn a_working_script_reports_its_registrations_and_no_errors() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_handler_named_but_not_defined_is_reported_before_it_can_500() {
-    let _guard = test_mutex().lock().await;
+    let _guard = fixtures().await;
     setup_env().await;
 
     let uri = "test://check/missing-handler";
@@ -175,7 +222,7 @@ async fn a_handler_named_but_not_defined_is_reported_before_it_can_500() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_handler_defined_only_inside_an_imported_module_is_reported() {
-    let _guard = test_mutex().lock().await;
+    let _guard = fixtures().await;
     setup_env().await;
 
     // The failure this endpoint exists for: a thin entrypoint that registers a
@@ -211,7 +258,7 @@ async fn a_handler_defined_only_inside_an_imported_module_is_reported() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_handler_that_is_defined_as_a_global_by_the_entrypoint_passes() {
-    let _guard = test_mutex().lock().await;
+    let _guard = fixtures().await;
     setup_env().await;
 
     let uri = "test://check/delegate-assigned";
@@ -237,7 +284,7 @@ async fn a_handler_that_is_defined_as_a_global_by_the_entrypoint_passes() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_circular_asset_import_is_reported_with_the_chain_that_closes_it() {
-    let _guard = test_mutex().lock().await;
+    let _guard = fixtures().await;
     setup_env().await;
 
     let uri = "test://check/cycle";
@@ -279,7 +326,7 @@ async fn a_circular_asset_import_is_reported_with_the_chain_that_closes_it() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_cycle_that_closes_on_the_entrypoint_names_the_entrypoint() {
-    let _guard = test_mutex().lock().await;
+    let _guard = fixtures().await;
     setup_env().await;
 
     let uri = "test://check/cycle-root";
@@ -311,7 +358,7 @@ async fn a_cycle_that_closes_on_the_entrypoint_names_the_entrypoint() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_script_with_no_init_is_told_it_registers_nothing() {
-    let _guard = test_mutex().lock().await;
+    let _guard = fixtures().await;
     setup_env().await;
 
     let uri = "test://check/no-init";
@@ -329,7 +376,7 @@ async fn a_script_with_no_init_is_told_it_registers_nothing() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn an_init_that_throws_is_reported_with_what_it_registered_first() {
-    let _guard = test_mutex().lock().await;
+    let _guard = fixtures().await;
     setup_env().await;
 
     let uri = "test://check/init-throws";
@@ -360,7 +407,7 @@ async fn an_init_that_throws_is_reported_with_what_it_registered_first() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn candidate_content_is_checked_without_being_deployed() {
-    let _guard = test_mutex().lock().await;
+    let _guard = fixtures().await;
     setup_env().await;
 
     let uri = "test://check/candidate";
@@ -388,7 +435,7 @@ async fn candidate_content_is_checked_without_being_deployed() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_dry_run_leaves_the_graphql_registry_alone() {
-    let _guard = test_mutex().lock().await;
+    let _guard = fixtures().await;
     setup_env().await;
 
     let uri = "test://check/graphql-isolation";
@@ -431,7 +478,7 @@ async fn a_dry_run_leaves_the_graphql_registry_alone() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_dry_run_leaves_the_dispatcher_alone() {
-    let _guard = test_mutex().lock().await;
+    let _guard = fixtures().await;
     setup_env().await;
 
     let uri = "test://check/dispatcher-isolation";
@@ -466,7 +513,7 @@ async fn a_dry_run_leaves_the_dispatcher_alone() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_dry_run_leaves_the_stream_registry_alone() {
-    let _guard = test_mutex().lock().await;
+    let _guard = fixtures().await;
     setup_env().await;
 
     let uri = "test://check/stream-isolation";
@@ -493,7 +540,7 @@ async fn a_dry_run_leaves_the_stream_registry_alone() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_dry_run_does_not_dispatch_messages_to_live_listeners() {
-    let _guard = test_mutex().lock().await;
+    let _guard = fixtures().await;
     setup_env().await;
 
     let uri = "test://check/no-dispatch";
@@ -519,7 +566,7 @@ async fn a_dry_run_does_not_dispatch_messages_to_live_listeners() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_route_another_script_already_serves_is_reported_as_a_conflict() {
-    let _guard = test_mutex().lock().await;
+    let _guard = fixtures().await;
     setup_env().await;
 
     let incumbent = "test://check/conflict-incumbent";
@@ -571,7 +618,7 @@ async fn a_route_another_script_already_serves_is_reported_as_a_conflict() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_script_that_is_not_deployed_needs_candidate_content() {
-    let _guard = test_mutex().lock().await;
+    let _guard = fixtures().await;
     setup_env().await;
 
     let user = UserContext::admin("checker".to_string());
@@ -588,7 +635,7 @@ async fn a_script_that_is_not_deployed_needs_candidate_content() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_user_who_may_not_write_scripts_is_refused() {
-    let _guard = test_mutex().lock().await;
+    let _guard = fixtures().await;
     setup_env().await;
 
     let uri = "test://check/authz";
@@ -602,7 +649,7 @@ async fn a_user_who_may_not_write_scripts_is_refused() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_check_tool_is_advertised_and_dispatches_over_mcp() {
-    let _guard = test_mutex().lock().await;
+    let _guard = fixtures().await;
     setup_env().await;
 
     let advertised = native_mcp_tool_descriptors()
@@ -687,7 +734,7 @@ async fn post_check(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_endpoint_reports_diagnostics_with_a_200() {
-    let _guard = test_mutex().lock().await;
+    let _guard = fixtures().await;
     setup_env().await;
 
     let uri = "test://check/http-report";
@@ -714,7 +761,7 @@ async fn the_endpoint_reports_diagnostics_with_a_200() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_raw_body_is_taken_as_candidate_source() {
-    let _guard = test_mutex().lock().await;
+    let _guard = fixtures().await;
     setup_env().await;
 
     let uri = "test://check/http-raw";
@@ -736,7 +783,7 @@ async fn a_raw_body_is_taken_as_candidate_source() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_json_body_carries_the_uri_and_the_candidate() {
-    let _guard = test_mutex().lock().await;
+    let _guard = fixtures().await;
     setup_env().await;
 
     let uri = "test://check/http-json";
@@ -756,7 +803,7 @@ async fn a_json_body_carries_the_uri_and_the_candidate() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_json_body_that_does_not_parse_is_a_400() {
-    let _guard = test_mutex().lock().await;
+    let _guard = fixtures().await;
     setup_env().await;
 
     let (status, _) = post_check("", Some("application/json"), "{not json").await;
@@ -765,7 +812,7 @@ async fn a_json_body_that_does_not_parse_is_a_400() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_endpoint_reports_its_missing_parameters_and_refusals() {
-    let _guard = test_mutex().lock().await;
+    let _guard = fixtures().await;
     setup_env().await;
 
     let uri = "test://check/http-authz";
@@ -819,7 +866,7 @@ fn deploy_slow_init(uri: &str, path: &str, spin_ms: u64) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn an_init_over_the_budget_is_measured_rather_than_interrupted() {
-    let _guard = test_mutex().lock().await;
+    let _guard = fixtures().await;
     setup_env().await;
 
     // The failure this fixes: with the run capped at the deploy budget, the one
@@ -866,7 +913,7 @@ async fn an_init_over_the_budget_is_measured_rather_than_interrupted() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn an_init_past_even_the_ceiling_reports_what_it_registered() {
-    let _guard = test_mutex().lock().await;
+    let _guard = fixtures().await;
     setup_env().await;
 
     let uri = "test://check/past-ceiling";
@@ -913,7 +960,7 @@ async fn an_init_past_even_the_ceiling_reports_what_it_registered() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_slow_init_answers_over_http_instead_of_hanging() {
-    let _guard = test_mutex().lock().await;
+    let _guard = fixtures().await;
     setup_env().await;
 
     let uri = "test://check/http-slow";
@@ -940,7 +987,7 @@ async fn a_slow_init_answers_over_http_instead_of_hanging() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_mcp_dispatcher_bounds_each_tool_by_what_that_tool_can_need() {
-    let _guard = test_mutex().lock().await;
+    let _guard = fixtures().await;
     setup_env().await;
 
     let execution_ms = aiwebengine::js_engine::current_execution_limits().timeout_ms;
@@ -976,7 +1023,7 @@ async fn the_mcp_dispatcher_bounds_each_tool_by_what_that_tool_can_need() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_slow_init_answers_over_mcp_with_what_it_registered() {
-    let _guard = test_mutex().lock().await;
+    let _guard = fixtures().await;
     setup_env().await;
 
     let uri = "test://check/mcp-slow";

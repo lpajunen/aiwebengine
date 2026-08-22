@@ -38,6 +38,7 @@ serial-server-tests = { max-threads = 1 }
 [[profile.default.overrides]]
 filter = '''
   binary(api_http)
+  or binary(assets_batch)
   or binary(cluster)
   or binary(dispatcher)
   or binary(openapi_validation)
