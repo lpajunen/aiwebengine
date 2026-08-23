@@ -8,6 +8,10 @@ use tracing::{debug, error, warn};
 /// response that can be awaited, read as an object, or parsed as a string.
 const FETCH_PRELUDE: &str = include_str!("../../assets/fetch_prelude.js");
 
+/// Gives the host namespaces that answer with a JSON string the same shape a
+/// `fetch` response has.
+const RESULT_PRELUDE: &str = include_str!("../../assets/result_prelude.js");
+
 use crate::repository;
 use crate::scheduler;
 use crate::security::{
@@ -3706,8 +3710,20 @@ impl SecureGlobalContext {
         )?;
         database_obj.set("releaseSavepoint", release_savepoint)?;
 
-        // Set the database object on the global scope
-        global.set("database", database_obj)?;
+        // Installed under a private name: the prelude below builds `database`
+        // from it, wrapping each answer so a result can be awaited and read
+        // the same way a `fetch` response is.
+        global.set("__hostDatabase", database_obj)?;
+
+        crate::bytecode::eval_program(ctx, "engine://result-prelude", RESULT_PRELUDE).map_err(
+            |e| {
+                rquickjs::Error::new_from_js_message(
+                    "database",
+                    "prelude",
+                    &format!("result prelude failed to load: {}", e),
+                )
+            },
+        )?;
 
         debug!(
             "database JavaScript API initialized for script: {}",

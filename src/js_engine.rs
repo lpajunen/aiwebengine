@@ -1600,9 +1600,11 @@ fn build_http_response(result: Value<'_>) -> Result<JsHttpResponse, String> {
                 if let Ok(html) = obj.get::<_, String>("__html") {
                     html
                 } else if let Ok(to_string_fn) = obj.get::<_, rquickjs::Function>("toString") {
-                    // Try calling toString() on the object
+                    // Bind the receiver: an inherited `toString` — `String`'s,
+                    // for one — reads the value off `this` and throws when
+                    // called with none.
                     to_string_fn
-                        .call::<_, String>(())
+                        .call::<_, String>((rquickjs::function::This(obj.clone()),))
                         .map_err(|e| format!("Failed to call toString: {}", e))?
                 } else {
                     return Err("Body must be a string or have a toString() method".to_string());

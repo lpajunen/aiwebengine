@@ -1134,25 +1134,65 @@ declare function fetch(
  * Database interface for script-scoped table management and operations.
  * Each script can create and manage its own tables with automatic namespacing.
  */
+/**
+ * The answer from a `database` call.
+ *
+ * Readable three ways, so the shape does not depend on which host API produced
+ * it and the scripts written against the JSON string keep working:
+ *
+ * - `(await database.query("notes")).json()` — awaitable, like a `fetch` response
+ * - `database.query("notes").json()` — the same, without awaiting
+ * - `JSON.parse(database.query("notes"))` — `toString` yields the raw string
+ *
+ * `await` here is sequencing sugar: the call has already finished by the time
+ * it returns.
+ */
+interface DatabaseResult {
+  /** The answer, parsed. Throws if the call did not answer with JSON. */
+  json(): unknown;
+
+  /** The answer, as the raw string. */
+  text(): string;
+
+  /**
+   * The raw JSON string, which is what these calls used to return.
+   * `JSON.parse(database.query(t))` still works because `JSON.parse` converts
+   * its argument with ToString first.
+   */
+  toString(): string;
+}
+
+/**
+ * A {@link DatabaseResult}, usable with or without `await`, and anywhere the
+ * string these calls used to return was.
+ *
+ * The `string` in this intersection is not a convenience: the value really is
+ * a `String` object, so every string method works on it and existing code
+ * needs no change. The single exception is `typeof`, which reports `"object"`
+ * rather than `"string"` — a check written that way has to become
+ * `typeof String(result)` or, better, `result.json()`.
+ */
+type DatabaseAnswer = string & DatabaseResult & PromiseLike<DatabaseResult>;
+
 interface Database {
   /**
    * Create a new table for this script
    * @param tableName - Logical table name (will be prefixed with script namespace)
    * @returns JSON string with result: {success: boolean, tableName: string, physicalName: string} or {error: string}
    * @example
-   * const result = JSON.parse(database.createTable("users"));
+   * const result = database.createTable("users").json();
    * // {success: true, tableName: "users", physicalName: "script_myapp_users"}
    */
-  createTable(tableName: string): string;
+  createTable(tableName: string): DatabaseAnswer;
 
   /**
    * Drop a table owned by this script
    * @param tableName - Table name to drop
    * @returns JSON string with result: {success: boolean, tableName: string, dropped: boolean} or {error: string}
    * @example
-   * const result = JSON.parse(database.dropTable("old_data"));
+   * const result = database.dropTable("old_data").json();
    */
-  dropTable(tableName: string): string;
+  dropTable(tableName: string): DatabaseAnswer;
 
   /**
    * Add an integer column to a table
@@ -1170,7 +1210,7 @@ interface Database {
     columnName: string,
     nullable?: boolean,
     defaultValue?: string,
-  ): string;
+  ): DatabaseAnswer;
 
   /**
    * Add a text column to a table
@@ -1188,7 +1228,7 @@ interface Database {
     columnName: string,
     nullable?: boolean,
     defaultValue?: string,
-  ): string;
+  ): DatabaseAnswer;
 
   /**
    * Add a boolean column to a table
@@ -1205,7 +1245,7 @@ interface Database {
     columnName: string,
     nullable?: boolean,
     defaultValue?: string,
-  ): string;
+  ): DatabaseAnswer;
 
   /**
    * Add a timestamp column to a table
@@ -1222,7 +1262,7 @@ interface Database {
     columnName: string,
     nullable?: boolean,
     defaultValue?: string,
-  ): string;
+  ): DatabaseAnswer;
 
   /**
    * Add a foreign key reference column to a table
@@ -1239,7 +1279,7 @@ interface Database {
     columnName: string,
     referencedTableName: string,
     nullable?: boolean,
-  ): string;
+  ): DatabaseAnswer;
 
   /**
    * Drop a column from a table
@@ -1247,9 +1287,9 @@ interface Database {
    * @param columnName - Column name
    * @returns JSON string with result: {success: boolean, tableName: string, columnName: string, dropped: boolean} or {error: string}
    * @example
-   * const result = JSON.parse(database.dropColumn("users", "old_field"));
+   * const result = database.dropColumn("users", "old_field").json();
    */
-  dropColumn(tableName: string, columnName: string): string;
+  dropColumn(tableName: string, columnName: string): DatabaseAnswer;
 
   /**
    * Query rows from a table with optional filters, limit, and ordering.
@@ -1269,13 +1309,13 @@ interface Database {
    * @example
    * // Range filter: users active in the last 90 seconds
    * const cutoff = Date.now() - 90000;
-   * const active = JSON.parse(database.query(
+   * const active = database.query(
    *   "presence",
    *   JSON.stringify({ last_active: { "$gt": cutoff } })
-   * ));
+   * ).json();
    *
    * // Last 100 chat messages, newest first
-   * const msgs = JSON.parse(database.query("chat", null, 100, "ts", "desc"));
+   * const msgs = database.query("chat", null, 100, "ts", "desc").json();
    */
   query(
     tableName: string,
@@ -1283,7 +1323,7 @@ interface Database {
     limit?: number,
     orderBy?: string,
     orderDir?: "asc" | "desc",
-  ): string;
+  ): DatabaseAnswer;
 
   /**
    * Insert a row into a table
@@ -1291,11 +1331,11 @@ interface Database {
    * @param data - JSON string with column values
    * @returns JSON string with inserted row (including generated id) or {error: string}
    * @example
-   * const result = JSON.parse(
-   *   database.insert("users", JSON.stringify({name: "John", email: "john@example.com"}))
-   * );
+   * const result = database
+   *   .insert("users", JSON.stringify({name: "John", email: "john@example.com"}))
+   *   .json();
    */
-  insert(tableName: string, data: string): string;
+  insert(tableName: string, data: string): DatabaseAnswer;
 
   /**
    * Update a row in a table by ID
@@ -1304,11 +1344,9 @@ interface Database {
    * @param data - JSON string with column values to update
    * @returns JSON string with updated row or {error: string}
    * @example
-   * const result = JSON.parse(
-   *   database.update("users", 1, JSON.stringify({name: "Jane"}))
-   * );
+   * const result = database.update("users", 1, JSON.stringify({name: "Jane"})).json();
    */
-  update(tableName: string, id: number, data: string): string;
+  update(tableName: string, id: number, data: string): DatabaseAnswer;
 
   /**
    * Delete a row from a table by ID
@@ -1316,9 +1354,9 @@ interface Database {
    * @param id - Row ID
    * @returns JSON string with result: {success: boolean, deleted: boolean} or {error: string}
    * @example
-   * const result = JSON.parse(database.delete("users", 5));
+   * const result = database.delete("users", 5).json();
    */
-  delete(tableName: string, id: number): string;
+  delete(tableName: string, id: number): DatabaseAnswer;
 
   /**
    * Insert or update a row by a unique key (atomic upsert).
@@ -1339,7 +1377,7 @@ interface Database {
    *   JSON.stringify({ user_id: userId, nick: nick, last_active: Date.now() })
    * );
    */
-  upsert(tableName: string, keyColumns: string, data: string): string;
+  upsert(tableName: string, keyColumns: string, data: string): DatabaseAnswer;
 
   /**
    * Delete rows matching filter conditions (bulk delete).
@@ -1357,7 +1395,7 @@ interface Database {
    *   JSON.stringify({ last_active: { "$lt": cutoff } })
    * );
    */
-  deleteWhere(tableName: string, filters: string): string;
+  deleteWhere(tableName: string, filters: string): DatabaseAnswer;
 
   /**
    * Atomically acquire or extend a distributed lease (compare-and-swap).
@@ -1377,9 +1415,9 @@ interface Database {
    * @param ttlMs - Lease duration in milliseconds
    * @returns JSON string: `{acquired: boolean, owner: string, expires_at: string}` or `{error: string}`
    * @example
-   * const lease = JSON.parse(
-   *   database.acquireLease("npc_leases", "world_" + worldId, myServerId, 2000)
-   * );
+   * const lease = database
+   *   .acquireLease("npc_leases", "world_" + worldId, myServerId, 2000)
+   *   .json();
    * if (!lease.acquired) return; // another instance owns the lease
    */
   acquireLease(
@@ -1387,7 +1425,7 @@ interface Database {
     leaseId: string,
     owner: string,
     ttlMs: number,
-  ): string;
+  ): DatabaseAnswer;
 
   /**
    * Create a lease table with the correct schema for use with `acquireLease()`.
@@ -1400,7 +1438,7 @@ interface Database {
    * @example
    * database.createLeaseTable("npc_leases");
    */
-  createLeaseTable(tableName: string): string;
+  createLeaseTable(tableName: string): DatabaseAnswer;
 
   /**
    * Add a unique index to a table column (or set of columns).
@@ -1415,7 +1453,7 @@ interface Database {
    * database.addUniqueIndex("presence", JSON.stringify(["user_id"]));
    * database.addUniqueIndex("scores", JSON.stringify(["user_id", "world_id"]));
    */
-  addUniqueIndex(tableName: string, columns: string): string;
+  addUniqueIndex(tableName: string, columns: string): DatabaseAnswer;
 
   /**
    * Auto-generate GraphQL operations for a table
@@ -1423,13 +1461,13 @@ interface Database {
    * @param options - JSON string with options (optional): {visibility: "script_internal" | "public" | "authenticated"}
    * @returns JSON string with result: {success: boolean, table: string, queries: string[], mutations: string[]} or {error: string}
    * @example
-   * const result = JSON.parse(
-   *   database.generateGraphQLForTable("users", JSON.stringify({visibility: "authenticated"}))
-   * );
+   * const result = database
+   *   .generateGraphQLForTable("users", JSON.stringify({visibility: "authenticated"}))
+   *   .json();
    * // Automatically creates queries like: getUser, listUsers
    * // And mutations like: createUser, updateUser, deleteUser
    */
-  generateGraphQLForTable(tableName: string, options?: string): string;
+  generateGraphQLForTable(tableName: string, options?: string): DatabaseAnswer;
 
   // Transaction Management
 
@@ -1440,7 +1478,7 @@ interface Database {
    * @returns JSON string with result: {success: boolean, message: string} or {error: string}
    * @example
    * // Start transaction with 5 second timeout
-   * const result = JSON.parse(database.beginTransaction(5000));
+   * const result = database.beginTransaction(5000).json();
    * if (result.error) {
    *   console.error(`Failed to start transaction: ${result.error}`);
    *   return ResponseBuilder.error(500, "Transaction error");
@@ -1449,19 +1487,19 @@ interface Database {
    * // Perform database operations...
    * // Transaction auto-commits on normal return or auto-rollbacks on exception
    */
-  beginTransaction(timeout_ms?: number): string;
+  beginTransaction(timeout_ms?: number): DatabaseAnswer;
 
   /**
    * Commit the current transaction or release the most recent savepoint.
    * Note: Transactions auto-commit on handler success, so explicit commit is optional.
    * @returns JSON string with result: {success: boolean, message: string} or {error: string}
    * @example
-   * const result = JSON.parse(database.commitTransaction());
+   * const result = database.commitTransaction().json();
    * if (result.error) {
    *   console.error(`Failed to commit: ${result.error}`);
    * }
    */
-  commitTransaction(): string;
+  commitTransaction(): DatabaseAnswer;
 
   /**
    * Rollback the current transaction or to the most recent savepoint.
@@ -1474,7 +1512,7 @@ interface Database {
    *   return ResponseBuilder.error(400, "Invalid data");
    * }
    */
-  rollbackTransaction(): string;
+  rollbackTransaction(): DatabaseAnswer;
 
   /**
    * Create a named or auto-generated savepoint for nested transaction control.
@@ -1483,20 +1521,20 @@ interface Database {
    * @returns JSON string with result: {success: boolean, savepoint: string} or {error: string}
    * @example
    * // Auto-generated savepoint
-   * const sp = JSON.parse(database.createSavepoint());
+   * const sp = database.createSavepoint().json();
    * console.log(`Savepoint: ${sp.savepoint}`); // "sp_1"
    *
    * // Named savepoint
    * database.createSavepoint("checkpoint_before_insert");
    */
-  createSavepoint(name?: string): string;
+  createSavepoint(name?: string): DatabaseAnswer;
 
   /**
    * Rollback to a specific savepoint without ending the transaction.
    * @param name - Savepoint name to rollback to
    * @returns JSON string with result: {success: boolean, message: string} or {error: string}
    * @example
-   * const sp = JSON.parse(database.createSavepoint("before_update"));
+   * const sp = database.createSavepoint("before_update").json();
    *
    * try {
    *   database.update("users", userId, JSON.stringify({status: "active"}));
@@ -1505,21 +1543,21 @@ interface Database {
    *   database.rollbackToSavepoint(sp.savepoint);
    * }
    */
-  rollbackToSavepoint(name: string): string;
+  rollbackToSavepoint(name: string): DatabaseAnswer;
 
   /**
    * Release a savepoint, making its changes permanent within the transaction scope.
    * @param name - Savepoint name to release
    * @returns JSON string with result: {success: boolean, message: string} or {error: string}
    * @example
-   * const sp = JSON.parse(database.createSavepoint("checkpoint"));
+   * const sp = database.createSavepoint("checkpoint").json();
    *
    * // Perform operations...
    *
    * // Release savepoint (changes become permanent in transaction)
    * database.releaseSavepoint(sp.savepoint);
    */
-  releaseSavepoint(name: string): string;
+  releaseSavepoint(name: string): DatabaseAnswer;
 }
 
 // ============================================================================
