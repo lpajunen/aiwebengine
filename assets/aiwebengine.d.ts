@@ -485,82 +485,92 @@ interface AssetStorage {
 // ============================================================================
 
 /**
- * Shared storage (script-scoped, persistent key-value store)
+ * The WHATWG Web Storage interface, as browsers expose it on `localStorage`
+ * and `sessionStorage`.
+ *
+ * Two stores implement it. `sharedStorage` belongs to the script and is shared
+ * by everyone using it, across every instance in a cluster. `personalStorage`
+ * belongs to one authenticated user within one script; reaching it with nobody
+ * logged in throws a `SecurityError`.
+ *
+ * Keys and values are coerced with `String()`, so `setItem("count", 1)` stores
+ * `"1"`. Failures throw a `DOMException` rather than being returned:
+ * `QuotaExceededError` when a value exceeds 1 MB, `SecurityError` when the
+ * store is not available to the caller.
+ *
+ * Named access — `store.foo`, `"foo" in store`, `delete store.foo`,
+ * `Object.keys(store)` — works, but each of those is a database round trip, so
+ * enumerating a large store costs one query per key.
+ *
+ * @example
+ * sharedStorage.setItem("pageViews", "42");
+ * const views = sharedStorage.getItem("pageViews") ?? "0";
+ *
+ * try {
+ *   personalStorage.setItem("theme", "dark");
+ * } catch (e) {
+ *   // e.name === "SecurityError" when nobody is logged in
+ * }
  */
-interface SharedStorage {
+interface Storage {
+  /** How many keys the store holds. */
+  readonly length: number;
+
   /**
-   * Get a value from shared storage
-   * @param key - Storage key
-   * @returns Stored value or null if not found
+   * The value stored under `key`, or `null` if there is none.
    * @example
-   * const counter = sharedStorage.getItem("pageViews") || "0";
+   * const counter = sharedStorage.getItem("pageViews") ?? "0";
    */
   getItem(key: string): string | null;
 
   /**
-   * Set a value in shared storage
-   * @param key - Storage key
-   * @param value - Value to store
+   * Store `value` under `key`, replacing any previous value.
+   * @throws DOMException `QuotaExceededError` if the value exceeds 1 MB,
+   * `SecurityError` if the store is not available to the caller.
    * @example
    * sharedStorage.setItem("pageViews", "42");
    */
   setItem(key: string, value: string): void;
 
   /**
-   * Remove a key from shared storage
-   * @param key - Storage key
+   * Remove `key`. Removing one that is not there is not an error.
+   * @throws DOMException `SecurityError` if the store is not available.
    * @example
    * sharedStorage.removeItem("oldData");
    */
   removeItem(key: string): void;
 
   /**
-   * Clear all data from shared storage
+   * Remove every key in the store.
+   * @throws DOMException `SecurityError` if the store is not available.
    * @example
    * sharedStorage.clear();
    */
   clear(): void;
+
+  /**
+   * The nth key in ascending order, or `null` if the index is out of range.
+   * @example
+   * for (let i = 0; i < sharedStorage.length; i++) {
+   *   console.log(sharedStorage.key(i));
+   * }
+   */
+  key(index: number): string | null;
+
+  /** Named access to a stored value. */
+  [name: string]: any;
 }
 
 /**
- * Personal storage (user-scoped, requires authentication)
+ * The error thrown by the storage APIs when a call cannot be completed.
+ * `name` identifies the failure — `QuotaExceededError`, `SecurityError`,
+ * `SyntaxError`, `UnknownError` — and it is a real `Error`, so an existing
+ * `catch` sees it either way.
  */
-interface PersonalStorage {
-  /**
-   * Get a value from personal storage for the authenticated user
-   * @param key - Storage key
-   * @returns Stored value or error message string
-   * @example
-   * const preferences = personalStorage.getItem("theme");
-   */
-  getItem(key: string): string;
-
-  /**
-   * Set a value in personal storage for the authenticated user
-   * @param key - Storage key
-   * @param value - Value to store
-   * @returns Success or error message
-   * @example
-   * const result = personalStorage.setItem("theme", "dark");
-   */
-  setItem(key: string, value: string): string;
-
-  /**
-   * Remove a key from personal storage for the authenticated user
-   * @param key - Storage key
-   * @returns Success or error message
-   * @example
-   * const result = personalStorage.removeItem("oldPreference");
-   */
-  removeItem(key: string): string;
-
-  /**
-   * Clear all data from personal storage for the authenticated user
-   * @returns Success or error message
-   * @example
-   * const result = personalStorage.clear();
-   */
-  clear(): string;
+declare class DOMException extends Error {
+  constructor(message?: string, name?: string);
+  readonly name: string;
+  readonly message: string;
 }
 
 // ============================================================================
@@ -1799,8 +1809,8 @@ interface Convert {
 
 declare var routeRegistry: RouteRegistry;
 declare var assetStorage: AssetStorage;
-declare var sharedStorage: SharedStorage;
-declare var personalStorage: PersonalStorage;
+declare var sharedStorage: Storage;
+declare var personalStorage: Storage;
 declare var secretStorage: SecretStorage;
 declare var schedulerService: SchedulerService;
 declare var graphQLRegistry: GraphQLRegistry;

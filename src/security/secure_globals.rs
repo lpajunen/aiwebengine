@@ -17,6 +17,10 @@ const RESULT_PRELUDE: &str = include_str!("../../assets/result_prelude.js");
 /// and throws on anything else — is handed something it accepts.
 const CONSOLE_PRELUDE: &str = include_str!("../../assets/console_prelude.js");
 
+/// Builds the Web Storage interface — `length`, `key(i)`, named access, and
+/// failures that throw rather than being returned — over the two host stores.
+const STORAGE_PRELUDE: &str = include_str!("../../assets/storage_prelude.js");
+
 use crate::repository;
 use crate::scheduler;
 use crate::security::{
@@ -3853,6 +3857,51 @@ impl SecureGlobalContext {
         Ok(())
     }
 
+    /// The user the current invocation is running as, if any.
+    ///
+    /// Personal storage is keyed by it, and every one of its methods needs the
+    /// same answer, so the walk down `context.request.auth` lives here rather
+    /// than four times over. `None` means there is nobody to store anything
+    /// for — which the prelude turns into a `SecurityError`, as a browser does
+    /// when storage is not available to the caller.
+    fn current_user_id(ctx: &rquickjs::Ctx<'_>) -> Option<String> {
+        let context_obj: rquickjs::Object = ctx.globals().get("context").ok()?;
+        let request_obj: rquickjs::Object = context_obj.get("request").ok()?;
+        let auth_obj: rquickjs::Object = request_obj.get("auth").ok()?;
+
+        let is_authenticated: bool = auth_obj.get("isAuthenticated").unwrap_or_default();
+        if !is_authenticated {
+            return None;
+        }
+
+        match auth_obj.get("userId") {
+            Ok(Some(user_id)) => Some(user_id),
+            _ => None,
+        }
+    }
+
+    /// The error envelope the storage prelude turns into a `DOMException`.
+    ///
+    /// `name` is the exception's, so the failure a script catches says which
+    /// kind it was rather than being prose it would have to match on.
+    fn storage_failure(name: &str, message: &str) -> String {
+        serde_json::json!({ "name": name, "message": message }).to_string()
+    }
+
+    /// Classifies a write that the repository refused.
+    ///
+    /// Size is the one a script can do something about, and the one the Web
+    /// Storage spec names, so it keeps its own exception; anything else is the
+    /// store being unable to answer.
+    fn storage_write_failure(error: &crate::error::AppError) -> String {
+        let message = error.to_string();
+        if message.contains("too large") {
+            Self::storage_failure("QuotaExceededError", &message)
+        } else {
+            Self::storage_failure("UnknownError", &message)
+        }
+    }
+
     /// Setup secure script storage functions
     fn setup_script_properties_functions(
         &self,
@@ -3862,10 +3911,13 @@ impl SecureGlobalContext {
         let global = ctx.globals();
         let script_uri_owned = script_uri.to_string();
 
-        // Create the sharedStorage namespace object
-        let script_properties_obj = rquickjs::Object::new(ctx.clone())?;
+        // The Rust half of `sharedStorage`. Every method here answers with a
+        // value rather than with prose about one: `null` where the browser's
+        // `Storage` answers `null`, and — on the write paths — either nothing
+        // or the envelope of the exception the prelude should throw. Building
+        // the browser's interface on top of that is `storage_prelude.js`'s job.
+        let host = rquickjs::Object::new(ctx.clone())?;
 
-        // sharedStorage.getItem(key) - Get a storage item
         let script_uri_get = script_uri_owned.clone();
         let get_item = Function::new(
             ctx.clone(),
@@ -3880,71 +3932,85 @@ impl SecureGlobalContext {
                 ))
             },
         )?;
-        script_properties_obj.set("getItem", get_item)?;
+        host.set("getItem", get_item)?;
 
-        // sharedStorage.setItem(key, value) - Set a storage item
         let script_uri_set = script_uri_owned.clone();
         let set_item = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, key: String, value: String| -> JsResult<String> {
+            move |_ctx: rquickjs::Ctx<'_>,
+                  key: String,
+                  value: String|
+                  -> JsResult<Option<String>> {
                 debug!(
                     "sharedStorage.setItem called for script {} with key: {}",
                     script_uri_set, key
                 );
 
-                // Validate inputs
                 if key.trim().is_empty() {
-                    return Ok("Error: Key cannot be empty".to_string());
-                }
-
-                if value.len() > 1_000_000 {
-                    return Ok("Error: Value too large (>1MB)".to_string());
+                    return Ok(Some(Self::storage_failure(
+                        "SyntaxError",
+                        "Key cannot be empty",
+                    )));
                 }
 
                 match crate::repository::set_script_properties_item(&script_uri_set, &key, &value) {
-                    Ok(()) => Ok("Item set successfully".to_string()),
-                    Err(e) => Ok(format!("Error setting item: {}", e)),
+                    Ok(()) => Ok(None),
+                    Err(e) => Ok(Some(Self::storage_write_failure(&e))),
                 }
             },
         )?;
-        script_properties_obj.set("setItem", set_item)?;
+        host.set("setItem", set_item)?;
 
-        // sharedStorage.removeItem(key) - Remove a storage item
         let script_uri_remove = script_uri_owned.clone();
         let remove_item = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>, key: String| -> JsResult<bool> {
+            move |_ctx: rquickjs::Ctx<'_>, key: String| -> JsResult<()> {
                 debug!(
                     "sharedStorage.removeItem called for script {} with key: {}",
                     script_uri_remove, key
                 );
-                Ok(crate::repository::remove_script_properties_item(
-                    &script_uri_remove,
-                    &key,
-                ))
+                // Whether the key was there is not something `removeItem`
+                // reports, in the browser or here.
+                crate::repository::remove_script_properties_item(&script_uri_remove, &key);
+                Ok(())
             },
         )?;
-        script_properties_obj.set("removeItem", remove_item)?;
+        host.set("removeItem", remove_item)?;
 
-        // sharedStorage.clear() - Clear all items for this script
         let script_uri_clear = script_uri_owned.clone();
         let clear_storage = Function::new(
             ctx.clone(),
-            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
+            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<Option<String>> {
                 debug!("sharedStorage.clear called for script {}", script_uri_clear);
                 match crate::repository::clear_script_properties(&script_uri_clear) {
-                    Ok(()) => Ok("Storage cleared successfully".to_string()),
-                    Err(e) => Ok(format!("Error clearing storage: {}", e)),
+                    Ok(()) => Ok(None),
+                    Err(e) => Ok(Some(Self::storage_write_failure(&e))),
                 }
             },
         )?;
-        script_properties_obj.set("clear", clear_storage)?;
+        host.set("clear", clear_storage)?;
 
-        // Set the sharedStorage object on the global scope
-        global.set("sharedStorage", script_properties_obj)?;
+        let script_uri_keys = script_uri_owned.clone();
+        let keys = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>| -> JsResult<Vec<String>> {
+                Ok(crate::repository::list_script_properties_keys(
+                    &script_uri_keys,
+                ))
+            },
+        )?;
+        host.set("keys", keys)?;
+
+        // Always available: shared storage belongs to the script, not to a
+        // user, so there is nobody who could be missing.
+        let available =
+            Function::new(ctx.clone(), move |_ctx: rquickjs::Ctx<'_>| -> bool { true })?;
+        host.set("available", available)?;
+
+        global.set("__hostSharedStorage", host)?;
 
         debug!(
-            "sharedStorage JavaScript API initialized for script: {}",
+            "sharedStorage host functions initialized for script: {}",
             script_uri
         );
 
@@ -3959,10 +4025,13 @@ impl SecureGlobalContext {
         let global = ctx.globals();
         let script_uri_owned = script_uri.to_string();
 
-        // Create the personalStorage namespace object
-        let user_properties_obj = rquickjs::Object::new(ctx.clone())?;
+        // The Rust half of `personalStorage`. It differs from shared storage in
+        // one way that matters: without an authenticated user there is no store
+        // to read or write, and saying so is not the same as saying the key was
+        // missing. `available()` is what lets the prelude tell those apart and
+        // raise `SecurityError` instead of quietly answering `null`.
+        let host = rquickjs::Object::new(ctx.clone())?;
 
-        // personalStorage.getItem(key) - Get a storage item for current user
         let script_uri_get = script_uri_owned.clone();
         let get_item = Function::new(
             ctx.clone(),
@@ -3971,44 +4040,9 @@ impl SecureGlobalContext {
                     "personalStorage.getItem called for script {} with key: {}",
                     script_uri_get, key
                 );
-
-                // Try to get current request auth from context
-                let globals = ctx.globals();
-                let context_obj: rquickjs::Object = match globals.get("context") {
-                    Ok(v) => v,
-                    Err(_) => {
-                        warn!("personalStorage.getItem: no context available");
-                        return Ok(None);
-                    }
-                };
-
-                let request_obj: rquickjs::Object = match context_obj.get("request") {
-                    Ok(v) => v,
-                    Err(_) => {
-                        warn!("personalStorage.getItem: no request in context");
-                        return Ok(None);
-                    }
-                };
-
-                let auth_obj: rquickjs::Object = match request_obj.get("auth") {
-                    Ok(v) => v,
-                    Err(_) => {
-                        warn!("personalStorage.getItem: no auth in request");
-                        return Ok(None);
-                    }
-                };
-
-                let is_authenticated: bool = auth_obj.get("isAuthenticated").unwrap_or_default();
-
-                if !is_authenticated {
+                let Some(user_id) = Self::current_user_id(&ctx) else {
                     return Ok(None);
-                }
-
-                let user_id: String = match auth_obj.get("userId") {
-                    Ok(Some(v)) => v,
-                    _ => return Ok(None),
                 };
-
                 Ok(crate::repository::get_user_properties_item(
                     &script_uri_get,
                     &user_id,
@@ -4016,208 +4050,123 @@ impl SecureGlobalContext {
                 ))
             },
         )?;
-        user_properties_obj.set("getItem", get_item)?;
+        host.set("getItem", get_item)?;
 
-        // personalStorage.setItem(key, value) - Set a storage item for current user
         let script_uri_set = script_uri_owned.clone();
-        let set_item =
-            Function::new(
-                ctx.clone(),
-                move |ctx: rquickjs::Ctx<'_>, key: String, value: String| -> JsResult<String> {
-                    debug!(
-                        "personalStorage.setItem called for script {} with key: {}",
-                        script_uri_set, key
-                    );
+        let set_item = Function::new(
+            ctx.clone(),
+            move |ctx: rquickjs::Ctx<'_>, key: String, value: String| -> JsResult<Option<String>> {
+                debug!(
+                    "personalStorage.setItem called for script {} with key: {}",
+                    script_uri_set, key
+                );
 
-                    // Try to get current request auth from context
-                    let globals = ctx.globals();
-                    let context_obj: rquickjs::Object =
-                        match globals.get("context") {
-                            Ok(v) => v,
-                            Err(_) => return Ok(
-                                "Error: Personal storage requires authentication. Please log in."
-                                    .to_string(),
-                            ),
-                        };
+                let Some(user_id) = Self::current_user_id(&ctx) else {
+                    return Ok(Some(Self::storage_failure(
+                        "SecurityError",
+                        "Personal storage requires an authenticated user",
+                    )));
+                };
 
-                    let request_obj: rquickjs::Object =
-                        match context_obj.get("request") {
-                            Ok(v) => v,
-                            Err(_) => return Ok(
-                                "Error: Personal storage requires authentication. Please log in."
-                                    .to_string(),
-                            ),
-                        };
+                if key.trim().is_empty() {
+                    return Ok(Some(Self::storage_failure(
+                        "SyntaxError",
+                        "Key cannot be empty",
+                    )));
+                }
 
-                    let auth_obj: rquickjs::Object =
-                        match request_obj.get("auth") {
-                            Ok(v) => v,
-                            Err(_) => return Ok(
-                                "Error: Personal storage requires authentication. Please log in."
-                                    .to_string(),
-                            ),
-                        };
+                match crate::repository::set_user_properties_item(
+                    &script_uri_set,
+                    &user_id,
+                    &key,
+                    &value,
+                ) {
+                    Ok(()) => Ok(None),
+                    Err(e) => Ok(Some(Self::storage_write_failure(&e))),
+                }
+            },
+        )?;
+        host.set("setItem", set_item)?;
 
-                    let is_authenticated: bool =
-                        auth_obj.get("isAuthenticated").unwrap_or_default();
-
-                    if !is_authenticated {
-                        return Ok(
-                            "Error: Personal storage requires authentication. Please log in."
-                                .to_string(),
-                        );
-                    }
-
-                    let user_id: String =
-                        match auth_obj.get("userId") {
-                            Ok(Some(v)) => v,
-                            _ => return Ok(
-                                "Error: Personal storage requires authentication. Please log in."
-                                    .to_string(),
-                            ),
-                        };
-
-                    // Validate inputs
-                    if key.trim().is_empty() {
-                        return Ok("Error: Key cannot be empty".to_string());
-                    }
-
-                    if value.len() > 1_000_000 {
-                        return Ok("Error: Value too large (>1MB)".to_string());
-                    }
-
-                    match crate::repository::set_user_properties_item(
-                        &script_uri_set,
-                        &user_id,
-                        &key,
-                        &value,
-                    ) {
-                        Ok(()) => Ok("Item set successfully".to_string()),
-                        Err(e) => Ok(format!("Error setting item: {}", e)),
-                    }
-                },
-            )?;
-        user_properties_obj.set("setItem", set_item)?;
-
-        // personalStorage.removeItem(key) - Remove a storage item for current user
         let script_uri_remove = script_uri_owned.clone();
         let remove_item = Function::new(
             ctx.clone(),
-            move |ctx: rquickjs::Ctx<'_>, key: String| -> JsResult<bool> {
+            move |ctx: rquickjs::Ctx<'_>, key: String| -> JsResult<Option<String>> {
                 debug!(
                     "personalStorage.removeItem called for script {} with key: {}",
                     script_uri_remove, key
                 );
-
-                // Try to get current request auth from context
-                let globals = ctx.globals();
-                let context_obj: rquickjs::Object = match globals.get("context") {
-                    Ok(v) => v,
-                    Err(_) => return Ok(false),
+                let Some(user_id) = Self::current_user_id(&ctx) else {
+                    return Ok(Some(Self::storage_failure(
+                        "SecurityError",
+                        "Personal storage requires an authenticated user",
+                    )));
                 };
+                crate::repository::remove_user_properties_item(&script_uri_remove, &user_id, &key);
+                Ok(None)
+            },
+        )?;
+        host.set("removeItem", remove_item)?;
 
-                let request_obj: rquickjs::Object = match context_obj.get("request") {
-                    Ok(v) => v,
-                    Err(_) => return Ok(false),
+        let script_uri_clear = script_uri_owned.clone();
+        let clear_storage = Function::new(
+            ctx.clone(),
+            move |ctx: rquickjs::Ctx<'_>| -> JsResult<Option<String>> {
+                debug!(
+                    "personalStorage.clear called for script {}",
+                    script_uri_clear
+                );
+                let Some(user_id) = Self::current_user_id(&ctx) else {
+                    return Ok(Some(Self::storage_failure(
+                        "SecurityError",
+                        "Personal storage requires an authenticated user",
+                    )));
                 };
-
-                let auth_obj: rquickjs::Object = match request_obj.get("auth") {
-                    Ok(v) => v,
-                    Err(_) => return Ok(false),
-                };
-
-                let is_authenticated: bool = auth_obj.get("isAuthenticated").unwrap_or_default();
-
-                if !is_authenticated {
-                    return Ok(false);
+                match crate::repository::clear_user_properties(&script_uri_clear, &user_id) {
+                    Ok(()) => Ok(None),
+                    Err(e) => Ok(Some(Self::storage_write_failure(&e))),
                 }
+            },
+        )?;
+        host.set("clear", clear_storage)?;
 
-                let user_id: String = match auth_obj.get("userId") {
-                    Ok(Some(v)) => v,
-                    _ => return Ok(false),
+        let script_uri_keys = script_uri_owned.clone();
+        let keys = Function::new(
+            ctx.clone(),
+            move |ctx: rquickjs::Ctx<'_>| -> JsResult<Vec<String>> {
+                let Some(user_id) = Self::current_user_id(&ctx) else {
+                    return Ok(Vec::new());
                 };
-
-                Ok(crate::repository::remove_user_properties_item(
-                    &script_uri_remove,
+                Ok(crate::repository::list_user_properties_keys(
+                    &script_uri_keys,
                     &user_id,
-                    &key,
                 ))
             },
         )?;
-        user_properties_obj.set("removeItem", remove_item)?;
+        host.set("keys", keys)?;
 
-        // personalStorage.clear() - Clear all items for current user
-        let script_uri_clear = script_uri_owned.clone();
-        let clear_storage =
-            Function::new(
-                ctx.clone(),
-                move |ctx: rquickjs::Ctx<'_>| -> JsResult<String> {
-                    debug!(
-                        "personalStorage.clear called for script {}",
-                        script_uri_clear
-                    );
+        let available = Function::new(ctx.clone(), move |ctx: rquickjs::Ctx<'_>| -> bool {
+            Self::current_user_id(&ctx).is_some()
+        })?;
+        host.set("available", available)?;
 
-                    // Try to get current request auth from context
-                    let globals = ctx.globals();
-                    let context_obj: rquickjs::Object =
-                        match globals.get("context") {
-                            Ok(v) => v,
-                            Err(_) => return Ok(
-                                "Error: Personal storage requires authentication. Please log in."
-                                    .to_string(),
-                            ),
-                        };
+        global.set("__hostPersonalStorage", host)?;
 
-                    let request_obj: rquickjs::Object =
-                        match context_obj.get("request") {
-                            Ok(v) => v,
-                            Err(_) => return Ok(
-                                "Error: Personal storage requires authentication. Please log in."
-                                    .to_string(),
-                            ),
-                        };
-
-                    let auth_obj: rquickjs::Object =
-                        match request_obj.get("auth") {
-                            Ok(v) => v,
-                            Err(_) => return Ok(
-                                "Error: Personal storage requires authentication. Please log in."
-                                    .to_string(),
-                            ),
-                        };
-
-                    let is_authenticated: bool =
-                        auth_obj.get("isAuthenticated").unwrap_or_default();
-
-                    if !is_authenticated {
-                        return Ok(
-                            "Error: Personal storage requires authentication. Please log in."
-                                .to_string(),
-                        );
-                    }
-
-                    let user_id: String =
-                        match auth_obj.get("userId") {
-                            Ok(Some(v)) => v,
-                            _ => return Ok(
-                                "Error: Personal storage requires authentication. Please log in."
-                                    .to_string(),
-                            ),
-                        };
-
-                    match crate::repository::clear_user_properties(&script_uri_clear, &user_id) {
-                        Ok(()) => Ok("Storage cleared successfully".to_string()),
-                        Err(e) => Ok(format!("Error clearing storage: {}", e)),
-                    }
-                },
-            )?;
-        user_properties_obj.set("clear", clear_storage)?;
-
-        // Set the personalStorage object on the global scope
-        global.set("personalStorage", user_properties_obj)?;
+        // Both stores are wrapped by one prelude, installed after the second of
+        // them so it finds each host object in place. Compiled once per process
+        // and cached, like the other preludes.
+        crate::bytecode::eval_program(ctx, "engine://storage-prelude", STORAGE_PRELUDE).map_err(
+            |e| {
+                rquickjs::Error::new_from_js_message(
+                    "storage",
+                    "prelude",
+                    &format!("storage prelude failed to load: {}", e),
+                )
+            },
+        )?;
 
         debug!(
-            "personalStorage JavaScript API initialized for script: {}",
+            "sharedStorage and personalStorage initialized for script: {}",
             script_uri
         );
 

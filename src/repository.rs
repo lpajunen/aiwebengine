@@ -1746,6 +1746,71 @@ where
 }
 
 /// Database-backed list script secret keys for a script
+async fn db_list_script_properties_keys<'e, E>(
+    executor: E,
+    script_uri: &str,
+) -> AppResult<Vec<String>>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    let rows = sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT key FROM script_properties WHERE script_uri = $1 ORDER BY key ASC
+        "#,
+    )
+    .bind(script_uri)
+    .fetch_all(executor)
+    .await
+    .map_err(|e| {
+        error!("Database error listing shared storage keys: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    debug!(
+        "Listed {} shared storage keys from database for script: {}",
+        rows.len(),
+        script_uri
+    );
+    Ok(rows)
+}
+
+async fn db_list_user_properties_keys<'e, E>(
+    executor: E,
+    script_uri: &str,
+    user_id: &str,
+) -> AppResult<Vec<String>>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    let rows = sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT key FROM user_properties WHERE script_uri = $1 AND user_id = $2 ORDER BY key ASC
+        "#,
+    )
+    .bind(script_uri)
+    .bind(user_id)
+    .fetch_all(executor)
+    .await
+    .map_err(|e| {
+        error!("Database error listing personal storage keys: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    debug!(
+        "Listed {} personal storage keys from database for script {} user {}",
+        rows.len(),
+        script_uri,
+        user_id
+    );
+    Ok(rows)
+}
+
 async fn db_list_script_secrets<'e, E>(executor: E, script_uri: &str) -> AppResult<Vec<String>>
 where
     E: sqlx::Executor<'e, Database = sqlx::Postgres>,
@@ -5234,6 +5299,26 @@ pub fn clear_script_properties(script_uri: &str) -> AppResult<()> {
     run_blocking(async { repo.clear_script_properties(script_uri).await })
 }
 
+/// List the keys a script has in shared storage, in ascending order.
+///
+/// What `length` and `key(i)` are built on: the Web Storage interface indexes
+/// its keys, and a stable order is what makes indexing mean anything.
+pub fn list_script_properties_keys(script_uri: &str) -> Vec<String> {
+    let repo = get_repository();
+    let result = run_blocking(async { repo.list_script_properties_keys(script_uri).await });
+
+    match result {
+        Ok(keys) => keys,
+        Err(e) => {
+            error!(
+                "Failed to list shared storage keys for {}: {}",
+                script_uri, e
+            );
+            Vec::new()
+        }
+    }
+}
+
 /// Set a personal storage item (key-value pair for a specific script and user)
 pub fn set_user_properties_item(
     script_uri: &str,
@@ -5304,6 +5389,23 @@ pub fn remove_user_properties_item(script_uri: &str, user_id: &str, key: &str) -
 pub fn clear_user_properties(script_uri: &str, user_id: &str) -> AppResult<()> {
     let repo = get_repository();
     run_blocking(async { repo.clear_user_properties(script_uri, user_id).await })
+}
+
+/// List the keys a user has in a script's personal storage, in ascending order.
+pub fn list_user_properties_keys(script_uri: &str, user_id: &str) -> Vec<String> {
+    let repo = get_repository();
+    let result = run_blocking(async { repo.list_user_properties_keys(script_uri, user_id).await });
+
+    match result {
+        Ok(keys) => keys,
+        Err(e) => {
+            error!(
+                "Failed to list personal storage keys for {} user {}: {}",
+                script_uri, user_id, e
+            );
+            Vec::new()
+        }
+    }
 }
 
 /// Set a script secret (key-value pair for a specific script)
@@ -5503,6 +5605,7 @@ pub trait Repository: Send + Sync {
     ) -> AppResult<()>;
     async fn remove_script_properties(&self, script_uri: &str, key: &str) -> AppResult<bool>;
     async fn clear_script_properties(&self, script_uri: &str) -> AppResult<()>;
+    async fn list_script_properties_keys(&self, script_uri: &str) -> AppResult<Vec<String>>;
 
     // Personal storage operations
     async fn get_user_properties(
@@ -5525,6 +5628,11 @@ pub trait Repository: Send + Sync {
         key: &str,
     ) -> AppResult<bool>;
     async fn clear_user_properties(&self, script_uri: &str, user_id: &str) -> AppResult<()>;
+    async fn list_user_properties_keys(
+        &self,
+        script_uri: &str,
+        user_id: &str,
+    ) -> AppResult<Vec<String>>;
 
     // Script secrets operations
     async fn get_script_secret(&self, script_uri: &str, key: &str) -> AppResult<Option<String>>;
@@ -6139,6 +6247,18 @@ impl Repository for PostgresRepository {
         }
     }
 
+    async fn list_script_properties_keys(&self, script_uri: &str) -> AppResult<Vec<String>> {
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_list_script_properties_keys(&mut **tx, script_uri).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_list_script_properties_keys(pool, script_uri).await
+            }
+        }
+    }
+
     async fn get_user_properties(
         &self,
         script_uri: &str,
@@ -6192,6 +6312,22 @@ impl Repository for PostgresRepository {
             }
             crate::database::TransactionExecutor::Pool(pool) => {
                 db_clear_user_properties(pool, script_uri, user_id).await
+            }
+        }
+    }
+
+    async fn list_user_properties_keys(
+        &self,
+        script_uri: &str,
+        user_id: &str,
+    ) -> AppResult<Vec<String>> {
+        let executor = crate::database::get_current_executor(&self.pool);
+        match executor {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                db_list_user_properties_keys(&mut **tx, script_uri, user_id).await
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                db_list_user_properties_keys(pool, script_uri, user_id).await
             }
         }
     }
