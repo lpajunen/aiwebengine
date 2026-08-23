@@ -12,6 +12,11 @@ const FETCH_PRELUDE: &str = include_str!("../../assets/fetch_prelude.js");
 /// `fetch` response has.
 const RESULT_PRELUDE: &str = include_str!("../../assets/result_prelude.js");
 
+/// The JavaScript half of `console`: joins a variadic call, fills in format
+/// specifiers and renders values, so the host binding — which takes one string
+/// and throws on anything else — is handed something it accepts.
+const CONSOLE_PRELUDE: &str = include_str!("../../assets/console_prelude.js");
+
 use crate::repository;
 use crate::scheduler;
 use crate::security::{
@@ -466,23 +471,24 @@ impl SecureGlobalContext {
             },
         )?;
 
-        // Create console object using JavaScript to avoid multiple ctx.clone() calls
-        // This creates wrapper functions in JavaScript space that call write_log with different levels
+        // The Rust half is installed under a private name, as `fetch` and
+        // `database` install theirs. `console` itself is built by the prelude
+        // below, which does the argument formatting this call cannot: it only
+        // accepts a string, and a script logging an object or a number would
+        // otherwise get a TypeError where it asked for a log line.
         global.set("__writeLog", write_log)?;
-        ctx.eval::<(), _>(
-            r#"
-            (function() {
-                const writeLog = globalThis.__writeLog;
-                globalThis.console = {
-                    log: function(msg) { return writeLog(msg, "LOG"); },
-                    info: function(msg) { return writeLog(msg, "INFO"); },
-                    warn: function(msg) { return writeLog(msg, "WARN"); },
-                    error: function(msg) { return writeLog(msg, "ERROR"); },
-                    debug: function(msg) { return writeLog(msg, "DEBUG"); }
-                };
-                delete globalThis.__writeLog;
-            })();
-        "#,
+
+        // Compiled once per process and cached under a stable key, like the
+        // other preludes. Installing it here covers every context that gets
+        // host functions rather than each entry point remembering to do it.
+        crate::bytecode::eval_program(ctx, "engine://console-prelude", CONSOLE_PRELUDE).map_err(
+            |e| {
+                rquickjs::Error::new_from_js_message(
+                    "console",
+                    "prelude",
+                    &format!("console prelude failed to load: {}", e),
+                )
+            },
         )?;
 
         Ok(())

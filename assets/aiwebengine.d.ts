@@ -1571,49 +1571,144 @@ interface Database {
  */
 interface Console {
   /**
-   * Write a log message
+   * Write a log message.
    *
-   * Takes exactly one string. Unlike the browser/Node console, there is no
-   * variadic form and no automatic stringification — pass a template literal
-   * or `JSON.stringify` the value yourself.
-   * @param message - Message to log
+   * Variadic and stringifying, as the browser's is: arguments are joined with
+   * spaces, and anything that is not a string is rendered — objects and arrays
+   * are inspected, an `Error` carries its stack. If the first argument is a
+   * string containing format specifiers and more arguments follow, they are
+   * substituted: `%s`, `%d`/`%i`, `%f`, `%o`/`%O`, `%j`, `%c` (consumed, styles
+   * nothing) and `%%`.
+   *
+   * Inspection is capped — depth 4, 100 entries per level, 8192 characters per
+   * line — because a log line is a database row rather than a devtools entry.
+   * @param data - Values to log
    * @example
-   * console.log(`Request received: ${req.path}`);
-   * console.log(`User: ${JSON.stringify(user)}`);
+   * console.log("Request received:", req.path);
+   * console.log(user);
+   * console.log("%s took %dms", label, elapsed);
    */
-  log(message: string): void;
+  log(...data: any[]): void;
 
   /**
-   * Write an info log message
-   * @param message - Info message to log
+   * Write an info log message. Formats its arguments like {@link Console.log}.
    * @example
-   * console.info(`User logged in: ${userId}`);
+   * console.info("User logged in:", userId);
    */
-  info(message: string): void;
+  info(...data: any[]): void;
 
   /**
-   * Write a warning log message
-   * @param message - Warning message to log
+   * Write a warning log message. Formats its arguments like {@link Console.log}.
    * @example
-   * console.warn(`Deprecated API usage detected: ${apiName}`);
+   * console.warn("Deprecated API usage detected:", apiName);
    */
-  warn(message: string): void;
+  warn(...data: any[]): void;
 
   /**
-   * Write an error log message
-   * @param message - Error message to log
+   * Write an error log message. Formats its arguments like {@link Console.log},
+   * so an `Error` may be passed directly and logs with its stack.
    * @example
-   * console.error(`Failed to process request: ${error}`);
+   * try { risky(); } catch (e) { console.error("failed:", e); }
    */
-  error(message: string): void;
+  error(...data: any[]): void;
 
   /**
-   * Write a debug log message
-   * @param message - Debug message to log
+   * Write a debug log message. Formats its arguments like {@link Console.log}.
    * @example
-   * console.debug(`Processing item: ${item.id}`);
+   * console.debug("Processing item:", item.id);
    */
-  debug(message: string): void;
+  debug(...data: any[]): void;
+
+  /**
+   * Write a single value, always inspected rather than printed as a string.
+   * @param item - Value to inspect
+   * @example
+   * console.dir(response.headers);
+   */
+  dir(item?: any): void;
+
+  /**
+   * Write a message followed by the current stack, at DEBUG level.
+   * @example
+   * console.trace("reached the fallback branch");
+   */
+  trace(...data: any[]): void;
+
+  /**
+   * Write "Assertion failed" at ERROR level when `condition` is falsy.
+   * Does nothing when it holds.
+   * @example
+   * console.assert(rows.length > 0, "expected at least one row for", tableName);
+   */
+  assert(condition?: boolean, ...data: any[]): void;
+
+  /**
+   * Write tabular data as a bordered table.
+   * @param tabularData - Array or object whose values become rows
+   * @param columns - Restrict the output to these column names
+   * @example
+   * console.table(rows, ["id", "email"]);
+   */
+  table(tabularData?: any, columns?: string[]): void;
+
+  /**
+   * Write an optional label and indent everything logged until the matching
+   * {@link Console.groupEnd} by two spaces.
+   * @example
+   * console.group("import");
+   * console.log("42 rows");
+   * console.groupEnd();
+   */
+  group(...data: any[]): void;
+
+  /**
+   * Alias of {@link Console.group}. Nothing here can collapse, so the two
+   * behave identically.
+   */
+  groupCollapsed(...data: any[]): void;
+
+  /** Close the innermost {@link Console.group}. */
+  groupEnd(): void;
+
+  /**
+   * Start a timer. Warns if one is already running under this label.
+   * @param label - Timer name (default: "default")
+   * @example
+   * console.time("query");
+   */
+  time(label?: string): void;
+
+  /**
+   * Write a running timer's elapsed time without stopping it.
+   * @example
+   * console.timeLog("query", "after the first page");
+   */
+  timeLog(label?: string, ...data: any[]): void;
+
+  /**
+   * Write a timer's elapsed time and stop it.
+   * @example
+   * console.timeEnd("query");
+   */
+  timeEnd(label?: string): void;
+
+  /**
+   * Write the number of times `count` has been called with this label.
+   * @param label - Counter name (default: "default")
+   * @example
+   * console.count("cache-miss");
+   */
+  count(label?: string): void;
+
+  /** Reset a counter created by {@link Console.count}. */
+  countReset(label?: string): void;
+
+  /**
+   * Does nothing. Present so the call is not a `ReferenceError`, but stored log
+   * lines are pruned through the engine's administration surface
+   * (`DELETE /engine/script_logs`), which is not reachable from a script.
+   */
+  clear(): void;
 }
 
 // ============================================================================
