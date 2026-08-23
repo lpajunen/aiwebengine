@@ -1531,6 +1531,42 @@ fn finish_transaction(succeeded: bool) -> Result<(), String> {
     }
 }
 
+/// Rolls back a transaction the invocation opened and never finished.
+///
+/// `database.beginTransaction()` leaves the transaction open for the handler
+/// boundary to finish, which is what the handler paths do. Paths without such
+/// a boundary — `init()`, an evaluation, a dry run — would otherwise leave it
+/// open on the thread, and since the transaction lives in thread-local storage
+/// the next invocation to land on that thread would inherit it and have its
+/// writes swallowed.
+///
+/// Only a transaction this invocation opened is rolled back. One that was
+/// already active belongs to an outer scope — a test run's or an evaluation's
+/// rollback guard — and finishing it here would cut that scope short.
+struct StrayTransaction {
+    outer_active: bool,
+}
+
+impl StrayTransaction {
+    fn arm() -> Self {
+        Self {
+            outer_active: crate::database::get_current_transaction_active(),
+        }
+    }
+}
+
+impl Drop for StrayTransaction {
+    fn drop(&mut self) {
+        if !self.outer_active && crate::database::get_current_transaction_active() {
+            warn!(
+                "a transaction was left open and is being rolled back; \
+                 call database.commitTransaction() to keep its writes"
+            );
+            let _ = crate::database::Database::rollback_transaction();
+        }
+    }
+}
+
 /// Maps a settled handler result into an [`JsHttpResponse`].
 fn build_http_response(result: Value<'_>) -> Result<JsHttpResponse, String> {
     if let Some(response_obj) = result.as_object() {
@@ -2424,9 +2460,7 @@ pub fn execute_mcp_prompt_handler(
         &ctx,
         &script_uri_owned,
         &format!("MCP prompt handler '{}'", handler_function_owned),
-        // This path has never committed or rolled back a transaction, and this
-        // change is about settling promises, not about fixing that.
-        TransactionHandling::Caller,
+        TransactionHandling::Auto,
         |ctx| -> Result<rquickjs::Promise<'_>, String> {
             // Get the handler function
             let handler_result: rquickjs::Value = ctx
@@ -2882,6 +2916,11 @@ fn is_zero(value: &usize) -> bool {
 /// Must run on a blocking thread — the isolating transaction is thread-local.
 pub fn evaluate_snippet(params: &EvalParams) -> EvalOutcome {
     let started = Instant::now();
+
+    // Declared before the rollback guard below so it drops *after* it: the
+    // guard finishes its own transaction, and this only catches one the snippet
+    // opened and left behind.
+    let _stray = StrayTransaction::arm();
 
     macro_rules! fail_early {
         ($error:expr) => {
@@ -3454,6 +3493,9 @@ fn run_registration_pass(
     debug!("Checking for init() function in script: {}", script_uri);
 
     let started = Instant::now();
+    // An `init()` that opens a transaction and never finishes it would leave it
+    // on the thread for the next invocation to inherit.
+    let _stray = StrayTransaction::arm();
     let sink_for_report = dry_run_sink.clone();
     let missing_handlers: Rc<RefCell<Vec<MissingHandler>>> = Rc::new(RefCell::new(Vec::new()));
 

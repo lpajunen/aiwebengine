@@ -132,6 +132,19 @@ impl TransactionGuard {
     pub fn commit(&mut self) {
         self.committed = true;
     }
+
+    /// Gives up the rollback-on-drop without ending the transaction.
+    ///
+    /// For a caller that holds the guard across the work it is protecting,
+    /// dropping it is the point. `database.beginTransaction()` is the opposite
+    /// case: the script expects the transaction to still be open on the next
+    /// line, so the guard must not outlive the call that made it, and the
+    /// transaction must. Whoever releases it takes on finishing it — for a
+    /// script that is the handler boundary, which commits on success and rolls
+    /// back on failure.
+    pub fn release(mut self) {
+        self.committed = true;
+    }
 }
 
 impl Drop for TransactionGuard {

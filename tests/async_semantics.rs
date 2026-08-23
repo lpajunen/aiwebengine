@@ -211,53 +211,41 @@ async fn a_runaway_await_loop_is_stopped_by_the_deadline() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_rejection_after_an_await_leaves_what_a_synchronous_throw_leaves() {
+async fn writes_made_after_an_await_are_committed() {
     if should_skip_integration_tests() {
         return;
     }
     let context = TestContext::new();
 
-    // Settling a handler's promise must not change when its transaction is
-    // finished relative to its writes. Asserting *parity* rather than rollback
-    // is deliberate: `database.beginTransaction()` currently ends the
-    // transaction as soon as it starts (the `TransactionGuard` returned by
-    // `Database::begin_transaction` is dropped immediately in
-    // `secure_globals.rs`, and dropping it rolls back), so writes never join a
-    // transaction at all. That is a pre-existing bug, not one settling
-    // introduced — and this test fails the moment the two paths diverge.
+    // The commit happens after the queue is drained. Committing when the
+    // handler first returned would close the transaction while the write below
+    // had not been made yet, losing it silently.
     let base = serve(
         &context,
-        "test_tx_parity",
+        "test_async_commit",
         r#"
         function prepare(context) {
-          database.dropTable("parity");
-          database.createTable("parity");
-          database.addTextColumn("parity", "label", true);
+          database.dropTable("notes");
+          database.createTable("notes");
+          database.addTextColumn("notes", "label", true);
           return { status: 200, body: "prepared" };
         }
 
-        function syncHandler(context) {
-          database.beginTransaction(5000);
-          database.insert("parity", JSON.stringify({ label: "sync" }));
-          throw new Error("sync failure");
-        }
-
-        async function asyncHandler(context) {
+        async function handler(context) {
           database.beginTransaction(5000);
           await Promise.resolve();
-          database.insert("parity", JSON.stringify({ label: "async" }));
-          throw new Error("async failure");
+          database.insert("notes", JSON.stringify({ label: "written after await" }));
+          return { status: 200, body: "ok" };
         }
 
         function readBack(context) {
-          return { status: 200, body: database.query("parity") };
+          return { status: 200, body: database.query("notes") };
         }
 
         function init(context) {
-          routeRegistry.registerRoute("/parity/prepare", "prepare", "POST");
-          routeRegistry.registerRoute("/parity/sync", "syncHandler", "POST");
-          routeRegistry.registerRoute("/parity/async", "asyncHandler", "POST");
-          routeRegistry.registerRoute("/parity", "readBack", "GET");
+          routeRegistry.registerRoute("/async/commit/prepare", "prepare", "POST");
+          routeRegistry.registerRoute("/async/commit", "handler", "POST");
+          routeRegistry.registerRoute("/async/commit", "readBack", "GET");
           return { success: true };
         }
         "#,
@@ -265,20 +253,9 @@ async fn a_rejection_after_an_await_leaves_what_a_synchronous_throw_leaves() {
     .await;
 
     let client = reqwest::Client::new();
-    let read_back = |client: reqwest::Client, base: String| async move {
-        client
-            .get(format!("{}/parity", base))
-            .send()
-            .await
-            .expect("read request failed")
-            .text()
-            .await
-            .expect("body")
-    };
-
     assert_eq!(
         client
-            .post(format!("{}/parity/prepare", base))
+            .post(format!("{}/async/commit/prepare", base))
             .send()
             .await
             .expect("prepare failed")
@@ -286,30 +263,191 @@ async fn a_rejection_after_an_await_leaves_what_a_synchronous_throw_leaves() {
         200
     );
 
-    let sync_failed = client
-        .post(format!("{}/parity/sync", base))
+    let written = client
+        .post(format!("{}/async/commit", base))
         .send()
         .await
-        .expect("sync request failed");
-    assert_eq!(sync_failed.status(), 500);
-    let after_sync = read_back(client.clone(), base.clone()).await;
-
-    let async_failed = client
-        .post(format!("{}/parity/async", base))
-        .send()
-        .await
-        .expect("async request failed");
-    assert_eq!(async_failed.status(), 500);
-    let after_async = read_back(client.clone(), base.clone()).await;
-
-    // Whatever the engine does with a failed handler's writes, it must do the
-    // same whether the failure arrived synchronously or through a rejection.
-    let sync_kept = after_sync.contains("\"sync\"");
-    let async_kept = after_async.contains("\"async\"");
+        .expect("write request failed");
     assert_eq!(
-        sync_kept, async_kept,
-        "sync and async failures must leave the same state; after sync: {}, after async: {}",
-        after_sync, after_async
+        written.status(),
+        200,
+        "{}",
+        written.text().await.unwrap_or_default()
+    );
+
+    let rows = client
+        .get(format!("{}/async/commit", base))
+        .send()
+        .await
+        .expect("read request failed")
+        .text()
+        .await
+        .expect("body");
+    assert!(
+        rows.contains("written after await"),
+        "a write made after an await should be committed, got: {}",
+        rows
+    );
+
+    context.cleanup().await.expect("Failed to cleanup");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn writes_are_rolled_back_when_the_handler_fails() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    let context = TestContext::new();
+
+    // Both failure shapes have to roll back, and roll back the same: a throw
+    // before the handler returns, and a rejection that only arrives once the
+    // queue is drained.
+    let base = serve(
+        &context,
+        "test_rollback_both",
+        r#"
+        function prepare(context) {
+          database.dropTable("ledger");
+          database.createTable("ledger");
+          database.addTextColumn("ledger", "label", true);
+          return { status: 200, body: "prepared" };
+        }
+
+        function syncHandler(context) {
+          database.beginTransaction(5000);
+          database.insert("ledger", JSON.stringify({ label: "sync" }));
+          throw new Error("sync failure");
+        }
+
+        async function asyncHandler(context) {
+          database.beginTransaction(5000);
+          await Promise.resolve();
+          database.insert("ledger", JSON.stringify({ label: "async" }));
+          throw new Error("async failure");
+        }
+
+        function readBack(context) {
+          return { status: 200, body: database.query("ledger") };
+        }
+
+        function init(context) {
+          routeRegistry.registerRoute("/rollback/prepare", "prepare", "POST");
+          routeRegistry.registerRoute("/rollback/sync", "syncHandler", "POST");
+          routeRegistry.registerRoute("/rollback/async", "asyncHandler", "POST");
+          routeRegistry.registerRoute("/rollback", "readBack", "GET");
+          return { success: true };
+        }
+        "#,
+    )
+    .await;
+
+    let client = reqwest::Client::new();
+    assert_eq!(
+        client
+            .post(format!("{}/rollback/prepare", base))
+            .send()
+            .await
+            .expect("prepare failed")
+            .status(),
+        200
+    );
+
+    for path in ["sync", "async"] {
+        let failed = client
+            .post(format!("{}/rollback/{}", base, path))
+            .send()
+            .await
+            .expect("write request failed");
+        assert_eq!(failed.status(), 500, "{} handler should fail", path);
+    }
+
+    let rows = client
+        .get(format!("{}/rollback", base))
+        .send()
+        .await
+        .expect("read request failed")
+        .text()
+        .await
+        .expect("body");
+    assert!(
+        !rows.contains("sync") && !rows.contains("async"),
+        "a failing handler's writes should roll back however the failure arrived, got: {}",
+        rows
+    );
+
+    context.cleanup().await.expect("Failed to cleanup");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_transaction_left_open_does_not_leak_into_the_next_request() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    let context = TestContext::new();
+
+    // A handler that opens a transaction and returns without finishing it is
+    // committed at the boundary, so the thread it ran on must be left clean for
+    // whatever request lands there next.
+    let base = serve(
+        &context,
+        "test_tx_no_leak",
+        r#"
+        function prepare(context) {
+          database.dropTable("leaky");
+          database.createTable("leaky");
+          database.addTextColumn("leaky", "label", true);
+          return { status: 200, body: "prepared" };
+        }
+
+        function opener(context) {
+          database.beginTransaction(5000);
+          database.insert("leaky", JSON.stringify({ label: "first" }));
+          return { status: 200, body: "opened" };
+        }
+
+        function follower(context) {
+          database.insert("leaky", JSON.stringify({ label: "second" }));
+          return { status: 200, body: "followed" };
+        }
+
+        function readBack(context) {
+          return { status: 200, body: database.query("leaky") };
+        }
+
+        function init(context) {
+          routeRegistry.registerRoute("/leak/prepare", "prepare", "POST");
+          routeRegistry.registerRoute("/leak/open", "opener", "POST");
+          routeRegistry.registerRoute("/leak/follow", "follower", "POST");
+          routeRegistry.registerRoute("/leak", "readBack", "GET");
+          return { success: true };
+        }
+        "#,
+    )
+    .await;
+
+    let client = reqwest::Client::new();
+    for path in ["prepare", "open", "follow"] {
+        let response = client
+            .post(format!("{}/leak/{}", base, path))
+            .send()
+            .await
+            .expect("request failed");
+        assert_eq!(response.status(), 200, "{} should succeed", path);
+    }
+
+    let rows = client
+        .get(format!("{}/leak", base))
+        .send()
+        .await
+        .expect("read request failed")
+        .text()
+        .await
+        .expect("body");
+    assert!(
+        rows.contains("first") && rows.contains("second"),
+        "both writes should be visible: the first committed at its boundary, \
+         the second not swallowed by an inherited transaction, got: {}",
+        rows
     );
 
     context.cleanup().await.expect("Failed to cleanup");

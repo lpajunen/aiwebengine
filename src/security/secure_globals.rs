@@ -3594,9 +3594,15 @@ impl SecureGlobalContext {
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>, timeout_ms: Opt<u64>| -> JsResult<String> {
                 match crate::database::Database::begin_transaction(timeout_ms.0) {
-                    Ok(_guard) => {
-                        // Note: The guard is not stored here - it's managed internally
-                        // Auto-commit/rollback happens at handler boundaries
+                    Ok(guard) => {
+                        // The transaction has to outlive this call: the script
+                        // expects it open on the next line, and the handler
+                        // boundary commits or rolls it back. Dropping the guard
+                        // here would roll it back immediately instead, leaving
+                        // every write the script went on to make outside any
+                        // transaction and nothing for `rollbackTransaction` to
+                        // undo.
+                        guard.release();
                         Ok("{\"success\": true, \"message\": \"Transaction started\"}".to_string())
                     }
                     Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
