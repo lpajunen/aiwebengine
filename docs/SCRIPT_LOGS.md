@@ -82,11 +82,11 @@ transpiler diagnostics — carry no context, and their `requestId`, `kind` and
 - **Entries written before the engine gained these columns** have `null` for all
   three, so any filter on them skips those rows. Only lines written since carry
   an invocation.
-- **A handler that is `async` stops at its first `await`.** Scripts run
-  synchronously — host calls block rather than yielding — so a promise never
-  settles and nothing after the await runs. Lines it would have logged there do
-  not exist to be filtered. The request fails with a message naming the handler,
-  and that failure is in the log under the request id.
+- **A handler that is `async` runs to completion.** The engine drains the
+  microtask queue after the handler returns, so lines logged after an `await`
+  are in the log, filed under the same request. A handler that rejects after an
+  `await` fails the request like any other thrown error, and that failure is in
+  the log under the request id too.
 
 ## Listing
 

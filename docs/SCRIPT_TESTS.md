@@ -118,9 +118,13 @@ Either limit reached, the report comes back with `timedOut: true` and the
 verdicts already reached. A case the interrupt stopped gets no verdict at all
 rather than a failure it did not earn.
 
-## Tests run synchronously
+## `await` works; concurrency does not
 
-Scripts execute without a job queue: host calls like `fetch()` and
-`database.query()` block rather than yielding. A test body that returns a
-promise would never settle, so it fails with a message saying as much instead of
-reporting a pass it never earned. Write test bodies without `async`/`await`.
+A test body may be `async`. Each case is called, its microtask queue drained,
+and its promise settled before the next case starts, so the verdict reflects the
+assertions the body actually reached rather than crediting a pass the moment it
+suspends. `beforeEach`/`afterEach` wrap the settled case, not just the call.
+
+What `await` does not buy is parallelism. Host calls like `fetch()` and
+`database.query()` block rather than yielding, so awaiting them sequences the
+run without overlapping anything.

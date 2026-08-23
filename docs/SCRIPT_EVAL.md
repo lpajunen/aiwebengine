@@ -155,12 +155,21 @@ Capture stops after 1,000 lines; anything past that is counted in
 - **Not isolated:** anything the engine does not mediate — an outbound `fetch`,
   a write to a third-party system.
 
-## Snippets run synchronously
+## `await` works; concurrency does not
 
-Host calls like `fetch()` and `database.query()` block rather than yielding;
-there is no job queue. A snippet that returns a promise would never settle, so
-it is reported as an error saying exactly that rather than hanging until the
-budget runs out. Write snippets without `async`/`await`.
+A snippet may be `async`. After it runs, the engine drains the microtask queue
+and reports the value the snippet's promise settled to — `Promise.resolve(1)`
+evaluates to `1`, and a rejection is reported as the error it carries.
+
+What `await` does not buy is parallelism. Host calls like `fetch()` and
+`database.query()` block rather than yielding, so `Promise.all([fetch(a),
+fetch(b)])` returns the right answers but runs the two calls one after the
+other. `await` sequences; it never overlaps.
+
+The one promise that still fails is one nothing can settle — `new Promise(() =>
+{})`. There are no timers, and every host call has already returned by the time
+the queue is drained, so it is reported as never having settled rather than
+hanging until the budget runs out.
 
 ## Over MCP
 

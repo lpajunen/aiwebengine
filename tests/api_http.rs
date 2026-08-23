@@ -1739,8 +1739,8 @@ async fn test_script_logs_correlate_what_the_engine_reports_about_a_request() {
         async function moveHandler(context) {
           diag("entering move");
           await Promise.resolve();
-          console.log("never reached");
-          return { status: 200, body: "ok" };
+          console.log("after the await");
+          throw new Error("move failed");
         }
 
         function init(context) {
@@ -1783,12 +1783,11 @@ async fn test_script_logs_correlate_what_the_engine_reports_about_a_request() {
         .expect("response carries no x-request-id")
         .to_string();
     let body = response.text().await.expect("failure response body");
-    // Scripts run synchronously, so an async handler never settles. The failure
-    // has to name that, not the type error that reading `status` off a promise
-    // happens to produce.
+    // The handler rejects after an await. That is a handler failure like any
+    // other and has to be reported as one, naming the handler.
     assert!(
-        body.contains("returned a promise") && body.contains("moveHandler"),
-        "a promise-returning handler should be diagnosed by name, got: {}",
+        body.contains("moveHandler"),
+        "a failing handler should be diagnosed by name, got: {}",
         body
     );
 
@@ -1831,11 +1830,11 @@ async fn test_script_logs_correlate_what_the_engine_reports_about_a_request() {
         assert_eq!(entry["route"], "/vw-engine/:id/move");
     }
 
-    // Nothing after the first await runs, so a handler that logs only there
-    // leaves no trace of its own — which is why the engine's line matters.
+    // Work after an await runs, and its output is filed under the same request.
     assert!(
-        !logs.iter().any(|entry| entry["message"] == "never reached"),
-        "nothing after an await should have run, got: {:?}",
+        logs.iter()
+            .any(|entry| entry["message"] == "after the await"),
+        "lines logged after an await should be in the log, got: {:?}",
         logs
     );
 

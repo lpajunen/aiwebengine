@@ -160,6 +160,183 @@ fn create_sandboxed_runtime(limits: &ExecutionLimits) -> Result<Runtime, String>
     Ok(rt)
 }
 
+/// Upper bound on microtasks drained for one invocation.
+///
+/// The runtime's interrupt handler is the real guard: it stops a chain that
+/// re-enqueues itself at the execution deadline, leaving the promise pending.
+/// This cap only exists so a queue that somehow outruns the deadline check
+/// cannot spin forever.
+const MAX_DRAINED_JOBS: usize = 1_000_000;
+
+/// Runs the microtask queue to a fixed point.
+///
+/// Scripts have no timers and every host call blocks rather than yielding, so
+/// the queue always reaches a fixed point — there is nothing to wait *for*. A
+/// promise still pending once this returns can never settle, and
+/// [`unwrap_settled`] says so rather than hanging.
+///
+/// Must be called with no `Context::with` closure on the stack: the runtime
+/// lock is not reentrant, and touching the runtime from inside a context
+/// panics with "RefCell already borrowed".
+///
+/// Returns the messages of any jobs that threw. Those are unhandled
+/// rejections — a promise chain with no `catch` — and deliberately do not fail
+/// the invocation that spawned them, which mirrors how a browser reports
+/// `unhandledrejection`.
+fn drain_jobs(rt: &Runtime) -> Vec<String> {
+    let mut unhandled = Vec::new();
+    let mut drained = 0usize;
+
+    while rt.is_job_pending() {
+        if drained >= MAX_DRAINED_JOBS {
+            warn!(
+                drained,
+                "microtask queue still not drained at the job cap; abandoning the rest"
+            );
+            break;
+        }
+        drained += 1;
+
+        match rt.execute_pending_job() {
+            Ok(true) => {}
+            Ok(false) => break,
+            Err(exception) => {
+                // `JobException` carries the context the job threw in; the
+                // exception itself is retrieved with `Ctx::catch`.
+                let message = exception.0.with(|ctx| {
+                    let caught = ctx.catch();
+                    caught
+                        .as_exception()
+                        .and_then(|ex| ex.message())
+                        .or_else(|| caught.as_string().and_then(|s| s.to_string().ok()))
+                        .unwrap_or_else(|| "unhandled promise rejection".to_string())
+                });
+                unhandled.push(message);
+            }
+        }
+    }
+
+    unhandled
+}
+
+/// Logs whatever [`drain_jobs`] collected, attributing it to the script.
+fn report_unhandled(script_uri: &str, unhandled: Vec<String>) {
+    for message in unhandled {
+        warn!(
+            script = %script_uri,
+            "unhandled promise rejection: {}", message
+        );
+    }
+}
+
+/// Wraps `value` in a native promise via `Promise.resolve`.
+///
+/// Normalising every handler result through this is what lets one code path
+/// serve both a plain return value and a promise. It costs a synchronous
+/// handler nothing — resolving with a non-thenable settles immediately, with
+/// no job queued — while a thenable that is *not* a native promise (the shape
+/// an awaitable `fetch` response has) becomes one that [`unwrap_settled`] can
+/// read after the drain.
+pub(crate) fn promise_resolve<'js>(
+    ctx: &rquickjs::Ctx<'js>,
+    value: Value<'js>,
+) -> Result<rquickjs::Promise<'js>, String> {
+    let promise_ctor: rquickjs::Object<'js> = ctx
+        .globals()
+        .get("Promise")
+        .map_err(|e| format!("Promise global missing: {}", e))?;
+    let resolve: Function<'js> = promise_ctor
+        .get("resolve")
+        .map_err(|e| format!("Promise.resolve missing: {}", e))?;
+    // `Promise.resolve` reads its constructor off `this`, so the receiver has to
+    // be bound explicitly; passing it as a plain argument leaves `this`
+    // undefined and the call throws.
+    resolve
+        .call::<_, rquickjs::Promise<'js>>((rquickjs::function::This(promise_ctor.clone()), value))
+        .map_err(|e| format!("Promise.resolve failed: {}", extract_error_details(ctx, &e)))
+}
+
+/// Whether settling an invocation should also close the database transaction
+/// the script opened.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum TransactionHandling {
+    /// Commit once the promise resolves, roll back if it rejects. What a
+    /// handler that called `database.beginTransaction()` expects.
+    Auto,
+    /// Leave the transaction alone — the caller owns it. The test runner wraps
+    /// whole modules in a transaction it always rolls back, and must not have
+    /// a passing case commit it.
+    Caller,
+}
+
+/// Calls a JS function, runs the microtask queue to a fixed point, and hands
+/// the settled value to `finish`.
+///
+/// The three phases cannot share one `ctx.with`. Draining needs the runtime,
+/// and touching the runtime from inside a context panics with "RefCell already
+/// borrowed", so the promise is persisted across the drain and restored after.
+///
+/// `what` names the invocation ("Handler 'index'") for the message a promise
+/// that can never settle produces.
+pub(crate) fn call_and_settle<T>(
+    rt: &Runtime,
+    context: &Context,
+    script_uri: &str,
+    what: &str,
+    transaction: TransactionHandling,
+    call: impl for<'js> FnOnce(&rquickjs::Ctx<'js>) -> Result<rquickjs::Promise<'js>, String>,
+    finish: impl for<'js> FnOnce(&rquickjs::Ctx<'js>, Value<'js>) -> Result<T, String>,
+) -> Result<T, String> {
+    let saved =
+        context.with(|ctx| call(&ctx).map(|promise| rquickjs::Persistent::save(&ctx, promise)))?;
+
+    report_unhandled(script_uri, drain_jobs(rt));
+
+    context.with(|ctx| {
+        let promise = saved
+            .restore(&ctx)
+            .map_err(|e| format!("restore invocation result: {}", e))?;
+
+        let value = match unwrap_settled(&ctx, promise, what) {
+            Ok(value) => value,
+            Err(details) => {
+                if transaction == TransactionHandling::Auto {
+                    finish_transaction(false)?;
+                }
+                return Err(details);
+            }
+        };
+
+        if transaction == TransactionHandling::Auto {
+            finish_transaction(true)?;
+        }
+        finish(&ctx, value)
+    })
+}
+
+/// Reads a promise that [`drain_jobs`] has already run to a fixed point.
+///
+/// `what` names the thing being settled ("Handler 'index'", "The snippet") so
+/// the never-settles message can point at it.
+fn unwrap_settled<'js>(
+    ctx: &rquickjs::Ctx<'js>,
+    promise: rquickjs::Promise<'js>,
+    what: &str,
+) -> Result<Value<'js>, String> {
+    match promise.result::<Value<'js>>() {
+        Some(Ok(value)) => Ok(value),
+        // `result` rethrows the rejection value into the context, so the same
+        // extractor that formats a thrown error formats a rejection.
+        Some(Err(e)) => Err(extract_error_details(ctx, &e)),
+        None => Err(format!(
+            "{} never settled. Scripts run synchronously here — host calls like fetch() \
+             and database queries block rather than yielding — so a promise that is not \
+             already resolved has nothing that could resolve it.",
+            what
+        )),
+    }
+}
+
 /// Parameters for secure script execution in request context
 #[derive(Debug)]
 pub struct RequestExecutionParams {
@@ -1237,8 +1414,7 @@ pub fn execute_script_for_request_secure(
     let t_eval = phase.elapsed();
 
     let phase = Instant::now();
-    let response_exec =
-        ctx.with(|ctx| invoke_handler_and_build_response(&ctx, &params, &auth_context));
+    let response_exec = invoke_handler_and_build_response(&rt, &ctx, &params, &auth_context);
 
     let t_handler = phase.elapsed();
 
@@ -1276,16 +1452,16 @@ pub fn execute_script_for_request_secure(
     Ok(response_result)
 }
 
-/// Builds the per-request handler context, invokes the named handler, and maps
-/// its return value into an [`JsHttpResponse`]. Runs inside an active `ctx.with`.
+/// Invokes the named handler and hands back its result as a native promise.
 ///
-/// Shared by the standard request path and the pooling prototype so both agree
-/// on transaction handling and response shaping.
-fn invoke_handler_and_build_response(
-    ctx: &rquickjs::Ctx<'_>,
+/// Runs inside an active `ctx.with`. The promise is not read here: the
+/// microtask queue that would settle it can only be drained with no context
+/// guard on the stack, so that is the caller's job.
+fn call_handler<'js>(
+    ctx: &rquickjs::Ctx<'js>,
     params: &RequestExecutionParams,
     auth_context: &Option<crate::auth::JsAuthContext>,
-) -> Result<JsHttpResponse, String> {
+) -> Result<rquickjs::Promise<'js>, String> {
     let global = ctx.globals();
     let func: Function = global
         .get::<_, Function>(&params.handler_name)
@@ -1323,37 +1499,40 @@ fn invoke_handler_and_build_response(
         .set("context", handler_context.clone())
         .map_err(|e| format!("set context global: {}", e))?;
 
-    // Call the handler function with automatic transaction handling
+    // A handler that throws before returning never reaches the queue, so its
+    // transaction is finished here. One that rejects *after* an await settles
+    // during the drain instead, and is finished by the caller.
     let result: Value = func.call::<_, Value>((handler_context,)).map_err(|e| {
         let details = extract_error_details(ctx, &e);
-        // Auto-rollback on exception if transaction is active
         if crate::database::get_current_transaction_active() {
             let _ = crate::database::Database::rollback_transaction();
         }
         format!("call handler: {}", details)
     })?;
 
-    // Auto-commit on success if transaction is active
-    if crate::database::get_current_transaction_active() {
+    promise_resolve(ctx, result)
+}
+
+/// Commits or rolls back the request's transaction, if it opened one.
+///
+/// Must run *after* the microtask queue has been drained. An `async` handler
+/// has not made its post-`await` writes until then, and committing earlier
+/// closes the transaction out from under them.
+fn finish_transaction(succeeded: bool) -> Result<(), String> {
+    if !crate::database::get_current_transaction_active() {
+        return Ok(());
+    }
+    if succeeded {
         crate::database::Database::commit_transaction()
-            .map_err(|e| format!("transaction commit failed: {}", e))?;
+            .map_err(|e| format!("transaction commit failed: {}", e))
+    } else {
+        let _ = crate::database::Database::rollback_transaction();
+        Ok(())
     }
+}
 
-    // A handler that returns a promise never settles, since scripts run
-    // synchronously: reading `status` off it yields `undefined` and the request
-    // fails with a type error that names neither the handler nor the cause.
-    // `/engine/eval` already refuses a promise in these words; a route handler
-    // is where the mistake is far likelier to be made.
-    if is_thenable(&result) {
-        return Err(format!(
-            "Handler '{}' returned a promise. Scripts run synchronously here — host calls \
-             like fetch() and database queries block rather than yielding — so it will never \
-             settle, and nothing after the first await runs. Drop the async/await.",
-            params.handler_name
-        ));
-    }
-
-    // Parse the response
+/// Maps a settled handler result into an [`JsHttpResponse`].
+fn build_http_response(result: Value<'_>) -> Result<JsHttpResponse, String> {
     if let Some(response_obj) = result.as_object() {
         let status: i32 = response_obj
             .get("status")
@@ -1445,6 +1624,33 @@ fn invoke_handler_and_build_response(
     }
 }
 
+/// Builds the per-request handler context, invokes the named handler, settles
+/// whatever it returned, and maps that into an [`JsHttpResponse`].
+///
+/// The three phases cannot share one `ctx.with`: draining the microtask queue
+/// requires the runtime, and touching the runtime from inside a context panics
+/// with "RefCell already borrowed". So the handler's result is persisted, the
+/// queue is drained outside the context, and the value is restored to finish.
+///
+/// Shared by the standard request path and the pooling prototype so both agree
+/// on transaction handling and response shaping.
+fn invoke_handler_and_build_response(
+    rt: &Runtime,
+    context: &Context,
+    params: &RequestExecutionParams,
+    auth_context: &Option<crate::auth::JsAuthContext>,
+) -> Result<JsHttpResponse, String> {
+    call_and_settle(
+        rt,
+        context,
+        &params.script_uri,
+        &format!("Handler '{}'", params.handler_name),
+        TransactionHandling::Auto,
+        |ctx| call_handler(ctx, params, auth_context),
+        |_ctx, value| build_http_response(value),
+    )
+}
+
 /// Executes a JavaScript script for an HTTP request (LEGACY - has security vulnerabilities)
 ///
 /// This function creates a QuickJS runtime, sets up host functions,
@@ -1500,8 +1706,13 @@ pub fn execute_script_for_request(
     ctx.with(|ctx| crate::bytecode::eval_program(&ctx, script_uri, &executable_code))
         .map_err(|e| format!("owner eval: {}", e))?;
 
-    let (status, body, content_type) =
-        ctx.with(|ctx| -> Result<(u16, String, Option<String>), String> {
+    let (status, body, content_type) = call_and_settle(
+        &rt,
+        &ctx,
+        script_uri,
+        &format!("Handler '{}'", handler_name),
+        TransactionHandling::Auto,
+        |ctx| {
             let global = ctx.globals();
             let func: Function = global
                 .get::<_, Function>(handler_name)
@@ -1527,7 +1738,7 @@ pub fn execute_script_for_request(
             context_builder = context_builder.with_auth_context(auth_ctx.clone());
 
             let handler_context = context_builder
-                .build(&ctx)
+                .build(ctx)
                 .map_err(|e| format!("build context: {}", e))?;
 
             // Set context as a global variable so personalStorage and other APIs can access it
@@ -1540,6 +1751,9 @@ pub fn execute_script_for_request(
                 .call::<_, Value>((handler_context,))
                 .map_err(|e| format!("call error: {}", e))?;
 
+            promise_resolve(ctx, val)
+        },
+        |_ctx, val| {
             let obj = val
                 .as_object()
                 .ok_or_else(|| "expected object".to_string())?;
@@ -1556,7 +1770,8 @@ pub fn execute_script_for_request(
             let content_type: Option<String> = obj.get("contentType").ok(); // This will be None if the field doesn't exist
 
             Ok((status as u16, body, content_type))
-        })?;
+        },
+    )?;
 
     // Ensure clean shutdown: drop Context before Runtime
     ensure_clean_shutdown(ctx, Ok((status, body, content_type)))
@@ -1610,50 +1825,54 @@ pub fn execute_scheduled_handler(
         })
     })?;
 
-    let handler_result = ctx.with(|ctx| -> Result<(), String> {
-        let global = ctx.globals();
-        let func: Function = global
-            .get::<_, Function>(handler_name)
-            .map_err(|e| format!("no handler {}: {}", handler_name, e))?;
+    let handler_result = call_and_settle(
+        &rt,
+        &ctx,
+        script_uri,
+        &format!("Scheduled handler '{}'", handler_name),
+        TransactionHandling::Auto,
+        |ctx| {
+            let global = ctx.globals();
+            let func: Function = global
+                .get::<_, Function>(handler_name)
+                .map_err(|e| format!("no handler {}: {}", handler_name, e))?;
 
-        let schedule_meta = serde_json::json!({
-            "jobId": invocation.job_id.to_string(),
-            "name": invocation.key,
-            "type": invocation.kind.as_str(),
-            "scheduledFor": invocation.scheduled_for.to_rfc3339(),
-            "intervalSeconds": invocation.interval_seconds,
-            "intervalMilliseconds": invocation.interval_milliseconds,
-        });
+            let schedule_meta = serde_json::json!({
+                "jobId": invocation.job_id.to_string(),
+                "name": invocation.key,
+                "type": invocation.kind.as_str(),
+                "scheduledFor": invocation.scheduled_for.to_rfc3339(),
+                "intervalSeconds": invocation.interval_seconds,
+                "intervalMilliseconds": invocation.interval_milliseconds,
+            });
 
-        let handler_context = JsHandlerContextBuilder::new(HandlerInvocationKind::Scheduled)
-            .with_script_metadata(script_uri, handler_name)
-            .with_metadata_value("schedule", schedule_meta)
-            .with_invocation_id(invocation.invocation_id.clone())
-            .build(&ctx)
-            .map_err(|e| format!("build context: {}", e))?;
+            let handler_context = JsHandlerContextBuilder::new(HandlerInvocationKind::Scheduled)
+                .with_script_metadata(script_uri, handler_name)
+                .with_metadata_value("schedule", schedule_meta)
+                .with_invocation_id(invocation.invocation_id.clone())
+                .build(ctx)
+                .map_err(|e| format!("build context: {}", e))?;
 
-        // Set context as a global variable so personalStorage and other APIs can access it
-        global
-            .set("context", handler_context.clone())
-            .map_err(|e| format!("set context global: {}", e))?;
+            // Set context as a global variable so personalStorage and other APIs can access it
+            global
+                .set("context", handler_context.clone())
+                .map_err(|e| format!("set context global: {}", e))?;
 
-        func.call::<_, Value>((handler_context,)).map_err(|e| {
-            let details = extract_error_details(&ctx, &e);
-            // Auto-rollback on exception if transaction is active
-            if crate::database::get_current_transaction_active() {
-                let _ = crate::database::Database::rollback_transaction();
-            }
-            format!("call handler: {}", details)
-        })?;
+            // A job that throws before returning never reaches the queue, so
+            // its transaction is rolled back here. One that rejects after an
+            // await settles during the drain, and `call_and_settle` finishes it.
+            let result = func.call::<_, Value>((handler_context,)).map_err(|e| {
+                let details = extract_error_details(ctx, &e);
+                if crate::database::get_current_transaction_active() {
+                    let _ = crate::database::Database::rollback_transaction();
+                }
+                format!("call handler: {}", details)
+            })?;
 
-        // Auto-commit on success if transaction is active
-        if crate::database::get_current_transaction_active() {
-            crate::database::Database::commit_transaction()
-                .map_err(|e| format!("transaction commit failed: {}", e))?;
-        }
-
-        Ok(())
-    });
+            promise_resolve(ctx, result)
+        },
+        |_ctx, _value| Ok(()),
+    );
 
     // Ensure clean shutdown
     drop(ctx);
@@ -1788,18 +2007,19 @@ fn execute_test_module(
     let rt = create_sandboxed_runtime(&limits)?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
-    // Collection and execution both happen inside one `with`: the registered
-    // test functions are bound to the context's lifetime and cannot outlive it.
-    let outcome = ctx.with(|ctx| {
-        run_test_module(
-            ctx,
-            params,
-            module_path,
-            &prepared.code,
-            budget_ms,
-            deadline,
-        )
-    });
+    // Collection happens inside a `with`; running the cases cannot, because a
+    // case that awaits only settles once the microtask queue is drained and
+    // draining needs the runtime. The collected functions are therefore
+    // persisted out of the context and restored one at a time.
+    let outcome = run_test_module(
+        &rt,
+        &ctx,
+        params,
+        module_path,
+        &prepared.code,
+        budget_ms,
+        deadline,
+    );
 
     // Context must drop before the runtime (see `ensure_clean_shutdown`).
     drop(ctx);
@@ -1810,14 +2030,12 @@ fn execute_test_module(
 /// Install the test globals into `ctx`, load `code`, and run the cases it
 /// registers. Split out from [`execute_test_module`] so the context lifetime
 /// has a name: the collected [`Function`]s are parameterized by it.
-fn run_test_module<'js>(
-    ctx: rquickjs::Ctx<'js>,
+fn install_and_collect_tests<'js>(
+    ctx: &rquickjs::Ctx<'js>,
     params: &TestRunParams,
     module_path: &str,
     code: &str,
-    budget_ms: u64,
-    deadline: Instant,
-) -> Result<ModuleOutcome, String> {
+) -> Result<Vec<(String, rquickjs::Persistent<Function<'static>>)>, String> {
     let invocation_id = crate::middleware::generate_request_id();
     let security_config = GlobalSecurityConfig {
         // A test must not mutate registries that outlive the run: routes,
@@ -1834,19 +2052,19 @@ fn run_test_module<'js>(
     };
 
     setup_secure_global_functions(
-        &ctx,
+        ctx,
         &params.script_uri,
         params.user_context.clone(),
         &security_config,
         None,
         None,
     )
-    .map_err(|e| format!("install test globals: {}", extract_error_details(&ctx, &e)))?;
+    .map_err(|e| format!("install test globals: {}", extract_error_details(ctx, &e)))?;
 
     let handler_context = JsHandlerContextBuilder::new(HandlerInvocationKind::Test)
         .with_script_metadata(params.script_uri.clone(), module_path)
         .with_invocation_id(invocation_id.clone())
-        .build(&ctx)
+        .build(ctx)
         .map_err(|e| format!("build context: {}", e))?;
     // Set before evaluating the module, not just before calling a case:
     // top-level code in the test file can already reach for `context`.
@@ -1870,21 +2088,44 @@ fn run_test_module<'js>(
         .set("__registerTest__", register)
         .map_err(|e| format!("install test registry: {}", e))?;
 
-    crate::bytecode::eval_program(&ctx, "engine://test-prelude", TEST_PRELUDE)
-        .map_err(|e| format!("test prelude: {}", extract_error_details(&ctx, &e)))?;
+    crate::bytecode::eval_program(ctx, "engine://test-prelude", TEST_PRELUDE)
+        .map_err(|e| format!("test prelude: {}", extract_error_details(ctx, &e)))?;
 
     // The bytecode cache overwrites by key, so a test bundle stored under the
     // script's own URI would evict the compiled program that serves requests.
     // The key doubles as the filename QuickJS puts in stack traces, hence a
     // readable separator rather than an exotic one.
     let bytecode_key = format!("{}::tests::{}", params.script_uri, module_path);
-    crate::bytecode::eval_program(&ctx, &bytecode_key, code)
-        .map_err(|e| format!("load: {}", extract_error_details(&ctx, &e)))?;
+    crate::bytecode::eval_program(ctx, &bytecode_key, code)
+        .map_err(|e| format!("load: {}", extract_error_details(ctx, &e)))?;
 
     // Take the cases out, so a `test()` call made from inside a running test
     // lands in a fresh vector and is ignored rather than conflicting with the
-    // borrow this loop holds.
-    let collected = registered.take();
+    // borrow the run loop holds. Each body is persisted so it survives leaving
+    // the context, which the run loop must do in order to drain the queue.
+    Ok(registered
+        .take()
+        .into_iter()
+        .map(|(name, body)| (name, rquickjs::Persistent::save(ctx, body)))
+        .collect())
+}
+
+/// Loads a test module and runs the cases it registers.
+///
+/// Each case is called, its microtask queue drained, and its promise settled
+/// before the next one starts, so an `async` test body reports the verdict its
+/// assertions actually reached rather than passing the moment it suspends.
+fn run_test_module(
+    rt: &Runtime,
+    context: &Context,
+    params: &TestRunParams,
+    module_path: &str,
+    code: &str,
+    budget_ms: u64,
+    deadline: Instant,
+) -> Result<ModuleOutcome, String> {
+    let collected =
+        context.with(|ctx| install_and_collect_tests(&ctx, params, module_path, code))?;
 
     // Held for the whole loop and never committed: `TransactionGuard` rolls
     // back when it drops, including on an early return.
@@ -1913,13 +2154,30 @@ fn run_test_module<'js>(
         }
 
         let started = Instant::now();
-        let result = body.call::<_, Value>(());
+        // The module's transaction belongs to the guard above; a passing case
+        // must not commit it out from under the rollback.
+        let result = call_and_settle(
+            rt,
+            context,
+            &params.script_uri,
+            &format!("Test '{}'", name),
+            TransactionHandling::Caller,
+            |ctx| {
+                let body = body
+                    .restore(ctx)
+                    .map_err(|e| format!("restore test body: {}", e))?;
+                let value = body
+                    .call::<_, Value>(())
+                    .map_err(|e| extract_error_details(ctx, &e))?;
+                promise_resolve(ctx, value)
+            },
+            |_ctx, _value| Ok(()),
+        );
         let duration_ms = started.elapsed().as_millis() as u64;
 
         match result {
-            Ok(_) => cases.push(TestCaseResult::passed(name, duration_ms).from_file(module_path)),
-            Err(error) => {
-                let details = extract_error_details(&ctx, &error);
+            Ok(()) => cases.push(TestCaseResult::passed(name, duration_ms).from_file(module_path)),
+            Err(details) => {
                 if Instant::now() >= deadline {
                     // The interrupt ended this call, not the test itself, so
                     // there is no verdict to report for it.
@@ -1956,7 +2214,7 @@ pub fn execute_graphql_resolver(params: GraphqlResolverExecutionParams) -> Resul
     let rt = create_sandboxed_runtime(&current_execution_limits())?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
-    let result_exec = ctx.with(|ctx| -> Result<String, rquickjs::Error> {
+    let setup_exec = ctx.with(|ctx| -> Result<(), rquickjs::Error> {
         // Set up all global functions using the secure helper function
         // For GraphQL resolvers, we don't need GraphQL registration (no-ops) or stream registration
         let config = GlobalSecurityConfig {
@@ -1985,81 +2243,111 @@ pub fn execute_graphql_resolver(params: GraphqlResolverExecutionParams) -> Resul
         // Execute the script (fetched and bundled above)
         crate::bytecode::eval_program(&ctx, &script_uri_owned, &executable_code)?;
 
-        let resolver_result: rquickjs::Value = ctx.globals().get(&resolver_function_owned)?;
-        let resolver_func = resolver_result
-            .as_function()
-            .ok_or_else(|| rquickjs::Error::new_from_js("Function", "not found"))?;
-
-        let request_context = JsRequestContext {
-            path: Some("/graphql".to_string()),
-            method: Some("POST".to_string()),
-            headers: HashMap::new(),
-            query_params: HashMap::new(),
-            form_data: HashMap::new(),
-            body: None,
-            route_params: HashMap::new(),
-            uploaded_files: Vec::new(),
-        };
-
-        let mut context_builder =
-            JsHandlerContextBuilder::new(params.operation_kind.as_handler_kind())
-                .with_script_metadata(&params.script_uri, &params.resolver_function)
-                .with_request(request_context)
-                .with_invocation_id(invocation_id.clone())
-                .with_metadata_value(
-                    "graphql",
-                    serde_json::json!({
-                        "fieldName": params.field_name,
-                        "operation": params.operation_kind.as_str()
-                    }),
-                );
-
-        if let Some(args) = args_owned {
-            context_builder = context_builder.with_args(args);
-        }
-
-        if let Some(auth_ctx) = auth_context.clone() {
-            context_builder = context_builder.with_auth_context(auth_ctx);
-        }
-
-        let handler_context = context_builder.build(&ctx)?;
-
-        // Set context as a global variable so personalStorage and other APIs can access it
-        let global = ctx.globals();
-        global.set("context", handler_context.clone())?;
-
-        let result_value = resolver_func
-            .call::<_, rquickjs::Value>((handler_context,))
-            .inspect_err(|_e| {
-                // Auto-rollback on exception if transaction is active
-                if crate::database::get_current_transaction_active() {
-                    let _ = crate::database::Database::rollback_transaction();
-                }
-            })?;
-
-        // Auto-commit on success if transaction is active
-        if crate::database::get_current_transaction_active() {
-            crate::database::Database::commit_transaction().map_err(|e| {
-                rquickjs::Error::new_from_js("Transaction", Box::leak(e.into_boxed_str()))
-            })?;
-        }
-
-        // Convert the result to a JSON string
-        let result_string: String = if result_value.is_string() {
-            result_value
-                .as_string()
-                .ok_or_else(|| rquickjs::Error::new_from_js("value", "string"))?
-                .to_string()?
-        } else {
-            // Use JavaScript's JSON.stringify to convert any value to JSON
-            let json_obj: rquickjs::Object = ctx.globals().get("JSON")?;
-            let json_stringify: rquickjs::Function = json_obj.get("stringify")?;
-            let json_str: String = json_stringify.call((result_value,))?;
-            json_str
-        };
-
-        Ok(result_string)
+        Ok(())
     });
+
+    if let Err(e) = setup_exec {
+        return Err(format!("JavaScript execution error: {}", e));
+    }
+
+    let result_exec = call_and_settle(
+        &rt,
+        &ctx,
+        &params.script_uri,
+        &format!("Resolver '{}'", params.resolver_function),
+        TransactionHandling::Auto,
+        |ctx| -> Result<rquickjs::Promise<'_>, String> {
+            let resolver_result: rquickjs::Value = ctx
+                .globals()
+                .get(&resolver_function_owned)
+                .map_err(|e| format!("no resolver {}: {}", resolver_function_owned, e))?;
+            let resolver_func = resolver_result.as_function().ok_or_else(|| {
+                format!(
+                    "resolver '{}' not found, or not a function",
+                    resolver_function_owned
+                )
+            })?;
+
+            let request_context = JsRequestContext {
+                path: Some("/graphql".to_string()),
+                method: Some("POST".to_string()),
+                headers: HashMap::new(),
+                query_params: HashMap::new(),
+                form_data: HashMap::new(),
+                body: None,
+                route_params: HashMap::new(),
+                uploaded_files: Vec::new(),
+            };
+
+            let mut context_builder =
+                JsHandlerContextBuilder::new(params.operation_kind.as_handler_kind())
+                    .with_script_metadata(&params.script_uri, &params.resolver_function)
+                    .with_request(request_context)
+                    .with_invocation_id(invocation_id.clone())
+                    .with_metadata_value(
+                        "graphql",
+                        serde_json::json!({
+                            "fieldName": params.field_name,
+                            "operation": params.operation_kind.as_str()
+                        }),
+                    );
+
+            if let Some(args) = args_owned {
+                context_builder = context_builder.with_args(args);
+            }
+
+            if let Some(auth_ctx) = auth_context.clone() {
+                context_builder = context_builder.with_auth_context(auth_ctx);
+            }
+
+            let handler_context = context_builder
+                .build(ctx)
+                .map_err(|e| format!("build context: {}", e))?;
+
+            // Set context as a global variable so personalStorage and other APIs can access it
+            let global = ctx.globals();
+            global
+                .set("context", handler_context.clone())
+                .map_err(|e| format!("set context global: {}", e))?;
+
+            // A resolver that throws before returning never reaches the queue, so
+            // its transaction is rolled back here. One that rejects after an await
+            // settles during the drain, and `call_and_settle` finishes it.
+            let result_value = resolver_func
+                .call::<_, rquickjs::Value>((handler_context,))
+                .map_err(|e| {
+                    let details = extract_error_details(ctx, &e);
+                    if crate::database::get_current_transaction_active() {
+                        let _ = crate::database::Database::rollback_transaction();
+                    }
+                    format!("call resolver: {}", details)
+                })?;
+
+            promise_resolve(ctx, result_value)
+        },
+        |ctx, result_value| -> Result<String, String> {
+            // Convert the result to a JSON string
+            if result_value.is_string() {
+                result_value
+                    .as_string()
+                    .ok_or_else(|| "resolver result was not a string".to_string())?
+                    .to_string()
+                    .map_err(|e| format!("read resolver string: {}", e))
+            } else {
+                // Use JavaScript's JSON.stringify to convert any value to JSON
+                let json_obj: rquickjs::Object = ctx
+                    .globals()
+                    .get("JSON")
+                    .map_err(|e| format!("JSON global missing: {}", e))?;
+                let json_stringify: rquickjs::Function = json_obj
+                    .get("stringify")
+                    .map_err(|e| format!("JSON.stringify missing: {}", e))?;
+                json_stringify
+                    .call((result_value,))
+                    .map_err(|e| format!("stringify resolver result: {}", e))
+            }
+        },
+    );
 
     let result_string = result_exec.map_err(|e| format!("JavaScript execution error: {}", e))?;
 
@@ -2099,7 +2387,7 @@ pub fn execute_mcp_prompt_handler(
     let rt = create_sandboxed_runtime(&current_execution_limits())?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
-    let result_exec = ctx.with(|ctx| -> Result<serde_json::Value, rquickjs::Error> {
+    let setup_exec = ctx.with(|ctx| -> Result<(), rquickjs::Error> {
         // Set up all global functions using the secure helper function
         // For MCP prompt handlers, we enable minimal features
         let config = GlobalSecurityConfig {
@@ -2124,29 +2412,63 @@ pub fn execute_mcp_prompt_handler(
         // Execute the script (fetched and bundled above)
         crate::bytecode::eval_program(&ctx, &script_uri_owned, &executable_code)?;
 
-        // Get the handler function
-        let handler_result: rquickjs::Value = ctx.globals().get(&handler_function_owned)?;
-        let handler_func = handler_result
-            .as_function()
-            .ok_or_else(|| rquickjs::Error::new_from_js("Function", "not found"))?;
-
-        // Parse arguments as a JavaScript object
-        let args_str = arguments_owned.to_string();
-        let args_obj: rquickjs::Value = ctx.json_parse(args_str)?;
-
-        // Call the handler with arguments
-        let result: rquickjs::Value = handler_func.call((args_obj,))?;
-
-        // Convert result to JSON
-        let result_json_str = ctx
-            .json_stringify(result)?
-            .ok_or_else(|| rquickjs::Error::new_from_js("value", "Failed to stringify result"))?;
-
-        let result_json: String = result_json_str.to_string()?;
-
-        serde_json::from_str(&result_json)
-            .map_err(|_e| rquickjs::Error::new_from_js("value", "Invalid JSON from prompt handler"))
+        Ok(())
     });
+
+    if let Err(e) = setup_exec {
+        return Err(format!("Prompt handler execution failed: {}", e));
+    }
+
+    let result_exec = call_and_settle(
+        &rt,
+        &ctx,
+        &script_uri_owned,
+        &format!("MCP prompt handler '{}'", handler_function_owned),
+        // This path has never committed or rolled back a transaction, and this
+        // change is about settling promises, not about fixing that.
+        TransactionHandling::Caller,
+        |ctx| -> Result<rquickjs::Promise<'_>, String> {
+            // Get the handler function
+            let handler_result: rquickjs::Value = ctx
+                .globals()
+                .get(&handler_function_owned)
+                .map_err(|e| format!("no handler {}: {}", handler_function_owned, e))?;
+            let handler_func = handler_result.as_function().ok_or_else(|| {
+                format!(
+                    "handler '{}' not found, or not a function",
+                    handler_function_owned
+                )
+            })?;
+
+            // Parse arguments as a JavaScript object
+            let args_str = arguments_owned.to_string();
+            let args_obj: rquickjs::Value = ctx
+                .json_parse(args_str)
+                .map_err(|e| format!("parse prompt arguments: {}", e))?;
+
+            // Call the handler with arguments
+            let result: rquickjs::Value = handler_func.call((args_obj,)).map_err(|e| {
+                let details = extract_error_details(ctx, &e);
+                format!("call prompt handler: {}", details)
+            })?;
+
+            promise_resolve(ctx, result)
+        },
+        |ctx, result| {
+            // Convert result to JSON
+            let result_json_str = ctx
+                .json_stringify(result)
+                .map_err(|e| format!("stringify prompt result: {}", e))?
+                .ok_or_else(|| "Failed to stringify result".to_string())?;
+
+            let result_json: String = result_json_str
+                .to_string()
+                .map_err(|e| format!("read prompt result: {}", e))?;
+
+            serde_json::from_str(&result_json)
+                .map_err(|_e| "Invalid JSON from prompt handler".to_string())
+        },
+    );
 
     result_exec.map_err(|e| format!("Prompt handler execution failed: {}", e))
 }
@@ -2189,7 +2511,7 @@ pub fn execute_mcp_tool_handler(
     let rt = create_sandboxed_runtime(&current_execution_limits())?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
-    let result_exec = ctx.with(|ctx| -> Result<String, rquickjs::Error> {
+    let setup_exec = ctx.with(|ctx| -> Result<(), rquickjs::Error> {
         // Set up all global functions using the secure helper function
         // For MCP tool handlers, we enable minimal features
         let config = GlobalSecurityConfig {
@@ -2211,76 +2533,106 @@ pub fn execute_mcp_tool_handler(
         // Execute the script (fetched and bundled above)
         crate::bytecode::eval_program(&ctx, &script_uri_owned, &executable_code)?;
 
-        let handler_result: rquickjs::Value = ctx.globals().get(&handler_function_owned)?;
-        let handler_func = handler_result
-            .as_function()
-            .ok_or_else(|| rquickjs::Error::new_from_js("Function", "not found"))?;
-
-        let request_context = JsRequestContext {
-            path: Some("/mcp/tools/call".to_string()),
-            method: Some("POST".to_string()),
-            headers: HashMap::new(),
-            query_params: HashMap::new(),
-            form_data: HashMap::new(),
-            body: None,
-            route_params: HashMap::new(),
-            uploaded_files: Vec::new(),
-        };
-
-        let mut context_builder = JsHandlerContextBuilder::new(HandlerInvocationKind::McpTool)
-            .with_script_metadata(&script_uri_owned, &handler_function_owned)
-            .with_request(request_context)
-            .with_invocation_id(invocation_id.clone())
-            .with_args(arguments_owned)
-            .with_metadata_value(
-                "mcp",
-                serde_json::json!({
-                    "toolName": tool_name_owned
-                }),
-            );
-
-        if let Some(auth_context) = auth_context_owned.clone() {
-            context_builder = context_builder.with_auth_context(auth_context);
-        }
-
-        let handler_context = context_builder.build(&ctx)?;
-
-        // Set context as a global variable
-        let global = ctx.globals();
-        global.set("context", handler_context.clone())?;
-
-        let result_value = handler_func
-            .call::<_, rquickjs::Value>((handler_context,))
-            .inspect_err(|_e| {
-                // Auto-rollback on exception if transaction is active
-                if crate::database::get_current_transaction_active() {
-                    let _ = crate::database::Database::rollback_transaction();
-                }
-            })?;
-
-        // Auto-commit on success if transaction is active
-        if crate::database::get_current_transaction_active() {
-            crate::database::Database::commit_transaction().map_err(|e| {
-                rquickjs::Error::new_from_js("Transaction", Box::leak(e.into_boxed_str()))
-            })?;
-        }
-
-        // Convert the result to a JSON string
-        let result_string: String = if result_value.is_string() {
-            result_value
-                .as_string()
-                .ok_or_else(|| rquickjs::Error::new_from_js("value", "string"))?
-                .to_string()?
-        } else {
-            // Use JavaScript's JSON.stringify to convert any value to JSON
-            let json_obj: rquickjs::Object = ctx.globals().get("JSON")?;
-            let json_stringify: rquickjs::Function = json_obj.get("stringify")?;
-            let json_str: String = json_stringify.call((result_value,))?;
-            json_str
-        };
-
-        Ok(result_string)
+        Ok(())
     });
+
+    if let Err(e) = setup_exec {
+        return Err(format!("JavaScript execution error: {}", e));
+    }
+
+    let result_exec = call_and_settle(
+        &rt,
+        &ctx,
+        &script_uri_owned,
+        &format!("MCP tool handler '{}'", handler_function_owned),
+        TransactionHandling::Auto,
+        |ctx| -> Result<rquickjs::Promise<'_>, String> {
+            let handler_result: rquickjs::Value = ctx
+                .globals()
+                .get(&handler_function_owned)
+                .map_err(|e| format!("no handler {}: {}", handler_function_owned, e))?;
+            let handler_func = handler_result.as_function().ok_or_else(|| {
+                format!(
+                    "handler '{}' not found, or not a function",
+                    handler_function_owned
+                )
+            })?;
+
+            let request_context = JsRequestContext {
+                path: Some("/mcp/tools/call".to_string()),
+                method: Some("POST".to_string()),
+                headers: HashMap::new(),
+                query_params: HashMap::new(),
+                form_data: HashMap::new(),
+                body: None,
+                route_params: HashMap::new(),
+                uploaded_files: Vec::new(),
+            };
+
+            let mut context_builder = JsHandlerContextBuilder::new(HandlerInvocationKind::McpTool)
+                .with_script_metadata(&script_uri_owned, &handler_function_owned)
+                .with_request(request_context)
+                .with_invocation_id(invocation_id.clone())
+                .with_args(arguments_owned)
+                .with_metadata_value(
+                    "mcp",
+                    serde_json::json!({
+                        "toolName": tool_name_owned
+                    }),
+                );
+
+            if let Some(auth_context) = auth_context_owned.clone() {
+                context_builder = context_builder.with_auth_context(auth_context);
+            }
+
+            let handler_context = context_builder
+                .build(ctx)
+                .map_err(|e| format!("build context: {}", e))?;
+
+            // Set context as a global variable
+            let global = ctx.globals();
+            global
+                .set("context", handler_context.clone())
+                .map_err(|e| format!("set context global: {}", e))?;
+
+            // A handler that throws before returning never reaches the queue, so
+            // its transaction is rolled back here. One that rejects after an await
+            // settles during the drain, and `call_and_settle` finishes it.
+            let result_value = handler_func
+                .call::<_, rquickjs::Value>((handler_context,))
+                .map_err(|e| {
+                    let details = extract_error_details(ctx, &e);
+                    if crate::database::get_current_transaction_active() {
+                        let _ = crate::database::Database::rollback_transaction();
+                    }
+                    format!("call handler: {}", details)
+                })?;
+
+            promise_resolve(ctx, result_value)
+        },
+        |ctx, result_value| -> Result<String, String> {
+            // Convert the result to a JSON string
+            if result_value.is_string() {
+                result_value
+                    .as_string()
+                    .ok_or_else(|| "handler result was not a string".to_string())?
+                    .to_string()
+                    .map_err(|e| format!("read handler string: {}", e))
+            } else {
+                // Use JavaScript's JSON.stringify to convert any value to JSON
+                let json_obj: rquickjs::Object = ctx
+                    .globals()
+                    .get("JSON")
+                    .map_err(|e| format!("JSON global missing: {}", e))?;
+                let json_stringify: rquickjs::Function = json_obj
+                    .get("stringify")
+                    .map_err(|e| format!("JSON.stringify missing: {}", e))?;
+                json_stringify
+                    .call((result_value,))
+                    .map_err(|e| format!("stringify handler result: {}", e))
+            }
+        },
+    );
 
     let result_string = result_exec.map_err(|e| format!("JavaScript execution error: {}", e))?;
 
@@ -2328,28 +2680,41 @@ pub fn execute_stream_customization_function(
     let rt = create_sandboxed_runtime(&current_execution_limits())?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
-    let result_exec = ctx.with(
-        |ctx| -> Result<std::collections::HashMap<String, String>, rquickjs::Error> {
-            // Set up global functions with minimal security for customization function
-            let config = GlobalSecurityConfig {
-                enable_audit_logging: false,
-                log_context: log_context.clone(),
-                ..Default::default()
-            };
+    let setup_exec = ctx.with(|ctx| -> Result<(), rquickjs::Error> {
+        // Set up global functions with minimal security for customization function
+        let config = GlobalSecurityConfig {
+            enable_audit_logging: false,
+            log_context: log_context.clone(),
+            ..Default::default()
+        };
 
-            setup_secure_global_functions(
-                &ctx,
-                &script_uri_owned,
-                UserContext::admin("stream-customization".to_string()),
-                &config,
-                None,
-                auth_context.clone(),
-            )?;
+        setup_secure_global_functions(
+            &ctx,
+            &script_uri_owned,
+            UserContext::admin("stream-customization".to_string()),
+            &config,
+            None,
+            auth_context.clone(),
+        )?;
 
-            // The script was fetched and bundled above.
+        // The script was fetched and bundled above.
 
-            crate::bytecode::eval_program(&ctx, &script_uri_owned, &executable_code)?;
+        crate::bytecode::eval_program(&ctx, &script_uri_owned, &executable_code)?;
 
+        Ok(())
+    });
+
+    if let Err(e) = setup_exec {
+        return Err(format!("Customization function execution error: {}", e));
+    }
+
+    let result_exec = call_and_settle(
+        &rt,
+        &ctx,
+        &script_uri_owned,
+        &format!("Stream customization '{}'", function_name_owned),
+        TransactionHandling::Auto,
+        |ctx| -> Result<rquickjs::Promise<'_>, String> {
             let request_context = JsRequestContext {
                 path: Some(path_owned.clone()),
                 method: Some("GET".to_string()),
@@ -2382,44 +2747,41 @@ pub fn execute_stream_customization_function(
                 context_builder = context_builder.with_auth_context(auth.clone());
             }
 
-            let handler_context = context_builder.build(&ctx)?;
+            let handler_context = context_builder
+                .build(ctx)
+                .map_err(|e| format!("build context: {}", e))?;
 
             // Set context as a global variable so personalStorage and other APIs can access it
             let global = ctx.globals();
-            global.set("context", handler_context.clone())?;
+            global
+                .set("context", handler_context.clone())
+                .map_err(|e| format!("set context global: {}", e))?;
 
             // Get the customization function
-            let customization_func: rquickjs::Function =
-                global.get(&function_name_owned).map_err(|_| {
-                    let msg = format!("'{}' not found", function_name_owned);
-                    rquickjs::Error::new_from_js("Function", msg.leak())
-                })?;
+            let customization_func: rquickjs::Function = global
+                .get(&function_name_owned)
+                .map_err(|_| format!("'{}' not found", function_name_owned))?;
 
-            // Call the function with req object
-            let result_value: rquickjs::Value = customization_func
-                .call((handler_context,))
-                .inspect_err(|_e| {
-                    // Auto-rollback on exception if transaction is active
+            // A function that throws before returning never reaches the queue,
+            // so its transaction is rolled back here. One that rejects after an
+            // await settles during the drain, and `call_and_settle` finishes it.
+            let result_value: rquickjs::Value =
+                customization_func.call((handler_context,)).map_err(|e| {
+                    let details = extract_error_details(ctx, &e);
                     if crate::database::get_current_transaction_active() {
                         let _ = crate::database::Database::rollback_transaction();
                     }
+                    format!("call customization: {}", details)
                 })?;
 
-            // Auto-commit on success if transaction is active
-            if crate::database::get_current_transaction_active() {
-                crate::database::Database::commit_transaction().map_err(|e| {
-                    rquickjs::Error::new_from_js("Transaction", Box::leak(e.into_boxed_str()))
-                })?;
-            }
-
+            promise_resolve(ctx, result_value)
+        },
+        |_ctx, result_value| {
             // Convert result to HashMap
             let mut filter_criteria = std::collections::HashMap::new();
 
             let Some(result_obj) = result_value.as_object() else {
-                return Err(rquickjs::Error::new_from_js(
-                    "Customization",
-                    "Expected object result",
-                ));
+                return Err("Expected object result".to_string());
             };
 
             for key_str in result_obj.keys::<String>().flatten() {
@@ -2427,10 +2789,7 @@ pub fn execute_stream_customization_function(
                     if let Some(value_str) = value.as_string().and_then(|s| s.to_string().ok()) {
                         filter_criteria.insert(key_str.clone(), value_str);
                     } else {
-                        return Err(rquickjs::Error::new_from_js(
-                            "Customization",
-                            "Filter values must be strings",
-                        ));
+                        return Err("Filter values must be strings".to_string());
                     }
                 }
             }
@@ -2578,7 +2937,7 @@ pub fn evaluate_snippet(params: &EvalParams) -> EvalOutcome {
         None
     };
 
-    let mut outcome = ctx.with(|ctx| run_snippet(ctx, params, &prepared.code, &console));
+    let mut outcome = run_snippet(&rt, &ctx, params, &prepared.code, &console);
 
     // A snippet that called `database.commitTransaction()` itself has already
     // committed the guard's transaction, so the guard has nothing left to roll
@@ -2603,137 +2962,172 @@ pub fn evaluate_snippet(params: &EvalParams) -> EvalOutcome {
 ///
 /// Split out so the context lifetime has a name, as `run_test_module` is.
 fn run_snippet(
-    ctx: rquickjs::Ctx<'_>,
+    rt: &Runtime,
+    context: &Context,
     params: &EvalParams,
     program: &str,
     console: &ConsoleSink,
 ) -> EvalOutcome {
-    let invocation_id = crate::middleware::generate_request_id();
-    let security_config = GlobalSecurityConfig {
-        // Same rule as a test run: the APIs stay callable and report that they
-        // did nothing, rather than installing registrations that outlive the
-        // request with no rollback to undo them.
-        registration_phase: false,
-        enable_audit_logging: false,
-        dry_run_sink: None,
-        console_sink: Some(std::sync::Arc::clone(console)),
-        log_context: HandlerInvocationKind::Eval.log_context(invocation_id.clone(), None),
-    };
+    // Installing the globals, loading the program and evaluating the snippet
+    // all need the context; draining the queue the snippet may have filled
+    // cannot hold one. So the snippet's value is persisted and picked up again
+    // below.
+    type Prepared = rquickjs::Persistent<rquickjs::Promise<'static>>;
+    // Boxed so the error variant does not dwarf the success one.
+    let prepared = context.with(|ctx| -> Result<Prepared, Box<EvalOutcome>> {
+        let ctx = &ctx;
+        let invocation_id = crate::middleware::generate_request_id();
+        let security_config = GlobalSecurityConfig {
+            // Same rule as a test run: the APIs stay callable and report that they
+            // did nothing, rather than installing registrations that outlive the
+            // request with no rollback to undo them.
+            registration_phase: false,
+            enable_audit_logging: false,
+            dry_run_sink: None,
+            console_sink: Some(std::sync::Arc::clone(console)),
+            log_context: HandlerInvocationKind::Eval.log_context(invocation_id.clone(), None),
+        };
 
-    let mut outcome = EvalOutcome::default();
+        let mut outcome = EvalOutcome::default();
 
-    if let Err(e) = setup_secure_global_functions(
-        &ctx,
-        &params.script_uri,
-        params.user_context.clone(),
-        &security_config,
-        None,
-        None,
-    ) {
-        outcome.error = Some(format!(
-            "install globals: {}",
-            extract_error_details(&ctx, &e)
-        ));
-        return outcome;
-    }
+        if let Err(e) = setup_secure_global_functions(
+            ctx,
+            &params.script_uri,
+            params.user_context.clone(),
+            &security_config,
+            None,
+            None,
+        ) {
+            outcome.error = Some(format!(
+                "install globals: {}",
+                extract_error_details(ctx, &e)
+            ));
+            return Err(Box::new(outcome));
+        }
 
-    match JsHandlerContextBuilder::new(HandlerInvocationKind::Eval)
-        .with_script_metadata(params.script_uri.clone(), "eval")
-        .with_invocation_id(invocation_id.clone())
-        .build(&ctx)
-    {
-        // Set before the program runs: its top level can already reach for
-        // `context`, exactly as a test module's can.
-        Ok(handler_context) => {
-            if let Err(e) = ctx.globals().set("context", handler_context) {
-                outcome.error = Some(format!("set context global: {}", e));
-                return outcome;
+        match JsHandlerContextBuilder::new(HandlerInvocationKind::Eval)
+            .with_script_metadata(params.script_uri.clone(), "eval")
+            .with_invocation_id(invocation_id.clone())
+            .build(ctx)
+        {
+            // Set before the program runs: its top level can already reach for
+            // `context`, exactly as a test module's can.
+            Ok(handler_context) => {
+                if let Err(e) = ctx.globals().set("context", handler_context) {
+                    outcome.error = Some(format!("set context global: {}", e));
+                    return Err(Box::new(outcome));
+                }
+            }
+            Err(e) => {
+                outcome.error = Some(format!("build context: {}", e));
+                return Err(Box::new(outcome));
             }
         }
-        Err(e) => {
-            outcome.error = Some(format!("build context: {}", e));
-            return outcome;
-        }
-    }
 
-    if let Err(e) = crate::bytecode::eval_program(&ctx, &params.script_uri, program) {
-        outcome.error = Some(format!(
-            "the script's own program failed to load: {}",
-            extract_error_details(&ctx, &e)
-        ));
-        return outcome;
-    }
-
-    // The bundler's module lookup is an implementation detail with an
-    // implementation detail's name. Alias it so a snippet has something
-    // reasonable to call, for the cases `import` cannot express — reaching a
-    // module by a path computed at run time, say.
-    install_require_alias(&ctx);
-
-    // Rewrite the snippet's imports the way every module's are rewritten, so
-    // `import` means in a snippet exactly what it means in the script.
-    let snippet = match module_loader::prepare_snippet(&params.script_uri, &params.source) {
-        Ok(snippet) => snippet,
-        Err(e) => {
-            outcome.error = Some(e.to_string());
-            return outcome;
-        }
-    };
-
-    // Check the imports against the graph before running, so a path that is not
-    // in the bundle is reported as what it is rather than as an unknown module
-    // thrown from inside the prelude.
-    if let Some(error) = unresolvable_imports(&ctx, &snippet.dependencies) {
-        outcome.error = Some(error);
-        return outcome;
-    }
-
-    // The snippet is compiled fresh every time and deliberately not cached: it
-    // is different on essentially every call, and caching it would evict the
-    // script programs the cache exists for.
-    let value = match ctx.eval::<rquickjs::Value, _>(snippet.code.as_bytes()) {
-        Ok(value) => value,
-        Err(e) => {
-            outcome.error = Some(extract_error_details(&ctx, &e));
-            return outcome;
-        }
-    };
-
-    outcome.value_type = Some(js_type_of(&value));
-
-    // Scripts run synchronously — host calls block rather than yielding — so a
-    // snippet that returns a promise would never settle. Say so, rather than
-    // reporting the opaque object the caller did not mean to ask for.
-    if is_thenable(&value) {
-        outcome.error = Some(
-            "The snippet returned a promise. Scripts run synchronously here — host calls \
-             like fetch() and database queries block rather than yielding — so it will never \
-             settle. Drop the async/await."
-                .to_string(),
-        );
-        return outcome;
-    }
-
-    match json_stringify(&ctx, &value) {
-        // `JSON.stringify` yields no string at all for `undefined`, a function
-        // or a symbol. That is not an error: `valueType` already said what it
-        // was, and forcing a null here would claim the snippet returned one.
-        Ok(None) => {}
-        Ok(Some(json)) => match serde_json::from_str(&json) {
-            Ok(parsed) => outcome.value = Some(parsed),
-            Err(e) => outcome.value_error = Some(format!("value is not valid JSON: {}", e)),
-        },
-        Err(e) => {
-            outcome.value_error = Some(format!(
-                "value could not be serialized (a circular structure, most likely): {}",
-                e
+        if let Err(e) = crate::bytecode::eval_program(ctx, &params.script_uri, program) {
+            outcome.error = Some(format!(
+                "the script's own program failed to load: {}",
+                extract_error_details(ctx, &e)
             ));
+            return Err(Box::new(outcome));
         }
-    }
 
-    outcome
+        // The bundler's module lookup is an implementation detail with an
+        // implementation detail's name. Alias it so a snippet has something
+        // reasonable to call, for the cases `import` cannot express — reaching a
+        // module by a path computed at run time, say.
+        install_require_alias(ctx);
+
+        // Rewrite the snippet's imports the way every module's are rewritten, so
+        // `import` means in a snippet exactly what it means in the script.
+        let snippet = match module_loader::prepare_snippet(&params.script_uri, &params.source) {
+            Ok(snippet) => snippet,
+            Err(e) => {
+                outcome.error = Some(e.to_string());
+                return Err(Box::new(outcome));
+            }
+        };
+
+        // Check the imports against the graph before running, so a path that is not
+        // in the bundle is reported as what it is rather than as an unknown module
+        // thrown from inside the prelude.
+        if let Some(error) = unresolvable_imports(ctx, &snippet.dependencies) {
+            outcome.error = Some(error);
+            return Err(Box::new(outcome));
+        }
+
+        // The snippet is compiled fresh every time and deliberately not cached:
+        // it is different on essentially every call, and caching it would evict
+        // the script programs the cache exists for.
+        let value = match ctx.eval::<rquickjs::Value, _>(snippet.code.as_bytes()) {
+            Ok(value) => value,
+            Err(e) => {
+                outcome.error = Some(extract_error_details(ctx, &e));
+                return Err(Box::new(outcome));
+            }
+        };
+
+        match promise_resolve(ctx, value) {
+            Ok(promise) => Ok(rquickjs::Persistent::save(ctx, promise)),
+            Err(e) => {
+                outcome.error = Some(e);
+                Err(Box::new(outcome))
+            }
+        }
+    });
+
+    let prepared = match prepared {
+        Ok(prepared) => prepared,
+        Err(outcome) => return *outcome,
+    };
+
+    report_unhandled(&params.script_uri, drain_jobs(rt));
+
+    context.with(|ctx| {
+        let mut outcome = EvalOutcome::default();
+
+        let promise = match prepared.restore(&ctx) {
+            Ok(promise) => promise,
+            Err(e) => {
+                outcome.error = Some(format!("restore snippet result: {}", e));
+                return outcome;
+            }
+        };
+
+        // A snippet that awaits settles during the drain above. One that
+        // returns a promise nothing can settle — `new Promise(() => {})` — is
+        // reported as that, rather than as the opaque object it is.
+        let value = match unwrap_settled(&ctx, promise, "The snippet") {
+            Ok(value) => value,
+            Err(details) => {
+                outcome.error = Some(details);
+                return outcome;
+            }
+        };
+
+        outcome.value_type = Some(js_type_of(&value));
+
+        match json_stringify(&ctx, &value) {
+            // `JSON.stringify` yields no string at all for `undefined`, a
+            // function or a symbol. That is not an error: `valueType` already
+            // said what it was, and forcing a null here would claim the snippet
+            // returned one.
+            Ok(None) => {}
+            Ok(Some(json)) => match serde_json::from_str(&json) {
+                Ok(parsed) => outcome.value = Some(parsed),
+                Err(e) => outcome.value_error = Some(format!("value is not valid JSON: {}", e)),
+            },
+            Err(e) => {
+                outcome.value_error = Some(format!(
+                    "value could not be serialized (a circular structure, most likely): {}",
+                    e
+                ));
+            }
+        }
+
+        outcome
+    })
 }
-
 /// Give the snippet a `require()` for the bundler's module table.
 ///
 /// Absent when the script imports nothing: the bundle only emits its module
@@ -2832,13 +3226,6 @@ fn js_type_of(value: &rquickjs::Value<'_>) -> String {
         return format!("{:?}", value.type_of()).to_lowercase();
     }
     .to_string()
-}
-
-fn is_thenable(value: &rquickjs::Value<'_>) -> bool {
-    value
-        .as_object()
-        .and_then(|object| object.get::<_, rquickjs::Value>("then").ok())
-        .is_some_and(|then| then.is_function())
 }
 
 /// `JSON.stringify(value)`, or `None` where it yields nothing.
@@ -3125,6 +3512,12 @@ fn run_registration_pass(
     let error_details: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
     let error_details_clone = Rc::clone(&error_details);
 
+    // Carries `init()`'s promise out of the context so the microtask queue can
+    // be drained, which holding a context guard makes impossible.
+    type InitPromise = rquickjs::Persistent<rquickjs::Promise<'static>>;
+    let init_promise: Rc<RefCell<Option<InitPromise>>> = Rc::new(RefCell::new(None));
+    let init_promise_clone = Rc::clone(&init_promise);
+
     let result = ctx
         .with(|ctx| -> Result<bool, rquickjs::Error> {
             // Set up secure global functions with minimal config for init
@@ -3248,14 +3641,31 @@ fn run_registration_pass(
                 .with_invocation_id(invocation_id.clone())
                 .build(&ctx)?;
 
-            // Call init function with context
+            // Call init function with context. An `async init()` suspends at
+            // its first await and hands back a promise; the queue that settles
+            // it can only be drained outside the context, so the promise is
+            // persisted for the caller to finish.
             debug!("Calling init() function for script: {}", script_uri);
-            let call_result = init_func.call::<_, ()>((handler_context,));
+            let call_result = init_func
+                .call::<_, Value>((handler_context,))
+                .and_then(|value| match promise_resolve(&ctx, value) {
+                    Ok(promise) => Ok(rquickjs::Persistent::save(&ctx, promise)),
+                    Err(details) => Err(rquickjs::Error::new_from_js_message(
+                        "init", "promise", details,
+                    )),
+                });
 
-            if let Err(ref e) = call_result {
-                let details = extract_error_details(&ctx, e);
-                if let Ok(mut error_ref) = error_details_clone.try_borrow_mut() {
-                    *error_ref = Some(details);
+            match call_result {
+                Ok(ref promise) => {
+                    if let Ok(mut slot) = init_promise_clone.try_borrow_mut() {
+                        *slot = Some(promise.clone());
+                    }
+                }
+                Err(ref e) => {
+                    let details = extract_error_details(&ctx, e);
+                    if let Ok(mut error_ref) = error_details_clone.try_borrow_mut() {
+                        *error_ref = Some(details);
+                    }
                 }
             }
             // Resolve delegates before propagating a failure: a script whose
@@ -3268,7 +3678,6 @@ fn run_registration_pass(
 
             call_result?;
 
-            info!("Successfully called init() for script: {}", script_uri);
             Ok(true)
         })
         .map_err(|e| {
@@ -3280,6 +3689,35 @@ fn run_registration_pass(
             }
             format!("Init function error: {}", e)
         });
+
+    // `init()` may have suspended at an await. Draining now runs whatever it
+    // queued — including any `registerRoute` calls made after the await, which
+    // is why this happens before the registrations are read below.
+    let result = match result {
+        Ok(had_init) => {
+            report_unhandled(script_uri, drain_jobs(&rt));
+
+            let settled = init_promise.take().map(|promise| {
+                ctx.with(|ctx| {
+                    let promise = promise
+                        .restore(&ctx)
+                        .map_err(|e| format!("restore init result: {}", e))?;
+                    unwrap_settled(&ctx, promise, "init()").map(|_| ())
+                })
+            });
+
+            match settled {
+                Some(Err(details)) => Err(format!("Init function error: {}", details)),
+                _ => {
+                    if had_init {
+                        info!("Successfully called init() for script: {}", script_uri);
+                    }
+                    Ok(had_init)
+                }
+            }
+        }
+        Err(e) => Err(e),
+    };
 
     // Routes registered before init() threw or ran out of budget are reported
     // with the failure rather than dropped. Scripts whose init() registers first

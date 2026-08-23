@@ -289,7 +289,7 @@ async fn a_filter_runs_only_the_matching_cases() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn an_async_test_body_fails_instead_of_silently_passing() {
+async fn an_async_test_body_is_judged_on_what_it_asserts() {
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
@@ -299,8 +299,14 @@ async fn an_async_test_body_fails_instead_of_silently_passing() {
         &[(
             "tests/async.test.ts",
             r#"
-            test("returns a promise", async () => {
+            test("fails after an await", async () => {
+              await Promise.resolve();
               expect(1).toBe(2);
+            });
+
+            test("passes after an await", async () => {
+              const doubled = await Promise.resolve(21);
+              expect(doubled * 2).toBe(42);
             });
             "#,
         )],
@@ -308,19 +314,24 @@ async fn an_async_test_body_fails_instead_of_silently_passing() {
 
     let result = run(script_uri);
 
-    let async_case = case(&result, "returns a promise");
+    // The verdict has to come from the assertion, not from the case suspending:
+    // a body that suspends and then fails must not be credited with a pass.
+    let failing = case(&result, "fails after an await");
     assert!(
-        !async_case.is_passed(),
+        !failing.is_passed(),
         "an async body must not report a pass it never earned"
     );
     assert!(
-        async_case
-            .error
-            .as_deref()
-            .unwrap_or_default()
-            .contains("returned a promise"),
-        "unexpected error: {:?}",
-        async_case.error
+        failing.error.as_deref().unwrap_or_default().contains("2"),
+        "the failure should be the assertion's, got: {:?}",
+        failing.error
+    );
+
+    let passing = case(&result, "passes after an await");
+    assert!(
+        passing.is_passed(),
+        "an async body whose assertions hold should pass, got: {:?}",
+        passing.error
     );
 }
 
@@ -399,6 +410,84 @@ async fn each_module_runs_in_its_own_context() {
 
     assert!(result.all_passed(), "cases: {:?}", result.cases);
     assert_eq!(result.cases.len(), 2);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_write_made_after_an_await_lands_inside_the_runs_transaction() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let script_uri = "test://script-tests-async-rollback";
+
+    // The run's transaction is opened in Rust and held for the whole module, so
+    // unlike `database.beginTransaction()` it really is active. That makes this
+    // the place where the ordering matters: a case is settled before the guard
+    // drops, so a write made after an await is inside the transaction and is
+    // rolled back with everything else.
+    script_with_test_modules(
+        script_uri,
+        &[(
+            "tests/setup.test.ts",
+            r#"
+            test("prepares the table", () => {
+              database.dropTable("late");
+              expect(JSON.parse(database.createTable("late")).success).toBeTruthy();
+              expect(JSON.parse(database.addTextColumn("late", "label", true)).success).toBeTruthy();
+            });
+            "#,
+        )],
+    );
+    let setup = execute_test_run(
+        &TestRunParams {
+            rollback: false,
+            ..params(script_uri)
+        },
+        &module_loader::discover_test_modules(script_uri),
+    );
+    assert!(setup.all_passed(), "setup: {:?}", setup.cases);
+
+    script_with_test_modules(
+        script_uri,
+        &[(
+            "tests/late.test.ts",
+            r#"
+            test("writes after an await and reads it back", async () => {
+              await Promise.resolve();
+              const inserted = JSON.parse(database.insert("late", JSON.stringify({ label: "late" })));
+              expect(inserted.error).toBeUndefined();
+              const rows = JSON.parse(database.query("late"));
+              expect(rows).toHaveLength(1);
+            });
+            "#,
+        )],
+    );
+    let writing = run(script_uri);
+    assert!(writing.all_passed(), "writing: {:?}", writing.cases);
+
+    script_with_test_modules(
+        script_uri,
+        &[(
+            "tests/observes.test.ts",
+            r#"
+            test("sees no rows from the previous run", () => {
+              const rows = JSON.parse(database.query("late"));
+              expect(rows).toHaveLength(0);
+            });
+            "#,
+        )],
+    );
+    let observing = execute_test_run(
+        &TestRunParams {
+            rollback: false,
+            ..params(script_uri)
+        },
+        &module_loader::discover_test_modules(script_uri),
+    );
+    assert!(
+        observing.all_passed(),
+        "a write made after an await should roll back with the run: {:?}",
+        observing.cases
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

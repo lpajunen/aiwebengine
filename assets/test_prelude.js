@@ -186,24 +186,38 @@
     const qualified = qualify(name);
     __registerTest__(qualified, function () {
       runHooks(beforeEachHooks);
+
+      let result;
       try {
-        const result = fn();
-        if (
-          result !== null &&
-          result !== undefined &&
-          typeof result.then === "function"
-        ) {
-          throw new Error(
-            'Test "' +
-              qualified +
-              '" returned a promise. Scripts run synchronously here — host calls ' +
-              "like fetch() and database queries block rather than yielding — so an " +
-              "async test body would never settle. Drop the async/await.",
-          );
-        }
-      } finally {
+        result = fn();
+      } catch (error) {
         runHooks(afterEachHooks);
+        throw error;
       }
+
+      // An async body hands back a promise. Return it so the runner can settle
+      // it before recording a verdict — otherwise the case would pass the
+      // moment it suspends, crediting assertions that have not run yet. The
+      // afterEach hooks have to wait for the same reason.
+      if (
+        result !== null &&
+        result !== undefined &&
+        typeof result.then === "function"
+      ) {
+        return result.then(
+          function (value) {
+            runHooks(afterEachHooks);
+            return value;
+          },
+          function (error) {
+            runHooks(afterEachHooks);
+            throw error;
+          },
+        );
+      }
+
+      runHooks(afterEachHooks);
+      return result;
     });
   }
 

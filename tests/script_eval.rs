@@ -319,18 +319,57 @@ async fn a_snippet_that_throws_is_reported_rather_than_hidden() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_snippet_returning_a_promise_is_told_it_will_never_settle() {
+async fn a_snippet_that_awaits_reports_the_settled_value() {
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
     let uri = "test://eval/promise";
     deploy(uri, "function init() {}");
 
+    // A resolved promise is reported as the value it resolved to, not as the
+    // opaque object the caller did not mean to ask for.
     let report = eval(uri, "Promise.resolve(1)");
+    assert!(report.ok, "{:?}", report.outcome.error);
+    assert_eq!(report.outcome.value, Some(json!(1)));
+    assert_eq!(report.outcome.value_type.as_deref(), Some("number"));
+
+    // Awaits resume, so the type reported is the awaited value's.
+    let awaited = eval(
+        uri,
+        "(async () => { const n = await 20; return n + 22; })()",
+    );
+    assert!(awaited.ok, "{:?}", awaited.outcome.error);
+    assert_eq!(awaited.outcome.value, Some(json!(42)));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_snippet_returning_an_unsettleable_promise_is_told_so() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://eval/pending";
+    deploy(uri, "function init() {}");
+
+    // Nothing can settle this: there are no timers, and every host call has
+    // already returned by the time the queue is drained.
+    let report = eval(uri, "new Promise(() => {})");
     assert!(!report.ok);
     let error = report.outcome.error.as_deref().unwrap_or_default();
-    assert!(error.contains("synchronously"), "{}", error);
-    assert!(error.contains("async/await"), "{}", error);
+    assert!(error.contains("never settled"), "{}", error);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rejected_snippet_reports_the_rejection() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://eval/rejected";
+    deploy(uri, "function init() {}");
+
+    let report = eval(uri, "(async () => { throw new Error('boom'); })()");
+    assert!(!report.ok);
+    let error = report.outcome.error.as_deref().unwrap_or_default();
+    assert!(error.contains("boom"), "{}", error);
 }
 
 #[tokio::test(flavor = "multi_thread")]

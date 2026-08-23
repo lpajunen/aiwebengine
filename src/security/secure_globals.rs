@@ -4633,7 +4633,7 @@ fn execute_message_handler(
     let rt = Runtime::new().map_err(|e| format!("Failed to create runtime: {}", e))?;
     let ctx = Context::full(&rt).map_err(|e| format!("Failed to create context: {}", e))?;
 
-    ctx.with(|ctx| -> Result<(), String> {
+    let setup = ctx.with(|ctx| -> Result<(), String> {
         // Set up minimal secure global functions for handler execution
         let user_context = UserContext::admin("dispatcher".to_string());
         // A listener is a plain handler invocation: it gets the same globals as
@@ -4664,34 +4664,47 @@ fn execute_message_handler(
         ctx.eval::<(), _>(script_content)
             .map_err(|e| format!("Script evaluation failed: {}", e))?;
 
-        // Parse message data back to JavaScript value
-        let message_data_value: rquickjs::Value = ctx
-            .json_parse(message_data_json)
-            .map_err(|e| format!("Failed to parse message data: {}", e))?;
-
-        // Create context object with message data
-        let context_obj = rquickjs::Object::new(ctx.clone())
-            .map_err(|e| format!("Failed to create context object: {}", e))?;
-        context_obj
-            .set("messageType", message_type)
-            .map_err(|e| format!("Failed to set messageType: {}", e))?;
-        context_obj
-            .set("messageData", message_data_value)
-            .map_err(|e| format!("Failed to set messageData: {}", e))?;
-
-        // Get the handler function
-        let global = ctx.globals();
-        let handler: rquickjs::Function = global
-            .get(handler_name)
-            .map_err(|e| format!("Handler function '{}' not found: {}", handler_name, e))?;
-
-        // Call the handler with the context
-        handler
-            .call::<_, ()>((context_obj,))
-            .map_err(|e| format!("Handler execution failed: {}", e))?;
-
         Ok(())
-    })
+    });
+    setup.map_err(|e| format!("Context execution failed: {}", e))?;
+
+    crate::js_engine::call_and_settle(
+        &rt,
+        &ctx,
+        &script_uri,
+        &format!("Message listener '{}'", handler_name),
+        crate::js_engine::TransactionHandling::Auto,
+        |ctx| {
+            // Parse message data back to JavaScript value
+            let message_data_value: rquickjs::Value = ctx
+                .json_parse(message_data_json)
+                .map_err(|e| format!("Failed to parse message data: {}", e))?;
+
+            // Create context object with message data
+            let context_obj = rquickjs::Object::new(ctx.clone())
+                .map_err(|e| format!("Failed to create context object: {}", e))?;
+            context_obj
+                .set("messageType", message_type)
+                .map_err(|e| format!("Failed to set messageType: {}", e))?;
+            context_obj
+                .set("messageData", message_data_value)
+                .map_err(|e| format!("Failed to set messageData: {}", e))?;
+
+            // Get the handler function
+            let global = ctx.globals();
+            let handler: rquickjs::Function = global
+                .get(handler_name)
+                .map_err(|e| format!("Handler function '{}' not found: {}", handler_name, e))?;
+
+            // Call the handler with the context
+            let result = handler
+                .call::<_, rquickjs::Value>((context_obj,))
+                .map_err(|e| format!("Handler execution failed: {}", e))?;
+
+            crate::js_engine::promise_resolve(ctx, result)
+        },
+        |_ctx, _value| Ok(()),
+    )
     .map_err(|e| format!("Context execution failed: {}", e))?;
 
     Ok(())

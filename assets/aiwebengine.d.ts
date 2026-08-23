@@ -1690,9 +1690,10 @@ declare function expect(actual: unknown): Matchers;
  * test modules — assets named `*.test.ts` (or `.js`, `.jsx`, `.tsx`) — which it
  * does on request via `POST /engine/run_tests?uri=<script>`.
  *
- * The body must be synchronous: scripts run without a job queue here, so host
- * calls like `fetch()` and `database.query()` block rather than yielding, and a
- * test returning a promise fails rather than reporting a pass it never earned.
+ * The body may be `async`: each case is settled before the next one starts, so
+ * the verdict reflects the assertions it reached. `await` does not make
+ * anything concurrent, though — host calls like `fetch()` and
+ * `database.query()` block rather than yielding.
  *
  * Each test module runs in its own context, so one file cannot see globals set
  * by another. Database writes are rolled back unless the run asks otherwise;
