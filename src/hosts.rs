@@ -27,6 +27,10 @@ pub struct HostConfig {
     default_host: String,
     /// Every host the engine serves, default first.
     all_hosts: Vec<String>,
+    /// The origin — scheme and authority — each entry of `all_hosts` was built
+    /// from, in the same order. A request's absolute URL needs the scheme, and
+    /// the Host header does not carry it.
+    all_origins: Vec<String>,
 }
 
 impl HostConfig {
@@ -36,13 +40,16 @@ impl HostConfig {
         let default_host = crate::config::base_url_authority(base_url).unwrap_or_default();
 
         let mut all_hosts = Vec::new();
+        let mut all_origins = Vec::new();
         if !default_host.is_empty() {
             all_hosts.push(default_host.clone());
+            all_origins.push(origin_of(base_url, &default_host));
         }
         for extra in additional_base_urls {
             if let Some(host) = crate::config::base_url_authority(extra)
                 && !all_hosts.contains(&host)
             {
+                all_origins.push(origin_of(extra, &host));
                 all_hosts.push(host);
             }
         }
@@ -50,6 +57,20 @@ impl HostConfig {
         Self {
             default_host,
             all_hosts,
+            all_origins,
+        }
+    }
+
+    /// The origin a request arriving on `host` should report as its own.
+    ///
+    /// Falls back to the default host's origin for anything unconfigured, the
+    /// same way [`canonical_host`](Self::canonical_host) does, so a direct-IP
+    /// or tunnel request still gets an absolute URL it can resolve against.
+    pub fn origin(&self, host: &str) -> String {
+        let host = host.trim().to_lowercase();
+        match self.all_hosts.iter().position(|h| *h == host) {
+            Some(index) => self.all_origins[index].clone(),
+            None => self.all_origins.first().cloned().unwrap_or_default(),
         }
     }
 
@@ -154,6 +175,21 @@ pub fn default_host() -> String {
 /// Every host the engine serves.
 pub fn all_hosts() -> Vec<String> {
     config().all_hosts.clone()
+}
+
+/// The scheme and authority of `base_url`, falling back to `https://{authority}`
+/// for a base URL that does not parse.
+fn origin_of(base_url: &str, authority: &str) -> String {
+    match url::Url::parse(base_url) {
+        Ok(parsed) => format!("{}://{}", parsed.scheme(), authority),
+        Err(_) => format!("https://{}", authority),
+    }
+}
+
+/// The origin a request arriving on `host` reports as its own. See
+/// [`HostConfig::origin`].
+pub fn origin(host: &str) -> String {
+    config().origin(host)
 }
 
 /// Map a request's Host header onto a configured host. See

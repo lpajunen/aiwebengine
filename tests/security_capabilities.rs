@@ -661,6 +661,7 @@ async fn test_secure_request_execution() {
         path: "/api/test".to_string(),
         method: "GET".to_string(),
         query_params: None,
+        url: None,
         form_data: None,
         raw_body: None,
         headers: HashMap::new(),

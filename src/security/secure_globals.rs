@@ -21,6 +21,10 @@ const CONSOLE_PRELUDE: &str = include_str!("../../assets/console_prelude.js");
 /// failures that throw rather than being returned — over the two host stores.
 const STORAGE_PRELUDE: &str = include_str!("../../assets/storage_prelude.js");
 
+/// `Headers`, `URLSearchParams`, and the methods `context.request` gains so a
+/// body a script receives reads the way a body it fetched does.
+const REQUEST_PRELUDE: &str = include_str!("../../assets/request_prelude.js");
+
 use crate::repository;
 use crate::scheduler;
 use crate::security::{
@@ -491,6 +495,19 @@ impl SecureGlobalContext {
                     "console",
                     "prelude",
                     &format!("console prelude failed to load: {}", e),
+                )
+            },
+        )?;
+
+        // `Headers` and `URLSearchParams` are ordinary globals, so they are
+        // installed for every context rather than only where a request exists;
+        // the request enhancement they back is applied when one is built.
+        crate::bytecode::eval_program(ctx, "engine://request-prelude", REQUEST_PRELUDE).map_err(
+            |e| {
+                rquickjs::Error::new_from_js_message(
+                    "request",
+                    "prelude",
+                    &format!("request prelude failed to load: {}", e),
                 )
             },
         )?;

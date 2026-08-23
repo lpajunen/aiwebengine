@@ -345,6 +345,8 @@ pub struct RequestExecutionParams {
     pub path: String,
     pub method: String,
     pub query_params: Option<HashMap<String, String>>,
+    /// Absolute URL of the request, origin included. See [`JsRequestContext::url`].
+    pub url: Option<String>,
     pub form_data: Option<HashMap<String, String>>,
     pub raw_body: Option<String>,
     pub headers: HashMap<String, String>,
@@ -427,6 +429,12 @@ impl HandlerInvocationKind {
 #[derive(Debug, Clone, Default)]
 pub struct JsRequestContext {
     pub path: Option<String>,
+    /// The absolute URL the request arrived on, origin included.
+    ///
+    /// `path` alone cannot say which host served a request, and the engine
+    /// serves several. This is also where the prelude reads the raw query
+    /// string from, which is the only place duplicate parameters survive.
+    pub url: Option<String>,
     pub method: Option<String>,
     pub headers: HashMap<String, String>,
     pub query_params: HashMap<String, String>,
@@ -523,6 +531,9 @@ impl JsHandlerContextBuilder {
         if let Some(path) = &request.path {
             request_obj.set("path", path)?;
         }
+        if let Some(url) = &request.url {
+            request_obj.set("url", url.as_str())?;
+        }
         if let Some(method) = &request.method {
             request_obj.set("method", method)?;
         }
@@ -587,6 +598,16 @@ impl JsHandlerContextBuilder {
         if let Some(auth_ctx) = auth_context {
             let auth_obj = crate::auth::AuthJsApi::create_auth_object(ctx, auth_ctx.clone())?;
             request_obj.set("auth", auth_obj)?;
+        }
+
+        // The request prelude gives this object the methods a handler expects of
+        // one — `text()`, `json()`, a `Headers` that does not care how the
+        // client capitalised a name. It is absent only in a context built
+        // before globals were installed, where the plain object is still fine.
+        let globals = ctx.globals();
+        if let Ok(enhance) = globals.get::<_, rquickjs::Function>("__enhanceRequest") {
+            let enhanced: rquickjs::Object = enhance.call((request_obj.clone(),))?;
+            return Ok(Some(enhanced));
         }
 
         Ok(Some(request_obj))
@@ -1469,6 +1490,7 @@ fn call_handler<'js>(
 
     let request_context = JsRequestContext {
         path: Some(params.path.clone()),
+        url: params.url.clone(),
         method: Some(params.method.clone()),
         headers: params.headers.clone(),
         query_params: params.query_params.clone().unwrap_or_default(),
@@ -1758,6 +1780,8 @@ pub fn execute_script_for_request(
 
             let request_context = JsRequestContext {
                 path: Some(path.to_string()),
+                // Not an HTTP request: nothing arrived on a URL.
+                url: None,
                 method: Some(method.to_string()),
                 headers: HashMap::new(),
                 query_params: query_params.cloned().unwrap_or_default(),
@@ -2308,6 +2332,7 @@ pub fn execute_graphql_resolver(params: GraphqlResolverExecutionParams) -> Resul
 
             let request_context = JsRequestContext {
                 path: Some("/graphql".to_string()),
+                url: None,
                 method: Some("POST".to_string()),
                 headers: HashMap::new(),
                 query_params: HashMap::new(),
@@ -2596,6 +2621,7 @@ pub fn execute_mcp_tool_handler(
 
             let request_context = JsRequestContext {
                 path: Some("/mcp/tools/call".to_string()),
+                url: None,
                 method: Some("POST".to_string()),
                 headers: HashMap::new(),
                 query_params: HashMap::new(),
@@ -2753,6 +2779,7 @@ pub fn execute_stream_customization_function(
         |ctx| -> Result<rquickjs::Promise<'_>, String> {
             let request_context = JsRequestContext {
                 path: Some(path_owned.clone()),
+                url: None,
                 method: Some("GET".to_string()),
                 headers: HashMap::new(),
                 query_params: query_params_owned.clone(),
@@ -4832,6 +4859,7 @@ mod tests {
             path: "/test".to_string(),
             method: "GET".to_string(),
             query_params: None,
+            url: None,
             form_data: None,
             raw_body: None,
             headers: HashMap::new(),
@@ -4868,6 +4896,7 @@ mod tests {
             path: "/test".to_string(),
             method: "GET".to_string(),
             query_params: None,
+            url: None,
             form_data: None,
             raw_body: None,
             headers: HashMap::new(),
@@ -4905,6 +4934,7 @@ mod tests {
             path: "/test".to_string(),
             method: "GET".to_string(),
             query_params: None,
+            url: None,
             form_data: None,
             raw_body: None,
             headers: HashMap::new(),
@@ -4953,6 +4983,7 @@ This is **bold** text.`;
             path: "/test".to_string(),
             method: "GET".to_string(),
             query_params: None,
+            url: None,
             form_data: None,
             raw_body: None,
             headers: HashMap::new(),
@@ -5008,6 +5039,7 @@ This is **bold** text.`;
             path: "/test".to_string(),
             method: "GET".to_string(),
             query_params: None,
+            url: None,
             form_data: None,
             raw_body: None,
             headers: HashMap::new(),
@@ -5060,6 +5092,7 @@ This is **bold** text.`;
             path: "/test".to_string(),
             method: "GET".to_string(),
             query_params: None,
+            url: None,
             form_data: None,
             raw_body: None,
             headers: HashMap::new(),
@@ -5112,6 +5145,7 @@ This is **bold** text.`;
             path: "/test".to_string(),
             method: "GET".to_string(),
             query_params: None,
+            url: None,
             form_data: None,
             raw_body: None,
             headers: HashMap::new(),
@@ -5168,6 +5202,7 @@ This is **bold** text.`;
             path: "/test".to_string(),
             method: "GET".to_string(),
             query_params: None,
+            url: None,
             form_data: None,
             raw_body: None,
             headers: HashMap::new(),
@@ -5238,6 +5273,7 @@ function hello() {
             path: "/test".to_string(),
             method: "GET".to_string(),
             query_params: None,
+            url: None,
             form_data: None,
             raw_body: None,
             headers: HashMap::new(),
@@ -5331,6 +5367,7 @@ function hello() {
             path: "/test".to_string(),
             method: "GET".to_string(),
             query_params: None,
+            url: None,
             form_data: None,
             raw_body: None,
             headers: HashMap::new(),
@@ -5398,6 +5435,7 @@ function hello() {
                 ("param1".to_string(), "value1".to_string()),
                 ("param2".to_string(), "value2".to_string()),
             ])),
+            url: None,
             form_data: None,
             raw_body: None,
             headers: HashMap::new(),
@@ -5453,6 +5491,7 @@ function hello() {
             path: "/test".to_string(),
             method: "GET".to_string(),
             query_params: None, // No query params
+            url: None,
             form_data: None,
             raw_body: None,
             headers: HashMap::new(),
@@ -5512,6 +5551,7 @@ function hello() {
             path: "/api/users/123/posts/456".to_string(),
             method: "GET".to_string(),
             query_params: None,
+            url: None,
             form_data: None,
             raw_body: None,
             headers: HashMap::new(),
@@ -5627,6 +5667,7 @@ function hello() {
                 "existing".to_string(),
                 "value1".to_string(),
             )])),
+            url: None,
             form_data: None,
             raw_body: None,
             headers: HashMap::new(),

@@ -95,6 +95,7 @@ fn one_request(uri: &str) {
         handler_name: "benchHandler".to_string(),
         path: "/bench".to_string(),
         method: "GET".to_string(),
+        url: None,
         query_params: None,
         form_data: None,
         raw_body: None,

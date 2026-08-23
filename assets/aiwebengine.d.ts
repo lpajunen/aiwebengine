@@ -104,8 +104,16 @@ interface HttpRequest {
   /** HTTP method (GET, POST, PUT, DELETE, etc.) */
   method: string;
 
-  /** Request headers as key-value pairs */
-  headers: Record<string, string>;
+  /**
+   * Request headers.
+   *
+   * A {@link Headers}, so `headers.get("content-type")` finds a header the
+   * client spelled `Content-Type`. It still reads as the plain object it used
+   * to be — `headers["content-type"]`, `Object.keys(headers)` and spreading all
+   * work — so existing code keeps working and stops depending on the
+   * capitalisation the client happened to choose.
+   */
+  headers: Headers & Record<string, string>;
 
   /** URL query parameters as key-value pairs */
   query: Record<string, string>;
@@ -118,6 +126,39 @@ interface HttpRequest {
 
   /** Raw request body as string */
   body: string;
+
+  /**
+   * The absolute URL the request arrived on, origin included.
+   *
+   * `path` cannot say which of the engine's hosts served a request; this can.
+   * Present only for HTTP routes — a GraphQL resolver, MCP tool or stream
+   * customization has no URL behind it.
+   * @example
+   * console.log(req.url); // "https://example.com/api/notes?tag=a"
+   */
+  url?: string;
+
+  /**
+   * The query string, parsed. Unlike {@link HttpRequest.query} — a plain object
+   * built from a map — this keeps a parameter that appeared more than once.
+   * @example
+   * req.searchParams.getAll("tag"); // ["a", "b"] for ?tag=a&tag=b
+   */
+  searchParams: URLSearchParams;
+
+  /**
+   * The body, as text. Mirrors what a `fetch` response answers, so a body a
+   * script receives reads the way a body it fetched does.
+   */
+  text(): string;
+
+  /**
+   * The body, parsed as JSON. Throws where the parse is asked for, not on the
+   * way in from a request that arrived perfectly well and was not JSON.
+   * @example
+   * const { name } = req.json() as { name: string };
+   */
+  json(): unknown;
 
   /** Uploaded files from multipart form data */
   files: Array<{
@@ -559,6 +600,81 @@ interface Storage {
 
   /** Named access to a stored value. */
   [name: string]: any;
+}
+
+/**
+ * The WHATWG `Headers` interface. Header names are case-insensitive, and a
+ * header that arrived more than once reads as its values joined with ", ".
+ *
+ * @example
+ * const headers = new Headers({ "Content-Type": "application/json" });
+ * headers.get("content-type"); // "application/json"
+ */
+declare class Headers {
+  constructor(init?: Headers | Record<string, string> | [string, string][]);
+  /** The value under `name`, or `null` if there is none. */
+  get(name: string): string | null;
+  /** Whether `name` is present. */
+  has(name: string): boolean;
+  /** Set `name`, replacing any previous value. */
+  set(name: string, value: string): void;
+  /** Add `value` under `name`, joining any existing value with ", ". */
+  append(name: string, value: string): void;
+  /** Remove `name`. */
+  delete(name: string): void;
+  forEach(
+    callback: (value: string, name: string, parent: Headers) => void,
+    thisArg?: any,
+  ): void;
+  keys(): IterableIterator<string>;
+  values(): IterableIterator<string>;
+  entries(): IterableIterator<[string, string]>;
+  [Symbol.iterator](): IterableIterator<[string, string]>;
+}
+
+/**
+ * The WHATWG `URLSearchParams` interface. A name may appear more than once,
+ * which is what {@link URLSearchParams.getAll} is for.
+ *
+ * @example
+ * const params = new URLSearchParams("tag=a&tag=b");
+ * params.getAll("tag"); // ["a", "b"]
+ * params.get("tag");    // "a"
+ */
+declare class URLSearchParams {
+  constructor(
+    init?:
+      | string
+      | URLSearchParams
+      | Record<string, string>
+      | [string, string][],
+  );
+  /** How many name/value pairs there are, repeats counted separately. */
+  readonly size: number;
+  /** The first value under `name`, or `null`. */
+  get(name: string): string | null;
+  /** Every value under `name`, in the order they appeared. */
+  getAll(name: string): string[];
+  /** Whether `name` is present. */
+  has(name: string): boolean;
+  /** Add another `name`/`value` pair. */
+  append(name: string, value: string): void;
+  /** Replace the first `name` and drop the rest. */
+  set(name: string, value: string): void;
+  /** Remove every pair under `name`. */
+  delete(name: string): void;
+  /** Sort by name, keeping repeated values in the order they arrived. */
+  sort(): void;
+  forEach(
+    callback: (value: string, name: string, parent: URLSearchParams) => void,
+    thisArg?: any,
+  ): void;
+  keys(): IterableIterator<string>;
+  values(): IterableIterator<string>;
+  entries(): IterableIterator<[string, string]>;
+  [Symbol.iterator](): IterableIterator<[string, string]>;
+  /** The pairs, re-encoded as a query string. */
+  toString(): string;
 }
 
 /**

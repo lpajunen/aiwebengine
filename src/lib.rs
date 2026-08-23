@@ -2652,6 +2652,17 @@ async fn handle_dynamic_request(
     let query_string = req.uri().query().map(|s| s.to_string()).unwrap_or_default();
     let query_params = parse_query_string(&query_string);
 
+    // The absolute URL the request arrived on. `path` cannot say which of the
+    // engine's hosts served it, and the query string here is the only copy that
+    // still has duplicate parameters in it — `query_params` collapses them.
+    let request_url = format!(
+        "{}{}{}{}",
+        hosts::origin(&canonical_host),
+        path,
+        if query_string.is_empty() { "" } else { "?" },
+        query_string
+    );
+
     // Extract request ID from extensions before consuming the request
     let request_id = req
         .extensions()
@@ -2794,6 +2805,7 @@ async fn handle_dynamic_request(
             path: path_clone.clone(),
             method: request_method.clone(),
             query_params: Some(query_params.clone()),
+            url: Some(request_url.clone()),
             form_data: Some(form_data.clone()),
             raw_body: raw_body.clone(),
             headers: headers_for_worker.clone(),
