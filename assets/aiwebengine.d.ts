@@ -1055,31 +1055,64 @@ interface FetchOptions {
 }
 
 /**
- * Fetch response
+ * Fetch response.
+ *
+ * Usable three ways, so browser habits work without breaking the scripts
+ * written against the JSON string `fetch` used to return:
+ *
+ * - `await fetch(url)` — it is thenable
+ * - `fetch(url).status` — the fields are really there
+ * - `JSON.parse(fetch(url))` — `toString` yields the original envelope
  */
 interface FetchResponse {
   /** HTTP status code */
   status: number;
+
+  /** Whether the status was a 2xx */
+  ok: boolean;
 
   /** Response body as string */
   body: string;
 
   /** Response headers */
   headers: Record<string, string>;
+
+  /** The body, as text. */
+  text(): string;
+
+  /** The body, parsed as JSON. Throws if the body is not JSON. */
+  json(): unknown;
+
+  /**
+   * The raw JSON envelope — status, ok, headers and body — which is what
+   * `fetch()` itself used to return. `JSON.parse(fetch(url))` still works
+   * because `JSON.parse` converts its argument with ToString first.
+   */
+  toString(): string;
 }
 
 /**
- * HTTP client with secret injection support
+ * HTTP client with secret injection support.
+ *
+ * The request is already finished by the time this returns: host calls block
+ * rather than yielding. `await` here sequences, it does not parallelise, so
+ * `Promise.all` over several fetches gives the right answers and runs them one
+ * after another.
+ *
  * @param url - URL to fetch (supports {{SECRET_NAME}} syntax for secret injection)
  * @param options - Fetch options
- * @returns Fetch response as JSON string
+ * @returns The response, readable directly or via `await`
  * @example
- * // Simple GET request
+ * // Browser-shaped
+ * const response = await fetch("https://api.example.com/data");
+ * const data = await response.json();
+ *
+ * // Without awaiting — the same object
  * const response = fetch("https://api.example.com/data");
- * const data = JSON.parse(response);
+ * if (response.ok) { const data = response.json(); }
  *
  * // POST with secret injection
- * const response = fetch("https://api.example.com/endpoint", {
+ * const response = await fetch("https://api.example.com/endpoint", {
  *   method: "POST",
  *   headers: {
  *     "Authorization": "Bearer {{API_TOKEN}}",
@@ -1088,7 +1121,10 @@ interface FetchResponse {
  *   body: JSON.stringify({ key: "value" })
  * });
  */
-declare function fetch(url: string, options?: FetchOptions): string;
+declare function fetch(
+  url: string,
+  options?: FetchOptions,
+): FetchResponse & PromiseLike<FetchResponse>;
 
 // ============================================================================
 // Database API (Script-Scoped Table Management)

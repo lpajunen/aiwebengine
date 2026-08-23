@@ -4,6 +4,10 @@ use rquickjs::{Function, Result as JsResult, function::Opt};
 use std::collections::HashMap;
 use tracing::{debug, error, warn};
 
+/// The JavaScript half of `fetch()`: wraps the Rust call's JSON envelope in a
+/// response that can be awaited, read as an object, or parsed as a string.
+const FETCH_PRELUDE: &str = include_str!("../../assets/fetch_prelude.js");
+
 use crate::repository;
 use crate::scheduler;
 use crate::security::{
@@ -2640,7 +2644,25 @@ impl SecureGlobalContext {
             },
         )?;
 
-        global.set("fetch", fetch_fn)?;
+        // The Rust half is installed under a private name. `fetch()` itself is
+        // defined by the prelude below, which wraps this envelope in something
+        // that can be awaited, read as an object, or parsed as the string this
+        // used to return.
+        global.set("__hostFetch", fetch_fn)?;
+
+        // Compiled once per process and cached under a stable key, the way the
+        // test prelude is. Installing it here covers every context that gets
+        // host functions, rather than each entry point remembering to do it.
+        crate::bytecode::eval_program(ctx, "engine://fetch-prelude", FETCH_PRELUDE).map_err(
+            |e| {
+                rquickjs::Error::new_from_js_message(
+                    "fetch",
+                    "prelude",
+                    &format!("fetch prelude failed to load: {}", e),
+                )
+            },
+        )?;
+
         debug!("fetch() function initialized with secret injection support");
 
         Ok(())
