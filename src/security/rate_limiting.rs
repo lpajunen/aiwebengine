@@ -541,10 +541,32 @@ impl RateLimiter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::sync::Mutex;
+    use std::time::Instant;
     use tokio::time::{Duration as TokioDuration, sleep};
 
-    static RATE_LIMIT_TEST_LOCK: Mutex<()> = Mutex::const_new(());
+    const TEST_DB_URL: &str = "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine";
+
+    /// Every DB-backed test gets its own bucket key.
+    ///
+    /// The `rate_limits` table is global state shared by every test process, and
+    /// nextest runs each test in its own process — so an in-process mutex cannot
+    /// serialise these. A key nobody else uses is what actually isolates them.
+    fn unique_key() -> RateLimitKey {
+        RateLimitKey::IpAddress(format!("test-{}", uuid::Uuid::new_v4()))
+    }
+
+    async fn test_pool() -> PgPool {
+        PgPool::connect(TEST_DB_URL)
+            .await
+            .expect("test Postgres must be running (make postgres-local)")
+    }
+
+    async fn drop_bucket(pool: &PgPool, key: &RateLimitKey) {
+        let _ = sqlx::query("DELETE FROM rate_limits WHERE key = $1")
+            .bind(key.as_string())
+            .execute(pool)
+            .await;
+    }
 
     #[test]
     fn test_token_bucket_creation() {
@@ -569,16 +591,27 @@ mod tests {
     async fn test_token_refill() {
         let mut bucket = TokenBucket::new(10, 10.0); // 10 tokens per second
 
-        // Consume all tokens
+        // Consume all tokens. `before` is taken first so it can only predate the
+        // bucket's own refill clock, which keeps the upper bound below conservative.
+        let before = Instant::now();
         assert!(bucket.consume(10));
         assert_eq!(bucket.available_tokens(), 0.0);
 
         // Wait for refill
         sleep(TokioDuration::from_millis(100)).await;
-
-        // Should have approximately 1 token after 0.1 seconds
         let available = bucket.available_tokens();
-        assert!((0.5..=1.5).contains(&available));
+        let elapsed = before.elapsed().as_secs_f64();
+
+        // The sleep lasts at least 100ms, so at 10 tokens/s at least one token is
+        // back. The upper bound tracks the time that really elapsed rather than the
+        // time we asked for — under parallel test load the sleep can overshoot, and
+        // a fixed ceiling of 1.5 tokens is what made this fail on a loaded machine.
+        assert!(available >= 0.9, "expected >= 0.9 tokens, got {available}");
+        assert!(
+            available <= elapsed * 10.0 + 0.1,
+            "expected <= {} tokens after {elapsed:.3}s, got {available}",
+            elapsed * 10.0 + 0.1
+        );
     }
 
     #[test]
@@ -595,92 +628,79 @@ mod tests {
 
     #[tokio::test]
     async fn test_rate_limiter_basic() {
-        let _lock = RATE_LIMIT_TEST_LOCK.lock().await;
-        let pool = sqlx::PgPool::connect_lazy(
-            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-        )
-        .unwrap();
-        let limiter = RateLimiter::new(pool);
-        let key = RateLimitKey::IpAddress("192.168.1.1".to_string());
+        let pool = test_pool().await;
+        let limiter = RateLimiter::new(pool.clone());
+        let key = unique_key();
 
         let result = limiter.check_rate_limit(key.clone(), 1).await;
         assert!(result.allowed);
         assert_eq!(result.tokens_consumed, 1);
+
+        drop_bucket(&pool, &key).await;
     }
 
     #[tokio::test]
     async fn test_rate_limiter_exceed_limit() {
-        let _lock = RATE_LIMIT_TEST_LOCK.lock().await;
-        let pool = sqlx::PgPool::connect(
-            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-        )
-        .await
-        .unwrap();
-        sqlx::query("DELETE FROM rate_limits WHERE key = 'ip:192.168.1.2'")
-            .execute(&pool)
-            .await
-            .unwrap();
-
-        let limiter = RateLimiter::new(pool);
-        let key = RateLimitKey::IpAddress("192.168.1.2".to_string());
+        let pool = test_pool().await;
+        let limiter = RateLimiter::new(pool.clone());
+        let key = unique_key();
 
         // Consume all tokens at once (IP config has 60 max tokens)
         let result = limiter.check_rate_limit(key.clone(), 60).await;
         assert!(result.allowed);
 
-        // Next request should be denied
-        let result = limiter.check_rate_limit(key.clone(), 1).await;
+        // Ask for 30 rather than 1: the bucket is empty and refills at 1 token/s,
+        // so this stays denied even if the two calls end up 30 seconds apart. At
+        // 1 token the assertion silently depended on the test being scheduled
+        // within a second of the previous line.
+        let result = limiter.check_rate_limit(key.clone(), 30).await;
         assert!(!result.allowed);
         assert!(result.retry_after.is_some());
+
+        drop_bucket(&pool, &key).await;
     }
 
     #[tokio::test]
     async fn test_multiple_rate_limits() {
-        let _lock = RATE_LIMIT_TEST_LOCK.lock().await;
-        let pool = sqlx::PgPool::connect_lazy(
-            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-        )
-        .unwrap();
-        let limiter = RateLimiter::new(pool);
-        let keys = vec![
-            RateLimitKey::IpAddress("192.168.1.1".to_string()),
-            RateLimitKey::UserId("user123".to_string()),
-        ];
+        let pool = test_pool().await;
+        let limiter = RateLimiter::new(pool.clone());
+        let ip_key = unique_key();
+        let user_key = RateLimitKey::UserId(format!("test-{}", uuid::Uuid::new_v4()));
 
-        let results = limiter.check_multiple_rate_limits(keys, 1).await;
+        let results = limiter
+            .check_multiple_rate_limits(vec![ip_key.clone(), user_key.clone()], 1)
+            .await;
         assert_eq!(results.len(), 2);
         assert!(results[0].allowed);
         assert!(results[1].allowed);
+
+        drop_bucket(&pool, &ip_key).await;
+        drop_bucket(&pool, &user_key).await;
     }
 
     #[tokio::test]
     async fn test_rate_limiter_statistics() {
-        let _lock = RATE_LIMIT_TEST_LOCK.lock().await;
-        let pool = sqlx::PgPool::connect(
-            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
-        )
-        .await
-        .unwrap();
-        sqlx::query("DELETE FROM rate_limits")
-            .execute(&pool)
-            .await
-            .unwrap();
-
-        let limiter = RateLimiter::new(pool);
-        let key = RateLimitKey::IpAddress("192.168.1.1".to_string());
+        let pool = test_pool().await;
+        let limiter = RateLimiter::new(pool.clone());
+        let key = unique_key();
 
         // Make some requests
         for _ in 0..5 {
             limiter.check_rate_limit(key.clone(), 1).await;
         }
 
+        // Read back only this test's bucket. Wiping the whole table here used to
+        // knock the counters out from under any test running beside this one.
         let stats = limiter.get_statistics().await;
-        assert!(stats.contains_key("ip:192.168.1.1"));
-
-        let (total, rejected, success_rate) = stats["ip:192.168.1.1"];
+        let (total, rejected, success_rate) = stats
+            .get(&key.as_string())
+            .copied()
+            .expect("statistics should include this test's bucket");
         assert_eq!(total, 5);
         assert_eq!(rejected, 0);
         assert_eq!(success_rate, 100.0);
+
+        drop_bucket(&pool, &key).await;
     }
 
     #[tokio::test]
@@ -698,7 +718,7 @@ mod tests {
         };
         limiter.update_config("ip", config);
 
-        let key = RateLimitKey::IpAddress("192.168.1.1".to_string());
+        let key = unique_key();
 
         // Should allow unlimited requests
         for _ in 0..1000 {

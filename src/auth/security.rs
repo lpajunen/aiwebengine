@@ -305,11 +305,20 @@ mod tests {
 
         let context = AuthSecurityContext::new(auditor, rate_limiter, csrf, encryption);
 
-        let ip = "192.168.1.1";
+        // The bucket behind this key lives in the `rate_limits` table, which every
+        // test process shares. On a fixed IP the 10 tokens spent here accumulate
+        // across runs and retries until the 60-token bucket is empty and the test
+        // starts failing; a key of its own keeps each run independent.
+        let ip = format!("test-{}", uuid::Uuid::new_v4());
 
         // First requests should succeed
         for _ in 0..10 {
-            assert!(context.check_auth_rate_limit(ip).await);
+            assert!(context.check_auth_rate_limit(&ip).await);
         }
+
+        let _ = sqlx::query("DELETE FROM rate_limits WHERE key = $1")
+            .bind(format!("ip:{}", ip))
+            .execute(&pool)
+            .await;
     }
 }

@@ -281,6 +281,15 @@ async fn test_validation_enforces_script_size_limits() {
     );
 }
 
+/// Drop a test's rate limit bucket so the shared `rate_limits` table does not
+/// accumulate a row per run.
+async fn delete_bucket(pool: &sqlx::PgPool, key: &RateLimitKey) {
+    let _ = sqlx::query("DELETE FROM rate_limits WHERE key = $1")
+        .bind(key.as_string())
+        .execute(pool)
+        .await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_rate_limiting_blocks_excessive_requests() {
     if should_skip_integration_tests() {
@@ -290,8 +299,11 @@ async fn test_rate_limiting_blocks_excessive_requests() {
         "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
     )
     .unwrap();
-    let limiter = RateLimiter::new(pool);
-    let key = RateLimitKey::IpAddress("test_client".to_string());
+    let limiter = RateLimiter::new(pool.clone());
+    // A key of this test's own. The bucket lives in the `rate_limits` table, so a
+    // fixed key carries its drained state into the next run — and this test drains
+    // it on purpose, which left the run after it failing on the very first assert.
+    let key = RateLimitKey::IpAddress(format!("test_client-{}", uuid::Uuid::new_v4()));
 
     // IP limits are 1 token per second with max 60
     // First request should succeed
@@ -300,16 +312,19 @@ async fn test_rate_limiting_blocks_excessive_requests() {
         assert!(result.allowed, "Request {} should be allowed", i + 1);
     }
 
-    // After consuming many tokens quickly, should be blocked
-    for _ in 0..60 {
-        let _ = limiter.check_rate_limit(key.clone(), 1).await;
-    }
+    // Drain the rest of the bucket in one call, so the refill that happens while
+    // the requests are in flight cannot keep it above the limit.
+    let _ = limiter.check_rate_limit(key.clone(), 57).await;
 
-    let blocked = limiter.check_rate_limit(key.clone(), 1).await;
+    // Ask for 30: the bucket is empty and refills at 1 token/s, so this stays
+    // denied no matter how slowly the test itself is scheduled.
+    let blocked = limiter.check_rate_limit(key.clone(), 30).await;
     assert!(
         !blocked.allowed,
         "Should be rate limited after many requests"
     );
+
+    delete_bucket(&pool, &key).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -321,14 +336,16 @@ async fn test_rate_limiting_resets_after_window() {
         "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
     )
     .unwrap();
-    let limiter = RateLimiter::new(pool);
-    let key = RateLimitKey::IpAddress("test_client_reset".to_string());
+    let limiter = RateLimiter::new(pool.clone());
+    let key = RateLimitKey::IpAddress(format!("test_client_reset-{}", uuid::Uuid::new_v4()));
 
-    // Use up many tokens quickly
-    for _ in 0..60 {
-        let _ = limiter.check_rate_limit(key.clone(), 1).await;
-    }
-    let result = limiter.check_rate_limit(key.clone(), 1).await;
+    // Use up the whole bucket in one call
+    let _ = limiter.check_rate_limit(key.clone(), 60).await;
+
+    // A 30-token request cannot be satisfied by the 1 token/s refill for the next
+    // 30 seconds, so this is a stable "still blocked" check. It is also refused
+    // rather than served, which leaves the bucket empty for the refill below.
+    let result = limiter.check_rate_limit(key.clone(), 30).await;
     assert!(!result.allowed, "Should be blocked after using all tokens");
 
     // Wait for some tokens to refill (1 token per second)
@@ -340,6 +357,8 @@ async fn test_rate_limiting_resets_after_window() {
         result_after.allowed,
         "Should be allowed after tokens refill"
     );
+
+    delete_bucket(&pool, &key).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
