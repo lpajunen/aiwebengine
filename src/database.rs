@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use sqlx::postgres::{PgPool, PgPoolOptions};
-use sqlx::{Postgres, Transaction};
+use sqlx::{PgConnection, Postgres, Transaction};
 use std::cell::RefCell;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -231,6 +231,76 @@ pub fn initialize_global_database(database: Arc<Database>) -> bool {
     GLOBAL_DATABASE.set(database).is_ok()
 }
 
+/// The limits every pooled connection carries for its whole session.
+///
+/// Postgres is the only party in this system that can interrupt a database
+/// call. The runtime's interrupt handler enforces a script's budget between
+/// bytecode operations, and a host call is opaque to it; the outer timeout on
+/// a request abandons the blocking thread but cannot stop the work running on
+/// it. So a statement waiting on a lock waits forever, holding whatever locks
+/// it already took, with every later writer queued behind it — the shape of a
+/// wedge that outlives the request, the handler, and often the operator's
+/// patience.
+///
+/// These three settings are the floor under all of that. They do not make a
+/// blocked call correct; they make it finite, and turn a silent cluster-wide
+/// stall into an error a script can catch and a line in the log.
+///
+/// `0` disables a setting, exactly as it does in Postgres.
+#[derive(Clone, Copy)]
+struct SessionGuards {
+    lock_timeout_ms: u64,
+    statement_timeout_ms: u64,
+    idle_in_transaction_timeout_ms: u64,
+}
+
+impl SessionGuards {
+    fn from_config(config: &RepositoryConfig) -> Self {
+        Self {
+            lock_timeout_ms: config.lock_timeout_ms,
+            statement_timeout_ms: config.statement_timeout_ms,
+            idle_in_transaction_timeout_ms: config.idle_in_transaction_timeout_ms,
+        }
+    }
+
+    /// Every guard off. What migrations run under.
+    fn none() -> Self {
+        Self {
+            lock_timeout_ms: 0,
+            statement_timeout_ms: 0,
+            idle_in_transaction_timeout_ms: 0,
+        }
+    }
+
+    /// The guards as Postgres setting names and values.
+    fn settings(&self) -> [(&'static str, u64); 3] {
+        [
+            ("lock_timeout", self.lock_timeout_ms),
+            ("statement_timeout", self.statement_timeout_ms),
+            (
+                "idle_in_transaction_session_timeout",
+                self.idle_in_transaction_timeout_ms,
+            ),
+        ]
+    }
+
+    /// Overrides what a session already connected with.
+    ///
+    /// One statement each: `SET` goes through the extended query protocol,
+    /// which carries a single statement per round trip.
+    async fn apply(self, conn: &mut PgConnection) -> Result<(), sqlx::Error> {
+        for (setting, milliseconds) in self.settings() {
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "SET {} = {}",
+                setting, milliseconds
+            )))
+            .execute(&mut *conn)
+            .await?;
+        }
+        Ok(())
+    }
+}
+
 /// Database connection pool manager
 pub struct Database {
     pool: PgPool,
@@ -262,10 +332,25 @@ impl Database {
         info!("Attempting to connect to database: {}", safe_conn_string);
 
         let max_connections = config.max_connections;
+
+        // Carried in the startup packet rather than set by a callback after
+        // connecting: the server applies them before it will run anything, so
+        // there is no window in which a connection is live but unguarded, and
+        // no round trip spent on saying so.
+        let guards = SessionGuards::from_config(config);
+        let connect_options = connection_string
+            .parse::<sqlx::postgres::PgConnectOptions>()
+            .context("Failed to parse the database connection string")?
+            .options(
+                guards
+                    .settings()
+                    .map(|(setting, milliseconds)| (setting, milliseconds.to_string())),
+            );
+
         let pool = PgPoolOptions::new()
             .max_connections(max_connections)
             .acquire_timeout(Duration::from_millis(5000)) // Increased for tests
-            .connect(connection_string)
+            .connect_with(connect_options)
             .await
             .context("Failed to connect to database")?;
 
@@ -278,12 +363,37 @@ impl Database {
         Ok(Self { pool })
     }
 
-    /// Run database migrations
+    /// Run database migrations.
+    ///
+    /// Migrations run with the session guards cleared. They are the one place
+    /// where a long statement and a long lock wait are both expected —
+    /// rewriting a large table, or waiting out the traffic already on it — and
+    /// a `statement_timeout` that cancelled one partway would leave the schema
+    /// between versions. The guards exist to bound a script's work, not the
+    /// engine's own.
     pub async fn migrate(&self) -> Result<()> {
         info!("Running database migrations...");
 
+        // Detached rather than borrowed: a connection whose guards have been
+        // cleared must not go back to the pool, where the next script to
+        // acquire it would run unbounded.
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .context("Failed to acquire a connection for migrations")?
+            .detach();
+
+        SessionGuards::none()
+            .apply(&mut conn)
+            .await
+            .context("Failed to clear session guards for migrations")?;
+
+        // `run_direct` rather than `run`: the latter is generic over `Acquire`,
+        // and the higher-ranked lifetime that introduces defeats `Send`
+        // inference for every future that transitively awaits this one.
         sqlx::migrate!("./migrations")
-            .run(&self.pool)
+            .run_direct(None, &mut conn, false)
             .await
             .context("Failed to run migrations")?;
 

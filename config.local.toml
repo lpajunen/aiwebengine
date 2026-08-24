@@ -84,6 +84,23 @@ log_retention_hours = 24
 # Enable automatic log pruning
 auto_prune_logs = true
 
+# Session guards, in milliseconds. Postgres is the only party that can
+# interrupt a database call: a script's execution budget is enforced between
+# JavaScript operations and cannot reach inside a host call, and the request
+# timeout abandons the thread without stopping the work on it. Without these,
+# one statement blocked on a lock waits forever while holding its own locks,
+# and every later writer queues behind it. 0 disables a guard.
+#
+# How long a statement waits for a lock before giving up. Set inside the
+# JavaScript budget, so a handler learns it lost the race with time to answer.
+lock_timeout_ms = 5000
+# How long any single statement may run. A backstop, not a policy — migrations
+# are exempt.
+statement_timeout_ms = 30000
+# How long a transaction may sit idle before Postgres ends it and releases its
+# locks. This is what reaps a transaction whose handler was abandoned mid-run.
+idle_in_transaction_timeout_ms = 300000
+
 [security]
 # Development mode: anonymous users get elevated capabilities (write/delete
 # scripts and assets) for local testing. NEVER enable in production.

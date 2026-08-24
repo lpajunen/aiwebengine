@@ -168,6 +168,18 @@ fn default_db_max_connections() -> u32 {
     20
 }
 
+fn default_lock_timeout_ms() -> u64 {
+    5_000
+}
+
+fn default_statement_timeout_ms() -> u64 {
+    30_000
+}
+
+fn default_idle_in_transaction_timeout_ms() -> u64 {
+    300_000
+}
+
 /// Repository configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepositoryConfig {
@@ -203,6 +215,46 @@ pub struct RepositoryConfig {
     /// instances when sizing the server's own `max_connections`.
     #[serde(default = "default_db_max_connections")]
     pub max_connections: u32,
+
+    /// How long a statement waits for a lock before giving up, in milliseconds.
+    /// `0` disables the limit, as it does in Postgres.
+    ///
+    /// Without this a statement blocked on a lock waits forever, and nothing in
+    /// the engine can interrupt it: the wait happens inside a host call, where
+    /// the interrupt handler that enforces a script's budget cannot reach, and
+    /// the outer timeout only abandons the thread. One blocked statement then
+    /// holds its own locks indefinitely and every later writer queues behind
+    /// it. This turns that from a permanent wedge into an error a script can
+    /// see and a log line an operator can find.
+    ///
+    /// The default sits well inside the JavaScript execution budget, so a
+    /// handler learns it lost the race with time left to answer.
+    #[serde(default = "default_lock_timeout_ms")]
+    pub lock_timeout_ms: u64,
+
+    /// How long any single statement may run before Postgres cancels it, in
+    /// milliseconds. `0` disables the limit.
+    ///
+    /// A backstop rather than a policy: the JavaScript budget already bounds
+    /// what a handler can ask for, so this is aimed at the query no timeout
+    /// upstream managed to bound. Migrations are exempt — see
+    /// [`Database::migrate`].
+    #[serde(default = "default_statement_timeout_ms")]
+    pub statement_timeout_ms: u64,
+
+    /// How long a transaction may sit idle before Postgres ends it and releases
+    /// its locks, in milliseconds. `0` disables the limit.
+    ///
+    /// This is what reaps a transaction whose handler was abandoned mid-run: a
+    /// budget kill does not unwind the JavaScript stack, so the commit or
+    /// rollback at the handler boundary never runs and the transaction's locks
+    /// outlive the request that took them.
+    ///
+    /// Deliberately generous. A transaction that has been idle this long is
+    /// leaked by any reading, and the bound that should actually fire first is
+    /// the one `database.beginTransaction(timeoutMs)` asks for.
+    #[serde(default = "default_idle_in_transaction_timeout_ms")]
+    pub idle_in_transaction_timeout_ms: u64,
 }
 
 /// Security configuration
@@ -434,6 +486,9 @@ impl Default for RepositoryConfig {
             auto_prune_logs: true,
             max_upload_size_bytes: 10 * 1024 * 1024, // 10MB
             max_connections: default_db_max_connections(),
+            lock_timeout_ms: default_lock_timeout_ms(),
+            statement_timeout_ms: default_statement_timeout_ms(),
+            idle_in_transaction_timeout_ms: default_idle_in_transaction_timeout_ms(),
         }
     }
 }
