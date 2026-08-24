@@ -1318,6 +1318,41 @@ interface Database {
   createTable(tableName: string): DatabaseAnswer;
 
   /**
+   * Bring a table to the shape you describe, whatever shape it is in now.
+   *
+   * The idempotent form of `createTable` plus a run of `add*Column` plus
+   * `addUniqueIndex`. Every step is checked before it is attempted rather than
+   * attempted and forgiven, so calling this on a table that is already correct
+   * costs one query and reports that it changed nothing — and an error that
+   * comes back means something other than "already done".
+   *
+   * The whole convergence runs under one lock keyed on this script and table,
+   * so concurrent callers — a cold start where every instance's first write
+   * arrives at once — take turns instead of racing.
+   *
+   * Columns default to nullable. A column added to a table that already holds
+   * rows cannot be `NOT NULL` without a default, and being safe against a table
+   * already in use is the point of this call.
+   *
+   * @param tableName - Logical table name
+   * @param schema - JSON string: `{ columns: [{ name, type, nullable?, default? }], uniqueIndexes?: string[][] }`
+   *   where `type` is one of integer, bigint, float, text, boolean, timestamp
+   * @returns JSON string with result: {success, created, columnsAdded, uniqueIndexesEnsured} or {error: string}
+   * @example
+   * const result = database.ensureTable("world_items", JSON.stringify({
+   *   columns: [
+   *     { name: "item_id", type: "text" },
+   *     { name: "owner", type: "text" },
+   *     { name: "updated_at", type: "bigint" },
+   *   ],
+   *   uniqueIndexes: [["item_id"]],
+   * })).json();
+   * // First run:  {success: true, created: true, columnsAdded: ["item_id", "owner", "updated_at"], ...}
+   * // Every run after: {success: true, created: false, columnsAdded: [], ...}
+   */
+  ensureTable(tableName: string, schema: string): DatabaseAnswer;
+
+  /**
    * Drop a table owned by this script
    * @param tableName - Table name to drop
    * @returns JSON string with result: {success: boolean, tableName: string, dropped: boolean} or {error: string}

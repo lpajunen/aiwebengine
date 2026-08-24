@@ -206,3 +206,144 @@ async fn a_rolled_back_transaction_takes_its_schema_with_it() {
         "the rolled-back table must not have survived"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn racing_handlers_creating_one_table_get_one_winner_and_a_clear_answer() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    const URI: &str = "test://schema-locks/race";
+    const RACERS: usize = 6;
+
+    repository::upsert_script(URI, "function init() {}").expect("script should be stored");
+    let _ = tokio::task::spawn_blocking(|| repository::drop_script_table(URI, "contested")).await;
+
+    // The shape of a cold start: every instance's first write calls
+    // `ensureSchema()` at once, and each one's existence check runs before any
+    // of them has created anything.
+    let mut racers = Vec::new();
+    for _ in 0..RACERS {
+        racers.push(tokio::task::spawn_blocking(|| {
+            repository::create_script_table(URI, "contested")
+        }));
+    }
+
+    let mut created = 0;
+    let mut refused = Vec::new();
+    for racer in racers {
+        match racer.await.expect("racer panicked") {
+            Ok(_) => created += 1,
+            Err(e) => refused.push(e.to_string()),
+        }
+    }
+
+    assert_eq!(created, 1, "exactly one racer should create the table");
+
+    // The point of serialising them. A loser that ran its existence check
+    // before the winner committed used to reach `CREATE TABLE` anyway and get
+    // Postgres's own complaint, which names a physical table the script has
+    // never heard of.
+    for message in &refused {
+        assert!(
+            message.contains("already exists for this script"),
+            "a loser should get the engine's answer, not the database's: {}",
+            message
+        );
+    }
+    assert_eq!(refused.len(), RACERS - 1);
+
+    let _ = tokio::task::spawn_blocking(|| repository::drop_script_table(URI, "contested")).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ensuring_a_table_converges_it_and_then_does_nothing() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    const SCHEMA: &str = r#"JSON.stringify({
+        columns: [
+          { name: "item_id", type: "text" },
+          { name: "owner", type: "text" },
+          { name: "updated_at", type: "bigint" },
+        ],
+        uniqueIndexes: [["item_id"]],
+    })"#;
+
+    drop_table("test://schema-locks/ensure", "world_items").await;
+
+    // First run builds it. Note this is inside a transaction, which is where a
+    // solution's ensureSchema() actually runs and where it used to wedge.
+    let first = eval(
+        "test://schema-locks/ensure",
+        false,
+        &format!(
+            r#"
+            const answer = database.ensureTable("world_items", {SCHEMA}).json();
+            ({{ created: answer.created, added: answer.columnsAdded, error: answer.error || null }})
+            "#
+        ),
+    )
+    .await;
+
+    assert!(first.ok, "{:?}", first.outcome.error);
+    let value = first.outcome.value.expect("a value");
+    assert_eq!(value["error"], json!(null));
+    assert_eq!(value["created"], json!(true));
+    assert_eq!(
+        value["added"],
+        json!(["item_id", "owner", "updated_at"]),
+        "the first run should add every column asked for"
+    );
+
+    // Second run is the one that matters: converging an already-correct table
+    // has to be a no-op that reports itself, not an exception to swallow.
+    let second = eval(
+        "test://schema-locks/ensure",
+        false,
+        &format!(
+            r#"
+            const answer = database.ensureTable("world_items", {SCHEMA}).json();
+            database.insert("world_items", JSON.stringify({{ item_id: "sword", owner: "me" }}));
+            ({{
+              created: answer.created,
+              added: answer.columnsAdded,
+              error: answer.error || null,
+              rows: database.query("world_items").json().length,
+            }})
+            "#
+        ),
+    )
+    .await;
+
+    assert!(second.ok, "{:?}", second.outcome.error);
+    let value = second.outcome.value.expect("a value");
+    assert_eq!(value["error"], json!(null));
+    assert_eq!(value["created"], json!(false));
+    assert_eq!(value["added"], json!([]), "nothing was left to add");
+    assert_eq!(value["rows"], json!(1));
+
+    // A column added later converges onto the table already holding rows.
+    let grown = eval(
+        "test://schema-locks/ensure",
+        false,
+        r#"
+        const answer = database.ensureTable("world_items", JSON.stringify({
+            columns: [
+              { name: "item_id", type: "text" },
+              { name: "durability", type: "integer" },
+            ],
+        })).json();
+        ({ added: answer.columnsAdded, error: answer.error || null,
+           rowsKept: database.query("world_items").json().length })
+        "#,
+    )
+    .await;
+
+    assert!(grown.ok, "{:?}", grown.outcome.error);
+    let value = grown.outcome.value.expect("a value");
+    assert_eq!(value["error"], json!(null));
+    assert_eq!(value["added"], json!(["durability"]));
+    assert_eq!(value["rowsKept"], json!(1), "existing rows must survive");
+
+    drop_table("test://schema-locks/ensure", "world_items").await;
+}

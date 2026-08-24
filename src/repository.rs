@@ -332,6 +332,38 @@ pub struct TableSchema {
     pub columns: Vec<ColumnInfo>,
 }
 
+/// One column a script wants a table to have.
+#[derive(Debug, Clone)]
+pub struct EnsuredColumn {
+    pub name: String,
+    pub column_type: crate::db_schema_utils::ColumnType,
+    pub nullable: bool,
+    pub default_value: Option<String>,
+}
+
+/// The shape a script wants a table to be in, whatever shape it is in now.
+#[derive(Debug, Clone, Default)]
+pub struct TableSpec {
+    pub columns: Vec<EnsuredColumn>,
+    /// Column groups that must each carry a unique index — what `upsert` needs
+    /// before it can use them as a conflict target.
+    pub unique_indexes: Vec<Vec<String>>,
+}
+
+/// What converging a table to a [`TableSpec`] actually changed.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnsuredTable {
+    /// Whether this call is the one that created the table.
+    pub created: bool,
+    /// Columns this call added. A column already present is not listed.
+    pub columns_added: Vec<String>,
+    /// Index column groups this call ensured. Postgres does not report whether
+    /// `CREATE UNIQUE INDEX IF NOT EXISTS` created anything, so these are
+    /// "present now", not "added now".
+    pub unique_indexes_ensured: Vec<Vec<String>>,
+}
+
 /// Information about a table column
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ColumnInfo {
@@ -2733,6 +2765,37 @@ impl<'a> ScopedConn<'a> {
         }
     }
 
+    /// A connection for a schema operation on one named table, serialised
+    /// against every other engine instance doing the same.
+    ///
+    /// The existence checks these operations start with are worthless
+    /// concurrently: two handlers calling `ensureSchema()` on a cold cache both
+    /// read "no such table" and both go on to create it. The loser gets
+    /// Postgres's own `relation already exists` rather than the engine's
+    /// answer, and between the two statements each of these operations makes
+    /// there is room for worse — a physical table with no `script_tables` row
+    /// to find it by.
+    ///
+    /// The advisory lock is keyed on the script and table, so two scripts, or
+    /// one script's two tables, never wait on each other. It is held for the
+    /// transaction rather than the savepoint, which means until the caller's
+    /// transaction ends — the same scope the schema change itself commits in,
+    /// and the only scope at which "did this table exist" stays true.
+    async fn for_schema_of(
+        pool: &'a PgPool,
+        script_uri: &str,
+        logical_table_name: &str,
+    ) -> AppResult<Self> {
+        let mut scope = Self::for_schema(pool).await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))")
+            .bind(script_uri)
+            .bind(logical_table_name)
+            .execute(scope.conn())
+            .await
+            .map_err(|e| schema_transaction_error("taking the schema lock", e))?;
+        Ok(scope)
+    }
+
     /// A connection for a single data statement — a row read or write.
     ///
     /// Inside a transaction it is bracketed like any other operation, which is
@@ -2931,6 +2994,90 @@ async fn db_create_script_table(
     );
 
     Ok(physical_table_name)
+}
+
+/// Brings a script-owned table to the shape `spec` describes.
+///
+/// Every solution ends up writing this by hand — create the table, add the
+/// columns, add the indexes, catch and ignore the "already exists" from each —
+/// and every hand-written version has the same two faults. It runs on the
+/// request path, where its `ALTER TABLE`s meet whatever else is holding the
+/// table; and it treats an error as success because the common error means
+/// "already done", which hides the ones that mean something else.
+///
+/// Here it is one call: one advisory lock, one transaction, and a check before
+/// each step instead of an exception after it. Doing nothing is the normal
+/// outcome and costs one query.
+async fn db_ensure_script_table(
+    conn: &mut PgConnection,
+    script_uri: &str,
+    logical_table_name: &str,
+    spec: &TableSpec,
+) -> AppResult<EnsuredTable> {
+    validate_identifier(logical_table_name).map_err(|e| AppError::Validation {
+        field: "table_name".to_string(),
+        reason: e.to_string(),
+    })?;
+
+    let mut outcome = EnsuredTable::default();
+
+    let existing: Option<serde_json::Value> = sqlx::query_scalar(
+        "SELECT schema_json FROM script_tables WHERE script_uri = $1 AND logical_table_name = $2",
+    )
+    .bind(script_uri)
+    .bind(logical_table_name)
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(|e| {
+        error!("Database error reading table metadata: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    let mut present: Vec<String> = match &existing {
+        Some(schema_json) => schema_json
+            .get("columns")
+            .and_then(|columns| columns.as_array())
+            .map(|columns| {
+                columns
+                    .iter()
+                    .filter_map(|column| column.get("name")?.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        None => {
+            db_create_script_table(&mut *conn, script_uri, logical_table_name).await?;
+            outcome.created = true;
+            vec!["id".to_string()]
+        }
+    };
+
+    for column in &spec.columns {
+        if present.iter().any(|name| name == &column.name) {
+            continue;
+        }
+        db_add_column_to_script_table(
+            &mut *conn,
+            script_uri,
+            logical_table_name,
+            &column.name,
+            column.column_type.clone(),
+            column.nullable,
+            column.default_value.as_deref(),
+        )
+        .await?;
+        present.push(column.name.clone());
+        outcome.columns_added.push(column.name.clone());
+    }
+
+    for columns in &spec.unique_indexes {
+        db_add_unique_index(&mut *conn, script_uri, logical_table_name, columns).await?;
+        outcome.unique_indexes_ensured.push(columns.clone());
+    }
+
+    Ok(outcome)
 }
 
 /// Database-backed add column to script-owned table
@@ -5436,6 +5583,19 @@ pub fn create_lease_table(script_uri: &str, logical_table_name: &str) -> AppResu
     })
 }
 
+/// Bring a script-owned table to the shape `spec` describes
+pub fn ensure_script_table(
+    script_uri: &str,
+    logical_table_name: &str,
+    spec: &TableSpec,
+) -> AppResult<EnsuredTable> {
+    let repo = get_repository();
+    run_bounded(async {
+        repo.ensure_script_table(script_uri, logical_table_name, spec)
+            .await
+    })
+}
+
 /// Add a unique index on one or more columns of a script-owned table
 pub fn add_unique_index(
     script_uri: &str,
@@ -6264,6 +6424,12 @@ pub trait Repository: Send + Sync {
         logical_table_name: &str,
         columns: &[String],
     ) -> AppResult<()>;
+    async fn ensure_script_table(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        spec: &TableSpec,
+    ) -> AppResult<EnsuredTable>;
 }
 
 /// PostgreSQL implementation of the Repository trait
@@ -7027,7 +7193,8 @@ impl Repository for PostgresRepository {
         script_uri: &str,
         logical_table_name: &str,
     ) -> AppResult<String> {
-        let mut schema = ScopedConn::for_schema(&self.pool).await?;
+        let mut schema =
+            ScopedConn::for_schema_of(&self.pool, script_uri, logical_table_name).await?;
         let created = db_create_script_table(schema.conn(), script_uri, logical_table_name).await;
         schema.finish(created).await
     }
@@ -7041,7 +7208,8 @@ impl Repository for PostgresRepository {
         nullable: bool,
         default_value: Option<&str>,
     ) -> AppResult<()> {
-        let mut schema = ScopedConn::for_schema(&self.pool).await?;
+        let mut schema =
+            ScopedConn::for_schema_of(&self.pool, script_uri, logical_table_name).await?;
         let added = db_add_column_to_script_table(
             schema.conn(),
             script_uri,
@@ -7063,7 +7231,8 @@ impl Repository for PostgresRepository {
         referenced_logical_table_name: &str,
         nullable: bool,
     ) -> AppResult<()> {
-        let mut schema = ScopedConn::for_schema(&self.pool).await?;
+        let mut schema =
+            ScopedConn::for_schema_of(&self.pool, script_uri, logical_table_name).await?;
         let added = db_add_reference_column(
             schema.conn(),
             script_uri,
@@ -7082,7 +7251,8 @@ impl Repository for PostgresRepository {
         logical_table_name: &str,
         column_name: &str,
     ) -> AppResult<bool> {
-        let mut schema = ScopedConn::for_schema(&self.pool).await?;
+        let mut schema =
+            ScopedConn::for_schema_of(&self.pool, script_uri, logical_table_name).await?;
         let dropped =
             db_drop_column(schema.conn(), script_uri, logical_table_name, column_name).await;
         schema.finish(dropped).await
@@ -7093,7 +7263,8 @@ impl Repository for PostgresRepository {
         script_uri: &str,
         logical_table_name: &str,
     ) -> AppResult<bool> {
-        let mut schema = ScopedConn::for_schema(&self.pool).await?;
+        let mut schema =
+            ScopedConn::for_schema_of(&self.pool, script_uri, logical_table_name).await?;
         let dropped = db_drop_script_table(schema.conn(), script_uri, logical_table_name).await;
         schema.finish(dropped).await
     }
@@ -7248,9 +7419,23 @@ impl Repository for PostgresRepository {
         script_uri: &str,
         logical_table_name: &str,
     ) -> AppResult<String> {
-        let mut schema = ScopedConn::for_schema(&self.pool).await?;
+        let mut schema =
+            ScopedConn::for_schema_of(&self.pool, script_uri, logical_table_name).await?;
         let created = db_create_lease_table(schema.conn(), script_uri, logical_table_name).await;
         schema.finish(created).await
+    }
+
+    async fn ensure_script_table(
+        &self,
+        script_uri: &str,
+        logical_table_name: &str,
+        spec: &TableSpec,
+    ) -> AppResult<EnsuredTable> {
+        let mut schema =
+            ScopedConn::for_schema_of(&self.pool, script_uri, logical_table_name).await?;
+        let ensured =
+            db_ensure_script_table(schema.conn(), script_uri, logical_table_name, spec).await;
+        schema.finish(ensured).await
     }
 
     async fn add_unique_index(
@@ -7259,7 +7444,8 @@ impl Repository for PostgresRepository {
         logical_table_name: &str,
         columns: &[String],
     ) -> AppResult<()> {
-        let mut schema = ScopedConn::for_schema(&self.pool).await?;
+        let mut schema =
+            ScopedConn::for_schema_of(&self.pool, script_uri, logical_table_name).await?;
         let added =
             db_add_unique_index(schema.conn(), script_uri, logical_table_name, columns).await;
         schema.finish(added).await

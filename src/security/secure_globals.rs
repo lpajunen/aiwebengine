@@ -44,6 +44,73 @@ fn error_answer(message: impl std::fmt::Display) -> String {
     serde_json::json!({ "error": message.to_string() }).to_string()
 }
 
+/// Reads the schema a script wants a table to have.
+///
+/// Shaped like the `columns` a script would otherwise pass to `addTextColumn`
+/// and friends one at a time: `{ "columns": [{ "name", "type", "nullable"?,
+/// "default"? }], "uniqueIndexes"?: [["col"]] }`. `nullable` defaults to true,
+/// because a column added to a table that already has rows cannot be `NOT NULL`
+/// without a default, and the whole point of this call is that it is safe to
+/// make against a table that is already in use.
+fn parse_table_spec(schema_json: &str) -> Result<crate::repository::TableSpec, String> {
+    use std::str::FromStr;
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(schema_json).map_err(|e| format!("Invalid schema JSON: {}", e))?;
+
+    let columns = parsed
+        .get("columns")
+        .and_then(|columns| columns.as_array())
+        .ok_or("schema must carry a \"columns\" array")?;
+
+    let mut spec = crate::repository::TableSpec::default();
+
+    for column in columns {
+        let name = column
+            .get("name")
+            .and_then(|name| name.as_str())
+            .ok_or("every column needs a \"name\"")?;
+        let type_name = column
+            .get("type")
+            .and_then(|kind| kind.as_str())
+            .ok_or_else(|| format!("column \"{}\" needs a \"type\"", name))?;
+        let column_type = crate::db_schema_utils::ColumnType::from_str(type_name)
+            .map_err(|e| format!("column \"{}\": {}", name, e))?;
+
+        spec.columns.push(crate::repository::EnsuredColumn {
+            name: name.to_string(),
+            column_type,
+            nullable: column
+                .get("nullable")
+                .and_then(|nullable| nullable.as_bool())
+                .unwrap_or(true),
+            default_value: column
+                .get("default")
+                .and_then(|default| default.as_str())
+                .map(str::to_string),
+        });
+    }
+
+    if let Some(indexes) = parsed.get("uniqueIndexes").and_then(|i| i.as_array()) {
+        for index in indexes {
+            let columns = index
+                .as_array()
+                .ok_or("every entry in \"uniqueIndexes\" must be an array of column names")?
+                .iter()
+                .map(|column| {
+                    column
+                        .as_str()
+                        .map(str::to_string)
+                        .ok_or("index columns must be strings")
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            spec.unique_indexes.push(columns);
+        }
+    }
+
+    Ok(spec)
+}
+
 /// A GraphQL `{"errors": [{"message": "..."}]}` answer.
 ///
 /// The shape a GraphQL client expects, with the same escaping guarantee
@@ -2778,6 +2845,45 @@ impl SecureGlobalContext {
             },
         )?;
         database_obj.set("createTable", create_table)?;
+
+        // database.ensureTable(tableName, schemaJson) - Converge a table's shape
+        let script_uri_ensure = script_uri_owned.clone();
+        let user_ctx_ensure = user_context.clone();
+        let ensure_table = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  table_name: String,
+                  schema_json: String|
+                  -> JsResult<String> {
+                debug!(
+                    "database.ensureTable called for script {} with table: {}",
+                    script_uri_ensure, table_name
+                );
+
+                if user_ctx_ensure
+                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                    .is_err()
+                {
+                    return Ok(error_answer(
+                        "Insufficient permissions for database schema operations",
+                    ));
+                }
+
+                let spec = match parse_table_spec(&schema_json) {
+                    Ok(spec) => spec,
+                    Err(e) => return Ok(error_answer(e)),
+                };
+
+                match crate::repository::ensure_script_table(&script_uri_ensure, &table_name, &spec)
+                {
+                    Ok(ensured) => Ok(success_answer(
+                        serde_json::to_value(&ensured).unwrap_or_else(|_| serde_json::json!({})),
+                    )),
+                    Err(e) => Ok(error_answer(e)),
+                }
+            },
+        )?;
+        database_obj.set("ensureTable", ensure_table)?;
 
         // database.addIntegerColumn(tableName, columnName, nullable, defaultValue)
         let script_uri_add_int = script_uri_owned.clone();
