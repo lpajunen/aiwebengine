@@ -2632,9 +2632,132 @@ use crate::db_schema_utils::{
     quote_identifier, validate_default_value, validate_identifier,
 };
 
+/// Names each savepoint [`SchemaConn`] brackets an operation with.
+static SCHEMA_SAVEPOINT_COUNTER: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// The connection a schema operation runs on: the caller's transaction when one
+/// is open, and one of its own otherwise.
+///
+/// Schema work must never run on a second connection while the caller holds a
+/// transaction. `CREATE INDEX` takes SHARE and `ALTER TABLE` takes ACCESS
+/// EXCLUSIVE, and both conflict with the ROW EXCLUSIVE the caller's own writes
+/// already hold on the table. Postgres cannot see that as a deadlock — the
+/// holder is not waiting on the database, it is waiting on the engine to finish
+/// the request — so its detector never fires, the statement blocks until the
+/// connection dies, and every later writer queues behind the pending strong
+/// lock. A script calling `ensureSchema()` inside `transaction()` was enough to
+/// wedge a table for every instance in the cluster.
+///
+/// Joining the caller's transaction makes that conflict impossible: a
+/// connection never blocks on locks it already holds.
+///
+/// Inside a transaction the operation is bracketed by a savepoint, so a failure
+/// — `table already exists`, an invalid column type — leaves the caller's
+/// transaction usable instead of aborting it. That is what a script wrapping an
+/// ensure-schema step in `try`/`catch` expects, and what running on a separate
+/// connection used to give it for free.
+///
+/// Outside one, the operation gets a transaction of its own. These are
+/// multi-statement units — `CREATE TABLE` plus the `script_tables` row that
+/// records it — and running them in autocommit leaves a physical table with no
+/// metadata behind whenever the second statement fails.
+///
+/// Every path must end at [`SchemaConn::finish`], which releases the savepoint
+/// or commits, and undoes either one if the operation failed.
+enum SchemaConn<'a> {
+    /// Bracketing the caller's transaction, which this must leave open.
+    Savepoint {
+        tx: &'a mut sqlx::Transaction<'static, sqlx::Postgres>,
+        savepoint: String,
+    },
+    /// A transaction of this operation's own, to be committed or rolled back.
+    Owned(sqlx::Transaction<'a, sqlx::Postgres>),
+}
+
+impl<'a> SchemaConn<'a> {
+    async fn open(pool: &'a PgPool) -> AppResult<Self> {
+        match crate::database::get_current_executor(pool) {
+            crate::database::TransactionExecutor::Transaction(tx) => {
+                let savepoint = format!(
+                    "aiwe_schema_{}",
+                    SCHEMA_SAVEPOINT_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                );
+                sqlx::query(sqlx::AssertSqlSafe(format!("SAVEPOINT {}", savepoint)))
+                    .execute(&mut **tx)
+                    .await
+                    .map_err(|e| schema_transaction_error("opening a schema savepoint", e))?;
+                Ok(SchemaConn::Savepoint { tx, savepoint })
+            }
+            crate::database::TransactionExecutor::Pool(pool) => {
+                let tx = pool
+                    .begin()
+                    .await
+                    .map_err(|e| schema_transaction_error("opening a schema transaction", e))?;
+                Ok(SchemaConn::Owned(tx))
+            }
+        }
+    }
+
+    fn conn(&mut self) -> &mut PgConnection {
+        match self {
+            SchemaConn::Savepoint { tx, .. } => tx,
+            SchemaConn::Owned(tx) => tx,
+        }
+    }
+
+    /// Closes the bracket around `outcome` and returns it unchanged.
+    ///
+    /// The operation's own error is the one worth reporting, so undoing a
+    /// failed operation is best effort — but recovering the caller's
+    /// transaction is not optional, which is why the rollback runs before the
+    /// error is handed back.
+    async fn finish<T>(self, outcome: AppResult<T>) -> AppResult<T> {
+        match self {
+            SchemaConn::Savepoint { tx, savepoint } => {
+                let verb = if outcome.is_ok() {
+                    "RELEASE SAVEPOINT"
+                } else {
+                    "ROLLBACK TO SAVEPOINT"
+                };
+                let closed = sqlx::query(sqlx::AssertSqlSafe(format!("{} {}", verb, savepoint)))
+                    .execute(&mut **tx)
+                    .await
+                    .map_err(|e| schema_transaction_error("closing a schema savepoint", e));
+                match outcome {
+                    Ok(value) => closed.map(|_| value),
+                    Err(operation_error) => Err(operation_error),
+                }
+            }
+            SchemaConn::Owned(tx) => match outcome {
+                Ok(value) => {
+                    tx.commit().await.map_err(|e| {
+                        schema_transaction_error("committing a schema transaction", e)
+                    })?;
+                    Ok(value)
+                }
+                Err(operation_error) => {
+                    if let Err(e) = tx.rollback().await {
+                        error!("Database error rolling back a schema transaction: {}", e);
+                    }
+                    Err(operation_error)
+                }
+            },
+        }
+    }
+}
+
+fn schema_transaction_error(what: &str, e: sqlx::Error) -> AppError {
+    error!("Database error {}: {}", what, e);
+    AppError::Database {
+        message: format!("Database error: {}", e),
+        source: None,
+    }
+}
+
 /// Database-backed create script-owned table
 async fn db_create_script_table(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     script_uri: &str,
     logical_table_name: &str,
 ) -> AppResult<String> {
@@ -2648,7 +2771,7 @@ async fn db_create_script_table(
     let table_count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM script_tables WHERE script_uri = $1")
             .bind(script_uri)
-            .fetch_one(pool)
+            .fetch_one(&mut *conn)
             .await
             .map_err(|e| {
                 error!("Database error counting tables for script: {}", e);
@@ -2677,7 +2800,7 @@ async fn db_create_script_table(
     )
     .bind(script_uri)
     .bind(logical_table_name)
-    .fetch_one(pool)
+    .fetch_one(&mut *conn)
     .await
     .map_err(|e| {
         error!("Database error checking table existence: {}", e);
@@ -2704,7 +2827,7 @@ async fn db_create_script_table(
     );
 
     sqlx::query(sqlx::AssertSqlSafe(create_table_sql.as_str()))
-        .execute(pool)
+        .execute(&mut *conn)
         .await
         .map_err(|e| {
             error!("Database error creating table: {}", e);
@@ -2731,7 +2854,7 @@ async fn db_create_script_table(
     .bind(logical_table_name)
     .bind(&physical_table_name)
     .bind(schema_json)
-    .execute(pool)
+    .execute(&mut *conn)
     .await
     .map_err(|e| {
         error!("Database error recording table metadata: {}", e);
@@ -2751,7 +2874,7 @@ async fn db_create_script_table(
 
 /// Database-backed add column to script-owned table
 async fn db_add_column_to_script_table(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     script_uri: &str,
     logical_table_name: &str,
     column_name: &str,
@@ -2775,7 +2898,7 @@ async fn db_add_column_to_script_table(
     )
     .bind(script_uri)
     .bind(logical_table_name)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await
     .map_err(|e| {
         error!("Database error fetching table metadata: {}", e);
@@ -2845,7 +2968,7 @@ async fn db_add_column_to_script_table(
 
     // Execute the ALTER TABLE
     sqlx::query(sqlx::AssertSqlSafe(alter_sql.as_str()))
-        .execute(pool)
+        .execute(&mut *conn)
         .await
         .map_err(|e| {
             error!("Database error adding column: {}", e);
@@ -2872,7 +2995,7 @@ async fn db_add_column_to_script_table(
         .bind(schema_json)
         .bind(script_uri)
         .bind(logical_table_name)
-        .execute(pool)
+        .execute(&mut *conn)
         .await
         .map_err(|e| {
             error!("Database error updating schema metadata: {}", e);
@@ -2895,7 +3018,7 @@ async fn db_add_column_to_script_table(
 
 /// Database-backed add reference column (creates INTEGER column with FK constraint)
 async fn db_add_reference_column(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     script_uri: &str,
     logical_table_name: &str,
     column_name: &str,
@@ -2918,7 +3041,7 @@ async fn db_add_reference_column(
 
     // First, add the integer column
     db_add_column_to_script_table(
-        pool,
+        &mut *conn,
         script_uri,
         logical_table_name,
         column_name,
@@ -2934,7 +3057,7 @@ async fn db_add_reference_column(
     )
     .bind(script_uri)
     .bind(logical_table_name)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await
     .map_err(|e| {
         error!("Database error fetching source table: {}", e);
@@ -2953,7 +3076,7 @@ async fn db_add_reference_column(
     )
     .bind(script_uri)
     .bind(referenced_logical_table_name)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await
     .map_err(|e| {
         error!("Database error fetching referenced table: {}", e);
@@ -2981,7 +3104,7 @@ async fn db_add_reference_column(
     );
 
     sqlx::query(sqlx::AssertSqlSafe(alter_sql.as_str()))
-        .execute(pool)
+        .execute(&mut *conn)
         .await
         .map_err(|e| {
             error!("Database error creating foreign key: {}", e);
@@ -3001,7 +3124,7 @@ async fn db_add_reference_column(
 
 /// Database-backed drop column from script-owned table
 async fn db_drop_column(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     script_uri: &str,
     logical_table_name: &str,
     column_name: &str,
@@ -3022,7 +3145,7 @@ async fn db_drop_column(
     )
     .bind(script_uri)
     .bind(logical_table_name)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await
     .map_err(|e| {
         error!("Database error fetching table metadata: {}", e);
@@ -3068,7 +3191,7 @@ async fn db_drop_column(
     );
 
     sqlx::query(sqlx::AssertSqlSafe(drop_sql.as_str()))
-        .execute(pool)
+        .execute(&mut *conn)
         .await
         .map_err(|e| {
             error!("Database error dropping column: {}", e);
@@ -3092,7 +3215,7 @@ async fn db_drop_column(
     .bind(schema_json)
     .bind(script_uri)
     .bind(logical_table_name)
-    .execute(pool)
+    .execute(&mut *conn)
     .await
     .map_err(|e| {
         error!("Database error updating schema metadata: {}", e);
@@ -3112,7 +3235,7 @@ async fn db_drop_column(
 
 /// Database-backed drop script-owned table
 async fn db_drop_script_table(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     script_uri: &str,
     logical_table_name: &str,
 ) -> AppResult<bool> {
@@ -3128,7 +3251,7 @@ async fn db_drop_script_table(
     )
     .bind(script_uri)
     .bind(logical_table_name)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await
     .map_err(|e| {
         error!("Database error fetching table metadata: {}", e);
@@ -3146,7 +3269,7 @@ async fn db_drop_script_table(
         );
 
         sqlx::query(sqlx::AssertSqlSafe(drop_sql.as_str()))
-            .execute(pool)
+            .execute(&mut *conn)
             .await
             .map_err(|e| {
                 error!("Database error dropping table: {}", e);
@@ -3160,7 +3283,7 @@ async fn db_drop_script_table(
         sqlx::query("DELETE FROM script_tables WHERE script_uri = $1 AND logical_table_name = $2")
             .bind(script_uri)
             .bind(logical_table_name)
-            .execute(pool)
+            .execute(&mut *conn)
             .await
             .map_err(|e| {
                 error!("Database error removing table metadata: {}", e);
@@ -3181,12 +3304,12 @@ async fn db_drop_script_table(
 }
 
 /// Database-backed drop all tables for a script
-async fn db_drop_all_script_tables(pool: &PgPool, script_uri: &str) -> AppResult<usize> {
+async fn db_drop_all_script_tables(conn: &mut PgConnection, script_uri: &str) -> AppResult<usize> {
     // Get all tables for this script
     let tables: Vec<String> =
         sqlx::query_scalar("SELECT physical_table_name FROM script_tables WHERE script_uri = $1")
             .bind(script_uri)
-            .fetch_all(pool)
+            .fetch_all(&mut *conn)
             .await
             .map_err(|e| {
                 error!("Database error fetching script tables: {}", e);
@@ -3206,7 +3329,7 @@ async fn db_drop_all_script_tables(pool: &PgPool, script_uri: &str) -> AppResult
         );
 
         sqlx::query(sqlx::AssertSqlSafe(drop_sql.as_str()))
-            .execute(pool)
+            .execute(&mut *conn)
             .await
             .map_err(|e| {
                 error!("Database error dropping table {}: {}", physical_name, e);
@@ -3220,7 +3343,7 @@ async fn db_drop_all_script_tables(pool: &PgPool, script_uri: &str) -> AppResult
     // Delete metadata entries (script_uri FK will auto-delete on script deletion)
     sqlx::query("DELETE FROM script_tables WHERE script_uri = $1")
         .bind(script_uri)
-        .execute(pool)
+        .execute(&mut *conn)
         .await
         .map_err(|e| {
             error!("Database error removing table metadata: {}", e);
@@ -3242,7 +3365,10 @@ async fn db_drop_all_script_tables(pool: &PgPool, script_uri: &str) -> AppResult
 // ============================================================================
 
 /// List all tables owned by a script
-async fn db_list_script_tables(pool: &PgPool, script_uri: &str) -> AppResult<Vec<TableInfo>> {
+async fn db_list_script_tables(
+    conn: &mut PgConnection,
+    script_uri: &str,
+) -> AppResult<Vec<TableInfo>> {
     let rows = sqlx::query!(
         r#"
         SELECT logical_table_name, physical_table_name, created_at
@@ -3252,7 +3378,7 @@ async fn db_list_script_tables(pool: &PgPool, script_uri: &str) -> AppResult<Vec
         "#,
         script_uri
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await
     .map_err(|e| {
         error!("Database error listing script tables: {}", e);
@@ -3274,7 +3400,7 @@ async fn db_list_script_tables(pool: &PgPool, script_uri: &str) -> AppResult<Vec
 
 /// Get detailed schema information for a specific table
 async fn db_get_table_schema(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     script_uri: &str,
     logical_table_name: &str,
 ) -> AppResult<TableSchema> {
@@ -3284,7 +3410,7 @@ async fn db_get_table_schema(
     )
     .bind(script_uri)
     .bind(logical_table_name)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await
     .map_err(|e| {
         error!("Database error fetching table schema: {}", e);
@@ -3363,7 +3489,7 @@ async fn db_get_table_schema(
 
 /// Get foreign key relationships for a table
 async fn db_get_foreign_keys(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     script_uri: &str,
     logical_table_name: &str,
 ) -> AppResult<Vec<ForeignKeyInfo>> {
@@ -3373,7 +3499,7 @@ async fn db_get_foreign_keys(
     )
     .bind(script_uri)
     .bind(logical_table_name)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await
     .map_err(|e| {
         error!("Database error fetching table metadata: {}", e);
@@ -3407,7 +3533,7 @@ async fn db_get_foreign_keys(
         "#,
         &physical_table_name
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await
     .map_err(|e| {
         error!("Database error fetching foreign keys: {}", e);
@@ -3426,7 +3552,7 @@ async fn db_get_foreign_keys(
         )
         .bind(script_uri)
         .bind(&row.referenced_table_physical)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await
         .map_err(|e| {
             error!("Database error fetching referenced table name: {}", e);
@@ -5841,8 +5967,14 @@ impl Repository for PostgresRepository {
     }
 
     async fn delete_script(&self, uri: &str) -> AppResult<bool> {
-        // First, drop all script-owned tables (outside transaction)
-        let _ = db_drop_all_script_tables(&self.pool, uri).await;
+        // First, drop all script-owned tables. This joins the caller's
+        // transaction when there is one: DROP TABLE takes ACCESS EXCLUSIVE, and
+        // taking it on a second connection would block on locks the caller
+        // already holds.
+        if let Ok(mut schema) = SchemaConn::open(&self.pool).await {
+            let dropped = db_drop_all_script_tables(schema.conn(), uri).await;
+            let _ = schema.finish(dropped).await;
+        }
 
         // Delete the script (within transaction if active)
         let executor = crate::database::get_current_executor(&self.pool);
@@ -6542,7 +6674,9 @@ impl Repository for PostgresRepository {
         script_uri: &str,
         logical_table_name: &str,
     ) -> AppResult<String> {
-        db_create_script_table(&self.pool, script_uri, logical_table_name).await
+        let mut schema = SchemaConn::open(&self.pool).await?;
+        let created = db_create_script_table(schema.conn(), script_uri, logical_table_name).await;
+        schema.finish(created).await
     }
 
     async fn add_column_to_script_table(
@@ -6554,8 +6688,9 @@ impl Repository for PostgresRepository {
         nullable: bool,
         default_value: Option<&str>,
     ) -> AppResult<()> {
-        db_add_column_to_script_table(
-            &self.pool,
+        let mut schema = SchemaConn::open(&self.pool).await?;
+        let added = db_add_column_to_script_table(
+            schema.conn(),
             script_uri,
             logical_table_name,
             column_name,
@@ -6563,7 +6698,8 @@ impl Repository for PostgresRepository {
             nullable,
             default_value,
         )
-        .await
+        .await;
+        schema.finish(added).await
     }
 
     async fn add_reference_column(
@@ -6574,15 +6710,17 @@ impl Repository for PostgresRepository {
         referenced_logical_table_name: &str,
         nullable: bool,
     ) -> AppResult<()> {
-        db_add_reference_column(
-            &self.pool,
+        let mut schema = SchemaConn::open(&self.pool).await?;
+        let added = db_add_reference_column(
+            schema.conn(),
             script_uri,
             logical_table_name,
             column_name,
             referenced_logical_table_name,
             nullable,
         )
-        .await
+        .await;
+        schema.finish(added).await
     }
 
     async fn drop_column(
@@ -6591,7 +6729,10 @@ impl Repository for PostgresRepository {
         logical_table_name: &str,
         column_name: &str,
     ) -> AppResult<bool> {
-        db_drop_column(&self.pool, script_uri, logical_table_name, column_name).await
+        let mut schema = SchemaConn::open(&self.pool).await?;
+        let dropped =
+            db_drop_column(schema.conn(), script_uri, logical_table_name, column_name).await;
+        schema.finish(dropped).await
     }
 
     async fn drop_script_table(
@@ -6599,11 +6740,15 @@ impl Repository for PostgresRepository {
         script_uri: &str,
         logical_table_name: &str,
     ) -> AppResult<bool> {
-        db_drop_script_table(&self.pool, script_uri, logical_table_name).await
+        let mut schema = SchemaConn::open(&self.pool).await?;
+        let dropped = db_drop_script_table(schema.conn(), script_uri, logical_table_name).await;
+        schema.finish(dropped).await
     }
 
     async fn list_script_tables(&self, script_uri: &str) -> AppResult<Vec<TableInfo>> {
-        db_list_script_tables(&self.pool, script_uri).await
+        let mut schema = SchemaConn::open(&self.pool).await?;
+        let listed = db_list_script_tables(schema.conn(), script_uri).await;
+        schema.finish(listed).await
     }
 
     async fn get_table_schema(
@@ -6611,7 +6756,9 @@ impl Repository for PostgresRepository {
         script_uri: &str,
         logical_table_name: &str,
     ) -> AppResult<TableSchema> {
-        db_get_table_schema(&self.pool, script_uri, logical_table_name).await
+        let mut schema = SchemaConn::open(&self.pool).await?;
+        let fetched = db_get_table_schema(schema.conn(), script_uri, logical_table_name).await;
+        schema.finish(fetched).await
     }
 
     async fn get_foreign_keys(
@@ -6619,7 +6766,9 @@ impl Repository for PostgresRepository {
         script_uri: &str,
         logical_table_name: &str,
     ) -> AppResult<Vec<ForeignKeyInfo>> {
-        db_get_foreign_keys(&self.pool, script_uri, logical_table_name).await
+        let mut schema = SchemaConn::open(&self.pool).await?;
+        let fetched = db_get_foreign_keys(schema.conn(), script_uri, logical_table_name).await;
+        schema.finish(fetched).await
     }
 
     async fn query_table(
@@ -6769,6 +6918,11 @@ impl Repository for PostgresRepository {
     /// operations above: a lease taken inside a caller's transaction would be
     /// invisible to every other instance until that transaction committed, and
     /// would vanish on rollback — which defeats the point of a lease.
+    ///
+    /// The cost of that choice is the hazard [`SchemaConn`] exists to avoid: a
+    /// caller whose own transaction has already written to the lease table
+    /// blocks here on a row lock it holds itself, and nothing in Postgres can
+    /// break the wait. Scripts must not write to a lease table directly.
     async fn acquire_lease(
         &self,
         script_uri: &str,
@@ -6797,11 +6951,9 @@ impl Repository for PostgresRepository {
         script_uri: &str,
         logical_table_name: &str,
     ) -> AppResult<String> {
-        let mut conn = self.pool.acquire().await.map_err(|e| AppError::Database {
-            message: format!("Failed to acquire connection: {}", e),
-            source: None,
-        })?;
-        db_create_lease_table(&mut conn, script_uri, logical_table_name).await
+        let mut schema = SchemaConn::open(&self.pool).await?;
+        let created = db_create_lease_table(schema.conn(), script_uri, logical_table_name).await;
+        schema.finish(created).await
     }
 
     async fn add_unique_index(
@@ -6810,11 +6962,10 @@ impl Repository for PostgresRepository {
         logical_table_name: &str,
         columns: &[String],
     ) -> AppResult<()> {
-        let mut conn = self.pool.acquire().await.map_err(|e| AppError::Database {
-            message: format!("Failed to acquire connection: {}", e),
-            source: None,
-        })?;
-        db_add_unique_index(&mut conn, script_uri, logical_table_name, columns).await
+        let mut schema = SchemaConn::open(&self.pool).await?;
+        let added =
+            db_add_unique_index(schema.conn(), script_uri, logical_table_name, columns).await;
+        schema.finish(added).await
     }
 }
 
