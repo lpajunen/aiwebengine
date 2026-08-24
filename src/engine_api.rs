@@ -1904,20 +1904,16 @@ pub fn generate_merged_openapi_spec() -> String {
     let mut rust_spec: Value = match serde_json::from_str(&rust_spec_str) {
         Ok(spec) => spec,
         Err(e) => {
-            return format!(
-                "{{\"error\": \"Failed to parse Rust OpenAPI spec: {}\"}}",
-                e
-            );
+            return json!({ "error": format!("Failed to parse Rust OpenAPI spec: {}", e) })
+                .to_string();
         }
     };
 
     let metadata_list = match repository::get_all_script_metadata() {
         Ok(list) => list,
         Err(e) => {
-            return format!(
-                "{{\"error\": \"Failed to fetch JavaScript routes: {}\"}}",
-                e
-            );
+            return json!({ "error": format!("Failed to fetch JavaScript routes: {}", e) })
+                .to_string();
         }
     };
 
@@ -2099,10 +2095,8 @@ pub fn generate_merged_openapi_spec() -> String {
 
     match serde_json::to_string_pretty(&rust_spec) {
         Ok(json) => json,
-        Err(e) => format!(
-            "{{\"error\": \"Failed to serialize merged OpenAPI spec: {}\"}}",
-            e
-        ),
+        Err(e) => json!({ "error": format!("Failed to serialize merged OpenAPI spec: {}", e) })
+            .to_string(),
     }
 }
 
@@ -5335,7 +5329,7 @@ pub async fn openapi_route(auth_user: Option<Extension<AuthUser>>) -> Response {
 
     let spec = tokio::task::spawn_blocking(generate_merged_openapi_spec)
         .await
-        .unwrap_or_else(|e| format!("{{\"error\": \"join error: {}\"}}", e));
+        .unwrap_or_else(|e| json!({ "error": format!("join error: {}", e) }).to_string());
 
     (StatusCode::OK, [("content-type", "application/json")], spec).into_response()
 }

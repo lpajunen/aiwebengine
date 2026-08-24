@@ -827,9 +827,9 @@ async fn handle_stream_request(req: Request<Body>) -> Response {
                         connection_id_for_stream, path_for_cleanup
                     );
                 }
-                Ok::<Event, std::convert::Infallible>(
-                    Event::default().data(format!("{{\"error\": \"Stream error: {}\"}}", e)),
-                )
+                Ok::<Event, std::convert::Infallible>(Event::default().data(
+                    serde_json::json!({ "error": format!("Stream error: {}", e) }).to_string(),
+                ))
             }
         }
     });

@@ -141,15 +141,12 @@ async fn a_failed_schema_change_leaves_the_transaction_usable() {
         database.insert("dupes", JSON.stringify({ label: "same" }));
         database.insert("dupes", JSON.stringify({ label: "same" }));
 
-        // Read as a string rather than with `.json()`: the engine interpolates
-        // the driver's message into `{"error": "..."}` without escaping it, and
-        // a duplicate-key message carries quotes of its own.
-        const failed = String(database.addUniqueIndex("dupes", JSON.stringify(["label"])));
+        const failed = database.addUniqueIndex("dupes", JSON.stringify(["label"])).json();
         const rows = database.query("dupes").json();
         database.insert("dupes", JSON.stringify({ label: "third" }));
 
         ({
-          refused: failed.indexOf("error") >= 0,
+          refused: typeof failed.error === "string",
           readable: rows.length,
           writable: database.query("dupes").json().length,
         })

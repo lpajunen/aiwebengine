@@ -243,6 +243,41 @@ async fn an_error_answer_is_readable_both_ways() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn an_error_carrying_quotes_still_parses() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    // The envelope used to be assembled by formatting the message into a JSON
+    // literal, which held up only while the message contained no JSON syntax of
+    // its own. Postgres names the constraint it rejected in double quotes, so
+    // `.json()` threw on exactly the errors worth reading and the only way to
+    // see one was to treat the answer as a string.
+    let report = eval_with_rows(
+        "test://db-shape/quoted-error",
+        r#"
+        database.insert("notes", JSON.stringify({ label: "one" }));
+        const answer = database.addUniqueIndex("notes", JSON.stringify(["label"]));
+        ({ viaJson: answer.json().error, viaParse: JSON.parse(answer).error })
+        "#,
+    )
+    .await;
+
+    assert!(report.ok, "{:?}", report.outcome.error);
+    let value = report.outcome.value.expect("a value");
+
+    let message = value["viaJson"].as_str().expect("an error message");
+    assert_eq!(value["viaParse"].as_str(), Some(message));
+
+    // Without this the test would keep passing if the message ever stopped
+    // carrying the syntax that broke the envelope, and stop proving anything.
+    assert!(
+        message.contains('"'),
+        "the driver's message should carry quotes of its own, got: {}",
+        message
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_result_can_be_returned_as_a_response_body() {
     if should_skip_integration_tests() {
         return;

@@ -31,6 +31,44 @@ use crate::security::{
     SecureOperations, SecurityAuditor, SecurityEventType, SecuritySeverity, UserContext,
 };
 
+/// A `{"error": "..."}` answer, built by the serializer rather than by string
+/// formatting.
+///
+/// The messages that reach here carry quotes and newlines of their own — a
+/// Postgres duplicate-key error names the constraint in quotes, and a
+/// JavaScript exception arrives with its stack attached. Formatting one
+/// straight into a JSON literal produced a string `JSON.parse` rejects, so
+/// `.json()` threw on exactly the errors a script most needs to read, and the
+/// only way to see one was to treat the answer as a string.
+fn error_answer(message: impl std::fmt::Display) -> String {
+    serde_json::json!({ "error": message.to_string() }).to_string()
+}
+
+/// A GraphQL `{"errors": [{"message": "..."}]}` answer.
+///
+/// The shape a GraphQL client expects, with the same escaping guarantee
+/// [`error_answer`] gives.
+fn graphql_errors_answer(message: impl std::fmt::Display) -> String {
+    serde_json::json!({ "errors": [{ "message": message.to_string() }] }).to_string()
+}
+
+/// A `{"success": true, ...}` answer carrying `fields`.
+///
+/// Serialised for the same reason [`error_answer`] is: the table and column
+/// names echoed back come from the script, and a name the engine would reject
+/// still has to produce a readable answer saying so.
+///
+/// `fields` is expected to be an object; anything else contributes nothing, so
+/// every call site passes a `json!({ ... })` literal.
+fn success_answer(fields: serde_json::Value) -> String {
+    let mut answer = serde_json::Map::new();
+    answer.insert("success".to_string(), serde_json::Value::Bool(true));
+    if let serde_json::Value::Object(fields) = fields {
+        answer.extend(fields);
+    }
+    serde_json::Value::Object(answer).to_string()
+}
+
 // Type alias for route registration callback function
 type RouteRegisterFn =
     Box<dyn Fn(&str, &repository::RouteMetadata, Option<&str>) -> Result<(), rquickjs::Error>>;
@@ -1272,7 +1310,7 @@ impl SecureGlobalContext {
                             )
                             .await;
                     });
-                    return Ok(format!("{{\"errors\": [{{\"message\": \"{}\"}}]}}", e));
+                    return Ok(graphql_errors_answer(e));
                 }
 
                 // Validate query
@@ -1288,10 +1326,10 @@ impl SecureGlobalContext {
                     match serde_json::from_str::<serde_json::Value>(&vars_json) {
                         Ok(v) => Some(v),
                         Err(e) => {
-                            return Ok(format!(
-                                "{{\"errors\": [{{\"message\": \"Invalid variables JSON: {}\"}}]}}",
+                            return Ok(graphql_errors_answer(format!(
+                                "Invalid variables JSON: {}",
                                 e
-                            ));
+                            )));
                         }
                     }
                 } else {
@@ -1334,10 +1372,10 @@ impl SecureGlobalContext {
                     }
                     Err(e) => {
                         tracing::error!("GraphQL execution failed: {}", e);
-                        Ok(format!(
-                            "{{\"errors\": [{{\"message\": \"GraphQL execution failed: {}\"}}]}}",
+                        Ok(graphql_errors_answer(format!(
+                            "GraphQL execution failed: {}",
                             e
-                        ))
+                        )))
                     }
                 }
             },
@@ -2731,11 +2769,11 @@ impl SecureGlobalContext {
                 }
 
                 match crate::repository::create_script_table(&script_uri_create, &table_name) {
-                    Ok(physical_name) => Ok(format!(
-                        "{{\"success\": true, \"tableName\": \"{}\", \"physicalName\": \"{}\"}}",
-                        table_name, physical_name
-                    )),
-                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                    Ok(physical_name) => Ok(success_answer(serde_json::json!({
+                        "tableName": table_name,
+                        "physicalName": physical_name,
+                    }))),
+                    Err(e) => Ok(error_answer(e)),
                 }
             },
         )?;
@@ -2778,11 +2816,10 @@ impl SecureGlobalContext {
                     nullable,
                     default_val,
                 ) {
-                    Ok(()) => Ok(format!(
-                        "{{\"success\": true, \"column\": \"{}\"}}",
-                        column_name
-                    )),
-                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                    Ok(()) => Ok(success_answer(serde_json::json!({
+                        "column": column_name,
+                    }))),
+                    Err(e) => Ok(error_answer(e)),
                 }
             },
         )?;
@@ -2825,11 +2862,10 @@ impl SecureGlobalContext {
                     nullable,
                     default_val,
                 ) {
-                    Ok(()) => Ok(format!(
-                        "{{\"success\": true, \"column\": \"{}\"}}",
-                        column_name
-                    )),
-                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                    Ok(()) => Ok(success_answer(serde_json::json!({
+                        "column": column_name,
+                    }))),
+                    Err(e) => Ok(error_answer(e)),
                 }
             },
         )?;
@@ -2872,11 +2908,10 @@ impl SecureGlobalContext {
                     nullable,
                     default_val,
                 ) {
-                    Ok(()) => Ok(format!(
-                        "{{\"success\": true, \"column\": \"{}\"}}",
-                        column_name
-                    )),
-                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                    Ok(()) => Ok(success_answer(serde_json::json!({
+                        "column": column_name,
+                    }))),
+                    Err(e) => Ok(error_answer(e)),
                 }
             },
         )?;
@@ -2919,11 +2954,10 @@ impl SecureGlobalContext {
                     nullable,
                     default_val,
                 ) {
-                    Ok(()) => Ok(format!(
-                        "{{\"success\": true, \"column\": \"{}\"}}",
-                        column_name
-                    )),
-                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                    Ok(()) => Ok(success_answer(serde_json::json!({
+                        "column": column_name,
+                    }))),
+                    Err(e) => Ok(error_answer(e)),
                 }
             },
         )?;
@@ -2964,11 +2998,14 @@ impl SecureGlobalContext {
                     &referenced_table_name,
                     nullable,
                 ) {
-                    Ok(()) => Ok(format!(
-                        "{{\"success\": true, \"foreignKey\": \"{}.{} -> {}\", \"nullable\": {}}}",
-                        table_name, column_name, referenced_table_name, nullable
-                    )),
-                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                    Ok(()) => Ok(success_answer(serde_json::json!({
+                        "foreignKey": format!(
+                            "{}.{} -> {}",
+                            table_name, column_name, referenced_table_name
+                        ),
+                        "nullable": nullable,
+                    }))),
+                    Err(e) => Ok(error_answer(e)),
                 }
             },
         )?;
@@ -3005,18 +3042,21 @@ impl SecureGlobalContext {
                 ) {
                     Ok(existed) => {
                         if existed {
-                            Ok(format!(
-                                "{{\"success\": true, \"tableName\": \"{}\", \"columnName\": \"{}\", \"dropped\": true}}",
-                                table_name, column_name
-                            ))
+                            Ok(success_answer(serde_json::json!({
+                                "tableName": table_name,
+                                "columnName": column_name,
+                                "dropped": true,
+                            })))
                         } else {
-                            Ok(format!(
-                                "{{\"success\": true, \"tableName\": \"{}\", \"columnName\": \"{}\", \"dropped\": false, \"message\": \"Column did not exist\"}}",
-                                table_name, column_name
-                            ))
+                            Ok(success_answer(serde_json::json!({
+                                "tableName": table_name,
+                                "columnName": column_name,
+                                "dropped": false,
+                                "message": "Column did not exist",
+                            })))
                         }
                     }
-                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                    Err(e) => Ok(error_answer(e)),
                 }
             },
         )?;
@@ -3046,18 +3086,19 @@ impl SecureGlobalContext {
                 match crate::repository::drop_script_table(&script_uri_drop, &table_name) {
                     Ok(existed) => {
                         if existed {
-                            Ok(format!(
-                                "{{\"success\": true, \"tableName\": \"{}\", \"dropped\": true}}",
-                                table_name
-                            ))
+                            Ok(success_answer(serde_json::json!({
+                                "tableName": table_name,
+                                "dropped": true,
+                            })))
                         } else {
-                            Ok(format!(
-                                "{{\"success\": true, \"tableName\": \"{}\", \"dropped\": false, \"message\": \"Table did not exist\"}}",
-                                table_name
-                            ))
+                            Ok(success_answer(serde_json::json!({
+                                "tableName": table_name,
+                                "dropped": false,
+                                "message": "Table did not exist",
+                            })))
                         }
                     }
-                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                    Err(e) => Ok(error_answer(e)),
                 }
             },
         )?;
@@ -3097,7 +3138,7 @@ impl SecureGlobalContext {
                     ) {
                         Ok(map) => Some(map),
                         Err(e) => {
-                            return Ok(format!("{{\"error\": \"Invalid filters JSON: {}\"}}", e));
+                            return Ok(error_answer(format!("Invalid filters JSON: {}", e)));
                         }
                     }
                 } else {
@@ -3118,9 +3159,9 @@ impl SecureGlobalContext {
                 ) {
                     Ok(rows) => match serde_json::to_string(&rows) {
                         Ok(json) => Ok(json),
-                        Err(e) => Ok(format!("{{\"error\": \"Serialization error: {}\"}}", e)),
+                        Err(e) => Ok(error_answer(format!("Serialization error: {}", e))),
                     },
-                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                    Err(e) => Ok(error_answer(e)),
                 }
             },
         )?;
@@ -3153,15 +3194,15 @@ impl SecureGlobalContext {
                 >(&data)
                 {
                     Ok(map) => map,
-                    Err(e) => return Ok(format!("{{\"error\": \"Invalid data JSON: {}\"}}", e)),
+                    Err(e) => return Ok(error_answer(format!("Invalid data JSON: {}", e))),
                 };
 
                 match crate::repository::insert_row(&script_uri_insert, &table_name, &data_map) {
                     Ok(row) => match serde_json::to_string(&row) {
                         Ok(json) => Ok(json),
-                        Err(e) => Ok(format!("{{\"error\": \"Serialization error: {}\"}}", e)),
+                        Err(e) => Ok(error_answer(format!("Serialization error: {}", e))),
                     },
-                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                    Err(e) => Ok(error_answer(e)),
                 }
             },
         )?;
@@ -3198,16 +3239,16 @@ impl SecureGlobalContext {
                 >(&data)
                 {
                     Ok(map) => map,
-                    Err(e) => return Ok(format!("{{\"error\": \"Invalid data JSON: {}\"}}", e)),
+                    Err(e) => return Ok(error_answer(format!("Invalid data JSON: {}", e))),
                 };
 
                 match crate::repository::update_row(&script_uri_update, &table_name, id, &data_map)
                 {
                     Ok(row) => match serde_json::to_string(&row) {
                         Ok(json) => Ok(json),
-                        Err(e) => Ok(format!("{{\"error\": \"Serialization error: {}\"}}", e)),
+                        Err(e) => Ok(error_answer(format!("Serialization error: {}", e))),
                     },
-                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                    Err(e) => Ok(error_answer(e)),
                 }
             },
         )?;
@@ -3235,8 +3276,8 @@ impl SecureGlobalContext {
                 }
 
                 match crate::repository::delete_row(&script_uri_delete, &table_name, id) {
-                    Ok(deleted) => Ok(format!("{{\"success\": true, \"deleted\": {}}}", deleted)),
-                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                    Ok(deleted) => Ok(success_answer(serde_json::json!({ "deleted": deleted }))),
+                    Err(e) => Ok(error_answer(e)),
                 }
             },
         )?;
@@ -3287,7 +3328,7 @@ impl SecureGlobalContext {
                 >(&data)
                 {
                     Ok(map) => map,
-                    Err(e) => return Ok(format!("{{\"error\": \"Invalid data JSON: {}\"}}", e)),
+                    Err(e) => return Ok(error_answer(format!("Invalid data JSON: {}", e))),
                 };
 
                 match crate::repository::upsert_row(
@@ -3298,9 +3339,9 @@ impl SecureGlobalContext {
                 ) {
                     Ok(row) => match serde_json::to_string(&row) {
                         Ok(json) => Ok(json),
-                        Err(e) => Ok(format!("{{\"error\": \"Serialization error: {}\"}}", e)),
+                        Err(e) => Ok(error_answer(format!("Serialization error: {}", e))),
                     },
-                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                    Err(e) => Ok(error_answer(e)),
                 }
             },
         )?;
@@ -3336,12 +3377,12 @@ impl SecureGlobalContext {
                 >(&filters)
                 {
                     Ok(map) => map,
-                    Err(e) => return Ok(format!("{{\"error\": \"Invalid filters JSON: {}\"}}", e)),
+                    Err(e) => return Ok(error_answer(format!("Invalid filters JSON: {}", e))),
                 };
 
                 match crate::repository::delete_where(&script_uri_dw, &table_name, &filters_map) {
-                    Ok(count) => Ok(format!("{{\"success\": true, \"deleted\": {}}}", count)),
-                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                    Ok(count) => Ok(success_answer(serde_json::json!({ "deleted": count }))),
+                    Err(e) => Ok(error_answer(e)),
                 }
             },
         )?;
@@ -3383,9 +3424,9 @@ impl SecureGlobalContext {
                 ) {
                     Ok(result) => match serde_json::to_string(&result) {
                         Ok(json) => Ok(json),
-                        Err(e) => Ok(format!("{{\"error\": \"Serialization error: {}\"}}", e)),
+                        Err(e) => Ok(error_answer(format!("Serialization error: {}", e))),
                     },
-                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                    Err(e) => Ok(error_answer(e)),
                 }
             },
         )?;
@@ -3414,11 +3455,11 @@ impl SecureGlobalContext {
                 }
 
                 match crate::repository::create_lease_table(&script_uri_clt, &table_name) {
-                    Ok(physical_name) => Ok(format!(
-                        "{{\"success\": true, \"tableName\": \"{}\", \"physicalName\": \"{}\"}}",
-                        table_name, physical_name
-                    )),
-                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                    Ok(physical_name) => Ok(success_answer(serde_json::json!({
+                        "tableName": table_name,
+                        "physicalName": physical_name,
+                    }))),
+                    Err(e) => Ok(error_answer(e)),
                 }
             },
         )?;
@@ -3466,11 +3507,14 @@ impl SecureGlobalContext {
                 };
 
                 match crate::repository::add_unique_index(&script_uri_idx, &table_name, &columns) {
-                    Ok(()) => Ok(format!(
-                        "{{\"success\": true, \"tableName\": \"{}\", \"columns\": {}}}",
-                        table_name, columns_json
-                    )),
-                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                    // The parsed columns rather than the caller's raw
+                    // `columns_json`: echoing an argument back verbatim puts
+                    // whatever it contained into the answer.
+                    Ok(()) => Ok(success_answer(serde_json::json!({
+                        "tableName": table_name,
+                        "columns": columns,
+                    }))),
+                    Err(e) => Ok(error_answer(e)),
                 }
             },
         )?;
@@ -3520,10 +3564,7 @@ impl SecureGlobalContext {
                     match crate::repository::get_table_schema(&script_uri_graphql, &table_name) {
                         Ok(s) => s,
                         Err(e) => {
-                            return Ok(format!(
-                                "{{\"error\": \"Failed to get table schema: {}\"}}",
-                                e
-                            ));
+                            return Ok(error_answer(format!("Failed to get table schema: {}", e)));
                         }
                     };
 
@@ -3532,10 +3573,7 @@ impl SecureGlobalContext {
                     match crate::repository::get_foreign_keys(&script_uri_graphql, &table_name) {
                         Ok(fks) => fks,
                         Err(e) => {
-                            return Ok(format!(
-                                "{{\"error\": \"Failed to get foreign keys: {}\"}}",
-                                e
-                            ));
+                            return Ok(error_answer(format!("Failed to get foreign keys: {}", e)));
                         }
                     };
 
@@ -3550,19 +3588,19 @@ impl SecureGlobalContext {
                 for query in &operations.queries {
                     // Evaluate resolver code in the current context
                     if let Err(e) = ctx_inner.eval::<(), _>(query.resolver_code.as_str()) {
-                        return Ok(format!(
-                            "{{\"error\": \"Failed to inject resolver {}: {:?}\"}}",
+                        return Ok(error_answer(format!(
+                            "Failed to inject resolver {}: {:?}",
                             query.resolver_function_name, e
-                        ));
+                        )));
                     }
                 }
 
                 for mutation in &operations.mutations {
                     if let Err(e) = ctx_inner.eval::<(), _>(mutation.resolver_code.as_str()) {
-                        return Ok(format!(
-                            "{{\"error\": \"Failed to inject resolver {}: {:?}\"}}",
+                        return Ok(error_answer(format!(
+                            "Failed to inject resolver {}: {:?}",
                             mutation.resolver_function_name, e
-                        ));
+                        )));
                     }
                 }
 
@@ -3586,10 +3624,9 @@ impl SecureGlobalContext {
                             .with_handler(mutation.resolver_function_name.clone()),
                         );
                     }
-                    return Ok(format!(
-                        "{{\"dryRun\": true, \"table\": \"{}\"}}",
-                        table_name
-                    ));
+                    return Ok(
+                        serde_json::json!({ "dryRun": true, "table": table_name }).to_string()
+                    );
                 }
 
                 for query in &operations.queries {
@@ -3600,10 +3637,10 @@ impl SecureGlobalContext {
                         script_uri_graphql.clone(),
                         visibility.clone(),
                     ) {
-                        return Ok(format!(
-                            "{{\"error\": \"Failed to register query {}: {}\"}}",
+                        return Ok(error_answer(format!(
+                            "Failed to register query {}: {}",
                             query.name, e
-                        ));
+                        )));
                     }
                 }
 
@@ -3616,10 +3653,10 @@ impl SecureGlobalContext {
                         script_uri_graphql.clone(),
                         visibility.clone(),
                     ) {
-                        return Ok(format!(
-                            "{{\"error\": \"Failed to register mutation {}: {}\"}}",
+                        return Ok(error_answer(format!(
+                            "Failed to register mutation {}: {}",
                             mutation.name, e
-                        ));
+                        )));
                     }
                 }
 
@@ -3632,10 +3669,13 @@ impl SecureGlobalContext {
                     .map(|m| m.name.as_str())
                     .collect();
 
-                Ok(format!(
-                    "{{\"success\": true, \"table\": \"{}\", \"queries\": {:?}, \"mutations\": {:?}}}",
-                    table_name, query_names, mutation_names
-                ))
+                // `{:?}` on a `Vec<String>` happens to look like a JSON array
+                // and escapes by Rust's rules, not JSON's.
+                Ok(success_answer(serde_json::json!({
+                    "table": table_name,
+                    "queries": query_names,
+                    "mutations": mutation_names,
+                })))
             },
         )?;
         database_obj.set("generateGraphQLForTable", generate_graphql)?;
@@ -3658,7 +3698,7 @@ impl SecureGlobalContext {
                         guard.release();
                         Ok("{\"success\": true, \"message\": \"Transaction started\"}".to_string())
                     }
-                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                    Err(e) => Ok(error_answer(e)),
                 }
             },
         )?;
@@ -3672,7 +3712,7 @@ impl SecureGlobalContext {
                     Ok(()) => Ok(
                         "{\"success\": true, \"message\": \"Transaction committed\"}".to_string(),
                     ),
-                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                    Err(e) => Ok(error_answer(e)),
                 }
             },
         )?;
@@ -3686,7 +3726,7 @@ impl SecureGlobalContext {
                     Ok(()) => Ok(
                         "{\"success\": true, \"message\": \"Transaction rolled back\"}".to_string(),
                     ),
-                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                    Err(e) => Ok(error_answer(e)),
                 }
             },
         )?;
@@ -3697,11 +3737,10 @@ impl SecureGlobalContext {
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>, name: Opt<String>| -> JsResult<String> {
                 match crate::database::Database::create_savepoint(name.0.as_deref()) {
-                    Ok(savepoint_name) => Ok(format!(
-                        "{{\"success\": true, \"savepoint\": \"{}\"}}",
-                        savepoint_name
-                    )),
-                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                    Ok(savepoint_name) => Ok(success_answer(serde_json::json!({
+                        "savepoint": savepoint_name,
+                    }))),
+                    Err(e) => Ok(error_answer(e)),
                 }
             },
         )?;
@@ -3712,11 +3751,10 @@ impl SecureGlobalContext {
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>, name: String| -> JsResult<String> {
                 match crate::database::Database::rollback_to_savepoint(&name) {
-                    Ok(()) => Ok(format!(
-                        "{{\"success\": true, \"message\": \"Rolled back to savepoint: {}\"}}",
-                        name
-                    )),
-                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                    Ok(()) => Ok(success_answer(serde_json::json!({
+                        "message": format!("Rolled back to savepoint: {}", name),
+                    }))),
+                    Err(e) => Ok(error_answer(e)),
                 }
             },
         )?;
@@ -3727,11 +3765,10 @@ impl SecureGlobalContext {
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>, name: String| -> JsResult<String> {
                 match crate::database::Database::release_savepoint(&name) {
-                    Ok(()) => Ok(format!(
-                        "{{\"success\": true, \"message\": \"Released savepoint: {}\"}}",
-                        name
-                    )),
-                    Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),
+                    Ok(()) => Ok(success_answer(serde_json::json!({
+                        "message": format!("Released savepoint: {}", name),
+                    }))),
+                    Err(e) => Ok(error_answer(e)),
                 }
             },
         )?;
