@@ -1176,7 +1176,13 @@ interface FetchOptions {
   /** Request body */
   body?: string;
 
-  /** Timeout in milliseconds (default: 30000) */
+  /**
+   * Timeout in milliseconds (default: 30000).
+   *
+   * Shortened to whatever is left of the handler's execution budget, so a
+   * request cannot outlive the script that made it. Redirects are followed
+   * within the same budget rather than each getting the full timeout.
+   */
   timeout?: number;
 }
 

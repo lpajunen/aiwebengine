@@ -186,9 +186,12 @@ impl ScriptInitializer {
         // is the better of the two — it returns the routes init() registered
         // before running out of time, whereas expiring here abandons the
         // blocking task and its registrations with it. So the outer budget gets
-        // a grace period and serves only as the backstop for the case the
-        // interrupt cannot handle: JavaScript blocked in a host call (a database
-        // query, say), where no bytecode executes for the handler to interrupt.
+        // a grace period and serves as a last resort.
+        //
+        // It used to be the only cover for an init() blocked in a host call —
+        // a database query, say — where no bytecode executes for the interrupt
+        // to stop. The host-call budget now bounds those directly, which leaves
+        // this for what neither reaches: a wait inside the engine itself.
         let timeout_duration =
             Duration::from_millis(self.timeout_ms.saturating_add(INIT_TIMEOUT_GRACE_MS));
         let script_uri_clone = script_uri.to_string();

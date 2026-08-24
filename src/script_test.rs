@@ -257,9 +257,12 @@ impl TestRunner {
     /// itself, and the outer one here. The inner ceiling is the better of the
     /// two — it returns the modules that finished, whereas expiring here
     /// abandons the blocking task and every verdict with it. So the outer
-    /// budget gets a grace period and serves only as the backstop the interrupt
-    /// cannot cover: JavaScript blocked in a host call, where no bytecode runs
-    /// for the handler to interrupt.
+    /// budget gets a grace period and serves as a last resort.
+    ///
+    /// It used to be the only cover for a module blocked in a host call, where
+    /// no bytecode runs for the interrupt handler to stop. The host-call budget
+    /// now bounds those directly, which leaves this for what neither reaches:
+    /// a wait inside the engine itself.
     pub async fn run(&self, request: TestRunRequest) -> TestRunResult {
         let started = std::time::Instant::now();
         let script_uri = request.script_uri.clone();

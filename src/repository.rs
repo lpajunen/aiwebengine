@@ -46,6 +46,19 @@ where
     crate::database::run_blocking(future)
 }
 
+/// The same, bounded by whatever remains of the caller's execution budget.
+///
+/// What every wrapper a script can reach goes through. A blocked database call
+/// is invisible to the interrupt handler that enforces the budget between
+/// bytecode operations, so without this the budget simply does not apply to the
+/// one kind of work most likely to exceed it.
+fn run_bounded<F, T>(future: F) -> AppResult<T>
+where
+    F: std::future::Future<Output = AppResult<T>>,
+{
+    crate::database::run_bounded(future)
+}
+
 /// Defines the types of repository errors that can occur
 #[derive(Debug, thiserror::Error)]
 pub enum RepositoryError {
@@ -4413,7 +4426,7 @@ pub fn fetch_scripts() -> HashMap<String, String> {
     let repo = get_repository();
 
     // Use run_blocking to call async repository method
-    let result = run_blocking(async { repo.list_scripts().await });
+    let result = run_bounded(async { repo.list_scripts().await });
 
     match result {
         Ok(scripts) => {
@@ -4450,7 +4463,7 @@ pub fn fetch_script(uri: &str) -> Option<String> {
 
     let repo = get_repository();
 
-    let result = run_blocking(async { repo.get_script(uri).await });
+    let result = run_bounded(async { repo.get_script(uri).await });
 
     match result {
         Ok(Some(script)) => {
@@ -4468,18 +4481,18 @@ pub fn fetch_script(uri: &str) -> Option<String> {
 /// Get metadata for a script
 pub fn get_script_metadata(uri: &str) -> AppResult<ScriptMetadata> {
     let repo = get_repository();
-    run_blocking(async { repo.get_script_metadata(uri).await })
+    run_bounded(async { repo.get_script_metadata(uri).await })
 }
 
 /// Get metadata for all scripts
 pub fn get_all_script_metadata() -> AppResult<Vec<ScriptMetadata>> {
     let repo = get_repository();
-    run_blocking(async { repo.get_all_script_metadata().await })
+    run_bounded(async { repo.get_all_script_metadata().await })
 }
 
 pub fn mark_script_init_failed(uri: &str, error: String) -> AppResult<()> {
     let repo = get_repository();
-    run_blocking(async {
+    run_bounded(async {
         repo.update_script_init_status(uri, false, Some(error), None)
             .await
     })
@@ -4487,7 +4500,7 @@ pub fn mark_script_init_failed(uri: &str, error: String) -> AppResult<()> {
 
 pub fn mark_script_initialized(uri: &str) -> AppResult<()> {
     let repo = get_repository();
-    run_blocking(async { repo.update_script_init_status(uri, true, None, None).await })
+    run_bounded(async { repo.update_script_init_status(uri, true, None, None).await })
 }
 
 pub fn mark_script_initialized_with_registrations(
@@ -4495,7 +4508,7 @@ pub fn mark_script_initialized_with_registrations(
     registrations: RouteRegistrations,
 ) -> AppResult<()> {
     let repo = get_repository();
-    run_blocking(async {
+    run_bounded(async {
         repo.update_script_init_status(uri, true, None, Some(registrations))
             .await
     })
@@ -4552,7 +4565,7 @@ pub async fn insert_log_message_async_in_context(
 /// Fetch log messages with error handling
 pub fn fetch_log_messages(script_uri: &str) -> Vec<LogEntry> {
     let repo = get_repository();
-    let result = run_blocking(async { repo.fetch_logs(script_uri).await });
+    let result = run_bounded(async { repo.fetch_logs(script_uri).await });
 
     match result {
         Ok(messages) => messages,
@@ -4573,7 +4586,7 @@ pub fn fetch_log_messages(script_uri: &str) -> Vec<LogEntry> {
 pub fn fetch_all_log_messages() -> Vec<LogEntry> {
     // Try database first if configured
     let repo = get_repository();
-    let result = run_blocking(async { repo.fetch_all_logs().await });
+    let result = run_bounded(async { repo.fetch_all_logs().await });
 
     match result {
         Ok(messages) => messages,
@@ -4596,19 +4609,19 @@ pub fn fetch_all_log_messages() -> Vec<LogEntry> {
 /// status code.
 pub fn query_log_messages(query: &LogQuery) -> AppResult<Vec<LogEntry>> {
     let repo = get_repository();
-    run_blocking(async { repo.query_logs(query).await })
+    run_bounded(async { repo.query_logs(query).await })
 }
 
 /// Clear log messages for a script
 pub fn clear_log_messages(script_uri: &str) -> AppResult<()> {
     let repo = get_repository();
-    run_blocking(async { repo.clear_logs(script_uri).await })
+    run_bounded(async { repo.clear_logs(script_uri).await })
 }
 
 /// Keep only the latest `limit` log messages (default 20) for each script URI and remove older ones
 pub fn prune_log_messages() -> AppResult<()> {
     let repo = get_repository();
-    run_blocking(async { repo.prune_logs().await })
+    run_bounded(async { repo.prune_logs().await })
 }
 
 /// Upsert script with error handling
@@ -4666,14 +4679,14 @@ pub fn upsert_script_with_owner(
 
     // Upsert the script
     let repo = get_repository();
-    run_blocking(async { repo.upsert_script(uri, content).await })?;
+    run_bounded(async { repo.upsert_script(uri, content).await })?;
 
     // Assign ownership if needed:
     // - For NEW scripts: set the creator as owner
     // - For EXISTING scripts: set owner if they don't have any owners yet (backfill)
     if let Some(user_id) = owner_user_id {
         // Check if script has any owners
-        let owner_count = run_blocking(async { repo.count_script_owners(uri).await }).unwrap_or(0);
+        let owner_count = run_bounded(async { repo.count_script_owners(uri).await }).unwrap_or(0);
         let has_owners = owner_count > 0;
         debug!(
             "Owner count check: uri={}, count={}, has_owners={}",
@@ -4683,7 +4696,7 @@ pub fn upsert_script_with_owner(
         // If script has no owners, assign this user as the first owner
         if !has_owners {
             debug!("Attempting to add owner: uri={}, user_id={}", uri, user_id);
-            run_blocking(async { repo.add_script_owner(uri, user_id).await })?;
+            run_bounded(async { repo.add_script_owner(uri, user_id).await })?;
             if script_exists {
                 debug!(
                     "✓ Backfilled owner {} for existing script {} (had no owners)",
@@ -4810,7 +4823,7 @@ pub async fn bootstrap_scripts_async() -> AppResult<()> {
 pub fn delete_script(uri: &str) -> bool {
     let repo = get_repository();
 
-    let result = run_blocking(async { repo.delete_script(uri).await });
+    let result = run_bounded(async { repo.delete_script(uri).await });
 
     match result {
         Ok(existed) => {
@@ -4832,19 +4845,19 @@ pub fn delete_script(uri: &str) -> bool {
 /// Add an owner to a script
 pub fn add_script_owner(uri: &str, user_id: &str) -> AppResult<()> {
     let repo = get_repository();
-    run_blocking(async { repo.add_script_owner(uri, user_id).await })
+    run_bounded(async { repo.add_script_owner(uri, user_id).await })
 }
 
 /// Remove an owner from a script
 pub fn remove_script_owner(uri: &str, user_id: &str) -> AppResult<bool> {
     let repo = get_repository();
-    run_blocking(async { repo.remove_script_owner(uri, user_id).await })
+    run_bounded(async { repo.remove_script_owner(uri, user_id).await })
 }
 
 /// Get all owners of a script
 pub fn get_script_owners(uri: &str) -> AppResult<Vec<String>> {
     let repo = get_repository();
-    run_blocking(async { repo.get_script_owners(uri).await })
+    run_bounded(async { repo.get_script_owners(uri).await })
 }
 
 /// Get the hosts a script's registrations are published on.
@@ -4853,7 +4866,7 @@ pub fn get_script_owners(uri: &str) -> AppResult<Vec<String>> {
 /// means every configured host. Resolve with [`crate::hosts::effective_hosts`].
 pub fn get_script_hosts(uri: &str) -> AppResult<Vec<String>> {
     let repo = get_repository();
-    run_blocking(async { repo.get_script_hosts(uri).await })
+    run_bounded(async { repo.get_script_hosts(uri).await })
 }
 
 /// Replace the hosts a script's registrations are published on.
@@ -4862,19 +4875,19 @@ pub fn get_script_hosts(uri: &str) -> AppResult<Vec<String>> {
 /// the default host.
 pub fn set_script_hosts(uri: &str, hosts: &[String]) -> AppResult<()> {
     let repo = get_repository();
-    run_blocking(async { repo.set_script_hosts(uri, hosts).await })
+    run_bounded(async { repo.set_script_hosts(uri, hosts).await })
 }
 
 /// Check if a user owns a script
 pub fn user_owns_script(uri: &str, user_id: &str) -> AppResult<bool> {
     let repo = get_repository();
-    run_blocking(async { repo.user_owns_script(uri, user_id).await })
+    run_bounded(async { repo.user_owns_script(uri, user_id).await })
 }
 
 /// Count the number of owners for a script
 pub fn count_script_owners(uri: &str) -> AppResult<i64> {
     let repo = get_repository();
-    run_blocking(async { repo.count_script_owners(uri).await })
+    run_bounded(async { repo.count_script_owners(uri).await })
 }
 
 // ============================================================================
@@ -4884,7 +4897,7 @@ pub fn count_script_owners(uri: &str) -> AppResult<i64> {
 /// Create a new table for a script
 pub fn create_script_table(script_uri: &str, logical_table_name: &str) -> AppResult<String> {
     let repo = get_repository();
-    run_blocking(async {
+    run_bounded(async {
         repo.create_script_table(script_uri, logical_table_name)
             .await
     })
@@ -4900,7 +4913,7 @@ pub fn add_column_to_script_table(
     default_value: Option<&str>,
 ) -> AppResult<()> {
     let repo = get_repository();
-    run_blocking(async {
+    run_bounded(async {
         repo.add_column_to_script_table(
             script_uri,
             logical_table_name,
@@ -4922,7 +4935,7 @@ pub fn add_reference_column(
     nullable: bool,
 ) -> AppResult<()> {
     let repo = get_repository();
-    run_blocking(async {
+    run_bounded(async {
         repo.add_reference_column(
             script_uri,
             logical_table_name,
@@ -4941,7 +4954,7 @@ pub fn drop_column(
     column_name: &str,
 ) -> AppResult<bool> {
     let repo = get_repository();
-    run_blocking(async {
+    run_bounded(async {
         repo.drop_column(script_uri, logical_table_name, column_name)
             .await
     })
@@ -4950,7 +4963,7 @@ pub fn drop_column(
 /// Drop a script-owned table
 pub fn drop_script_table(script_uri: &str, logical_table_name: &str) -> AppResult<bool> {
     let repo = get_repository();
-    run_blocking(async { repo.drop_script_table(script_uri, logical_table_name).await })
+    run_bounded(async { repo.drop_script_table(script_uri, logical_table_name).await })
 }
 
 // ============================================================================
@@ -4960,13 +4973,13 @@ pub fn drop_script_table(script_uri: &str, logical_table_name: &str) -> AppResul
 /// List all tables owned by a script
 pub fn list_script_tables(script_uri: &str) -> AppResult<Vec<TableInfo>> {
     let repo = get_repository();
-    run_blocking(async { repo.list_script_tables(script_uri).await })
+    run_bounded(async { repo.list_script_tables(script_uri).await })
 }
 
 /// Get detailed schema for a table
 pub fn get_table_schema(script_uri: &str, logical_table_name: &str) -> AppResult<TableSchema> {
     let repo = get_repository();
-    run_blocking(async { repo.get_table_schema(script_uri, logical_table_name).await })
+    run_bounded(async { repo.get_table_schema(script_uri, logical_table_name).await })
 }
 
 /// Get foreign key relationships for a table
@@ -4975,7 +4988,7 @@ pub fn get_foreign_keys(
     logical_table_name: &str,
 ) -> AppResult<Vec<ForeignKeyInfo>> {
     let repo = get_repository();
-    run_blocking(async { repo.get_foreign_keys(script_uri, logical_table_name).await })
+    run_bounded(async { repo.get_foreign_keys(script_uri, logical_table_name).await })
 }
 
 /// Query rows from a script-owned table
@@ -4988,7 +5001,7 @@ pub fn query_table(
     order_dir: Option<&str>,
 ) -> AppResult<Vec<serde_json::Value>> {
     let repo = get_repository();
-    run_blocking(async {
+    run_bounded(async {
         repo.query_table(
             script_uri,
             logical_table_name,
@@ -5008,7 +5021,7 @@ pub fn insert_row(
     data: &HashMap<String, serde_json::Value>,
 ) -> AppResult<serde_json::Value> {
     let repo = get_repository();
-    run_blocking(async { repo.insert_row(script_uri, logical_table_name, data).await })
+    run_bounded(async { repo.insert_row(script_uri, logical_table_name, data).await })
 }
 
 /// Update a row in a script-owned table
@@ -5019,7 +5032,7 @@ pub fn update_row(
     data: &HashMap<String, serde_json::Value>,
 ) -> AppResult<serde_json::Value> {
     let repo = get_repository();
-    run_blocking(async {
+    run_bounded(async {
         repo.update_row(script_uri, logical_table_name, id, data)
             .await
     })
@@ -5028,7 +5041,7 @@ pub fn update_row(
 /// Delete a row from a script-owned table
 pub fn delete_row(script_uri: &str, logical_table_name: &str, id: i32) -> AppResult<bool> {
     let repo = get_repository();
-    run_blocking(async { repo.delete_row(script_uri, logical_table_name, id).await })
+    run_bounded(async { repo.delete_row(script_uri, logical_table_name, id).await })
 }
 
 /// Upsert a row into a script-owned table (INSERT … ON CONFLICT DO UPDATE)
@@ -5039,7 +5052,7 @@ pub fn upsert_row(
     data: &HashMap<String, serde_json::Value>,
 ) -> AppResult<serde_json::Value> {
     let repo = get_repository();
-    run_blocking(async {
+    run_bounded(async {
         repo.upsert_row(script_uri, logical_table_name, key_columns, data)
             .await
     })
@@ -5052,7 +5065,7 @@ pub fn delete_where(
     filters: &HashMap<String, serde_json::Value>,
 ) -> AppResult<u64> {
     let repo = get_repository();
-    run_blocking(async {
+    run_bounded(async {
         repo.delete_where(script_uri, logical_table_name, filters)
             .await
     })
@@ -5067,7 +5080,7 @@ pub fn acquire_lease(
     ttl_ms: i64,
 ) -> AppResult<serde_json::Value> {
     let repo = get_repository();
-    run_blocking(async {
+    run_bounded(async {
         repo.acquire_lease(script_uri, logical_table_name, lease_id, owner, ttl_ms)
             .await
     })
@@ -5076,7 +5089,7 @@ pub fn acquire_lease(
 /// Create a lease table with the required schema in a script-owned table
 pub fn create_lease_table(script_uri: &str, logical_table_name: &str) -> AppResult<String> {
     let repo = get_repository();
-    run_blocking(async {
+    run_bounded(async {
         repo.create_lease_table(script_uri, logical_table_name)
             .await
     })
@@ -5089,7 +5102,7 @@ pub fn add_unique_index(
     columns: &[String],
 ) -> AppResult<()> {
     let repo = get_repository();
-    run_blocking(async {
+    run_bounded(async {
         repo.add_unique_index(script_uri, logical_table_name, columns)
             .await
     })
@@ -5180,7 +5193,7 @@ fn get_static_scripts() -> HashMap<String, String> {
 pub fn fetch_assets(script_uri: &str) -> HashMap<String, Asset> {
     let repo = get_repository();
 
-    let result = run_blocking(async { repo.list_assets(script_uri).await });
+    let result = run_bounded(async { repo.list_assets(script_uri).await });
 
     match result {
         Ok(assets) => {
@@ -5296,7 +5309,7 @@ pub async fn upsert_assets_async(script_uri: &str, assets: Vec<Asset>) -> AppRes
 /// Delete asset with error handling  
 pub fn delete_asset(script_uri: &str, uri: &str) -> bool {
     let repo = get_repository();
-    let result = run_blocking(async { repo.delete_asset(script_uri, uri).await });
+    let result = run_bounded(async { repo.delete_asset(script_uri, uri).await });
 
     match result {
         Ok(existed) => existed,
@@ -5382,13 +5395,13 @@ pub fn set_script_properties_item(script_uri: &str, key: &str, value: &str) -> A
     }
 
     let repo = get_repository();
-    run_blocking(async { repo.set_script_properties(script_uri, key, value).await })
+    run_bounded(async { repo.set_script_properties(script_uri, key, value).await })
 }
 
 /// Get a shared storage item
 pub fn get_script_properties_item(script_uri: &str, key: &str) -> Option<String> {
     let repo = get_repository();
-    let result = run_blocking(async { repo.get_script_properties(script_uri, key).await });
+    let result = run_bounded(async { repo.get_script_properties(script_uri, key).await });
 
     match result {
         Ok(value) => value,
@@ -5405,7 +5418,7 @@ pub fn get_script_properties_item(script_uri: &str, key: &str) -> Option<String>
 /// Remove a shared storage item
 pub fn remove_script_properties_item(script_uri: &str, key: &str) -> bool {
     let repo = get_repository();
-    let result = run_blocking(async { repo.remove_script_properties(script_uri, key).await });
+    let result = run_bounded(async { repo.remove_script_properties(script_uri, key).await });
 
     match result {
         Ok(existed) => existed,
@@ -5422,7 +5435,7 @@ pub fn remove_script_properties_item(script_uri: &str, key: &str) -> bool {
 /// Clear all shared storage items for a specific script
 pub fn clear_script_properties(script_uri: &str) -> AppResult<()> {
     let repo = get_repository();
-    run_blocking(async { repo.clear_script_properties(script_uri).await })
+    run_bounded(async { repo.clear_script_properties(script_uri).await })
 }
 
 /// List the keys a script has in shared storage, in ascending order.
@@ -5431,7 +5444,7 @@ pub fn clear_script_properties(script_uri: &str) -> AppResult<()> {
 /// its keys, and a stable order is what makes indexing mean anything.
 pub fn list_script_properties_keys(script_uri: &str) -> Vec<String> {
     let repo = get_repository();
-    let result = run_blocking(async { repo.list_script_properties_keys(script_uri).await });
+    let result = run_bounded(async { repo.list_script_properties_keys(script_uri).await });
 
     match result {
         Ok(keys) => keys,
@@ -5470,7 +5483,7 @@ pub fn set_user_properties_item(
     }
 
     let repo = get_repository();
-    run_blocking(async {
+    run_bounded(async {
         repo.set_user_properties(script_uri, user_id, key, value)
             .await
     })
@@ -5479,7 +5492,7 @@ pub fn set_user_properties_item(
 /// Get a personal storage item
 pub fn get_user_properties_item(script_uri: &str, user_id: &str, key: &str) -> Option<String> {
     let repo = get_repository();
-    let result = run_blocking(async { repo.get_user_properties(script_uri, user_id, key).await });
+    let result = run_bounded(async { repo.get_user_properties(script_uri, user_id, key).await });
 
     match result {
         Ok(value) => value,
@@ -5496,8 +5509,7 @@ pub fn get_user_properties_item(script_uri: &str, user_id: &str, key: &str) -> O
 /// Remove a personal storage item
 pub fn remove_user_properties_item(script_uri: &str, user_id: &str, key: &str) -> bool {
     let repo = get_repository();
-    let result =
-        run_blocking(async { repo.remove_user_properties(script_uri, user_id, key).await });
+    let result = run_bounded(async { repo.remove_user_properties(script_uri, user_id, key).await });
 
     match result {
         Ok(existed) => existed,
@@ -5514,13 +5526,13 @@ pub fn remove_user_properties_item(script_uri: &str, user_id: &str, key: &str) -
 /// Clear all personal storage items for a specific script and user
 pub fn clear_user_properties(script_uri: &str, user_id: &str) -> AppResult<()> {
     let repo = get_repository();
-    run_blocking(async { repo.clear_user_properties(script_uri, user_id).await })
+    run_bounded(async { repo.clear_user_properties(script_uri, user_id).await })
 }
 
 /// List the keys a user has in a script's personal storage, in ascending order.
 pub fn list_user_properties_keys(script_uri: &str, user_id: &str) -> Vec<String> {
     let repo = get_repository();
-    let result = run_blocking(async { repo.list_user_properties_keys(script_uri, user_id).await });
+    let result = run_bounded(async { repo.list_user_properties_keys(script_uri, user_id).await });
 
     match result {
         Ok(keys) => keys,
@@ -5550,13 +5562,13 @@ pub fn set_script_secret_item(script_uri: &str, key: &str, value: &str) -> AppRe
     }
 
     let repo = get_repository();
-    run_blocking(async { repo.set_script_secret(script_uri, key, value).await })
+    run_bounded(async { repo.set_script_secret(script_uri, key, value).await })
 }
 
 /// Get a script secret
 pub fn get_script_secret_item(script_uri: &str, key: &str) -> Option<String> {
     let repo = get_repository();
-    let result = run_blocking(async { repo.get_script_secret(script_uri, key).await });
+    let result = run_bounded(async { repo.get_script_secret(script_uri, key).await });
 
     match result {
         Ok(value) => value,
@@ -5583,7 +5595,7 @@ pub fn resolve_secret_db(script_uri: &str, key: &str, user_id: Option<&str>) -> 
 /// Remove a script secret
 pub fn remove_script_secret_item(script_uri: &str, key: &str) -> bool {
     let repo = get_repository();
-    let result = run_blocking(async { repo.remove_script_secret(script_uri, key).await });
+    let result = run_bounded(async { repo.remove_script_secret(script_uri, key).await });
 
     match result {
         Ok(existed) => existed,
@@ -5600,13 +5612,13 @@ pub fn remove_script_secret_item(script_uri: &str, key: &str) -> bool {
 /// Clear all script secrets for a specific script
 pub fn clear_script_secrets(script_uri: &str) -> AppResult<()> {
     let repo = get_repository();
-    run_blocking(async { repo.clear_script_secrets(script_uri).await })
+    run_bounded(async { repo.clear_script_secrets(script_uri).await })
 }
 
 /// List all secret keys for a specific script
 pub fn list_script_secrets(script_uri: &str) -> AppResult<Vec<String>> {
     let repo = get_repository();
-    run_blocking(async { repo.list_script_secrets(script_uri).await })
+    run_bounded(async { repo.list_script_secrets(script_uri).await })
 }
 
 /// Set a user secret (key-value pair for a specific script and user)
@@ -5634,13 +5646,13 @@ pub fn set_user_secret_item(
     }
 
     let repo = get_repository();
-    run_blocking(async { repo.set_user_secret(script_uri, user_id, key, value).await })
+    run_bounded(async { repo.set_user_secret(script_uri, user_id, key, value).await })
 }
 
 /// Get a user secret
 pub fn get_user_secret_item(script_uri: &str, user_id: &str, key: &str) -> Option<String> {
     let repo = get_repository();
-    let result = run_blocking(async { repo.get_user_secret(script_uri, user_id, key).await });
+    let result = run_bounded(async { repo.get_user_secret(script_uri, user_id, key).await });
 
     match result {
         Ok(value) => value,
@@ -5657,7 +5669,7 @@ pub fn get_user_secret_item(script_uri: &str, user_id: &str, key: &str) -> Optio
 /// Remove a user secret
 pub fn remove_user_secret_item(script_uri: &str, user_id: &str, key: &str) -> bool {
     let repo = get_repository();
-    let result = run_blocking(async { repo.remove_user_secret(script_uri, user_id, key).await });
+    let result = run_bounded(async { repo.remove_user_secret(script_uri, user_id, key).await });
 
     match result {
         Ok(existed) => existed,
@@ -5674,7 +5686,7 @@ pub fn remove_user_secret_item(script_uri: &str, user_id: &str, key: &str) -> bo
 /// Clear all user secrets for a specific script and user
 pub fn clear_user_secrets(script_uri: &str, user_id: &str) -> AppResult<()> {
     let repo = get_repository();
-    run_blocking(async { repo.clear_user_secrets(script_uri, user_id).await })
+    run_bounded(async { repo.clear_user_secrets(script_uri, user_id).await })
 }
 
 use async_trait::async_trait;

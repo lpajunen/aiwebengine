@@ -328,10 +328,13 @@ impl McpClient {
             crate::repository::resolve_secret_db(script_uri, &self.secret_identifier, user_id)
                 .ok_or_else(|| McpClientError::SecretNotFound(self.secret_identifier.clone()))?;
 
-        // Build request
+        // Build request. The per-request timeout overrides the client's, so a
+        // call out to another MCP server cannot outlive the script that made
+        // it — the same bound `fetch` gets.
         let response = self
             .client
             .post(&self.server_url)
+            .timeout(crate::database::within_host_budget(DEFAULT_TIMEOUT))
             .header("Content-Type", "application/json")
             .header("Authorization", format!("Bearer {}", token))
             .json(&request_body)

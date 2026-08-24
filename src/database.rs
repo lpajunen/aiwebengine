@@ -49,6 +49,104 @@ fn fallback_runtime() -> &'static tokio::runtime::Runtime {
     })
 }
 
+thread_local! {
+    /// The instant after which host calls on this thread stop waiting.
+    ///
+    /// Armed for the length of a script execution and restored when it ends,
+    /// so a pooled blocking thread never inherits an expired budget from the
+    /// run before it.
+    static HOST_CALL_DEADLINE: std::cell::Cell<Option<Instant>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Bounds every host call made on this thread until it is dropped.
+///
+/// The QuickJS interrupt handler stops a runaway script between bytecode
+/// operations, which is everything except the case that matters here: a call
+/// that left JavaScript and is waiting on Postgres. The interrupt cannot reach
+/// into it, and the timeout around the request only abandons the blocking
+/// thread — the work keeps running on it, holding whatever it holds. This is
+/// how the budget follows the execution across that boundary.
+///
+/// What it stops is the *engine's* wait, not the database's work. Dropping a
+/// query future does not cancel the statement Postgres is running; the session
+/// guards do that. What it buys is control returning to JavaScript, so the
+/// handler unwinds and the commit-or-rollback at its boundary actually runs
+/// instead of being skipped by a thread that never came back.
+pub struct HostCallBudget {
+    /// Restored rather than cleared, so an execution nested inside another —
+    /// one script dispatching to the next — gives the outer budget back.
+    previous: Option<Instant>,
+}
+
+impl Drop for HostCallBudget {
+    fn drop(&mut self) {
+        HOST_CALL_DEADLINE.with(|deadline| deadline.set(self.previous));
+    }
+}
+
+/// Bounds host calls on this thread until the returned guard is dropped.
+pub fn bound_host_calls(deadline: Instant) -> HostCallBudget {
+    let previous = HOST_CALL_DEADLINE.with(|cell| cell.replace(Some(deadline)));
+    HostCallBudget { previous }
+}
+
+/// What is left of the current execution's budget, if one is armed.
+///
+/// An expired budget reports a zero duration rather than `None`: the call must
+/// still fail, and `tokio::time::timeout` with a zero duration is the shortest
+/// way to say so.
+fn remaining_host_budget() -> Option<Duration> {
+    HOST_CALL_DEADLINE.with(|cell| {
+        cell.get()
+            .map(|deadline| deadline.saturating_duration_since(Instant::now()))
+    })
+}
+
+/// `limit`, shortened to whatever remains of the execution budget.
+///
+/// For a host call that already bounds its own wait — `fetch` has a request
+/// timeout of its own — and only needs to be stopped from outliving the script
+/// that made it. With no budget armed the limit is returned untouched.
+///
+/// Lives here with [`run_blocking`] because both are the same bridge: the point
+/// where a script's thread leaves JavaScript to wait on something. It is not
+/// specific to the database.
+pub fn within_host_budget(limit: Duration) -> Duration {
+    match remaining_host_budget() {
+        Some(remaining) => limit.min(remaining),
+        None => limit,
+    }
+}
+
+/// Drives `future` to completion, giving up if the execution budget runs out.
+///
+/// The bounded counterpart of [`run_blocking`], and what every host call a
+/// script can reach should use. Without a budget armed — engine-internal work,
+/// startup, the scheduler — it behaves exactly like `run_blocking`.
+///
+/// Deliberately not used for committing or rolling back a transaction. Those
+/// are what a timed-out call unwinds *into*, and cutting a rollback short
+/// because the budget is already gone would leave open the transaction the
+/// rollback exists to close.
+pub(crate) fn run_bounded<F, T>(future: F) -> crate::error::AppResult<T>
+where
+    F: std::future::Future<Output = crate::error::AppResult<T>>,
+{
+    let Some(remaining) = remaining_host_budget() else {
+        return run_blocking(future);
+    };
+
+    run_blocking(async move {
+        match tokio::time::timeout(remaining, future).await {
+            Ok(result) => result,
+            Err(_) => Err(crate::error::AppError::JsTimeout {
+                timeout_ms: remaining.as_millis() as u64,
+            }),
+        }
+    })
+}
+
 /// Transaction state stored in thread-local storage
 pub struct TransactionState {
     /// The active PostgreSQL transaction
@@ -819,6 +917,65 @@ mod tests {
                 connection_string,
                 ..RepositoryConfig::default()
             })
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_host_call_gives_up_when_the_execution_budget_is_gone() {
+        // No database needed. What is under test is that a host call which
+        // would never return on its own returns anyway — the case the
+        // interrupt handler cannot see, because control has left JavaScript.
+        let outcome = tokio::task::spawn_blocking(|| {
+            let _budget = bound_host_calls(Instant::now() + Duration::from_millis(200));
+            run_bounded(std::future::pending::<crate::error::AppResult<()>>())
+        })
+        .await
+        .expect("task panicked");
+
+        assert!(
+            matches!(outcome, Err(crate::error::AppError::JsTimeout { .. })),
+            "a call that outlives the budget must fail, got {:?}",
+            outcome.map(|_| ())
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_host_call_outside_an_execution_is_not_bounded() {
+        // Startup, the scheduler and the notification listener all reach the
+        // repository with no script budget in scope. Bounding them by an
+        // arbitrary default would be a behaviour change nobody asked for.
+        let outcome = tokio::task::spawn_blocking(|| {
+            assert!(remaining_host_budget().is_none());
+            run_bounded(async { Ok::<_, crate::error::AppError>(7) })
+        })
+        .await
+        .expect("task panicked");
+
+        assert_eq!(outcome.expect("unbounded call"), 7);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_nested_execution_hands_the_outer_budget_back() {
+        // One script dispatching to another nests two budgets on one thread.
+        // Clearing instead of restoring would leave the outer script's host
+        // calls unbounded for the rest of its run.
+        tokio::task::spawn_blocking(|| {
+            let outer_deadline = Instant::now() + Duration::from_secs(30);
+            let _outer = bound_host_calls(outer_deadline);
+
+            {
+                let _inner = bound_host_calls(Instant::now() + Duration::from_millis(50));
+                assert!(remaining_host_budget().expect("inner") < Duration::from_secs(1));
+            }
+
+            let restored = remaining_host_budget().expect("outer restored");
+            assert!(
+                restored > Duration::from_secs(20),
+                "the outer budget should be back, got {:?}",
+                restored
+            );
+        })
+        .await
+        .expect("task panicked");
     }
 
     #[test]

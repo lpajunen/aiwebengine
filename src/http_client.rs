@@ -153,7 +153,7 @@ impl HttpClient {
             let mut request = shared_test_client()?
                 .request(method, parsed_url.as_str())
                 .headers(headers)
-                .timeout(timeout);
+                .timeout(crate::database::within_host_budget(timeout));
             if let Some(body) = options.body {
                 request = request.body(body);
             }
@@ -172,10 +172,13 @@ impl HttpClient {
         let mut current_headers = headers;
 
         for _ in 0..=MAX_REDIRECTS {
+            // Recomputed per hop rather than once: the budget is what bounds
+            // the whole fetch, and a chain of redirects each given the full
+            // timeout could outlast the script by several multiples of it.
             let mut request = client
                 .request(current_method.clone(), current_url.as_str())
                 .headers(current_headers.clone())
-                .timeout(timeout);
+                .timeout(crate::database::within_host_budget(timeout));
             if let Some(body) = &current_body {
                 request = request.body(body.clone());
             }

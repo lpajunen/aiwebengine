@@ -1944,13 +1944,13 @@ async fn setup_routes(
                     }));
                 }
 
-                // Every tool bounds its own run, but those bounds are enforced
-                // by the JavaScript interrupt handler, which only fires between
-                // bytecode instructions. A handler parked in a *host* call — a
-                // fetch with no timeout, an unbounded query — executes no
-                // bytecode, so nothing inside the run can stop it and without a
-                // backstop here the request never answers. The blocking thread
-                // is still lost either way; what this recovers is the response.
+                // A tool's own budget is enforced twice over — by the
+                // JavaScript interrupt handler between bytecode instructions,
+                // and by the host-call budget across a call that has left
+                // JavaScript to wait on the database or the network. This
+                // backstop covers what neither reaches: a wait inside the
+                // engine itself. The blocking thread is still lost when it
+                // fires; what it recovers is the response.
                 let backstop =
                     std::time::Duration::from_millis(mcp::tool_call_backstop_ms(&tool_name));
                 let tool_name_for_error = tool_name.clone();

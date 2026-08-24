@@ -148,16 +148,28 @@ fn request_profiling_enabled() -> bool {
 
 /// Creates a QuickJS runtime with memory, stack, and wall-clock limits enforced.
 ///
-/// The interrupt handler is the only mechanism that can stop a runaway script
-/// (e.g. `while(true) {}`); outer tokio timeouts abandon the blocking thread
-/// but cannot terminate execution running on it.
-fn create_sandboxed_runtime(limits: &ExecutionLimits) -> Result<Runtime, String> {
+/// The budget is enforced twice over, because one mechanism cannot see what the
+/// other does. The interrupt handler stops a runaway script (`while (true) {}`)
+/// between bytecode operations, and is blind to a call that has left JavaScript
+/// to wait on the database. The [`HostCallBudget`] bounds exactly that call,
+/// and is blind to a loop that never makes one. Outer tokio timeouts do neither
+/// — they abandon the blocking thread while the work continues on it.
+///
+/// Both run from the same deadline, so a script gets one budget however it
+/// chooses to spend it.
+///
+/// The returned guard must outlive the runtime: dropping it early leaves the
+/// script running with its host calls unbounded again.
+#[must_use = "the host-call budget ends when its guard is dropped"]
+fn create_sandboxed_runtime(
+    limits: &ExecutionLimits,
+) -> Result<(Runtime, crate::database::HostCallBudget), String> {
     let rt = Runtime::new().map_err(|e| format!("Failed to create runtime: {}", e))?;
     rt.set_memory_limit(limits.max_memory_mb * 1024 * 1024);
     rt.set_max_stack_size(512 * 1024);
     let deadline = Instant::now() + Duration::from_millis(limits.timeout_ms);
     rt.set_interrupt_handler(Some(Box::new(move || Instant::now() >= deadline)));
-    Ok(rt)
+    Ok((rt, crate::database::bound_host_calls(deadline)))
 }
 
 /// Upper bound on microtasks drained for one invocation.
@@ -1067,7 +1079,7 @@ pub fn execute_script_secure(
     };
 
     match create_sandboxed_runtime(&limits) {
-        Ok(rt) => match Context::full(&rt) {
+        Ok((rt, _budget)) => match Context::full(&rt) {
             Ok(ctx) => {
                 // Create a shared location for detailed error message
                 let error_details: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
@@ -1200,7 +1212,7 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
     };
 
     match create_sandboxed_runtime(&limits) {
-        Ok(rt) => {
+        Ok((rt, _budget)) => {
             match Context::full(&rt) {
                 Ok(ctx) => {
                     let result =
@@ -1393,7 +1405,7 @@ pub fn execute_script_for_request_secure(
     let t_transpile = phase.elapsed();
 
     let phase = Instant::now();
-    let rt = create_sandboxed_runtime(&current_execution_limits())?;
+    let (rt, _budget) = create_sandboxed_runtime(&current_execution_limits())?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
     let t_runtime = phase.elapsed();
 
@@ -1737,7 +1749,7 @@ pub fn execute_script_for_request(
         .ok_or_else(|| format!("no script for uri {}", script_uri))?;
     let executable_code = transpile_if_needed(script_uri, &owner_script)?;
 
-    let rt = create_sandboxed_runtime(&current_execution_limits())?;
+    let (rt, _budget) = create_sandboxed_runtime(&current_execution_limits())?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
     ctx.with(|ctx| -> Result<(), rquickjs::Error> {
@@ -1859,7 +1871,7 @@ pub fn execute_scheduled_handler(
         .ok_or_else(|| format!("no script for uri {}", script_uri))?;
     let executable_code = transpile_if_needed(script_uri, &owner_script)?;
 
-    let rt = create_sandboxed_runtime(&current_execution_limits())?;
+    let (rt, _budget) = create_sandboxed_runtime(&current_execution_limits())?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
     ctx.with(|ctx| -> Result<(), rquickjs::Error> {
@@ -2066,7 +2078,7 @@ fn execute_test_module(
     // without matching on QuickJS error text.
     let deadline = Instant::now() + Duration::from_millis(budget_ms);
 
-    let rt = create_sandboxed_runtime(&limits)?;
+    let (rt, _budget) = create_sandboxed_runtime(&limits)?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
     // Collection happens inside a `with`; running the cases cannot, because a
@@ -2273,7 +2285,7 @@ pub fn execute_graphql_resolver(params: GraphqlResolverExecutionParams) -> Resul
         .ok_or_else(|| format!("no script for uri {}", script_uri_owned))?;
     let executable_code = transpile_if_needed(&script_uri_owned, &script_content)?;
 
-    let rt = create_sandboxed_runtime(&current_execution_limits())?;
+    let (rt, _budget) = create_sandboxed_runtime(&current_execution_limits())?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
     let setup_exec = ctx.with(|ctx| -> Result<(), rquickjs::Error> {
@@ -2447,7 +2459,7 @@ pub fn execute_mcp_prompt_handler(
         .ok_or_else(|| format!("no script for uri {}", script_uri_owned))?;
     let executable_code = transpile_if_needed(&script_uri_owned, &script_content)?;
 
-    let rt = create_sandboxed_runtime(&current_execution_limits())?;
+    let (rt, _budget) = create_sandboxed_runtime(&current_execution_limits())?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
     let setup_exec = ctx.with(|ctx| -> Result<(), rquickjs::Error> {
@@ -2569,7 +2581,7 @@ pub fn execute_mcp_tool_handler(
         .ok_or_else(|| format!("no script for uri {}", script_uri_owned))?;
     let executable_code = transpile_if_needed(&script_uri_owned, &script_content)?;
 
-    let rt = create_sandboxed_runtime(&current_execution_limits())?;
+    let (rt, _budget) = create_sandboxed_runtime(&current_execution_limits())?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
     let setup_exec = ctx.with(|ctx| -> Result<(), rquickjs::Error> {
@@ -2739,7 +2751,7 @@ pub fn execute_stream_customization_function(
         .ok_or_else(|| format!("no script for uri {}", script_uri_owned))?;
     let executable_code = transpile_if_needed(&script_uri_owned, &script_content)?;
 
-    let rt = create_sandboxed_runtime(&current_execution_limits())?;
+    let (rt, _budget) = create_sandboxed_runtime(&current_execution_limits())?;
     let ctx = Context::full(&rt).map_err(|e| format!("context create: {}", e))?;
 
     let setup_exec = ctx.with(|ctx| -> Result<(), rquickjs::Error> {
@@ -2978,8 +2990,8 @@ pub fn evaluate_snippet(params: &EvalParams) -> EvalOutcome {
         ..current_execution_limits()
     };
 
-    let rt = match create_sandboxed_runtime(&limits) {
-        Ok(rt) => rt,
+    let (rt, _budget) = match create_sandboxed_runtime(&limits) {
+        Ok(armed) => armed,
         Err(e) => fail_early!(e),
     };
     let ctx = match Context::full(&rt) {
@@ -3554,8 +3566,8 @@ fn run_registration_pass(
         Err(e) => fail_early!(format!("Transpilation failed: {}", e)),
     };
 
-    let rt = match create_sandboxed_runtime(&limits) {
-        Ok(rt) => rt,
+    let (rt, _budget) = match create_sandboxed_runtime(&limits) {
+        Ok(armed) => armed,
         Err(e) => fail_early!(e),
     };
     // Mirrors the deadline `create_sandboxed_runtime` just armed the interrupt
@@ -3945,7 +3957,7 @@ mod tests {
             timeout_ms: 200,
             ..ExecutionLimits::default()
         };
-        let rt = create_sandboxed_runtime(&limits).expect("runtime creation failed");
+        let (rt, _budget) = create_sandboxed_runtime(&limits).expect("runtime creation failed");
         let ctx = Context::full(&rt).expect("context creation failed");
         let start = Instant::now();
         let result: Result<(), rquickjs::Error> =
@@ -3966,7 +3978,7 @@ mod tests {
             max_memory_mb: 8,
             ..ExecutionLimits::default()
         };
-        let rt = create_sandboxed_runtime(&limits).expect("runtime creation failed");
+        let (rt, _budget) = create_sandboxed_runtime(&limits).expect("runtime creation failed");
         let ctx = Context::full(&rt).expect("context creation failed");
         let start = Instant::now();
         let result: Result<(), rquickjs::Error> = ctx.with(|ctx| {
