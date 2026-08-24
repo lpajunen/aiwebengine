@@ -4851,6 +4851,110 @@ pub async fn installed_page_route() -> Response {
         .into_response()
 }
 
+/// How many rows of lock detail one health check reports.
+///
+/// A wedged table produces one blocked waiter per stalled request, and they all
+/// name the same holder. A handful is enough to identify it; the rest is
+/// repetition an operator has to scroll past.
+const LOCK_DIAGNOSTIC_LIMIT: i64 = 10;
+
+/// Statements currently waiting on a lock, and the sessions holding them.
+///
+/// The question this answers used to be unanswerable from inside the engine:
+/// a wedged table shows up as requests that never return, and telling that
+/// apart from a slow script meant reaching for `psql`. A blocked statement
+/// names its own query, and `pg_blocking_pids` names whoever is in front of it,
+/// which together identify a lock wedge without leaving the health check.
+///
+/// Reported alongside the oldest transaction on the server, because the holder
+/// of a lock nobody can break is usually a transaction that stopped making
+/// progress rather than one doing something slow.
+pub async fn lock_diagnostics(pool: &sqlx::PgPool) -> Value {
+    use sqlx::Row;
+
+    let waiting = sqlx::query(
+        r#"
+        SELECT
+            a.pid,
+            a.state,
+            a.wait_event_type,
+            EXTRACT(EPOCH FROM (now() - a.xact_start))::float8 AS xact_age_seconds,
+            left(a.query, 200) AS query,
+            pg_blocking_pids(a.pid) AS blocked_by
+        FROM pg_stat_activity a
+        WHERE a.datname = current_database()
+          AND cardinality(pg_blocking_pids(a.pid)) > 0
+        ORDER BY a.xact_start
+        LIMIT $1
+        "#,
+    )
+    .bind(LOCK_DIAGNOSTIC_LIMIT)
+    .fetch_all(pool)
+    .await;
+
+    let waiting = match waiting {
+        Ok(rows) => rows
+            .into_iter()
+            .map(|row| {
+                json!({
+                    "pid": row.try_get::<i32, _>("pid").unwrap_or_default(),
+                    "state": row.try_get::<Option<String>, _>("state").unwrap_or_default(),
+                    "wait_event_type": row
+                        .try_get::<Option<String>, _>("wait_event_type")
+                        .unwrap_or_default(),
+                    "transaction_age_seconds": row
+                        .try_get::<Option<f64>, _>("xact_age_seconds")
+                        .unwrap_or_default(),
+                    "query": row.try_get::<Option<String>, _>("query").unwrap_or_default(),
+                    "blocked_by": row
+                        .try_get::<Vec<i32>, _>("blocked_by")
+                        .unwrap_or_default(),
+                })
+            })
+            .collect::<Vec<_>>(),
+        Err(e) => {
+            // A diagnostic that cannot run must not decide whether the engine
+            // is healthy; the database ping above already answered that.
+            return json!({ "available": false, "message": e.to_string() });
+        }
+    };
+
+    let oldest = sqlx::query(
+        r#"
+        SELECT
+            pid,
+            state,
+            EXTRACT(EPOCH FROM (now() - xact_start))::float8 AS xact_age_seconds,
+            left(query, 200) AS query
+        FROM pg_stat_activity
+        WHERE datname = current_database() AND xact_start IS NOT NULL
+        ORDER BY xact_start
+        LIMIT 1
+        "#,
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .map(|row| {
+        json!({
+            "pid": row.try_get::<i32, _>("pid").unwrap_or_default(),
+            "state": row.try_get::<Option<String>, _>("state").unwrap_or_default(),
+            "age_seconds": row
+                .try_get::<Option<f64>, _>("xact_age_seconds")
+                .unwrap_or_default(),
+            "query": row.try_get::<Option<String>, _>("query").unwrap_or_default(),
+        })
+    });
+
+    json!({
+        "available": true,
+        "blocked_statements": waiting.len(),
+        "waiting": waiting,
+        "oldest_transaction": oldest,
+    })
+}
+
 /// Detailed cluster diagnostics. Administrators only.
 ///
 /// Unlike the unauthenticated `/health` liveness probe, this reports internal
@@ -4886,11 +4990,16 @@ pub async fn cluster_health_route(auth_user: Option<Extension<AuthUser>>) -> Res
     let server_id = crate::notifications::get_server_id().unwrap_or_else(|| "unknown".to_string());
 
     // Verify the database with a real query and report pool stats alongside it.
-    let (db_healthy, pool_stats) = if let Some(db) = crate::database::get_global_database() {
+    let (db_healthy, pool_stats, locks) = if let Some(db) = crate::database::get_global_database() {
         let connected = db.health_check().await.is_ok();
         let pool = db.pool();
         let size = pool.size() as usize;
         let idle = pool.num_idle();
+        let locks = if connected {
+            lock_diagnostics(pool).await
+        } else {
+            json!({ "available": false, "message": "Database unreachable" })
+        };
         (
             connected,
             json!({
@@ -4900,6 +5009,7 @@ pub async fn cluster_health_route(auth_user: Option<Extension<AuthUser>>) -> Res
                 "idle_connections": idle,
                 "max_connections": pool.options().get_max_connections(),
             }),
+            locks,
         )
     } else {
         (
@@ -4909,6 +5019,7 @@ pub async fn cluster_health_route(auth_user: Option<Extension<AuthUser>>) -> Res
                 "connected": false,
                 "message": "Database not initialized (memory mode)"
             }),
+            json!({ "available": false, "message": "Database not initialized" }),
         )
     };
 
@@ -4930,6 +5041,12 @@ pub async fn cluster_health_route(auth_user: Option<Extension<AuthUser>>) -> Res
     let job_counts = scheduler.get_job_counts();
     let total_jobs: usize = job_counts.values().sum();
 
+    // Reported rather than folded into `status`: a lost thread does not make
+    // the engine unreachable, and a probe that starts failing would take the
+    // instance out of rotation for a condition that often clears itself. It is
+    // what to alert on, not what to fail on.
+    let census = crate::worker_census::snapshot();
+
     let status_code = if db_healthy {
         StatusCode::OK
     } else {
@@ -4949,6 +5066,12 @@ pub async fn cluster_health_route(auth_user: Option<Extension<AuthUser>>) -> Res
                 "build_timestamp": option_env!("VERGEN_BUILD_TIMESTAMP").unwrap_or("")
             },
             "database": pool_stats,
+            "locks": locks,
+            "workers": {
+                "abandoned": census.abandoned,
+                "recovered": census.recovered,
+                "in_flight": census.in_flight,
+            },
             "notification_listener": listener_status,
             "scheduler": {
                 "total_jobs": total_jobs,

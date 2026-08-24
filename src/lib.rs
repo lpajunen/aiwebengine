@@ -45,6 +45,7 @@ pub mod stream_manager;
 pub mod stream_registry;
 pub mod transpiler;
 pub mod user_repository;
+pub mod worker_census;
 
 // Authentication module (Phase 1 - Core Infrastructure)
 pub mod auth;
@@ -1954,9 +1955,11 @@ async fn setup_routes(
                 let backstop =
                     std::time::Duration::from_millis(mcp::tool_call_backstop_ms(&tool_name));
                 let tool_name_for_error = tool_name.clone();
+                let (ticket, watch) = worker_census::watch(format!("mcp tool {}", tool_name));
                 let execution = match tokio::time::timeout(
                     backstop,
                     tokio::task::spawn_blocking(move || {
+                        let _ticket = ticket;
                         mcp::execute_mcp_tool(&tool_name, arguments, auth_context, user_context)
                     }),
                 )
@@ -1966,6 +1969,7 @@ async fn setup_routes(
                         Err(format!("tool task failed: {}", join_error))
                     }),
                     Err(_) => {
+                        watch.abandon();
                         error!(
                             "MCP tool '{}' did not answer within {:?}; abandoning the call",
                             tool_name_for_error, backstop
@@ -2772,6 +2776,10 @@ async fn handle_dynamic_request(
     let headers_for_worker = header_map;
     let request_id_worker = request_id.clone();
     let route_pattern_worker = route_pattern.clone();
+    // Taken before the worker closure claims it, so the census can name the
+    // request it was serving.
+    let method_for_census = request_method.clone();
+
     let worker = move || -> Result<js_engine::JsHttpResponse, String> {
         // Create authentication context for JavaScript
         let auth_context = if let Some(ref auth_user) = auth_user {
@@ -2833,14 +2841,24 @@ async fn handle_dynamic_request(
     // would block until the script finishes and the timeout could never fire. On
     // timeout the blocking thread is abandoned; the QuickJS interrupt handler
     // (see js_engine::create_sandboxed_runtime) terminates the script itself.
+    // The census is what turns "this request was slow" into "this thread is
+    // still out there holding a connection". Without it an abandoned worker
+    // leaves no trace beyond one log line, and a leak is invisible until the
+    // pool is empty.
+    let (ticket, watch) = worker_census::watch(format!("{} {}", method_for_census, route_pattern));
+
     let timed = match tokio::time::timeout(
         std::time::Duration::from_millis(script_timeout_ms),
-        tokio::task::spawn_blocking(worker),
+        tokio::task::spawn_blocking(move || {
+            let _ticket = ticket;
+            worker()
+        }),
     )
     .await
     {
         Ok(join) => join.map_err(|e| format!("join error: {}", e)),
         Err(_) => {
+            watch.abandon();
             // A timed-out request left no trace in the script's own log before
             // this: the handler was abandoned mid-run, so unless the engine
             // says what happened, the log simply stops mid-invocation.

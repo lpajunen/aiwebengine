@@ -281,9 +281,11 @@ impl TestRunner {
                 .saturating_add(TEST_RUN_TIMEOUT_GRACE_MS),
         );
 
+        let (ticket, watch) = crate::worker_census::watch(format!("tests {}", script_uri));
         let outcome = tokio::time::timeout(
             backstop,
             tokio::task::spawn_blocking(move || {
+                let _ticket = ticket;
                 let modules = crate::module_loader::discover_test_modules(&params.script_uri);
                 debug!(
                     script_uri = %params.script_uri,
@@ -308,6 +310,7 @@ impl TestRunner {
                 )
             }
             Err(_elapsed) => {
+                watch.abandon();
                 // The backstop fired: the blocking task is abandoned mid-run,
                 // so there are no verdicts to recover here.
                 warn!(

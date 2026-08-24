@@ -199,9 +199,11 @@ impl ScriptInitializer {
 
         debug!("Spawning blocking task for {}", script_uri);
         let init_timeout_ms = self.timeout_ms;
+        let (ticket, watch) = crate::worker_census::watch(format!("init {}", script_uri));
         let result = timeout(
             timeout_duration,
             tokio::task::spawn_blocking(move || {
+                let _ticket = ticket;
                 debug!("Inside spawn_blocking for {}", script_uri_clone);
                 crate::js_engine::call_init_if_exists_with_timeout(
                     &script_uri_clone,
@@ -290,6 +292,7 @@ impl ScriptInitializer {
                 ))
             }
             Err(_timeout_error) => {
+                watch.abandon();
                 // The backstop fired: the blocking task is abandoned mid-run, so
                 // there are no registrations to recover here.
                 let error_msg = format!(
