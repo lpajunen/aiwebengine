@@ -3663,31 +3663,306 @@ fn parse_filter_conditions(
     Ok(conditions)
 }
 
-/// Bind a single JSON value to a sqlx query as the appropriate Postgres type.
-fn bind_json_value<'q>(
-    query: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
-    value: &'q serde_json::Value,
-) -> AppResult<sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>> {
-    match value {
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Ok(query.bind(i))
-            } else if let Some(f) = n.as_f64() {
-                Ok(query.bind(f))
-            } else {
-                Err(AppError::Validation {
-                    field: "value".to_string(),
-                    reason: "Numeric value out of range".to_string(),
-                })
+/// The Postgres type a script's value is bound as, and cast to in the SQL.
+///
+/// Picking this from the shape of the JSON that carried the value — an `i64`
+/// for `2`, an `f64` for `1.57` — is what let one SQL string arrive with
+/// different parameter types on different calls. sqlx caches a prepared
+/// statement under that string alone: `get_or_prepare` returns the cached
+/// entry before it looks at the argument types, so the types inferred by the
+/// first call are the types every later call binds against, for as long as
+/// that pooled connection lives. Bind ships the encoded bytes unchecked, so a
+/// float sent to a parameter prepared as `int8` is not rejected — it is
+/// reinterpreted, bit for bit, and `1.57` arrives as 4609081767789723156.
+///
+/// Deciding the type from the column instead makes it a function of the
+/// column names, which are already in the SQL text — the thing the cache is
+/// keyed on. The same statement can then only ever be bound the same way.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BindType {
+    Int4,
+    Int8,
+    Float8,
+    Text,
+    Bool,
+    Timestamptz,
+}
+
+impl BindType {
+    /// The type the placeholder is cast to, as in `$1::int4`.
+    ///
+    /// Pinning it in the SQL does two things. It stops Postgres inferring the
+    /// parameter's type from the surrounding statement — inference is what
+    /// quietly rounded `1.57` to `2` through a `float8 → int4` assignment
+    /// cast — and it puts the type into the cache key, so a column whose
+    /// declared type is unknown and whose bind type had to be guessed from
+    /// the value still cannot collide with a differently typed guess.
+    fn cast(self) -> &'static str {
+        match self {
+            BindType::Int4 => "int4",
+            BindType::Int8 => "int8",
+            BindType::Float8 => "float8",
+            BindType::Text => "text",
+            BindType::Bool => "bool",
+            BindType::Timestamptz => "timestamptz",
+        }
+    }
+
+    /// How the type is named back to the script, in the words it declared it with.
+    fn describe(self) -> &'static str {
+        match self {
+            BindType::Int4 => "INTEGER",
+            BindType::Int8 => "BIGINT",
+            BindType::Float8 => "FLOAT",
+            BindType::Text => "TEXT",
+            BindType::Bool => "BOOLEAN",
+            BindType::Timestamptz => "TIMESTAMP",
+        }
+    }
+
+    /// Resolve a column type recorded in `script_tables.schema_json`.
+    ///
+    /// Returns `None` for anything unrecognised, which leaves the value's own
+    /// shape to decide — see [`BindType::infer`].
+    fn from_declared(declared: &str) -> Option<Self> {
+        match declared.to_uppercase().as_str() {
+            "INTEGER" | "INT" | "INT4" | "SERIAL" => Some(BindType::Int4),
+            "TEXT" | "STRING" | "VARCHAR" => Some(BindType::Text),
+            "BOOLEAN" | "BOOL" => Some(BindType::Bool),
+            "TIMESTAMPTZ" | "TIMESTAMP" => Some(BindType::Timestamptz),
+            _ => None,
+        }
+    }
+
+    /// The type to bind a value as when the column's own type is unknown.
+    ///
+    /// Tables predating the schema metadata — and lease tables, which record
+    /// no columns — have nothing to look the column up in. The value's shape
+    /// is all that is left, which is the old behaviour; what keeps it safe is
+    /// that the guess is pinned by [`BindType::cast`], so two different
+    /// guesses land on two different cached statements.
+    fn infer(value: &serde_json::Value) -> Self {
+        match value {
+            serde_json::Value::Number(n) if n.as_i64().is_some() => BindType::Int8,
+            serde_json::Value::Number(_) => BindType::Float8,
+            serde_json::Value::Bool(_) => BindType::Bool,
+            _ => BindType::Text,
+        }
+    }
+}
+
+/// The columns of a script-owned table, with the physical name to address it by.
+///
+/// Loaded in the one query that used to fetch the physical name alone, so
+/// typing a statement's parameters costs no extra round trip.
+struct TableColumns {
+    physical_name: String,
+    /// Column name to declared type. Empty for a table that records no schema.
+    declared: HashMap<String, BindType>,
+}
+
+impl TableColumns {
+    async fn load(
+        conn: &mut PgConnection,
+        script_uri: &str,
+        logical_table_name: &str,
+    ) -> AppResult<Self> {
+        let row: Option<(String, Option<serde_json::Value>)> = sqlx::query_as(
+            "SELECT physical_table_name, schema_json FROM script_tables WHERE script_uri = $1 AND logical_table_name = $2",
+        )
+        .bind(script_uri)
+        .bind(logical_table_name)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(|e| {
+            error!("Database error fetching table metadata: {}", e);
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
+        })?;
+
+        let (physical_name, schema_json) = row.ok_or_else(|| AppError::Validation {
+            field: "table_name".to_string(),
+            reason: format!("Table '{}' not found for this script", logical_table_name),
+        })?;
+
+        let mut declared = HashMap::new();
+        if let Some(columns) = schema_json
+            .as_ref()
+            .and_then(|s| s.get("columns"))
+            .and_then(|c| c.as_array())
+        {
+            for column in columns {
+                if let Some(name) = column.get("name").and_then(|n| n.as_str())
+                    && let Some(bind_type) = column
+                        .get("type")
+                        .and_then(|t| t.as_str())
+                        .and_then(BindType::from_declared)
+                {
+                    declared.insert(name.to_string(), bind_type);
+                }
             }
         }
-        serde_json::Value::String(s) => Ok(query.bind(s.as_str())),
-        serde_json::Value::Bool(b) => Ok(query.bind(*b)),
-        serde_json::Value::Null => Ok(query.bind(Option::<String>::None)),
-        _ => Err(AppError::Validation {
-            field: "value".to_string(),
-            reason: "Unsupported value type (array/object not allowed)".to_string(),
-        }),
+
+        Ok(Self {
+            physical_name,
+            declared,
+        })
+    }
+
+    /// The type `column` must be bound as, falling back to the value's shape.
+    fn bind_type(&self, column: &str, value: &serde_json::Value) -> BindType {
+        self.declared
+            .get(column)
+            .copied()
+            .unwrap_or_else(|| BindType::infer(value))
+    }
+}
+
+/// A value to bind, with the type resolved from the column it is going into.
+struct BoundValue<'a> {
+    column: &'a str,
+    value: &'a serde_json::Value,
+    bind_type: BindType,
+}
+
+impl<'a> BoundValue<'a> {
+    fn new(columns: &TableColumns, column: &'a str, value: &'a serde_json::Value) -> Self {
+        Self {
+            column,
+            value,
+            bind_type: columns.bind_type(column, value),
+        }
+    }
+
+    /// The placeholder for this value, cast to its resolved type.
+    fn placeholder(&self, position: usize) -> String {
+        format!("${}::{}", position, self.bind_type.cast())
+    }
+}
+
+/// Resolve a script's `{column: value}` map into a deterministic binding order.
+///
+/// Sorted rather than left in hash order: the column list is part of the SQL
+/// text, and the statement cache is keyed on that text, so an unstable order
+/// would scatter one logical statement across as many cached statements as the
+/// map has orderings.
+fn ordered_bindings<'a>(
+    columns: &TableColumns,
+    data: &'a HashMap<String, serde_json::Value>,
+) -> AppResult<Vec<BoundValue<'a>>> {
+    let mut names: Vec<&'a String> = data.keys().collect();
+    names.sort();
+
+    let mut bound = Vec::with_capacity(names.len());
+    for name in names {
+        validate_identifier(name).map_err(|e| AppError::Validation {
+            field: "column_name".to_string(),
+            reason: e.to_string(),
+        })?;
+        bound.push(BoundValue::new(columns, name, &data[name]));
+    }
+    Ok(bound)
+}
+
+/// Reject a value the column's declared type cannot hold.
+fn value_rejected(column: &str, bind_type: BindType, got: &str) -> AppError {
+    AppError::Validation {
+        field: column.to_string(),
+        reason: format!(
+            "Column '{}' is {}; got {}",
+            column,
+            bind_type.describe(),
+            got
+        ),
+    }
+}
+
+/// A JSON number as a whole number, or an error naming what was wrong with it.
+///
+/// A script computing `1.57` for an integer column has a bug, and rounding it
+/// to `2` on the script's behalf hides that bug behind a value it never asked
+/// to store. `2.0` is a different matter: JavaScript has one numeric type, so
+/// a whole number arrives as a float whenever it has been through arithmetic,
+/// and refusing it would refuse ordinary integer work.
+fn as_whole_number(column: &str, bind_type: BindType, n: &serde_json::Number) -> AppResult<i64> {
+    if let Some(i) = n.as_i64() {
+        return Ok(i);
+    }
+    match n.as_f64() {
+        Some(f) if f.fract() == 0.0 && f >= i64::MIN as f64 && f <= i64::MAX as f64 => Ok(f as i64),
+        Some(f) if f.fract() != 0.0 => Err(value_rejected(
+            column,
+            bind_type,
+            &format!("{} — a whole number is required", f),
+        )),
+        _ => Err(value_rejected(
+            column,
+            bind_type,
+            &format!("{} — out of range", n),
+        )),
+    }
+}
+
+/// Bind one resolved value to a sqlx query as the type its column declared.
+///
+/// Every mismatch is reported here, as a validation error naming the column,
+/// rather than being sent to Postgres to fail against. That matters inside a
+/// transaction: a statement that never runs cannot abort one.
+fn bind_value<'q>(
+    query: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
+    bound: &BoundValue<'q>,
+) -> AppResult<sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>> {
+    use serde_json::Value;
+
+    let column = bound.column;
+    let bind_type = bound.bind_type;
+
+    match (bind_type, bound.value) {
+        (BindType::Int4, Value::Null) => Ok(query.bind(Option::<i32>::None)),
+        (BindType::Int4, Value::Number(n)) => {
+            let whole = as_whole_number(column, bind_type, n)?;
+            let narrowed = i32::try_from(whole).map_err(|_| {
+                value_rejected(column, bind_type, &format!("{} — out of range", whole))
+            })?;
+            Ok(query.bind(narrowed))
+        }
+
+        (BindType::Int8, Value::Null) => Ok(query.bind(Option::<i64>::None)),
+        (BindType::Int8, Value::Number(n)) => {
+            Ok(query.bind(as_whole_number(column, bind_type, n)?))
+        }
+
+        (BindType::Float8, Value::Null) => Ok(query.bind(Option::<f64>::None)),
+        (BindType::Float8, Value::Number(n)) => {
+            // A `serde_json` number is finite by construction, so there is no
+            // NaN or infinity to screen out here.
+            let f = n.as_f64().ok_or_else(|| {
+                value_rejected(column, bind_type, &format!("{} — out of range", n))
+            })?;
+            Ok(query.bind(f))
+        }
+
+        (BindType::Text, Value::Null) => Ok(query.bind(Option::<String>::None)),
+        (BindType::Text, Value::String(s)) => Ok(query.bind(s.as_str())),
+
+        (BindType::Bool, Value::Null) => Ok(query.bind(Option::<bool>::None)),
+        (BindType::Bool, Value::Bool(b)) => Ok(query.bind(*b)),
+
+        // Postgres parses the timestamp out of the cast placeholder, which
+        // accepts the ISO 8601 strings scripts get from `toISOString()`.
+        (BindType::Timestamptz, Value::Null) => Ok(query.bind(Option::<String>::None)),
+        (BindType::Timestamptz, Value::String(s)) => Ok(query.bind(s.as_str())),
+
+        (_, Value::Array(_)) | (_, Value::Object(_)) => Err(value_rejected(
+            column,
+            bind_type,
+            "an array or object — only scalar values can be stored",
+        )),
+        (_, Value::Number(n)) => Err(value_rejected(column, bind_type, &format!("{}", n))),
+        (_, Value::String(_)) => Err(value_rejected(column, bind_type, "a string")),
+        (_, Value::Bool(b)) => Err(value_rejected(column, bind_type, &format!("{}", b))),
     }
 }
 
@@ -3759,7 +4034,7 @@ async fn db_query_table(
     order_by: Option<&str>,
     order_dir: Option<&str>,
 ) -> AppResult<Vec<serde_json::Value>> {
-    let physical_table_name = get_physical_table_name(conn, script_uri, logical_table_name).await?;
+    let columns = TableColumns::load(conn, script_uri, logical_table_name).await?;
 
     // Parse filter conditions (supports equality and range operators)
     let conditions = if let Some(f) = filters {
@@ -3768,14 +4043,20 @@ async fn db_query_table(
         Vec::new()
     };
 
+    let bound: Vec<BoundValue<'_>> = conditions
+        .iter()
+        .map(|c| BoundValue::new(&columns, &c.column, &c.value))
+        .collect();
+
     // Build WHERE clause
-    let mut sql = format!("SELECT * FROM {}", quote_identifier(&physical_table_name));
+    let mut sql = format!("SELECT * FROM {}", quote_identifier(&columns.physical_name));
     let mut param_count = 0usize;
 
     if !conditions.is_empty() {
         let clauses: Vec<String> = conditions
             .iter()
-            .map(|c| {
+            .zip(&bound)
+            .map(|(c, b)| {
                 param_count += 1;
                 let op_str = match c.op {
                     FilterOp::Eq => "=",
@@ -3786,10 +4067,10 @@ async fn db_query_table(
                     FilterOp::Ne => "!=",
                 };
                 format!(
-                    "{} {} ${}",
+                    "{} {} {}",
                     quote_identifier(&c.column),
                     op_str,
-                    param_count
+                    b.placeholder(param_count)
                 )
             })
             .collect();
@@ -3816,12 +4097,12 @@ async fn db_query_table(
     // LIMIT (default 100, max 1000)
     let limit_val = limit.unwrap_or(100).min(1000);
     param_count += 1;
-    sql.push_str(&format!(" LIMIT ${}", param_count));
+    sql.push_str(&format!(" LIMIT ${}::int8", param_count));
 
     // Bind parameters
     let mut sql_query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
-    for cond in &conditions {
-        sql_query = bind_json_value(sql_query, &cond.value)?;
+    for value in &bound {
+        sql_query = bind_value(sql_query, value)?;
     }
     sql_query = sql_query.bind(limit_val);
 
@@ -3843,7 +4124,7 @@ async fn db_insert_row(
     logical_table_name: &str,
     data: &HashMap<String, serde_json::Value>,
 ) -> AppResult<serde_json::Value> {
-    let physical_table_name = get_physical_table_name(conn, script_uri, logical_table_name).await?;
+    let columns = TableColumns::load(conn, script_uri, logical_table_name).await?;
 
     if data.is_empty() {
         return Err(AppError::Validation {
@@ -3852,30 +4133,25 @@ async fn db_insert_row(
         });
     }
 
-    let mut columns = Vec::new();
-    let mut placeholders = Vec::new();
-    let mut param_count = 0usize;
+    let bound = ordered_bindings(&columns, data)?;
 
-    for column in data.keys() {
-        validate_identifier(column).map_err(|e| AppError::Validation {
-            field: "column_name".to_string(),
-            reason: e.to_string(),
-        })?;
-        columns.push(quote_identifier(column));
-        param_count += 1;
-        placeholders.push(format!("${}", param_count));
+    let mut column_list = Vec::new();
+    let mut placeholders = Vec::new();
+    for (position, value) in bound.iter().enumerate() {
+        column_list.push(quote_identifier(value.column));
+        placeholders.push(value.placeholder(position + 1));
     }
 
     let sql = format!(
         "INSERT INTO {} ({}) VALUES ({}) RETURNING *",
-        quote_identifier(&physical_table_name),
-        columns.join(", "),
+        quote_identifier(&columns.physical_name),
+        column_list.join(", "),
         placeholders.join(", ")
     );
 
     let mut sql_query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
-    for value in data.values() {
-        sql_query = bind_json_value(sql_query, value)?;
+    for value in &bound {
+        sql_query = bind_value(sql_query, value)?;
     }
 
     let row = sql_query.fetch_one(&mut *conn).await.map_err(|e| {
@@ -3897,7 +4173,7 @@ async fn db_update_row(
     id: i32,
     data: &HashMap<String, serde_json::Value>,
 ) -> AppResult<serde_json::Value> {
-    let physical_table_name = get_physical_table_name(conn, script_uri, logical_table_name).await?;
+    let columns = TableColumns::load(conn, script_uri, logical_table_name).await?;
 
     if data.is_empty() {
         return Err(AppError::Validation {
@@ -3906,29 +4182,32 @@ async fn db_update_row(
         });
     }
 
-    let mut set_clauses = Vec::new();
-    let mut param_count = 0usize;
+    let bound = ordered_bindings(&columns, data)?;
 
-    for column in data.keys() {
-        validate_identifier(column).map_err(|e| AppError::Validation {
-            field: "column_name".to_string(),
-            reason: e.to_string(),
-        })?;
-        param_count += 1;
-        set_clauses.push(format!("{} = ${}", quote_identifier(column), param_count));
-    }
+    let mut param_count = 0usize;
+    let set_clauses: Vec<String> = bound
+        .iter()
+        .map(|value| {
+            param_count += 1;
+            format!(
+                "{} = {}",
+                quote_identifier(value.column),
+                value.placeholder(param_count)
+            )
+        })
+        .collect();
 
     param_count += 1;
     let sql = format!(
-        "UPDATE {} SET {} WHERE id = ${} RETURNING *",
-        quote_identifier(&physical_table_name),
+        "UPDATE {} SET {} WHERE id = ${}::int4 RETURNING *",
+        quote_identifier(&columns.physical_name),
         set_clauses.join(", "),
         param_count
     );
 
     let mut sql_query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
-    for value in data.values() {
-        sql_query = bind_json_value(sql_query, value)?;
+    for value in &bound {
+        sql_query = bind_value(sql_query, value)?;
     }
     sql_query = sql_query.bind(id);
 
@@ -3953,7 +4232,7 @@ async fn db_delete_row(
     let physical_table_name = get_physical_table_name(conn, script_uri, logical_table_name).await?;
 
     let sql = format!(
-        "DELETE FROM {} WHERE id = $1",
+        "DELETE FROM {} WHERE id = $1::int4",
         quote_identifier(&physical_table_name)
     );
 
@@ -3984,7 +4263,7 @@ async fn db_upsert_row(
     key_columns: &[String],
     data: &HashMap<String, serde_json::Value>,
 ) -> AppResult<serde_json::Value> {
-    let physical_table_name = get_physical_table_name(conn, script_uri, logical_table_name).await?;
+    let columns = TableColumns::load(conn, script_uri, logical_table_name).await?;
 
     if data.is_empty() {
         return Err(AppError::Validation {
@@ -4008,29 +4287,27 @@ async fn db_upsert_row(
     }
 
     // Build column/placeholder lists (deterministic order via sorted keys)
-    let mut ordered_cols: Vec<&String> = data.keys().collect();
-    ordered_cols.sort();
+    let bound = ordered_bindings(&columns, data)?;
 
     let mut col_list = Vec::new();
     let mut placeholder_list = Vec::new();
-    let mut param_count = 0usize;
-
-    for col in &ordered_cols {
-        validate_identifier(col).map_err(|e| AppError::Validation {
-            field: "column_name".to_string(),
-            reason: e.to_string(),
-        })?;
-        col_list.push(quote_identifier(col));
-        param_count += 1;
-        placeholder_list.push(format!("${}", param_count));
+    for (position, value) in bound.iter().enumerate() {
+        col_list.push(quote_identifier(value.column));
+        placeholder_list.push(value.placeholder(position + 1));
     }
 
     // SET clause: update all non-key columns
     let key_set: std::collections::HashSet<&str> = key_columns.iter().map(|s| s.as_str()).collect();
-    let set_clauses: Vec<String> = ordered_cols
+    let set_clauses: Vec<String> = bound
         .iter()
-        .filter(|c| !key_set.contains(c.as_str()))
-        .map(|c| format!("{} = EXCLUDED.{}", quote_identifier(c), quote_identifier(c)))
+        .filter(|value| !key_set.contains(value.column))
+        .map(|value| {
+            format!(
+                "{} = EXCLUDED.{}",
+                quote_identifier(value.column),
+                quote_identifier(value.column)
+            )
+        })
         .collect();
 
     let conflict_target = key_columns
@@ -4043,7 +4320,7 @@ async fn db_upsert_row(
         // All columns are key columns — DO NOTHING is the right action
         format!(
             "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT ({}) DO NOTHING RETURNING *",
-            quote_identifier(&physical_table_name),
+            quote_identifier(&columns.physical_name),
             col_list.join(", "),
             placeholder_list.join(", "),
             conflict_target,
@@ -4051,7 +4328,7 @@ async fn db_upsert_row(
     } else {
         format!(
             "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT ({}) DO UPDATE SET {} RETURNING *",
-            quote_identifier(&physical_table_name),
+            quote_identifier(&columns.physical_name),
             col_list.join(", "),
             placeholder_list.join(", "),
             conflict_target,
@@ -4060,9 +4337,8 @@ async fn db_upsert_row(
     };
 
     let mut sql_query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
-    for col in &ordered_cols {
-        let value = &data[*col];
-        sql_query = bind_json_value(sql_query, value)?;
+    for value in &bound {
+        sql_query = bind_value(sql_query, value)?;
     }
 
     let row = sql_query.fetch_one(&mut *conn).await.map_err(|e| {
@@ -4086,7 +4362,7 @@ async fn db_delete_where(
     logical_table_name: &str,
     filters: &HashMap<String, serde_json::Value>,
 ) -> AppResult<u64> {
-    let physical_table_name = get_physical_table_name(conn, script_uri, logical_table_name).await?;
+    let columns = TableColumns::load(conn, script_uri, logical_table_name).await?;
 
     if filters.is_empty() {
         return Err(AppError::Validation {
@@ -4097,10 +4373,16 @@ async fn db_delete_where(
 
     let conditions = parse_filter_conditions(filters)?;
 
+    let bound: Vec<BoundValue<'_>> = conditions
+        .iter()
+        .map(|c| BoundValue::new(&columns, &c.column, &c.value))
+        .collect();
+
     let mut param_count = 0usize;
     let clauses: Vec<String> = conditions
         .iter()
-        .map(|c| {
+        .zip(&bound)
+        .map(|(c, b)| {
             param_count += 1;
             let op_str = match c.op {
                 FilterOp::Eq => "=",
@@ -4111,23 +4393,23 @@ async fn db_delete_where(
                 FilterOp::Ne => "!=",
             };
             format!(
-                "{} {} ${}",
+                "{} {} {}",
                 quote_identifier(&c.column),
                 op_str,
-                param_count
+                b.placeholder(param_count)
             )
         })
         .collect();
 
     let sql = format!(
         "DELETE FROM {} WHERE {}",
-        quote_identifier(&physical_table_name),
+        quote_identifier(&columns.physical_name),
         clauses.join(" AND ")
     );
 
     let mut sql_query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
-    for cond in &conditions {
-        sql_query = bind_json_value(sql_query, &cond.value)?;
+    for value in &bound {
+        sql_query = bind_value(sql_query, value)?;
     }
 
     let result = sql_query.execute(&mut *conn).await.map_err(|e| {
