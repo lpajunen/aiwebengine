@@ -1600,7 +1600,20 @@ interface Database {
   /**
    * Begin a new database transaction or create a savepoint if already in a transaction.
    * Transactions auto-commit on normal handler exit and auto-rollback on exceptions.
-   * @param timeout_ms - Optional timeout in milliseconds (prevents long-running transactions)
+   *
+   * `timeout_ms` is enforced by the database, not merely recorded. Within the
+   * transaction, no single statement runs longer than the budget, no wait for
+   * a lock exceeds it, and if the handler is stopped mid-transaction the
+   * database ends the transaction and releases its locks once the budget's
+   * worth of idleness has passed. It bounds each step, not their sum: many
+   * fast statements can still take longer than the budget between them.
+   *
+   * A budget can only tighten the engine's own limits, never loosen them —
+   * asking for ten minutes on an engine that allows five seconds gets five.
+   * Omitting it leaves the engine's configured limits in force.
+   *
+   * @param timeout_ms - Optional budget in milliseconds for each statement,
+   *   lock wait and idle gap in the transaction
    * @returns JSON string with result: {success: boolean, message: string} or {error: string}
    * @example
    * // Start transaction with 5 second timeout

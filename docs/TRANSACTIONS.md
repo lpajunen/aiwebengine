@@ -45,9 +45,30 @@ if (result.error) {
 
 **Parameters:**
 
-- `timeout_ms` (optional): Transaction timeout in milliseconds
+- `timeout_ms` (optional): budget in milliseconds for each statement, lock wait
+  and idle gap in the transaction
 
 **Returns:** JSON string with `{success: true}` or `{error: "..."}`
+
+The budget is enforced by PostgreSQL rather than merely recorded. Within the
+transaction it becomes `statement_timeout`, `lock_timeout` and
+`idle_in_transaction_session_timeout`, which means:
+
+- no single statement runs longer than the budget;
+- no wait for a lock exceeds it;
+- if the handler is stopped mid-transaction — a budget kill does not unwind the
+  JavaScript stack, so the commit or rollback at the handler boundary never runs
+  — PostgreSQL ends the transaction and releases its locks once the budget's
+  worth of idleness has passed.
+
+It bounds each step, not their sum: a hundred fast statements can still take
+longer than the budget between them. Bounding that is the execution budget's
+job.
+
+A budget can only tighten the engine's configured limits, never loosen them.
+Asking for ten minutes on an engine that allows five seconds gets five. Omitting
+it leaves those limits in force, which for an abandoned transaction means the
+engine's `idle_in_transaction_timeout_ms` rather than the handler's own budget.
 
 ### `database.commitTransaction()`
 
@@ -247,12 +268,17 @@ export function resolveCreateUserWithProfile(args) {
 
 ### 1. Use Timeouts
 
-Always specify reasonable timeouts to prevent connection pool exhaustion:
+Specify a budget close to what the work actually needs. It is the tightest bound
+the transaction gets, and the one that decides how quickly its locks come back
+if the handler never returns:
 
 ```javascript
-// 30 second timeout for complex operations
+// 30 second budget for complex operations
 database.beginTransaction(30000);
 ```
+
+A budget longer than the engine allows is silently clamped to the engine's
+limit, so there is no benefit to padding it.
 
 ### 2. Keep Transactions Short
 

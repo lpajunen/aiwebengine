@@ -272,6 +272,29 @@ impl SessionGuards {
         }
     }
 
+    /// The guards a transaction with this budget runs under.
+    ///
+    /// A budget may only tighten. `beginTransaction(600000)` must not be a way
+    /// for a script to buy itself ten minutes of lock waiting when the engine
+    /// allows five seconds, so each guard is the lower of the two — treating a
+    /// disabled ceiling as no ceiling at all.
+    ///
+    /// A budget of zero would read to Postgres as "disabled", the exact
+    /// opposite of what asking for it means, so it becomes the shortest budget
+    /// expressible instead.
+    fn tightened_to(self, budget_ms: u64) -> Self {
+        let budget_ms = budget_ms.max(1);
+        let tighten = |ceiling: u64| match ceiling {
+            0 => budget_ms,
+            ceiling => ceiling.min(budget_ms),
+        };
+        Self {
+            lock_timeout_ms: tighten(self.lock_timeout_ms),
+            statement_timeout_ms: tighten(self.statement_timeout_ms),
+            idle_in_transaction_timeout_ms: tighten(self.idle_in_transaction_timeout_ms),
+        }
+    }
+
     /// The guards as Postgres setting names and values.
     fn settings(&self) -> [(&'static str, u64); 3] {
         [
@@ -288,11 +311,13 @@ impl SessionGuards {
     ///
     /// One statement each: `SET` goes through the extended query protocol,
     /// which carries a single statement per round trip.
-    async fn apply(self, conn: &mut PgConnection) -> Result<(), sqlx::Error> {
+    async fn apply(self, conn: &mut PgConnection, scope: GuardScope) -> Result<(), sqlx::Error> {
         for (setting, milliseconds) in self.settings() {
             sqlx::query(sqlx::AssertSqlSafe(format!(
-                "SET {} = {}",
-                setting, milliseconds
+                "{} {} = {}",
+                scope.keyword(),
+                setting,
+                milliseconds
             )))
             .execute(&mut *conn)
             .await?;
@@ -301,15 +326,44 @@ impl SessionGuards {
     }
 }
 
+/// How long an application of [`SessionGuards`] lasts.
+#[derive(Clone, Copy)]
+enum GuardScope {
+    /// Until the connection closes.
+    Session,
+    /// Until the surrounding transaction ends, which is what lets a
+    /// transaction's own budget bind without following the connection back
+    /// into the pool.
+    Transaction,
+}
+
+impl GuardScope {
+    fn keyword(self) -> &'static str {
+        match self {
+            GuardScope::Session => "SET",
+            GuardScope::Transaction => "SET LOCAL",
+        }
+    }
+}
+
 /// Database connection pool manager
 pub struct Database {
     pool: PgPool,
+    /// The ceiling a transaction's own budget is measured against.
+    guards: SessionGuards,
 }
 
 impl Database {
     /// Create a new database instance from an existing pool (useful for testing)
+    ///
+    /// The pool arrives already configured or not at all, so there is no
+    /// ceiling to measure a transaction's budget against: whatever it asks for
+    /// is what it gets.
     pub fn from_pool(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            guards: SessionGuards::none(),
+        }
     }
 
     /// Create a new database connection pool
@@ -360,7 +414,7 @@ impl Database {
             max_connections
         );
 
-        Ok(Self { pool })
+        Ok(Self { pool, guards })
     }
 
     /// Run database migrations.
@@ -385,7 +439,7 @@ impl Database {
             .detach();
 
         SessionGuards::none()
-            .apply(&mut conn)
+            .apply(&mut conn, GuardScope::Session)
             .await
             .context("Failed to clear session guards for migrations")?;
 
@@ -426,6 +480,25 @@ impl Database {
     ///
     /// If a transaction is already active, this will create a savepoint instead.
     /// Returns a TransactionGuard for automatic rollback on drop.
+    ///
+    /// `timeout_ms` is handed to Postgres, not just recorded. The deadline
+    /// [`TransactionState`] keeps is only consulted when the engine next passes
+    /// through this module — beginning, committing, taking a savepoint — and a
+    /// transaction that never gets there again is exactly the one worth
+    /// bounding. So the budget becomes `SET LOCAL` guards on the transaction
+    /// itself: no statement in it runs longer than the budget, no lock wait
+    /// exceeds it, and if the handler is abandoned mid-transaction Postgres
+    /// ends it and releases its locks once the budget's worth of idleness has
+    /// passed, rather than at the far more generous session default.
+    ///
+    /// What this does not bound is the sum: a hundred fast statements can still
+    /// outlast the budget between them. Bounding that needs a check before
+    /// every statement, which is the caller's execution budget's job.
+    ///
+    /// Nested calls take a savepoint and leave the guards alone. `SET LOCAL`
+    /// belongs to the transaction rather than the savepoint, so it would not be
+    /// undone on release, and an inner scope must not quietly re-bound an outer
+    /// one that is still running.
     pub fn begin_transaction(timeout_ms: Option<u64>) -> Result<TransactionGuard, String> {
         CURRENT_TRANSACTION.with(|tx_cell| {
             let mut tx_option = tx_cell.borrow_mut();
@@ -458,11 +531,25 @@ impl Database {
                 let db = get_global_database().ok_or("Database not initialized")?;
 
                 let pool = db.pool.clone();
+                let guards = db.guards;
 
                 let tx = run_blocking(async {
-                    pool.begin()
+                    let mut tx = pool
+                        .begin()
                         .await
-                        .map_err(|e| format!("Failed to begin transaction: {}", e))
+                        .map_err(|e| format!("Failed to begin transaction: {}", e))?;
+
+                    if let Some(budget_ms) = timeout_ms {
+                        guards
+                            .tightened_to(budget_ms)
+                            .apply(&mut tx, GuardScope::Transaction)
+                            .await
+                            .map_err(|e| {
+                                format!("Failed to bound the transaction to its budget: {}", e)
+                            })?;
+                    }
+
+                    Ok::<_, String>(tx)
                 })?;
 
                 // Convert to 'static lifetime by leaking (will be properly cleaned up on commit/rollback)
@@ -722,6 +809,150 @@ pub async fn init_database(config: &RepositoryConfig, auto_migrate: bool) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A repository config pointed at the test database, or `None` when there
+    /// is none to point at.
+    fn test_repository_config() -> Option<RepositoryConfig> {
+        std::env::var("DATABASE_URL")
+            .ok()
+            .map(|connection_string| RepositoryConfig {
+                connection_string,
+                ..RepositoryConfig::default()
+            })
+    }
+
+    #[test]
+    fn a_budget_may_tighten_a_guard_but_never_loosen_one() {
+        let configured = SessionGuards {
+            lock_timeout_ms: 5_000,
+            statement_timeout_ms: 30_000,
+            idle_in_transaction_timeout_ms: 300_000,
+        };
+
+        // A budget shorter than the ceiling is what binds.
+        let tightened = configured.tightened_to(1_000);
+        assert_eq!(tightened.lock_timeout_ms, 1_000);
+        assert_eq!(tightened.statement_timeout_ms, 1_000);
+        assert_eq!(tightened.idle_in_transaction_timeout_ms, 1_000);
+
+        // A budget longer than the ceiling is not: asking for ten minutes must
+        // not be a way to buy ten minutes of lock waiting where the engine
+        // allows five seconds.
+        let loosened = configured.tightened_to(600_000);
+        assert_eq!(loosened.lock_timeout_ms, 5_000);
+        assert_eq!(loosened.statement_timeout_ms, 30_000);
+        assert_eq!(loosened.idle_in_transaction_timeout_ms, 300_000);
+
+        // A disabled guard is no ceiling at all, so the budget stands alone.
+        assert_eq!(
+            SessionGuards::none().tightened_to(1_000).lock_timeout_ms,
+            1_000
+        );
+
+        // Zero would read to Postgres as "disabled" — the opposite of asking
+        // for it — so it becomes the shortest budget expressible.
+        assert_eq!(configured.tightened_to(0).lock_timeout_ms, 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_transaction_budget_lasts_exactly_as_long_as_the_transaction() {
+        let Some(config) = test_repository_config() else {
+            eprintln!("Skipping transaction budget test - DATABASE_URL not set");
+            return;
+        };
+        let Ok(db) = Database::new(&config).await else {
+            eprintln!("Skipping transaction budget test - could not connect");
+            return;
+        };
+
+        let mut tx = db.pool.begin().await.expect("begin");
+        SessionGuards::from_config(&config)
+            .tightened_to(400)
+            .apply(&mut tx, GuardScope::Transaction)
+            .await
+            .expect("bound the transaction");
+
+        let inside: String = sqlx::query_scalar("SHOW statement_timeout")
+            .fetch_one(&mut *tx)
+            .await
+            .expect("read the setting inside");
+        assert_eq!(inside, "400ms");
+
+        tx.commit().await.expect("commit");
+
+        // `SET LOCAL` and not `SET`: the connection goes back to the pool
+        // carrying the session's guards, not one transaction's budget.
+        let after: String = sqlx::query_scalar("SHOW statement_timeout")
+            .fetch_one(&db.pool)
+            .await
+            .expect("read the setting after");
+        assert_eq!(
+            after,
+            format!("{}s", config.statement_timeout_ms / 1_000),
+            "a transaction's budget must not follow its connection into the pool"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn beginning_a_transaction_with_a_budget_hands_it_to_postgres() {
+        let Some(config) = test_repository_config() else {
+            eprintln!("Skipping begin_transaction budget test - DATABASE_URL not set");
+            return;
+        };
+        let Ok(db) = Database::new(&config).await else {
+            eprintln!("Skipping begin_transaction budget test - could not connect");
+            return;
+        };
+
+        if !initialize_global_database(Arc::new(db)) {
+            eprintln!("Skipping begin_transaction budget test - global already initialized");
+            return;
+        }
+
+        // On the blocking thread the engine runs handlers on: the transaction
+        // lives in thread-local storage, so the whole exchange has to stay on
+        // one thread.
+        let observed = tokio::task::spawn_blocking(|| {
+            let guard = Database::begin_transaction(Some(750))?;
+
+            let settings = CURRENT_TRANSACTION.with(|cell| {
+                let mut state = cell.borrow_mut();
+                let tx = state
+                    .as_mut()
+                    .and_then(|s| s.transaction.as_mut())
+                    .ok_or("no transaction")?;
+
+                run_blocking(async {
+                    let mut read = Vec::new();
+                    for name in [
+                        "lock_timeout",
+                        "statement_timeout",
+                        "idle_in_transaction_session_timeout",
+                    ] {
+                        let value: String =
+                            sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SHOW {}", name)))
+                                .fetch_one(&mut **tx)
+                                .await
+                                .map_err(|e| e.to_string())?;
+                        read.push(value);
+                    }
+                    Ok::<_, String>(read)
+                })
+            })?;
+
+            // Dropping the guard is the rollback: it is what a handler that
+            // never reaches its own commit relies on.
+            drop(guard);
+            Ok::<_, String>(settings)
+        })
+        .await
+        .expect("task panicked")
+        .expect("budgeted transaction");
+
+        // Every guard the engine has, bound to the budget the caller asked for
+        // rather than merely recorded alongside it.
+        assert_eq!(observed, vec!["750ms", "750ms", "750ms"]);
+    }
 
     #[tokio::test]
     async fn test_database_connection() {
