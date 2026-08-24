@@ -1,4 +1,4 @@
-//! The shape `sharedStorage` and `personalStorage` present to a script.
+//! The shape `scriptStorage` and `personalStorage` present to a script.
 //!
 //! Both are the WHATWG `Storage` interface now, so what a browser teaches about
 //! `localStorage` holds here: a missing key is `null`, keys and values are
@@ -66,9 +66,9 @@ async fn value(uri: &str, source: &str) -> serde_json::Value {
     report.outcome.value.expect("a value")
 }
 
-/// Shared storage belongs to the script, so an evaluation reaches it whether or
+/// Script storage belongs to the script, so an evaluation reaches it whether or
 /// not anyone is logged in. Every test below starts from a known-empty store.
-const RESET: &str = "sharedStorage.clear();";
+const RESET: &str = "scriptStorage.clear();";
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_missing_key_reads_as_null() {
@@ -79,7 +79,7 @@ async fn a_missing_key_reads_as_null() {
         "test://storage-shape/missing",
         &format!(
             "{}\n{}",
-            RESET, r#"[sharedStorage.getItem("nope"), sharedStorage.length]"#
+            RESET, r#"[scriptStorage.getItem("nope"), scriptStorage.length]"#
         ),
     )
     .await;
@@ -98,8 +98,8 @@ async fn a_value_survives_a_round_trip() {
             "{}\n{}",
             RESET,
             r#"
-            sharedStorage.setItem("theme", "dark");
-            sharedStorage.getItem("theme")
+            scriptStorage.setItem("theme", "dark");
+            scriptStorage.getItem("theme")
             "#
         ),
     )
@@ -121,14 +121,14 @@ async fn keys_and_values_are_coerced_to_strings() {
             "{}\n{}",
             RESET,
             r#"
-            sharedStorage.setItem("count", 1);
-            sharedStorage.setItem(2, true);
-            sharedStorage.setItem("nothing", null);
+            scriptStorage.setItem("count", 1);
+            scriptStorage.setItem(2, true);
+            scriptStorage.setItem("nothing", null);
             [
-              sharedStorage.getItem("count"),
-              sharedStorage.getItem("2"),
-              sharedStorage.getItem(2),
-              sharedStorage.getItem("nothing"),
+              scriptStorage.getItem("count"),
+              scriptStorage.getItem("2"),
+              scriptStorage.getItem(2),
+              scriptStorage.getItem("nothing"),
             ]
             "#
         ),
@@ -150,9 +150,9 @@ async fn setting_a_value_answers_undefined_rather_than_a_status_string() {
             RESET,
             r#"
             [
-              sharedStorage.setItem("a", "1"),
-              sharedStorage.removeItem("a"),
-              sharedStorage.clear(),
+              scriptStorage.setItem("a", "1"),
+              scriptStorage.removeItem("a"),
+              scriptStorage.clear(),
             ].every(function (v) { return v === undefined; })
             "#
         ),
@@ -176,7 +176,7 @@ async fn an_oversized_value_throws_quota_exceeded() {
             RESET,
             r#"
             try {
-              sharedStorage.setItem("big", "x".repeat(1000001));
+              scriptStorage.setItem("big", "x".repeat(1000001));
               "no throw";
             } catch (e) {
               [e.name, e instanceof DOMException, e instanceof Error];
@@ -201,7 +201,7 @@ async fn an_empty_key_throws_rather_than_writing() {
             RESET,
             r#"
             try {
-              sharedStorage.setItem("   ", "value");
+              scriptStorage.setItem("   ", "value");
               "no throw";
             } catch (e) {
               e.name;
@@ -321,15 +321,15 @@ async fn a_store_converts_to_a_string() {
             "{}\n{}",
             RESET,
             r#"
-            sharedStorage.setItem("toString", "stored");
+            scriptStorage.setItem("toString", "stored");
             [
-              String(sharedStorage),
-              `${sharedStorage}`,
-              typeof sharedStorage.toString,
-              typeof sharedStorage.valueOf,
-              typeof sharedStorage.hasOwnProperty,
+              String(scriptStorage),
+              `${scriptStorage}`,
+              typeof scriptStorage.toString,
+              typeof scriptStorage.valueOf,
+              typeof scriptStorage.hasOwnProperty,
               // The stored key is still reachable the explicit way.
-              sharedStorage.getItem("toString"),
+              scriptStorage.getItem("toString"),
             ]
             "#
         ),
@@ -362,19 +362,19 @@ async fn length_and_key_enumerate_in_a_stable_order() {
             "{}\n{}",
             RESET,
             r#"
-            sharedStorage.setItem("gamma", "3");
-            sharedStorage.setItem("alpha", "1");
-            sharedStorage.setItem("beta", "2");
+            scriptStorage.setItem("gamma", "3");
+            scriptStorage.setItem("alpha", "1");
+            scriptStorage.setItem("beta", "2");
 
             const collected = [];
-            for (let i = 0; i < sharedStorage.length; i++) {
-              collected.push(sharedStorage.key(i));
+            for (let i = 0; i < scriptStorage.length; i++) {
+              collected.push(scriptStorage.key(i));
             }
             [
-              sharedStorage.length,
+              scriptStorage.length,
               collected,
-              sharedStorage.key(99),
-              sharedStorage.key(-1),
+              scriptStorage.key(99),
+              scriptStorage.key(-1),
             ]
             "#
         ),
@@ -403,13 +403,13 @@ async fn named_access_reads_writes_and_deletes() {
             "{}\n{}",
             RESET,
             r#"
-            sharedStorage.theme = "dark";
-            const read = sharedStorage.theme;
-            const present = "theme" in sharedStorage;
-            const absent = "nothing" in sharedStorage;
-            const missing = sharedStorage.nothing;
-            delete sharedStorage.theme;
-            [read, present, absent, missing === undefined, sharedStorage.getItem("theme")]
+            scriptStorage.theme = "dark";
+            const read = scriptStorage.theme;
+            const present = "theme" in scriptStorage;
+            const absent = "nothing" in scriptStorage;
+            const missing = scriptStorage.nothing;
+            delete scriptStorage.theme;
+            [read, present, absent, missing === undefined, scriptStorage.getItem("theme")]
             "#
         ),
     )
@@ -432,9 +432,9 @@ async fn the_store_enumerates_as_an_object() {
             "{}\n{}",
             RESET,
             r#"
-            sharedStorage.setItem("b", "2");
-            sharedStorage.setItem("a", "1");
-            [Object.keys(sharedStorage), JSON.stringify(Object.assign({}, sharedStorage))]
+            scriptStorage.setItem("b", "2");
+            scriptStorage.setItem("a", "1");
+            [Object.keys(scriptStorage), JSON.stringify(Object.assign({}, scriptStorage))]
             "#
         ),
     )
@@ -457,13 +457,13 @@ async fn an_interface_member_is_not_shadowed_by_a_stored_key() {
             "{}\n{}",
             RESET,
             r#"
-            sharedStorage.setItem("getItem", "stored");
-            sharedStorage.setItem("length", "stored");
+            scriptStorage.setItem("getItem", "stored");
+            scriptStorage.setItem("length", "stored");
             [
-              typeof sharedStorage.getItem,
-              typeof sharedStorage.length,
-              sharedStorage.getItem("getItem"),
-              sharedStorage.getItem("length"),
+              typeof scriptStorage.getItem,
+              typeof scriptStorage.length,
+              scriptStorage.getItem("getItem"),
+              scriptStorage.getItem("length"),
             ]
             "#
         ),
@@ -484,11 +484,11 @@ async fn clear_empties_the_store() {
             "{}\n{}",
             RESET,
             r#"
-            sharedStorage.setItem("a", "1");
-            sharedStorage.setItem("b", "2");
-            const before = sharedStorage.length;
-            sharedStorage.clear();
-            [before, sharedStorage.length, sharedStorage.getItem("a")]
+            scriptStorage.setItem("a", "1");
+            scriptStorage.setItem("b", "2");
+            const before = scriptStorage.length;
+            scriptStorage.clear();
+            [before, scriptStorage.length, scriptStorage.getItem("a")]
             "#
         ),
     )
@@ -509,7 +509,7 @@ async fn removing_an_absent_key_is_not_an_error() {
             "{}\n{}",
             RESET,
             r#"
-            sharedStorage.removeItem("never-stored");
+            scriptStorage.removeItem("never-stored");
             "survived"
             "#
         ),
@@ -541,9 +541,9 @@ async fn calling_without_the_required_arguments_throws_a_type_error() {
               }
             }
             [
-              nameOfThrow(function () { return sharedStorage.getItem(); }),
-              nameOfThrow(function () { sharedStorage.setItem("only-key"); }),
-              nameOfThrow(function () { sharedStorage.removeItem(); }),
+              nameOfThrow(function () { return scriptStorage.getItem(); }),
+              nameOfThrow(function () { scriptStorage.setItem("only-key"); }),
+              nameOfThrow(function () { scriptStorage.removeItem(); }),
             ]
             "#
         ),
@@ -565,12 +565,12 @@ async fn the_two_stores_do_not_share_keys() {
             "{}\n{}",
             RESET,
             r#"
-            sharedStorage.setItem("only-shared", "yes");
+            scriptStorage.setItem("only-shared", "yes");
             try {
               personalStorage.getItem("only-shared");
               "read without a user";
             } catch (e) {
-              [e.name, sharedStorage.getItem("only-shared")];
+              [e.name, scriptStorage.getItem("only-shared")];
             }
             "#
         ),

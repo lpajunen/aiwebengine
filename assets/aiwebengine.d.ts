@@ -82,7 +82,7 @@ declare function init(context?: HandlerContext): void;
  * path or an empty name is reported the same way in every context.
  *
  * Everything else — `database`, `assetStorage`, `secretStorage`,
- * `sharedStorage`, `personalStorage`, `fetch`, `convert`, `console`,
+ * `scriptStorage`, `personalStorage`, `fetch`, `convert`, `console`,
  * `McpClient`, `dispatcher.sendMessage`, `graphQLRegistry.executeGraphQL`,
  * `routeRegistry.sendStreamMessage` — works in every context.
  *
@@ -529,7 +529,7 @@ interface AssetStorage {
  * The WHATWG Web Storage interface, as browsers expose it on `localStorage`
  * and `sessionStorage`.
  *
- * Two stores implement it. `sharedStorage` belongs to the script and is shared
+ * Two stores implement it. `scriptStorage` belongs to the script and is shared
  * by everyone using it, across every instance in a cluster. `personalStorage`
  * belongs to one authenticated user within one script; reaching it with nobody
  * logged in throws a `SecurityError`.
@@ -544,8 +544,8 @@ interface AssetStorage {
  * enumerating a large store costs one query per key.
  *
  * @example
- * sharedStorage.setItem("pageViews", "42");
- * const views = sharedStorage.getItem("pageViews") ?? "0";
+ * scriptStorage.setItem("pageViews", "42");
+ * const views = scriptStorage.getItem("pageViews") ?? "0";
  *
  * try {
  *   personalStorage.setItem("theme", "dark");
@@ -560,7 +560,7 @@ interface Storage {
   /**
    * The value stored under `key`, or `null` if there is none.
    * @example
-   * const counter = sharedStorage.getItem("pageViews") ?? "0";
+   * const counter = scriptStorage.getItem("pageViews") ?? "0";
    */
   getItem(key: string): string | null;
 
@@ -569,7 +569,7 @@ interface Storage {
    * @throws DOMException `QuotaExceededError` if the value exceeds 1 MB,
    * `SecurityError` if the store is not available to the caller.
    * @example
-   * sharedStorage.setItem("pageViews", "42");
+   * scriptStorage.setItem("pageViews", "42");
    */
   setItem(key: string, value: string): void;
 
@@ -577,7 +577,7 @@ interface Storage {
    * Remove `key`. Removing one that is not there is not an error.
    * @throws DOMException `SecurityError` if the store is not available.
    * @example
-   * sharedStorage.removeItem("oldData");
+   * scriptStorage.removeItem("oldData");
    */
   removeItem(key: string): void;
 
@@ -585,15 +585,15 @@ interface Storage {
    * Remove every key in the store.
    * @throws DOMException `SecurityError` if the store is not available.
    * @example
-   * sharedStorage.clear();
+   * scriptStorage.clear();
    */
   clear(): void;
 
   /**
    * The nth key in ascending order, or `null` if the index is out of range.
    * @example
-   * for (let i = 0; i < sharedStorage.length; i++) {
-   *   console.log(sharedStorage.key(i));
+   * for (let i = 0; i < scriptStorage.length; i++) {
+   *   console.log(scriptStorage.key(i));
    * }
    */
   key(index: number): string | null;
@@ -2036,7 +2036,7 @@ interface Convert {
 
 declare var routeRegistry: RouteRegistry;
 declare var assetStorage: AssetStorage;
-declare var sharedStorage: Storage;
+declare var scriptStorage: Storage;
 declare var personalStorage: Storage;
 declare var secretStorage: SecretStorage;
 declare var schedulerService: SchedulerService;

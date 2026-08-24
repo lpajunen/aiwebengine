@@ -1064,13 +1064,14 @@ The engine provides an impressive array of JavaScript APIs with excellent securi
 - ✅ Filtered broadcasting with metadata matching
 - ✅ Stream listing
 
-#### 3. Script Management (`scriptStorage`)
+#### 3. Script Management (`/engine/scripts`, engine MCP tools)
+
+Not a JavaScript API. Scripts are managed over HTTP and MCP, never from
+inside the sandbox.
 
 - ✅ List, get, upsert, delete scripts
 - ✅ Ownership management (add/remove owners)
-- ✅ Privilege management (admin-only)
 - ✅ Init status tracking
-- ✅ Security profiles
 
 #### 4. Asset Management (`assetStorage`)
 
@@ -1092,7 +1093,7 @@ The engine provides an impressive array of JavaScript APIs with excellent securi
 
 #### 7. Storage APIs
 
-- ✅ `sharedStorage` - Script-scoped key-value storage
+- ✅ `scriptStorage` - Script-scoped key-value storage
 - ✅ `personalStorage` - User-scoped authenticated storage
 
 #### 8. HTTP Client (`fetch`)
@@ -1484,7 +1485,7 @@ scheduler.resume("task-id");
 #### 26. Cache API with TTL
 
 **Problem:**
-Only basic sharedStorage without expiration support.
+Only basic scriptStorage without expiration support.
 
 **Current State:** ⚠️ **LIMITED - no TTL/expiration**
 

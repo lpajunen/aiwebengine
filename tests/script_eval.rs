@@ -252,7 +252,7 @@ async fn database_writes_roll_back_by_default() {
     let written = eval(
         uri,
         &format!(
-            r#"sharedStorage.setItem("{}", "written"); sharedStorage.getItem("{}");"#,
+            r#"scriptStorage.setItem("{}", "written"); scriptStorage.getItem("{}");"#,
             key, key
         ),
     );
@@ -262,7 +262,7 @@ async fn database_writes_roll_back_by_default() {
     assert!(written.outcome.rolled_back);
 
     // ...and gone once it ends.
-    let after = eval(uri, &format!(r#"sharedStorage.getItem("{}")"#, key));
+    let after = eval(uri, &format!(r#"scriptStorage.getItem("{}")"#, key));
     assert!(after.ok, "{:?}", after.outcome.error);
     assert_ne!(
         after.outcome.value,

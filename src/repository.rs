@@ -1110,7 +1110,7 @@ async fn db_set_script_hosts(
     Ok(())
 }
 
-/// Database-backed set shared storage item
+/// Database-backed set script storage item
 async fn db_set_script_properties_item(
     mut executor: crate::database::TransactionExecutor<'_>,
     script_uri: &str,
@@ -1153,7 +1153,7 @@ async fn db_set_script_properties_item(
         }
     }
     .map_err(|e| {
-        error!("Database error updating shared storage: {}", e);
+        error!("Database error updating script storage: {}", e);
         AppError::Database {
             message: format!("Database error: {}", e),
             source: None,
@@ -1162,7 +1162,7 @@ async fn db_set_script_properties_item(
 
     if update_result.rows_affected() > 0 {
         debug!(
-            "Updated shared storage item in database: {}:{}",
+            "Updated script storage item in database: {}:{}",
             script_uri, key
         );
         return Ok(());
@@ -1200,7 +1200,7 @@ async fn db_set_script_properties_item(
         }
     }
     .map_err(|e| {
-        error!("Database error creating shared storage item: {}", e);
+        error!("Database error creating script storage item: {}", e);
         AppError::Database {
             message: format!("Database error: {}", e),
             source: None,
@@ -1208,13 +1208,13 @@ async fn db_set_script_properties_item(
     })?;
 
     debug!(
-        "Created new shared storage item in database: {}:{}",
+        "Created new script storage item in database: {}:{}",
         script_uri, key
     );
     Ok(())
 }
 
-/// Database-backed get shared storage item
+/// Database-backed get script storage item
 async fn db_get_script_properties_item<'e, E>(
     executor: E,
     script_uri: &str,
@@ -1233,7 +1233,7 @@ where
     .fetch_optional(executor)
     .await
     .map_err(|e| {
-        error!("Database error getting shared storage item: {}", e);
+        error!("Database error getting script storage item: {}", e);
         AppError::Database {
             message: format!("Database error: {}", e),
             source: None,
@@ -1254,7 +1254,7 @@ where
     }
 }
 
-/// Database-backed remove shared storage item
+/// Database-backed remove script storage item
 async fn db_remove_script_properties_item<'e, E>(
     executor: E,
     script_uri: &str,
@@ -1273,7 +1273,7 @@ where
     .execute(executor)
     .await
     .map_err(|e| {
-        error!("Database error removing shared storage item: {}", e);
+        error!("Database error removing script storage item: {}", e);
         AppError::Database {
             message: format!("Database error: {}", e),
             source: None,
@@ -1296,7 +1296,7 @@ where
     Ok(existed)
 }
 
-/// Database-backed clear all shared storage for a script
+/// Database-backed clear all script storage for a script
 async fn db_clear_script_properties<'e, E>(executor: E, script_uri: &str) -> AppResult<()>
 where
     E: sqlx::Executor<'e, Database = sqlx::Postgres>,
@@ -1310,7 +1310,7 @@ where
     .execute(executor)
     .await
     .map_err(|e| {
-        error!("Database error clearing shared storage: {}", e);
+        error!("Database error clearing script storage: {}", e);
         AppError::Database {
             message: format!("Database error: {}", e),
             source: None,
@@ -1807,7 +1807,7 @@ where
     .fetch_all(executor)
     .await
     .map_err(|e| {
-        error!("Database error listing shared storage keys: {}", e);
+        error!("Database error listing script storage keys: {}", e);
         AppError::Database {
             message: format!("Database error: {}", e),
             source: None,
@@ -1815,7 +1815,7 @@ where
     })?;
 
     debug!(
-        "Listed {} shared storage keys from database for script: {}",
+        "Listed {} script storage keys from database for script: {}",
         rows.len(),
         script_uri
     );
@@ -5861,7 +5861,7 @@ pub fn get_repository_stats() -> HashMap<String, usize> {
     };
     stats.insert("log_entries".to_string(), log_count);
 
-    // Count shared storage entries
+    // Count script storage entries
     let script_properties_count = if let Some(db) = get_db_pool() {
         run_blocking(async {
             sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM script_properties")
@@ -5880,7 +5880,7 @@ pub fn get_repository_stats() -> HashMap<String, usize> {
     stats
 }
 
-/// Set a shared storage item (key-value pair for a specific script)
+/// Set a script storage item (key-value pair for a specific script)
 pub fn set_script_properties_item(script_uri: &str, key: &str, value: &str) -> AppResult<()> {
     if script_uri.trim().is_empty() {
         return Err(RepositoryError::InvalidData("Script URI cannot be empty".to_string()).into());
@@ -5899,7 +5899,7 @@ pub fn set_script_properties_item(script_uri: &str, key: &str, value: &str) -> A
     run_bounded(async { repo.set_script_properties(script_uri, key, value).await })
 }
 
-/// Get a shared storage item
+/// Get a script storage item
 pub fn get_script_properties_item(script_uri: &str, key: &str) -> Option<String> {
     let repo = get_repository();
     let result = run_bounded(async { repo.get_script_properties(script_uri, key).await });
@@ -5908,7 +5908,7 @@ pub fn get_script_properties_item(script_uri: &str, key: &str) -> Option<String>
         Ok(value) => value,
         Err(e) => {
             error!(
-                "Failed to get shared storage item {}:{}: {}",
+                "Failed to get script storage item {}:{}: {}",
                 script_uri, key, e
             );
             None
@@ -5916,7 +5916,7 @@ pub fn get_script_properties_item(script_uri: &str, key: &str) -> Option<String>
     }
 }
 
-/// Remove a shared storage item
+/// Remove a script storage item
 pub fn remove_script_properties_item(script_uri: &str, key: &str) -> bool {
     let repo = get_repository();
     let result = run_bounded(async { repo.remove_script_properties(script_uri, key).await });
@@ -5925,7 +5925,7 @@ pub fn remove_script_properties_item(script_uri: &str, key: &str) -> bool {
         Ok(existed) => existed,
         Err(e) => {
             error!(
-                "Failed to remove shared storage item {}:{}: {}",
+                "Failed to remove script storage item {}:{}: {}",
                 script_uri, key, e
             );
             false
@@ -5933,13 +5933,13 @@ pub fn remove_script_properties_item(script_uri: &str, key: &str) -> bool {
     }
 }
 
-/// Clear all shared storage items for a specific script
+/// Clear all script storage items for a specific script
 pub fn clear_script_properties(script_uri: &str) -> AppResult<()> {
     let repo = get_repository();
     run_bounded(async { repo.clear_script_properties(script_uri).await })
 }
 
-/// List the keys a script has in shared storage, in ascending order.
+/// List the keys a script has in script storage, in ascending order.
 ///
 /// What `length` and `key(i)` are built on: the Web Storage interface indexes
 /// its keys, and a stable order is what makes indexing mean anything.
@@ -5951,7 +5951,7 @@ pub fn list_script_properties_keys(script_uri: &str) -> Vec<String> {
         Ok(keys) => keys,
         Err(e) => {
             error!(
-                "Failed to list shared storage keys for {}: {}",
+                "Failed to list script storage keys for {}: {}",
                 script_uri, e
             );
             Vec::new()
@@ -6233,7 +6233,7 @@ pub trait Repository: Send + Sync {
     async fn clear_logs(&self, script_uri: &str) -> AppResult<()>;
     async fn prune_logs(&self) -> AppResult<()>;
 
-    // Shared storage operations
+    // Script storage operations
     async fn get_script_properties(&self, script_uri: &str, key: &str)
     -> AppResult<Option<String>>;
     async fn set_script_properties(

@@ -1781,10 +1781,10 @@ This means JavaScript calls secure Rust functions, Rust validates everything bef
 **Main Flow - Correct Pattern**:
 
 1. **Developer + AI creates script** with business logic only
-2. **Script calls global function** (e.g., `scriptStorage.upsertScript(uri, content)`)
+2. **Script calls global function** (e.g., `assetStorage.upsertAsset(name, mimetype, contentBase64)`)
 3. **Rust function receives call** from JavaScript
 4. **Rust validates ALL inputs** before execution:
-   - Check user capabilities (does user have WriteScripts permission?)
+   - Check user capabilities (does user have WriteAssets permission?)
    - Validate URI format and safety
    - Scan content for dangerous patterns
    - Enforce size limits

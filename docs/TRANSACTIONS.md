@@ -348,7 +348,7 @@ Transactions hold a database connection for their lifetime. With default pool si
 
 ### Repository Operation Support
 
-**Current Status**: Transaction infrastructure is in place, but individual repository operations (like `personalStorage.setItem()`, `sharedStorage.setItem()`) don't yet automatically participate in transactions.
+**Current Status**: Transaction infrastructure is in place, but individual repository operations (like `personalStorage.setItem()`, `scriptStorage.setItem()`) don't yet automatically participate in transactions.
 
 **Manual Transaction Use**: You can use transactions to wrap multiple database operations:
 
@@ -366,7 +366,7 @@ export function atomicUpdate(req) {
 }
 ```
 
-**Future Enhancement**: A future update will refactor repository methods to automatically use the active transaction when available. This will make operations like `personalStorage.setItem()`, `sharedStorage.setItem()`, and database query/insert/update methods fully transaction-aware without code changes.
+**Future Enhancement**: A future update will refactor repository methods to automatically use the active transaction when available. This will make operations like `personalStorage.setItem()`, `scriptStorage.setItem()`, and database query/insert/update methods fully transaction-aware without code changes.
 
 **Workaround**: For now, if you need true atomic operations, you can:
 

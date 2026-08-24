@@ -1,30 +1,30 @@
 /// <reference path="../../assets/aiwebengine.d.ts" />
 
-// Test script for sharedStorage functionality
+// Test script for scriptStorage functionality
 routeRegistry.registerRoute("/test-storage", "testStorageHandler", "GET");
 
 function testStorageHandler(context) {
   // Test setting an item
-  const setResult = sharedStorage.setItem("test_key", "test_value");
+  const setResult = scriptStorage.setItem("test_key", "test_value");
   console.log("Set result: " + setResult);
 
   // Test getting the item
-  const getResult = sharedStorage.getItem("test_key");
+  const getResult = scriptStorage.getItem("test_key");
   console.log("Get result: " + getResult);
 
   // Test setting another item
-  sharedStorage.setItem("counter", "1");
+  scriptStorage.setItem("counter", "1");
 
   // Test removing an item
-  const removeResult = sharedStorage.removeItem("test_key");
+  const removeResult = scriptStorage.removeItem("test_key");
   console.log("Remove result: " + removeResult);
 
   // Verify it's gone
-  const getAfterRemove = sharedStorage.getItem("test_key");
+  const getAfterRemove = scriptStorage.getItem("test_key");
   console.log("Get after remove: " + getAfterRemove);
 
   return ResponseBuilder.json({
-    message: "sharedStorage test completed",
+    message: "scriptStorage test completed",
     results: {
       setResult,
       getResult,

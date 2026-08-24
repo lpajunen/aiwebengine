@@ -1,6 +1,6 @@
-// The JavaScript half of `sharedStorage` and `personalStorage`.
+// The JavaScript half of `scriptStorage` and `personalStorage`.
 //
-// `__hostSharedStorage` and `__hostPersonalStorage` are the Rust calls. They
+// `__hostScriptStorage` and `__hostPersonalStorage` are the Rust calls. They
 // answer with values rather than with prose about values — `null` for a key
 // that is not there, nothing for a write that worked, and the envelope of an
 // exception for one that did not. What is missing from them is the interface
@@ -234,6 +234,6 @@
     });
   }
 
-  globalThis.sharedStorage = build(__hostSharedStorage, "sharedStorage");
+  globalThis.scriptStorage = build(__hostScriptStorage, "scriptStorage");
   globalThis.personalStorage = build(__hostPersonalStorage, "personalStorage");
 })();

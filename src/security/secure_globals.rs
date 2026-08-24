@@ -4163,7 +4163,7 @@ impl SecureGlobalContext {
         let global = ctx.globals();
         let script_uri_owned = script_uri.to_string();
 
-        // The Rust half of `sharedStorage`. Every method here answers with a
+        // The Rust half of `scriptStorage`. Every method here answers with a
         // value rather than with prose about one: `null` where the browser's
         // `Storage` answers `null`, and — on the write paths — either nothing
         // or the envelope of the exception the prelude should throw. Building
@@ -4175,7 +4175,7 @@ impl SecureGlobalContext {
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>, key: String| -> JsResult<Option<String>> {
                 debug!(
-                    "sharedStorage.getItem called for script {} with key: {}",
+                    "scriptStorage.getItem called for script {} with key: {}",
                     script_uri_get, key
                 );
                 Ok(crate::repository::get_script_properties_item(
@@ -4194,7 +4194,7 @@ impl SecureGlobalContext {
                   value: String|
                   -> JsResult<Option<String>> {
                 debug!(
-                    "sharedStorage.setItem called for script {} with key: {}",
+                    "scriptStorage.setItem called for script {} with key: {}",
                     script_uri_set, key
                 );
 
@@ -4218,7 +4218,7 @@ impl SecureGlobalContext {
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>, key: String| -> JsResult<()> {
                 debug!(
-                    "sharedStorage.removeItem called for script {} with key: {}",
+                    "scriptStorage.removeItem called for script {} with key: {}",
                     script_uri_remove, key
                 );
                 // Whether the key was there is not something `removeItem`
@@ -4233,7 +4233,7 @@ impl SecureGlobalContext {
         let clear_storage = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>| -> JsResult<Option<String>> {
-                debug!("sharedStorage.clear called for script {}", script_uri_clear);
+                debug!("scriptStorage.clear called for script {}", script_uri_clear);
                 match crate::repository::clear_script_properties(&script_uri_clear) {
                     Ok(()) => Ok(None),
                     Err(e) => Ok(Some(Self::storage_write_failure(&e))),
@@ -4253,16 +4253,16 @@ impl SecureGlobalContext {
         )?;
         host.set("keys", keys)?;
 
-        // Always available: shared storage belongs to the script, not to a
+        // Always available: script storage belongs to the script, not to a
         // user, so there is nobody who could be missing.
         let available =
             Function::new(ctx.clone(), move |_ctx: rquickjs::Ctx<'_>| -> bool { true })?;
         host.set("available", available)?;
 
-        global.set("__hostSharedStorage", host)?;
+        global.set("__hostScriptStorage", host)?;
 
         debug!(
-            "sharedStorage host functions initialized for script: {}",
+            "scriptStorage host functions initialized for script: {}",
             script_uri
         );
 
@@ -4277,7 +4277,7 @@ impl SecureGlobalContext {
         let global = ctx.globals();
         let script_uri_owned = script_uri.to_string();
 
-        // The Rust half of `personalStorage`. It differs from shared storage in
+        // The Rust half of `personalStorage`. It differs from script storage in
         // one way that matters: without an authenticated user there is no store
         // to read or write, and saying so is not the same as saying the key was
         // missing. `available()` is what lets the prelude tell those apart and
@@ -4418,7 +4418,7 @@ impl SecureGlobalContext {
         )?;
 
         debug!(
-            "sharedStorage and personalStorage initialized for script: {}",
+            "scriptStorage and personalStorage initialized for script: {}",
             script_uri
         );
 
@@ -5177,7 +5177,7 @@ mod api_surface_tests {
         for global in [
             "routeRegistry",
             "assetStorage",
-            "sharedStorage",
+            "scriptStorage",
             "personalStorage",
             "secretStorage",
             "schedulerService",

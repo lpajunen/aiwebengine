@@ -232,9 +232,9 @@ AI Assistant
 ```javascript
 // 1. Pre-compute and cache embeddings
 async function indexScripts() {
-  const scripts = scriptStorage.listScripts();
+  const scripts = await (await fetch("/engine/scripts")).json();
   for (const script of scripts) {
-    const content = scriptStorage.getScript(script);
+    const content = await (await fetch(`/engine/scripts/${script}`)).text();
     const embedding = await computeEmbedding(content);
     embeddings[script] = embedding;
   }
@@ -616,7 +616,7 @@ AI Assistant Response:
 │                                                           │
 │ [posts-api.js]──────────────────────────────────────────│
 │ + function handleGetPosts(req) {                         │
-│ +   const posts = sharedStorage.getItem('posts');       │
+│ +   const posts = scriptStorage.getItem('posts');       │
 │ +   return { status: 200, body: posts || '[]' };        │
 │ + }                                                       │
 │ [Show Full Diff]                                         │
@@ -675,10 +675,10 @@ class FileTransaction {
     this.backups = new Map();
   }
 
-  addOperation(type, scriptName, content) {
+  async addOperation(type, scriptName, content) {
     // Backup original if editing
     if (type === "edit" || type === "delete") {
-      this.backups.set(scriptName, scriptStorage.getScript(scriptName));
+      this.backups.set(scriptName, await getScript(scriptName));
     }
     this.operations.push({ type, scriptName, content });
   }
@@ -3113,7 +3113,7 @@ User: [Confirm Rollback]
 - Cache script embeddings (if using Phase 3)
 - Cache dependency graph
 - Invalidate on script save
-- Store in sharedStorage or browser localStorage
+- Store in scriptStorage or browser localStorage
 
 ### Performance
 
