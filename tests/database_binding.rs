@@ -299,3 +299,44 @@ async fn a_filter_is_bound_as_the_column_it_compares() {
         "a fractional filter on an INTEGER column",
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_statement_no_longer_takes_the_transaction_with_it() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    // Not every bad write can be caught before it is sent: a duplicate key is
+    // only knowable at the server. Postgres aborts a transaction on any error,
+    // so this used to discard the writes either side of it — an unrelated
+    // tick's work included — and the script's `catch` ran with nothing left to
+    // save. Each statement is bracketed by a savepoint now, so the failure
+    // stops at the statement that caused it.
+    let report = eval_against_table(
+        "test://db-binding/survives-a-real-error",
+        r#"
+        database.addUniqueIndex("readings", JSON.stringify(["amount"]));
+        database.beginTransaction(5000);
+        database.insert("readings", JSON.stringify({ amount: 1 }));
+        const duplicate = database.insert("readings", JSON.stringify({ amount: 1 })).json();
+        database.insert("readings", JSON.stringify({ amount: 2 }));
+        database.commitTransaction();
+        ({
+          duplicate: duplicate,
+          amounts: database.query("readings").json().map(row => row.amount).sort((a, b) => a - b),
+        })
+        "#,
+    )
+    .await;
+
+    assert!(report.ok, "{:?}", report.outcome.error);
+    let answer = report.outcome.value.expect("a value");
+    error_of(&answer["duplicate"], "a duplicate key");
+    assert_eq!(
+        answer["amounts"],
+        Value::from(vec![1, 2]),
+        "the writes either side of the failure should have committed"
+    );
+}

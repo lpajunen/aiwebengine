@@ -2645,12 +2645,19 @@ use crate::db_schema_utils::{
     quote_identifier, validate_default_value, validate_identifier,
 };
 
-/// Names each savepoint [`SchemaConn`] brackets an operation with.
+/// Names each savepoint a [`ScopedConn`] brackets an operation with.
 static SCHEMA_SAVEPOINT_COUNTER: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
-/// The connection a schema operation runs on: the caller's transaction when one
-/// is open, and one of its own otherwise.
+/// The connection a script's database operation runs on, and the scope that
+/// undoes it if it fails.
+///
+/// Whatever opened it, the rule is the same: an operation that fails inside
+/// the caller's transaction must not take the transaction with it. Postgres
+/// aborts a transaction on any error, so without a savepoint one bad statement
+/// discards every write made before it — a scheduled tick's unrelated work
+/// included — and the script's `try`/`catch` catches an error it can no longer
+/// do anything about.
 ///
 /// Schema work must never run on a second connection while the caller holds a
 /// transaction. `CREATE INDEX` takes SHARE and `ALTER TABLE` takes ACCESS
@@ -2676,9 +2683,9 @@ static SCHEMA_SAVEPOINT_COUNTER: std::sync::atomic::AtomicU64 =
 /// records it — and running them in autocommit leaves a physical table with no
 /// metadata behind whenever the second statement fails.
 ///
-/// Every path must end at [`SchemaConn::finish`], which releases the savepoint
+/// Every path must end at [`ScopedConn::finish`], which releases the savepoint
 /// or commits, and undoes either one if the operation failed.
-enum SchemaConn<'a> {
+enum ScopedConn<'a> {
     /// Bracketing the caller's transaction, which this must leave open.
     Savepoint {
         tx: &'a mut sqlx::Transaction<'static, sqlx::Postgres>,
@@ -2686,36 +2693,76 @@ enum SchemaConn<'a> {
     },
     /// A transaction of this operation's own, to be committed or rolled back.
     Owned(sqlx::Transaction<'a, sqlx::Postgres>),
+    /// A pooled connection in autocommit, for an operation that is one
+    /// statement and has no caller's transaction to protect.
+    Pooled(sqlx::pool::PoolConnection<sqlx::Postgres>),
 }
 
-impl<'a> SchemaConn<'a> {
-    async fn open(pool: &'a PgPool) -> AppResult<Self> {
+impl<'a> ScopedConn<'a> {
+    /// Opens the savepoint every scope shares when a transaction is active.
+    async fn savepoint_in(
+        tx: &'a mut sqlx::Transaction<'static, sqlx::Postgres>,
+    ) -> AppResult<Self> {
+        let savepoint = format!(
+            "aiwe_scope_{}",
+            SCHEMA_SAVEPOINT_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
+        sqlx::query(sqlx::AssertSqlSafe(format!("SAVEPOINT {}", savepoint)))
+            .execute(&mut **tx)
+            .await
+            .map_err(|e| schema_transaction_error("opening a savepoint", e))?;
+        Ok(ScopedConn::Savepoint { tx, savepoint })
+    }
+
+    /// A connection for a schema operation.
+    ///
+    /// Outside a transaction the operation gets one of its own, because these
+    /// are multi-statement units — `CREATE TABLE` plus the `script_tables` row
+    /// that records it — and running them in autocommit leaves a physical
+    /// table with no metadata behind whenever the second statement fails.
+    async fn for_schema(pool: &'a PgPool) -> AppResult<Self> {
         match crate::database::get_current_executor(pool) {
-            crate::database::TransactionExecutor::Transaction(tx) => {
-                let savepoint = format!(
-                    "aiwe_schema_{}",
-                    SCHEMA_SAVEPOINT_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                );
-                sqlx::query(sqlx::AssertSqlSafe(format!("SAVEPOINT {}", savepoint)))
-                    .execute(&mut **tx)
-                    .await
-                    .map_err(|e| schema_transaction_error("opening a schema savepoint", e))?;
-                Ok(SchemaConn::Savepoint { tx, savepoint })
-            }
+            crate::database::TransactionExecutor::Transaction(tx) => Self::savepoint_in(tx).await,
             crate::database::TransactionExecutor::Pool(pool) => {
                 let tx = pool
                     .begin()
                     .await
                     .map_err(|e| schema_transaction_error("opening a schema transaction", e))?;
-                Ok(SchemaConn::Owned(tx))
+                Ok(ScopedConn::Owned(tx))
+            }
+        }
+    }
+
+    /// A connection for a single data statement — a row read or write.
+    ///
+    /// Inside a transaction it is bracketed like any other operation, which is
+    /// what makes a failed write survivable: a duplicate key, a value the
+    /// column will not take, a timestamp Postgres cannot parse. The script
+    /// catches the error and the transaction it is standing in remains usable.
+    /// The bracket costs two round trips, which is the price of not losing the
+    /// rest of a transaction to one failed statement.
+    ///
+    /// Outside a transaction there is nothing to protect: a lone statement in
+    /// autocommit is already its own unit, and wrapping it would only add
+    /// round trips.
+    async fn for_statement(pool: &'a PgPool) -> AppResult<Self> {
+        match crate::database::get_current_executor(pool) {
+            crate::database::TransactionExecutor::Transaction(tx) => Self::savepoint_in(tx).await,
+            crate::database::TransactionExecutor::Pool(pool) => {
+                let conn = pool.acquire().await.map_err(|e| AppError::Database {
+                    message: format!("Failed to acquire connection: {}", e),
+                    source: None,
+                })?;
+                Ok(ScopedConn::Pooled(conn))
             }
         }
     }
 
     fn conn(&mut self) -> &mut PgConnection {
         match self {
-            SchemaConn::Savepoint { tx, .. } => tx,
-            SchemaConn::Owned(tx) => tx,
+            ScopedConn::Savepoint { tx, .. } => tx,
+            ScopedConn::Owned(tx) => tx,
+            ScopedConn::Pooled(conn) => conn,
         }
     }
 
@@ -2727,7 +2774,7 @@ impl<'a> SchemaConn<'a> {
     /// error is handed back.
     async fn finish<T>(self, outcome: AppResult<T>) -> AppResult<T> {
         match self {
-            SchemaConn::Savepoint { tx, savepoint } => {
+            ScopedConn::Savepoint { tx, savepoint } => {
                 let verb = if outcome.is_ok() {
                     "RELEASE SAVEPOINT"
                 } else {
@@ -2736,13 +2783,14 @@ impl<'a> SchemaConn<'a> {
                 let closed = sqlx::query(sqlx::AssertSqlSafe(format!("{} {}", verb, savepoint)))
                     .execute(&mut **tx)
                     .await
-                    .map_err(|e| schema_transaction_error("closing a schema savepoint", e));
+                    .map_err(|e| schema_transaction_error("closing a savepoint", e));
                 match outcome {
                     Ok(value) => closed.map(|_| value),
                     Err(operation_error) => Err(operation_error),
                 }
             }
-            SchemaConn::Owned(tx) => match outcome {
+            ScopedConn::Pooled(_) => outcome,
+            ScopedConn::Owned(tx) => match outcome {
                 Ok(value) => {
                     tx.commit().await.map_err(|e| {
                         schema_transaction_error("committing a schema transaction", e)
@@ -6265,7 +6313,7 @@ impl Repository for PostgresRepository {
         // transaction when there is one: DROP TABLE takes ACCESS EXCLUSIVE, and
         // taking it on a second connection would block on locks the caller
         // already holds.
-        if let Ok(mut schema) = SchemaConn::open(&self.pool).await {
+        if let Ok(mut schema) = ScopedConn::for_schema(&self.pool).await {
             let dropped = db_drop_all_script_tables(schema.conn(), uri).await;
             let _ = schema.finish(dropped).await;
         }
@@ -6968,7 +7016,7 @@ impl Repository for PostgresRepository {
         script_uri: &str,
         logical_table_name: &str,
     ) -> AppResult<String> {
-        let mut schema = SchemaConn::open(&self.pool).await?;
+        let mut schema = ScopedConn::for_schema(&self.pool).await?;
         let created = db_create_script_table(schema.conn(), script_uri, logical_table_name).await;
         schema.finish(created).await
     }
@@ -6982,7 +7030,7 @@ impl Repository for PostgresRepository {
         nullable: bool,
         default_value: Option<&str>,
     ) -> AppResult<()> {
-        let mut schema = SchemaConn::open(&self.pool).await?;
+        let mut schema = ScopedConn::for_schema(&self.pool).await?;
         let added = db_add_column_to_script_table(
             schema.conn(),
             script_uri,
@@ -7004,7 +7052,7 @@ impl Repository for PostgresRepository {
         referenced_logical_table_name: &str,
         nullable: bool,
     ) -> AppResult<()> {
-        let mut schema = SchemaConn::open(&self.pool).await?;
+        let mut schema = ScopedConn::for_schema(&self.pool).await?;
         let added = db_add_reference_column(
             schema.conn(),
             script_uri,
@@ -7023,7 +7071,7 @@ impl Repository for PostgresRepository {
         logical_table_name: &str,
         column_name: &str,
     ) -> AppResult<bool> {
-        let mut schema = SchemaConn::open(&self.pool).await?;
+        let mut schema = ScopedConn::for_schema(&self.pool).await?;
         let dropped =
             db_drop_column(schema.conn(), script_uri, logical_table_name, column_name).await;
         schema.finish(dropped).await
@@ -7034,13 +7082,13 @@ impl Repository for PostgresRepository {
         script_uri: &str,
         logical_table_name: &str,
     ) -> AppResult<bool> {
-        let mut schema = SchemaConn::open(&self.pool).await?;
+        let mut schema = ScopedConn::for_schema(&self.pool).await?;
         let dropped = db_drop_script_table(schema.conn(), script_uri, logical_table_name).await;
         schema.finish(dropped).await
     }
 
     async fn list_script_tables(&self, script_uri: &str) -> AppResult<Vec<TableInfo>> {
-        let mut schema = SchemaConn::open(&self.pool).await?;
+        let mut schema = ScopedConn::for_schema(&self.pool).await?;
         let listed = db_list_script_tables(schema.conn(), script_uri).await;
         schema.finish(listed).await
     }
@@ -7050,7 +7098,7 @@ impl Repository for PostgresRepository {
         script_uri: &str,
         logical_table_name: &str,
     ) -> AppResult<TableSchema> {
-        let mut schema = SchemaConn::open(&self.pool).await?;
+        let mut schema = ScopedConn::for_schema(&self.pool).await?;
         let fetched = db_get_table_schema(schema.conn(), script_uri, logical_table_name).await;
         schema.finish(fetched).await
     }
@@ -7060,7 +7108,7 @@ impl Repository for PostgresRepository {
         script_uri: &str,
         logical_table_name: &str,
     ) -> AppResult<Vec<ForeignKeyInfo>> {
-        let mut schema = SchemaConn::open(&self.pool).await?;
+        let mut schema = ScopedConn::for_schema(&self.pool).await?;
         let fetched = db_get_foreign_keys(schema.conn(), script_uri, logical_table_name).await;
         schema.finish(fetched).await
     }
@@ -7074,36 +7122,18 @@ impl Repository for PostgresRepository {
         order_by: Option<&str>,
         order_dir: Option<&str>,
     ) -> AppResult<Vec<serde_json::Value>> {
-        match crate::database::get_current_executor(&self.pool) {
-            crate::database::TransactionExecutor::Transaction(tx) => {
-                db_query_table(
-                    tx,
-                    script_uri,
-                    logical_table_name,
-                    filters,
-                    limit,
-                    order_by,
-                    order_dir,
-                )
-                .await
-            }
-            crate::database::TransactionExecutor::Pool(pool) => {
-                let mut conn = pool.acquire().await.map_err(|e| AppError::Database {
-                    message: format!("Failed to acquire connection: {}", e),
-                    source: None,
-                })?;
-                db_query_table(
-                    &mut conn,
-                    script_uri,
-                    logical_table_name,
-                    filters,
-                    limit,
-                    order_by,
-                    order_dir,
-                )
-                .await
-            }
-        }
+        let mut scope = ScopedConn::for_statement(&self.pool).await?;
+        let queried = db_query_table(
+            scope.conn(),
+            script_uri,
+            logical_table_name,
+            filters,
+            limit,
+            order_by,
+            order_dir,
+        )
+        .await;
+        scope.finish(queried).await
     }
 
     async fn insert_row(
@@ -7112,18 +7142,9 @@ impl Repository for PostgresRepository {
         logical_table_name: &str,
         data: &HashMap<String, serde_json::Value>,
     ) -> AppResult<serde_json::Value> {
-        match crate::database::get_current_executor(&self.pool) {
-            crate::database::TransactionExecutor::Transaction(tx) => {
-                db_insert_row(tx, script_uri, logical_table_name, data).await
-            }
-            crate::database::TransactionExecutor::Pool(pool) => {
-                let mut conn = pool.acquire().await.map_err(|e| AppError::Database {
-                    message: format!("Failed to acquire connection: {}", e),
-                    source: None,
-                })?;
-                db_insert_row(&mut conn, script_uri, logical_table_name, data).await
-            }
-        }
+        let mut scope = ScopedConn::for_statement(&self.pool).await?;
+        let inserted = db_insert_row(scope.conn(), script_uri, logical_table_name, data).await;
+        scope.finish(inserted).await
     }
 
     async fn update_row(
@@ -7133,18 +7154,9 @@ impl Repository for PostgresRepository {
         id: i32,
         data: &HashMap<String, serde_json::Value>,
     ) -> AppResult<serde_json::Value> {
-        match crate::database::get_current_executor(&self.pool) {
-            crate::database::TransactionExecutor::Transaction(tx) => {
-                db_update_row(tx, script_uri, logical_table_name, id, data).await
-            }
-            crate::database::TransactionExecutor::Pool(pool) => {
-                let mut conn = pool.acquire().await.map_err(|e| AppError::Database {
-                    message: format!("Failed to acquire connection: {}", e),
-                    source: None,
-                })?;
-                db_update_row(&mut conn, script_uri, logical_table_name, id, data).await
-            }
-        }
+        let mut scope = ScopedConn::for_statement(&self.pool).await?;
+        let updated = db_update_row(scope.conn(), script_uri, logical_table_name, id, data).await;
+        scope.finish(updated).await
     }
 
     async fn delete_row(
@@ -7153,18 +7165,9 @@ impl Repository for PostgresRepository {
         logical_table_name: &str,
         id: i32,
     ) -> AppResult<bool> {
-        match crate::database::get_current_executor(&self.pool) {
-            crate::database::TransactionExecutor::Transaction(tx) => {
-                db_delete_row(tx, script_uri, logical_table_name, id).await
-            }
-            crate::database::TransactionExecutor::Pool(pool) => {
-                let mut conn = pool.acquire().await.map_err(|e| AppError::Database {
-                    message: format!("Failed to acquire connection: {}", e),
-                    source: None,
-                })?;
-                db_delete_row(&mut conn, script_uri, logical_table_name, id).await
-            }
-        }
+        let mut scope = ScopedConn::for_statement(&self.pool).await?;
+        let deleted = db_delete_row(scope.conn(), script_uri, logical_table_name, id).await;
+        scope.finish(deleted).await
     }
 
     async fn upsert_row(
@@ -7174,18 +7177,16 @@ impl Repository for PostgresRepository {
         key_columns: &[String],
         data: &HashMap<String, serde_json::Value>,
     ) -> AppResult<serde_json::Value> {
-        match crate::database::get_current_executor(&self.pool) {
-            crate::database::TransactionExecutor::Transaction(tx) => {
-                db_upsert_row(tx, script_uri, logical_table_name, key_columns, data).await
-            }
-            crate::database::TransactionExecutor::Pool(pool) => {
-                let mut conn = pool.acquire().await.map_err(|e| AppError::Database {
-                    message: format!("Failed to acquire connection: {}", e),
-                    source: None,
-                })?;
-                db_upsert_row(&mut conn, script_uri, logical_table_name, key_columns, data).await
-            }
-        }
+        let mut scope = ScopedConn::for_statement(&self.pool).await?;
+        let upserted = db_upsert_row(
+            scope.conn(),
+            script_uri,
+            logical_table_name,
+            key_columns,
+            data,
+        )
+        .await;
+        scope.finish(upserted).await
     }
 
     async fn delete_where(
@@ -7194,18 +7195,9 @@ impl Repository for PostgresRepository {
         logical_table_name: &str,
         filters: &HashMap<String, serde_json::Value>,
     ) -> AppResult<u64> {
-        match crate::database::get_current_executor(&self.pool) {
-            crate::database::TransactionExecutor::Transaction(tx) => {
-                db_delete_where(tx, script_uri, logical_table_name, filters).await
-            }
-            crate::database::TransactionExecutor::Pool(pool) => {
-                let mut conn = pool.acquire().await.map_err(|e| AppError::Database {
-                    message: format!("Failed to acquire connection: {}", e),
-                    source: None,
-                })?;
-                db_delete_where(&mut conn, script_uri, logical_table_name, filters).await
-            }
-        }
+        let mut scope = ScopedConn::for_statement(&self.pool).await?;
+        let deleted = db_delete_where(scope.conn(), script_uri, logical_table_name, filters).await;
+        scope.finish(deleted).await
     }
 
     /// Leases run on their own pooled connection on purpose, unlike the row
@@ -7213,7 +7205,7 @@ impl Repository for PostgresRepository {
     /// invisible to every other instance until that transaction committed, and
     /// would vanish on rollback — which defeats the point of a lease.
     ///
-    /// The cost of that choice is the hazard [`SchemaConn`] exists to avoid: a
+    /// The cost of that choice is the hazard [`ScopedConn`] exists to avoid: a
     /// caller whose own transaction has already written to the lease table
     /// blocks here on a row lock it holds itself, and nothing in Postgres can
     /// break the wait. Scripts must not write to a lease table directly.
@@ -7245,7 +7237,7 @@ impl Repository for PostgresRepository {
         script_uri: &str,
         logical_table_name: &str,
     ) -> AppResult<String> {
-        let mut schema = SchemaConn::open(&self.pool).await?;
+        let mut schema = ScopedConn::for_schema(&self.pool).await?;
         let created = db_create_lease_table(schema.conn(), script_uri, logical_table_name).await;
         schema.finish(created).await
     }
@@ -7256,7 +7248,7 @@ impl Repository for PostgresRepository {
         logical_table_name: &str,
         columns: &[String],
     ) -> AppResult<()> {
-        let mut schema = SchemaConn::open(&self.pool).await?;
+        let mut schema = ScopedConn::for_schema(&self.pool).await?;
         let added =
             db_add_unique_index(schema.conn(), script_uri, logical_table_name, columns).await;
         schema.finish(added).await
