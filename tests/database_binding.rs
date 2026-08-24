@@ -340,3 +340,72 @@ async fn a_failed_statement_no_longer_takes_the_transaction_with_it() {
         "the writes either side of the failure should have committed"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_float_column_holds_a_javascript_number() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    // The column type a JavaScript number has an exact home in. Storing it as
+    // scaled integers or text was the alternative, and text compares
+    // lexically — "10" sorts below "9" — which makes a filter quietly wrong.
+    let report = eval_against_table(
+        "test://db-binding/float-column",
+        r#"
+        database.addFloatColumn("readings", "celsius", true);
+        database.insert("readings", JSON.stringify({ amount: 1, celsius: 21.5 }));
+        database.insert("readings", JSON.stringify({ amount: 2, celsius: 3.25 }));
+        const warm = database.query("readings", JSON.stringify({ celsius: { $gt: 10 } })).json();
+        ({ stored: warm.length, celsius: warm[0].celsius })
+        "#,
+    )
+    .await;
+
+    assert!(report.ok, "{:?}", report.outcome.error);
+    let answer = report.outcome.value.expect("a value");
+    assert_eq!(answer["stored"], 1, "only 21.5 is above 10: {:?}", answer);
+    assert_eq!(
+        answer["celsius"], 21.5,
+        "the value should come back as it went in, not as null: {:?}",
+        answer
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bigint_column_holds_epoch_milliseconds() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    // `Date.now()` is past 1.7 trillion, so an INTEGER column refuses it —
+    // with the same "out of range" wording the reinterpreted-float bug used
+    // to produce, which is half of why that report was hard to read.
+    let report = eval_against_table(
+        "test://db-binding/bigint-column",
+        r#"
+        database.addBigintColumn("readings", "occurred_at_ms", true);
+        const now = Date.now();
+        const refused = database.insert("readings", JSON.stringify({ amount: now })).json();
+        const stored = database.insert("readings", JSON.stringify({ occurred_at_ms: now })).json();
+        ({ refused: refused, stored: stored, now: now })
+        "#,
+    )
+    .await;
+
+    assert!(report.ok, "{:?}", report.outcome.error);
+    let answer = report.outcome.value.expect("a value");
+    error_of(
+        &answer["refused"],
+        "epoch milliseconds in an INTEGER column",
+    );
+    assert_eq!(
+        answer["stored"]["occurred_at_ms"], answer["now"],
+        "a BIGINT column should hold it exactly: {:?}",
+        answer
+    );
+}

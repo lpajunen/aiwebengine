@@ -60,6 +60,43 @@ database.addIntegerColumn("users", "age", false, "0");
 database.addIntegerColumn("users", "score", true, null);
 ```
 
+### `database.addBigintColumn(tableName, columnName, nullable, defaultValue)`
+
+Adds a BIGINT column to an existing table.
+
+Whole numbers past INTEGER's ~2.1 billion limit — epoch milliseconds most of
+all, since `Date.now()` is already past 1.7 trillion. JavaScript integers are
+exact to 2^53, so anything a script can count with round-trips exactly.
+
+**Parameters:** as `addIntegerColumn`.
+
+**Example:**
+
+```javascript
+database.addBigintColumn("events", "occurred_at_ms", false, "0");
+database.insert("events", JSON.stringify({ occurred_at_ms: Date.now() }));
+```
+
+### `database.addFloatColumn(tableName, columnName, nullable, defaultValue)`
+
+Adds a DOUBLE PRECISION column to an existing table.
+
+The column type that holds a JavaScript number as it is — rates, ratios,
+scores, measurements. The value round-trips exactly, because the column is a
+double and so is a JavaScript number.
+
+**Not for money.** `0.1 + 0.2` is not `0.3` in any double. Store amounts as
+whole minor units — cents, not euros — in an INTEGER or BIGINT column.
+
+**Parameters:** as `addIntegerColumn`.
+
+**Example:**
+
+```javascript
+database.addFloatColumn("readings", "celsius", true);
+database.insert("readings", JSON.stringify({ celsius: 21.5 }));
+```
+
 ### `database.addTextColumn(tableName, columnName, nullable, defaultValue)`
 
 Adds a TEXT column to an existing table.
@@ -229,7 +266,11 @@ When a script is updated:
 - **Maximum columns per table**: 50
 - **Identifier requirements**: Must match `^[a-z][a-z0-9_]*$` (lowercase, alphanumeric + underscore)
 - **Reserved keywords**: Cannot use SQL reserved words as identifiers
-- **Column types**: Only INTEGER, TEXT, BOOLEAN, and TIMESTAMPTZ are supported
+- **Column types**: Only INTEGER, BIGINT, DOUBLE PRECISION, TEXT, BOOLEAN, and TIMESTAMPTZ are supported
+- **Values are typed by their column**: a value that the column cannot hold is
+  refused, naming the column, rather than being coerced. A fraction in an
+  INTEGER column is not rounded — use a FLOAT column to keep it — and a number
+  past a column's range is not wrapped
 
 ## Complete Example
 

@@ -1327,7 +1327,14 @@ interface Database {
   dropTable(tableName: string): DatabaseAnswer;
 
   /**
-   * Add an integer column to a table
+   * Add a 32-bit integer column to a table
+   *
+   * Holds whole numbers up to about 2.1 billion. A value with a fraction is
+   * refused rather than rounded — use `addFloatColumn` to keep it — and a
+   * value past the range is refused rather than wrapped. For epoch
+   * milliseconds and anything else that outgrows 2.1 billion, use
+   * `addBigintColumn`.
+   *
    * @param tableName - Table name
    * @param columnName - Column name
    * @param nullable - Whether column can be NULL (default: true)
@@ -1338,6 +1345,56 @@ interface Database {
    * database.addIntegerColumn("products", "stock", false, "0");
    */
   addIntegerColumn(
+    tableName: string,
+    columnName: string,
+    nullable?: boolean,
+    defaultValue?: string,
+  ): DatabaseAnswer;
+
+  /**
+   * Add a 64-bit integer column to a table
+   *
+   * What `Date.now()` needs: epoch milliseconds are past 1.7 trillion, which
+   * an `addIntegerColumn` column cannot hold. JavaScript integers are exact to
+   * 2^53, so anything a script can count with round-trips exactly.
+   *
+   * @param tableName - Table name
+   * @param columnName - Column name
+   * @param nullable - Whether column can be NULL (default: true)
+   * @param defaultValue - Default value (optional)
+   * @returns JSON string with result: {success: boolean, column: string} or {error: string}
+   * @example
+   * database.addBigintColumn("events", "occurred_at_ms", false, "0");
+   * database.insert("events", JSON.stringify({ occurred_at_ms: Date.now() }));
+   */
+  addBigintColumn(
+    tableName: string,
+    columnName: string,
+    nullable?: boolean,
+    defaultValue?: string,
+  ): DatabaseAnswer;
+
+  /**
+   * Add a floating-point column to a table
+   *
+   * The column type that holds a JavaScript number as it is: rates, ratios,
+   * scores, measurements. The value round-trips exactly, because the column is
+   * a double and so is a JavaScript number.
+   *
+   * Not for money. `0.1 + 0.2` is not `0.3` in any double, here or in
+   * JavaScript. Store amounts as whole minor units — cents, not euros — in an
+   * `addIntegerColumn` or `addBigintColumn` column.
+   *
+   * @param tableName - Table name
+   * @param columnName - Column name
+   * @param nullable - Whether column can be NULL (default: true)
+   * @param defaultValue - Default value (optional)
+   * @returns JSON string with result: {success: boolean, column: string} or {error: string}
+   * @example
+   * database.addFloatColumn("readings", "celsius", true);
+   * database.insert("readings", JSON.stringify({ celsius: 21.5 }));
+   */
+  addFloatColumn(
     tableName: string,
     columnName: string,
     nullable?: boolean,

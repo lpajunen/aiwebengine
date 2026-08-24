@@ -2825,6 +2825,98 @@ impl SecureGlobalContext {
         )?;
         database_obj.set("addIntegerColumn", add_integer_column)?;
 
+        // database.addBigintColumn(tableName, columnName, nullable, defaultValue)
+        let script_uri_add_bigint = script_uri_owned.clone();
+        let user_ctx_add_bigint = user_context.clone();
+        let add_bigint_column = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  table_name: String,
+                  column_name: String,
+                  nullable: Opt<bool>,
+                  default_value: Opt<String>|
+                  -> JsResult<String> {
+                debug!(
+                    "database.addBigintColumn called for script {}",
+                    script_uri_add_bigint
+                );
+
+                if user_ctx_add_bigint
+                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                    .is_err()
+                {
+                    return Ok(
+                        "{\"error\": \"Insufficient permissions for database schema operations\"}"
+                            .to_string(),
+                    );
+                }
+
+                let nullable = nullable.0.unwrap_or(true);
+                let default_val = default_value.0.as_deref();
+
+                match crate::repository::add_column_to_script_table(
+                    &script_uri_add_bigint,
+                    &table_name,
+                    &column_name,
+                    crate::db_schema_utils::ColumnType::Bigint,
+                    nullable,
+                    default_val,
+                ) {
+                    Ok(()) => Ok(success_answer(serde_json::json!({
+                        "column": column_name,
+                    }))),
+                    Err(e) => Ok(error_answer(e)),
+                }
+            },
+        )?;
+        database_obj.set("addBigintColumn", add_bigint_column)?;
+
+        // database.addFloatColumn(tableName, columnName, nullable, defaultValue)
+        let script_uri_add_float = script_uri_owned.clone();
+        let user_ctx_add_float = user_context.clone();
+        let add_float_column = Function::new(
+            ctx.clone(),
+            move |_ctx: rquickjs::Ctx<'_>,
+                  table_name: String,
+                  column_name: String,
+                  nullable: Opt<bool>,
+                  default_value: Opt<String>|
+                  -> JsResult<String> {
+                debug!(
+                    "database.addFloatColumn called for script {}",
+                    script_uri_add_float
+                );
+
+                if user_ctx_add_float
+                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                    .is_err()
+                {
+                    return Ok(
+                        "{\"error\": \"Insufficient permissions for database schema operations\"}"
+                            .to_string(),
+                    );
+                }
+
+                let nullable = nullable.0.unwrap_or(true);
+                let default_val = default_value.0.as_deref();
+
+                match crate::repository::add_column_to_script_table(
+                    &script_uri_add_float,
+                    &table_name,
+                    &column_name,
+                    crate::db_schema_utils::ColumnType::Float,
+                    nullable,
+                    default_val,
+                ) {
+                    Ok(()) => Ok(success_answer(serde_json::json!({
+                        "column": column_name,
+                    }))),
+                    Err(e) => Ok(error_answer(e)),
+                }
+            },
+        )?;
+        database_obj.set("addFloatColumn", add_float_column)?;
+
         // database.addTextColumn(tableName, columnName, nullable, defaultValue)
         let script_uri_add_text = script_uri_owned.clone();
         let user_ctx_add_text = user_context.clone();

@@ -253,6 +253,11 @@ fn generate_delete_mutation(
 fn map_column_to_graphql_type(column_type: &str) -> &'static str {
     match column_type.to_uppercase().as_str() {
         "INTEGER" | "INT" | "SERIAL" => "Int",
+        // GraphQL's `Int` is 32-bit, so a `BIGINT` cannot be one. `Float` is a
+        // double, which is what the value lands in on the JavaScript side
+        // regardless.
+        "BIGINT" | "BIGSERIAL" => "Float",
+        "DOUBLE PRECISION" | "FLOAT" | "REAL" => "Float",
         "TEXT" | "STRING" => "String",
         "BOOLEAN" | "BOOL" => "Boolean",
         "TIMESTAMPTZ" | "TIMESTAMP" => "String", // ISO 8601 string

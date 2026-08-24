@@ -3775,6 +3775,8 @@ impl BindType {
     fn from_declared(declared: &str) -> Option<Self> {
         match declared.to_uppercase().as_str() {
             "INTEGER" | "INT" | "INT4" | "SERIAL" => Some(BindType::Int4),
+            "BIGINT" | "INT8" | "BIGSERIAL" => Some(BindType::Int8),
+            "DOUBLE PRECISION" | "FLOAT8" | "FLOAT" | "REAL" | "DOUBLE" => Some(BindType::Float8),
             "TEXT" | "STRING" | "VARCHAR" => Some(BindType::Text),
             "BOOLEAN" | "BOOL" => Some(BindType::Bool),
             "TIMESTAMPTZ" | "TIMESTAMP" => Some(BindType::Timestamptz),
@@ -3943,7 +3945,10 @@ fn as_whole_number(column: &str, bind_type: BindType, n: &serde_json::Number) ->
         Some(f) if f.fract() != 0.0 => Err(value_rejected(
             column,
             bind_type,
-            &format!("{} — a whole number is required", f),
+            &format!(
+                "{} — a whole number is required, or a FLOAT column to keep the fraction",
+                f
+            ),
         )),
         _ => Err(value_rejected(
             column,
@@ -4026,6 +4031,12 @@ fn row_to_json(row: &sqlx::postgres::PgRow) -> serde_json::Value {
             serde_json::Value::Number(v.into())
         } else if let Ok(v) = row.try_get::<String, _>(idx) {
             serde_json::Value::String(v)
+        } else if let Ok(v) = row.try_get::<f64, _>(idx) {
+            // Ahead of the null fallback rather than after it: a `float8`
+            // column matches none of the arms above, so without this one every
+            // float a script stored would read back as null.
+            serde_json::Number::from_f64(v)
+                .map_or(serde_json::Value::Null, serde_json::Value::Number)
         } else if let Ok(v) = row.try_get::<bool, _>(idx) {
             serde_json::Value::Bool(v)
         } else if let Ok(v) = row.try_get::<DateTime<Utc>, _>(idx) {

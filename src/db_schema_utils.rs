@@ -50,6 +50,15 @@ pub enum SchemaError {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ColumnType {
     Integer,
+    /// For whole numbers past `INTEGER`'s ~2.1 billion — epoch milliseconds
+    /// being the one every script reaches for. JavaScript integers are exact
+    /// to 2^53, so `int8` is the width that matches the language.
+    Bigint,
+    /// JavaScript has one numeric type and this is it. `DOUBLE PRECISION`
+    /// rather than `NUMERIC`: an `f64` round-trips through a JS number
+    /// exactly, where `NUMERIC`'s precision would be lost at the boundary
+    /// anyway. Money belongs in `Integer` minor units, not here.
+    Float,
     Text,
     Boolean,
     Timestamp,
@@ -59,6 +68,8 @@ impl ColumnType {
     pub fn to_sql(&self) -> &'static str {
         match self {
             ColumnType::Integer => "INTEGER",
+            ColumnType::Bigint => "BIGINT",
+            ColumnType::Float => "DOUBLE PRECISION",
             ColumnType::Text => "TEXT",
             ColumnType::Boolean => "BOOLEAN",
             ColumnType::Timestamp => "TIMESTAMPTZ",
@@ -71,7 +82,9 @@ impl FromStr for ColumnType {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "integer" | "int" => Ok(ColumnType::Integer),
+            "integer" | "int" | "int4" => Ok(ColumnType::Integer),
+            "bigint" | "int8" | "long" => Ok(ColumnType::Bigint),
+            "float" | "double" | "real" | "float8" | "double precision" => Ok(ColumnType::Float),
             "text" | "string" => Ok(ColumnType::Text),
             "boolean" | "bool" => Ok(ColumnType::Boolean),
             "timestamp" | "timestamptz" => Ok(ColumnType::Timestamp),
@@ -178,6 +191,27 @@ pub fn validate_default_value(
                 })?;
             Ok(default_value.to_string())
         }
+        ColumnType::Bigint => {
+            // Validate it's a valid whole number
+            default_value
+                .parse::<i64>()
+                .map_err(|_| SchemaError::InvalidDefaultValue {
+                    column_type: "BIGINT".to_string(),
+                    value: default_value.to_string(),
+                })?;
+            Ok(default_value.to_string())
+        }
+        ColumnType::Float => {
+            // Postgres accepts NaN and Infinity here; JSON cannot express
+            // either, so a column defaulted to one would read back as null.
+            match default_value.parse::<f64>() {
+                Ok(f) if f.is_finite() => Ok(default_value.to_string()),
+                _ => Err(SchemaError::InvalidDefaultValue {
+                    column_type: "DOUBLE PRECISION".to_string(),
+                    value: default_value.to_string(),
+                }),
+            }
+        }
         ColumnType::Text => {
             // Text values need to be quoted
             Ok(format!("'{}'", default_value.replace('\'', "''")))
@@ -280,6 +314,37 @@ mod tests {
         assert!(validate_default_value(&ColumnType::Integer, "-100").is_ok());
         assert!(validate_default_value(&ColumnType::Integer, "0").is_ok());
         assert!(validate_default_value(&ColumnType::Integer, "not_a_number").is_err());
+    }
+
+    #[test]
+    fn test_validate_default_value_bigint() {
+        assert!(validate_default_value(&ColumnType::Bigint, "1700000000000").is_ok());
+        assert!(validate_default_value(&ColumnType::Bigint, "-1").is_ok());
+        assert!(validate_default_value(&ColumnType::Bigint, "1.5").is_err());
+    }
+
+    #[test]
+    fn test_validate_default_value_float() {
+        assert!(validate_default_value(&ColumnType::Float, "1.57").is_ok());
+        assert!(validate_default_value(&ColumnType::Float, "-0.5").is_ok());
+        assert!(validate_default_value(&ColumnType::Float, "0").is_ok());
+
+        // Postgres would take these; JSON cannot express either, so a column
+        // defaulted to one would read back as null.
+        assert!(validate_default_value(&ColumnType::Float, "NaN").is_err());
+        assert!(validate_default_value(&ColumnType::Float, "Infinity").is_err());
+        assert!(validate_default_value(&ColumnType::Float, "not_a_number").is_err());
+    }
+
+    #[test]
+    fn a_column_type_is_named_the_way_a_script_would_name_it() {
+        use std::str::FromStr;
+        assert_eq!(ColumnType::from_str("bigint").unwrap(), ColumnType::Bigint);
+        assert_eq!(ColumnType::from_str("LONG").unwrap(), ColumnType::Bigint);
+        assert_eq!(ColumnType::from_str("float").unwrap(), ColumnType::Float);
+        assert_eq!(ColumnType::from_str("double").unwrap(), ColumnType::Float);
+        assert_eq!(ColumnType::Float.to_sql(), "DOUBLE PRECISION");
+        assert_eq!(ColumnType::Bigint.to_sql(), "BIGINT");
     }
 
     #[test]
