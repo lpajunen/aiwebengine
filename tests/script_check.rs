@@ -1072,3 +1072,177 @@ async fn no_native_tool_description_carries_leftover_indentation() {
         );
     }
 }
+
+// ============================================================================
+// Candidate changes spanning several files
+// ============================================================================
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_candidate_change_across_modules_is_checked_before_any_of_it_lands() {
+    let _guard = fixtures().await;
+    setup_env().await;
+
+    let uri = "test://check/candidate/main.ts";
+    deploy_with_assets(
+        uri,
+        "import { rate } from './server/rules.ts';\nfunction init() { rate(); }",
+        &[("server/rules.ts", "export function rate() { return 1; }")],
+    );
+
+    // The change moves a constant into a module that does not exist yet. Sent
+    // as a root alone, it cannot bundle: the module it needs is part of the
+    // same change and has nowhere to be.
+    let candidate_root = "import { rate } from './server/rules.ts';\nfunction init() { rate(); }";
+    let (status, body) = post_check(
+        &format!("uri={}", uri),
+        Some("application/json"),
+        &json!({
+            "content": "import { LIMIT } from './server/limits.ts';\nfunction init() { LIMIT; }",
+        })
+        .to_string(),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        body["ok"],
+        json!(false),
+        "a root that imports a module nobody has written cannot bundle"
+    );
+
+    // Sent as the change it actually is, it does.
+    let (status, body) = post_check(
+        &format!("uri={}", uri),
+        Some("application/json"),
+        &json!({
+            "content": "import { LIMIT } from './server/limits.ts';\nfunction init() { LIMIT; }",
+            "files": {
+                "server/limits.ts": { "content": "export const LIMIT = 5;" }
+            }
+        })
+        .to_string(),
+    )
+    .await;
+
+    assert_eq!(status, 200);
+    assert_eq!(body["candidateFiles"], json!(1));
+    assert_eq!(
+        body["ok"],
+        json!(true),
+        "the whole change bundles: {:?}",
+        body["diagnostics"]
+    );
+
+    // None of it was stored: the deployment is exactly what it was.
+    assert_eq!(
+        repository::fetch_script(uri).as_deref(),
+        Some(candidate_root)
+    );
+    assert!(
+        repository::fetch_asset(uri, "server/limits.ts").is_none(),
+        "checking a candidate must not write it"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_candidate_can_say_a_file_is_removed() {
+    let _guard = fixtures().await;
+    setup_env().await;
+
+    let uri = "test://check/candidate-delete/main.ts";
+    deploy_with_assets(
+        uri,
+        "import { rate } from './server/doomed.ts';\nfunction init() { rate(); }",
+        &[("server/doomed.ts", "export function rate() { return 1; }")],
+    );
+
+    // Deployed, this bundles.
+    let (_, before) = post_check(&format!("uri={}", uri), None, "").await;
+    assert_eq!(before["ok"], json!(true), "{:?}", before["diagnostics"]);
+
+    // A change that removes the module has to be checked as removing it. A
+    // check that kept reading the deleted file would pass on a program that
+    // cannot be built once the change lands.
+    let (status, body) = post_check(
+        &format!("uri={}", uri),
+        Some("application/json"),
+        &json!({ "files": { "server/doomed.ts": null } }).to_string(),
+    )
+    .await;
+
+    assert_eq!(status, 200);
+    assert_eq!(body["candidateFiles"], json!(1));
+    assert_eq!(body["ok"], json!(false));
+    assert!(
+        repository::fetch_asset(uri, "server/doomed.ts").is_some(),
+        "the file is only deleted in the candidate, not in the deployment"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_candidate_path_that_escapes_the_script_is_refused() {
+    let _guard = fixtures().await;
+    setup_env().await;
+
+    let uri = "test://check/candidate-path/main.ts";
+    deploy(uri, "function init() {}");
+
+    let (status, body) = post_check(
+        &format!("uri={}", uri),
+        Some("application/json"),
+        &json!({ "files": { "../elsewhere/main.ts": { "content": "export const x = 1;" } } })
+            .to_string(),
+    )
+    .await;
+
+    assert_eq!(status, 400);
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("traversal"),
+        "got {:?}",
+        body["error"]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_mcp_tool_takes_the_same_candidate_change() {
+    let _guard = fixtures().await;
+    setup_env().await;
+
+    let uri = "test://check/candidate-mcp/main.ts";
+    deploy(uri, "function init() {}");
+
+    let result = execute_native_mcp_tool(
+        "check_script",
+        &json!({
+            "uri": uri,
+            "content": "import { LIMIT } from './server/limits.ts';\nfunction init() { LIMIT; }",
+            "files": { "server/limits.ts": { "content": "export const LIMIT = 5;" } }
+        }),
+        &UserContext::admin("checker".to_string()),
+    )
+    .expect("check_script is a native tool");
+
+    assert_eq!(result["candidateFiles"], json!(1));
+    assert_eq!(
+        result["ok"],
+        json!(true),
+        "the tool resolves the same overlay the endpoint does: {:?}",
+        result["diagnostics"]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_check_tool_advertises_candidate_files() {
+    let descriptors = native_mcp_tool_descriptors();
+    let check = descriptors
+        .iter()
+        .find(|tool| tool.name == "check_script")
+        .expect("check_script should be exposed");
+
+    assert!(
+        check.input_schema["properties"]["files"].is_object(),
+        "an agent cannot send a change it is not told about"
+    );
+}

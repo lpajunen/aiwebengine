@@ -24,7 +24,16 @@ type RouteRegistrations = repository::RouteRegistrations;
 
 /// Transpile TypeScript/JSX/TSX to JavaScript if needed
 fn transpile_if_needed(uri: &str, content: &str) -> Result<String, String> {
-    module_loader::prepare_executable_program(uri, content)
+    transpile_if_needed_in(uri, content, &crate::source_view::SourceView::Live)
+}
+
+/// [`transpile_if_needed`], resolving the program's imports through `view`.
+fn transpile_if_needed_in(
+    uri: &str,
+    content: &str,
+    view: &crate::source_view::SourceView,
+) -> Result<String, String> {
+    module_loader::prepare_executable_program_in(uri, content, view)
         .map(|prepared| prepared.code)
         .map_err(|e| format!("Transpilation error: {}", e))
 }
@@ -3379,7 +3388,14 @@ pub fn call_init_if_exists_with_timeout(
     context: crate::script_init::InitContext,
     timeout_ms: u64,
 ) -> Result<Option<RouteRegistrations>, InitFailure> {
-    let outcome = run_registration_pass(script_uri, script_content, context, timeout_ms, None);
+    let outcome = run_registration_pass(
+        script_uri,
+        script_content,
+        context,
+        timeout_ms,
+        None,
+        &crate::source_view::SourceView::Live,
+    );
 
     match outcome.error {
         Some(error) => Err(InitFailure {
@@ -3410,6 +3426,14 @@ pub struct DryRunParams {
     /// the thread — and every local it owns — goes with it, but an `Arc` the
     /// caller still holds does not.
     pub sink: RegistrationSink,
+    /// Where the program's imports are resolved from.
+    ///
+    /// `script_content` alone only ever answered for the root. A change that
+    /// spans modules, or a revision being checked without being deployed, is
+    /// described by this — and a pass that took the root from one version and
+    /// its imports from another would be checking a program that exists
+    /// nowhere.
+    pub view: crate::source_view::SourceView,
 }
 
 /// Run a script's registration pass for its findings alone, changing nothing.
@@ -3455,6 +3479,7 @@ pub fn dry_run_registration_pass(params: &DryRunParams) -> RegistrationPassOutco
         context,
         params.timeout_ms,
         Some(std::sync::Arc::clone(&params.sink)),
+        &params.view,
     );
 
     drop(rollback_guard);
@@ -3533,6 +3558,7 @@ fn run_registration_pass(
     context: crate::script_init::InitContext,
     timeout_ms: u64,
     dry_run_sink: Option<RegistrationSink>,
+    view: &crate::source_view::SourceView,
 ) -> RegistrationPassOutcome {
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -3567,7 +3593,7 @@ fn run_registration_pass(
     // a deploy depends on, and it runs with the caches cold by definition — with
     // the bundle inside the budget, a script with many imported modules could
     // spend its whole init() allowance fetching and transpiling them.
-    let executable_code = match transpile_if_needed(script_uri, script_content) {
+    let executable_code = match transpile_if_needed_in(script_uri, script_content, view) {
         Ok(code) => code,
         Err(e) => fail_early!(format!("Transpilation failed: {}", e)),
     };

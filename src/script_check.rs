@@ -381,7 +381,10 @@ fn check_blocking_into(
     let ceiling_ms = check_timeout_ms(init_budget_ms, timeout_ms);
     let mut report = CheckReport::new(script_uri.clone());
 
-    let checking_candidate = content.is_some();
+    // Anything but the deployed tree leaves a bundle in the prepared-program
+    // cache that no deploy would have put there — a candidate's, or a
+    // revision's — and it is this function's to clean up.
+    let checking_candidate = content.is_some() || !view.is_live();
     // The root comes from the same view as the modules unless the caller
     // supplied one: checking a revision means checking what it held, and
     // reading its root from the live rows would splice two versions together.
@@ -430,6 +433,11 @@ fn check_blocking_into(
         timeout_ms: ceiling_ms,
         rollback,
         sink,
+        // The same view the probe above bundled with. Resolving the root's
+        // imports from the deployed tree here would check a program made of
+        // one version's root and another version's modules — which is to say,
+        // one that exists nowhere.
+        view,
     });
 
     if checking_candidate {

@@ -115,9 +115,41 @@ the revision that still held the module, the same check succeeds, which is how
 you find out that the deletion — rather than anything else in the change — is
 what broke it.
 
-Combining `revision` with candidate `content` checks a candidate root against
-that revision's modules: the tree the change was written for, rather than
-whatever head has since become.
+### Checking a change that spans modules
+
+`content` only ever answered for the root. A change to a schema module and the
+three modules that read it had to be written — all of it, to the deployment
+other people are using — before anything could say whether it bundled.
+
+`files` describes the whole change, none of it stored:
+
+```bash
+curl -X POST "…/engine/check?uri=myapp" -H "Content-Type: application/json" -d '{
+  "content": "import { LIMIT } from \'./server/limits.ts\'; function init() { … }",
+  "files": {
+    "server/limits.ts": { "content": "export const LIMIT = 5;" },
+    "server/old-limits.ts": null
+  }
+}'
+```
+
+A `null` entry is a file the change **deletes**, which is as much a part of it
+as a rewrite: a check that quietly kept reading a module the change removes
+would pass on a program that cannot be built once it lands.
+
+`mimetype` is inferred from the extension when omitted. Content is plain source
+text rather than base64 — a module the bundler can read has to be UTF-8 anyway.
+The response echoes `candidateFiles` so a caller can confirm the engine used
+what it sent.
+
+Combined with `revision`, the candidate is laid over that revision rather than
+over what is deployed: the tree the change was written for, rather than
+whatever head has since become. That is what makes a change checkable while
+head is broken.
+
+Both halves of a check read from the same version — the bundle and the `init()`
+run. A check that resolved the root's imports one way and the run's another
+would be reporting on a program that exists nowhere.
 
 ## Putting it back
 

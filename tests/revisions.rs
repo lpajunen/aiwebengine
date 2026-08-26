@@ -12,7 +12,7 @@ mod common;
 
 use aiwebengine::engine_api::{
     RevertOutcome, RevertRefusal, delete_asset_authorized, revert_authorized,
-    upsert_asset_authorized, upsert_script_authorized,
+    upsert_asset_authorized,
 };
 use aiwebengine::repository;
 use aiwebengine::revisions;
@@ -47,22 +47,32 @@ fn admin() -> UserContext {
     UserContext::admin("reviser".to_string())
 }
 
-/// Deploy a script through the authorized path, so the write is recorded the
-/// way a caller's write is.
+/// Store a script and record the revision that write produced.
+///
+/// Deliberately not through `upsert_script_authorized`: that spawns the
+/// script's `init()`, which records its outcome against whatever is head when
+/// it finishes. A test that sets init outcomes of its own would be racing it,
+/// and a test that does not would still have a background task writing to the
+/// history it is asserting on.
+///
+/// The script is deleted rather than overwritten, so each test starts from no
+/// history at all — revisions cascade with the script. Otherwise a test
+/// asserting on the shape of a history would be reading every previous run's
+/// as well.
 async fn deploy(script_uri: &str, content: &str) {
-    // Delete rather than overwrite: revisions cascade with the script, so each
-    // test starts from no history at all. Otherwise a test asserting on the
-    // shape of a history would be reading every previous run's as well.
     let uri = script_uri.to_string();
     tokio::task::spawn_blocking(move || repository::delete_script(&uri))
         .await
         .expect("join");
+
     let (uri, content) = (script_uri.to_string(), content.to_string());
     tokio::task::spawn_blocking(move || {
-        upsert_script_authorized(&admin(), &uri, &content, None).expect("script should be stored")
+        repository::upsert_script(&uri, &content).expect("script should be stored");
+        revisions::record_blocking(&uri, revisions::Origin::Script, Some("reviser"))
     })
     .await
-    .expect("join");
+    .expect("join")
+    .expect("deploying records a revision");
 }
 
 async fn write_asset(script_uri: &str, asset_uri: &str, content: &str) -> Option<i32> {
@@ -683,11 +693,21 @@ async fn pruning_keeps_the_newest_revision_that_initialised() {
         .await
         .expect("prune should succeed");
 
+    let surviving = aiwebengine::revisions::list(uri, 1000)
+        .await
+        .expect("history should read")
+        .into_iter()
+        .map(|revision| (revision.revision, revision.init_ok))
+        .collect::<Vec<_>>();
+
     assert_eq!(
         aiwebengine::revisions::last_good(uri).await.unwrap(),
         Some(good),
         "the rollback floor must survive retention, or the history is collected \
-         exactly when the question gets asked"
+         exactly when the question gets asked. Revision {} was the good one; \
+         what survived, as (revision, initOk): {:?}",
+        good,
+        surviving
     );
 }
 
@@ -832,5 +852,117 @@ async fn a_blob_is_collected_once_no_revision_names_it() {
     assert!(
         collected,
         "with the revision that cited it gone, the bytes are nobody's"
+    );
+}
+
+// ============================================================================
+// Checking a version other than the deployed one
+// ============================================================================
+
+fn check_at(script_uri: &str, view: aiwebengine::source_view::SourceView) -> String {
+    let report = aiwebengine::script_check::check_blocking(
+        aiwebengine::script_check::CheckRequest {
+            script_uri: script_uri.to_string(),
+            content: None,
+            rollback: true,
+            timeout_ms: Some(5_000),
+            view,
+        },
+        5_000,
+    );
+    if report.ok {
+        return String::new();
+    }
+    report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code != "no-init")
+        .map(|diagnostic| format!("{}: {}", diagnostic.code, diagnostic.message))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_check_at_a_revision_runs_init_against_that_revision_s_modules() {
+    setup_env().await;
+    let uri = "test://revisions/check-at/main.ts";
+    let root = "import { help } from './server/help.ts';\nfunction init() { return help(); }";
+    deploy(uri, root).await;
+
+    let with_helper = write_asset(
+        uri,
+        "server/help.ts",
+        "export function help() { return {}; }",
+    )
+    .await
+    .expect("write records a revision");
+
+    // Head is broken: the module the root imports is gone.
+    delete_asset(uri, "server/help.ts").await;
+
+    assert!(
+        !check_at(uri, aiwebengine::source_view::SourceView::Live).is_empty(),
+        "the deployed tree is missing the module the root imports"
+    );
+
+    // Both halves of a check have to read from the same version. Bundling the
+    // probe at the revision and then running init() against the deployed
+    // modules would check a program made of one version's root and another's
+    // imports — which is to say, one that exists nowhere.
+    let failures = check_at(
+        uri,
+        aiwebengine::source_view::SourceView::Revision(with_helper),
+    );
+    assert!(
+        failures.is_empty(),
+        "revision {} still holds the module, so it checks clean: {}",
+        with_helper,
+        failures
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_candidate_can_be_checked_against_the_revision_it_was_written_for() {
+    setup_env().await;
+    let uri = "test://revisions/check-overlay/main.ts";
+    let root = "import { help } from './server/help.ts';\nfunction init() { return help(); }";
+    deploy(uri, root).await;
+
+    let written_for = write_asset(
+        uri,
+        "server/help.ts",
+        "export function help() { return {}; }",
+    )
+    .await
+    .expect("write records a revision");
+
+    // Head has moved on and the module is gone, so the change cannot be
+    // checked against head at all.
+    delete_asset(uri, "server/help.ts").await;
+
+    let mut files = std::collections::BTreeMap::new();
+    files.insert(
+        "server/extra.ts".to_string(),
+        aiwebengine::source_view::OverlayEntry::Written(
+            aiwebengine::source_view::SourceFile::text(
+                "export const extra = 1;",
+                "text/typescript",
+            ),
+        ),
+    );
+
+    let over_head = aiwebengine::source_view::SourceView::overlay(files.clone());
+    assert!(
+        !check_at(uri, over_head).is_empty(),
+        "over head, the change is checked against a tree that is already broken"
+    );
+
+    let over_revision = aiwebengine::source_view::SourceView::overlay_on(
+        aiwebengine::source_view::SourceView::Revision(written_for),
+        files,
+    );
+    assert!(
+        check_at(uri, over_revision).is_empty(),
+        "over the revision it was written for, the same change checks clean"
     );
 }

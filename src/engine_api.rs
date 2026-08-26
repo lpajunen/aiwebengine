@@ -2622,6 +2622,21 @@ pub struct CheckParams {
     revision: Option<String>,
 }
 
+/// One file of a candidate change: source that has not been written anywhere.
+#[derive(Deserialize)]
+pub struct CandidateFile {
+    /// Source text. Not base64, unlike the asset write paths: a module the
+    /// bundler can read has to be UTF-8 text anyway, so encoding it would buy
+    /// nothing and cost the caller a step.
+    content: String,
+    /// Inferred from the extension when omitted, as it is for a batch write.
+    mimetype: Option<String>,
+}
+
+/// The files of a candidate change, by path. `null` means the change deletes
+/// that file.
+type CandidateFiles = std::collections::BTreeMap<String, Option<CandidateFile>>;
+
 /// A JSON check request body.
 #[derive(Deserialize, Default)]
 struct CheckBody {
@@ -2630,6 +2645,70 @@ struct CheckBody {
     rollback: Option<bool>,
     timeout_ms: Option<u64>,
     revision: Option<String>,
+    #[serde(default)]
+    files: Option<CandidateFiles>,
+}
+
+/// Build the view a candidate change describes, over `base`.
+///
+/// The point of the whole thing: a change that spans modules can be checked
+/// while it is still a proposal. `content` alone only ever answered for the
+/// root, so a change to a schema module and the three modules that read it had
+/// to be written — all of it, to the deployment other people are using —
+/// before anything could tell you whether it bundled.
+///
+/// A `null` entry is a deletion, which is as much a part of a change as a
+/// rewrite: a check that quietly kept reading a module the change removes
+/// would pass on a program that cannot be built once it lands.
+fn candidate_overlay(
+    files: CandidateFiles,
+    base: crate::source_view::SourceView,
+) -> Result<(crate::source_view::SourceView, usize), String> {
+    use crate::source_view::{OverlayEntry, SourceFile};
+
+    if files.len() > MAX_BATCH_FILES {
+        return Err(format!(
+            "Too many candidate files: {} (limit {})",
+            files.len(),
+            MAX_BATCH_FILES
+        ));
+    }
+
+    let mut total = 0usize;
+    let mut entries = std::collections::BTreeMap::new();
+    for (path, file) in files {
+        validate_asset_uri(&path).map_err(|e| match e {
+            AssetWriteError::Validation(message) => message,
+            _ => format!("Invalid candidate path '{}'", path),
+        })?;
+
+        let entry = match file {
+            None => OverlayEntry::Deleted,
+            Some(file) => {
+                if file.content.len() > MAX_ASSET_BYTES {
+                    return Err(format!("Candidate file '{}' is too large", path));
+                }
+                total = total.saturating_add(file.content.len());
+                if total > MAX_BATCH_BYTES {
+                    return Err(format!(
+                        "Candidate files exceed the {}-byte ceiling",
+                        MAX_BATCH_BYTES
+                    ));
+                }
+                let mimetype = file
+                    .mimetype
+                    .unwrap_or_else(|| mimetype_for(&path).to_string());
+                OverlayEntry::Written(SourceFile::text(file.content, mimetype))
+            }
+        };
+        entries.insert(path, entry);
+    }
+
+    let count = entries.len();
+    Ok((
+        crate::source_view::SourceView::overlay_on(base, entries),
+        count,
+    ))
 }
 
 /// Check what a script would do if it were deployed.
@@ -2645,8 +2724,10 @@ struct CheckBody {
     ),
     request_body(
         description = "Optional candidate source to check instead of what is deployed. Send it as \
-                       `application/json` (`{uri, content, rollback}`) or as a raw body under any \
-                       other content type.",
+                       `application/json` (`{uri, content, files, rollback}`) or as a raw body \
+                       under any other content type. `content` is the candidate root; `files` is a \
+                       candidate change across several files, an object of path -> \
+                       `{content, mimetype?}` or path -> `null` for a file the change deletes.",
         content_type = "application/json",
     ),
     responses(
@@ -2709,10 +2790,17 @@ pub async fn check_route(
     let timeout_ms = parsed.timeout_ms.or(query.timeout_ms);
     let content = parsed.content;
     let revision = parsed.revision.or(query.revision);
+    let files = parsed.files.unwrap_or_default();
 
     let user_for_auth = user.clone();
     let uri_for_auth = uri.clone();
-    let has_candidate = content.is_some();
+    // A candidate is source the caller supplied that lets the check proceed
+    // without a deployed script — the root, whether it arrived as `content` or
+    // as the candidate file that carries it.
+    let has_candidate = content.is_some()
+        || crate::module_loader::root_module_path(&uri)
+            .ok()
+            .is_some_and(|root| matches!(files.get(&root), Some(Some(_))));
     let authorized = tokio::task::spawn_blocking(move || {
         authorize_check(&user_for_auth, &uri_for_auth, has_candidate)
     })
@@ -2748,9 +2836,21 @@ pub async fn check_route(
         }
     }
 
-    let view = match resolve_view(&uri, revision.as_deref()).await {
+    let base = match resolve_view(&uri, revision.as_deref()).await {
         Ok(view) => view,
         Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
+    };
+
+    // Laid over the revision when one is named, so a change is checked against
+    // the tree it was written for rather than against whatever head has since
+    // become.
+    let (view, candidate_files) = if files.is_empty() {
+        (base, 0)
+    } else {
+        match candidate_overlay(files, base) {
+            Ok(built) => built,
+            Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
+        }
     };
 
     let report = crate::script_check::ScriptChecker::with_configured_timeout()
@@ -2765,6 +2865,7 @@ pub async fn check_route(
 
     let mut body = report.to_json();
     if let Some(object) = body.as_object_mut() {
+        object.insert("candidateFiles".to_string(), json!(candidate_files));
         object.insert("timestamp".to_string(), json!(iso_timestamp()));
     }
 
@@ -6621,7 +6722,12 @@ fn native_tools() -> &'static [NativeToolEntry] {
                         },
                         "revision": {
                             "type": "string",
-                            "description": "Which version to check: a revision number, 'head', 'last-good', or a label. Omit for what is deployed. Combined with 'content', the candidate root is checked against that revision's modules."
+                            "description": "Which version to check: a revision number, 'head', 'last-good', or a label. Omit for what is deployed. Combined with 'content' or 'files', the candidate is checked against that revision's modules."
+                        },
+                        "files": {
+                            "type": "object",
+                            "description": "A candidate change spanning several files, none of them written: an object of path -> {content, mimetype?}, or path -> null to check what removing that file would do. Use this to check a change across modules — a schema module and the modules that read it — before any of it lands. Laid over what is deployed, or over 'revision' when given.",
+                            "additionalProperties": true
                         }
                     },
                     "required": ["uri"]
@@ -6787,8 +6893,27 @@ fn tool_check_script(args: &Value, user: &UserContext) -> Value {
         return missing_arg("uri");
     };
     let content = arg_str(args, "content").map(str::to_string);
+    let files: CandidateFiles = match args.get("files") {
+        None | Some(Value::Null) => CandidateFiles::default(),
+        Some(value) => match serde_json::from_value(value.clone()) {
+            Ok(files) => files,
+            Err(e) => {
+                return json!({
+                    "error": format!(
+                        "Invalid 'files': expected an object of path -> {{content, mimetype?}} or null: {}",
+                        e
+                    )
+                });
+            }
+        },
+    };
 
-    match authorize_check(user, uri, content.is_some()) {
+    let has_candidate = content.is_some()
+        || crate::module_loader::root_module_path(uri)
+            .ok()
+            .is_some_and(|root| matches!(files.get(&root), Some(Some(_))));
+
+    match authorize_check(user, uri, has_candidate) {
         Ok(()) => {}
         Err(CheckRefusal::NotFound) => {
             return json!({
@@ -6811,9 +6936,18 @@ fn tool_check_script(args: &Value, user: &UserContext) -> Value {
         .and_then(Value::as_bool)
         .unwrap_or(true);
 
-    let view = match crate::database::run_blocking(resolve_view(uri, arg_str(args, "revision"))) {
+    let base = match crate::database::run_blocking(resolve_view(uri, arg_str(args, "revision"))) {
         Ok(view) => view,
         Err(message) => return json!({ "error": message }),
+    };
+
+    let (view, candidate_files) = if files.is_empty() {
+        (base, 0)
+    } else {
+        match candidate_overlay(files, base) {
+            Ok(built) => built,
+            Err(message) => return json!({ "error": message }),
+        }
     };
 
     // Through the async runner rather than straight to `check_blocking`, so a
@@ -6839,6 +6973,7 @@ fn tool_check_script(args: &Value, user: &UserContext) -> Value {
 
     let mut body = report.to_json();
     if let Some(object) = body.as_object_mut() {
+        object.insert("candidateFiles".to_string(), json!(candidate_files));
         object.insert("timestamp".to_string(), json!(iso_timestamp()));
     }
     body
