@@ -119,6 +119,87 @@ Combining `revision` with candidate `content` checks a candidate root against
 that revision's modules: the tree the change was written for, rather than
 whatever head has since become.
 
+## Putting it back
+
+```bash
+# What would change, without changing it
+curl -X POST "…/engine/revisions/revert?script=myapp&revision=41&dry_run=true"
+
+# Do it
+curl -X POST "…/engine/revisions/revert?script=myapp&revision=last-good"
+```
+
+A revert is a **forward write**. The restored content becomes a new revision
+whose parent is the one it came from, so the history reads as a graph — "48 is
+41 again" — rather than as a line that silently doubles back. Nothing is
+rewritten, and the cluster notification, the cache invalidation and the
+`init()` that follows are the same ones any other write goes through, rather
+than a second path into the same caches with its own way of going wrong.
+
+It restores files whose content differs, and **removes files the target
+revision did not contain**. Leaving those behind would produce a tree that is
+neither version — a module deleted in the change stays around, imported by
+nobody, until the next person assumes it is current. The whole thing is one
+transaction, so a revert never lands halfway.
+
+Files the target holds that the deployment already has are not rewritten, so
+reverting to a nearby revision is as small as the change that caused it.
+
+### It will not deploy a revision that does not build
+
+Because the engine can bundle a revision without deploying it, it checks first:
+
+```json
+{
+  "error": "Revision 37 does not bundle: Module './server/rules.ts' imported
+            from 'main.ts' was not found in assets for 'myapp'.
+            Pass force to restore it anyway."
+}
+```
+
+That is a `409`, before anything is written. `force=true` says the caller meant
+it.
+
+Reverting to what is already deployed changes nothing and records no revision —
+`"revision": null`, and `init()` is not run, because there is nothing for it to
+pick up.
+
+## How long history is kept
+
+```toml
+[revisions]
+prune_enabled = true
+retention_days = 30
+keep_per_script = 50
+prune_interval_secs = 3600
+```
+
+Recording a revision on every write is what makes the history worth having and
+also what makes it grow — an agent editing through `PATCH /engine/assets`
+writes far more often than a person does. A pass runs on the interval above,
+on one instance at a time.
+
+A revision is removed only when it is older than `retention_days` **and**
+outside the newest `keep_per_script` of its script. Either clause on its own
+deletes history someone is plausibly still using.
+
+Three things are never removed, whatever the numbers say:
+
+- a **labelled** revision — a label is someone having said out loud that this
+  one is worth returning to, and retention does not get to disagree;
+- the newest revision that **initialised cleanly**, because it is the floor a
+  rollback lands on, and collecting it would take away the answer exactly when
+  the question gets asked;
+- the **newest** revision of every script, which is what the script currently
+  is.
+
+Content is collected separately and only once no revision cites it, since blobs
+are shared across revisions and across scripts — one revision going away says
+nothing about whether its bytes are still someone else's. A blob is also left
+alone for an hour after the last write that cited it, which is the window a
+write needs between claiming content and recording the manifest that points at
+it.
+
 ## Reading a file's history
 
 ```bash

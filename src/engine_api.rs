@@ -267,31 +267,23 @@ fn spawn_script_init(script_uri: String) {
 }
 
 /// An init() run reported back to whoever triggered it.
-/// Resolve a caller's `revision` argument to a view of a script's files.
+/// Resolve a caller's `revision` argument to a revision number.
 ///
-/// Accepts a number, `head`, `last-good`, or a label. Absent means the
-/// deployed state — so every existing caller keeps checking and testing what
-/// is serving, which is what they have always meant.
+/// Accepts a number, `head`, `last-good`, or a label. A revision named and not
+/// found is an error rather than a fall back to what is deployed: a caller who
+/// asked for 41 and silently got head would be told their check passed against
+/// code they never named.
 ///
 /// `last-good` is the one worth spelling out: it names the newest revision
 /// whose write left `init()` succeeding, which is the target an operator means
 /// by "back to when it worked" and a number they would otherwise have to find
 /// by reading the history themselves.
-async fn resolve_view(
-    script_uri: &str,
-    revision: Option<&str>,
-) -> Result<crate::source_view::SourceView, String> {
-    use crate::source_view::SourceView;
-
-    let Some(spec) = revision.map(str::trim).filter(|spec| !spec.is_empty()) else {
-        return Ok(SourceView::Live);
-    };
-
-    let resolved = match spec {
+async fn resolve_revision(script_uri: &str, spec: &str) -> Result<i32, String> {
+    match spec {
         "head" => revisions::head(script_uri)
             .await
             .map_err(|e| format!("Failed to read revision history: {}", e))?
-            .ok_or_else(|| format!("Script '{}' has no revisions yet", script_uri))?,
+            .ok_or_else(|| format!("Script '{}' has no revisions yet", script_uri)),
         "last-good" => revisions::last_good(script_uri)
             .await
             .map_err(|e| format!("Failed to read revision history: {}", e))?
@@ -300,11 +292,9 @@ async fn resolve_view(
                     "Script '{}' has no revision whose init() succeeded",
                     script_uri
                 )
-            })?,
+            }),
         _ => match spec.parse::<i32>() {
             Ok(number) => {
-                // Named explicitly, so a number that is not there is an error
-                // rather than a silent fall back to what is deployed.
                 if revisions::get(script_uri, number)
                     .await
                     .map_err(|e| format!("Failed to read revision history: {}", e))?
@@ -315,7 +305,7 @@ async fn resolve_view(
                         script_uri, number
                     ));
                 }
-                number
+                Ok(number)
             }
             Err(_) => revisions::by_label(script_uri, spec)
                 .await
@@ -325,11 +315,28 @@ async fn resolve_view(
                         "Script '{}' has no revision labelled '{}'",
                         script_uri, spec
                     )
-                })?,
+                }),
         },
+    }
+}
+
+/// Resolve a caller's `revision` argument to a view of a script's files.
+///
+/// Absent means the deployed state — so every existing caller keeps checking
+/// and testing what is serving, which is what they have always meant.
+async fn resolve_view(
+    script_uri: &str,
+    revision: Option<&str>,
+) -> Result<crate::source_view::SourceView, String> {
+    use crate::source_view::SourceView;
+
+    let Some(spec) = revision.map(str::trim).filter(|spec| !spec.is_empty()) else {
+        return Ok(SourceView::Live);
     };
 
-    Ok(SourceView::Revision(resolved))
+    Ok(SourceView::Revision(
+        resolve_revision(script_uri, spec).await?,
+    ))
 }
 
 fn init_result_json(result: &crate::script_init::InitResult) -> Value {
@@ -4036,6 +4043,280 @@ pub async fn assets_delete_route(
     }
 }
 
+/// Why a revert was refused.
+pub enum RevertRefusal {
+    AccessDenied,
+    NotFound(String),
+    /// The target revision cannot be bundled, so restoring it would deploy a
+    /// script that does not build.
+    WillNotBuild(String),
+    Storage(String),
+}
+
+/// What a revert did, or would do.
+pub struct RevertOutcome {
+    pub target: i32,
+    pub written: Vec<String>,
+    pub deleted: Vec<String>,
+    pub root_changed: bool,
+    /// The revision the revert recorded, or `None` for a dry run and for a
+    /// revert that found nothing to change.
+    pub revision: Option<i32>,
+    pub dry_run: bool,
+}
+
+impl RevertOutcome {
+    fn to_json(&self) -> Value {
+        json!({
+            "revertedTo": self.target,
+            "revision": self.revision,
+            "dryRun": self.dry_run,
+            "changed": {
+                "written": self.written.len(),
+                "deleted": self.deleted.len(),
+                "root": self.root_changed,
+            },
+            "files": { "written": self.written, "deleted": self.deleted },
+        })
+    }
+}
+
+/// Restore a script's files to what a revision held.
+///
+/// A forward write, never a rewrite of history: the restored content becomes a
+/// new revision whose parent is the one it came from. That keeps the cluster
+/// notification, the cache invalidation and the `init()` that follows exactly
+/// as they are for any other write, instead of adding a second path into the
+/// same caches with its own way of going wrong.
+///
+/// The whole thing is one transaction. A revert that wrote the modules but not
+/// the root — or that restored files without removing the ones the target
+/// never had — would leave a tree that is neither version, which is the state
+/// reverting exists to escape.
+pub async fn revert_authorized(
+    user: &UserContext,
+    script_uri: &str,
+    spec: &str,
+    dry_run: bool,
+    force: bool,
+) -> Result<RevertOutcome, RevertRefusal> {
+    if !can_access_assets(user, script_uri, &Capability::WriteAssets) {
+        return Err(RevertRefusal::AccessDenied);
+    }
+
+    let target = resolve_revision(script_uri, spec)
+        .await
+        .map_err(RevertRefusal::NotFound)?;
+
+    let plan = revisions::plan_revert(script_uri, target)
+        .await
+        .map_err(|e| RevertRefusal::Storage(format!("Failed to plan revert: {}", e)))?
+        .ok_or_else(|| {
+            RevertRefusal::NotFound(format!(
+                "Revision {} of '{}' cannot be read",
+                target, script_uri
+            ))
+        })?;
+
+    // Refuse to deploy a revision that does not bundle. The engine can answer
+    // this without running anything and without writing anything — which is
+    // the point of being able to build from a view other than the deployed
+    // one — so a revert onto a broken tree is a thing the caller finds out
+    // before it happens rather than from the FATAL afterwards.
+    if !force
+        && let Some(root) = revisions::root_content(script_uri, target)
+            .await
+            .map_err(|e| RevertRefusal::Storage(format!("Failed to read revision: {}", e)))?
+        && let Err(error) = crate::module_loader::prepare_executable_program_in(
+            script_uri,
+            &root,
+            &crate::source_view::SourceView::Revision(target),
+        )
+    {
+        return Err(RevertRefusal::WillNotBuild(format!(
+            "Revision {} does not bundle: {}. Pass force to restore it anyway.",
+            target, error
+        )));
+    }
+
+    let outcome = RevertOutcome {
+        target,
+        written: plan.writes.iter().map(|file| file.uri.clone()).collect(),
+        deleted: plan.deletes.clone(),
+        root_changed: plan.root_changes,
+        revision: None,
+        dry_run,
+    };
+
+    if dry_run || plan.is_empty() {
+        return Ok(outcome);
+    }
+
+    let (root, writes) = revisions::revert_content(script_uri, target, &plan)
+        .await
+        .map_err(|e| RevertRefusal::Storage(format!("Failed to read revision content: {}", e)))?;
+
+    let script = script_uri.to_string();
+    let deletes = plan.deletes.clone();
+    let user_id = user.user_id.clone();
+    let applied = tokio::task::spawn_blocking(move || {
+        apply_revert(&script, target, root, writes, deletes, user_id.as_deref())
+    })
+    .await
+    .map_err(|e| RevertRefusal::Storage(format!("join error: {}", e)))?
+    .map_err(RevertRefusal::Storage)?;
+
+    Ok(RevertOutcome {
+        revision: applied,
+        ..outcome
+    })
+}
+
+/// The writing half of a revert, as one transaction on one thread.
+///
+/// Blocking because the repository's transaction is thread-local: the writes
+/// and the revision that records them have to happen on the thread that opened
+/// it, or they join no transaction at all.
+fn apply_revert(
+    script_uri: &str,
+    target: i32,
+    root: Option<String>,
+    writes: Vec<(String, String, Vec<u8>)>,
+    deletes: Vec<String>,
+    user_id: Option<&str>,
+) -> Result<Option<i32>, String> {
+    let _guard = crate::database::Database::begin_transaction(None)
+        .map_err(|e| format!("Failed to open revert transaction: {}", e))?;
+
+    let result = (|| -> Result<Option<i32>, String> {
+        if let Some(root) = root {
+            repository::upsert_script(script_uri, &root)
+                .map_err(|e| format!("Failed to restore script source: {}", e))?;
+        }
+
+        if !writes.is_empty() {
+            let now = std::time::SystemTime::now();
+            let assets = writes
+                .into_iter()
+                .map(|(uri, mimetype, content)| repository::Asset {
+                    name: Some(uri.clone()),
+                    uri,
+                    mimetype,
+                    content,
+                    created_at: now,
+                    updated_at: now,
+                    script_uri: script_uri.to_string(),
+                })
+                .collect();
+            repository::upsert_assets(script_uri, assets)
+                .map_err(|e| format!("Failed to restore files: {}", e))?;
+        }
+
+        for uri in &deletes {
+            repository::delete_asset(script_uri, uri);
+        }
+
+        Ok(revisions::record_blocking_with_parent(
+            script_uri,
+            revisions::Origin::Revert,
+            user_id,
+            Some(target),
+        ))
+    })();
+
+    match result {
+        Ok(revision) => {
+            crate::database::Database::commit_transaction()
+                .map_err(|e| format!("Failed to commit revert: {}", e))?;
+            Ok(revision)
+        }
+        Err(e) => {
+            let _ = crate::database::Database::rollback_transaction();
+            Err(e)
+        }
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub struct RevertParams {
+    script: Option<String>,
+    revision: Option<String>,
+    dry_run: Option<bool>,
+    force: Option<bool>,
+    reinit: Option<String>,
+}
+
+/// Put a script's files back to what a revision held.
+#[utoipa::path(
+    post,
+    path = "/engine/revisions/revert",
+    tags = ["Scripts"],
+    params(
+        ("script" = String, Query, description = "URI of the script to restore"),
+        ("revision" = String, Query, description = "Which version to restore: a revision number, `head`, `last-good`, or a label"),
+        ("dry_run" = Option<bool>, Query, description = "Report what would change without changing it"),
+        ("force" = Option<bool>, Query, description = "Restore even if the target revision does not bundle"),
+        ("reinit" = Option<String>, Query, description = "`after` runs the script's init() once the files land (default); `never` leaves it alone"),
+    ),
+    responses(
+        (status = 200, description = "What the revert changed, and what init() did"),
+        (status = 400, description = "Missing parameter, or a revision that cannot be resolved"),
+        (status = 403, description = "Not an administrator or owner of the script"),
+        (status = 409, description = "The target revision does not bundle"),
+    )
+)]
+pub async fn revert_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<RevertParams>,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    let Some(script) = query.script else {
+        return missing_param_response("script");
+    };
+    let Some(spec) = query.revision else {
+        return missing_param_response("revision");
+    };
+    let reinit = match ReinitMode::parse(query.reinit.as_deref()) {
+        Ok(reinit) => reinit,
+        Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
+    };
+    let dry_run = query.dry_run.unwrap_or(false);
+
+    let outcome =
+        match revert_authorized(&user, &script, &spec, dry_run, query.force.unwrap_or(false)).await
+        {
+            Ok(outcome) => outcome,
+            Err(RevertRefusal::AccessDenied) => {
+                return error_response(StatusCode::FORBIDDEN, "Error: Access denied".to_string());
+            }
+            Err(RevertRefusal::NotFound(message)) => {
+                return error_response(StatusCode::BAD_REQUEST, message);
+            }
+            Err(RevertRefusal::WillNotBuild(message)) => {
+                return error_response(StatusCode::CONFLICT, message);
+            }
+            Err(RevertRefusal::Storage(message)) => {
+                return error_response(StatusCode::INTERNAL_SERVER_ERROR, message);
+            }
+        };
+
+    // A revert that changed nothing has nothing to re-register, and a dry run
+    // deliberately changed nothing at all.
+    let init = match (reinit, outcome.revision) {
+        (ReinitMode::Never, _) => json!({ "ran": false, "reason": "reinit=never" }),
+        (_, None) => json!({ "ran": false, "reason": "no change" }),
+        (ReinitMode::After, Some(_)) => init_result_json(&reinitialize_script(&script).await),
+    };
+
+    let mut body = outcome.to_json();
+    if let Some(object) = body.as_object_mut() {
+        object.insert("script".to_string(), json!(script));
+        object.insert("init".to_string(), init);
+        object.insert("timestamp".to_string(), json!(iso_timestamp()));
+    }
+    json_response(StatusCode::OK, body)
+}
+
 #[derive(Deserialize, Default)]
 pub struct RevisionListParams {
     script: Option<String>,
@@ -6266,6 +6547,51 @@ fn native_tools() -> &'static [NativeToolEntry] {
             tool_run_tests,
         ),
         (
+            "list_revisions",
+            "What a script's files have been. Every write records a revision of the whole script, so this is the history behind an edit made without a checkout: what changed, when, by whom, and whether the script still initialised afterwards. 'lastGood' names the newest revision whose init() succeeded — the target for 'put it back to when it worked'. Pass 'asset' for one file's history.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "script": { "type": "string", "description": "URI of the script whose history to read" },
+                        "asset": { "type": "string", "description": "Only the revisions in which this file changed" },
+                        "limit": { "type": "integer", "description": "Keep at most this many of the newest revisions (default 50)" }
+                    },
+                    "required": ["script"]
+                })
+            },
+            tool_list_revisions,
+        ),
+        (
+            "revert_script",
+            "Put a script's files back to what a revision held, as a new revision rather than a rewrite of history. Restores changed files, removes files the target revision did not contain, and refuses a target that does not bundle unless 'force'. Pass 'dryRun' to see what would change first. Requires the user to own the script or be an administrator.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "script": { "type": "string", "description": "URI of the script to restore" },
+                        "revision": { "type": "string", "description": "Which version to restore: a revision number, 'head', 'last-good', or a label" },
+                        "dryRun": {
+                            "type": "boolean",
+                            "description": "Report what would change without changing it",
+                            "default": false
+                        },
+                        "force": {
+                            "type": "boolean",
+                            "description": "Restore even if the target revision does not bundle",
+                            "default": false
+                        },
+                        "reinit": {
+                            "type": "string",
+                            "description": "'after' runs the script's init() once the files land (default); 'never' leaves it alone"
+                        }
+                    },
+                    "required": ["script", "revision"]
+                })
+            },
+            tool_revert_script,
+        ),
+        (
             "check_script",
             "Check what a script would do if it were deployed, without deploying it: resolve its \
             asset-backed imports the way the engine does, run its init() with every registration \
@@ -6526,6 +6852,100 @@ fn tool_check_script(args: &Value, user: &UserContext) -> Value {
 /// inside the run loop rather than by an outer timeout — there is no async
 /// backstop on this path, and the in-loop ceiling is the one that can still
 /// report the modules that finished.
+fn tool_list_revisions(args: &Value, user: &UserContext) -> Value {
+    let Some(script) = arg_str(args, "script") else {
+        return missing_arg("script");
+    };
+    if !can_access_assets(user, script, &Capability::ReadAssets) {
+        return json!({ "error": "Failed to read revisions: Access denied" });
+    }
+    let limit = args.get("limit").and_then(Value::as_i64).unwrap_or(50);
+
+    if let Some(asset) = arg_str(args, "asset") {
+        return match crate::database::run_blocking(revisions::file_history(script, asset, limit)) {
+            Ok(history) => json!({
+                "success": true,
+                "script": script,
+                "asset": asset,
+                "history": history
+                    .iter()
+                    .map(|(revision, file)| {
+                        let mut entry = revision_file_to_json(file);
+                        if let Some(object) = entry.as_object_mut() {
+                            object.insert("revision".to_string(), json!(revision));
+                        }
+                        entry
+                    })
+                    .collect::<Vec<Value>>(),
+                "timestamp": iso_timestamp(),
+            }),
+            Err(e) => json!({ "error": format!("Failed to read file history: {}", e) }),
+        };
+    }
+
+    match crate::database::run_blocking(revisions::list(script, limit)) {
+        Ok(listed) => json!({
+            "success": true,
+            "script": script,
+            "revisions": listed.iter().map(revision_to_json).collect::<Vec<Value>>(),
+            "head": listed.first().map(|revision| revision.revision),
+            "lastGood": crate::database::run_blocking(revisions::last_good(script))
+                .ok()
+                .flatten(),
+            "timestamp": iso_timestamp(),
+        }),
+        Err(e) => json!({ "error": format!("Failed to read revisions: {}", e) }),
+    }
+}
+
+fn tool_revert_script(args: &Value, user: &UserContext) -> Value {
+    let Some(script) = arg_str(args, "script") else {
+        return missing_arg("script");
+    };
+    let Some(spec) = arg_str(args, "revision") else {
+        return missing_arg("revision");
+    };
+    let dry_run = args.get("dryRun").and_then(Value::as_bool).unwrap_or(false);
+    let force = args.get("force").and_then(Value::as_bool).unwrap_or(false);
+    let reinit = match ReinitMode::parse(arg_str(args, "reinit")) {
+        Ok(reinit) => reinit,
+        Err(message) => return json!({ "error": message }),
+    };
+
+    let outcome = match crate::database::run_blocking(revert_authorized(
+        user, script, spec, dry_run, force,
+    )) {
+        Ok(outcome) => outcome,
+        Err(RevertRefusal::AccessDenied) => {
+            return json!({ "error": "Failed to revert: Access denied" });
+        }
+        Err(RevertRefusal::NotFound(message))
+        | Err(RevertRefusal::WillNotBuild(message))
+        | Err(RevertRefusal::Storage(message)) => {
+            return json!({ "error": format!("Failed to revert: {}", message) });
+        }
+    };
+
+    // Bridging back to async, as the asset tools do, so the caller is told what
+    // init() did rather than that it was started.
+    let init = match (reinit, outcome.revision) {
+        (ReinitMode::Never, _) => json!({ "ran": false, "reason": "reinit=never" }),
+        (_, None) => json!({ "ran": false, "reason": "no change" }),
+        (ReinitMode::After, Some(_)) => {
+            init_result_json(&crate::database::run_blocking(reinitialize_script(script)))
+        }
+    };
+
+    let mut body = outcome.to_json();
+    if let Some(object) = body.as_object_mut() {
+        object.insert("success".to_string(), json!(true));
+        object.insert("script".to_string(), json!(script));
+        object.insert("init".to_string(), init);
+        object.insert("timestamp".to_string(), json!(iso_timestamp()));
+    }
+    body
+}
+
 fn tool_run_tests(args: &Value, user: &UserContext) -> Value {
     let Some(uri) = arg_str(args, "uri") else {
         return missing_arg("uri");

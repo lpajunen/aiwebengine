@@ -159,6 +159,17 @@ enable_metrics = true
 metrics_interval_secs = 60
 
 # Authentication Configuration
+
+[revisions]
+# Script revision history. Every write records what the script's files became,
+# so this decides how much of that is kept. A labelled revision, the newest
+# revision whose init() succeeded, and the newest revision of each script are
+# kept regardless of these settings.
+prune_enabled = true
+retention_days = 30
+keep_per_script = 50
+prune_interval_secs = 3600
+
 [auth]
 # Enable authentication in development
 enabled = true

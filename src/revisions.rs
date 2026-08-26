@@ -201,10 +201,27 @@ pub async fn record(
     origin: Origin,
     created_by: Option<&str>,
 ) -> AppResult<Option<i32>> {
+    record_with_parent(script_uri, origin, created_by, None).await
+}
+
+/// [`record`], naming the revision this one was computed against.
+///
+/// Only a revert needs this. Its parent is the revision it restored, not the
+/// one it happened to follow, and recording that is what lets a history be
+/// read as a graph — "48 is 41 again" — rather than as a line that doubles
+/// back without saying so.
+pub async fn record_with_parent(
+    script_uri: &str,
+    origin: Origin,
+    created_by: Option<&str>,
+    parent: Option<i32>,
+) -> AppResult<Option<i32>> {
     let script_uri = script_uri.to_string();
     let created_by = created_by.map(str::to_string);
     with_transaction(move |conn| {
-        Box::pin(async move { record_in(conn, &script_uri, origin, created_by.as_deref()).await })
+        Box::pin(async move {
+            record_in(conn, &script_uri, origin, created_by.as_deref(), parent).await
+        })
     })
     .await
 }
@@ -225,6 +242,7 @@ async fn record_in(
     script_uri: &str,
     origin: Origin,
     created_by: Option<&str>,
+    parent_override: Option<i32>,
 ) -> AppResult<Option<i32>> {
     // Serialise revision numbering per script. Two writes landing together
     // would otherwise read the same `MAX(revision)` and one would fail on the
@@ -244,13 +262,21 @@ async fn record_in(
     // database and copying blob-side keeps that cost off the wire entirely:
     // nothing here reads a byte of the script's content, however large the
     // tree is.
+    // `ON CONFLICT DO UPDATE` rather than `DO NOTHING`, for a reason that has
+    // nothing to do with the column it sets. `DO NOTHING` leaves an existing
+    // blob untouched and so unlocked, and a collector running beside this one
+    // could judge that blob unreferenced — its last citing revision having
+    // just been pruned — and delete it between here and the manifest insert
+    // below, which would then fail on the foreign key and lose the revision.
+    // Touching the row locks it for the rest of this transaction and moves it
+    // out of the collector's grace period.
     let root_sha: Option<String> = sqlx::query_scalar(
         "WITH root AS (
              SELECT convert_to(content, 'UTF8') AS bytes FROM scripts WHERE uri = $1
          ), stored AS (
              INSERT INTO asset_blobs (sha256, bytes, content)
              SELECT encode(sha256(bytes), 'hex'), octet_length(bytes), bytes FROM root
-             ON CONFLICT (sha256) DO NOTHING
+             ON CONFLICT (sha256) DO UPDATE SET created_at = NOW()
              RETURNING 1
          )
          SELECT encode(sha256(bytes), 'hex') FROM root",
@@ -280,7 +306,7 @@ async fn record_in(
              SELECT DISTINCT ON (sha256) sha256, octet_length(content), content
              FROM current_files
              ORDER BY sha256
-             ON CONFLICT (sha256) DO NOTHING
+             ON CONFLICT (sha256) DO UPDATE SET created_at = NOW()
              RETURNING 1
          )
          SELECT uri, name, mimetype, sha256 FROM current_files ORDER BY uri",
@@ -309,7 +335,10 @@ async fn record_in(
     .await
     .map_err(|e| db_error("reading previous revision", e))?;
 
-    let parent = match &previous {
+    // `latest` numbers the new revision; `parent` says what it was computed
+    // against. They are the same for an ordinary write and differ for a
+    // revert, which follows head but descends from the revision it restored.
+    let latest = match &previous {
         Some(row) => {
             let previous_id: i64 = row.get("id");
             let previous_root: String = row.get("root_sha256");
@@ -322,7 +351,8 @@ async fn record_in(
         None => None,
     };
 
-    let next = parent.unwrap_or(0) + 1;
+    let parent = parent_override.or(latest);
+    let next = latest.unwrap_or(0) + 1;
     let revision_id: i64 = sqlx::query_scalar(
         "INSERT INTO script_revisions
              (script_uri, revision, parent, root_sha256, created_by, origin)
@@ -797,7 +827,19 @@ pub async fn set_label(script_uri: &str, revision: i32, label: Option<&str>) -> 
 /// rejected when the files are stored and serving — so a failure here is
 /// logged and the write stands without a revision.
 pub fn record_blocking(script_uri: &str, origin: Origin, created_by: Option<&str>) -> Option<i32> {
-    match crate::database::run_blocking(record(script_uri, origin, created_by)) {
+    record_blocking_with_parent(script_uri, origin, created_by, None)
+}
+
+/// [`record_with_parent`] from a synchronous context, reporting failure rather
+/// than propagating it.
+pub fn record_blocking_with_parent(
+    script_uri: &str,
+    origin: Origin,
+    created_by: Option<&str>,
+    parent: Option<i32>,
+) -> Option<i32> {
+    match crate::database::run_blocking(record_with_parent(script_uri, origin, created_by, parent))
+    {
         Ok(revision) => revision,
         Err(e) => {
             tracing::warn!(
@@ -902,7 +944,7 @@ async fn backfill_missing_inner() -> AppResult<()> {
                         encode(sha256(bytes), 'hex'), octet_length(bytes), bytes
                  FROM all_bytes
                  ORDER BY 1
-                 ON CONFLICT (sha256) DO NOTHING",
+                 ON CONFLICT (sha256) DO UPDATE SET created_at = NOW()",
             )
             .execute(&mut *conn)
             .await
@@ -952,4 +994,374 @@ async fn backfill_missing_inner() -> AppResult<()> {
         })
     })
     .await
+}
+
+// ============================================================================
+// Reverting
+// ============================================================================
+
+/// What restoring a revision would change.
+#[derive(Debug, Clone, Default)]
+pub struct RevertPlan {
+    /// Files the target revision holds whose stored content differs, or which
+    /// are not stored at all.
+    pub writes: Vec<RevisionFile>,
+    /// Files stored now that the target revision did not contain.
+    ///
+    /// Restoring without these would leave a tree that is neither the old
+    /// version nor the new one — a module deleted in the change stays behind,
+    /// shadowing nothing and imported by nobody, until it is imported again by
+    /// the next person who assumes it is current.
+    pub deletes: Vec<String>,
+    /// Whether the script's root source differs from the target's.
+    pub root_changes: bool,
+}
+
+impl RevertPlan {
+    /// Whether the deployed files already are the target revision.
+    pub fn is_empty(&self) -> bool {
+        self.writes.is_empty() && self.deletes.is_empty() && !self.root_changes
+    }
+}
+
+/// Work out what restoring `target` would change, without changing anything.
+///
+/// Compared by digest against what is stored, so a file the target holds and
+/// the deployment already has is not rewritten. That keeps a revert to a
+/// nearby revision as small as the change that caused it, and keeps the
+/// revision it records honest about what moved.
+pub async fn plan_revert(script_uri: &str, target: i32) -> AppResult<Option<RevertPlan>> {
+    let Some(files) = files(script_uri, target).await? else {
+        return Ok(None);
+    };
+    let Some(target_root) = root_content(script_uri, target).await? else {
+        return Ok(None);
+    };
+
+    let script_uri_owned = script_uri.to_string();
+    let current = with_read_connection(move |conn| {
+        Box::pin(async move {
+            let rows = sqlx::query(
+                "SELECT uri, encode(sha256(content), 'hex') AS sha256
+                 FROM assets WHERE script_uri = $1",
+            )
+            .bind(&script_uri_owned)
+            .fetch_all(&mut *conn)
+            .await
+            .map_err(|e| db_error("reading deployed files", e))?;
+
+            let root: Option<String> = sqlx::query_scalar(
+                "SELECT encode(sha256(convert_to(content, 'UTF8')), 'hex')
+                 FROM scripts WHERE uri = $1",
+            )
+            .bind(&script_uri_owned)
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(|e| db_error("reading deployed root", e))?;
+
+            let stored: std::collections::HashMap<String, String> = rows
+                .into_iter()
+                .map(|row| (row.get("uri"), row.get("sha256")))
+                .collect();
+            Ok((stored, root))
+        })
+    })
+    .await?;
+
+    let (stored, stored_root) = current;
+
+    let target_root_sha = {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(target_root.as_bytes());
+        hex::encode(hasher.finalize())
+    };
+
+    let mut plan = RevertPlan {
+        root_changes: stored_root.as_deref() != Some(target_root_sha.as_str()),
+        ..RevertPlan::default()
+    };
+
+    for file in &files {
+        if stored.get(&file.uri) != Some(&file.sha256) {
+            plan.writes.push(file.clone());
+        }
+    }
+
+    let held: std::collections::HashSet<&str> =
+        files.iter().map(|file| file.uri.as_str()).collect();
+    plan.deletes = stored
+        .keys()
+        .filter(|uri| !held.contains(uri.as_str()))
+        .cloned()
+        .collect();
+    plan.deletes.sort();
+
+    Ok(Some(plan))
+}
+
+/// The content a revert needs to write, read from the target revision.
+pub async fn revert_content(
+    script_uri: &str,
+    target: i32,
+    plan: &RevertPlan,
+) -> AppResult<(Option<String>, Vec<(String, String, Vec<u8>)>)> {
+    let root = if plan.root_changes {
+        root_content(script_uri, target).await?
+    } else {
+        None
+    };
+
+    let mut writes = Vec::with_capacity(plan.writes.len());
+    for file in &plan.writes {
+        if let Some((content, mimetype)) = read_file(script_uri, target, &file.uri).await? {
+            writes.push((file.uri.clone(), mimetype, content));
+        }
+    }
+
+    Ok((root, writes))
+}
+
+// ============================================================================
+// Retention
+// ============================================================================
+
+/// What a pruning pass is allowed to remove.
+///
+/// Recording a revision on every write is what makes the history worth having,
+/// and it is also what makes it grow without bound: an agent editing a script
+/// through `PATCH /engine/assets` writes far more often than a person does.
+/// The policy is the answer to "which of these will nobody want", and every
+/// clause is a way of being wrong about that.
+#[derive(Debug, Clone, Copy)]
+pub struct Retention {
+    /// Keep every revision younger than this.
+    pub keep_days: i32,
+    /// Keep this many of the newest per script regardless of age, so a script
+    /// nobody has touched in a year still has a history when someone returns
+    /// to it.
+    pub keep_per_script: i32,
+    /// How long a blob is left alone after the last write that cited it.
+    ///
+    /// Not a retention policy so much as the width of the window in which a
+    /// collector must not act — see the delete in [`prune`]. Wide on purpose:
+    /// an uncollected orphan costs one pass of waiting, and collecting one too
+    /// early costs a write its revision.
+    pub blob_grace_secs: f64,
+}
+
+impl Default for Retention {
+    fn default() -> Self {
+        Self {
+            keep_days: 30,
+            keep_per_script: 50,
+            blob_grace_secs: 3600.0,
+        }
+    }
+}
+
+/// What a pruning pass removed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PruneOutcome {
+    pub revisions: u64,
+    pub blobs: u64,
+}
+
+/// Delete revisions the policy does not protect, then the blobs nothing cites.
+///
+/// Three things are never deleted, whatever the policy says:
+///
+/// - a **labelled** revision, because a label is someone having said out loud
+///   that this one is worth returning to;
+/// - the newest revision that **initialised cleanly**, because it is the floor
+///   a rollback lands on, and a retention policy that removed it would take
+///   away the answer exactly when the question gets asked;
+/// - the **newest** revision of every script, which `keep_per_script` covers
+///   for any sane value and which the `>= 1` clamp guarantees for the rest.
+///
+/// Age and count are both required before anything goes: a revision has to be
+/// older than `keep_days` *and* outside the newest `keep_per_script` of its
+/// script. Either alone deletes history someone is plausibly still using.
+/// `scope` restricts the pass to one script; `None` prunes every script, which
+/// is what the background pruner does. An operator clearing out one script's
+/// churn should not have to wait for the whole engine's turn.
+pub async fn prune(scope: Option<&str>, retention: Retention) -> AppResult<PruneOutcome> {
+    let revisions = prune_revisions(scope, retention).await?;
+    // Collected separately, and after the revisions are committed. The sweep
+    // is opportunistic — see [`collect_blobs`] — and a pass that cannot
+    // collect must not undo the pruning that has already succeeded.
+    let blobs = collect_blobs(retention).await;
+
+    if revisions > 0 || blobs > 0 {
+        tracing::info!(
+            revisions = revisions,
+            blobs = blobs,
+            "Pruned script revision history"
+        );
+    }
+
+    Ok(PruneOutcome { revisions, blobs })
+}
+
+async fn prune_revisions(scope: Option<&str>, retention: Retention) -> AppResult<u64> {
+    let keep_days = retention.keep_days.max(0);
+    let keep_per_script = retention.keep_per_script.max(1);
+    let scope = scope.map(str::to_string);
+
+    with_transaction(move |conn| {
+        Box::pin(async move {
+            // One instance prunes at a time. Two doing it together is not
+            // unsafe — the deletes are idempotent — but they would scan the
+            // same rows to find the same answer, and a collector is only worth
+            // running if it is cheap.
+            let acquired: bool = sqlx::query_scalar(
+                "SELECT pg_try_advisory_xact_lock(hashtext('revision-prune' || COALESCE($1, '')))",
+            )
+            .bind(scope.as_deref())
+            .fetch_one(&mut *conn)
+            .await
+            .map_err(|e| db_error("locking for prune", e))?;
+
+            if !acquired {
+                tracing::debug!("Another instance is pruning revisions; skipping this pass");
+                return Ok(0);
+            }
+
+            Ok(sqlx::query(
+                "WITH ranked AS (
+                     SELECT r.id,
+                            r.label,
+                            r.created_at,
+                            row_number() OVER (
+                                PARTITION BY r.script_uri ORDER BY r.revision DESC
+                            ) AS recency,
+                            r.revision = (
+                                SELECT MAX(g.revision) FROM script_revisions g
+                                WHERE g.script_uri = r.script_uri AND g.init_ok IS TRUE
+                            ) AS is_last_good
+                     FROM script_revisions r
+                     WHERE $3::text IS NULL OR r.script_uri = $3
+                 )
+                 DELETE FROM script_revisions
+                 WHERE id IN (
+                     SELECT id FROM ranked
+                     WHERE label IS NULL
+                       AND is_last_good IS NOT TRUE
+                       AND recency > $1
+                       AND created_at < NOW() - make_interval(days => $2)
+                 )",
+            )
+            .bind(keep_per_script)
+            .bind(keep_days)
+            .bind(scope.as_deref())
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| db_error("pruning revisions", e))?
+            .rows_affected())
+        })
+    })
+    .await
+}
+
+/// Delete content no revision cites any more.
+///
+/// Always the whole table, whatever script was pruned: blobs are shared across
+/// revisions and across scripts, so "this script's revision is gone" says
+/// nothing about whether its bytes are still someone else's.
+///
+/// Best-effort by design, and it returns 0 rather than an error when it cannot
+/// run. Deciding a blob is unreferenced and deleting it are two steps, and a
+/// writer can claim that content in between — the foreign key then refuses the
+/// delete, which is the database preventing exactly the loss worth preventing.
+/// Nothing is wrong when that happens and nothing needs reporting: the orphan
+/// is collected on the next pass.
+///
+/// The age guard makes that collision rare rather than routine. Recording a
+/// revision touches every blob it cites before inserting the manifest rows
+/// that reference them, so a blob in that window is too young to collect.
+async fn collect_blobs(retention: Retention) -> u64 {
+    let grace = retention.blob_grace_secs.max(0.0);
+    let result = with_transaction(move |conn| {
+        Box::pin(async move {
+            sqlx::query(
+                "DELETE FROM asset_blobs b
+                 WHERE b.created_at < NOW() - make_interval(secs => $1)
+                 AND NOT EXISTS (
+                     SELECT 1 FROM script_revision_files f WHERE f.sha256 = b.sha256
+                 )
+                 AND NOT EXISTS (
+                     SELECT 1 FROM script_revisions r WHERE r.root_sha256 = b.sha256
+                 )",
+            )
+            .bind(grace)
+            .execute(conn)
+            .await
+            .map(|done| done.rows_affected())
+            .map_err(|e| db_error("collecting revision blobs", e))
+        })
+    })
+    .await;
+
+    match result {
+        Ok(collected) => collected,
+        Err(e) => {
+            tracing::debug!("Blob collection did not run this pass: {}", e);
+            0
+        }
+    }
+}
+
+/// Run a pruning pass on an interval until shutdown.
+///
+/// Started alongside the scheduler worker and stopped by the same graceful
+/// shutdown, so an engine that is going down is not left holding a half-run
+/// collection.
+///
+/// Every instance runs this; the advisory lock in [`prune`] means only one of
+/// them does the work on any given tick.
+pub fn spawn_pruner(
+    config: crate::config::RevisionsConfig,
+    shutdown: tokio::sync::oneshot::Receiver<()>,
+) {
+    if !config.prune_enabled {
+        tracing::info!("Revision pruning is disabled; history will grow without bound");
+        return;
+    }
+
+    let retention = Retention {
+        keep_days: config.retention_days.min(i32::MAX as u32) as i32,
+        keep_per_script: config.keep_per_script.min(i32::MAX as u32) as i32,
+        ..Retention::default()
+    };
+    let period = std::time::Duration::from_secs(config.prune_interval_secs.max(60));
+
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(period);
+        // The first tick fires immediately, which would put a prune in the
+        // middle of startup — the moment an engine has least to spare and the
+        // history has least to gain.
+        ticker.tick().await;
+
+        let mut shutdown = shutdown;
+        loop {
+            tokio::select! {
+                _ = ticker.tick() => {
+                    if let Err(e) = prune(None, retention).await {
+                        tracing::warn!("Revision pruning pass failed: {}", e);
+                    }
+                }
+                _ = &mut shutdown => {
+                    tracing::debug!("Revision pruner stopping");
+                    return;
+                }
+            }
+        }
+    });
+
+    tracing::info!(
+        retention_days = retention.keep_days,
+        keep_per_script = retention.keep_per_script,
+        interval_secs = period.as_secs(),
+        "Revision pruner started"
+    );
 }

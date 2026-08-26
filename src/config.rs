@@ -30,6 +30,49 @@ pub struct AppConfig {
     /// Authentication configuration (optional)
     #[serde(default)]
     pub auth: Option<crate::auth::AuthConfig>,
+
+    /// Script revision history and how long it is kept.
+    ///
+    /// Defaulted rather than required, so a configuration written before
+    /// revisions existed keeps loading and gets the same policy a new one
+    /// would.
+    #[serde(default)]
+    pub revisions: RevisionsConfig,
+}
+
+/// How much of a script's history to keep.
+///
+/// Every write records a revision, which is what makes the history useful and
+/// also what makes it grow. These are the two dials that decide when a
+/// revision stops being worth its rows — see `revisions::Retention` for what
+/// is kept regardless of them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RevisionsConfig {
+    /// Whether to prune at all. Off means the history grows forever, which is
+    /// a defensible choice for a small engine and a leak for a busy one.
+    pub prune_enabled: bool,
+
+    /// Keep every revision younger than this many days.
+    pub retention_days: u32,
+
+    /// Keep this many of the newest revisions per script whatever their age.
+    pub keep_per_script: u32,
+
+    /// How often to run a pruning pass, in seconds.
+    pub prune_interval_secs: u64,
+}
+
+impl Default for RevisionsConfig {
+    fn default() -> Self {
+        Self {
+            prune_enabled: true,
+            retention_days: 30,
+            keep_per_script: 50,
+            // Hourly. The pass is a pair of indexed deletes behind an advisory
+            // lock, and nothing downstream depends on it being prompt.
+            prune_interval_secs: 3600,
+        }
+    }
 }
 
 /// Server-specific configuration

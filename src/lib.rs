@@ -77,6 +77,7 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
         engine_api::script_logs_stream_route,
         engine_api::routes_route,
         engine_api::revisions_route,
+        engine_api::revert_route,
         engine_api::run_tests_route,
         engine_api::check_route,
         engine_api::eval_route,
@@ -1317,12 +1318,15 @@ pub async fn start_server_with_config(
     // Fan out shutdown notifications so both the HTTP server and scheduler worker can stop cleanly
     let (server_shutdown_tx, server_shutdown_rx) = tokio::sync::oneshot::channel();
     let (scheduler_shutdown_tx, scheduler_shutdown_rx) = tokio::sync::oneshot::channel();
+    let (pruner_shutdown_tx, pruner_shutdown_rx) = tokio::sync::oneshot::channel();
 
     scheduler::spawn_worker(scheduler_shutdown_rx);
+    revisions::spawn_pruner(config.revisions.clone(), pruner_shutdown_rx);
 
     tokio::spawn(async move {
         let _ = shutdown_rx.await;
         let _ = scheduler_shutdown_tx.send(());
+        let _ = pruner_shutdown_tx.send(());
         let _ = server_shutdown_tx.send(());
     });
 
@@ -2357,6 +2361,10 @@ async fn setup_routes(
         .route(
             "/engine/revisions",
             axum::routing::get(engine_api::revisions_route),
+        )
+        .route(
+            "/engine/revisions/revert",
+            axum::routing::post(engine_api::revert_route),
         )
         .route(
             "/engine/run_tests",

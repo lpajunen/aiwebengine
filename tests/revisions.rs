@@ -11,7 +11,8 @@
 mod common;
 
 use aiwebengine::engine_api::{
-    delete_asset_authorized, upsert_asset_authorized, upsert_script_authorized,
+    RevertOutcome, RevertRefusal, delete_asset_authorized, revert_authorized,
+    upsert_asset_authorized, upsert_script_authorized,
 };
 use aiwebengine::repository;
 use aiwebengine::revisions;
@@ -35,6 +36,11 @@ async fn setup_env() {
         }
     })
     .await;
+}
+
+fn stored_text(script_uri: &str, asset_uri: &str) -> String {
+    let asset = repository::fetch_asset(script_uri, asset_uri).expect("asset should be stored");
+    String::from_utf8(asset.content).expect("asset should be UTF-8")
 }
 
 fn admin() -> UserContext {
@@ -332,5 +338,499 @@ async fn an_overlay_builds_from_files_that_were_never_stored() {
     assert!(
         repository::fetch_asset(uri, "server/help.ts").is_none(),
         "checking a candidate must not store it"
+    );
+}
+
+// ============================================================================
+// Reverting
+// ============================================================================
+
+async fn revert(script_uri: &str, spec: &str, dry_run: bool) -> RevertOutcome {
+    revert_authorized(&admin(), script_uri, spec, dry_run, false)
+        .await
+        .unwrap_or_else(|_| panic!("revert should be permitted"))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_revert_restores_content_and_removes_what_the_target_never_had() {
+    setup_env().await;
+    let uri = "test://revisions/revert/main.ts";
+    deploy(uri, "function init() {}").await;
+
+    write_asset(uri, "server/keep.ts", "export const v = 1;").await;
+    let target = write_asset(uri, "server/gone-later.ts", "export const g = 1;")
+        .await
+        .expect("write records a revision");
+
+    // Move on: change one file, remove another, add a third.
+    write_asset(uri, "server/keep.ts", "export const v = 2;").await;
+    delete_asset(uri, "server/gone-later.ts").await;
+    write_asset(uri, "server/added-later.ts", "export const a = 1;").await;
+
+    let outcome = revert(uri, &target.to_string(), false).await;
+
+    assert_eq!(outcome.target, target);
+    assert!(
+        outcome.revision.is_some(),
+        "a revert that changed files records a revision"
+    );
+
+    assert_eq!(stored_text(uri, "server/keep.ts"), "export const v = 1;");
+    assert_eq!(
+        stored_text(uri, "server/gone-later.ts"),
+        "export const g = 1;",
+        "a file the target held is restored"
+    );
+    assert!(
+        repository::fetch_asset(uri, "server/added-later.ts").is_none(),
+        "a file the target never had is removed, or the tree is neither version"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_revert_is_a_forward_write_that_names_what_it_restored() {
+    setup_env().await;
+    let uri = "test://revisions/revert/forward.ts";
+    deploy(uri, "function init() {}").await;
+
+    let target = write_asset(uri, "server/a.ts", "export const a = 1;")
+        .await
+        .expect("write records a revision");
+    let head_before = write_asset(uri, "server/a.ts", "export const a = 2;")
+        .await
+        .expect("write records a revision");
+
+    let outcome = revert(uri, &target.to_string(), false).await;
+    let recorded = outcome.revision.expect("the revert records a revision");
+
+    assert!(
+        recorded > head_before,
+        "a revert moves history forward ({} should follow {})",
+        recorded,
+        head_before
+    );
+
+    let revision = aiwebengine::revisions::get(uri, recorded)
+        .await
+        .expect("revision should read")
+        .expect("revision should exist");
+    assert_eq!(revision.origin, "revert");
+    assert_eq!(
+        revision.parent,
+        Some(target),
+        "the parent is what it restored, not what it followed — that is what \
+         makes the history a graph rather than a line that doubles back"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dry_run_reports_the_change_without_making_it() {
+    setup_env().await;
+    let uri = "test://revisions/revert/dry.ts";
+    deploy(uri, "function init() {}").await;
+
+    let target = write_asset(uri, "server/a.ts", "export const a = 1;")
+        .await
+        .expect("write records a revision");
+    write_asset(uri, "server/a.ts", "export const a = 2;").await;
+
+    let outcome = revert(uri, &target.to_string(), true).await;
+
+    assert!(outcome.dry_run);
+    assert_eq!(outcome.written, vec!["server/a.ts".to_string()]);
+    assert_eq!(outcome.revision, None, "a dry run records nothing");
+    assert_eq!(
+        stored_text(uri, "server/a.ts"),
+        "export const a = 2;",
+        "a dry run leaves the deployed file alone"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reverting_to_what_is_already_deployed_changes_nothing() {
+    setup_env().await;
+    let uri = "test://revisions/revert/noop.ts";
+    deploy(uri, "function init() {}").await;
+
+    let head = write_asset(uri, "server/a.ts", "export const a = 1;")
+        .await
+        .expect("write records a revision");
+
+    let outcome = revert(uri, &head.to_string(), false).await;
+
+    assert!(outcome.written.is_empty());
+    assert!(outcome.deleted.is_empty());
+    assert_eq!(
+        outcome.revision, None,
+        "restoring what is already there is not a change, so it is not a revision"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_revert_to_a_revision_that_does_not_bundle_is_refused() {
+    setup_env().await;
+    let uri = "test://revisions/revert/broken/main.ts";
+    // Revision 1: the root imports a module that was never written.
+    deploy(
+        uri,
+        "import { missing } from './server/missing.ts';\nfunction init() { missing(); }",
+    )
+    .await;
+    let broken = aiwebengine::revisions::head(uri)
+        .await
+        .expect("head should read")
+        .expect("deploying records a revision");
+
+    let refusal = revert_authorized(&admin(), uri, &broken.to_string(), false, false).await;
+    assert!(
+        matches!(refusal, Err(RevertRefusal::WillNotBuild(_))),
+        "a revert onto a tree that cannot be bundled should be refused before it lands"
+    );
+
+    // The engine can only know this because it can build from a revision
+    // without deploying it — so `force` is there for the caller who means it.
+    let forced = revert_authorized(&admin(), uri, &broken.to_string(), true, true).await;
+    assert!(forced.is_ok(), "force says the caller meant it");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn last_good_names_the_newest_revision_that_initialised() {
+    setup_env().await;
+    let uri = "test://revisions/revert/last-good.ts";
+    deploy(uri, "function init() {}").await;
+
+    let good = aiwebengine::revisions::head(uri)
+        .await
+        .expect("head should read")
+        .expect("deploying records a revision");
+    let bad = write_asset(uri, "server/a.ts", "export const a = 1;")
+        .await
+        .expect("write records a revision");
+
+    // Named revisions rather than `annotate_init`, which attaches to whatever
+    // is head when it runs. Deploying spawns an init() of its own, and a test
+    // that raced it would be asserting on whichever of the two finished last.
+    set_init(uri, good, true, None).await;
+    set_init(uri, bad, false, Some("TypeError: boom")).await;
+
+    assert_eq!(
+        aiwebengine::revisions::last_good(uri).await.unwrap(),
+        Some(good),
+        "the failing revision {} is not a landing place",
+        bad
+    );
+}
+
+// ============================================================================
+// Retention
+// ============================================================================
+
+/// Age every revision of one script, so a retention window that counts days
+/// has something to act on without the test waiting for one.
+async fn age_revisions(script_uri: &str, days: i32) {
+    let pool = aiwebengine::database::get_global_database()
+        .expect("database should be initialized")
+        .pool()
+        .clone();
+    sqlx::query(
+        "UPDATE script_revisions SET created_at = NOW() - make_interval(days => $2)
+         WHERE script_uri = $1",
+    )
+    .bind(script_uri)
+    .bind(days)
+    .execute(&pool)
+    .await
+    .expect("ageing revisions should succeed");
+}
+
+/// Record an init outcome against a named revision.
+///
+/// The engine's own path attaches to head, which is right in production — the
+/// write that triggered the init is the newest — and unusable in a test that
+/// wants two revisions to have different outcomes.
+async fn set_init(script_uri: &str, revision: i32, ok: bool, error: Option<&str>) {
+    aiwebengine::revisions::set_init_outcome(script_uri, revision, ok, error)
+        .await
+        .expect("recording the init outcome should succeed");
+}
+
+async fn revision_numbers(script_uri: &str) -> Vec<i32> {
+    aiwebengine::revisions::list(script_uri, 1000)
+        .await
+        .expect("history should read")
+        .into_iter()
+        .map(|revision| revision.revision)
+        .collect()
+}
+
+/// Keep nothing for its age or its recency, so what survives is only what the
+/// policy protects outright.
+const KEEP_NOTHING: aiwebengine::revisions::Retention = aiwebengine::revisions::Retention {
+    keep_days: 0,
+    keep_per_script: 1,
+    // Blobs keep their production grace here. The sweep is over the whole
+    // table however narrow the scope, so a test that collected everything
+    // young would be reaching into whatever another test process is writing
+    // at that moment. Only the test that is about collection lifts it.
+    blob_grace_secs: 3600.0,
+};
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pruning_keeps_the_newest_revision_and_drops_the_churn() {
+    setup_env().await;
+    let uri = "test://revisions/prune/churn.ts";
+    deploy(uri, "function init() {}").await;
+
+    for value in 1..=5 {
+        write_asset(uri, "server/a.ts", &format!("export const a = {};", value)).await;
+    }
+    age_revisions(uri, 90).await;
+
+    let before = revision_numbers(uri).await;
+    assert!(before.len() > 1, "the test needs some history to prune");
+
+    let outcome = aiwebengine::revisions::prune(Some(uri), KEEP_NOTHING)
+        .await
+        .expect("prune should succeed");
+    assert!(outcome.revisions > 0, "old churn should be collectable");
+
+    let newest = *before.first().expect("history is not empty");
+    let after = revision_numbers(uri).await;
+
+    assert!(
+        after.contains(&newest),
+        "the newest revision is never collected: it is what the script is"
+    );
+    assert!(
+        after.len() < before.len(),
+        "the churn between the protected revisions should have gone: {:?}",
+        after
+    );
+    // Deploying ran init(), so revision 1 is this script's last good one and
+    // is protected too. What survives is exactly what the policy names.
+    let last_good = aiwebengine::revisions::last_good(uri)
+        .await
+        .expect("last good should read");
+    let mut expected: Vec<i32> = vec![newest].into_iter().chain(last_good).collect();
+    expected.sort_unstable();
+    expected.dedup();
+    let mut survived = after.clone();
+    survived.sort_unstable();
+    assert_eq!(survived, expected);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pruning_keeps_a_labelled_revision_however_old() {
+    setup_env().await;
+    let uri = "test://revisions/prune/labelled.ts";
+    deploy(uri, "function init() {}").await;
+
+    let marked = write_asset(uri, "server/a.ts", "export const a = 1;")
+        .await
+        .expect("write records a revision");
+    for value in 2..=5 {
+        write_asset(uri, "server/a.ts", &format!("export const a = {};", value)).await;
+    }
+    aiwebengine::revisions::set_label(uri, marked, Some("before-the-refactor"))
+        .await
+        .expect("labelling should succeed");
+    age_revisions(uri, 90).await;
+
+    aiwebengine::revisions::prune(Some(uri), KEEP_NOTHING)
+        .await
+        .expect("prune should succeed");
+
+    assert!(
+        revision_numbers(uri).await.contains(&marked),
+        "a label is someone saying this one is worth returning to; retention \
+         does not get to disagree"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pruning_keeps_the_newest_revision_that_initialised() {
+    setup_env().await;
+    let uri = "test://revisions/prune/last-good.ts";
+    deploy(uri, "function init() {}").await;
+
+    let good = write_asset(uri, "server/a.ts", "export const a = 1;")
+        .await
+        .expect("write records a revision");
+
+    let mut later = Vec::new();
+    for value in 2..=5 {
+        if let Some(revision) =
+            write_asset(uri, "server/a.ts", &format!("export const a = {};", value)).await
+        {
+            later.push(revision);
+        }
+    }
+
+    // Set every outcome by revision, including the ones deploying's own init()
+    // may have touched, so the history the policy sees is the one the test
+    // described rather than one a background task got to first.
+    for revision in revision_numbers(uri).await {
+        let ok = revision == good;
+        set_init(uri, revision, ok, (!ok).then_some("TypeError: boom")).await;
+    }
+    assert!(
+        !later.is_empty(),
+        "the test needs revisions after the good one"
+    );
+    age_revisions(uri, 90).await;
+
+    aiwebengine::revisions::prune(Some(uri), KEEP_NOTHING)
+        .await
+        .expect("prune should succeed");
+
+    assert_eq!(
+        aiwebengine::revisions::last_good(uri).await.unwrap(),
+        Some(good),
+        "the rollback floor must survive retention, or the history is collected \
+         exactly when the question gets asked"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recent_history_survives_a_pruning_pass() {
+    setup_env().await;
+    let uri = "test://revisions/prune/recent.ts";
+    deploy(uri, "function init() {}").await;
+
+    for value in 1..=4 {
+        write_asset(uri, "server/a.ts", &format!("export const a = {};", value)).await;
+    }
+    let before = revision_numbers(uri).await;
+
+    // Nothing here is older than a day, so the age clause protects all of it
+    // even though the count clause would not.
+    let outcome = aiwebengine::revisions::prune(
+        Some(uri),
+        aiwebengine::revisions::Retention {
+            keep_days: 30,
+            keep_per_script: 1,
+            ..KEEP_NOTHING
+        },
+    )
+    .await
+    .expect("prune should succeed");
+
+    assert_eq!(outcome.revisions, 0);
+    assert_eq!(
+        revision_numbers(uri).await,
+        before,
+        "age and count both have to agree before anything goes"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_blob_survives_while_another_revision_still_cites_it() {
+    setup_env().await;
+    let uri = "test://revisions/prune/blobs.ts";
+    deploy(uri, "function init() {}").await;
+
+    // The same content in two files: one blob, two manifest rows.
+    let shared = "export const shared = 1;";
+    write_asset(uri, "server/one.ts", shared).await;
+    let both = write_asset(uri, "server/two.ts", shared)
+        .await
+        .expect("write records a revision");
+
+    let digest = {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(shared.as_bytes());
+        hex::encode(hasher.finalize())
+    };
+
+    // Remove one of the two files, then collect. The other still holds the
+    // content, so the blob has to stay.
+    delete_asset(uri, "server/one.ts").await;
+    aiwebengine::revisions::prune(Some(uri), KEEP_NOTHING)
+        .await
+        .expect("prune should succeed");
+
+    let pool = aiwebengine::database::get_global_database()
+        .expect("database should be initialized")
+        .pool()
+        .clone();
+    let survives: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM asset_blobs WHERE sha256 = $1)")
+            .bind(&digest)
+            .fetch_one(&pool)
+            .await
+            .expect("blob lookup should succeed");
+
+    assert!(
+        survives,
+        "revision {} still lists this content under server/two.ts; blobs are \
+         shared, so one revision going away says nothing about the bytes",
+        both
+    );
+    assert_eq!(stored_text(uri, "server/two.ts"), shared);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_blob_is_collected_once_no_revision_names_it() {
+    setup_env().await;
+    let uri = "test://revisions/prune/orphan.ts";
+    deploy(uri, "function init() {}").await;
+
+    // Content unique to this test, so nothing else in the database cites it.
+    let doomed = format!("export const doomed = {:?};", uri);
+    write_asset(uri, "server/doomed.ts", &doomed).await;
+    write_asset(uri, "server/doomed.ts", "export const doomed = 'replaced';").await;
+
+    let digest = {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(doomed.as_bytes());
+        hex::encode(hasher.finalize())
+    };
+
+    let pool = aiwebengine::database::get_global_database()
+        .expect("database should be initialized")
+        .pool()
+        .clone();
+    let exists = |digest: String, pool: sqlx::PgPool| async move {
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM asset_blobs WHERE sha256 = $1)")
+            .bind(&digest)
+            .fetch_one(&pool)
+            .await
+            .expect("blob lookup should succeed")
+    };
+
+    assert!(
+        exists(digest.clone(), pool.clone()).await,
+        "the revision that held this content still exists"
+    );
+
+    age_revisions(uri, 90).await;
+
+    // Collection is best-effort: the sweep is over the whole table, and a
+    // writer claiming a blob between the decision and the delete makes the
+    // foreign key refuse it. That is the contract — "an orphan that survives
+    // one pass is collected by the next" — so the test takes it at its word
+    // rather than demanding the first pass succeed against a database other
+    // tests are writing to.
+    let collecting = aiwebengine::revisions::Retention {
+        blob_grace_secs: 0.0,
+        ..KEEP_NOTHING
+    };
+    let mut collected = false;
+    for _ in 0..10 {
+        aiwebengine::revisions::prune(Some(uri), collecting)
+            .await
+            .expect("prune should succeed");
+        if !exists(digest.clone(), pool.clone()).await {
+            collected = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    assert!(
+        collected,
+        "with the revision that cited it gone, the bytes are nobody's"
     );
 }
