@@ -73,6 +73,7 @@ fn params(script_uri: &str) -> TestRunParams {
         run_timeout_ms: 60_000,
         filter: None,
         rollback: true,
+        view: Default::default(),
     }
 }
 
@@ -631,6 +632,7 @@ async fn a_script_without_test_modules_reports_no_cases_rather_than_success() {
             user_context: UserContext::admin("test-runner".to_string()),
             filter: None,
             rollback: true,
+            view: Default::default(),
         })
         .await;
 

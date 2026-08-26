@@ -218,6 +218,12 @@ pub struct CheckRequest {
     pub content: Option<String>,
     /// Roll back the database writes `init()` makes. On by default.
     pub rollback: bool,
+    /// Which version of the script's files the imports resolve against.
+    ///
+    /// Defaults to what is deployed. Pointed at a revision, it checks that
+    /// revision — including its own modules, so a candidate root is checked
+    /// against the tree it was written for rather than against head.
+    pub view: crate::source_view::SourceView,
 }
 
 /// Extra wall-clock time the outer timeout allows beyond the run's own ceiling.
@@ -369,13 +375,17 @@ fn check_blocking_into(
         content,
         rollback,
         timeout_ms,
+        view,
     } = request;
 
     let ceiling_ms = check_timeout_ms(init_budget_ms, timeout_ms);
     let mut report = CheckReport::new(script_uri.clone());
 
     let checking_candidate = content.is_some();
-    let content = match content.or_else(|| repository::fetch_script(&script_uri)) {
+    // The root comes from the same view as the modules unless the caller
+    // supplied one: checking a revision means checking what it held, and
+    // reading its root from the live rows would splice two versions together.
+    let content = match content.or_else(|| view.root_content(&script_uri)) {
         Some(content) => content,
         None => {
             report.diagnostics.push(Diagnostic::error(
@@ -394,7 +404,9 @@ fn check_blocking_into(
     // bundling report it. The linker's error type distinguishes a cycle from an
     // unresolvable specifier from a syntax error, and that distinction is lost
     // once the run flattens it into one "Transpilation failed" string.
-    if let Err(error) = crate::module_loader::prepare_executable_program(&script_uri, &content) {
+    if let Err(error) =
+        crate::module_loader::prepare_executable_program_in(&script_uri, &content, &view)
+    {
         report
             .diagnostics
             .push(bundle_diagnostic(&script_uri, &error));

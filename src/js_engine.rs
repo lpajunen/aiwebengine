@@ -1981,6 +1981,11 @@ pub struct TestRunParams {
     /// This covers `database.*` and nothing else — asset writes, secret writes,
     /// and outbound HTTP a test performs are real and survive the run.
     pub rollback: bool,
+    /// Which version of the script's files the run bundles. Defaults to what
+    /// is deployed; a revision runs the tests a revision contained, against
+    /// the modules that revision had, rather than against whatever has been
+    /// written since.
+    pub view: crate::source_view::SourceView,
 }
 
 /// What running one test module produced.
@@ -2066,8 +2071,9 @@ fn execute_test_module(
     // transpiles every module the test imports, which must not be charged to
     // the budget meant for running the tests.
     let modules = [module_path.to_string()];
-    let prepared = module_loader::prepare_test_program(&params.script_uri, &modules)
-        .map_err(|e| format!("Failed to bundle test module: {}", e))?;
+    let prepared =
+        module_loader::prepare_test_program_in(&params.script_uri, &modules, &params.view)
+            .map_err(|e| format!("Failed to bundle test module: {}", e))?;
 
     let limits = ExecutionLimits {
         timeout_ms: budget_ms,

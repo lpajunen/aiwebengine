@@ -17,6 +17,7 @@ use tracing::{debug, info, warn};
 use crate::auth::AuthUser;
 use crate::error::AppResult;
 use crate::repository;
+use crate::revisions;
 use crate::security::{
     Capability, SecurityAuditor, SecurityEvent, SecurityEventType, SecuritySeverity, UserContext,
 };
@@ -266,6 +267,71 @@ fn spawn_script_init(script_uri: String) {
 }
 
 /// An init() run reported back to whoever triggered it.
+/// Resolve a caller's `revision` argument to a view of a script's files.
+///
+/// Accepts a number, `head`, `last-good`, or a label. Absent means the
+/// deployed state — so every existing caller keeps checking and testing what
+/// is serving, which is what they have always meant.
+///
+/// `last-good` is the one worth spelling out: it names the newest revision
+/// whose write left `init()` succeeding, which is the target an operator means
+/// by "back to when it worked" and a number they would otherwise have to find
+/// by reading the history themselves.
+async fn resolve_view(
+    script_uri: &str,
+    revision: Option<&str>,
+) -> Result<crate::source_view::SourceView, String> {
+    use crate::source_view::SourceView;
+
+    let Some(spec) = revision.map(str::trim).filter(|spec| !spec.is_empty()) else {
+        return Ok(SourceView::Live);
+    };
+
+    let resolved = match spec {
+        "head" => revisions::head(script_uri)
+            .await
+            .map_err(|e| format!("Failed to read revision history: {}", e))?
+            .ok_or_else(|| format!("Script '{}' has no revisions yet", script_uri))?,
+        "last-good" => revisions::last_good(script_uri)
+            .await
+            .map_err(|e| format!("Failed to read revision history: {}", e))?
+            .ok_or_else(|| {
+                format!(
+                    "Script '{}' has no revision whose init() succeeded",
+                    script_uri
+                )
+            })?,
+        _ => match spec.parse::<i32>() {
+            Ok(number) => {
+                // Named explicitly, so a number that is not there is an error
+                // rather than a silent fall back to what is deployed.
+                if revisions::get(script_uri, number)
+                    .await
+                    .map_err(|e| format!("Failed to read revision history: {}", e))?
+                    .is_none()
+                {
+                    return Err(format!(
+                        "Script '{}' has no revision {}",
+                        script_uri, number
+                    ));
+                }
+                number
+            }
+            Err(_) => revisions::by_label(script_uri, spec)
+                .await
+                .map_err(|e| format!("Failed to resolve revision label: {}", e))?
+                .ok_or_else(|| {
+                    format!(
+                        "Script '{}' has no revision labelled '{}'",
+                        script_uri, spec
+                    )
+                })?,
+        },
+    };
+
+    Ok(SourceView::Revision(resolved))
+}
+
 fn init_result_json(result: &crate::script_init::InitResult) -> Value {
     json!({
         "ran": true,
@@ -302,7 +368,7 @@ pub fn upsert_script_authorized(
     uri: &str,
     content: &str,
     via: Option<&str>,
-) -> Result<UpsertAction, String> {
+) -> Result<(UpsertAction, Option<i32>), String> {
     if let Err(e) = user.require_capability(&Capability::WriteScripts) {
         return Err(format!("Error: {}", e));
     }
@@ -330,6 +396,11 @@ pub fn upsert_script_authorized(
         return Err(format!("Error storing script: {}", e));
     }
 
+    // Recorded before init is spawned, so the revision exists by the time the
+    // init that follows looks for one to attach its outcome to.
+    let revision =
+        revisions::record_blocking(uri, revisions::Origin::Script, user.user_id.as_deref());
+
     spawn_script_init(uri.to_string());
 
     let action = if exists {
@@ -346,7 +417,7 @@ pub fn upsert_script_authorized(
     }
     broadcast_script_update(uri, action.as_str(), &details);
 
-    Ok(action)
+    Ok((action, revision))
 }
 
 /// Delete a script: DeleteScripts capability required. Returns false when the
@@ -1263,7 +1334,7 @@ pub fn upsert_asset_authorized(
     asset_uri: &str,
     mimetype: &str,
     content_b64: &str,
-) -> Result<(), AssetWriteError> {
+) -> Result<Option<i32>, AssetWriteError> {
     let content = base64::engine::general_purpose::STANDARD
         .decode(content_b64)
         .map_err(|e| {
@@ -1316,7 +1387,13 @@ pub fn upsert_asset_authorized(
         script_uri: script_uri.to_string(),
     };
     repository::upsert_asset(asset)
-        .map_err(|e| AssetWriteError::Storage(format!("Error upserting asset: {}", e)))
+        .map_err(|e| AssetWriteError::Storage(format!("Error upserting asset: {}", e)))?;
+
+    Ok(revisions::record_blocking(
+        script_uri,
+        revisions::Origin::Post,
+        user.user_id.as_deref(),
+    ))
 }
 
 /// One file of a batch asset write.
@@ -1356,6 +1433,9 @@ impl AssetWriteOutcome {
 /// What a batch write did overall.
 pub struct BatchWriteOutcome {
     pub results: Vec<AssetWriteOutcome>,
+    /// The revision this write produced, or `None` when it changed nothing.
+    /// The number a caller reverts to when the change turns out to be wrong.
+    pub revision: Option<i32>,
     /// How many files reached the database. Zero when every file already held
     /// the content it was sent with, which is also when re-initializing the
     /// script afterwards would be pure cost.
@@ -1516,7 +1596,23 @@ pub fn upsert_assets_authorized(
             .await;
     });
 
-    Ok(BatchWriteOutcome { results, written })
+    // A batch that wrote nothing left the script exactly as the previous
+    // revision already describes, so there is no new state to record.
+    let revision = (written > 0)
+        .then(|| {
+            revisions::record_blocking(
+                script_uri,
+                revisions::Origin::Batch,
+                user.user_id.as_deref(),
+            )
+        })
+        .flatten();
+
+    Ok(BatchWriteOutcome {
+        results,
+        revision,
+        written,
+    })
 }
 
 /// One string replacement of a patch.
@@ -1534,6 +1630,9 @@ pub struct AssetPatchOutcome {
     /// Digest of the content as it now stands, which the next patch can send
     /// back as `base_sha256`.
     pub sha256: String,
+    /// The revision this patch produced, or `None` when the edits cancelled
+    /// each other out and nothing was stored.
+    pub revision: Option<i32>,
     pub bytes: usize,
     /// How many occurrences the edits replaced in total.
     pub replacements: usize,
@@ -1548,6 +1647,7 @@ impl AssetPatchOutcome {
             "bytes": self.bytes,
             "replacements": self.replacements,
             "status": self.status,
+            "revision": self.revision,
         })
     }
 }
@@ -1732,8 +1832,19 @@ pub fn patch_asset_authorized(
             .await;
     });
 
+    let revision = (!unchanged)
+        .then(|| {
+            revisions::record_blocking(
+                script_uri,
+                revisions::Origin::Patch,
+                user.user_id.as_deref(),
+            )
+        })
+        .flatten();
+
     Ok(AssetPatchOutcome {
         sha256: digest,
+        revision,
         bytes,
         replacements,
         status: if unchanged { "unchanged" } else { "updated" },
@@ -1745,7 +1856,7 @@ pub fn delete_asset_authorized(
     user: &UserContext,
     script_uri: &str,
     asset_uri: &str,
-) -> Result<bool, AssetFetchError> {
+) -> Result<(bool, Option<i32>), AssetFetchError> {
     if !can_access_assets(user, script_uri, &Capability::DeleteAssets) {
         let auditor = auditor();
         let user_id = user.user_id.clone();
@@ -1782,7 +1893,20 @@ pub fn delete_asset_authorized(
             .await;
     });
 
-    Ok(repository::delete_asset(script_uri, asset_uri))
+    let deleted = repository::delete_asset(script_uri, asset_uri);
+    // Removing a file is a change like any other, and the one most worth being
+    // able to undo: nothing else in the engine still holds the content.
+    let revision = deleted
+        .then(|| {
+            revisions::record_blocking(
+                script_uri,
+                revisions::Origin::Delete,
+                user.user_id.as_deref(),
+            )
+        })
+        .flatten();
+
+    Ok((deleted, revision))
 }
 
 // ============================================================================
@@ -2157,18 +2281,20 @@ pub async fn upsert_script_route(
     };
 
     let result = tokio::task::spawn_blocking(move || {
-        upsert_script_authorized(&user, &uri, &content, None).map(|_| (uri, content.len()))
+        upsert_script_authorized(&user, &uri, &content, None)
+            .map(|(_, revision)| (uri, content.len(), revision))
     })
     .await;
 
     match result {
-        Ok(Ok((uri, content_length))) => json_response(
+        Ok(Ok((uri, content_length, revision))) => json_response(
             StatusCode::OK,
             json!({
                 "success": true,
                 "message": "Script upserted successfully",
                 "uri": uri,
                 "contentLength": content_length,
+                "revision": revision,
                 "timestamp": iso_timestamp(),
             }),
         ),
@@ -2325,6 +2451,9 @@ pub struct TestRunParams {
     uri: Option<String>,
     filter: Option<String>,
     rollback: Option<bool>,
+    /// Which version to run: a revision number, `head`, `last-good`, or a
+    /// label. Absent runs what is deployed.
+    revision: Option<String>,
 }
 
 /// Run a script's test modules and report the verdicts.
@@ -2336,6 +2465,7 @@ pub struct TestRunParams {
         ("uri" = String, Query, description = "URI of the script whose tests to run"),
         ("filter" = Option<String>, Query, description = "Run only cases whose name contains this text"),
         ("rollback" = Option<bool>, Query, description = "Roll back database writes the tests make (default true)"),
+        ("revision" = Option<String>, Query, description = "Which version to run: a revision number, `head`, `last-good`, or a label. Omit for what is deployed."),
     ),
     responses(
         (status = 200, description = "Test report; `success` is false when any case failed"),
@@ -2359,6 +2489,7 @@ pub async fn run_tests_route(
     // Isolation is the default: a test that writes should not leave rows behind
     // unless the caller says so.
     let rollback = form.rollback.or(query.rollback).unwrap_or(true);
+    let revision = form.revision.or(query.revision);
 
     let user_for_auth = user.clone();
     let uri_for_auth = uri.clone();
@@ -2395,12 +2526,18 @@ pub async fn run_tests_route(
         }
     }
 
+    let view = match resolve_view(&uri, revision.as_deref()).await {
+        Ok(view) => view,
+        Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
+    };
+
     let result = crate::script_test::TestRunner::with_configured_timeouts()
         .run(crate::script_test::TestRunRequest {
             script_uri: uri,
             user_context: user,
             filter,
             rollback,
+            view,
         })
         .await;
 
@@ -2473,6 +2610,9 @@ pub struct CheckParams {
     uri: Option<String>,
     rollback: Option<bool>,
     timeout_ms: Option<u64>,
+    /// Which version to check: a revision number, `head`, `last-good`, or a
+    /// label. Absent checks what is deployed.
+    revision: Option<String>,
 }
 
 /// A JSON check request body.
@@ -2482,6 +2622,7 @@ struct CheckBody {
     content: Option<String>,
     rollback: Option<bool>,
     timeout_ms: Option<u64>,
+    revision: Option<String>,
 }
 
 /// Check what a script would do if it were deployed.
@@ -2493,6 +2634,7 @@ struct CheckBody {
         ("uri" = String, Query, description = "URI of the script to check"),
         ("rollback" = Option<bool>, Query, description = "Roll back database writes init() makes (default true)"),
         ("timeout_ms" = Option<u64>, Query, description = "Ceiling for the init() run. Defaults to several times the deploy budget so a slow init() is measured rather than interrupted; raise it for one slower still."),
+        ("revision" = Option<String>, Query, description = "Which version to check: a revision number, `head`, `last-good`, or a label. Omit for what is deployed."),
     ),
     request_body(
         description = "Optional candidate source to check instead of what is deployed. Send it as \
@@ -2559,6 +2701,7 @@ pub async fn check_route(
     let rollback = parsed.rollback.or(query.rollback).unwrap_or(true);
     let timeout_ms = parsed.timeout_ms.or(query.timeout_ms);
     let content = parsed.content;
+    let revision = parsed.revision.or(query.revision);
 
     let user_for_auth = user.clone();
     let uri_for_auth = uri.clone();
@@ -2598,12 +2741,18 @@ pub async fn check_route(
         }
     }
 
+    let view = match resolve_view(&uri, revision.as_deref()).await {
+        Ok(view) => view,
+        Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
+    };
+
     let report = crate::script_check::ScriptChecker::with_configured_timeout()
         .run(crate::script_check::CheckRequest {
             script_uri: uri,
             content,
             rollback,
             timeout_ms,
+            view,
         })
         .await;
 
@@ -3537,12 +3686,13 @@ pub async fn assets_post_route(
     .unwrap_or(Err(AssetWriteError::Storage("join error".to_string())));
 
     match result {
-        Ok(()) => json_response(
+        Ok(revision) => json_response(
             StatusCode::CREATED,
             json!({
                 "message": format!("Asset '{}' upserted successfully", asset),
                 "script": script,
                 "asset": asset,
+                "revision": revision,
             }),
         ),
         Err(AssetWriteError::AccessDenied) => {
@@ -3665,6 +3815,7 @@ pub async fn assets_batch_route(
             "script": script,
             "results": outcome.results.iter().map(AssetWriteOutcome::to_json).collect::<Vec<Value>>(),
             "written": outcome.written,
+            "revision": outcome.revision,
             "init": init,
             "timestamp": iso_timestamp(),
         }),
@@ -3863,25 +4014,183 @@ pub async fn assets_delete_route(
     let result =
         tokio::task::spawn_blocking(move || delete_asset_authorized(&user, &script_cl, &asset_cl))
             .await
-            .unwrap_or(Ok(false));
+            .unwrap_or(Ok((false, None)));
 
     match result {
         Err(AssetFetchError::AccessDenied) => {
             error_response(StatusCode::FORBIDDEN, "Error: Access denied".to_string())
         }
-        Ok(false) | Err(AssetFetchError::NotFound) => error_response(
+        Ok((false, _)) | Err(AssetFetchError::NotFound) => error_response(
             StatusCode::NOT_FOUND,
             format!("Asset '{}' not found", asset),
         ),
-        Ok(true) => json_response(
+        Ok((true, revision)) => json_response(
             StatusCode::OK,
             json!({
                 "message": format!("Asset '{}' deleted successfully", asset),
                 "script": script,
                 "asset": asset,
+                "revision": revision,
             }),
         ),
     }
+}
+
+#[derive(Deserialize, Default)]
+pub struct RevisionListParams {
+    script: Option<String>,
+    /// Restrict the history to one file's changes.
+    asset: Option<String>,
+    /// Include the file manifest of each revision listed.
+    files: Option<bool>,
+    limit: Option<i64>,
+}
+
+fn revision_to_json(revision: &revisions::Revision) -> Value {
+    json!({
+        "revision": revision.revision,
+        "parent": revision.parent,
+        "origin": revision.origin,
+        "label": revision.label,
+        "at": revision.created_at.to_rfc3339(),
+        "by": revision.created_by,
+        "files": revision.file_count,
+        "bytes": revision.total_bytes,
+        // Absent rather than false when init() has not reported: a revision
+        // whose outcome is unknown is not one that failed, and a caller
+        // looking for somewhere safe to land must be able to tell them apart.
+        "initOk": revision.init_ok,
+        "initError": revision.init_error,
+    })
+}
+
+fn revision_file_to_json(file: &revisions::RevisionFile) -> Value {
+    json!({
+        "uri": file.uri,
+        "name": file.name,
+        "mimetype": file.mimetype,
+        "sha256": file.sha256,
+        "bytes": file.bytes,
+    })
+}
+
+/// What a script's files have been.
+///
+/// Every write records a revision, so this is the history a caller editing
+/// through `/engine/assets` has instead of a checkout: what changed, when, at
+/// whose hand, and — uniquely — whether the script still initialised
+/// afterwards. `lastGood` names the newest revision that did, which is the
+/// answer to "where do I put this back to".
+#[utoipa::path(
+    get,
+    path = "/engine/revisions",
+    tags = ["Scripts"],
+    params(
+        ("script" = String, Query, description = "URI of the script whose history to read"),
+        ("asset" = Option<String>, Query, description = "Only the revisions in which this file changed"),
+        ("files" = Option<bool>, Query, description = "Include each revision's file manifest"),
+        ("limit" = Option<i64>, Query, description = "Keep at most this many of the newest revisions (default 50)"),
+    ),
+    responses(
+        (status = 200, description = "Revision history, newest first"),
+        (status = 400, description = "Missing required parameter"),
+        (status = 403, description = "Not an administrator or owner of the script"),
+    )
+)]
+pub async fn revisions_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<RevisionListParams>,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    let Some(script) = query.script else {
+        return missing_param_response("script");
+    };
+
+    let user_for_auth = user.clone();
+    let script_for_auth = script.clone();
+    let allowed = tokio::task::spawn_blocking(move || {
+        can_access_assets(&user_for_auth, &script_for_auth, &Capability::ReadAssets)
+    })
+    .await
+    .unwrap_or(false);
+
+    if !allowed {
+        return error_response(StatusCode::FORBIDDEN, "Error: Access denied".to_string());
+    }
+
+    let limit = query.limit.unwrap_or(50);
+
+    // One file's history is a different question from the script's, and
+    // answering it by listing every revision and letting the caller diff the
+    // manifests would make them read the whole history to find the two
+    // revisions where their file moved.
+    if let Some(asset) = query.asset {
+        return match revisions::file_history(&script, &asset, limit).await {
+            Ok(history) => json_response(
+                StatusCode::OK,
+                json!({
+                    "script": script,
+                    "asset": asset,
+                    "history": history
+                        .iter()
+                        .map(|(revision, file)| {
+                            let mut entry = revision_file_to_json(file);
+                            if let Some(object) = entry.as_object_mut() {
+                                object.insert("revision".to_string(), json!(revision));
+                            }
+                            entry
+                        })
+                        .collect::<Vec<Value>>(),
+                    "timestamp": iso_timestamp(),
+                }),
+            ),
+            Err(e) => error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to read file history: {}", e),
+            ),
+        };
+    }
+
+    let listed = match revisions::list(&script, limit).await {
+        Ok(listed) => listed,
+        Err(e) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to read revisions: {}", e),
+            );
+        }
+    };
+
+    let mut entries = Vec::with_capacity(listed.len());
+    for revision in &listed {
+        let mut entry = revision_to_json(revision);
+        if query.files.unwrap_or(false)
+            && let Ok(Some(files)) = revisions::files(&script, revision.revision).await
+            && let Some(object) = entry.as_object_mut()
+        {
+            object.insert(
+                "manifest".to_string(),
+                json!(
+                    files
+                        .iter()
+                        .map(revision_file_to_json)
+                        .collect::<Vec<Value>>()
+                ),
+            );
+        }
+        entries.push(entry);
+    }
+
+    json_response(
+        StatusCode::OK,
+        json!({
+            "script": script,
+            "revisions": entries,
+            "head": listed.first().map(|revision| revision.revision),
+            "lastGood": revisions::last_good(&script).await.ok().flatten(),
+            "timestamp": iso_timestamp(),
+        }),
+    )
 }
 
 /// List all scripts with metadata.
@@ -5945,6 +6254,10 @@ fn native_tools() -> &'static [NativeToolEntry] {
                             "type": "boolean",
                             "description": "Roll back the database writes the tests make (default true)",
                             "default": true
+                        },
+                        "revision": {
+                            "type": "string",
+                            "description": "Which version to use: a revision number, 'head', 'last-good', or a label. Omit for what is deployed."
                         }
                     },
                     "required": ["uri"]
@@ -5979,6 +6292,10 @@ fn native_tools() -> &'static [NativeToolEntry] {
                         "timeoutMs": {
                             "type": "integer",
                             "description": "Ceiling for the init() run. Defaults to several times the deploy budget so a slow init() is measured rather than interrupted; raise it for one slower still."
+                        },
+                        "revision": {
+                            "type": "string",
+                            "description": "Which version to check: a revision number, 'head', 'last-good', or a label. Omit for what is deployed. Combined with 'content', the candidate root is checked against that revision's modules."
                         }
                     },
                     "required": ["uri"]
@@ -6168,6 +6485,11 @@ fn tool_check_script(args: &Value, user: &UserContext) -> Value {
         .and_then(Value::as_bool)
         .unwrap_or(true);
 
+    let view = match crate::database::run_blocking(resolve_view(uri, arg_str(args, "revision"))) {
+        Ok(view) => view,
+        Err(message) => return json!({ "error": message }),
+    };
+
     // Through the async runner rather than straight to `check_blocking`, so a
     // call over MCP gets the same answer one over HTTP does when `init()` will
     // not stop: the registrations collected before it stalled, rather than only
@@ -6184,6 +6506,7 @@ fn tool_check_script(args: &Value, user: &UserContext) -> Value {
                 content,
                 rollback,
                 timeout_ms: args.get("timeoutMs").and_then(Value::as_u64),
+                view,
             },
         ),
     );
@@ -6231,8 +6554,13 @@ fn tool_run_tests(args: &Value, user: &UserContext) -> Value {
         .and_then(Value::as_bool)
         .unwrap_or(true);
 
+    let view = match crate::database::run_blocking(resolve_view(uri, arg_str(args, "revision"))) {
+        Ok(view) => view,
+        Err(message) => return json!({ "error": message }),
+    };
+
     let (timeout_ms, run_timeout_ms) = crate::script_test::configured_test_timeouts();
-    let modules = crate::module_loader::discover_test_modules(uri);
+    let modules = crate::module_loader::discover_test_modules_in(uri, &view);
     let result = crate::js_engine::execute_test_run(
         &crate::js_engine::TestRunParams {
             script_uri: uri.to_string(),
@@ -6241,6 +6569,7 @@ fn tool_run_tests(args: &Value, user: &UserContext) -> Value {
             run_timeout_ms,
             filter,
             rollback,
+            view,
         },
         &modules,
     );
@@ -6283,7 +6612,7 @@ fn tool_write_file(args: &Value, user: &UserContext) -> Value {
         return missing_arg("content");
     };
     match upsert_script_authorized(user, uri, content, Some("mcp")) {
-        Ok(action) => {
+        Ok((action, revision)) => {
             let action = match action {
                 UpsertAction::Inserted => "created",
                 UpsertAction::Updated => "updated",
@@ -6293,6 +6622,7 @@ fn tool_write_file(args: &Value, user: &UserContext) -> Value {
                 "action": action,
                 "uri": uri,
                 "size": content.len(),
+                "revision": revision,
                 "timestamp": iso_timestamp(),
             })
         }
@@ -6559,11 +6889,12 @@ fn tool_write_asset(args: &Value, user: &UserContext) -> Value {
     };
 
     match upsert_asset_authorized(user, script, asset, mimetype, content) {
-        Ok(()) => json!({
+        Ok(revision) => json!({
             "success": true,
             "message": format!("Asset '{}' upserted successfully", asset),
             "script": script,
             "asset": asset,
+            "revision": revision,
             "timestamp": iso_timestamp(),
         }),
         Err(AssetWriteError::AccessDenied) => {
@@ -6740,14 +7071,15 @@ fn tool_delete_asset(args: &Value, user: &UserContext) -> Value {
         return missing_arg("asset");
     };
     match delete_asset_authorized(user, script, asset) {
-        Ok(true) => json!({
+        Ok((true, revision)) => json!({
             "success": true,
             "message": format!("Asset '{}' deleted successfully", asset),
             "script": script,
             "asset": asset,
+            "revision": revision,
             "timestamp": iso_timestamp(),
         }),
-        Ok(false) => json!({ "error": format!("Asset '{}' not found", asset) }),
+        Ok((false, _)) => json!({ "error": format!("Asset '{}' not found", asset) }),
         Err(_) => json!({ "error": "Failed to delete asset: Access denied" }),
     }
 }

@@ -128,6 +128,7 @@ fn check(script_uri: &str) -> CheckReport {
             content: None,
             rollback: true,
             timeout_ms: None,
+            view: Default::default(),
         },
         INIT_BUDGET_MS,
     )
@@ -140,6 +141,7 @@ fn check_candidate(script_uri: &str, content: &str) -> CheckReport {
             content: Some(content.to_string()),
             rollback: true,
             timeout_ms: None,
+            view: Default::default(),
         },
         INIT_BUDGET_MS,
     )
@@ -882,6 +884,7 @@ async fn an_init_over_the_budget_is_measured_rather_than_interrupted() {
             content: None,
             rollback: true,
             timeout_ms: None,
+            view: Default::default(),
         },
         budget_ms,
     );
@@ -927,6 +930,7 @@ async fn an_init_past_even_the_ceiling_reports_what_it_registered() {
             rollback: true,
             // Deliberately below what init() needs, so the ceiling is reached.
             timeout_ms: Some(600),
+            view: Default::default(),
         },
         600,
     );

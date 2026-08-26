@@ -1,4 +1,4 @@
-use crate::repository;
+use crate::source_view::SourceView;
 use crate::transpiler;
 use regex::Regex;
 use sha2::{Digest, Sha256};
@@ -49,19 +49,33 @@ enum ProgramKind {
 }
 
 impl ProgramKind {
-    fn cache_key(self, script_uri: &str, root_hash: &str) -> String {
-        match self {
-            ProgramKind::Runtime => script_uri.to_string(),
-            ProgramKind::Test => format!("{}{}", test_key_prefix(script_uri), root_hash),
+    fn cache_key(self, script_uri: &str, root_hash: &str, view: &SourceView) -> String {
+        // The request-serving program built from the live rows keeps the bare
+        // URI as its key. It is the hot path, and it is the one entry every
+        // existing invalidation already names directly.
+        if matches!(self, ProgramKind::Runtime) && view.is_live() {
+            return script_uri.to_string();
         }
+        let kind = match self {
+            ProgramKind::Runtime => "run",
+            ProgramKind::Test => "test",
+        };
+        format!(
+            "{}{}\u{1}{}\u{1}{}",
+            derived_key_prefix(script_uri),
+            kind,
+            view.cache_key(),
+            root_hash
+        )
     }
 }
 
-/// Prefix shared by every cached test program of `script_uri`. The separator is
-/// a control character, which no script URI contains, so a test key can never
-/// collide with the runtime key of another script.
-fn test_key_prefix(script_uri: &str) -> String {
-    format!("{}\u{1}test\u{1}", script_uri)
+/// Prefix shared by every cached program of `script_uri` other than the
+/// request-serving one. The separator is a control character, which no script
+/// URI contains, so one script's derived keys can never collide with another
+/// script's key of any kind.
+fn derived_key_prefix(script_uri: &str) -> String {
+    format!("{}\u{1}", script_uri)
 }
 
 fn hash_root(content: &str) -> String {
@@ -106,8 +120,13 @@ pub fn invalidate(script_uri: &str) {
 pub fn invalidate_program(script_uri: &str) {
     if let Ok(mut guard) = prepared_cache().lock() {
         guard.remove(script_uri);
-        let test_prefix = test_key_prefix(script_uri);
-        guard.retain(|key, _| !key.starts_with(&test_prefix));
+        // Every derived program of this script goes too: its test programs,
+        // and the ones built from a revision or a candidate. Those cannot have
+        // become *wrong* — the content behind them is immutable — but they are
+        // the only entries nothing else ever drops, and a script being edited
+        // is the moment its accumulated builds stop being worth keeping.
+        let derived = derived_key_prefix(script_uri);
+        guard.retain(|key, _| !key.starts_with(&derived));
     }
 }
 
@@ -174,16 +193,35 @@ pub fn prepare_executable_program(
     script_uri: &str,
     root_content: &str,
 ) -> Result<PreparedExecutable, ModuleLoaderError> {
-    prepare_program(script_uri, root_content, ProgramKind::Runtime)
+    prepare_program(
+        script_uri,
+        root_content,
+        ProgramKind::Runtime,
+        &SourceView::Live,
+    )
+}
+
+/// [`prepare_executable_program`] against a chosen view of the script's files.
+///
+/// The imports resolve through `view`, so a program can be built from a stored
+/// revision, or from a candidate that has not been written anywhere, without
+/// that content having to displace what is deployed.
+pub fn prepare_executable_program_in(
+    script_uri: &str,
+    root_content: &str,
+    view: &SourceView,
+) -> Result<PreparedExecutable, ModuleLoaderError> {
+    prepare_program(script_uri, root_content, ProgramKind::Runtime, view)
 }
 
 fn prepare_program(
     script_uri: &str,
     root_content: &str,
     kind: ProgramKind,
+    view: &SourceView,
 ) -> Result<PreparedExecutable, ModuleLoaderError> {
     let root_hash = hash_root(root_content);
-    let cache_key = kind.cache_key(script_uri, &root_hash);
+    let cache_key = kind.cache_key(script_uri, &root_hash, view);
 
     // Fast path: return the cached prepared program when the root content is
     // unchanged. Asset edits (which the hash cannot see) drop the entry via
@@ -199,7 +237,7 @@ fn prepare_program(
     }
 
     debug!(uri = script_uri, "Prepared-program cache miss; bundling");
-    let prepared = build_executable_program(script_uri, root_content)?;
+    let prepared = build_executable_program(script_uri, root_content, view)?;
 
     if let Ok(mut guard) = prepared_cache().lock() {
         guard.insert(
@@ -226,9 +264,20 @@ pub fn prepare_test_program(
     script_uri: &str,
     test_modules: &[String],
 ) -> Result<PreparedExecutable, ModuleLoaderError> {
+    prepare_test_program_in(script_uri, test_modules, &SourceView::Live)
+}
+
+/// [`prepare_test_program`] against a chosen view of the script's files, so a
+/// revision's tests run against that revision's modules rather than against
+/// whatever has been deployed since.
+pub fn prepare_test_program_in(
+    script_uri: &str,
+    test_modules: &[String],
+    view: &SourceView,
+) -> Result<PreparedExecutable, ModuleLoaderError> {
     let root_path = root_module_path(script_uri)?;
     let root_content = build_test_root(&root_path, test_modules)?;
-    prepare_program(script_uri, &root_content, ProgramKind::Test)
+    prepare_program(script_uri, &root_content, ProgramKind::Test, view)
 }
 
 /// Synthesize the root module that imports every test module in turn.
@@ -258,8 +307,16 @@ fn build_test_root(root_path: &str, test_modules: &[String]) -> Result<String, M
 /// Order is alphabetical so a run reports its cases the same way twice, and so
 /// a bundle of the same files hits the prepared-program cache.
 pub fn discover_test_modules(script_uri: &str) -> Vec<String> {
-    let mut paths: Vec<String> = repository::fetch_assets(script_uri)
-        .into_keys()
+    discover_test_modules_in(script_uri, &SourceView::Live)
+}
+
+/// [`discover_test_modules`] against a chosen view. A revision's test files
+/// are the ones it contained — a test added since is not one of them, and a
+/// test deleted since still is.
+pub fn discover_test_modules_in(script_uri: &str, view: &SourceView) -> Vec<String> {
+    let mut paths: Vec<String> = view
+        .list_paths(script_uri)
+        .into_iter()
         .filter(|path| is_test_module(path))
         .collect();
     paths.sort();
@@ -279,6 +336,7 @@ fn is_test_module(logical_path: &str) -> bool {
 fn build_executable_program(
     script_uri: &str,
     root_content: &str,
+    view: &SourceView,
 ) -> Result<PreparedExecutable, ModuleLoaderError> {
     if contains_dynamic_import(root_content) {
         return Err(ModuleLoaderError::UnsupportedImport(
@@ -287,7 +345,7 @@ fn build_executable_program(
     }
 
     let root_path = root_module_path(script_uri)?;
-    let mut linker = ModuleLinker::new(script_uri);
+    let mut linker = ModuleLinker::new(script_uri, view);
     let root_code = linker.compile_root_module(&root_path, root_content)?;
 
     if linker.module_order.is_empty() {
@@ -338,6 +396,8 @@ fn build_executable_program(
 
 struct ModuleLinker<'a> {
     root_script_uri: &'a str,
+    /// Where this build reads imported modules from.
+    view: &'a SourceView,
     compiled_modules: HashMap<String, String>,
     module_order: Vec<String>,
     /// The chain of modules currently being compiled, outermost first.
@@ -351,9 +411,10 @@ struct ModuleLinker<'a> {
 }
 
 impl<'a> ModuleLinker<'a> {
-    fn new(root_script_uri: &'a str) -> Self {
+    fn new(root_script_uri: &'a str, view: &'a SourceView) -> Self {
         Self {
             root_script_uri,
+            view,
             compiled_modules: HashMap::new(),
             module_order: Vec::new(),
             visiting: Vec::new(),
@@ -463,6 +524,7 @@ impl<'a> ModuleLinker<'a> {
                 dependency,
                 dependency,
                 importer_path,
+                self.view,
             )?;
             self.compile_dependency_module(dependency, &asset_source)?;
         }
@@ -815,9 +877,25 @@ pub fn load_owned_asset_module(
     importer_path: &str,
     specifier: &str,
 ) -> Result<ModuleSource, ModuleLoaderError> {
+    load_owned_asset_module_in(root_script_uri, importer_path, specifier, &SourceView::Live)
+}
+
+/// [`load_owned_asset_module`] against a chosen view of the script's files.
+pub fn load_owned_asset_module_in(
+    root_script_uri: &str,
+    importer_path: &str,
+    specifier: &str,
+    view: &SourceView,
+) -> Result<ModuleSource, ModuleLoaderError> {
     let logical_path = normalize_asset_module_specifier(importer_path, specifier)?;
-    load_owned_asset_module_by_path(root_script_uri, &logical_path, specifier, importer_path)
-        .map(|source| (*source).clone())
+    load_owned_asset_module_by_path(
+        root_script_uri,
+        &logical_path,
+        specifier,
+        importer_path,
+        view,
+    )
+    .map(|source| (*source).clone())
 }
 
 fn load_owned_asset_module_by_path(
@@ -825,29 +903,37 @@ fn load_owned_asset_module_by_path(
     logical_path: &str,
     original_specifier: &str,
     importer_path: &str,
+    view: &SourceView,
 ) -> Result<Arc<ModuleSource>, ModuleLoaderError> {
+    // Only the live view is cached here. Every other view is read for a check
+    // or a test run rather than to serve requests, and caching those would
+    // grow a map that nothing invalidates — a revision's content cannot
+    // change, so an entry for it would never be evicted and never be wrong,
+    // only permanent. The prepared-program cache still keeps a repeated build
+    // of the same revision from re-reading anything.
     let cache_key = (root_script_uri.to_string(), logical_path.to_string());
-    if let Ok(guard) = module_source_cache().lock()
+    if view.is_live()
+        && let Ok(guard) = module_source_cache().lock()
         && let Some(source) = guard.get(&cache_key)
     {
         return Ok(Arc::clone(source));
     }
 
-    let asset = repository::fetch_asset(root_script_uri, logical_path).ok_or_else(|| {
+    let file = view.fetch(root_script_uri, logical_path).ok_or_else(|| {
         ModuleLoaderError::InvalidSpecifier(format!(
             "Module '{}' imported from '{}' was not found in assets for '{}'",
             original_specifier, importer_path, root_script_uri
         ))
     })?;
 
-    if !is_supported_module_asset(logical_path, &asset.mimetype) {
+    if !is_supported_module_asset(logical_path, &file.mimetype) {
         return Err(ModuleLoaderError::InvalidSpecifier(format!(
             "Module '{}' has unsupported asset type '{}'",
-            logical_path, asset.mimetype
+            logical_path, file.mimetype
         )));
     }
 
-    let content = String::from_utf8(asset.content).map_err(|_| {
+    let content = String::from_utf8(file.content).map_err(|_| {
         ModuleLoaderError::InvalidSpecifier(format!(
             "Module '{}' must be valid UTF-8 text content",
             logical_path
@@ -857,10 +943,12 @@ fn load_owned_asset_module_by_path(
     let source = Arc::new(ModuleSource {
         logical_path: logical_path.to_string(),
         content,
-        mimetype: asset.mimetype,
+        mimetype: file.mimetype,
     });
 
-    if let Ok(mut guard) = module_source_cache().lock() {
+    if view.is_live()
+        && let Ok(mut guard) = module_source_cache().lock()
+    {
         guard.insert(cache_key, Arc::clone(&source));
     }
 
@@ -1463,16 +1551,52 @@ export const WORLD_TYPE_FOREST: WorldType = "forest";
 
     #[test]
     fn test_programs_do_not_share_a_cache_slot_with_the_runtime_program() {
-        let runtime_key = ProgramKind::Runtime.cache_key("apps/main.ts", "abc");
-        let test_key = ProgramKind::Test.cache_key("apps/main.ts", "abc");
+        let live = SourceView::Live;
+        let runtime_key = ProgramKind::Runtime.cache_key("apps/main.ts", "abc", &live);
+        let test_key = ProgramKind::Test.cache_key("apps/main.ts", "abc", &live);
 
         assert_eq!(runtime_key, "apps/main.ts");
         assert_ne!(runtime_key, test_key);
-        assert!(test_key.starts_with(&test_key_prefix("apps/main.ts")));
+        assert!(test_key.starts_with(&derived_key_prefix("apps/main.ts")));
         assert_ne!(
             test_key,
-            ProgramKind::Test.cache_key("apps/main.ts", "def"),
+            ProgramKind::Test.cache_key("apps/main.ts", "def", &live),
             "bundles of different test modules need their own slots"
         );
+    }
+
+    #[test]
+    fn a_program_built_from_a_revision_keeps_its_own_cache_slot() {
+        let live = ProgramKind::Runtime.cache_key("apps/main.ts", "abc", &SourceView::Live);
+        let at_40 =
+            ProgramKind::Runtime.cache_key("apps/main.ts", "abc", &SourceView::Revision(40));
+        let at_41 =
+            ProgramKind::Runtime.cache_key("apps/main.ts", "abc", &SourceView::Revision(41));
+
+        assert_eq!(
+            live, "apps/main.ts",
+            "the served program keeps the bare key"
+        );
+        assert_ne!(live, at_40);
+        assert_ne!(at_40, at_41, "two revisions are two programs");
+    }
+
+    #[test]
+    fn invalidating_a_script_drops_the_programs_derived_from_it() {
+        // Checking a revision leaves a cached program behind. Editing the
+        // script is the point at which those accumulated builds stop earning
+        // their memory, so the wholesale invalidation has to reach them.
+        let derived = derived_key_prefix("apps/main.ts");
+        for view in [
+            SourceView::Revision(40),
+            SourceView::overlay(Default::default()),
+        ] {
+            let key = ProgramKind::Runtime.cache_key("apps/main.ts", "abc", &view);
+            assert!(
+                key.starts_with(&derived),
+                "{} is not reachable from the invalidation prefix",
+                key
+            );
+        }
     }
 }

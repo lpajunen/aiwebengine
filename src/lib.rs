@@ -33,6 +33,7 @@ pub mod notifications;
 pub mod openapi_schemas;
 pub mod parsers;
 pub mod repository;
+pub mod revisions;
 pub mod route_index;
 pub mod safe_helpers;
 pub mod scheduler;
@@ -41,6 +42,7 @@ pub mod script_eval;
 pub mod script_init;
 pub mod script_test;
 pub mod security;
+pub mod source_view;
 pub mod stream_manager;
 pub mod stream_registry;
 pub mod transpiler;
@@ -74,6 +76,7 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
         engine_api::script_logs_delete_route,
         engine_api::script_logs_stream_route,
         engine_api::routes_route,
+        engine_api::revisions_route,
         engine_api::run_tests_route,
         engine_api::check_route,
         engine_api::eval_route,
@@ -1137,6 +1140,12 @@ async fn execute_startup_scripts() -> AppResult<()> {
         .await
         .unwrap_or_default();
     info!("Found {} scripts to execute", scripts.len());
+
+    // Give scripts that predate their own history something to return to,
+    // before init() runs so its outcome has a revision to attach itself to.
+    // One pass over the scripts that have no revisions at all, rather than a
+    // question asked once per script on every boot.
+    revisions::backfill_missing().await;
 
     for (uri, content) in scripts.iter() {
         info!("Executing script: {}", uri);
@@ -2344,6 +2353,10 @@ async fn setup_routes(
         .route(
             "/engine/routes",
             axum::routing::get(engine_api::routes_route),
+        )
+        .route(
+            "/engine/revisions",
+            axum::routing::get(engine_api::revisions_route),
         )
         .route(
             "/engine/run_tests",

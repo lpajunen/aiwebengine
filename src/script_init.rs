@@ -147,11 +147,29 @@ impl ScriptInitializer {
     }
 
     /// Initialize a single script by URI
+    /// Run the script's `init()` and record how it went against the script's
+    /// newest revision.
+    ///
+    /// Every write records its revision before triggering this, so the newest
+    /// revision is the one whose content just ran. That is what makes "put it
+    /// back to the last one that worked" answerable — the engine executed the
+    /// code and knows, which is the one thing a history kept outside the
+    /// engine could never tell anyone.
     pub async fn initialize_script(
         &self,
         script_uri: &str,
         is_startup: bool,
     ) -> Result<InitResult, String> {
+        let result = self.run_init(script_uri, is_startup).await;
+
+        if let Ok(init) = &result {
+            crate::revisions::annotate_init(script_uri, init.success, init.error.as_deref()).await;
+        }
+
+        result
+    }
+
+    async fn run_init(&self, script_uri: &str, is_startup: bool) -> Result<InitResult, String> {
         let start_time = std::time::Instant::now();
         debug!("initialize_script: getting metadata for {}", script_uri);
 

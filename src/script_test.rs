@@ -229,6 +229,9 @@ pub struct TestRunRequest {
     pub filter: Option<String>,
     /// Roll back the database writes the tests make.
     pub rollback: bool,
+    /// Which version of the script's files to run. Defaults to what is
+    /// deployed.
+    pub view: crate::source_view::SourceView,
 }
 
 /// Runs a script's test modules off the async runtime and within a budget.
@@ -274,6 +277,7 @@ impl TestRunner {
             run_timeout_ms: self.run_timeout_ms,
             filter: request.filter,
             rollback: request.rollback,
+            view: request.view,
         };
 
         let backstop = Duration::from_millis(
@@ -286,7 +290,10 @@ impl TestRunner {
             backstop,
             tokio::task::spawn_blocking(move || {
                 let _ticket = ticket;
-                let modules = crate::module_loader::discover_test_modules(&params.script_uri);
+                let modules = crate::module_loader::discover_test_modules_in(
+                    &params.script_uri,
+                    &params.view,
+                );
                 debug!(
                     script_uri = %params.script_uri,
                     modules = modules.len(),
