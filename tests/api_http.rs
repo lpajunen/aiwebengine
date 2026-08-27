@@ -782,6 +782,34 @@ async fn test_explicit_head_handler_overrides_get_fallback() {
         .expect("Server failed to start");
     wait_for_server(port, 20).await.expect("Server not ready");
 
+    // Check what the script actually registered before asking what the router
+    // does with it.
+    //
+    // An init() that is interrupted partway leaves the routes it managed to
+    // register — deliberately, so a first deploy with a slow init() is
+    // reachable rather than invisible. Interrupted between these two calls, the
+    // script ends up with a GET-only table, and the HEAD request below then
+    // takes the RFC 7231 fallback to the GET handler: status 200, no custom
+    // header. That failure reads as "the override does not work" when what
+    // actually happened is that the override was never registered, so say so
+    // here instead.
+    let registered = repository::get_script_metadata("https://example.com/explicit_head_test")
+        .expect("the script should be stored");
+    let methods: Vec<&str> = registered
+        .registrations
+        .keys()
+        .filter(|(pattern, _)| pattern == "/api/explicit-head")
+        .map(|(_, method)| method.as_str())
+        .collect();
+    assert!(
+        methods.contains(&"GET") && methods.contains(&"HEAD"),
+        "init() did not register both handlers (registered: {:?}, initialized: {}, \
+         error: {:?}) — the routing behaviour below is not what is being tested",
+        methods,
+        registered.initialized,
+        registered.init_error
+    );
+
     let client = reqwest::Client::new();
 
     let head_response = client

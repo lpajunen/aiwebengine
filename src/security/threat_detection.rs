@@ -567,6 +567,17 @@ mod tests {
 
     static THREAT_TEST_LOCK: Mutex<()> = Mutex::const_new(());
 
+    /// A detector reports what the database holds.
+    ///
+    /// Counted as a difference rather than against zero. `active_threats` is a
+    /// count over a table the whole engine writes to, and this test shares its
+    /// database with every other test process — one of which will eventually
+    /// record a failed attempt between the read and the assertion. The old
+    /// version emptied both tables first to make zero true, which raced the
+    /// same writers and destroyed rows the tests doing the writing were about
+    /// to assert on.
+    ///
+    /// A difference is immune to both: concurrent writers only add.
     #[tokio::test]
     async fn test_threat_detector_creation() {
         let _lock = THREAT_TEST_LOCK.lock().await;
@@ -575,18 +586,39 @@ mod tests {
         )
         .await
         .unwrap();
-        sqlx::query("DELETE FROM suspicious_activity")
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query("DELETE FROM failed_auth_attempts")
+
+        let detector = ThreatDetector::with_default_config(Some(pool.clone()));
+        let before = detector.get_threat_statistics().await;
+
+        let identifier = format!(
+            "threat-detector-creation:{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        );
+        sqlx::query(
+            "INSERT INTO failed_auth_attempts (identifier, type) VALUES ($1, 'authentication')",
+        )
+        .bind(&identifier)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let after = detector.get_threat_statistics().await;
+
+        // Scoped to this test's own row, so nothing another process is
+        // counting on goes with it.
+        sqlx::query("DELETE FROM failed_auth_attempts WHERE identifier = $1")
+            .bind(&identifier)
             .execute(&pool)
             .await
             .unwrap();
 
-        let detector = ThreatDetector::with_default_config(Some(pool));
-        let stats = detector.get_threat_statistics().await;
-        assert_eq!(stats.active_threats, 0);
+        assert!(
+            after.active_threats > before.active_threats,
+            "a detector with a pool reports what the table holds: {} then {}",
+            before.active_threats,
+            after.active_threats
+        );
+        assert!(after.last_updated >= before.last_updated);
     }
 
     #[tokio::test]
