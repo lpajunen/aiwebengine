@@ -225,18 +225,20 @@ impl SourceView {
                 }
             }
             SourceView::Overlay { base, files } => {
-                let mut paths: Vec<String> = base
+                // A set rather than `Vec::contains` per candidate file: a
+                // change of any size would otherwise cost a scan of the base
+                // tree for each of its files.
+                let mut paths: std::collections::BTreeSet<String> = base
                     .list_paths(script_uri)
                     .into_iter()
                     .filter(|path| !matches!(files.get(path), Some(OverlayEntry::Deleted)))
                     .collect();
                 for (path, entry) in files {
-                    if matches!(entry, OverlayEntry::Written(_)) && !paths.contains(path) {
-                        paths.push(path.clone());
+                    if matches!(entry, OverlayEntry::Written(_)) {
+                        paths.insert(path.clone());
                     }
                 }
-                paths.sort();
-                paths
+                paths.into_iter().collect()
             }
         }
     }

@@ -26,7 +26,22 @@ const MAX_MODULE_SPECIFIER_LENGTH: usize = 255;
 struct CachedPrepared {
     root_hash: String,
     code: Arc<str>,
+    /// When this entry was stored, relative to the others. Only derived
+    /// entries are evicted by age — see [`MAX_DERIVED_PROGRAMS`] — so the
+    /// request-serving programs never lose their slot to a burst of checks.
+    stored: u64,
 }
+
+/// How many programs built from something other than the deployed files are
+/// kept at once, across every script.
+///
+/// A check cleans up after itself, but a test run at a revision does not, and
+/// each of those entries is a whole transpiled bundle. Without a ceiling the
+/// map grows for as long as anyone keeps exercising versions — slowly, and
+/// with nothing to make it stop.
+const MAX_DERIVED_PROGRAMS: usize = 64;
+
+static PREPARED_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 static PREPARED_CACHE: OnceLock<Mutex<HashMap<String, CachedPrepared>>> = OnceLock::new();
 
@@ -67,6 +82,31 @@ impl ProgramKind {
             view.cache_key(),
             root_hash
         )
+    }
+}
+
+/// Drop the oldest derived programs once there are more than the ceiling
+/// allows.
+///
+/// Oldest rather than all of them: a test run bundles a program per module,
+/// and clearing the map wholesale in the middle of one would make every
+/// remaining module rebuild what it just built. Request-serving programs are
+/// keyed by the bare URI and are never candidates — they are the hot path, and
+/// nothing about a check should be able to evict them.
+fn evict_derived_over_ceiling(cache: &mut HashMap<String, CachedPrepared>) {
+    let mut derived: Vec<(u64, String)> = cache
+        .iter()
+        .filter(|(key, _)| key.contains('\u{1}'))
+        .map(|(key, entry)| (entry.stored, key.clone()))
+        .collect();
+
+    if derived.len() <= MAX_DERIVED_PROGRAMS {
+        return;
+    }
+
+    derived.sort_unstable();
+    for (_, key) in derived.iter().take(derived.len() - MAX_DERIVED_PROGRAMS) {
+        cache.remove(key);
     }
 }
 
@@ -245,8 +285,10 @@ fn prepare_program(
             CachedPrepared {
                 root_hash,
                 code: Arc::from(prepared.code.as_str()),
+                stored: PREPARED_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             },
         );
+        evict_derived_over_ceiling(&mut guard);
     }
 
     Ok(prepared)
@@ -1579,6 +1621,46 @@ export const WORLD_TYPE_FOREST: WorldType = "forest";
         );
         assert_ne!(live, at_40);
         assert_ne!(at_40, at_41, "two revisions are two programs");
+    }
+
+    #[test]
+    fn the_derived_cache_evicts_its_oldest_and_never_the_served_program() {
+        let mut cache: HashMap<String, CachedPrepared> = HashMap::new();
+        let entry = |stored| CachedPrepared {
+            root_hash: "hash".to_string(),
+            code: Arc::from("code"),
+            stored,
+        };
+
+        // The request-serving program of a script, keyed by the bare URI.
+        cache.insert("apps/main.ts".to_string(), entry(0));
+        for index in 0..(MAX_DERIVED_PROGRAMS as u64 + 10) {
+            cache.insert(
+                ProgramKind::Runtime.cache_key(
+                    "apps/main.ts",
+                    "abc",
+                    &SourceView::Revision(index as i32),
+                ),
+                entry(index + 1),
+            );
+        }
+
+        evict_derived_over_ceiling(&mut cache);
+
+        let derived = cache.keys().filter(|key| key.contains('\u{1}')).count();
+        assert_eq!(derived, MAX_DERIVED_PROGRAMS);
+        assert!(
+            cache.contains_key("apps/main.ts"),
+            "a burst of checks must not cost a script the program that serves it"
+        );
+        assert!(
+            !cache.contains_key(&ProgramKind::Runtime.cache_key(
+                "apps/main.ts",
+                "abc",
+                &SourceView::Revision(0)
+            )),
+            "the oldest derived programs are the ones that go"
+        );
     }
 
     #[test]

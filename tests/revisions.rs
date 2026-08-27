@@ -63,13 +63,28 @@ async fn deploy(script_uri: &str, content: &str) {
     clear_script_state(script_uri).await;
 
     let (uri, content) = (script_uri.to_string(), content.to_string());
-    tokio::task::spawn_blocking(move || {
-        repository::upsert_script(&uri, &content).expect("script should be stored");
-        revisions::record_blocking(&uri, revisions::Origin::Script, Some("reviser"))
+    tokio::task::spawn_blocking({
+        let uri = uri.clone();
+        move || repository::upsert_script(&uri, &content).expect("script should be stored")
     })
     .await
-    .expect("join")
-    .expect("deploying records a revision");
+    .expect("join");
+
+    // Through the async form so a failure says what went wrong. The blocking
+    // wrapper reports failure as `None`, which is also what "nothing changed"
+    // looks like — indistinguishable in a test that only knows it got nothing.
+    // `None` here means the content already had a revision — an engine
+    // instance sharing this database can backfill a baseline for a script it
+    // finds without one, and between the write above and this call is exactly
+    // when it would. Either way the script must end up with a history.
+    revisions::record(&uri, revisions::Origin::Script, Some("reviser"))
+        .await
+        .expect("recording the deploy should succeed");
+
+    revisions::head(&uri)
+        .await
+        .expect("head should read")
+        .expect("a deployed script has a history");
 }
 
 /// Remove every trace of a script: its row, its files, its history and its log.
@@ -1575,4 +1590,43 @@ async fn a_revert_onto_the_same_schema_says_nothing_about_it() {
         "the data is the one this revision ran against: {:?}",
         outcome.schema_warnings
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_backfilled_baseline_records_the_schema_it_found() {
+    setup_env().await;
+    let uri = "test://revisions/schema/backfill.ts";
+    clear_script_state(uri).await;
+
+    let pool = aiwebengine::database::get_global_database()
+        .expect("database should be initialized")
+        .pool()
+        .clone();
+    sqlx::query("INSERT INTO scripts (uri, content, name) VALUES ($1, 'function init() {}', $2)")
+        .bind(uri)
+        .bind("backfill.ts")
+        .execute(&pool)
+        .await
+        .expect("storing the script should succeed");
+    declare_table(uri, "matches", &["id"]).await;
+
+    // Scoped to this script. The unscoped pass is what startup runs, and
+    // calling it here would hand a baseline to every other test's script in
+    // the moment between its own write and its own recording — which is a race
+    // this test would be creating rather than observing.
+    aiwebengine::revisions::backfill_missing(Some(uri)).await;
+
+    let recorded = aiwebengine::revisions::schema_at(uri, 1)
+        .await
+        .expect("schema should read")
+        .expect("the baseline recorded a fingerprint");
+
+    assert!(
+        recorded.get("matches").is_some(),
+        "a baseline with no fingerprint would tell every revert to it that the \
+         comparison was impossible, which is the one answer nobody can act on: {}",
+        recorded
+    );
+
+    clear_script_state(uri).await;
 }

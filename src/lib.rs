@@ -1148,7 +1148,7 @@ async fn execute_startup_scripts() -> AppResult<()> {
     // before init() runs so its outcome has a revision to attach itself to.
     // One pass over the scripts that have no revisions at all, rather than a
     // question asked once per script on every boot.
-    revisions::backfill_missing().await;
+    revisions::backfill_missing(None).await;
     // Which revision each script is at, so lines logged before this boot's
     // first write to a script are still attributed to a version.
     revisions::load_current().await;

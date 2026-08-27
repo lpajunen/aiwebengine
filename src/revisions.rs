@@ -662,6 +662,99 @@ pub async fn read_file(
     .await
 }
 
+/// Several of a revision's files at once.
+///
+/// One query rather than one per file. A diff or a revert touches every file
+/// that moved, and asking for them one at a time is a round trip each — which
+/// is what the manifest comparison already saved by telling the caller exactly
+/// which ones it needs.
+pub async fn read_files(
+    script_uri: &str,
+    revision: i32,
+    paths: &[String],
+) -> AppResult<std::collections::HashMap<String, (Vec<u8>, String)>> {
+    if paths.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let script_uri = script_uri.to_string();
+    let paths = paths.to_vec();
+    with_read_connection(move |conn| {
+        Box::pin(async move {
+            let rows = sqlx::query(
+                "SELECT f.uri, b.content, f.mimetype
+                 FROM script_revisions r
+                 JOIN script_revision_files f ON f.revision_id = r.id
+                 JOIN asset_blobs b ON b.sha256 = f.sha256
+                 WHERE r.script_uri = $1 AND r.revision = $2 AND f.uri = ANY($3)",
+            )
+            .bind(&script_uri)
+            .bind(revision)
+            .bind(&paths)
+            .fetch_all(conn)
+            .await
+            .map_err(|e| db_error("reading revision files", e))?;
+
+            Ok(rows
+                .into_iter()
+                .map(|row| {
+                    let uri: String = row.get("uri");
+                    (uri, (row.get("content"), row.get("mimetype")))
+                })
+                .collect())
+        })
+    })
+    .await
+}
+
+/// The manifests of several revisions at once, keyed by revision number.
+///
+/// The listing endpoint offers every revision's file list in one response, and
+/// fetching them a revision at a time turns one answer into fifty round trips.
+pub async fn files_for(
+    script_uri: &str,
+    revisions: &[i32],
+) -> AppResult<std::collections::HashMap<i32, Vec<RevisionFile>>> {
+    if revisions.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let script_uri = script_uri.to_string();
+    let revisions = revisions.to_vec();
+    with_read_connection(move |conn| {
+        Box::pin(async move {
+            let rows = sqlx::query(
+                "SELECT r.revision, f.uri, f.name, f.mimetype, f.sha256, b.bytes
+                 FROM script_revisions r
+                 JOIN script_revision_files f ON f.revision_id = r.id
+                 JOIN asset_blobs b ON b.sha256 = f.sha256
+                 WHERE r.script_uri = $1 AND r.revision = ANY($2)
+                 ORDER BY r.revision DESC, f.uri",
+            )
+            .bind(&script_uri)
+            .bind(&revisions)
+            .fetch_all(conn)
+            .await
+            .map_err(|e| db_error("reading revision manifests", e))?;
+
+            let mut manifests: std::collections::HashMap<i32, Vec<RevisionFile>> =
+                std::collections::HashMap::new();
+            for row in rows {
+                manifests
+                    .entry(row.get("revision"))
+                    .or_default()
+                    .push(RevisionFile {
+                        uri: row.get("uri"),
+                        name: row.get("name"),
+                        mimetype: row.get("mimetype"),
+                        sha256: row.get("sha256"),
+                        bytes: row.get("bytes"),
+                    });
+            }
+            Ok(manifests)
+        })
+    })
+    .await
+}
+
 /// The root source as a revision held it.
 pub async fn root_content(script_uri: &str, revision: i32) -> AppResult<Option<String>> {
     let script_uri = script_uri.to_string();
@@ -921,13 +1014,16 @@ pub async fn annotate_init(script_uri: &str, ok: bool, error: Option<&str>) {
 /// Set-based on purpose. Asking each script in turn whether it has a revision
 /// is a query per script per boot, and an engine with a few hundred scripts
 /// pays that on every start of every instance.
-pub async fn backfill_missing() {
-    if let Err(e) = backfill_missing_inner().await {
+/// `scope` restricts the pass to one script; `None` covers every script, which
+/// is what startup does.
+pub async fn backfill_missing(scope: Option<&str>) {
+    let scope = scope.map(str::to_string);
+    if let Err(e) = backfill_missing_inner(scope).await {
         tracing::warn!("Failed to record baseline revisions: {}", e);
     }
 }
 
-async fn backfill_missing_inner() -> AppResult<()> {
+async fn backfill_missing_inner(scope: Option<String>) -> AppResult<()> {
     with_transaction(move |conn| {
         Box::pin(async move {
             // Blobs first, in their own statement: a revision row references
@@ -944,6 +1040,7 @@ async fn backfill_missing_inner() -> AppResult<()> {
                      WHERE NOT EXISTS (
                          SELECT 1 FROM script_revisions r WHERE r.script_uri = s.uri
                      )
+                     AND ($1::text IS NULL OR s.uri = $1)
                  ), all_bytes AS (
                      SELECT convert_to(m.content, 'UTF8') AS bytes FROM missing m
                      UNION
@@ -956,6 +1053,7 @@ async fn backfill_missing_inner() -> AppResult<()> {
                  ORDER BY 1
                  ON CONFLICT (sha256) DO UPDATE SET created_at = NOW()",
             )
+            .bind(scope.as_deref())
             .execute(&mut *conn)
             .await
             .map_err(|e| db_error("storing baseline blobs", e))?;
@@ -965,16 +1063,27 @@ async fn backfill_missing_inner() -> AppResult<()> {
             // and the one that loses simply has nothing to record.
             let created: Vec<(i64, String)> = sqlx::query_as(
                 "INSERT INTO script_revisions
-                     (script_uri, revision, parent, root_sha256, origin)
+                     (script_uri, revision, parent, root_sha256, origin, tables)
                  SELECT s.uri, 1, NULL,
-                        encode(sha256(convert_to(s.content, 'UTF8')), 'hex'), 'bootstrap'
+                        encode(sha256(convert_to(s.content, 'UTF8')), 'hex'), 'bootstrap',
+                        -- The schema this baseline ran against, so a revert to
+                        -- it can say how the data has moved since. Left out,
+                        -- every backfilled revision would report that it
+                        -- predates schema recording.
+                        COALESCE(
+                            (SELECT jsonb_object_agg(t.logical_table_name, t.schema_json)
+                             FROM script_tables t WHERE t.script_uri = s.uri),
+                            '{}'::jsonb
+                        )
                  FROM scripts s
                  WHERE NOT EXISTS (
                      SELECT 1 FROM script_revisions r WHERE r.script_uri = s.uri
                  )
+                 AND ($1::text IS NULL OR s.uri = $1)
                  ON CONFLICT (script_uri, revision) DO NOTHING
                  RETURNING id, script_uri",
             )
+            .bind(scope.as_deref())
             .fetch_all(&mut *conn)
             .await
             .map_err(|e| db_error("recording baseline revisions", e))?;
@@ -1122,12 +1231,20 @@ pub async fn revert_content(
         None
     };
 
-    let mut writes = Vec::with_capacity(plan.writes.len());
-    for file in &plan.writes {
-        if let Some((content, mimetype)) = read_file(script_uri, target, &file.uri).await? {
-            writes.push((file.uri.clone(), mimetype, content));
-        }
-    }
+    let paths: Vec<String> = plan.writes.iter().map(|file| file.uri.clone()).collect();
+    let contents = read_files(script_uri, target, &paths).await?;
+
+    // Ordered by the plan rather than by whatever the map yields, so a revert
+    // writes files in the order it reported them.
+    let writes = plan
+        .writes
+        .iter()
+        .filter_map(|file| {
+            contents
+                .get(&file.uri)
+                .map(|(content, mimetype)| (file.uri.clone(), mimetype.clone(), content.clone()))
+        })
+        .collect();
 
     Ok((root, writes))
 }
@@ -1237,28 +1354,36 @@ async fn prune_revisions(scope: Option<&str>, retention: Retention) -> AppResult
                 return Ok(0);
             }
 
+            // `good` is aggregated once rather than asked per row. As a
+            // correlated subquery it ran an index lookup for every revision in
+            // the table, which is fine at hundreds and needless at any size.
             Ok(sqlx::query(
-                "WITH ranked AS (
+                "WITH good AS (
+                     SELECT script_uri, MAX(revision) AS revision
+                     FROM script_revisions
+                     WHERE init_ok IS TRUE AND ($3::text IS NULL OR script_uri = $3)
+                     GROUP BY script_uri
+                 ), ranked AS (
                      SELECT r.id,
+                            r.script_uri,
+                            r.revision,
                             r.label,
                             r.created_at,
                             row_number() OVER (
                                 PARTITION BY r.script_uri ORDER BY r.revision DESC
-                            ) AS recency,
-                            r.revision = (
-                                SELECT MAX(g.revision) FROM script_revisions g
-                                WHERE g.script_uri = r.script_uri AND g.init_ok IS TRUE
-                            ) AS is_last_good
+                            ) AS recency
                      FROM script_revisions r
                      WHERE $3::text IS NULL OR r.script_uri = $3
                  )
                  DELETE FROM script_revisions
                  WHERE id IN (
-                     SELECT id FROM ranked
-                     WHERE label IS NULL
-                       AND is_last_good IS NOT TRUE
-                       AND recency > $1
-                       AND created_at < NOW() - make_interval(days => $2)
+                     SELECT ranked.id
+                     FROM ranked
+                     LEFT JOIN good ON good.script_uri = ranked.script_uri
+                     WHERE ranked.label IS NULL
+                       AND (good.revision IS NULL OR ranked.revision <> good.revision)
+                       AND ranked.recency > $1
+                       AND ranked.created_at < NOW() - make_interval(days => $2)
                  )",
             )
             .bind(keep_per_script)
@@ -1279,29 +1404,38 @@ async fn prune_revisions(scope: Option<&str>, retention: Retention) -> AppResult
 /// revisions and across scripts, so "this script's revision is gone" says
 /// nothing about whether its bytes are still someone else's.
 ///
-/// Best-effort by design, and it returns 0 rather than an error when it cannot
-/// run. Deciding a blob is unreferenced and deleting it are two steps, and a
-/// writer can claim that content in between — the foreign key then refuses the
-/// delete, which is the database preventing exactly the loss worth preventing.
-/// Nothing is wrong when that happens and nothing needs reporting: the orphan
-/// is collected on the next pass.
+/// `FOR UPDATE SKIP LOCKED` is what makes this safe to run while writes are
+/// landing. Recording a revision touches every blob it cites before inserting
+/// the manifest rows that reference them, so a blob being claimed is a blob
+/// this transaction cannot lock — and skipping it is exactly right, because
+/// the writer is about to make it referenced. Without the lock the collector
+/// decided and deleted in two steps, and a writer arriving in between turned
+/// the foreign key into a refusal that took the whole statement with it.
 ///
-/// The age guard makes that collision rare rather than routine. Recording a
-/// revision touches every blob it cites before inserting the manifest rows
-/// that reference them, so a blob in that window is too young to collect.
+/// The age guard stays as a second line: a blob nothing has touched for an
+/// hour is not one any in-flight write is about to claim.
+///
+/// Returns 0 rather than an error when it cannot run. Collection is
+/// housekeeping; a pass that achieves nothing is not a failure worth
+/// reporting, and whatever it skipped is collected by the next one.
 async fn collect_blobs(retention: Retention) -> u64 {
     let grace = retention.blob_grace_secs.max(0.0);
     let result = with_transaction(move |conn| {
         Box::pin(async move {
             sqlx::query(
-                "DELETE FROM asset_blobs b
-                 WHERE b.created_at < NOW() - make_interval(secs => $1)
-                 AND NOT EXISTS (
-                     SELECT 1 FROM script_revision_files f WHERE f.sha256 = b.sha256
+                "WITH candidates AS (
+                     SELECT b.sha256 FROM asset_blobs b
+                     WHERE b.created_at < NOW() - make_interval(secs => $1)
+                       AND NOT EXISTS (
+                           SELECT 1 FROM script_revision_files f WHERE f.sha256 = b.sha256
+                       )
+                       AND NOT EXISTS (
+                           SELECT 1 FROM script_revisions r WHERE r.root_sha256 = b.sha256
+                       )
+                     FOR UPDATE SKIP LOCKED
                  )
-                 AND NOT EXISTS (
-                     SELECT 1 FROM script_revisions r WHERE r.root_sha256 = b.sha256
-                 )",
+                 DELETE FROM asset_blobs
+                 WHERE sha256 IN (SELECT sha256 FROM candidates)",
             )
             .bind(grace)
             .execute(conn)
@@ -1466,6 +1600,18 @@ pub async fn diff(
     paths.sort_unstable();
     paths.dedup();
 
+    // Both sides of every file that moved, in one query each. The manifest
+    // comparison above already said exactly which files those are, and asking
+    // for them one at a time would give that saving straight back.
+    let moved: Vec<String> = paths
+        .iter()
+        .filter(|path| before.get(**path) != after.get(**path))
+        .filter(|path| ***path != root)
+        .map(|path| (*path).clone())
+        .collect();
+    let old_files = read_files(script_uri, from, &moved).await?;
+    let new_files = read_files(script_uri, to, &moved).await?;
+
     let mut rendered = 0usize;
     let mut truncated = false;
     let mut diffs = Vec::new();
@@ -1501,11 +1647,11 @@ pub async fn diff(
 
         let is_root = *path == root;
         let old_text = match from_sha {
-            Some(_) => read_text(script_uri, from, path, is_root).await?,
+            Some(_) => revision_text(script_uri, from, path, is_root, &old_files).await?,
             None => Some(String::new()),
         };
         let new_text = match to_sha {
-            Some(_) => read_text(script_uri, to, path, is_root).await?,
+            Some(_) => revision_text(script_uri, to, path, is_root, &new_files).await?,
             None => Some(String::new()),
         };
 
@@ -1537,18 +1683,22 @@ pub async fn diff(
 }
 
 /// One file of a revision as text, or `None` when it is not UTF-8.
-async fn read_text(
+///
+/// Takes the already-fetched contents rather than reading again; only the root
+/// is read here, since it lives outside the manifest.
+async fn revision_text(
     script_uri: &str,
     revision: i32,
     path: &str,
     is_root: bool,
+    fetched: &std::collections::HashMap<String, (Vec<u8>, String)>,
 ) -> AppResult<Option<String>> {
     if is_root {
         return root_content(script_uri, revision).await;
     }
-    Ok(read_file(script_uri, revision, path)
-        .await?
-        .and_then(|(content, _)| String::from_utf8(content).ok()))
+    Ok(fetched
+        .get(path)
+        .and_then(|(content, _)| String::from_utf8(content.clone()).ok()))
 }
 
 // ============================================================================

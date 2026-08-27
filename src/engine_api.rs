@@ -4194,11 +4194,10 @@ pub async fn revision_label_route(
 
     let user_for_auth = user.clone();
     let script_for_auth = script.clone();
-    let allowed = tokio::task::spawn_blocking(move || {
-        can_access_assets(&user_for_auth, &script_for_auth, &Capability::WriteAssets)
-    })
-    .await
-    .unwrap_or(false);
+    let allowed =
+        tokio::task::spawn_blocking(move || can_write_history(&user_for_auth, &script_for_auth))
+            .await
+            .unwrap_or(false);
     if !allowed {
         return error_response(StatusCode::FORBIDDEN, "Error: Access denied".to_string());
     }
@@ -4285,11 +4284,10 @@ pub async fn revision_diff_route(
 
     let user_for_auth = user.clone();
     let script_for_auth = script.clone();
-    let allowed = tokio::task::spawn_blocking(move || {
-        can_access_assets(&user_for_auth, &script_for_auth, &Capability::ReadAssets)
-    })
-    .await
-    .unwrap_or(false);
+    let allowed =
+        tokio::task::spawn_blocking(move || can_read_history(&user_for_auth, &script_for_auth))
+            .await
+            .unwrap_or(false);
     if !allowed {
         return error_response(StatusCode::FORBIDDEN, "Error: Access denied".to_string());
     }
@@ -4363,6 +4361,27 @@ pub async fn revision_diff_route(
     }
 }
 
+/// Whether `user` may read a script's history.
+///
+/// A revision covers the script's root source as well as its files, so reading
+/// one is reading both — hence both capabilities rather than the asset one
+/// alone. Every built-in capability set grants them together, which is why
+/// this changes nothing today; requiring both is what keeps that coincidence
+/// from being the reason it is safe.
+fn can_read_history(user: &UserContext, script_uri: &str) -> bool {
+    can_access_assets(user, script_uri, &Capability::ReadAssets)
+        && can_access_assets(user, script_uri, &Capability::ReadScripts)
+}
+
+/// Whether `user` may change a script's history or restore from it.
+///
+/// A revert writes the root as readily as it writes a module, so it takes what
+/// writing either takes.
+fn can_write_history(user: &UserContext, script_uri: &str) -> bool {
+    can_access_assets(user, script_uri, &Capability::WriteAssets)
+        && can_access_assets(user, script_uri, &Capability::WriteScripts)
+}
+
 /// Why a revert was refused.
 pub enum RevertRefusal {
     AccessDenied,
@@ -4432,7 +4451,7 @@ pub async fn revert_authorized(
     dry_run: bool,
     force: bool,
 ) -> Result<RevertOutcome, RevertRefusal> {
-    if !can_access_assets(user, script_uri, &Capability::WriteAssets) {
+    if !can_write_history(user, script_uri) {
         return Err(RevertRefusal::AccessDenied);
     }
 
@@ -4736,11 +4755,10 @@ pub async fn revisions_route(
 
     let user_for_auth = user.clone();
     let script_for_auth = script.clone();
-    let allowed = tokio::task::spawn_blocking(move || {
-        can_access_assets(&user_for_auth, &script_for_auth, &Capability::ReadAssets)
-    })
-    .await
-    .unwrap_or(false);
+    let allowed =
+        tokio::task::spawn_blocking(move || can_read_history(&user_for_auth, &script_for_auth))
+            .await
+            .unwrap_or(false);
 
     if !allowed {
         return error_response(StatusCode::FORBIDDEN, "Error: Access denied".to_string());
@@ -4789,11 +4807,21 @@ pub async fn revisions_route(
         }
     };
 
+    // Every manifest in one query rather than one per revision: a listing of
+    // fifty revisions is one answer, not fifty round trips.
+    let manifests = if query.files.unwrap_or(false) {
+        let numbers: Vec<i32> = listed.iter().map(|revision| revision.revision).collect();
+        revisions::files_for(&script, &numbers)
+            .await
+            .unwrap_or_default()
+    } else {
+        std::collections::HashMap::new()
+    };
+
     let mut entries = Vec::with_capacity(listed.len());
     for revision in &listed {
         let mut entry = revision_to_json(revision);
-        if query.files.unwrap_or(false)
-            && let Ok(Some(files)) = revisions::files(&script, revision.revision).await
+        if let Some(files) = manifests.get(&revision.revision)
             && let Some(object) = entry.as_object_mut()
         {
             object.insert(
@@ -7271,7 +7299,7 @@ fn tool_list_revisions(args: &Value, user: &UserContext) -> Value {
     let Some(script) = arg_str(args, "script") else {
         return missing_arg("script");
     };
-    if !can_access_assets(user, script, &Capability::ReadAssets) {
+    if !can_read_history(user, script) {
         return json!({ "error": "Failed to read revisions: Access denied" });
     }
     let limit = args.get("limit").and_then(Value::as_i64).unwrap_or(50);
@@ -7317,7 +7345,7 @@ fn tool_diff_revisions(args: &Value, user: &UserContext) -> Value {
     let Some(script) = arg_str(args, "script") else {
         return missing_arg("script");
     };
-    if !can_access_assets(user, script, &Capability::ReadAssets) {
+    if !can_read_history(user, script) {
         return json!({ "error": "Failed to diff revisions: Access denied" });
     }
 
@@ -7380,7 +7408,7 @@ fn tool_label_revision(args: &Value, user: &UserContext) -> Value {
     let Some(spec) = arg_str(args, "revision") else {
         return missing_arg("revision");
     };
-    if !can_access_assets(user, script, &Capability::WriteAssets) {
+    if !can_write_history(user, script) {
         return json!({ "error": "Failed to label revision: Access denied" });
     }
 
