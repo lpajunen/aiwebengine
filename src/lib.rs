@@ -78,6 +78,8 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
         engine_api::routes_route,
         engine_api::revisions_route,
         engine_api::revert_route,
+        engine_api::revision_label_route,
+        engine_api::revision_diff_route,
         engine_api::run_tests_route,
         engine_api::check_route,
         engine_api::eval_route,
@@ -2365,6 +2367,14 @@ async fn setup_routes(
         .route(
             "/engine/revisions/revert",
             axum::routing::post(engine_api::revert_route),
+        )
+        .route(
+            "/engine/revisions/label",
+            axum::routing::post(engine_api::revision_label_route),
+        )
+        .route(
+            "/engine/revisions/diff",
+            axum::routing::get(engine_api::revision_diff_route),
         )
         .route(
             "/engine/run_tests",

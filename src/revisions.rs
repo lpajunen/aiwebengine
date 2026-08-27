@@ -1365,3 +1365,178 @@ pub fn spawn_pruner(
         "Revision pruner started"
     );
 }
+
+// ============================================================================
+// Diffing
+// ============================================================================
+
+/// How long a diff may get before it stops being an answer.
+///
+/// A caller asking what changed between two revisions wants to read the
+/// result. Past this the response is a data dump, and the files it could not
+/// show are still listed by name so nothing goes missing silently.
+const MAX_DIFF_BYTES: usize = 512 * 1024;
+
+/// What happened to one file between two revisions.
+#[derive(Debug, Clone)]
+pub struct FileDiff {
+    pub uri: String,
+    /// `added`, `removed`, or `modified`.
+    pub status: &'static str,
+    pub from_sha256: Option<String>,
+    pub to_sha256: Option<String>,
+    /// Unified diff, or `None` when one could not be produced.
+    pub diff: Option<String>,
+    /// Why there is no diff, when there is none.
+    pub note: Option<String>,
+}
+
+/// What changed between two revisions.
+#[derive(Debug, Clone)]
+pub struct RevisionDiff {
+    pub from: i32,
+    pub to: i32,
+    pub files: Vec<FileDiff>,
+    /// True when the ceiling stopped further diffs being rendered. The files
+    /// are still listed; only their contents are missing.
+    pub truncated: bool,
+}
+
+/// The root's path within the script, which is how its imports name it.
+fn root_path(script_uri: &str) -> String {
+    crate::module_loader::root_module_path(script_uri).unwrap_or_else(|_| script_uri.to_string())
+}
+
+/// What changed between two revisions of a script.
+///
+/// The counterpart to editing without sending a file. An agent that has just
+/// rewritten four modules can ask what it actually changed instead of reading
+/// all four back, and someone deciding whether to revert can see what they
+/// would be undoing rather than inferring it from a list of digests.
+///
+/// Files whose digest is the same in both revisions are not read at all: the
+/// blobs are shared, so equal digests are equal bytes and there is nothing to
+/// render.
+pub async fn diff(
+    script_uri: &str,
+    from: i32,
+    to: i32,
+    context_lines: usize,
+) -> AppResult<Option<RevisionDiff>> {
+    let Some(from_files) = files(script_uri, from).await? else {
+        return Ok(None);
+    };
+    let Some(to_files) = files(script_uri, to).await? else {
+        return Ok(None);
+    };
+
+    let root = root_path(script_uri);
+    let from_root = get(script_uri, from).await?.map(|r| r.root_sha256);
+    let to_root = get(script_uri, to).await?.map(|r| r.root_sha256);
+
+    let index = |list: &[RevisionFile]| -> std::collections::BTreeMap<String, String> {
+        list.iter()
+            .map(|file| (file.uri.clone(), file.sha256.clone()))
+            .collect()
+    };
+    let mut before = index(&from_files);
+    let mut after = index(&to_files);
+
+    // The root is a file of the script like any other from the caller's side —
+    // it is what its imports are relative to — so it belongs in the same list
+    // rather than in a section of its own.
+    if let Some(sha) = from_root {
+        before.insert(root.clone(), sha);
+    }
+    if let Some(sha) = to_root {
+        after.insert(root.clone(), sha);
+    }
+
+    let mut paths: Vec<&String> = before.keys().chain(after.keys()).collect();
+    paths.sort_unstable();
+    paths.dedup();
+
+    let mut rendered = 0usize;
+    let mut truncated = false;
+    let mut diffs = Vec::new();
+
+    for path in paths {
+        let from_sha = before.get(path);
+        let to_sha = after.get(path);
+        if from_sha == to_sha {
+            continue;
+        }
+
+        let status = match (from_sha, to_sha) {
+            (None, Some(_)) => "added",
+            (Some(_), None) => "removed",
+            _ => "modified",
+        };
+
+        let mut entry = FileDiff {
+            uri: path.clone(),
+            status,
+            from_sha256: from_sha.cloned(),
+            to_sha256: to_sha.cloned(),
+            diff: None,
+            note: None,
+        };
+
+        if rendered >= MAX_DIFF_BYTES {
+            truncated = true;
+            entry.note = Some("Diff omitted: the response reached its size ceiling".to_string());
+            diffs.push(entry);
+            continue;
+        }
+
+        let is_root = *path == root;
+        let old_text = match from_sha {
+            Some(_) => read_text(script_uri, from, path, is_root).await?,
+            None => Some(String::new()),
+        };
+        let new_text = match to_sha {
+            Some(_) => read_text(script_uri, to, path, is_root).await?,
+            None => Some(String::new()),
+        };
+
+        match (old_text, new_text) {
+            (Some(old), Some(new)) => {
+                let rendered_diff = similar::TextDiff::from_lines(&old, &new)
+                    .unified_diff()
+                    .context_radius(context_lines)
+                    .header(&format!("r{}", from), &format!("r{}", to))
+                    .to_string();
+                rendered = rendered.saturating_add(rendered_diff.len());
+                entry.diff = Some(rendered_diff);
+            }
+            _ => {
+                entry.note =
+                    Some("No diff: the file is not UTF-8 text in one of the revisions".to_string());
+            }
+        }
+
+        diffs.push(entry);
+    }
+
+    Ok(Some(RevisionDiff {
+        from,
+        to,
+        files: diffs,
+        truncated,
+    }))
+}
+
+/// One file of a revision as text, or `None` when it is not UTF-8.
+async fn read_text(
+    script_uri: &str,
+    revision: i32,
+    path: &str,
+    is_root: bool,
+) -> AppResult<Option<String>> {
+    if is_root {
+        return root_content(script_uri, revision).await;
+    }
+    Ok(read_file(script_uri, revision, path)
+        .await?
+        .and_then(|(content, _)| String::from_utf8(content).ok()))
+}

@@ -4144,6 +4144,217 @@ pub async fn assets_delete_route(
     }
 }
 
+#[derive(Deserialize, Default)]
+pub struct RevisionLabelParams {
+    script: Option<String>,
+    revision: Option<String>,
+    label: Option<String>,
+}
+
+/// Name a revision.
+///
+/// Applied to a revision that already exists, which is the whole point: a
+/// snapshot API that must be called *before* a risky change is one you
+/// remember only after the change went wrong. A labelled revision also
+/// survives retention, so this is how an operator says "keep this one".
+#[utoipa::path(
+    post,
+    path = "/engine/revisions/label",
+    tags = ["Scripts"],
+    params(
+        ("script" = String, Query, description = "URI of the script whose revision to name"),
+        ("revision" = String, Query, description = "Which revision: a number, `head`, `last-good`, or an existing label"),
+        ("label" = Option<String>, Query, description = "The name. Omit or leave empty to clear the revision's label."),
+    ),
+    responses(
+        (status = 200, description = "The revision and the label it now carries"),
+        (status = 400, description = "Missing parameter, or a revision that cannot be resolved"),
+        (status = 403, description = "Not an administrator or owner of the script"),
+    )
+)]
+pub async fn revision_label_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<RevisionLabelParams>,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    let Some(script) = query.script else {
+        return missing_param_response("script");
+    };
+    let Some(spec) = query.revision else {
+        return missing_param_response("revision");
+    };
+
+    let user_for_auth = user.clone();
+    let script_for_auth = script.clone();
+    let allowed = tokio::task::spawn_blocking(move || {
+        can_access_assets(&user_for_auth, &script_for_auth, &Capability::WriteAssets)
+    })
+    .await
+    .unwrap_or(false);
+    if !allowed {
+        return error_response(StatusCode::FORBIDDEN, "Error: Access denied".to_string());
+    }
+
+    let revision = match resolve_revision(&script, &spec).await {
+        Ok(revision) => revision,
+        Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
+    };
+
+    // An empty label clears rather than storing a name nobody can type again.
+    let label = query.label.filter(|label| !label.trim().is_empty());
+    match revisions::set_label(&script, revision, label.as_deref()).await {
+        Ok(true) => json_response(
+            StatusCode::OK,
+            json!({
+                "script": script,
+                "revision": revision,
+                "label": label,
+                "timestamp": iso_timestamp(),
+            }),
+        ),
+        Ok(false) => error_response(
+            StatusCode::BAD_REQUEST,
+            format!("Script '{}' has no revision {}", script, revision),
+        ),
+        Err(e) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to label revision: {}", e),
+        ),
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub struct RevisionDiffParams {
+    script: Option<String>,
+    from: Option<String>,
+    to: Option<String>,
+    context: Option<usize>,
+}
+
+fn file_diff_to_json(file: &revisions::FileDiff) -> Value {
+    json!({
+        "uri": file.uri,
+        "status": file.status,
+        "from": file.from_sha256,
+        "to": file.to_sha256,
+        "diff": file.diff,
+        "note": file.note,
+    })
+}
+
+/// What changed between two revisions.
+///
+/// The read counterpart to `PATCH /engine/assets`: an agent that has just
+/// rewritten four modules can ask what it changed rather than reading all four
+/// back, and someone deciding whether to revert can see what they would undo.
+///
+/// With neither `from` nor `to`, this is the newest change — `to` is head and
+/// `from` is what head was computed against.
+#[utoipa::path(
+    get,
+    path = "/engine/revisions/diff",
+    tags = ["Scripts"],
+    params(
+        ("script" = String, Query, description = "URI of the script to compare"),
+        ("from" = Option<String>, Query, description = "The older side: a revision number, `head`, `last-good`, or a label. Defaults to what `to` was computed against."),
+        ("to" = Option<String>, Query, description = "The newer side. Defaults to `head`."),
+        ("context" = Option<usize>, Query, description = "Lines of context around each hunk (default 3)"),
+    ),
+    responses(
+        (status = 200, description = "A unified diff per changed file"),
+        (status = 400, description = "Missing parameter, or a revision that cannot be resolved"),
+        (status = 403, description = "Not an administrator or owner of the script"),
+    )
+)]
+pub async fn revision_diff_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<RevisionDiffParams>,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    let Some(script) = query.script else {
+        return missing_param_response("script");
+    };
+
+    let user_for_auth = user.clone();
+    let script_for_auth = script.clone();
+    let allowed = tokio::task::spawn_blocking(move || {
+        can_access_assets(&user_for_auth, &script_for_auth, &Capability::ReadAssets)
+    })
+    .await
+    .unwrap_or(false);
+    if !allowed {
+        return error_response(StatusCode::FORBIDDEN, "Error: Access denied".to_string());
+    }
+
+    let to = match resolve_revision(&script, query.to.as_deref().unwrap_or("head")).await {
+        Ok(revision) => revision,
+        Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
+    };
+
+    // Defaulting `from` to `to`'s parent makes the bare question — "what
+    // changed?" — the newest change, and follows a revert back to the revision
+    // it restored rather than to the number below it.
+    let from = match query.from {
+        Some(spec) => match resolve_revision(&script, &spec).await {
+            Ok(revision) => revision,
+            Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
+        },
+        None => match revisions::get(&script, to).await {
+            Ok(Some(revision)) => match revision.parent {
+                Some(parent) => parent,
+                None => {
+                    return json_response(
+                        StatusCode::OK,
+                        json!({
+                            "script": script,
+                            "from": Value::Null,
+                            "to": to,
+                            "files": [],
+                            "message": "Revision 1 has nothing before it to compare against",
+                            "timestamp": iso_timestamp(),
+                        }),
+                    );
+                }
+            },
+            Ok(None) => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    format!("Script '{}' has no revision {}", script, to),
+                );
+            }
+            Err(e) => {
+                return error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to read revision: {}", e),
+                );
+            }
+        },
+    };
+
+    let context = query.context.unwrap_or(3).min(50);
+    match revisions::diff(&script, from, to, context).await {
+        Ok(Some(diff)) => json_response(
+            StatusCode::OK,
+            json!({
+                "script": script,
+                "from": diff.from,
+                "to": diff.to,
+                "files": diff.files.iter().map(file_diff_to_json).collect::<Vec<Value>>(),
+                "truncated": diff.truncated,
+                "timestamp": iso_timestamp(),
+            }),
+        ),
+        Ok(None) => error_response(
+            StatusCode::BAD_REQUEST,
+            format!("Script '{}' has no revision {} or {}", script, from, to),
+        ),
+        Err(e) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to diff revisions: {}", e),
+        ),
+    }
+}
+
 /// Why a revert was refused.
 pub enum RevertRefusal {
     AccessDenied,
@@ -6693,6 +6904,39 @@ fn native_tools() -> &'static [NativeToolEntry] {
             tool_revert_script,
         ),
         (
+            "diff_revisions",
+            "What changed between two revisions of a script, as a unified diff per file. The read counterpart to edit_asset: see what you changed without reading the files back, or what a revert would undo before running it. With neither 'from' nor 'to', reports the newest change.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "script": { "type": "string", "description": "URI of the script to compare" },
+                        "from": { "type": "string", "description": "The older side: a revision number, 'head', 'last-good', or a label. Defaults to what 'to' was computed against." },
+                        "to": { "type": "string", "description": "The newer side. Defaults to 'head'." },
+                        "context": { "type": "integer", "description": "Lines of context around each hunk (default 3)" }
+                    },
+                    "required": ["script"]
+                })
+            },
+            tool_diff_revisions,
+        ),
+        (
+            "label_revision",
+            "Name a revision, so it can be restored by name and is kept regardless of retention. Applied after the fact, to a revision that already exists — which is the point, since whether a change was worth marking is known afterwards. Omit 'label' to clear one.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "script": { "type": "string", "description": "URI of the script whose revision to name" },
+                        "revision": { "type": "string", "description": "Which revision: a number, 'head', 'last-good', or an existing label" },
+                        "label": { "type": "string", "description": "The name. Omit to clear the revision's label." }
+                    },
+                    "required": ["script", "revision"]
+                })
+            },
+            tool_label_revision,
+        ),
+        (
             "check_script",
             "Check what a script would do if it were deployed, without deploying it: resolve its \
             asset-backed imports the way the engine does, run its init() with every registration \
@@ -7030,6 +7274,96 @@ fn tool_list_revisions(args: &Value, user: &UserContext) -> Value {
             "timestamp": iso_timestamp(),
         }),
         Err(e) => json!({ "error": format!("Failed to read revisions: {}", e) }),
+    }
+}
+
+fn tool_diff_revisions(args: &Value, user: &UserContext) -> Value {
+    let Some(script) = arg_str(args, "script") else {
+        return missing_arg("script");
+    };
+    if !can_access_assets(user, script, &Capability::ReadAssets) {
+        return json!({ "error": "Failed to diff revisions: Access denied" });
+    }
+
+    let to = match crate::database::run_blocking(resolve_revision(
+        script,
+        arg_str(args, "to").unwrap_or("head"),
+    )) {
+        Ok(revision) => revision,
+        Err(message) => return json!({ "error": message }),
+    };
+
+    let from = match arg_str(args, "from") {
+        Some(spec) => match crate::database::run_blocking(resolve_revision(script, spec)) {
+            Ok(revision) => revision,
+            Err(message) => return json!({ "error": message }),
+        },
+        None => match crate::database::run_blocking(revisions::get(script, to)) {
+            Ok(Some(revision)) => match revision.parent {
+                Some(parent) => parent,
+                None => {
+                    return json!({
+                        "success": true,
+                        "script": script,
+                        "to": to,
+                        "files": [],
+                        "message": "Revision 1 has nothing before it to compare against",
+                    });
+                }
+            },
+            Ok(None) => return json!({ "error": format!("No revision {}", to) }),
+            Err(e) => return json!({ "error": format!("Failed to read revision: {}", e) }),
+        },
+    };
+
+    let context = args
+        .get("context")
+        .and_then(Value::as_u64)
+        .unwrap_or(3)
+        .min(50) as usize;
+
+    match crate::database::run_blocking(revisions::diff(script, from, to, context)) {
+        Ok(Some(diff)) => json!({
+            "success": true,
+            "script": script,
+            "from": diff.from,
+            "to": diff.to,
+            "files": diff.files.iter().map(file_diff_to_json).collect::<Vec<Value>>(),
+            "truncated": diff.truncated,
+            "timestamp": iso_timestamp(),
+        }),
+        Ok(None) => json!({ "error": format!("No revision {} or {}", from, to) }),
+        Err(e) => json!({ "error": format!("Failed to diff revisions: {}", e) }),
+    }
+}
+
+fn tool_label_revision(args: &Value, user: &UserContext) -> Value {
+    let Some(script) = arg_str(args, "script") else {
+        return missing_arg("script");
+    };
+    let Some(spec) = arg_str(args, "revision") else {
+        return missing_arg("revision");
+    };
+    if !can_access_assets(user, script, &Capability::WriteAssets) {
+        return json!({ "error": "Failed to label revision: Access denied" });
+    }
+
+    let revision = match crate::database::run_blocking(resolve_revision(script, spec)) {
+        Ok(revision) => revision,
+        Err(message) => return json!({ "error": message }),
+    };
+    let label = arg_str(args, "label").filter(|label| !label.trim().is_empty());
+
+    match crate::database::run_blocking(revisions::set_label(script, revision, label)) {
+        Ok(true) => json!({
+            "success": true,
+            "script": script,
+            "revision": revision,
+            "label": label,
+            "timestamp": iso_timestamp(),
+        }),
+        Ok(false) => json!({ "error": format!("No revision {}", revision) }),
+        Err(e) => json!({ "error": format!("Failed to label revision: {}", e) }),
     }
 }
 

@@ -232,6 +232,53 @@ alone for an hour after the last write that cited it, which is the window a
 write needs between claiming content and recording the manifest that points at
 it.
 
+## What changed
+
+```bash
+# The newest change
+curl "…/engine/revisions/diff?script=myapp"
+
+# Between two revisions, or two names
+curl "…/engine/revisions/diff?script=myapp&from=41&to=48"
+curl "…/engine/revisions/diff?script=myapp&from=before-the-refactor&to=head"
+```
+
+A unified diff per file that moved, plus its status — `added`, `removed`, or
+`modified`. This is the read counterpart to `PATCH /engine/assets`: an agent
+that has just rewritten four modules can ask what it changed instead of reading
+all four back, and someone deciding whether to revert can see what they would
+undo rather than inferring it from a list of digests.
+
+Files whose digest is the same in both revisions are left out entirely and
+never read — the blobs are shared, so equal digests are equal bytes and there
+is nothing to render. The root source appears under its own path, the one its
+imports are relative to, because from the caller's side it is a file of the
+script like any other.
+
+With neither `from` nor `to`, `to` is head and `from` is what head was computed
+against. That makes the bare question — "what changed?" — the newest change,
+and it follows a revert back to the revision it restored rather than to the
+number below it.
+
+Binary files report their status without a diff. A very large diff stops
+rendering at a ceiling and says so in `truncated`; the files it could not show
+are still listed by name, so nothing goes missing silently.
+
+## Naming a revision
+
+```bash
+curl -X POST "…/engine/revisions/label?script=myapp&revision=41&label=before-the-refactor"
+```
+
+A label makes a revision addressable by name everywhere a revision is named —
+`check`, `run_tests`, `diff`, `revert` — and it keeps that revision through
+retention. Labels are applied after the fact, to a revision that already
+exists, which is the whole point: whether a change was worth marking is known
+afterwards.
+
+A name belongs to one revision per script, so reusing it moves it. Omitting
+`label` clears it.
+
 ## Reading a file's history
 
 ```bash
