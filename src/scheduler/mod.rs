@@ -364,28 +364,26 @@ impl Scheduler {
         Ok(job)
     }
 
-    /// Remove all jobs for a script (returns number removed)
-    pub fn clear_script(&self, script_uri: &str) -> usize {
-        let removed_db = Self::run_db_blocking({
-            let script_uri = script_uri.to_string();
-            move |db| {
-                async move {
-                    match sqlx::query("DELETE FROM scheduler_jobs WHERE script_uri = $1")
-                        .bind(&script_uri)
-                        .execute(db.pool())
-                        .await
-                    {
-                        Ok(result) => result.rows_affected() as usize,
-                        Err(e) => {
-                            warn!(script = %script_uri, error = %e, "Failed clearing scheduler jobs from DB");
-                            0
-                        }
-                    }
-                }
+    /// Delete a script's persisted jobs.
+    async fn delete_jobs_in_db(script_uri: &str) -> usize {
+        let Some(db) = crate::database::get_global_database() else {
+            return 0;
+        };
+        match sqlx::query("DELETE FROM scheduler_jobs WHERE script_uri = $1")
+            .bind(script_uri)
+            .execute(db.pool())
+            .await
+        {
+            Ok(result) => result.rows_affected() as usize,
+            Err(e) => {
+                warn!(script = %script_uri, error = %e, "Failed clearing scheduler jobs from DB");
+                0
             }
-        })
-        .unwrap_or(0);
+        }
+    }
 
+    /// Drop a script's jobs from the in-memory table and report the total.
+    fn forget_jobs(&self, script_uri: &str, removed_db: usize) -> usize {
         let mut guard = self.lock_jobs();
         let removed = guard.remove(script_uri).map(|v| v.len()).unwrap_or(0);
         let total_removed = removed + removed_db;
@@ -398,6 +396,39 @@ impl Scheduler {
             );
         }
         total_removed
+    }
+
+    /// Remove all jobs for a script (returns number removed).
+    ///
+    /// For callers that are genuinely blocking — a script calling
+    /// `schedulerService.clearAll` from inside the sandbox, or the synchronous
+    /// repository wrapper. An async caller wants [`Scheduler::clear_script_async`]
+    /// instead: see what it says about why.
+    pub fn clear_script(&self, script_uri: &str) -> usize {
+        let removed_db = Self::run_db_blocking({
+            let script_uri = script_uri.to_string();
+            move |_db| async move { Self::delete_jobs_in_db(&script_uri).await }
+        })
+        .unwrap_or(0);
+
+        self.forget_jobs(script_uri, removed_db)
+    }
+
+    /// [`Scheduler::clear_script`] for callers that are already async.
+    ///
+    /// Not a convenience. The blocking form reaches the database through
+    /// `block_in_place(|| handle.block_on(..))`, which drives the query on a
+    /// thread parked outside the runtime while the readiness that would wake
+    /// it has to come from the runtime's IO driver. Startup calls this once per
+    /// script with `init_concurrency()` inits in flight, and enough of them
+    /// inside `block_in_place` at once leaves nothing driving the driver —
+    /// every one of them then waits forever, which is a hang with no CPU, no
+    /// database activity and nothing in the logs.
+    ///
+    /// Awaiting the query has none of that shape.
+    pub async fn clear_script_async(&self, script_uri: &str) -> usize {
+        let removed_db = Self::delete_jobs_in_db(script_uri).await;
+        self.forget_jobs(script_uri, removed_db)
     }
 
     /// Get job counts per script for monitoring
@@ -934,6 +965,14 @@ pub fn clear_script_jobs(script_uri: &str) -> usize {
         .get()
         .map(|scheduler| scheduler.clear_script(script_uri))
         .unwrap_or(0)
+}
+
+/// [`clear_script_jobs`] for callers that are already async.
+pub async fn clear_script_jobs_async(script_uri: &str) -> usize {
+    match GLOBAL_SCHEDULER.get() {
+        Some(scheduler) => scheduler.clear_script_async(script_uri).await,
+        None => 0,
+    }
 }
 
 /// Spawn the background worker. This should be called once during server startup.

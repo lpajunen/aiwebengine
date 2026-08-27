@@ -192,8 +192,14 @@ impl ScriptInitializer {
             }
         };
 
-        // Prevent stale scheduled work from previous deployments
-        scheduler::clear_script_jobs(script_uri);
+        // Prevent stale scheduled work from previous deployments.
+        //
+        // Awaited rather than blocked on. Startup runs this once per script
+        // with `init_concurrency()` inits in flight, and the blocking form
+        // drives its query from a thread parked outside the runtime — enough
+        // of those at once and there is nobody left to deliver the readiness
+        // that would wake any of them.
+        scheduler::clear_script_jobs_async(script_uri).await;
 
         debug!("Initializing script: {}", script_uri);
 
@@ -385,13 +391,12 @@ impl ScriptInitializer {
         // One task per script, bounded by a semaphore — not a combinator over a
         // single task.
         //
-        // `initialize_script` blocks its thread twice: `clear_script_jobs` runs
-        // a query through `block_in_place`, and the `init()` call itself is a
-        // `spawn_blocking` this future waits on. Both need the future to *own* a
-        // task. Driven as futures inside one task (`buffer_unordered` and
-        // friends), the first one to block holds the only poll slot, so the rest
-        // — including their timeouts — never get polled, and initialization
-        // stalls outright rather than merely running in sequence.
+        // `initialize_script` waits on a `spawn_blocking` for the `init()` call
+        // itself, so each one needs the future to *own* a task. Driven as
+        // futures inside one task (`buffer_unordered` and friends), the first
+        // one to block holds the only poll slot, so the rest — including their
+        // timeouts — never get polled, and initialization stalls outright
+        // rather than merely running in sequence.
         for (position, metadata) in all_metadata.into_iter().enumerate() {
             let permits = permits.clone();
             let timeout_ms = self.timeout_ms;

@@ -314,7 +314,7 @@ impl NotificationListener {
         info!("Handling script deleted for: {}", uri);
 
         // Clear any scheduled jobs for this script
-        scheduler::clear_script_jobs(uri);
+        scheduler::clear_script_jobs_async(uri).await;
         debug!("Cleared scheduled jobs for script '{}'", uri);
 
         // Nothing is running here any more, so there is no revision to
