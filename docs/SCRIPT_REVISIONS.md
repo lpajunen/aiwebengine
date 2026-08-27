@@ -334,3 +334,31 @@ modules that read a table does not un-add the column, and a revert that dropped
 the column to match would destroy data in order to restore code. Treat a
 revision as an answer to "what was the code", and treat the data it ran against
 as a separate question with a separate answer.
+
+What the engine can do is notice, so a revision records what the script's
+tables looked like while it was current, and a revert reports how they have
+moved since:
+
+```json
+{
+  "revertedTo": 41,
+  "dryRun": true,
+  "schema": {
+    "matches": false,
+    "warnings": [
+      "Table `matches` has column `round`, added after revision 41; that revision's modules do not write it.",
+      "Table `rounds` did not exist at revision 41; nothing in that revision reads it."
+    ]
+  }
+}
+```
+
+The comparison runs before anything is applied, so `dry_run` reports it while
+there is still the option not to. It is advisory in both directions and always:
+nothing is migrated, dropped or created on the strength of it. The case worth
+reading closely is the reverse of the one above — a table or column the target
+revision **expects and cannot find**, because those modules will fail rather
+than merely ignore something.
+
+A revision recorded before this existed carries no fingerprint, and says so
+rather than reporting a match it cannot vouch for.

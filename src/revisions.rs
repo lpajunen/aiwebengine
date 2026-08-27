@@ -338,6 +338,11 @@ async fn record_in(
     // `latest` numbers the new revision; `parent` says what it was computed
     // against. They are the same for an ordinary write and differ for a
     // revert, which follows head but descends from the revision it restored.
+    // What the script's tables look like right now. Recorded beside the files
+    // rather than derived later: the schema a revision ran against is only
+    // knowable while that revision is current.
+    let tables = read_table_schemas(conn, script_uri).await?;
+
     let latest = match &previous {
         Some(row) => {
             let previous_id: i64 = row.get("id");
@@ -355,8 +360,8 @@ async fn record_in(
     let next = latest.unwrap_or(0) + 1;
     let revision_id: i64 = sqlx::query_scalar(
         "INSERT INTO script_revisions
-             (script_uri, revision, parent, root_sha256, created_by, origin)
-         VALUES ($1, $2, $3, $4, $5, $6)
+             (script_uri, revision, parent, root_sha256, created_by, origin, tables)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING id",
     )
     .bind(script_uri)
@@ -365,6 +370,7 @@ async fn record_in(
     .bind(&root_sha)
     .bind(created_by)
     .bind(origin.as_str())
+    .bind(serde_json::Value::Object(tables))
     .fetch_one(&mut *conn)
     .await
     .map_err(|e| db_error("recording revision", e))?;
@@ -1637,5 +1643,245 @@ pub async fn load_current() {
             }
         }
         Err(e) => tracing::warn!("Could not load current revisions: {}", e),
+    }
+}
+
+// ============================================================================
+// Schema fingerprints
+// ============================================================================
+
+/// The script's table schemas as they stand, keyed by logical table name.
+async fn read_table_schemas(
+    conn: &mut PgConnection,
+    script_uri: &str,
+) -> AppResult<serde_json::Map<String, serde_json::Value>> {
+    let rows = sqlx::query(
+        "SELECT logical_table_name, schema_json FROM script_tables
+         WHERE script_uri = $1 ORDER BY logical_table_name",
+    )
+    .bind(script_uri)
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(|e| db_error("reading script table schemas", e))?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let name: String = row.get("logical_table_name");
+            let schema: serde_json::Value = row.get("schema_json");
+            (name, schema)
+        })
+        .collect())
+}
+
+/// The table schemas a revision recorded, or `None` for one recorded before
+/// revisions carried them.
+pub async fn schema_at(script_uri: &str, revision: i32) -> AppResult<Option<serde_json::Value>> {
+    let script_uri = script_uri.to_string();
+    with_read_connection(move |conn| {
+        Box::pin(async move {
+            sqlx::query_scalar(
+                "SELECT tables FROM script_revisions WHERE script_uri = $1 AND revision = $2",
+            )
+            .bind(&script_uri)
+            .bind(revision)
+            .fetch_optional(conn)
+            .await
+            .map(Option::flatten)
+            .map_err(|e| db_error("reading revision schema", e))
+        })
+    })
+    .await
+}
+
+/// The script's table schemas right now.
+pub async fn schema_now(script_uri: &str) -> AppResult<serde_json::Value> {
+    let script_uri = script_uri.to_string();
+    with_read_connection(move |conn| {
+        Box::pin(async move {
+            read_table_schemas(conn, &script_uri)
+                .await
+                .map(serde_json::Value::Object)
+        })
+    })
+    .await
+}
+
+fn column_names(table: &serde_json::Value) -> Vec<String> {
+    table
+        .get("columns")
+        .and_then(|columns| columns.as_array())
+        .map(|columns| {
+            columns
+                .iter()
+                .filter_map(|column| column.get("name").and_then(|name| name.as_str()))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// How the script's tables now differ from what `target` recorded.
+///
+/// Advisory, always. Restoring code to an earlier version says nothing about
+/// what should happen to the data that version's successors wrote, and a
+/// revert that dropped a column to match old code would destroy data in order
+/// to restore code. What the engine can do is say what it noticed, and leave
+/// the data to whoever knows what it is for.
+///
+/// An empty list means the schema is the one this revision ran against. A
+/// revision recorded before schemas were captured reports that instead of
+/// pretending to have compared.
+pub fn compare_schema(
+    revision: i32,
+    recorded: Option<&serde_json::Value>,
+    current: &serde_json::Value,
+) -> Vec<String> {
+    let Some(recorded) = recorded.and_then(|value| value.as_object()) else {
+        return vec![format!(
+            "Revision {} predates schema recording, so what its modules expect of the \
+             database cannot be compared with what is there now",
+            revision
+        )];
+    };
+    let Some(current) = current.as_object() else {
+        return Vec::new();
+    };
+
+    let mut warnings = Vec::new();
+
+    for (name, then) in recorded {
+        let Some(now) = current.get(name) else {
+            // The most serious case: the restored modules read a table that is
+            // not there at all.
+            warnings.push(format!(
+                "Table `{}` existed at revision {} and does not now; its modules will \
+                 not find it",
+                name, revision
+            ));
+            continue;
+        };
+
+        let then_columns = column_names(then);
+        let now_columns = column_names(now);
+
+        for column in &then_columns {
+            if !now_columns.contains(column) {
+                warnings.push(format!(
+                    "Table `{}` is missing column `{}`, which revision {} expects",
+                    name, column, revision
+                ));
+            }
+        }
+        for column in &now_columns {
+            if !then_columns.contains(column) {
+                warnings.push(format!(
+                    "Table `{}` has column `{}`, added after revision {}; that revision's \
+                     modules do not write it",
+                    name, column, revision
+                ));
+            }
+        }
+    }
+
+    for name in current.keys() {
+        if !recorded.contains_key(name) {
+            warnings.push(format!(
+                "Table `{}` did not exist at revision {}; nothing in that revision reads it",
+                name, revision
+            ));
+        }
+    }
+
+    warnings
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn table(columns: &[&str]) -> serde_json::Value {
+        json!({
+            "columns": columns
+                .iter()
+                .map(|name| json!({ "name": name, "type": "TEXT" }))
+                .collect::<Vec<_>>()
+        })
+    }
+
+    #[test]
+    fn an_unchanged_schema_warns_about_nothing() {
+        let recorded = json!({ "matches": table(&["id", "score"]) });
+        let current = json!({ "matches": table(&["id", "score"]) });
+
+        assert!(compare_schema(41, Some(&recorded), &current).is_empty());
+    }
+
+    #[test]
+    fn a_column_added_since_is_reported_as_one_the_revision_does_not_write() {
+        let recorded = json!({ "matches": table(&["id"]) });
+        let current = json!({ "matches": table(&["id", "round"]) });
+
+        let warnings = compare_schema(41, Some(&recorded), &current);
+        assert_eq!(warnings.len(), 1, "{:?}", warnings);
+        assert!(warnings[0].contains("`round`"), "{}", warnings[0]);
+        assert!(
+            warnings[0].contains("added after revision 41"),
+            "{}",
+            warnings[0]
+        );
+    }
+
+    #[test]
+    fn a_column_the_revision_expects_and_cannot_find_is_reported() {
+        let recorded = json!({ "matches": table(&["id", "score"]) });
+        let current = json!({ "matches": table(&["id"]) });
+
+        let warnings = compare_schema(41, Some(&recorded), &current);
+        assert_eq!(warnings.len(), 1, "{:?}", warnings);
+        assert!(
+            warnings[0].contains("missing column `score`"),
+            "{}",
+            warnings[0]
+        );
+    }
+
+    #[test]
+    fn a_table_that_is_gone_is_the_one_worth_saying_loudest() {
+        let recorded = json!({ "matches": table(&["id"]) });
+        let current = json!({});
+
+        let warnings = compare_schema(41, Some(&recorded), &current);
+        assert_eq!(warnings.len(), 1, "{:?}", warnings);
+        assert!(warnings[0].contains("does not now"), "{}", warnings[0]);
+    }
+
+    #[test]
+    fn a_table_added_since_is_reported_as_one_nothing_reads() {
+        let recorded = json!({});
+        let current = json!({ "rounds": table(&["id"]) });
+
+        let warnings = compare_schema(41, Some(&recorded), &current);
+        assert_eq!(warnings.len(), 1, "{:?}", warnings);
+        assert!(
+            warnings[0].contains("did not exist at revision 41"),
+            "{}",
+            warnings[0]
+        );
+    }
+
+    #[test]
+    fn a_revision_with_no_fingerprint_says_so_rather_than_claiming_a_match() {
+        let current = json!({ "matches": table(&["id"]) });
+
+        let warnings = compare_schema(41, None, &current);
+        assert_eq!(warnings.len(), 1, "{:?}", warnings);
+        assert!(
+            warnings[0].contains("predates schema recording"),
+            "reporting 'no differences' for a revision that recorded nothing would be \
+             a claim the engine cannot make: {}",
+            warnings[0]
+        );
     }
 }

@@ -4383,6 +4383,14 @@ pub struct RevertOutcome {
     /// revert that found nothing to change.
     pub revision: Option<i32>,
     pub dry_run: bool,
+    /// How the script's tables now differ from what the target revision ran
+    /// against.
+    ///
+    /// Advisory and never acted on. A revert restores code; the data that
+    /// code's successors wrote is a separate question with a separate answer,
+    /// and dropping a column to match old modules would destroy data in order
+    /// to restore code.
+    pub schema_warnings: Vec<String>,
 }
 
 impl RevertOutcome {
@@ -4397,6 +4405,10 @@ impl RevertOutcome {
                 "root": self.root_changed,
             },
             "files": { "written": self.written, "deleted": self.deleted },
+            "schema": {
+                "matches": self.schema_warnings.is_empty(),
+                "warnings": self.schema_warnings,
+            },
         })
     }
 }
@@ -4459,6 +4471,20 @@ pub async fn revert_authorized(
         )));
     }
 
+    // Compared before anything is applied, so a dry run reports it too — which
+    // is the point. Someone deciding whether to revert wants to know that the
+    // target's modules never heard of the column added since, while they still
+    // have the option not to.
+    let schema_warnings = match (
+        revisions::schema_at(script_uri, target).await,
+        revisions::schema_now(script_uri).await,
+    ) {
+        (Ok(recorded), Ok(current)) => {
+            revisions::compare_schema(target, recorded.as_ref(), &current)
+        }
+        _ => Vec::new(),
+    };
+
     let outcome = RevertOutcome {
         target,
         written: plan.writes.iter().map(|file| file.uri.clone()).collect(),
@@ -4466,6 +4492,7 @@ pub async fn revert_authorized(
         root_changed: plan.root_changes,
         revision: None,
         dry_run,
+        schema_warnings,
     };
 
     if dry_run || plan.is_empty() {

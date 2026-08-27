@@ -1403,3 +1403,176 @@ async fn an_invocation_keeps_the_revision_it_started_under() {
          whatever was deployed by the time it got there"
     );
 }
+
+// ============================================================================
+// Schema drift
+// ============================================================================
+
+/// Declare a table for a script.
+///
+/// Writes `script_tables` directly rather than creating a physical table. What
+/// a revision records is that metadata, and what a revert compares is that
+/// metadata against itself — the physical table is neither read nor touched by
+/// any of it, and creating one per test would leave real tables behind in a
+/// shared database.
+async fn declare_table(script_uri: &str, name: &str, columns: &[&str]) {
+    let pool = aiwebengine::database::get_global_database()
+        .expect("database should be initialized")
+        .pool()
+        .clone();
+
+    let schema = serde_json::json!({
+        "columns": columns
+            .iter()
+            .map(|column| serde_json::json!({ "name": column, "type": "TEXT" }))
+            .collect::<Vec<_>>()
+    });
+
+    sqlx::query(
+        "INSERT INTO script_tables (script_uri, logical_table_name, physical_table_name, schema_json)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (script_uri, logical_table_name)
+         DO UPDATE SET schema_json = EXCLUDED.schema_json",
+    )
+    .bind(script_uri)
+    .bind(name)
+    .bind(format!("t_{}_{}", name, uuid_like(script_uri, name)))
+    .bind(schema)
+    .execute(&pool)
+    .await
+    .expect("declaring the table should succeed");
+}
+
+async fn drop_declared_table(script_uri: &str, name: &str) {
+    let pool = aiwebengine::database::get_global_database()
+        .expect("database should be initialized")
+        .pool()
+        .clone();
+    sqlx::query("DELETE FROM script_tables WHERE script_uri = $1 AND logical_table_name = $2")
+        .bind(script_uri)
+        .bind(name)
+        .execute(&pool)
+        .await
+        .expect("dropping the table should succeed");
+}
+
+/// Physical table names are globally unique, so they have to differ per test.
+fn uuid_like(script_uri: &str, name: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(script_uri.as_bytes());
+    hasher.update(name.as_bytes());
+    hex::encode(hasher.finalize())[..12].to_string()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_revision_records_the_tables_the_script_had() {
+    setup_env().await;
+    let uri = "test://revisions/schema/records.ts";
+    deploy(uri, "function init() {}").await;
+    declare_table(uri, "matches", &["id", "score"]).await;
+
+    let revision = write_asset(uri, "server/a.ts", "export const a = 1;")
+        .await
+        .expect("write records a revision");
+
+    let recorded = aiwebengine::revisions::schema_at(uri, revision)
+        .await
+        .expect("schema should read")
+        .expect("the revision recorded a fingerprint");
+
+    assert!(
+        recorded.get("matches").is_some(),
+        "the revision should know the script had a `matches` table: {}",
+        recorded
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_revert_warns_about_a_column_added_since() {
+    setup_env().await;
+    let uri = "test://revisions/schema/column.ts";
+    deploy(uri, "function init() {}").await;
+    declare_table(uri, "matches", &["id"]).await;
+
+    let target = write_asset(uri, "server/a.ts", "export const a = 1;")
+        .await
+        .expect("write records a revision");
+
+    // The change that followed added a column and the code that reads it.
+    declare_table(uri, "matches", &["id", "round"]).await;
+    write_asset(uri, "server/a.ts", "export const a = 2;").await;
+
+    let outcome = revert(uri, &target.to_string(), true).await;
+
+    assert!(
+        outcome
+            .schema_warnings
+            .iter()
+            .any(|warning| warning.contains("`round`")),
+        "a dry run is where this belongs — while there is still the option not \
+         to: {:?}",
+        outcome.schema_warnings
+    );
+    // And nothing was done about it.
+    let still_there = aiwebengine::revisions::schema_now(uri)
+        .await
+        .expect("schema should read");
+    assert!(
+        still_there["matches"]["columns"]
+            .as_array()
+            .expect("columns")
+            .iter()
+            .any(|column| column["name"] == "round"),
+        "the column stays: dropping it to match old code would destroy data in \
+         order to restore code"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_revert_warns_when_a_table_the_revision_expects_is_gone() {
+    setup_env().await;
+    let uri = "test://revisions/schema/missing.ts";
+    deploy(uri, "function init() {}").await;
+    declare_table(uri, "matches", &["id"]).await;
+
+    let target = write_asset(uri, "server/a.ts", "export const a = 1;")
+        .await
+        .expect("write records a revision");
+
+    drop_declared_table(uri, "matches").await;
+    write_asset(uri, "server/a.ts", "export const a = 2;").await;
+
+    let outcome = revert(uri, &target.to_string(), true).await;
+
+    assert!(
+        outcome
+            .schema_warnings
+            .iter()
+            .any(|warning| warning.contains("does not now")),
+        "restoring modules that read a table which is gone is the case worth \
+         hearing about: {:?}",
+        outcome.schema_warnings
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_revert_onto_the_same_schema_says_nothing_about_it() {
+    setup_env().await;
+    let uri = "test://revisions/schema/quiet.ts";
+    deploy(uri, "function init() {}").await;
+    declare_table(uri, "matches", &["id"]).await;
+
+    let target = write_asset(uri, "server/a.ts", "export const a = 1;")
+        .await
+        .expect("write records a revision");
+    write_asset(uri, "server/a.ts", "export const a = 2;").await;
+
+    let outcome = revert(uri, &target.to_string(), true).await;
+
+    assert!(
+        outcome.schema_warnings.is_empty(),
+        "the data is the one this revision ran against: {:?}",
+        outcome.schema_warnings
+    );
+}
