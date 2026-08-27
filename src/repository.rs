@@ -532,7 +532,18 @@ async fn send_script_notification(
     Ok(())
 }
 
-/// Database-backed upsert script
+/// Database-backed upsert script.
+///
+/// One statement rather than an UPDATE followed by an INSERT when it matched
+/// nothing. Those two are not a unit: between them, another instance creating
+/// the same script — or the same caller redeploying after a delete — leaves a
+/// row where the UPDATE found none, and the INSERT then fails on the unique
+/// constraint with a duplicate-key error for what is an ordinary write. The
+/// upsert has no window to lose.
+///
+/// `name` is only filled in when the row has none, which is what the UPDATE
+/// did with `COALESCE(name, $4)`: it is a display label a caller may have
+/// customised, and a redeploy is not a reason to overwrite it.
 async fn db_upsert_script(
     mut executor: crate::database::TransactionExecutor<'_>,
     uri: &str,
@@ -548,106 +559,44 @@ async fn db_upsert_script(
     // Extract name from URI (last segment after /)
     let name = uri.rsplit('/').next().unwrap_or(uri);
 
-    // Try to update existing script
-    debug!("Attempting to UPDATE script: uri={}", uri);
-    let update_result = match executor {
-        crate::database::TransactionExecutor::Transaction(ref mut tx) => {
-            sqlx::query(
-                r#"
-                UPDATE scripts
-                SET content = $1, updated_at = $2, name = COALESCE(name, $4)
-                WHERE uri = $3
-                "#,
-            )
-            .bind(content)
-            .bind(now)
-            .bind(uri)
-            .bind(name)
-            .execute(&mut ***tx)
-            .await
-        }
-        crate::database::TransactionExecutor::Pool(pool) => {
-            sqlx::query(
-                r#"
-                UPDATE scripts
-                SET content = $1, updated_at = $2, name = COALESCE(name, $4)
-                WHERE uri = $3
-                "#,
-            )
-            .bind(content)
-            .bind(now)
-            .bind(uri)
-            .bind(name)
-            .execute(pool)
-            .await
-        }
-    }
-    .map_err(|e| {
-        error!("Database error updating script: {}", e);
-        AppError::Database {
-            message: format!("Database error: {}", e),
-            source: None,
-        }
-    })?;
+    const UPSERT: &str = r#"
+        INSERT INTO scripts (uri, content, name, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $4)
+        ON CONFLICT (uri) DO UPDATE
+        SET content = EXCLUDED.content,
+            updated_at = EXCLUDED.updated_at,
+            name = COALESCE(scripts.name, EXCLUDED.name)
+        "#;
 
-    let rows_affected = update_result.rows_affected();
-    debug!(
-        "UPDATE result: uri={}, rows_affected={}",
-        uri, rows_affected
-    );
-
-    if rows_affected > 0 {
-        debug!(
-            "✓ Successfully updated existing script in database: {}",
-            uri
-        );
-        return Ok(());
-    }
-
-    // Script doesn't exist, create new one
-    debug!(
-        "Script not found for update, attempting INSERT: uri={}",
-        uri
-    );
     match executor {
         crate::database::TransactionExecutor::Transaction(ref mut tx) => {
-            sqlx::query(
-                r#"
-                INSERT INTO scripts (uri, content, name, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $4)
-                "#,
-            )
-            .bind(uri)
-            .bind(content)
-            .bind(name)
-            .bind(now)
-            .execute(&mut ***tx)
-            .await
+            sqlx::query(UPSERT)
+                .bind(uri)
+                .bind(content)
+                .bind(name)
+                .bind(now)
+                .execute(&mut ***tx)
+                .await
         }
         crate::database::TransactionExecutor::Pool(pool) => {
-            sqlx::query(
-                r#"
-                INSERT INTO scripts (uri, content, name, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $4)
-                "#,
-            )
-            .bind(uri)
-            .bind(content)
-            .bind(name)
-            .bind(now)
-            .execute(pool)
-            .await
+            sqlx::query(UPSERT)
+                .bind(uri)
+                .bind(content)
+                .bind(name)
+                .bind(now)
+                .execute(pool)
+                .await
         }
     }
     .map_err(|e| {
-        error!("Database error creating script: {}", e);
+        error!("Database error storing script: {}", e);
         AppError::Database {
             message: format!("Database error: {}", e),
             source: None,
         }
     })?;
 
-    debug!("✓ Successfully created new script in database: {}", uri);
+    debug!("✓ Successfully stored script in database: {}", uri);
     Ok(())
 }
 
