@@ -165,12 +165,21 @@ pub struct LogContext {
     /// that filtering by it aggregates every call to the same handler. For
     /// invocations that are not HTTP routes this names the job, stream or tool.
     pub route: Option<String>,
+    /// Which revision of the script was running.
+    ///
+    /// Captured once when the invocation starts rather than read per line: a
+    /// long-running handler can span a write, and every line it produced came
+    /// from the version it started under.
+    pub revision: Option<i32>,
 }
 
 impl LogContext {
     /// True when this context names nothing, i.e. there is no invocation to
     /// attribute the line to.
     pub fn is_empty(&self) -> bool {
+        // `revision` is deliberately not part of this. It says which version
+        // wrote the line, not which invocation did, so a context carrying only
+        // a revision still names no invocation.
         self.request_id.is_none() && self.kind.is_none() && self.route.is_none()
     }
 }
@@ -201,6 +210,10 @@ pub struct LogQuery {
     pub kind: Option<String>,
     /// Keep only entries logged while serving this registered route pattern.
     pub route: Option<String>,
+    /// Keep only entries written while this revision of the script was
+    /// running. What makes "the errors started at revision 41" a query rather
+    /// than a wall-clock comparison against a deploy time.
+    pub revision: Option<i32>,
     /// Keep at most this many of the *newest* matching entries.
     pub limit: Option<i64>,
 }
@@ -2105,8 +2118,8 @@ where
         // which is how `/engine/eval` and the test runner execute — would carry
         // the same timestamp and lose its order.
         r#"
-        INSERT INTO logs (script_uri, message, log_level, created_at, request_id, kind, route)
-        VALUES ($1, $2, $3, clock_timestamp(), $4, $5, $6)
+        INSERT INTO logs (script_uri, message, log_level, created_at, request_id, kind, route, revision)
+        VALUES ($1, $2, $3, clock_timestamp(), $4, $5, $6, $7)
         "#,
     )
     .bind(script_uri)
@@ -2115,6 +2128,7 @@ where
     .bind(context.request_id.as_deref())
     .bind(context.kind.as_deref())
     .bind(context.route.as_deref())
+    .bind(context.revision)
     .execute(executor)
     .await
     .map_err(|e| {
@@ -2167,7 +2181,8 @@ where
         // and tailing by `seq` reliable.
         r#"
         WITH matching AS (
-            SELECT script_uri, message, log_level, created_at, seq, request_id, kind, route
+            SELECT script_uri, message, log_level, created_at, seq, request_id, kind, route,
+                   revision
             FROM logs
             WHERE ($1::text IS NULL OR script_uri = $1)
               AND ($2::text IS NULL OR log_level = $2)
@@ -2177,6 +2192,7 @@ where
               AND ($6::text IS NULL OR lower(kind) = lower($6))
               AND ($7::text IS NULL OR route = $7)
               AND ($8::bigint IS NULL OR seq > $8)
+              AND ($10::int4 IS NULL OR revision = $10)
             -- Without a cursor the constant leaves the ordering to the keys
             -- that follow, so the limit keeps the newest entries; with one it
             -- orders oldest-first, so the limit keeps the next page instead.
@@ -2198,6 +2214,7 @@ where
     .bind(query.route.as_deref())
     .bind(query.after_seq)
     .bind(query.limit)
+    .bind(query.revision)
     .fetch_all(executor)
     .await
     .map_err(|e| {
@@ -2220,6 +2237,7 @@ where
                 request_id: row.try_get("request_id")?,
                 kind: row.try_get("kind")?,
                 route: row.try_get("route")?,
+                revision: row.try_get("revision")?,
             };
             // Convert chrono DateTime to SystemTime
             let system_time = SystemTime::from(created_at);
@@ -6461,6 +6479,7 @@ impl Repository for PostgresRepository {
             if let Ok(mut guard) = safe_lock_scripts() {
                 guard.remove(uri);
             }
+            crate::revisions::forget_current(uri);
             crate::route_index::invalidate();
             crate::bytecode::invalidate(uri);
             crate::module_loader::invalidate(uri);

@@ -1149,6 +1149,9 @@ async fn execute_startup_scripts() -> AppResult<()> {
     // One pass over the scripts that have no revisions at all, rather than a
     // question asked once per script on every boot.
     revisions::backfill_missing().await;
+    // Which revision each script is at, so lines logged before this boot's
+    // first write to a script are still attributed to a version.
+    revisions::load_current().await;
 
     for (uri, content) in scripts.iter() {
         info!("Executing script: {}", uri);
@@ -2865,8 +2868,11 @@ async fn handle_dynamic_request(
     // What the engine itself writes about this request belongs with what the
     // handler wrote: a failure, a timeout or a panic is the line a developer
     // most needs, and it is useless if it cannot be tied to the run it describes.
-    let request_log_context = js_engine::HandlerInvocationKind::HttpRoute
-        .log_context(request_id.clone(), Some(route_pattern.clone()));
+    let request_log_context = js_engine::HandlerInvocationKind::HttpRoute.log_context(
+        &owner_uri,
+        request_id.clone(),
+        Some(route_pattern.clone()),
+    );
 
     // The timeout must wrap the un-awaited join handle: awaiting spawn_blocking first
     // would block until the script finishes and the timeout could never fire. On

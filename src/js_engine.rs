@@ -435,6 +435,7 @@ impl HandlerInvocationKind {
     /// one concrete path per parameter value.
     pub fn log_context(
         self,
+        script_uri: &str,
         invocation_id: impl Into<String>,
         route: Option<String>,
     ) -> repository::LogContext {
@@ -442,6 +443,13 @@ impl HandlerInvocationKind {
             request_id: Some(invocation_id.into()),
             kind: Some(self.as_str().to_string()),
             route,
+            // Read once, here, rather than per line: an invocation that spans
+            // a write still produced all of its output from the version it
+            // started under. `script_uri` is a parameter rather than something
+            // this resolves later so a call site cannot forget it — an
+            // unattributed line is indistinguishable from one written before
+            // revisions existed.
+            revision: crate::revisions::current(script_uri),
         }
     }
 }
@@ -1106,8 +1114,11 @@ pub fn execute_script_secure(
                         console_sink: None,
                         // Bringing the script up is one invocation, so its
                         // output groups under one id like any other.
-                        log_context: HandlerInvocationKind::Init
-                            .log_context(crate::middleware::generate_request_id(), None),
+                        log_context: HandlerInvocationKind::Init.log_context(
+                            &uri_owned,
+                            crate::middleware::generate_request_id(),
+                            None,
+                        ),
                     };
 
                     // Create the register function that captures registrations
@@ -1232,8 +1243,11 @@ pub fn execute_script(uri: &str, content: &str) -> ScriptExecutionResult {
                             // registration pass like startup and init().
                             let config = GlobalSecurityConfig {
                                 registration_phase: true,
-                                log_context: HandlerInvocationKind::Init
-                                    .log_context(crate::middleware::generate_request_id(), None),
+                                log_context: HandlerInvocationKind::Init.log_context(
+                                    &uri_owned,
+                                    crate::middleware::generate_request_id(),
+                                    None,
+                                ),
                                 ..Default::default()
                             };
 
@@ -1384,6 +1398,7 @@ pub fn execute_script_for_request_secure(
     // came from the HTTP stack or was generated here.
     params.request_id = Some(invocation_id.clone());
     let log_context = HandlerInvocationKind::HttpRoute.log_context(
+        &script_uri_owned,
         invocation_id.clone(),
         params
             .route_pattern
@@ -1749,8 +1764,11 @@ pub fn execute_script_for_request(
     let script_uri_owned = script_uri.to_string();
     let auth_ctx = crate::auth::JsAuthContext::anonymous();
     let invocation_id = crate::middleware::generate_request_id();
-    let log_context =
-        HandlerInvocationKind::HttpRoute.log_context(invocation_id.clone(), Some(path.to_string()));
+    let log_context = HandlerInvocationKind::HttpRoute.log_context(
+        &script_uri_owned,
+        invocation_id.clone(),
+        Some(path.to_string()),
+    );
 
     // Fetch and bundle before arming the runtime's interrupt deadline (see
     // `execute_script_for_request_secure`).
@@ -1870,6 +1888,7 @@ pub fn execute_scheduled_handler(
     // The scheduler generated this id when it claimed the run, so the lines the
     // engine wrote about the run and the lines the job itself wrote share it.
     let log_context = HandlerInvocationKind::Scheduled.log_context(
+        &script_uri_owned,
         invocation.invocation_id.clone(),
         Some(invocation.key.clone()),
     );
@@ -2136,8 +2155,11 @@ fn install_and_collect_tests<'js>(
         enable_audit_logging: false,
         dry_run_sink: None,
         console_sink: None,
-        log_context: HandlerInvocationKind::Test
-            .log_context(invocation_id.clone(), Some(module_path.to_string())),
+        log_context: HandlerInvocationKind::Test.log_context(
+            &params.script_uri,
+            invocation_id.clone(),
+            Some(module_path.to_string()),
+        ),
     };
 
     setup_secure_global_functions(
@@ -2308,10 +2330,11 @@ pub fn execute_graphql_resolver(params: GraphqlResolverExecutionParams) -> Resul
         // For GraphQL resolvers, we don't need GraphQL registration (no-ops) or stream registration
         let config = GlobalSecurityConfig {
             enable_audit_logging: false, // Disable audit logging to avoid runtime conflicts
-            log_context: params
-                .operation_kind
-                .as_handler_kind()
-                .log_context(invocation_id.clone(), Some(params.field_name.clone())),
+            log_context: params.operation_kind.as_handler_kind().log_context(
+                &script_uri_owned,
+                invocation_id.clone(),
+                Some(params.field_name.clone()),
+            ),
             ..Default::default()
         };
 
@@ -2483,6 +2506,7 @@ pub fn execute_mcp_prompt_handler(
         let config = GlobalSecurityConfig {
             enable_audit_logging: false,
             log_context: HandlerInvocationKind::McpPrompt.log_context(
+                &script_uri_owned,
                 crate::middleware::generate_request_id(),
                 Some(handler_function_owned.clone()),
             ),
@@ -2587,8 +2611,11 @@ pub fn execute_mcp_tool_handler(
     let auth_context_owned = auth_context;
     let user_context_owned = user_context;
     let invocation_id = crate::middleware::generate_request_id();
-    let log_context = HandlerInvocationKind::McpTool
-        .log_context(invocation_id.clone(), Some(tool_name_owned.clone()));
+    let log_context = HandlerInvocationKind::McpTool.log_context(
+        &script_uri_owned,
+        invocation_id.clone(),
+        Some(tool_name_owned.clone()),
+    );
 
     // Fetch and bundle before arming the runtime's interrupt deadline (see
     // `execute_script_for_request_secure`).
@@ -2757,8 +2784,11 @@ pub fn execute_stream_customization_function(
     let path_owned = path.to_string();
     let query_params_owned = query_params.clone();
     let invocation_id = crate::middleware::generate_request_id();
-    let log_context = HandlerInvocationKind::StreamCustomization
-        .log_context(invocation_id.clone(), Some(path_owned.clone()));
+    let log_context = HandlerInvocationKind::StreamCustomization.log_context(
+        &script_uri_owned,
+        invocation_id.clone(),
+        Some(path_owned.clone()),
+    );
 
     // Fetch and bundle before arming the runtime's interrupt deadline (see
     // `execute_script_for_request_secure`).
@@ -3080,7 +3110,11 @@ fn run_snippet(
             enable_audit_logging: false,
             dry_run_sink: None,
             console_sink: Some(std::sync::Arc::clone(console)),
-            log_context: HandlerInvocationKind::Eval.log_context(invocation_id.clone(), None),
+            log_context: HandlerInvocationKind::Eval.log_context(
+                &params.script_uri,
+                invocation_id.clone(),
+                None,
+            ),
         };
 
         let mut outcome = EvalOutcome::default();
@@ -3645,7 +3679,11 @@ fn run_registration_pass(
                 // A check reports diagnostics, not output; console writes go to
                 // the script's log as they would on a deploy.
                 console_sink: None,
-                log_context: HandlerInvocationKind::Init.log_context(invocation_id.clone(), None),
+                log_context: HandlerInvocationKind::Init.log_context(
+                    script_uri,
+                    invocation_id.clone(),
+                    None,
+                ),
             };
 
             // Create the register function that captures registrations

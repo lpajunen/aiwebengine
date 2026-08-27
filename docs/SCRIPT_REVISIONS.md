@@ -289,6 +289,32 @@ Only the revisions in which that file actually changed. Consecutive revisions
 that left it alone report the same digest, and listing each of them answers a
 question nobody asked.
 
+## Which version wrote this line
+
+Every log line records the revision the script was running when it was written,
+alongside the invocation attribution it already carried:
+
+```bash
+# Everything revision 41 produced
+curl "…/engine/script_logs?uri=myapp&revision=41"
+```
+
+This is what makes rollback _decidable_ rather than merely possible. Without
+it, "did this start when I deployed?" is answered by eyeballing a deploy time
+against a burst of errors and hoping the two line up. With it, the question is
+a filter.
+
+Two details are deliberate. The revision is resolved **once, when the
+invocation starts** — a handler that runs while a write lands still produced
+all of its output from the version it started under, and filing its later lines
+under the new one would be a lie about which code ran. And it is the version
+_this instance_ is running, not necessarily the newest stored: an instance that
+has not yet picked up another node's write is still serving the older revision,
+and its output belongs there.
+
+Lines with nothing to attribute — engine-internal output, anything written
+before this existed — carry no revision rather than a guessed one.
+
 ## Scripts that predate their own history
 
 At startup, a script with no revisions gets one recording its current state.

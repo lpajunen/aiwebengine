@@ -520,6 +520,7 @@ impl Scheduler {
     /// job's own output is filed under.
     fn invocation_log_context(invocation: &ScheduledInvocation) -> repository::LogContext {
         js_engine::HandlerInvocationKind::Scheduled.log_context(
+            &invocation.script_uri,
             invocation.invocation_id.clone(),
             Some(invocation.key.clone()),
         )

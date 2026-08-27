@@ -60,10 +60,7 @@ fn admin() -> UserContext {
 /// asserting on the shape of a history would be reading every previous run's
 /// as well.
 async fn deploy(script_uri: &str, content: &str) {
-    let uri = script_uri.to_string();
-    tokio::task::spawn_blocking(move || repository::delete_script(&uri))
-        .await
-        .expect("join");
+    clear_script_state(script_uri).await;
 
     let (uri, content) = (script_uri.to_string(), content.to_string());
     tokio::task::spawn_blocking(move || {
@@ -73,6 +70,36 @@ async fn deploy(script_uri: &str, content: &str) {
     .await
     .expect("join")
     .expect("deploying records a revision");
+}
+
+/// Remove every trace of a script: its row, its files, its history and its log.
+///
+/// Spelled out rather than left to `delete_script`'s cascade. That path drops
+/// the script's tables first, which takes ACCESS EXCLUSIVE locks and can fail
+/// under load — and it reports failure by returning `false`, so a test built on
+/// it starts from whatever the previous run left. Logs are not cascaded at all,
+/// which a test asserting on log contents notices immediately.
+async fn clear_script_state(script_uri: &str) {
+    let pool = aiwebengine::database::get_global_database()
+        .expect("database should be initialized")
+        .pool()
+        .clone();
+
+    for statement in [
+        "DELETE FROM logs WHERE script_uri = $1",
+        "DELETE FROM script_revisions WHERE script_uri = $1",
+        "DELETE FROM assets WHERE script_uri = $1",
+        "DELETE FROM scripts WHERE uri = $1",
+    ] {
+        sqlx::query(statement)
+            .bind(script_uri)
+            .execute(&pool)
+            .await
+            .unwrap_or_else(|e| panic!("clearing '{}' should succeed: {}", statement, e));
+    }
+
+    // The in-memory caches still hold what was just deleted.
+    revisions::forget_current(script_uri);
 }
 
 /// Rewrite a deployed script's root without clearing its history.
@@ -580,16 +607,13 @@ async fn set_init(script_uri: &str, revision: i32, ok: bool, error: Option<&str>
 /// and it makes a test that asserts on init outcomes a race against a peer.
 /// Writing the rows directly leaves no notification for anyone to answer.
 async fn deploy_unnoticed(script_uri: &str, content: &str, asset: (&str, &str)) -> (i32, i32) {
+    clear_script_state(script_uri).await;
+
     let pool = aiwebengine::database::get_global_database()
         .expect("database should be initialized")
         .pool()
         .clone();
 
-    sqlx::query("DELETE FROM scripts WHERE uri = $1")
-        .bind(script_uri)
-        .execute(&pool)
-        .await
-        .expect("clearing the script should succeed");
     sqlx::query("INSERT INTO scripts (uri, content, name) VALUES ($1, $2, $3)")
         .bind(script_uri)
         .bind(content)
@@ -1247,4 +1271,135 @@ async fn the_history_tools_are_exposed_over_mcp() {
             name
         );
     }
+}
+
+// ============================================================================
+// Attributing output to a version
+// ============================================================================
+
+async fn logs_at(script_uri: &str, revision: Option<i32>) -> Vec<String> {
+    let query = aiwebengine::repository::LogQuery {
+        script_uri: Some(script_uri.to_string()),
+        revision,
+        limit: Some(100),
+        ..Default::default()
+    };
+    aiwebengine::engine_api::query_log_entries_authorized(&admin(), &query)
+        .expect("reading logs should succeed")
+        .into_iter()
+        .map(|entry| entry.message)
+        .collect()
+}
+
+async fn log_line(script_uri: &str, message: &str) {
+    let context = aiwebengine::js_engine::HandlerInvocationKind::HttpRoute.log_context(
+        script_uri,
+        "test-invocation",
+        Some("/probe".to_string()),
+    );
+    use aiwebengine::repository::Repository as _;
+    aiwebengine::repository::get_repository()
+        .insert_log(script_uri, message, "INFO", &context)
+        .await
+        .expect("writing a log line should succeed");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_log_line_names_the_revision_that_was_running() {
+    setup_env().await;
+    let uri = "test://revisions/logs/attribution.ts";
+    let (first, second) = deploy_unnoticed(
+        uri,
+        "function init() {}",
+        ("server/a.ts", "export const a = 1;"),
+    )
+    .await;
+
+    // The second write is what this instance is now running, so a line written
+    // now belongs to it rather than to the version it replaced.
+    log_line(uri, "after the second write").await;
+
+    let at_second = logs_at(uri, Some(second)).await;
+    assert!(
+        at_second.contains(&"after the second write".to_string()),
+        "the line should be filed under revision {}: {:?}",
+        second,
+        at_second
+    );
+    assert!(
+        !logs_at(uri, Some(first))
+            .await
+            .contains(&"after the second write".to_string()),
+        "and not under the revision it replaced"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_write_moves_later_output_to_the_new_revision() {
+    setup_env().await;
+    let uri = "test://revisions/logs/moves.ts";
+    let (_, before) = deploy_unnoticed(
+        uri,
+        "function init() {}",
+        ("server/a.ts", "export const a = 1;"),
+    )
+    .await;
+
+    log_line(uri, "written before the change").await;
+
+    write_asset(uri, "server/a.ts", "export const a = 2;").await;
+    let after = aiwebengine::revisions::head(uri)
+        .await
+        .expect("head should read")
+        .expect("the write records a revision");
+
+    log_line(uri, "written after the change").await;
+
+    assert_eq!(
+        logs_at(uri, Some(before)).await,
+        vec!["written before the change".to_string()],
+        "output written under the old version stays with it"
+    );
+    assert_eq!(
+        logs_at(uri, Some(after)).await,
+        vec!["written after the change".to_string()],
+        "which is what makes 'the errors started at revision {}' answerable",
+        after
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_invocation_keeps_the_revision_it_started_under() {
+    setup_env().await;
+    let uri = "test://revisions/logs/spanning.ts";
+    let (_, started_under) = deploy_unnoticed(
+        uri,
+        "function init() {}",
+        ("server/a.ts", "export const a = 1;"),
+    )
+    .await;
+
+    // A handler resolves its context once, at the start.
+    let context = aiwebengine::js_engine::HandlerInvocationKind::HttpRoute.log_context(
+        uri,
+        "long-running",
+        Some("/probe".to_string()),
+    );
+
+    // A write lands while it is still running.
+    write_asset(uri, "server/a.ts", "export const a = 2;").await;
+
+    use aiwebengine::repository::Repository as _;
+    aiwebengine::repository::get_repository()
+        .insert_log(uri, "logged after the write landed", "INFO", &context)
+        .await
+        .expect("writing a log line should succeed");
+
+    assert!(
+        logs_at(uri, Some(started_under))
+            .await
+            .contains(&"logged after the write landed".to_string()),
+        "every line an invocation wrote came from the version it started under, \
+         whatever was deployed by the time it got there"
+    );
 }

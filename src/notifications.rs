@@ -1,6 +1,6 @@
 use crate::error::AppResult;
 use crate::stream_registry::FilterMatchMode;
-use crate::{graphql, repository, scheduler, script_init};
+use crate::{graphql, repository, revisions, scheduler, script_init};
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::{PgListener, PgPool};
 use std::collections::HashMap;
@@ -262,6 +262,11 @@ impl NotificationListener {
         // an administrator may have republished the script on other hosts.
         repository::refresh_cached_script_hosts_from_db(uri).await;
 
+        // This instance is only now starting to run the version the other one
+        // wrote, which is the moment its log output starts belonging to that
+        // revision rather than to the one it was serving until here.
+        revisions::refresh_current(uri).await;
+
         // Initialize the script (this will call init() and register routes/GraphQL)
         let initializer = script_init::ScriptInitializer::with_configured_timeout();
         match initializer.initialize_script(uri, false).await {
@@ -311,6 +316,10 @@ impl NotificationListener {
         // Clear any scheduled jobs for this script
         scheduler::clear_script_jobs(uri);
         debug!("Cleared scheduled jobs for script '{}'", uri);
+
+        // Nothing is running here any more, so there is no revision to
+        // attribute output to.
+        revisions::forget_current(uri);
 
         // Clear GraphQL registrations for this script
         graphql::clear_script_graphql_registrations(uri);

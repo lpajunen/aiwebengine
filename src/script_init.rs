@@ -57,7 +57,7 @@ fn init_concurrency() -> usize {
 /// sandbox or was abandoned mid-run, so there is no id from that run to share.
 /// `kind` still puts the line with the rest of what bringing the script up
 /// produced.
-fn init_log_context() -> repository::LogContext {
+fn init_log_context(script_uri: &str) -> repository::LogContext {
     repository::LogContext {
         request_id: None,
         kind: Some(
@@ -66,6 +66,9 @@ fn init_log_context() -> repository::LogContext {
                 .to_string(),
         ),
         route: None,
+        // An init failure belongs to the version that failed to initialise,
+        // which is the one this instance is running.
+        revision: crate::revisions::current(script_uri),
     }
 }
 
@@ -277,7 +280,7 @@ impl ScriptInitializer {
                     }
                     // Log FATAL error to database
                     if let Err(err) = repository::get_repository()
-                        .insert_log(script_uri, &e, "FATAL", &init_log_context())
+                        .insert_log(script_uri, &e, "FATAL", &init_log_context(script_uri))
                         .await
                     {
                         warn!("Failed to log error to database: {}", err);
@@ -297,7 +300,12 @@ impl ScriptInitializer {
                 }
                 // Log FATAL error to database
                 if let Err(err) = repository::get_repository()
-                    .insert_log(script_uri, &error_msg, "FATAL", &init_log_context())
+                    .insert_log(
+                        script_uri,
+                        &error_msg,
+                        "FATAL",
+                        &init_log_context(script_uri),
+                    )
                     .await
                 {
                     warn!("Failed to log error to database: {}", err);
@@ -325,7 +333,12 @@ impl ScriptInitializer {
                 }
                 // Log FATAL error to database
                 if let Err(err) = repository::get_repository()
-                    .insert_log(script_uri, &error_msg, "FATAL", &init_log_context())
+                    .insert_log(
+                        script_uri,
+                        &error_msg,
+                        "FATAL",
+                        &init_log_context(script_uri),
+                    )
                     .await
                 {
                     warn!("Failed to log error to database: {}", err);

@@ -517,6 +517,7 @@ pub fn log_entry_json(entry: &repository::LogEntry) -> Value {
         "requestId": entry.context.request_id,
         "kind": entry.context.kind,
         "route": entry.context.route,
+        "revision": entry.context.revision,
     })
 }
 
@@ -3123,6 +3124,8 @@ pub struct LogParams {
     kind: Option<String>,
     /// Only entries logged while serving this registered route pattern.
     route: Option<String>,
+    /// Only entries written while this revision of the script was running.
+    revision: Option<i32>,
     limit: Option<i64>,
 }
 
@@ -3155,6 +3158,7 @@ fn parse_since(raw: &str) -> Option<std::time::SystemTime> {
         ("request_id" = Option<String>, Query, description = "Only the entries one invocation emitted, by x-request-id or a non-HTTP invocation's id"),
         ("kind" = Option<String>, Query, description = "Only entries from invocations of this kind, e.g. httpRoute, scheduled, streamCustomization"),
         ("route" = Option<String>, Query, description = "Only entries logged while serving this registered route pattern, e.g. /things/:id"),
+        ("revision" = Option<i32>, Query, description = "Only entries written while this revision of the script was running"),
         ("limit" = Option<i64>, Query, description = "Keep at most this many of the newest matching entries"),
     ),
     responses(
@@ -3198,6 +3202,7 @@ pub async fn script_logs_route(
         contains: params.contains,
         request_id: params.request_id,
         kind: params.kind,
+        revision: params.revision,
         route: params.route,
         limit: params.limit,
     };
@@ -3270,6 +3275,7 @@ pub struct LogTailParams {
     request_id: Option<String>,
     kind: Option<String>,
     route: Option<String>,
+    revision: Option<i32>,
     /// Start after this `seq`, replaying everything written since. This is how
     /// a dropped tail resumes without a gap: the client reconnects with the
     /// last seq it saw.
@@ -3293,6 +3299,7 @@ impl LogTailParams {
             contains: self.contains.clone(),
             request_id: self.request_id.clone(),
             kind: self.kind.clone(),
+            revision: self.revision,
             route: self.route.clone(),
             limit: None,
         }
@@ -3352,6 +3359,7 @@ async fn query_logs_off_runtime(
         ("request_id" = Option<String>, Query, description = "Only the entries one invocation emits"),
         ("kind" = Option<String>, Query, description = "Only entries from invocations of this kind, e.g. httpRoute, scheduled"),
         ("route" = Option<String>, Query, description = "Only entries logged while serving this registered route pattern"),
+        ("revision" = Option<i32>, Query, description = "Only entries written while this revision of the script was running"),
         ("after_seq" = Option<i64>, Query, description = "Resume after this seq, replaying everything written since"),
         ("since" = Option<String>, Query, description = "Start at this time (epoch millis or RFC 3339) instead of at the end of the log"),
         ("backlog" = Option<i64>, Query, description = "Replay this many of the newest matching entries before going live"),
@@ -6484,6 +6492,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
                         "request_id": { "type": "string", "description": "Only the entries one invocation emitted, by x-request-id or a non-HTTP invocation's id" },
                         "kind": { "type": "string", "description": "Only entries from invocations of this kind: httpRoute, graphqlQuery, graphqlMutation, graphqlSubscription, scheduled, streamCustomization, mcpTool, mcpPrompt, init, eval, test" },
                         "route": { "type": "string", "description": "Only entries logged while serving this registered route pattern, e.g. /things/:id" },
+                        "revision": { "type": "integer", "description": "Only entries written while this revision of the script was running. Use with list_revisions to find when a failure started." },
                         "limit": { "type": "integer", "description": "Keep at most this many of the newest matching entries" }
                     }
                 })
@@ -7658,6 +7667,10 @@ fn tool_read_logs(args: &Value, user: &UserContext) -> Value {
         contains: arg_str(args, "contains").map(str::to_string),
         request_id: arg_str(args, "request_id").map(str::to_string),
         kind: arg_str(args, "kind").map(str::to_string),
+        revision: args
+            .get("revision")
+            .and_then(Value::as_i64)
+            .map(|revision| revision as i32),
         route: arg_str(args, "route").map(str::to_string),
         limit,
     };

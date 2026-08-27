@@ -4901,6 +4901,7 @@ fn execute_message_handler(
             // output is indistinguishable from whatever request happened to
             // send the message.
             log_context: crate::js_engine::HandlerInvocationKind::MessageListener.log_context(
+                &script_uri,
                 crate::middleware::generate_request_id(),
                 Some(message_type.to_string()),
             ),

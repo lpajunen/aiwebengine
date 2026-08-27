@@ -389,6 +389,10 @@ async fn record_in(
         .map_err(|e| db_error("recording revision manifest", e))?;
     }
 
+    // This instance wrote it, so this instance is running it — which is what a
+    // log line written from here should be attributed to.
+    remember_current(script_uri, next);
+
     tracing::debug!(
         script = script_uri,
         revision = next,
@@ -1539,4 +1543,99 @@ async fn read_text(
     Ok(read_file(script_uri, revision, path)
         .await?
         .and_then(|(content, _)| String::from_utf8(content).ok()))
+}
+
+// ============================================================================
+// What this instance is running
+// ============================================================================
+
+/// The revision each script is at, as far as this instance is concerned.
+///
+/// Deliberately not a lookup of `MAX(revision)` per use. A log line asks this
+/// question, and a query per line would cost more than writing the line does.
+///
+/// It is also the more honest answer. What a log line should record is the
+/// version whose code produced it — which is the version *this* instance is
+/// running, not necessarily the newest one stored. An instance that has not
+/// yet processed another node's write is still serving the older revision, and
+/// its output belongs to that one.
+static CURRENT: std::sync::OnceLock<std::sync::RwLock<std::collections::HashMap<String, i32>>> =
+    std::sync::OnceLock::new();
+
+fn current_map() -> &'static std::sync::RwLock<std::collections::HashMap<String, i32>> {
+    CURRENT.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()))
+}
+
+/// The revision `script_uri` is running here, if it is known.
+pub fn current(script_uri: &str) -> Option<i32> {
+    current_map()
+        .read()
+        .ok()
+        .and_then(|map| map.get(script_uri).copied())
+}
+
+/// Record that this instance is now running `revision` of `script_uri`.
+pub fn remember_current(script_uri: &str, revision: i32) {
+    if let Ok(mut map) = current_map().write() {
+        map.insert(script_uri.to_string(), revision);
+    }
+}
+
+/// Forget a script, because it is gone.
+pub fn forget_current(script_uri: &str) {
+    if let Ok(mut map) = current_map().write() {
+        map.remove(script_uri);
+    }
+}
+
+/// Learn `script_uri`'s newest revision from the database and remember it.
+///
+/// For the paths that pick up someone else's write — a notification from
+/// another instance — where this instance only now starts running the new
+/// code.
+pub async fn refresh_current(script_uri: &str) {
+    match head(script_uri).await {
+        Ok(Some(revision)) => remember_current(script_uri, revision),
+        Ok(None) => forget_current(script_uri),
+        Err(e) => tracing::debug!(
+            script = script_uri,
+            "Could not refresh the current revision: {}",
+            e
+        ),
+    }
+}
+
+/// Learn every script's newest revision in one query.
+///
+/// Run at startup, so lines logged before a script's first write of this boot
+/// are still attributed. One query rather than one per script, for the same
+/// reason the baseline backfill is one pass.
+pub async fn load_current() {
+    let result = with_read_connection(move |conn| {
+        Box::pin(async move {
+            sqlx::query(
+                "SELECT script_uri, MAX(revision) AS revision
+                 FROM script_revisions GROUP BY script_uri",
+            )
+            .fetch_all(conn)
+            .await
+            .map_err(|e| db_error("loading current revisions", e))
+        })
+    })
+    .await;
+
+    match result {
+        Ok(rows) => {
+            if let Ok(mut map) = current_map().write() {
+                for row in rows {
+                    let uri: String = row.get("script_uri");
+                    let revision: Option<i32> = row.get("revision");
+                    if let Some(revision) = revision {
+                        map.insert(uri, revision);
+                    }
+                }
+            }
+        }
+        Err(e) => tracing::warn!("Could not load current revisions: {}", e),
+    }
 }
