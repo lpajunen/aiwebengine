@@ -1382,6 +1382,15 @@ async fn prune_revisions(scope: Option<&str>, retention: Retention) -> AppResult
                      LEFT JOIN good ON good.script_uri = ranked.script_uri
                      WHERE ranked.label IS NULL
                        AND (good.revision IS NULL OR ranked.revision <> good.revision)
+                       -- A pinned revision is what a script is serving. The
+                       -- foreign key would refuse the delete anyway, but it
+                       -- would refuse the whole statement with it, so the
+                       -- policy names it rather than discovering it.
+                       AND NOT EXISTS (
+                           SELECT 1 FROM script_deployments d
+                           WHERE d.script_uri = ranked.script_uri
+                             AND d.revision = ranked.revision
+                       )
                        AND ranked.recency > $1
                        AND ranked.created_at < NOW() - make_interval(days => $2)
                  )",

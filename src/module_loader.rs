@@ -65,10 +65,19 @@ enum ProgramKind {
 
 impl ProgramKind {
     fn cache_key(self, script_uri: &str, root_hash: &str, view: &SourceView) -> String {
-        // The request-serving program built from the live rows keeps the bare
-        // URI as its key. It is the hot path, and it is the one entry every
-        // existing invalidation already names directly.
-        if matches!(self, ProgramKind::Runtime) && view.is_live() {
+        // The request-serving program keeps the bare URI as its key. It is the
+        // hot path, it is the one entry every existing invalidation already
+        // names directly, and it is the one that must not be evicted to make
+        // room for a check.
+        //
+        // A pinned script's serving program is built from a revision rather
+        // than the live rows and still belongs in that slot: it is what
+        // answers requests. Nothing is ambiguous about sharing the key,
+        // because the entry is validated by the root's hash — a pin change
+        // brings a different root and the entry rebuilds.
+        if matches!(self, ProgramKind::Runtime)
+            && crate::deployments::serving_view(script_uri) == *view
+        {
             return script_uri.to_string();
         }
         let kind = match self {

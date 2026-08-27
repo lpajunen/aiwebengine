@@ -16,6 +16,7 @@ pub mod config;
 pub mod conversion;
 pub mod database;
 pub mod db_schema_utils;
+pub mod deployments;
 pub mod dispatcher;
 pub mod engine_api;
 pub mod error;
@@ -80,6 +81,9 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
         engine_api::revert_route,
         engine_api::revision_label_route,
         engine_api::revision_diff_route,
+        engine_api::deploy_route,
+        engine_api::undeploy_route,
+        engine_api::deployment_route,
         engine_api::run_tests_route,
         engine_api::check_route,
         engine_api::eval_route,
@@ -1152,6 +1156,17 @@ async fn execute_startup_scripts() -> AppResult<()> {
     // Which revision each script is at, so lines logged before this boot's
     // first write to a script are still attributed to a version.
     revisions::load_current().await;
+
+    // Which revision each script *serves*, before any of them is executed. The
+    // source cache is filled from the `scripts` table, which is head — a
+    // pinned script would otherwise run head's code until something happened
+    // to refresh it, which is the whole of what pinning promises not to do.
+    deployments::load_pins().await;
+    for uri in scripts.keys() {
+        if deployments::pinned(uri).is_some() {
+            repository::refresh_served_source(uri).await;
+        }
+    }
 
     for (uri, content) in scripts.iter() {
         info!("Executing script: {}", uri);
@@ -2370,6 +2385,12 @@ async fn setup_routes(
         .route(
             "/engine/revisions/revert",
             axum::routing::post(engine_api::revert_route),
+        )
+        .route(
+            "/engine/deploy",
+            axum::routing::post(engine_api::deploy_route)
+                .delete(engine_api::undeploy_route)
+                .get(engine_api::deployment_route),
         )
         .route(
             "/engine/revisions/label",

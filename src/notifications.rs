@@ -1,6 +1,6 @@
 use crate::error::AppResult;
 use crate::stream_registry::FilterMatchMode;
-use crate::{graphql, repository, revisions, scheduler, script_init};
+use crate::{deployments, graphql, repository, revisions, scheduler, script_init};
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::{PgListener, PgPool};
 use std::collections::HashMap;
@@ -251,6 +251,12 @@ impl NotificationListener {
     async fn handle_script_upserted(uri: &str) -> AppResult<()> {
         info!("Handling script upserted for: {}", uri);
 
+        // What the script serves may have changed too — this is the
+        // notification a deployment sends — so the pin is read before the
+        // source, which is chosen based on it.
+        revisions::refresh_current(uri).await;
+        deployments::refresh(uri).await;
+
         // Replace the stale in-memory source (which `fetch_script` and the
         // init() below both read) with the database copy. This refreshes the
         // content in place instead of evicting the entry: eviction would also
@@ -261,11 +267,6 @@ impl NotificationListener {
         // Host bindings live alongside the source and are equally stale here:
         // an administrator may have republished the script on other hosts.
         repository::refresh_cached_script_hosts_from_db(uri).await;
-
-        // This instance is only now starting to run the version the other one
-        // wrote, which is the moment its log output starts belonging to that
-        // revision rather than to the one it was serving until here.
-        revisions::refresh_current(uri).await;
 
         // Initialize the script (this will call init() and register routes/GraphQL)
         let initializer = script_init::ScriptInitializer::with_configured_timeout();
@@ -318,8 +319,9 @@ impl NotificationListener {
         debug!("Cleared scheduled jobs for script '{}'", uri);
 
         // Nothing is running here any more, so there is no revision to
-        // attribute output to.
+        // attribute output to and nothing to be pinned to.
         revisions::forget_current(uri);
+        deployments::forget_pin(uri);
 
         // Clear GraphQL registrations for this script
         graphql::clear_script_graphql_registrations(uri);

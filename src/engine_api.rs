@@ -339,6 +339,23 @@ async fn resolve_view(
     ))
 }
 
+/// Re-initialise a script after a write, unless a write is not what it serves.
+///
+/// A pinned script runs a revision, so writing its files changes nothing about
+/// the program that is running. Re-initialising anyway would clear and rebuild
+/// the registrations of a working deployment on the strength of an edit it is
+/// not serving — the disturbance pinning exists to prevent.
+async fn reinitialize_after_write(script_uri: &str) -> Value {
+    if let Some(revision) = crate::deployments::pinned(script_uri) {
+        return json!({
+            "ran": false,
+            "reason": "pinned",
+            "servingRevision": revision,
+        });
+    }
+    init_result_json(&reinitialize_script(script_uri).await)
+}
+
 fn init_result_json(result: &crate::script_init::InitResult) -> Value {
     json!({
         "ran": true,
@@ -408,7 +425,11 @@ pub fn upsert_script_authorized(
     let revision =
         revisions::record_blocking(uri, revisions::Origin::Script, user.user_id.as_deref());
 
-    spawn_script_init(uri.to_string());
+    // A pinned script serves a revision; writing its root advances head and
+    // leaves the running program alone, so there is nothing to initialise.
+    if crate::deployments::pinned(uri).is_none() {
+        spawn_script_init(uri.to_string());
+    }
 
     let action = if exists {
         UpsertAction::Updated
@@ -3922,7 +3943,7 @@ pub async fn assets_batch_route(
     let init = match (reinit, outcome.written) {
         (ReinitMode::Never, _) => json!({ "ran": false, "reason": "reinit=never" }),
         (ReinitMode::After, 0) => json!({ "ran": false, "reason": "no files changed" }),
-        (ReinitMode::After, _) => init_result_json(&reinitialize_script(&script).await),
+        (ReinitMode::After, _) => reinitialize_after_write(&script).await,
     };
 
     json_response(
@@ -4079,7 +4100,7 @@ pub async fn assets_patch_route(
     let init = match (reinit, outcome.status) {
         (ReinitMode::Never, _) => json!({ "ran": false, "reason": "reinit=never" }),
         (_, "unchanged") => json!({ "ran": false, "reason": "no change" }),
-        (ReinitMode::After, _) => init_result_json(&reinitialize_script(&script).await),
+        (ReinitMode::After, _) => reinitialize_after_write(&script).await,
     };
 
     let mut body = outcome.to_json();
@@ -4150,6 +4171,237 @@ pub async fn assets_delete_route(
             }),
         ),
     }
+}
+
+#[derive(Deserialize, Default)]
+pub struct DeployParams {
+    script: Option<String>,
+    revision: Option<String>,
+}
+
+/// Apply a deployment on this instance and tell the rest of the cluster.
+///
+/// Everything after the pin is what makes it take effect *here*: the source
+/// cache holds what a script serves, the prepared program is built from it,
+/// and `init()` registers what that version registers. The notification hands
+/// the same sequence to every other instance.
+async fn activate_deployment(script: &str) -> Value {
+    repository::refresh_served_source(script).await;
+    crate::module_loader::invalidate(script);
+    crate::bytecode::invalidate(script);
+    crate::route_index::invalidate();
+
+    let result = reinitialize_script(script).await;
+    crate::deployments::record_init(script, result.success, result.error.as_deref()).await;
+
+    // Same channel a write uses. The handler on the other side re-reads the
+    // pin, loads the source it now names and re-initialises — which is the
+    // whole of what deploying means there too.
+    repository::notify_script_changed(script).await;
+
+    init_result_json(&result)
+}
+
+fn deployment_to_json(deployment: &crate::deployments::Deployment) -> Value {
+    json!({
+        "revision": deployment.revision,
+        "at": deployment.deployed_at.to_rfc3339(),
+        "by": deployment.deployed_by,
+        "initOk": deployment.init_ok,
+        "initError": deployment.init_error,
+    })
+}
+
+/// Deploy a revision: what this script serves stops following its writes.
+///
+/// Writing a script's files and deploying them used to be the same act. They
+/// are separate once a script is pinned: writes record revisions and advance
+/// head, and what answers requests changes here and nowhere else.
+#[utoipa::path(
+    post,
+    path = "/engine/deploy",
+    tags = ["Scripts"],
+    params(
+        ("script" = String, Query, description = "URI of the script to deploy"),
+        ("revision" = String, Query, description = "Which version to serve: a revision number, `head`, `last-good`, or a label"),
+    ),
+    responses(
+        (status = 200, description = "What the script now serves, and what init() did"),
+        (status = 400, description = "Missing parameter, or a revision that cannot be resolved"),
+        (status = 403, description = "Not an administrator or owner of the script"),
+    )
+)]
+pub async fn deploy_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<DeployParams>,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    let Some(script) = query.script else {
+        return missing_param_response("script");
+    };
+    let Some(spec) = query.revision else {
+        return missing_param_response("revision");
+    };
+
+    let user_for_auth = user.clone();
+    let script_for_auth = script.clone();
+    let allowed =
+        tokio::task::spawn_blocking(move || can_write_history(&user_for_auth, &script_for_auth))
+            .await
+            .unwrap_or(false);
+    if !allowed {
+        return error_response(StatusCode::FORBIDDEN, "Error: Access denied".to_string());
+    }
+
+    // `head` is resolved to a number before it is stored. A pin that meant
+    // "whatever is newest" would move with the next write, which is the one
+    // thing it exists not to do.
+    let revision = match resolve_revision(&script, &spec).await {
+        Ok(revision) => revision,
+        Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
+    };
+
+    let deployment =
+        match crate::deployments::deploy(&script, revision, user.user_id.as_deref()).await {
+            Ok(deployment) => deployment,
+            Err(crate::deployments::DeployRefusal::NoSuchRevision(message)) => {
+                return error_response(StatusCode::BAD_REQUEST, message);
+            }
+            Err(crate::deployments::DeployRefusal::Storage(message)) => {
+                return error_response(StatusCode::INTERNAL_SERVER_ERROR, message);
+            }
+        };
+
+    let init = activate_deployment(&script).await;
+
+    json_response(
+        StatusCode::OK,
+        json!({
+            "script": script,
+            "deployed": deployment_to_json(&deployment),
+            "init": init,
+            "timestamp": iso_timestamp(),
+        }),
+    )
+}
+
+/// Stop pinning a script, so it serves its newest revision again.
+#[utoipa::path(
+    delete,
+    path = "/engine/deploy",
+    tags = ["Scripts"],
+    params(
+        ("script" = String, Query, description = "URI of the script to unpin"),
+    ),
+    responses(
+        (status = 200, description = "The script follows head again"),
+        (status = 400, description = "Missing required parameter"),
+        (status = 403, description = "Not an administrator or owner of the script"),
+    )
+)]
+pub async fn undeploy_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<DeployParams>,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    let Some(script) = query.script else {
+        return missing_param_response("script");
+    };
+
+    let user_for_auth = user.clone();
+    let script_for_auth = script.clone();
+    let allowed =
+        tokio::task::spawn_blocking(move || can_write_history(&user_for_auth, &script_for_auth))
+            .await
+            .unwrap_or(false);
+    if !allowed {
+        return error_response(StatusCode::FORBIDDEN, "Error: Access denied".to_string());
+    }
+
+    let was_pinned = match crate::deployments::unpin(&script).await {
+        Ok(was_pinned) => was_pinned,
+        Err(e) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to remove the deployment: {}", e),
+            );
+        }
+    };
+
+    // Unpinning is not a deployment of head, it is a decision to stop
+    // deciding — but what runs still has to catch up with what the script now
+    // follows, which is everything a deployment does.
+    let init = if was_pinned {
+        activate_deployment(&script).await
+    } else {
+        json!({ "ran": false, "reason": "the script was not pinned" })
+    };
+
+    json_response(
+        StatusCode::OK,
+        json!({
+            "script": script,
+            "wasPinned": was_pinned,
+            "following": "head",
+            "init": init,
+            "timestamp": iso_timestamp(),
+        }),
+    )
+}
+
+/// What a script serves, and what it would serve if it followed head.
+#[utoipa::path(
+    get,
+    path = "/engine/deploy",
+    tags = ["Scripts"],
+    params(
+        ("script" = String, Query, description = "URI of the script to report on"),
+    ),
+    responses(
+        (status = 200, description = "The deployed revision, head, and whether they differ"),
+        (status = 400, description = "Missing required parameter"),
+        (status = 403, description = "Not an administrator or owner of the script"),
+    )
+)]
+pub async fn deployment_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<DeployParams>,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    let Some(script) = query.script else {
+        return missing_param_response("script");
+    };
+
+    let user_for_auth = user.clone();
+    let script_for_auth = script.clone();
+    let allowed =
+        tokio::task::spawn_blocking(move || can_read_history(&user_for_auth, &script_for_auth))
+            .await
+            .unwrap_or(false);
+    if !allowed {
+        return error_response(StatusCode::FORBIDDEN, "Error: Access denied".to_string());
+    }
+
+    let deployment = crate::deployments::get(&script).await.ok().flatten();
+    let head = revisions::head(&script).await.ok().flatten();
+
+    json_response(
+        StatusCode::OK,
+        json!({
+            "script": script,
+            "pinned": deployment.is_some(),
+            "serving": deployment.as_ref().map(|d| d.revision).or(head),
+            "head": head,
+            // The number of revisions written since the deployment: what an
+            // operator is deciding whether to take.
+            "behind": match (deployment.as_ref().map(|d| d.revision), head) {
+                (Some(serving), Some(head)) => json!((head - serving).max(0)),
+                _ => Value::Null,
+            },
+            "deployment": deployment.as_ref().map(deployment_to_json),
+            "timestamp": iso_timestamp(),
+        }),
+    )
 }
 
 #[derive(Deserialize, Default)]
@@ -4671,7 +4923,7 @@ pub async fn revert_route(
     let init = match (reinit, outcome.revision) {
         (ReinitMode::Never, _) => json!({ "ran": false, "reason": "reinit=never" }),
         (_, None) => json!({ "ran": false, "reason": "no change" }),
-        (ReinitMode::After, Some(_)) => init_result_json(&reinitialize_script(&script).await),
+        (ReinitMode::After, Some(_)) => reinitialize_after_write(&script).await,
     };
 
     let mut body = outcome.to_json();
@@ -7001,6 +7253,40 @@ fn native_tools() -> &'static [NativeToolEntry] {
             tool_label_revision,
         ),
         (
+            "deploy_script",
+            "Choose which revision of a script is served. Once deployed, writing the script's files records revisions and advances head without changing what answers requests — so code can be uploaded and tested while production stays where it is, and moves only when you say so. Pass revision='head' to take the newest, or omit 'revision' with follow=true to stop pinning entirely.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "script": { "type": "string", "description": "URI of the script to deploy" },
+                        "revision": { "type": "string", "description": "Which version to serve: a revision number, 'head', 'last-good', or a label" },
+                        "follow": {
+                            "type": "boolean",
+                            "description": "Stop pinning and serve the newest revision from now on. Ignores 'revision'.",
+                            "default": false
+                        }
+                    },
+                    "required": ["script"]
+                })
+            },
+            tool_deploy_script,
+        ),
+        (
+            "get_deployment",
+            "What a script serves, what its newest revision is, and how many revisions separate them. Use before deploying to see what taking head would mean.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "script": { "type": "string", "description": "URI of the script to report on" }
+                    },
+                    "required": ["script"]
+                })
+            },
+            tool_get_deployment,
+        ),
+        (
             "check_script",
             "Check what a script would do if it were deployed, without deploying it: resolve its \
             asset-backed imports the way the engine does, run its init() with every registration \
@@ -7401,6 +7687,95 @@ fn tool_diff_revisions(args: &Value, user: &UserContext) -> Value {
     }
 }
 
+fn tool_deploy_script(args: &Value, user: &UserContext) -> Value {
+    let Some(script) = arg_str(args, "script") else {
+        return missing_arg("script");
+    };
+    if !can_write_history(user, script) {
+        return json!({ "error": "Failed to deploy: Access denied" });
+    }
+
+    if args.get("follow").and_then(Value::as_bool).unwrap_or(false) {
+        let was_pinned = match crate::database::run_blocking(crate::deployments::unpin(script)) {
+            Ok(was_pinned) => was_pinned,
+            Err(e) => return json!({ "error": format!("Failed to remove the deployment: {}", e) }),
+        };
+        let init = if was_pinned {
+            crate::database::run_blocking(activate_deployment(script))
+        } else {
+            json!({ "ran": false, "reason": "the script was not pinned" })
+        };
+        return json!({
+            "success": true,
+            "script": script,
+            "wasPinned": was_pinned,
+            "following": "head",
+            "init": init,
+            "timestamp": iso_timestamp(),
+        });
+    }
+
+    let Some(spec) = arg_str(args, "revision") else {
+        return missing_arg("revision");
+    };
+    let revision = match crate::database::run_blocking(resolve_revision(script, spec)) {
+        Ok(revision) => revision,
+        Err(message) => return json!({ "error": message }),
+    };
+
+    let deployment = match crate::database::run_blocking(crate::deployments::deploy(
+        script,
+        revision,
+        user.user_id.as_deref(),
+    )) {
+        Ok(deployment) => deployment,
+        Err(crate::deployments::DeployRefusal::NoSuchRevision(message))
+        | Err(crate::deployments::DeployRefusal::Storage(message)) => {
+            return json!({ "error": format!("Failed to deploy: {}", message) });
+        }
+    };
+
+    let init = crate::database::run_blocking(activate_deployment(script));
+
+    json!({
+        "success": true,
+        "script": script,
+        "deployed": deployment_to_json(&deployment),
+        "init": init,
+        "timestamp": iso_timestamp(),
+    })
+}
+
+fn tool_get_deployment(args: &Value, user: &UserContext) -> Value {
+    let Some(script) = arg_str(args, "script") else {
+        return missing_arg("script");
+    };
+    if !can_read_history(user, script) {
+        return json!({ "error": "Failed to read the deployment: Access denied" });
+    }
+
+    let deployment = crate::database::run_blocking(crate::deployments::get(script))
+        .ok()
+        .flatten();
+    let head = crate::database::run_blocking(revisions::head(script))
+        .ok()
+        .flatten();
+
+    json!({
+        "success": true,
+        "script": script,
+        "pinned": deployment.is_some(),
+        "serving": deployment.as_ref().map(|d| d.revision).or(head),
+        "head": head,
+        "behind": match (deployment.as_ref().map(|d| d.revision), head) {
+            (Some(serving), Some(head)) => json!((head - serving).max(0)),
+            _ => Value::Null,
+        },
+        "deployment": deployment.as_ref().map(deployment_to_json),
+        "timestamp": iso_timestamp(),
+    })
+}
+
 fn tool_label_revision(args: &Value, user: &UserContext) -> Value {
     let Some(script) = arg_str(args, "script") else {
         return missing_arg("script");
@@ -7465,7 +7840,7 @@ fn tool_revert_script(args: &Value, user: &UserContext) -> Value {
         (ReinitMode::Never, _) => json!({ "ran": false, "reason": "reinit=never" }),
         (_, None) => json!({ "ran": false, "reason": "no change" }),
         (ReinitMode::After, Some(_)) => {
-            init_result_json(&crate::database::run_blocking(reinitialize_script(script)))
+            crate::database::run_blocking(reinitialize_after_write(script))
         }
     };
 
@@ -7910,7 +8285,7 @@ fn tool_write_assets(args: &Value, user: &UserContext) -> Value {
                 (ReinitMode::Never, _) => json!({ "ran": false, "reason": "reinit=never" }),
                 (ReinitMode::After, 0) => json!({ "ran": false, "reason": "no files changed" }),
                 (ReinitMode::After, _) => {
-                    init_result_json(&crate::database::run_blocking(reinitialize_script(script)))
+                    crate::database::run_blocking(reinitialize_after_write(script))
                 }
             };
             json!({
@@ -7985,7 +8360,7 @@ fn tool_edit_asset(args: &Value, user: &UserContext) -> Value {
                 (ReinitMode::Never, _) => json!({ "ran": false, "reason": "reinit=never" }),
                 (_, "unchanged") => json!({ "ran": false, "reason": "no change" }),
                 (ReinitMode::After, _) => {
-                    init_result_json(&crate::database::run_blocking(reinitialize_script(script)))
+                    crate::database::run_blocking(reinitialize_after_write(script))
                 }
             };
             let mut body = outcome.to_json();

@@ -22,9 +22,14 @@ use crate::security::secure_globals::{
 // Type alias for route registrations map
 type RouteRegistrations = repository::RouteRegistrations;
 
-/// Transpile TypeScript/JSX/TSX to JavaScript if needed
+/// Transpile TypeScript/JSX/TSX to JavaScript if needed.
+///
+/// Resolves imports through whatever the script serves here — the live rows
+/// for a script that follows head, and its own revision for one that is
+/// pinned. Taking the live rows unconditionally would build a pinned script's
+/// root against modules from a version it was never written for.
 fn transpile_if_needed(uri: &str, content: &str) -> Result<String, String> {
-    transpile_if_needed_in(uri, content, &crate::source_view::SourceView::Live)
+    transpile_if_needed_in(uri, content, &crate::deployments::serving_view(uri))
 }
 
 /// [`transpile_if_needed`], resolving the program's imports through `view`.

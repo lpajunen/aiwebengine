@@ -494,14 +494,67 @@ pub async fn refresh_cached_script_hosts_from_db(uri: &str) {
 /// stale *source* is a correctness bug, while losing the registrations only
 /// costs the routes until the pending init() restores them.
 pub async fn refresh_cached_script_source_from_db(uri: &str) {
-    let repo = get_repository();
-    match repo.get_script(uri).await {
-        Ok(Some(content)) => refresh_cached_script_source(uri, &content),
-        Ok(None) | Err(_) => {
+    match read_served_source(uri).await {
+        Some(content) => refresh_cached_script_source(uri, &content),
+        None => {
             if let Ok(mut guard) = safe_lock_scripts() {
                 guard.remove(uri);
             }
         }
+    }
+}
+
+/// The root source `uri` serves: its pinned revision's, or the stored one.
+///
+/// The cache this feeds is what every execution path reads the root from, so
+/// putting head's source there for a pinned script would run that script's
+/// modules under a root from a version they were never written for.
+pub async fn read_served_source(uri: &str) -> Option<String> {
+    if let Some(revision) = crate::deployments::pinned(uri) {
+        match crate::revisions::root_content(uri, revision).await {
+            Ok(Some(content)) => return Some(content),
+            Ok(None) => {
+                warn!(
+                    "Script '{}' is pinned to revision {}, which has no stored source; \
+                     falling back to what is stored",
+                    uri, revision
+                );
+            }
+            Err(e) => {
+                warn!(
+                    "Could not read revision {} of '{}': {}; falling back to what is stored",
+                    revision, uri, e
+                );
+            }
+        }
+    }
+
+    get_repository().get_script(uri).await.ok().flatten()
+}
+
+/// Tell the rest of the cluster that `uri` changed.
+///
+/// The write paths do this as part of storing. A deployment changes what a
+/// script serves without changing a row any of them touch, so it says so
+/// itself — on the same channel, because the receiving side does the same
+/// thing either way: re-read what the script serves, and initialise it.
+pub async fn notify_script_changed(uri: &str) {
+    let Some(repo) = GLOBAL_REPOSITORY.get() else {
+        return;
+    };
+    if let Err(e) = send_script_notification(&repo.pool, uri, "upserted", &repo.server_id).await {
+        warn!("Failed to announce the change to '{}': {}", uri, e);
+    }
+}
+
+/// Put what `uri` serves into the in-memory source cache.
+///
+/// Called when a pin changes and at startup, where the cache is otherwise
+/// filled from the `scripts` table — which is head, not necessarily what the
+/// script serves.
+pub async fn refresh_served_source(uri: &str) {
+    if let Some(content) = read_served_source(uri).await {
+        refresh_cached_script_source(uri, &content);
     }
 }
 
@@ -4916,9 +4969,13 @@ pub fn fetch_script(uri: &str) -> Option<String> {
         return Some(metadata.content.clone());
     }
 
-    let repo = get_repository();
-
-    let result = run_bounded(async { repo.get_script(uri).await });
+    // The database holds head. For a pinned script that is not what it serves,
+    // and this fallback is reached exactly when the cache cannot say otherwise
+    // — a cold instance, or a read inside a transaction. Returning head here
+    // would pair a pinned script's modules with a root from a version they
+    // were never written for, which is the failure pinning exists to prevent
+    // and the hardest kind to notice.
+    let result = run_bounded(async { Ok(read_served_source(uri).await) });
 
     match result {
         Ok(Some(script)) => {
@@ -6440,15 +6497,23 @@ impl Repository for PostgresRepository {
         // Send notification after successful upsert
         send_script_notification(&self.pool, uri, "upserted", &self.server_id).await?;
 
-        // Refresh the cached source in place rather than evicting it: eviction
-        // would also drop the script's route registrations, 404ing every one of
-        // its routes until the re-init that follows this upsert completes.
-        refresh_cached_script_source(uri, content);
-        crate::route_index::invalidate();
-        crate::bytecode::invalidate(uri);
-        // Only the root source changed; the script's imported modules are still
-        // current, so the rebuild reads them from cache instead of the database.
-        crate::module_loader::invalidate_program(uri);
+        // A pinned script serves a revision, so a write to its files is not a
+        // change to what is running. Refreshing the cache or dropping the
+        // prepared program here would swap the deployment for head — which is
+        // the one thing pinning exists to prevent.
+        if crate::deployments::pinned(uri).is_none() {
+            // Refresh the cached source in place rather than evicting it:
+            // eviction would also drop the script's route registrations,
+            // 404ing every one of its routes until the re-init that follows
+            // this upsert completes.
+            refresh_cached_script_source(uri, content);
+            crate::route_index::invalidate();
+            crate::bytecode::invalidate(uri);
+            // Only the root source changed; the script's imported modules are
+            // still current, so the rebuild reads them from cache instead of
+            // the database.
+            crate::module_loader::invalidate_program(uri);
+        }
         Ok(())
     }
 

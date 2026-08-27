@@ -324,6 +324,56 @@ boot after this ships, rather than acquiring its first revision only once
 someone changes it — by which point the state they might have wanted back is
 the one that was just overwritten.
 
+## Choosing what is served
+
+Writing a script's files and deploying them are the same act until you say
+otherwise. That is right for one person editing their own script, and wrong as
+soon as an agent is editing modules other people are using: every experiment
+reaches production because there is nowhere else for it to go.
+
+```bash
+# Serve revision 41, whatever gets written next
+curl -X POST "…/engine/deploy?script=myapp&revision=41"
+
+# What is served, what is newest, and how far apart they are
+curl "…/engine/deploy?script=myapp"
+
+# Take the accumulated writes
+curl -X POST "…/engine/deploy?script=myapp&revision=head"
+
+# Go back to following head automatically
+curl -X DELETE "…/engine/deploy?script=myapp"
+```
+
+Once a script is pinned, writing its files records revisions and advances head
+without changing what answers requests. `POST /engine/assets` reports
+`"init": {"ran": false, "reason": "pinned"}` — not because the write failed,
+but because it changed nothing that is running. Re-initialising a working
+deployment on the strength of an edit it is not serving is the disturbance
+pinning exists to prevent.
+
+`GET /engine/deploy` reports `behind`, the number of revisions written since
+the deployment — what you are deciding whether to take.
+
+A deployment is a **whole version**: the revision's root and the modules that
+root was written against. A pinned script whose head has since deleted a module
+still runs, because it is not reading head's files at all.
+
+`revision=head` is resolved to a number before it is stored. A pin that meant
+"whatever is newest" would move with the next write, which is the one thing it
+exists not to do.
+
+Retention will not collect the revision a script serves, alongside labelled
+revisions and the newest that initialised.
+
+### What this version does not do
+
+Every host serves the same revision. Running `staging.example.com` on 42 while
+`example.com` stays on 40 needs the route index to carry a revision, and
+scheduled jobs and message listeners to be scoped by host — neither has a host
+dimension today, so two live revisions of one script would fire its cron twice.
+The table is a per-script pin until those exist.
+
 ## What is not versioned
 
 Code, and only code. A script's tables, its properties, personal storage and

@@ -117,6 +117,11 @@ async fn clear_script_state(script_uri: &str) {
     revisions::forget_current(script_uri);
 }
 
+/// Deploy a script from nothing: clear its state, then store and record it.
+async fn deploy_over_fresh(script_uri: &str, content: &str) {
+    deploy(script_uri, content).await;
+}
+
 /// Rewrite a deployed script's root without clearing its history.
 async fn deploy_over(script_uri: &str, content: &str) {
     let (uri, content) = (script_uri.to_string(), content.to_string());
@@ -1629,4 +1634,211 @@ async fn a_backfilled_baseline_records_the_schema_it_found() {
     );
 
     clear_script_state(uri).await;
+}
+
+// ============================================================================
+// Deployments
+// ============================================================================
+
+async fn deploy_revision(script_uri: &str, revision: i32) {
+    aiwebengine::deployments::deploy(script_uri, revision, Some("deployer"))
+        .await
+        .unwrap_or_else(|e| panic!("deploying should succeed: {:?}", e));
+}
+
+/// What the engine would run for this script, as its own module resolution
+/// sees it: the served root bundled against the modules that root belongs to.
+async fn serving_program(script_uri: &str) -> Result<String, String> {
+    let view = aiwebengine::deployments::serving_view(script_uri);
+    let root = aiwebengine::repository::read_served_source(script_uri)
+        .await
+        .ok_or_else(|| "no source".to_string())?;
+    let uri = script_uri.to_string();
+    tokio::task::spawn_blocking(move || {
+        aiwebengine::module_loader::prepare_executable_program_in(&uri, &root, &view)
+            .map(|prepared| prepared.code)
+            .map_err(|e| format!("{:?}", e))
+    })
+    .await
+    .expect("join")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unpinned_script_serves_whatever_was_written_last() {
+    setup_env().await;
+    let uri = "test://deployments/follow/main.ts";
+    deploy_over_fresh(uri, "function init() { return 1; }\n").await;
+
+    deploy_over(uri, "function init() { return 2; }\n").await;
+
+    assert!(
+        serving_program(uri)
+            .await
+            .expect("the program builds")
+            .contains("return 2"),
+        "with no pin, a write is a deployment — which is what every script \
+         does today and must keep doing"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_write_to_a_pinned_script_does_not_change_what_it_serves() {
+    setup_env().await;
+    let uri = "test://deployments/pinned/main.ts";
+    deploy_over_fresh(uri, "function init() { return 1; }\n").await;
+    let deployed = aiwebengine::revisions::head(uri)
+        .await
+        .expect("head should read")
+        .expect("deploying records a revision");
+
+    deploy_revision(uri, deployed).await;
+
+    // The change lands, and head moves.
+    deploy_over(uri, "function init() { return 2; }\n").await;
+    let head = aiwebengine::revisions::head(uri)
+        .await
+        .expect("head should read")
+        .expect("the write records a revision");
+    assert!(head > deployed, "the write still records a revision");
+
+    assert!(
+        serving_program(uri)
+            .await
+            .expect("the program builds")
+            .contains("return 1"),
+        "the deployment is what is served; the write is history until someone \
+         deploys it"
+    );
+
+    aiwebengine::deployments::unpin(uri).await.expect("unpin");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pinned_script_resolves_imports_from_its_own_revision() {
+    setup_env().await;
+    let uri = "test://deployments/modules/main.ts";
+    let root = "import { rate } from './server/rate.ts';\nfunction init() { return rate(); }";
+    deploy_over_fresh(uri, root).await;
+    write_asset(
+        uri,
+        "server/rate.ts",
+        "export function rate() { return 1; }",
+    )
+    .await;
+
+    let deployed = aiwebengine::revisions::head(uri)
+        .await
+        .expect("head should read")
+        .expect("the write records a revision");
+    deploy_revision(uri, deployed).await;
+
+    // Head loses the module the deployed root imports.
+    delete_asset(uri, "server/rate.ts").await;
+
+    assert!(
+        serving_program(uri).await.is_ok(),
+        "a deployment is a whole version: its root and the modules that root \
+         was written against, not one of each"
+    );
+
+    aiwebengine::deployments::unpin(uri).await.expect("unpin");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn deploying_head_takes_the_writes_that_accumulated() {
+    setup_env().await;
+    let uri = "test://deployments/take/main.ts";
+    deploy_over_fresh(uri, "function init() { return 1; }\n").await;
+    let first = aiwebengine::revisions::head(uri)
+        .await
+        .expect("head should read")
+        .expect("deploying records a revision");
+    deploy_revision(uri, first).await;
+
+    deploy_over(uri, "function init() { return 2; }\n").await;
+    let head = aiwebengine::revisions::head(uri)
+        .await
+        .expect("head should read")
+        .expect("the write records a revision");
+
+    deploy_revision(uri, head).await;
+    aiwebengine::repository::refresh_served_source(uri).await;
+
+    assert!(
+        serving_program(uri)
+            .await
+            .expect("the program builds")
+            .contains("return 2"),
+        "the accumulated writes are taken when, and only when, they are deployed"
+    );
+
+    aiwebengine::deployments::unpin(uri).await.expect("unpin");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pin_names_a_number_rather_than_following_head() {
+    setup_env().await;
+    let uri = "test://deployments/number/main.ts";
+    deploy_over_fresh(uri, "function init() { return 1; }\n").await;
+    let head = aiwebengine::revisions::head(uri)
+        .await
+        .expect("head should read")
+        .expect("deploying records a revision");
+
+    deploy_revision(uri, head).await;
+    deploy_over(uri, "function init() { return 2; }\n").await;
+
+    let deployment = aiwebengine::deployments::get(uri)
+        .await
+        .expect("deployment should read")
+        .expect("the script is pinned");
+    assert_eq!(
+        deployment.revision, head,
+        "a pin that meant 'newest' would move with the next write, which is \
+         the one thing it exists not to do"
+    );
+
+    aiwebengine::deployments::unpin(uri).await.expect("unpin");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn retention_will_not_collect_the_revision_a_script_serves() {
+    setup_env().await;
+    let uri = "test://deployments/retention/main.ts";
+    deploy_over_fresh(uri, "function init() { return 1; }\n").await;
+    let deployed = aiwebengine::revisions::head(uri)
+        .await
+        .expect("head should read")
+        .expect("deploying records a revision");
+    deploy_revision(uri, deployed).await;
+
+    for value in 2..=6 {
+        write_asset(uri, "server/a.ts", &format!("export const a = {};", value)).await;
+    }
+    age_revisions(uri, 90).await;
+
+    aiwebengine::revisions::prune(Some(uri), KEEP_NOTHING)
+        .await
+        .expect("prune should succeed");
+
+    assert!(
+        revision_numbers(uri).await.contains(&deployed),
+        "collecting what a script is serving would leave it running code with \
+         no history behind it"
+    );
+
+    aiwebengine::deployments::unpin(uri).await.expect("unpin");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_deployment_tools_are_exposed_over_mcp() {
+    let descriptors = aiwebengine::engine_api::native_mcp_tool_descriptors();
+    for name in ["deploy_script", "get_deployment"] {
+        assert!(
+            descriptors.iter().any(|tool| tool.name == name),
+            "an agent that can write a script but not choose what it serves is \
+             back to every write being a deployment: '{}' missing",
+            name
+        );
+    }
 }
