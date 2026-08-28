@@ -326,8 +326,9 @@ postgres-local-logs:
 
 build-locally-deploy-prod:
 	@echo "Building production Docker image for amd64 platform using Buildx..."
-	@DOCKER_HOST='' docker buildx create --name aiwebengine-builder --use || true
-	@DOCKER_HOST='' docker buildx build --platform linux/amd64 -t aiwebengine:latest --load .
+	@DOCKER_HOST='' docker buildx inspect aiwebengine-builder >/dev/null 2>&1 || \
+		DOCKER_HOST='' docker buildx create --name aiwebengine-builder --bootstrap
+	@DOCKER_HOST='' docker buildx build --builder aiwebengine-builder --platform linux/amd64 -t aiwebengine:latest --load .
 	@DOCKER_HOST='' docker save aiwebengine:latest -o aiwebengine_latest.tar
 	scp aiwebengine_latest.tar softagen:/tmp/
 	ssh softagen 'docker load -i /tmp/aiwebengine_latest.tar && rm /tmp/aiwebengine_latest.tar'
