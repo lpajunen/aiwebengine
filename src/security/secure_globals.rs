@@ -44,6 +44,90 @@ fn error_answer(message: impl std::fmt::Display) -> String {
     serde_json::json!({ "error": message.to_string() }).to_string()
 }
 
+/// Read an optional argument a script may pass as `null` to skip it.
+///
+/// `Opt<T>` treats a *missing* argument as absent but refuses a literal
+/// `null`, and the documented calling convention uses `null` to skip a
+/// positional one — `query(table, null, 100, null, "asc")`. Skipping an
+/// argument that way raised a type error naming a conversion the script never
+/// asked for, so the only way to reach a later argument was to pass a value
+/// for every earlier one.
+fn optional_arg<'js, T: rquickjs::FromJs<'js>>(
+    value: Opt<rquickjs::Value<'js>>,
+    name: &str,
+) -> Result<Option<T>, String> {
+    let Some(value) = value.0 else {
+        return Ok(None);
+    };
+    if value.is_null() || value.is_undefined() {
+        return Ok(None);
+    }
+    // Taken from the value rather than passed in: a separately supplied
+    // context is a second lifetime, and the two are invariant.
+    let ctx = value.ctx().clone();
+    T::from_js(&ctx, value)
+        .map(Some)
+        .map_err(|e| format!("{} is not valid: {}", name, e))
+}
+
+/// Turn the arguments a script passed to `database.query` into the options the
+/// repository runs it under.
+///
+/// Every one of them is validated here rather than nearer the statement, so a
+/// query that cannot mean what it says is refused before anything runs. Two of
+/// those refusals are new: a sort direction that is neither `asc` nor `desc`
+/// used to sort ascending, and an unrecognised option key used to be dropped.
+/// Both handed back a query that read like the one the script asked for and
+/// was not.
+fn build_query_options(
+    limit: Option<i32>,
+    order_by: Option<String>,
+    order_dir: Option<String>,
+    options_json: Option<&str>,
+) -> Result<crate::repository::QueryOptions, String> {
+    let mut options = crate::repository::QueryOptions {
+        limit: limit.map(i64::from),
+        order_by,
+        ..Default::default()
+    };
+
+    if let Some(raw) = order_dir {
+        options.order_dir = crate::repository::OrderDirection::parse(&raw)
+            .ok_or_else(|| format!("orderDir must be \"asc\" or \"desc\", got \"{}\"", raw))?;
+    }
+
+    let Some(raw) = options_json else {
+        return Ok(options);
+    };
+    if raw.trim().is_empty() {
+        return Ok(options);
+    }
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(raw).map_err(|e| format!("Invalid options JSON: {}", e))?;
+    let object = parsed.as_object().ok_or_else(|| {
+        "options must be a JSON object, for example {\"forUpdate\": true}".to_string()
+    })?;
+
+    for (key, value) in object {
+        match key.as_str() {
+            "forUpdate" => {
+                options.for_update = value.as_bool().ok_or_else(|| {
+                    format!("options.forUpdate must be true or false, got {}", value)
+                })?;
+            }
+            other => {
+                return Err(format!(
+                    "Unknown query option '{}'; the supported options are: forUpdate",
+                    other
+                ));
+            }
+        }
+    }
+
+    Ok(options)
+}
+
 /// Reads the schema a script wants a table to have.
 ///
 /// Shaped like the `columns` a script would otherwise pass to `addTextColumn`
@@ -3302,18 +3386,21 @@ impl SecureGlobalContext {
         )?;
         database_obj.set("dropTable", drop_table)?;
 
-        // database.query(tableName, filters, limit, orderBy, orderDir)
+        // database.query(tableName, filters, limit, orderBy, orderDir, options)
         // filters supports equality {"col": val} and range operators {"col": {"$gt": val, ...}}
+        // options supports {"forUpdate": true} to hold the returned rows for
+        // the rest of the transaction.
         let script_uri_query = script_uri_owned.clone();
         let user_ctx_query = user_context.clone();
         let query_table = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>,
                   table_name: String,
-                  filters: Opt<String>,
-                  limit: Opt<i32>,
-                  order_by: Opt<String>,
-                  order_dir: Opt<String>|
+                  filters: Opt<rquickjs::Value<'_>>,
+                  limit: Opt<rquickjs::Value<'_>>,
+                  order_by: Opt<rquickjs::Value<'_>>,
+                  order_dir: Opt<rquickjs::Value<'_>>,
+                  options: Opt<rquickjs::Value<'_>>|
                   -> JsResult<String> {
                 debug!(
                     "database.query called for script {} on table: {}",
@@ -3330,7 +3417,28 @@ impl SecureGlobalContext {
                     );
                 }
 
-                let filters_map = if let Some(filters_str) = filters.0 {
+                let filters_arg: Option<String> = match optional_arg(filters, "filters") {
+                    Ok(value) => value,
+                    Err(message) => return Ok(error_answer(message)),
+                };
+                let limit_arg: Option<i32> = match optional_arg(limit, "limit") {
+                    Ok(value) => value,
+                    Err(message) => return Ok(error_answer(message)),
+                };
+                let order_by_arg: Option<String> = match optional_arg(order_by, "orderBy") {
+                    Ok(value) => value,
+                    Err(message) => return Ok(error_answer(message)),
+                };
+                let order_dir_arg: Option<String> = match optional_arg(order_dir, "orderDir") {
+                    Ok(value) => value,
+                    Err(message) => return Ok(error_answer(message)),
+                };
+                let options_arg: Option<String> = match optional_arg(options, "options") {
+                    Ok(value) => value,
+                    Err(message) => return Ok(error_answer(message)),
+                };
+
+                let filters_map = if let Some(filters_str) = filters_arg {
                     match serde_json::from_str::<std::collections::HashMap<String, serde_json::Value>>(
                         &filters_str,
                     ) {
@@ -3343,17 +3451,21 @@ impl SecureGlobalContext {
                     None
                 };
 
-                let limit_val = limit.0.map(|l| l as i64);
-                let order_by_ref = order_by.0.as_deref();
-                let order_dir_ref = order_dir.0.as_deref();
+                let query_options = match build_query_options(
+                    limit_arg,
+                    order_by_arg,
+                    order_dir_arg,
+                    options_arg.as_deref(),
+                ) {
+                    Ok(parsed) => parsed,
+                    Err(message) => return Ok(error_answer(message)),
+                };
 
                 match crate::repository::query_table(
                     &script_uri_query,
                     &table_name,
                     filters_map.as_ref(),
-                    limit_val,
-                    order_by_ref,
-                    order_dir_ref,
+                    &query_options,
                 ) {
                     Ok(rows) => match serde_json::to_string(&rows) {
                         Ok(json) => Ok(json),
@@ -5257,5 +5369,93 @@ mod api_surface_tests {
             eval_outside_registration_phase("routeRegistry.registerStreamRoute('no-slash')")
                 .contains("must start with"),
         );
+    }
+}
+
+#[cfg(test)]
+mod query_option_tests {
+    use super::build_query_options;
+    use crate::repository::OrderDirection;
+
+    #[test]
+    fn omitting_everything_gives_the_defaults() {
+        let options = build_query_options(None, None, None, None).expect("defaults are valid");
+
+        assert_eq!(options.limit, None);
+        assert_eq!(options.order_by, None);
+        assert_eq!(options.order_dir, OrderDirection::Ascending);
+        assert!(!options.for_update);
+    }
+
+    #[test]
+    fn the_arguments_land_where_the_query_will_look_for_them() {
+        let options = build_query_options(
+            Some(25),
+            Some("ts".to_string()),
+            Some("desc".to_string()),
+            Some(r#"{"forUpdate": true}"#),
+        )
+        .expect("a fully specified query is valid");
+
+        assert_eq!(options.limit, Some(25));
+        assert_eq!(options.order_by.as_deref(), Some("ts"));
+        assert_eq!(options.order_dir, OrderDirection::Descending);
+        assert!(options.for_update);
+    }
+
+    #[test]
+    fn a_sort_direction_that_is_neither_is_refused() {
+        // It used to sort ascending. A script asking for "descending" got the
+        // opposite of what it asked for, in silence.
+        let error = build_query_options(None, None, Some("descending".to_string()), None)
+            .expect_err("'descending' is not a direction");
+
+        assert!(
+            error.contains("descending") && error.contains("desc"),
+            "the refusal should show what was passed and what is accepted: {error}"
+        );
+
+        for accepted in ["asc", "ASC", "desc", "DESC", " Desc "] {
+            assert!(
+                build_query_options(None, None, Some(accepted.to_string()), None).is_ok(),
+                "{accepted} should be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unrecognised_option_is_refused_rather_than_dropped() {
+        // Dropping it would hand back an unguarded query to a caller who asked
+        // for a guarded one — this option's whole failure mode, in silence.
+        let error = build_query_options(None, None, None, Some(r#"{"forupdate": true}"#))
+            .expect_err("a misspelled key is not an option");
+
+        assert!(
+            error.contains("forupdate") && error.contains("forUpdate"),
+            "the refusal should name both what was passed and what is supported: {error}"
+        );
+    }
+
+    #[test]
+    fn an_option_of_the_wrong_type_is_refused() {
+        let error = build_query_options(None, None, None, Some(r#"{"forUpdate": "yes"}"#))
+            .expect_err("a string is not a boolean");
+        assert!(error.contains("true or false"), "{error}");
+
+        let error = build_query_options(None, None, None, Some("[]"))
+            .expect_err("an array is not an options object");
+        assert!(error.contains("JSON object"), "{error}");
+
+        let error = build_query_options(None, None, None, Some("{not json"))
+            .expect_err("this is not JSON at all");
+        assert!(error.contains("Invalid options JSON"), "{error}");
+    }
+
+    #[test]
+    fn an_empty_options_string_is_the_same_as_none() {
+        // A script building the argument conditionally can end up passing "".
+        let options =
+            build_query_options(None, None, None, Some("   ")).expect("blank is not an error");
+        assert!(!options.for_update);
     }
 }

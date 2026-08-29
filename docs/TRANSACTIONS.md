@@ -4,12 +4,66 @@ This document describes the transaction support in aiwebengine, allowing JavaScr
 
 ## Overview
 
-Transactions provide ACID guarantees for database operations:
+Transactions group database operations so they succeed or fail together:
 
 - **Automatic lifecycle**: Transactions auto-commit on normal handler exit and auto-rollback on exceptions
 - **Manual control**: JavaScript APIs allow explicit transaction management
 - **Nested transactions**: PostgreSQL savepoints enable nested transaction scopes
 - **Timeout protection**: Configurable timeouts prevent long-running transactions from holding connections
+
+## What a Transaction Does Not Give You
+
+A transaction makes a group of writes **all-or-nothing**. On its own it does
+not stop another transaction reading the same rows at the same time.
+
+Scripts run at PostgreSQL's default isolation level, `READ COMMITTED`, where a
+plain `database.query()` takes no lock. So this counter is wrong, even though
+every line of it looks right and every transaction commits successfully:
+
+```javascript
+// WRONG under concurrency — two callers can read the same seq
+database.beginTransaction(5000);
+const row = database.query("event_seq", null, 1).json()[0];
+database.update("event_seq", row.id, JSON.stringify({ seq: row.seq + 1 }));
+database.commitTransaction();
+```
+
+Run ten of those at once and they do not produce ten distinct numbers. Several
+read the same value, each writes the same result, and the later writes replace
+the earlier ones. Nothing errors — this is a **lost update**, and it is what
+`READ COMMITTED` is specified to allow.
+
+### Reading in Order to Write
+
+Pass `{ forUpdate: true }` to hold the rows the query returns until the
+transaction ends. A second caller then waits for the first to commit and reads
+what it wrote:
+
+```javascript
+// Correct: the row is held for the rest of the transaction
+database.beginTransaction(5000);
+const row = database
+  .query("event_seq", null, 1, null, null, JSON.stringify({ forUpdate: true }))
+  .json()[0];
+database.update("event_seq", row.id, JSON.stringify({ seq: row.seq + 1 }));
+database.commitTransaction();
+```
+
+Rules of thumb:
+
+- Any **read whose value decides a later write** in the same transaction needs
+  `forUpdate`. A read whose result is only returned to the caller does not.
+- `forUpdate` outside a transaction is **refused**. The lock would be released
+  the moment the query returned, which would read like a guard without being
+  one.
+- Lock the rows in a consistent order across handlers. Two transactions that
+  take the same two rows in opposite orders can deadlock.
+- Hold the transaction for as little time as possible — every other caller
+  wanting those rows is waiting on it. See [Keep Transactions
+  Short](#2-keep-transactions-short).
+
+For a whole-operation mutex rather than a row guard — "only one instance runs
+this job" — use `database.acquireLease()` instead.
 
 ## Automatic Transaction Management
 
@@ -297,7 +351,37 @@ performDatabaseOperations();
 database.commitTransaction();
 ```
 
-### 3. Use Savepoints for Partial Rollback
+### 3. Guard Reads That Decide Writes
+
+If a value read inside a transaction determines what that transaction writes,
+read it with `forUpdate`. Without it the read takes no lock and the write can
+be lost silently — see [What a Transaction Does Not Give
+You](#what-a-transaction-does-not-give-you):
+
+```javascript
+// Good: the balance is held while it is being spent
+database.beginTransaction(5000);
+const account = database
+  .query(
+    "accounts",
+    JSON.stringify({ id: accountId }),
+    1,
+    null,
+    null,
+    JSON.stringify({ forUpdate: true }),
+  )
+  .json()[0];
+if (account.balance >= amount) {
+  database.update(
+    "accounts",
+    account.id,
+    JSON.stringify({ balance: account.balance - amount }),
+  );
+}
+database.commitTransaction();
+```
+
+### 4. Use Savepoints for Partial Rollback
 
 When processing batches, use savepoints to rollback individual items while keeping successful ones:
 
@@ -312,7 +396,7 @@ for (const item of items) {
 }
 ```
 
-### 4. Handle Errors Explicitly
+### 5. Handle Errors Explicitly
 
 Always check return values for errors:
 

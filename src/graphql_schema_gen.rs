@@ -251,17 +251,25 @@ fn generate_delete_mutation(
 
 /// Map database column type to GraphQL scalar type
 fn map_column_to_graphql_type(column_type: &str) -> &'static str {
-    match column_type.to_uppercase().as_str() {
-        "INTEGER" | "INT" | "SERIAL" => "Int",
+    use crate::db_schema_utils::BindType;
+
+    // Resolved through the same parser the query path uses, so a column is
+    // named one type here and bound as another nowhere. It accepts both the
+    // engine's own type names and the SQL ones older tables recorded.
+    match BindType::from_declared(column_type) {
+        Some(BindType::Int4) => "Int",
         // GraphQL's `Int` is 32-bit, so a `BIGINT` cannot be one. `Float` is a
         // double, which is what the value lands in on the JavaScript side
         // regardless.
-        "BIGINT" | "BIGSERIAL" => "Float",
-        "DOUBLE PRECISION" | "FLOAT" | "REAL" => "Float",
-        "TEXT" | "STRING" => "String",
-        "BOOLEAN" | "BOOL" => "Boolean",
-        "TIMESTAMPTZ" | "TIMESTAMP" => "String", // ISO 8601 string
-        _ => "String",                           // Default fallback
+        Some(BindType::Int8) => "Float",
+        Some(BindType::Float8) => "Float",
+        Some(BindType::Text) => "String",
+        Some(BindType::Bool) => "Boolean",
+        // ISO 8601 string.
+        Some(BindType::Timestamptz) => "String",
+        // A column nothing declared reaches the script as whatever decoding it
+        // yields; `String` is the only type that cannot be wrong about it.
+        None => "String",
     }
 }
 
@@ -295,6 +303,16 @@ mod tests {
         assert_eq!(map_column_to_graphql_type("TEXT"), "String");
         assert_eq!(map_column_to_graphql_type("BOOLEAN"), "Boolean");
         assert_eq!(map_column_to_graphql_type("TIMESTAMPTZ"), "String");
+
+        // The names tables record now, alongside the SQL ones older tables
+        // recorded. Both have to reach the same GraphQL type, or a table
+        // would describe itself differently depending on when it was made.
+        assert_eq!(map_column_to_graphql_type("integer"), "Int");
+        assert_eq!(map_column_to_graphql_type("bigint"), "Float");
+        assert_eq!(map_column_to_graphql_type("float"), "Float");
+        assert_eq!(map_column_to_graphql_type("text"), "String");
+        assert_eq!(map_column_to_graphql_type("boolean"), "Boolean");
+        assert_eq!(map_column_to_graphql_type("timestamp"), "String");
     }
 
     #[test]

@@ -354,6 +354,63 @@ pub struct EnsuredColumn {
     pub default_value: Option<String>,
 }
 
+/// Which way a query orders its rows.
+///
+/// An enum rather than a string because there are two answers and the caller
+/// has to pick one of them. The string form used to fall through to ascending
+/// for anything it did not recognise, so a misspelled `"descending"` sorted
+/// the wrong way without saying so.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OrderDirection {
+    #[default]
+    Ascending,
+    Descending,
+}
+
+impl OrderDirection {
+    /// Read a direction as a script would write it, or `None` if it is neither.
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_lowercase().as_str() {
+            "asc" => Some(OrderDirection::Ascending),
+            "desc" => Some(OrderDirection::Descending),
+            _ => None,
+        }
+    }
+
+    /// `ASC` and `DESC` are spelled the same by every backend, so this needs
+    /// no dialect.
+    fn sql(self) -> &'static str {
+        match self {
+            OrderDirection::Ascending => "ASC",
+            OrderDirection::Descending => "DESC",
+        }
+    }
+}
+
+/// How a query runs, beyond which rows it matches.
+///
+/// One value rather than four trailing parameters. A call site passing
+/// `(None, None, None, true)` says nothing about what any of them are, and the
+/// list is the part of a query most likely to grow.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct QueryOptions {
+    /// Most rows to return. `None` takes the default of 100; anything above
+    /// the cap of 1000 is clamped to it.
+    pub limit: Option<i64>,
+    /// Column to sort by. `None` leaves the order to the database.
+    pub order_by: Option<String>,
+    /// Which way to sort, when `order_by` names a column.
+    pub order_dir: OrderDirection,
+    /// Hold the rows this query returns until the transaction ends, so a
+    /// read-modify-write can rely on what it read.
+    ///
+    /// Only meaningful inside a transaction: a lock taken outside one is
+    /// released the moment the statement finishes, which looks like a guard
+    /// and is not one. Asking for it outside a transaction is refused rather
+    /// than quietly ignored.
+    pub for_update: bool,
+}
+
 /// The shape a script wants a table to be in, whatever shape it is in now.
 #[derive(Debug, Clone, Default)]
 pub struct TableSpec {
@@ -2693,9 +2750,10 @@ where
 // ============================================================================
 
 use crate::db_schema_utils::{
-    ColumnType, MAX_COLUMNS_PER_TABLE, MAX_TABLES_PER_SCRIPT, generate_physical_table_name,
-    quote_identifier, validate_default_value, validate_identifier,
+    BindType, ColumnType, MAX_COLUMNS_PER_TABLE, MAX_TABLES_PER_SCRIPT,
+    generate_physical_table_name, quote_identifier, validate_identifier,
 };
+use crate::sql_dialect::dialect;
 
 /// Names each savepoint a [`ScopedConn`] brackets an operation with.
 static SCHEMA_SAVEPOINT_COUNTER: std::sync::atomic::AtomicU64 =
@@ -2966,8 +3024,9 @@ async fn db_create_script_table(
 
     // Create the physical table with id column
     let create_table_sql = format!(
-        "CREATE TABLE {} (id SERIAL PRIMARY KEY)",
-        quote_identifier(&physical_table_name)
+        "CREATE TABLE {} ({})",
+        quote_identifier(&physical_table_name),
+        dialect().identity_primary_key()
     );
 
     sqlx::query(sqlx::AssertSqlSafe(create_table_sql.as_str()))
@@ -2984,7 +3043,12 @@ async fn db_create_script_table(
     // Record the table in script_tables metadata
     let schema_json = serde_json::json!({
         "columns": [
-            {"name": "id", "type": "SERIAL", "nullable": false, "primary_key": true}
+            {
+                "name": "id",
+                "type": ColumnType::Integer.canonical(),
+                "nullable": false,
+                "primary_key": true
+            }
         ]
     });
 
@@ -3083,7 +3147,7 @@ async fn db_ensure_script_table(
             script_uri,
             logical_table_name,
             &column.name,
-            column.column_type.clone(),
+            column.column_type,
             column.nullable,
             column.default_value.as_deref(),
         )
@@ -3178,7 +3242,7 @@ async fn db_add_column_to_script_table(
         "ALTER TABLE {} ADD COLUMN {} {}",
         quote_identifier(&physical_table_name),
         quote_identifier(column_name),
-        column_type.to_sql()
+        dialect().column_type(column_type)
     );
 
     if !nullable {
@@ -3186,12 +3250,15 @@ async fn db_add_column_to_script_table(
     }
 
     if let Some(default) = default_value {
-        let validated_default =
-            validate_default_value(&column_type, default).map_err(|e| AppError::Validation {
+        // Read into a value first, so what reaches the statement is this
+        // backend's spelling of that value rather than the script's text.
+        let parsed = column_type
+            .parse_default(default)
+            .map_err(|e| AppError::Validation {
                 field: "default_value".to_string(),
                 reason: e.to_string(),
             })?;
-        alter_sql.push_str(&format!(" DEFAULT {}", validated_default));
+        alter_sql.push_str(&format!(" DEFAULT {}", dialect().render_default(&parsed)));
     }
 
     // Execute the ALTER TABLE
@@ -3213,7 +3280,7 @@ async fn db_add_column_to_script_table(
     {
         columns.push(serde_json::json!({
             "name": column_name,
-            "type": column_type.to_sql(),
+            "type": column_type.canonical(),
             "nullable": nullable,
             "default": default_value,
         }));
@@ -3237,7 +3304,7 @@ async fn db_add_column_to_script_table(
         "Added column {} to table {}: {} {}",
         column_name,
         logical_table_name,
-        column_type.to_sql(),
+        column_type.canonical(),
         if nullable { "NULL" } else { "NOT NULL" }
     );
 
@@ -3878,96 +3945,6 @@ fn parse_filter_conditions(
     Ok(conditions)
 }
 
-/// The Postgres type a script's value is bound as, and cast to in the SQL.
-///
-/// Picking this from the shape of the JSON that carried the value — an `i64`
-/// for `2`, an `f64` for `1.57` — is what let one SQL string arrive with
-/// different parameter types on different calls. sqlx caches a prepared
-/// statement under that string alone: `get_or_prepare` returns the cached
-/// entry before it looks at the argument types, so the types inferred by the
-/// first call are the types every later call binds against, for as long as
-/// that pooled connection lives. Bind ships the encoded bytes unchecked, so a
-/// float sent to a parameter prepared as `int8` is not rejected — it is
-/// reinterpreted, bit for bit, and `1.57` arrives as 4609081767789723156.
-///
-/// Deciding the type from the column instead makes it a function of the
-/// column names, which are already in the SQL text — the thing the cache is
-/// keyed on. The same statement can then only ever be bound the same way.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum BindType {
-    Int4,
-    Int8,
-    Float8,
-    Text,
-    Bool,
-    Timestamptz,
-}
-
-impl BindType {
-    /// The type the placeholder is cast to, as in `$1::int4`.
-    ///
-    /// Pinning it in the SQL does two things. It stops Postgres inferring the
-    /// parameter's type from the surrounding statement — inference is what
-    /// quietly rounded `1.57` to `2` through a `float8 → int4` assignment
-    /// cast — and it puts the type into the cache key, so a column whose
-    /// declared type is unknown and whose bind type had to be guessed from
-    /// the value still cannot collide with a differently typed guess.
-    fn cast(self) -> &'static str {
-        match self {
-            BindType::Int4 => "int4",
-            BindType::Int8 => "int8",
-            BindType::Float8 => "float8",
-            BindType::Text => "text",
-            BindType::Bool => "bool",
-            BindType::Timestamptz => "timestamptz",
-        }
-    }
-
-    /// How the type is named back to the script, in the words it declared it with.
-    fn describe(self) -> &'static str {
-        match self {
-            BindType::Int4 => "INTEGER",
-            BindType::Int8 => "BIGINT",
-            BindType::Float8 => "FLOAT",
-            BindType::Text => "TEXT",
-            BindType::Bool => "BOOLEAN",
-            BindType::Timestamptz => "TIMESTAMP",
-        }
-    }
-
-    /// Resolve a column type recorded in `script_tables.schema_json`.
-    ///
-    /// Returns `None` for anything unrecognised, which leaves the value's own
-    /// shape to decide — see [`BindType::infer`].
-    fn from_declared(declared: &str) -> Option<Self> {
-        match declared.to_uppercase().as_str() {
-            "INTEGER" | "INT" | "INT4" | "SERIAL" => Some(BindType::Int4),
-            "BIGINT" | "INT8" | "BIGSERIAL" => Some(BindType::Int8),
-            "DOUBLE PRECISION" | "FLOAT8" | "FLOAT" | "REAL" | "DOUBLE" => Some(BindType::Float8),
-            "TEXT" | "STRING" | "VARCHAR" => Some(BindType::Text),
-            "BOOLEAN" | "BOOL" => Some(BindType::Bool),
-            "TIMESTAMPTZ" | "TIMESTAMP" => Some(BindType::Timestamptz),
-            _ => None,
-        }
-    }
-
-    /// The type to bind a value as when the column's own type is unknown.
-    ///
-    /// Tables predating the schema metadata — and lease tables, which record
-    /// no columns — have nothing to look the column up in. The value's shape
-    /// is all that is left, which is the old behaviour; what keeps it safe is
-    /// that the guess is pinned by [`BindType::cast`], so two different
-    /// guesses land on two different cached statements.
-    fn infer(value: &serde_json::Value) -> Self {
-        match value {
-            serde_json::Value::Number(n) if n.as_i64().is_some() => BindType::Int8,
-            serde_json::Value::Number(_) => BindType::Float8,
-            serde_json::Value::Bool(_) => BindType::Bool,
-            _ => BindType::Text,
-        }
-    }
-}
-
 /// The columns of a script-owned table, with the physical name to address it by.
 ///
 /// Loaded in the one query that used to fetch the physical name alone, so
@@ -4028,6 +4005,11 @@ impl TableColumns {
         })
     }
 
+    /// The type `column` was declared as, if the table records one for it.
+    fn declared_type(&self, column: &str) -> Option<BindType> {
+        self.declared.get(column).copied()
+    }
+
     /// The type `column` must be bound as, falling back to the value's shape.
     fn bind_type(&self, column: &str, value: &serde_json::Value) -> BindType {
         self.declared
@@ -4053,9 +4035,9 @@ impl<'a> BoundValue<'a> {
         }
     }
 
-    /// The placeholder for this value, cast to its resolved type.
+    /// The placeholder for this value, spelled by the backend in use.
     fn placeholder(&self, position: usize) -> String {
-        format!("${}::{}", position, self.bind_type.cast())
+        dialect().placeholder(position, self.bind_type)
     }
 }
 
@@ -4186,34 +4168,118 @@ fn bind_value<'q>(
     }
 }
 
-/// Convert a sqlx `PgRow` to a `serde_json::Value::Object`.
-fn row_to_json(row: &sqlx::postgres::PgRow) -> serde_json::Value {
+/// Convert a sqlx `PgRow` to a `serde_json::Value::Object`, decoding each
+/// column as the type the script declared it.
+///
+/// Reading a value by trying each Rust type in turn until one decodes is only
+/// safe where the wire format carries the column's own type. Postgres does, so
+/// a `bool` column fails the integer attempt and falls through to the right
+/// one. A backend that stores a boolean as 0 or 1 does not: the integer
+/// attempt succeeds first, and `true` comes back to the script as `1`. Nothing
+/// errors, nothing is logged, and the script sees a different value than it
+/// wrote.
+///
+/// Consulting the declared type makes the read path the mirror of the write
+/// path, which already binds by declared type. Sniffing survives only as the
+/// fallback for columns nothing declared — lease tables, which record no
+/// schema, and tables predating the metadata.
+fn row_to_json(row: &sqlx::postgres::PgRow, columns: &TableColumns) -> serde_json::Value {
     use sqlx::Column;
+
     let mut obj = serde_json::Map::new();
     for (idx, column) in row.columns().iter().enumerate() {
-        let column_name = column.name().to_string();
-        let value = if let Ok(v) = row.try_get::<i64, _>(idx) {
-            serde_json::Value::Number(v.into())
-        } else if let Ok(v) = row.try_get::<i32, _>(idx) {
-            serde_json::Value::Number(v.into())
-        } else if let Ok(v) = row.try_get::<String, _>(idx) {
-            serde_json::Value::String(v)
-        } else if let Ok(v) = row.try_get::<f64, _>(idx) {
-            // Ahead of the null fallback rather than after it: a `float8`
-            // column matches none of the arms above, so without this one every
-            // float a script stored would read back as null.
-            serde_json::Number::from_f64(v)
-                .map_or(serde_json::Value::Null, serde_json::Value::Number)
-        } else if let Ok(v) = row.try_get::<bool, _>(idx) {
-            serde_json::Value::Bool(v)
-        } else if let Ok(v) = row.try_get::<DateTime<Utc>, _>(idx) {
-            serde_json::Value::String(v.to_rfc3339())
-        } else {
-            serde_json::Value::Null
+        let name = column.name();
+
+        let value = match columns.declared_type(name) {
+            // A declared type that will not decode means the recorded schema
+            // and the physical column have drifted apart. Falling back leaves
+            // the script with the value rather than a null, which is the same
+            // thing it got before any of this was declared.
+            Some(bind_type) => {
+                decode_as(row, idx, bind_type).unwrap_or_else(|| decode_by_shape(row, idx))
+            }
+            None => decode_by_shape(row, idx),
         };
-        obj.insert(column_name, value);
+
+        obj.insert(name.to_string(), value);
     }
     serde_json::Value::Object(obj)
+}
+
+/// Decode one column as `bind_type`, or `None` if it does not hold that type.
+///
+/// A SQL `NULL` decodes as `Some(Value::Null)` — it is a value of the column's
+/// type, not a failure to decode one.
+fn decode_as(
+    row: &sqlx::postgres::PgRow,
+    idx: usize,
+    bind_type: BindType,
+) -> Option<serde_json::Value> {
+    fn number(value: impl Into<serde_json::Number>) -> serde_json::Value {
+        serde_json::Value::Number(value.into())
+    }
+
+    let value = match bind_type {
+        BindType::Int4 => row
+            .try_get::<Option<i32>, _>(idx)
+            .ok()?
+            .map_or_else(|| serde_json::Value::Null, number),
+        BindType::Int8 => row
+            .try_get::<Option<i64>, _>(idx)
+            .ok()?
+            .map_or_else(|| serde_json::Value::Null, number),
+        BindType::Float8 => row.try_get::<Option<f64>, _>(idx).ok()?.map_or_else(
+            || serde_json::Value::Null,
+            // JSON has no NaN or infinity. A column holding one has no
+            // representation here, and null is the only honest answer.
+            |v| {
+                serde_json::Number::from_f64(v)
+                    .map_or(serde_json::Value::Null, serde_json::Value::Number)
+            },
+        ),
+        BindType::Text => row
+            .try_get::<Option<String>, _>(idx)
+            .ok()?
+            .map_or(serde_json::Value::Null, serde_json::Value::String),
+        BindType::Bool => row
+            .try_get::<Option<bool>, _>(idx)
+            .ok()?
+            .map_or(serde_json::Value::Null, serde_json::Value::Bool),
+        BindType::Timestamptz => row
+            .try_get::<Option<DateTime<Utc>>, _>(idx)
+            .ok()?
+            .map_or(serde_json::Value::Null, |v| {
+                serde_json::Value::String(v.to_rfc3339())
+            }),
+    };
+
+    Some(value)
+}
+
+/// Decode one column by trying each type in turn.
+///
+/// Only for columns the recorded schema does not describe. Correct on Postgres,
+/// where the column's type decides which attempt succeeds; see [`row_to_json`]
+/// for why it cannot be the general case.
+fn decode_by_shape(row: &sqlx::postgres::PgRow, idx: usize) -> serde_json::Value {
+    if let Ok(v) = row.try_get::<i64, _>(idx) {
+        serde_json::Value::Number(v.into())
+    } else if let Ok(v) = row.try_get::<i32, _>(idx) {
+        serde_json::Value::Number(v.into())
+    } else if let Ok(v) = row.try_get::<String, _>(idx) {
+        serde_json::Value::String(v)
+    } else if let Ok(v) = row.try_get::<f64, _>(idx) {
+        // Ahead of the null fallback rather than after it: a `float8`
+        // column matches none of the arms above, so without this one every
+        // float a script stored would read back as null.
+        serde_json::Number::from_f64(v).map_or(serde_json::Value::Null, serde_json::Value::Number)
+    } else if let Ok(v) = row.try_get::<bool, _>(idx) {
+        serde_json::Value::Bool(v)
+    } else if let Ok(v) = row.try_get::<DateTime<Utc>, _>(idx) {
+        serde_json::Value::String(v.to_rfc3339())
+    } else {
+        serde_json::Value::Null
+    }
 }
 
 /// Look up the physical table name for a script-owned logical table.
@@ -4256,10 +4322,19 @@ async fn db_query_table(
     script_uri: &str,
     logical_table_name: &str,
     filters: Option<&HashMap<String, serde_json::Value>>,
-    limit: Option<i64>,
-    order_by: Option<&str>,
-    order_dir: Option<&str>,
+    options: &QueryOptions,
 ) -> AppResult<Vec<serde_json::Value>> {
+    if options.for_update && !crate::database::get_current_transaction_active() {
+        return Err(AppError::Validation {
+            field: "forUpdate".to_string(),
+            reason: "forUpdate needs an open transaction to hold the rows it locks — call \
+                     beginTransaction() first, and commitTransaction() once the write is done. \
+                     Outside a transaction the lock is released as soon as the query returns, \
+                     which would read like a guard without being one."
+                .to_string(),
+        });
+    }
+
     let columns = TableColumns::load(conn, script_uri, logical_table_name).await?;
 
     // Parse filter conditions (supports equality and range operators)
@@ -4304,26 +4379,30 @@ async fn db_query_table(
     }
 
     // ORDER BY
-    if let Some(order_col) = order_by {
+    if let Some(order_col) = options.order_by.as_deref() {
         validate_identifier(order_col).map_err(|e| AppError::Validation {
             field: "order_by".to_string(),
             reason: e.to_string(),
         })?;
-        let dir = match order_dir.unwrap_or("asc").to_lowercase().as_str() {
-            "desc" => "DESC",
-            _ => "ASC",
-        };
         sql.push_str(&format!(
             " ORDER BY {} {}",
             quote_identifier(order_col),
-            dir
+            options.order_dir.sql()
         ));
     }
 
     // LIMIT (default 100, max 1000)
-    let limit_val = limit.unwrap_or(100).min(1000);
+    let limit_val = options.limit.unwrap_or(100).min(1000);
     param_count += 1;
     sql.push_str(&format!(" LIMIT ${}::int8", param_count));
+
+    // Last, after LIMIT: the clause applies to the rows the query settles on.
+    if options.for_update
+        && let Some(clause) = dialect().row_lock_clause()
+    {
+        sql.push(' ');
+        sql.push_str(clause);
+    }
 
     // Bind parameters
     let mut sql_query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
@@ -4340,7 +4419,7 @@ async fn db_query_table(
         }
     })?;
 
-    Ok(rows.iter().map(row_to_json).collect())
+    Ok(rows.iter().map(|row| row_to_json(row, &columns)).collect())
 }
 
 /// Insert a row into a script-owned table
@@ -4388,7 +4467,7 @@ async fn db_insert_row(
         }
     })?;
 
-    Ok(row_to_json(&row))
+    Ok(row_to_json(&row, &columns))
 }
 
 /// Update a row in a script-owned table
@@ -4445,7 +4524,7 @@ async fn db_update_row(
         }
     })?;
 
-    Ok(row_to_json(&row))
+    Ok(row_to_json(&row, &columns))
 }
 
 /// Delete a row from a script-owned table by ID
@@ -4575,7 +4654,7 @@ async fn db_upsert_row(
         }
     })?;
 
-    Ok(row_to_json(&row))
+    Ok(row_to_json(&row, &columns))
 }
 
 /// Delete rows from a script-owned table matching the given filter conditions.
@@ -4678,26 +4757,52 @@ async fn db_acquire_lease(
         });
     }
 
-    // Single-statement atomic upsert: wins only if slot is free or ours.
-    // bind order: $1=lease_id, $2=owner, $3=ttl_ms (bigint milliseconds)
+    // Both instants come from the engine's clock rather than the database's,
+    // and both come from the same read of it, so the window a lease is judged
+    // against is exactly the window it was granted for.
+    //
+    // The trade this makes is worth naming. `NOW()` was one clock shared by
+    // every instance pointed at the one database, which made a lease immune to
+    // clock skew between them. Wall-clock instants are not: an instance whose
+    // clock runs ahead by δ writes expiries δ late and judges other instances'
+    // expiries δ early, so a lease can be taken up to δ before it truly lapses.
+    // That is the usual guarantee of a wall-clock lease and it holds as long as
+    // instances keep time to well inside the TTL — which is the assumption a
+    // multi-instance deployment was already making everywhere else the engine
+    // reads a clock. What it buys is a lease that no longer depends on one
+    // database's interval arithmetic to say when it ends.
+    let now = Utc::now();
+    let expires_at = chrono::TimeDelta::try_milliseconds(ttl_ms)
+        .and_then(|ttl| now.checked_add_signed(ttl))
+        .ok_or_else(|| AppError::Validation {
+            field: "ttl_ms".to_string(),
+            reason: format!("ttl_ms of {} is too far in the future to represent", ttl_ms),
+        })?;
+
+    // Single-statement atomic upsert: wins only if the slot is free or ours.
     let sql = format!(
         r#"
         INSERT INTO {tbl} (lease_id, owner, expires_at)
-        VALUES ($1, $2, NOW() + ($3::bigint * interval '1 millisecond'))
+        VALUES ({lease_id}, {owner}, {expires_at})
         ON CONFLICT (lease_id) DO UPDATE
             SET owner      = EXCLUDED.owner,
                 expires_at = EXCLUDED.expires_at
-        WHERE {tbl}.expires_at <= NOW()
+        WHERE {tbl}.expires_at <= {now}
            OR {tbl}.owner = EXCLUDED.owner
         RETURNING owner, expires_at
         "#,
-        tbl = quote_identifier(&physical_table_name)
+        tbl = quote_identifier(&physical_table_name),
+        lease_id = dialect().placeholder(1, BindType::Text),
+        owner = dialect().placeholder(2, BindType::Text),
+        expires_at = dialect().placeholder(3, BindType::Timestamptz),
+        now = dialect().placeholder(4, BindType::Timestamptz),
     );
 
     let upsert_row = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
         .bind(lease_id)
         .bind(owner)
-        .bind(ttl_ms)
+        .bind(expires_at)
+        .bind(now)
         .fetch_optional(&mut *conn)
         .await
         .map_err(|e| {
@@ -4725,8 +4830,9 @@ async fn db_acquire_lease(
     // Upsert produced no row — someone else holds an active lease.
     // Do a plain SELECT to return current lease info (best-effort, non-critical).
     let select_sql = format!(
-        "SELECT owner, expires_at FROM {} WHERE lease_id = $1",
-        quote_identifier(&physical_table_name)
+        "SELECT owner, expires_at FROM {} WHERE lease_id = {}",
+        quote_identifier(&physical_table_name),
+        dialect().placeholder(1, BindType::Text),
     );
     let current = sqlx::query(sqlx::AssertSqlSafe(select_sql.as_str()))
         .bind(lease_id)
@@ -5508,21 +5614,12 @@ pub fn query_table(
     script_uri: &str,
     logical_table_name: &str,
     filters: Option<&HashMap<String, serde_json::Value>>,
-    limit: Option<i64>,
-    order_by: Option<&str>,
-    order_dir: Option<&str>,
+    options: &QueryOptions,
 ) -> AppResult<Vec<serde_json::Value>> {
     let repo = get_repository();
     run_bounded(async {
-        repo.query_table(
-            script_uri,
-            logical_table_name,
-            filters,
-            limit,
-            order_by,
-            order_dir,
-        )
-        .await
+        repo.query_table(script_uri, logical_table_name, filters, options)
+            .await
     })
 }
 
@@ -6393,9 +6490,7 @@ pub trait Repository: Send + Sync {
         script_uri: &str,
         logical_table_name: &str,
         filters: Option<&HashMap<String, serde_json::Value>>,
-        limit: Option<i64>,
-        order_by: Option<&str>,
-        order_dir: Option<&str>,
+        options: &QueryOptions,
     ) -> AppResult<Vec<serde_json::Value>>;
     async fn insert_row(
         &self,
@@ -7333,9 +7428,7 @@ impl Repository for PostgresRepository {
         script_uri: &str,
         logical_table_name: &str,
         filters: Option<&HashMap<String, serde_json::Value>>,
-        limit: Option<i64>,
-        order_by: Option<&str>,
-        order_dir: Option<&str>,
+        options: &QueryOptions,
     ) -> AppResult<Vec<serde_json::Value>> {
         let mut scope = ScopedConn::for_statement(&self.pool).await?;
         let queried = db_query_table(
@@ -7343,9 +7436,7 @@ impl Repository for PostgresRepository {
             script_uri,
             logical_table_name,
             filters,
-            limit,
-            order_by,
-            order_dir,
+            options,
         )
         .await;
         scope.finish(queried).await

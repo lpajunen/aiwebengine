@@ -11,13 +11,13 @@ Scripts can now dynamically create database tables, add columns of various types
 - Requires the `ManageScriptDatabase` capability (granted to authenticated users and admins)
 - In development mode, anonymous users also have this capability for testing
 - Each script's tables are isolated using a hash-based prefix
-- Maximum limits: 10 tables per script, 50 columns per table
+- Maximum limits: 50 tables per script, 50 columns per table
 
 ## API Reference
 
 ### `database.createTable(tableName)`
 
-Creates a new table for the current script with an automatic `id` column (SERIAL PRIMARY KEY).
+Creates a new table for the current script with an automatic, auto-incrementing integer `id` primary key.
 
 **Parameters:**
 
@@ -79,7 +79,7 @@ database.insert("events", JSON.stringify({ occurred_at_ms: Date.now() }));
 
 ### `database.addFloatColumn(tableName, columnName, nullable, defaultValue)`
 
-Adds a DOUBLE PRECISION column to an existing table.
+Adds a `float` column to an existing table — a double, which is what a JavaScript number already is.
 
 The column type that holds a JavaScript number as it is — rates, ratios,
 scores, measurements. The value round-trips exactly, because the column is a
@@ -145,14 +145,17 @@ database.addBooleanColumn("users", "verified", true, null);
 
 ### `database.addTimestampColumn(tableName, columnName, nullable, defaultValue)`
 
-Adds a TIMESTAMPTZ column to an existing table.
+Adds a timestamp column to an existing table.
 
 **Parameters:**
 
 - `tableName` (string): Table name
 - `columnName` (string): Column name
 - `nullable` (boolean, optional): Whether column can be NULL (default: true)
-- `defaultValue` (string, optional): "NOW()" or specific timestamp
+- `defaultValue` (string, optional): the moment the row is written — `"NOW()"`
+  or `"CURRENT_TIMESTAMP"`, which mean the same thing — or a fixed instant as
+  `"YYYY-MM-DD"`, `"YYYY-MM-DD HH:MM:SS"`, or ISO 8601. Anything else is
+  refused rather than passed to the database to judge
 
 **Returns:** JSON string with `success` or `error`
 
@@ -262,11 +265,21 @@ When a script is updated:
 
 ## Limits and Constraints
 
-- **Maximum tables per script**: 10
+- **Maximum tables per script**: 50
 - **Maximum columns per table**: 50
 - **Identifier requirements**: Must match `^[a-z][a-z0-9_]*$` (lowercase, alphanumeric + underscore)
 - **Reserved keywords**: Cannot use SQL reserved words as identifiers
-- **Column types**: Only INTEGER, BIGINT, DOUBLE PRECISION, TEXT, BOOLEAN, and TIMESTAMPTZ are supported
+- **Column types**: Only `integer`, `bigint`, `float`, `text`, `boolean`, and
+  `timestamp` are supported. These are the engine's own types, not any one
+  database's: what a column accepts and what it gives back is decided by the
+  engine, and how it is stored is the storage backend's business
+- **An argument that cannot mean what it says is refused**: a sort direction
+  that is neither `asc` nor `desc`, and an unrecognised entry in the `options`
+  object, are both errors rather than being quietly ignored
+- **Values read back as their column's type**: a `boolean` column returns
+  `true`/`false`, a `timestamp` returns an ISO 8601 string, a `float` returns
+  a number. A column is decoded as the type it was declared with, not as
+  whatever the stored bytes happen to look like
 - **Values are typed by their column**: a value that the column cannot hold is
   refused, naming the column, rather than being coerced. A fraction in an
   INTEGER column is not rounded — use a FLOAT column to keep it — and a number

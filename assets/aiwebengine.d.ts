@@ -1472,14 +1472,22 @@ interface Database {
   ): DatabaseAnswer;
 
   /**
-   * Add a timestamp column to a table
+   * Add a timestamp column to a table.
+   *
+   * `defaultValue` is either the moment the row is written — `"NOW()"` or
+   * `"CURRENT_TIMESTAMP"`, which mean the same thing — or a fixed instant as
+   * `"YYYY-MM-DD"`, `"YYYY-MM-DD HH:MM:SS"`, or ISO 8601. Anything else is
+   * refused rather than passed to the database to judge, so a default means
+   * the same time wherever the table is later read.
+   *
    * @param tableName - Table name
    * @param columnName - Column name
    * @param nullable - Whether column can be NULL (default: true)
-   * @param defaultValue - Default value (optional, e.g., "CURRENT_TIMESTAMP")
+   * @param defaultValue - `"NOW()"`, `"CURRENT_TIMESTAMP"`, or a fixed instant (optional)
    * @returns JSON string with result: {success: boolean, column: string} or {error: string}
    * @example
    * database.addTimestampColumn("posts", "created_at", false, "CURRENT_TIMESTAMP");
+   * database.addTimestampColumn("posts", "embargoed_until", true, "2030-01-01");
    */
   addTimestampColumn(
     tableName: string,
@@ -1524,11 +1532,26 @@ interface Database {
    *   Supported operators: `$gt`, `$gte`, `$lt`, `$lte`, `$ne`
    *   Multiple operators on the same column are AND-ed together.
    *
+   * Any positional argument may be passed as `null` to skip it and take its
+   * default — `query("chat", null, 100)`.
+   *
+   * **Reading in order to write.** A plain query takes no lock, so two
+   * transactions can read the same row, each compute from what they read, and
+   * each commit — leaving only the second write. Both report success. To make
+   * a read-modify-write safe, open a transaction and pass
+   * `{ forUpdate: true }`: the rows the query returns are then held until the
+   * transaction ends, and a second caller waits and re-reads what the first
+   * one wrote. Asking for it outside a transaction is refused, because a lock
+   * taken there is released as soon as the query returns.
+   *
    * @param tableName - Table name
    * @param filters - JSON string with filter conditions (optional)
    * @param limit - Maximum rows to return (default 100, max 1000)
    * @param orderBy - Column to sort by (optional)
-   * @param orderDir - Sort direction: `"asc"` (default) or `"desc"`
+   * @param orderDir - Sort direction: `"asc"` (default) or `"desc"`. Anything
+   *                   else is refused rather than sorted ascending
+   * @param options - JSON string of query options: `{ forUpdate?: boolean }`.
+   *                  An unrecognised option is refused rather than ignored
    * @returns JSON string array of matching rows or {error: string}
    * @example
    * // Range filter: users active in the last 90 seconds
@@ -1540,13 +1563,22 @@ interface Database {
    *
    * // Last 100 chat messages, newest first
    * const msgs = database.query("chat", null, 100, "ts", "desc").json();
+   *
+   * // A counter that stays correct under concurrency
+   * database.beginTransaction(5000);
+   * const row = database
+   *   .query("event_seq", null, 1, null, null, JSON.stringify({ forUpdate: true }))
+   *   .json()[0];
+   * database.update("event_seq", row.id, JSON.stringify({ seq: row.seq + 1 }));
+   * database.commitTransaction();
    */
   query(
     tableName: string,
     filters?: string | null,
-    limit?: number,
-    orderBy?: string,
-    orderDir?: "asc" | "desc",
+    limit?: number | null,
+    orderBy?: string | null,
+    orderDir?: "asc" | "desc" | null,
+    options?: string | null,
   ): DatabaseAnswer;
 
   /**
@@ -1624,14 +1656,23 @@ interface Database {
   /**
    * Atomically acquire or extend a distributed lease (compare-and-swap).
    *
-   * The table must be created with `database.createLeaseTable()` which sets up
-   * the required schema (`lease_id TEXT UNIQUE, owner TEXT, expires_at TIMESTAMPTZ`).
+   * The table must be created with `database.createLeaseTable()`, which sets up
+   * the required schema.
    *
    * Acquisition rules:
-   * - No existing row → INSERT succeeds → acquired.
-   * - Existing row is expired → UPDATE succeeds → acquired.
-   * - Existing row belongs to the same owner → UPDATE succeeds (extends TTL) → acquired.
-   * - Existing row belongs to a different owner and is not expired → no change → not acquired.
+   * - No existing row → acquired.
+   * - Existing row is expired → acquired.
+   * - Existing row belongs to the same owner → acquired, extending the TTL.
+   * - Existing row belongs to a different owner and is not expired → not acquired.
+   *
+   * Expiry is measured against the engine's clock, not the database's, so
+   * instances competing for one lease must keep time to well inside the TTL —
+   * an instance whose clock runs ahead may take a lease slightly before it
+   * truly lapses. Seconds-long TTLs on NTP-synchronised hosts are well clear
+   * of this; sub-second TTLs across several machines are not.
+   *
+   * A `ttlMs` that is not positive is refused, as is one so large that the
+   * moment it would expire cannot be represented.
    *
    * @param tableName - Lease table created with `createLeaseTable`
    * @param leaseId - Unique identifier for this lease slot (e.g., `"npc_tick_world_42"`)
@@ -1655,7 +1696,8 @@ interface Database {
    * Create a lease table with the correct schema for use with `acquireLease()`.
    *
    * The table is idempotent — calling it a second time returns the existing physical name.
-   * Schema: `lease_id TEXT PRIMARY KEY, owner TEXT NOT NULL, expires_at TIMESTAMPTZ NOT NULL`.
+   * Its columns are the lease id (the slot), its owner, and when the lease
+   * expires; they are managed by the engine and not added or altered directly.
    *
    * @param tableName - Logical table name
    * @returns JSON string: `{success: boolean, tableName: string, physicalName: string}` or `{error: string}`
