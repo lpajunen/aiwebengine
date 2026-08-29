@@ -67,8 +67,9 @@ fn init_log_context(script_uri: &str) -> repository::LogContext {
         ),
         route: None,
         // An init failure belongs to the version that failed to initialise,
-        // which is the one this instance is running.
-        revision: crate::revisions::current(script_uri),
+        // which is the one this instance is running — the pin when there is
+        // one, not whatever has been written since.
+        revision: crate::deployments::serving_revision(script_uri),
     }
 }
 
@@ -150,23 +151,26 @@ impl ScriptInitializer {
     }
 
     /// Initialize a single script by URI
-    /// Run the script's `init()` and record how it went against the script's
-    /// newest revision.
+    /// Run the script's `init()` and record how it went against the revision
+    /// whose code ran.
     ///
-    /// Every write records its revision before triggering this, so the newest
-    /// revision is the one whose content just ran. That is what makes "put it
-    /// back to the last one that worked" answerable — the engine executed the
-    /// code and knows, which is the one thing a history kept outside the
-    /// engine could never tell anyone.
+    /// That is what makes "put it back to the last one that worked"
+    /// answerable — the engine executed the code and knows, which is the one
+    /// thing a history kept outside the engine could never tell anyone. It is
+    /// also why the revision is resolved *before* the run rather than after: a
+    /// write landing while `init()` is still going moves head, and the outcome
+    /// belongs to the version that ran, not to the one that arrived meanwhile.
     pub async fn initialize_script(
         &self,
         script_uri: &str,
         is_startup: bool,
     ) -> Result<InitResult, String> {
+        let ran = crate::deployments::serving_revision(script_uri);
         let result = self.run_init(script_uri, is_startup).await;
 
         if let Ok(init) = &result {
-            crate::revisions::annotate_init(script_uri, init.success, init.error.as_deref()).await;
+            crate::revisions::annotate_init(script_uri, ran, init.success, init.error.as_deref())
+                .await;
         }
 
         result

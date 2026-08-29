@@ -308,9 +308,16 @@ Two details are deliberate. The revision is resolved **once, when the
 invocation starts** — a handler that runs while a write lands still produced
 all of its output from the version it started under, and filing its later lines
 under the new one would be a lie about which code ran. And it is the version
-_this instance_ is running, not necessarily the newest stored: an instance that
-has not yet picked up another node's write is still serving the older revision,
-and its output belongs there.
+_this instance is running_: the pin when the script has one, otherwise the
+newest revision this instance knows about. Head is not the answer — a pinned
+script's head is a revision nothing has executed, and an instance that has not
+yet picked up another node's write is still serving the older one.
+
+The same rule decides where an `init()` outcome is recorded, and there it
+matters more. `lastGood` is the engine saying "this version ran and worked", so
+crediting a revision nothing executed makes it an assurance the engine cannot
+back. A revision that has never run carries `initOk: null` — not `false`, and
+exactly what a pinned script's unserved writes look like.
 
 Lines with nothing to attribute — engine-internal output, anything written
 before this existed — carry no revision rather than a guessed one.

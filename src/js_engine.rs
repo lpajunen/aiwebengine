@@ -454,7 +454,7 @@ impl HandlerInvocationKind {
             // this resolves later so a call site cannot forget it — an
             // unattributed line is indistinguishable from one written before
             // revisions existed.
-            revision: crate::revisions::current(script_uri),
+            revision: crate::deployments::serving_revision(script_uri),
         }
     }
 }

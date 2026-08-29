@@ -102,6 +102,10 @@ async fn clear_script_state(script_uri: &str) {
 
     for statement in [
         "DELETE FROM logs WHERE script_uri = $1",
+        // Before the revisions it references: a pin is a foreign key onto one,
+        // and it refuses rather than cascading — which is what keeps retention
+        // from collecting the revision a script is serving.
+        "DELETE FROM script_deployments WHERE script_uri = $1",
         "DELETE FROM script_revisions WHERE script_uri = $1",
         "DELETE FROM assets WHERE script_uri = $1",
         "DELETE FROM scripts WHERE uri = $1",
@@ -115,6 +119,7 @@ async fn clear_script_state(script_uri: &str) {
 
     // The in-memory caches still hold what was just deleted.
     revisions::forget_current(script_uri);
+    aiwebengine::deployments::forget_pin(script_uri);
 }
 
 /// Deploy a script from nothing: clear its state, then store and record it.
@@ -506,7 +511,7 @@ async fn a_dry_run_reports_the_change_without_making_it() {
     let outcome = revert(uri, &target.to_string(), true).await;
 
     assert!(outcome.dry_run);
-    assert_eq!(outcome.written, vec!["server/a.ts".to_string()]);
+    assert_eq!(outcome.assets_written, vec!["server/a.ts".to_string()]);
     assert_eq!(outcome.revision, None, "a dry run records nothing");
     assert_eq!(
         stored_text(uri, "server/a.ts"),
@@ -527,8 +532,8 @@ async fn reverting_to_what_is_already_deployed_changes_nothing() {
 
     let outcome = revert(uri, &head.to_string(), false).await;
 
-    assert!(outcome.written.is_empty());
-    assert!(outcome.deleted.is_empty());
+    assert!(outcome.assets_written.is_empty());
+    assert!(outcome.assets_deleted.is_empty());
     assert_eq!(
         outcome.revision, None,
         "restoring what is already there is not a change, so it is not a revision"
@@ -1841,4 +1846,84 @@ async fn the_deployment_tools_are_exposed_over_mcp() {
             name
         );
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_init_outcome_lands_on_the_revision_whose_code_ran() {
+    setup_env().await;
+    let uri = "test://deployments/attribution/main.ts";
+    deploy_over_fresh(uri, "function init() { return 1; }\n").await;
+    let served = aiwebengine::revisions::head(uri)
+        .await
+        .expect("head should read")
+        .expect("deploying records a revision");
+    deploy_revision(uri, served).await;
+
+    // A write the deployment does not serve. Head moves; what runs does not.
+    write_asset(uri, "server/a.ts", "export const a = 1;").await;
+    let unserved = aiwebengine::revisions::head(uri)
+        .await
+        .expect("head should read")
+        .expect("the write records a revision");
+    assert_ne!(served, unserved);
+
+    // Anything that initialises the script runs the *served* revision.
+    aiwebengine::script_init::ScriptInitializer::with_configured_timeout()
+        .initialize_script(uri, false)
+        .await
+        .expect("initialising should report a result");
+
+    let by_revision: std::collections::HashMap<i32, Option<bool>> =
+        aiwebengine::revisions::list(uri, 1000)
+            .await
+            .expect("history should read")
+            .into_iter()
+            .map(|revision| (revision.revision, revision.init_ok))
+            .collect();
+
+    assert_eq!(
+        by_revision.get(&served),
+        Some(&Some(true)),
+        "the revision that ran is the one that gets the outcome"
+    );
+    assert_eq!(
+        by_revision.get(&unserved),
+        Some(&None),
+        "revision {} has never run: no init() has ever been given its code",
+        unserved
+    );
+    assert_eq!(
+        aiwebengine::revisions::last_good(uri).await.unwrap(),
+        Some(served),
+        "a rollback floor that names a revision nobody has run is worse than \
+         no floor at all — it is an assurance the engine cannot back"
+    );
+
+    aiwebengine::deployments::unpin(uri).await.expect("unpin");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_revert_that_restores_only_the_entrypoint_says_something_happened() {
+    setup_env().await;
+    let uri = "test://revisions/revert/entrypoint-only/main.ts";
+    deploy_over_fresh(uri, "function init() { return 1; }\n").await;
+    let target = aiwebengine::revisions::head(uri)
+        .await
+        .expect("head should read")
+        .expect("deploying records a revision");
+
+    // Only the entrypoint moves: no assets are written, deleted or involved.
+    deploy_over(uri, "function init() { return 2; }\n").await;
+
+    let outcome = revert(uri, &target.to_string(), true).await;
+
+    assert!(outcome.entrypoint_changed);
+    assert!(outcome.assets_written.is_empty());
+    assert!(outcome.assets_deleted.is_empty());
+    assert!(
+        outcome.changed_anything(),
+        "the counts are of assets, and this revert has none — a caller reading \
+         them alone would conclude nothing happened when the entrypoint is \
+         exactly what it restored"
+    );
 }

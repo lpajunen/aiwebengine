@@ -4645,11 +4645,19 @@ pub enum RevertRefusal {
 }
 
 /// What a revert did, or would do.
+///
+/// The counts are of *assets*. The script's entrypoint is restored alongside
+/// them and reported separately, because it is not one of them — it lives in
+/// the `scripts` row rather than the asset tree. That distinction is real and
+/// it is also a trap: a revert that restored the entrypoint and nothing else
+/// reported zero written, which reads as nothing having happened. Hence the
+/// names below saying what they count, and `changed_anything` so a caller
+/// never has to know the composition to answer the only question it has.
 pub struct RevertOutcome {
     pub target: i32,
-    pub written: Vec<String>,
-    pub deleted: Vec<String>,
-    pub root_changed: bool,
+    pub assets_written: Vec<String>,
+    pub assets_deleted: Vec<String>,
+    pub entrypoint_changed: bool,
     /// The revision the revert recorded, or `None` for a dry run and for a
     /// revert that found nothing to change.
     pub revision: Option<i32>,
@@ -4665,17 +4673,27 @@ pub struct RevertOutcome {
 }
 
 impl RevertOutcome {
+    /// Whether the revert moved anything at all.
+    pub fn changed_anything(&self) -> bool {
+        self.entrypoint_changed
+            || !self.assets_written.is_empty()
+            || !self.assets_deleted.is_empty()
+    }
+
     fn to_json(&self) -> Value {
         json!({
             "revertedTo": self.target,
             "revision": self.revision,
             "dryRun": self.dry_run,
             "changed": {
-                "written": self.written.len(),
-                "deleted": self.deleted.len(),
-                "root": self.root_changed,
+                // First, because it is the question every caller has and the
+                // only one that cannot be got wrong by reading the wrong count.
+                "any": self.changed_anything(),
+                "entrypoint": self.entrypoint_changed,
+                "assetsWritten": self.assets_written.len(),
+                "assetsDeleted": self.assets_deleted.len(),
             },
-            "files": { "written": self.written, "deleted": self.deleted },
+            "files": { "written": self.assets_written, "deleted": self.assets_deleted },
             "schema": {
                 "matches": self.schema_warnings.is_empty(),
                 "warnings": self.schema_warnings,
@@ -4758,9 +4776,9 @@ pub async fn revert_authorized(
 
     let outcome = RevertOutcome {
         target,
-        written: plan.writes.iter().map(|file| file.uri.clone()).collect(),
-        deleted: plan.deletes.clone(),
-        root_changed: plan.root_changes,
+        assets_written: plan.writes.iter().map(|file| file.uri.clone()).collect(),
+        assets_deleted: plan.deletes.clone(),
+        entrypoint_changed: plan.root_changes,
         revision: None,
         dry_run,
         schema_warnings,

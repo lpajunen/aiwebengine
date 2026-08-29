@@ -956,33 +956,39 @@ pub fn record_blocking_with_parent(
     }
 }
 
-/// Record how `init()` went, against the script's newest revision.
+/// Record how `init()` went, against the revision whose code ran.
 ///
-/// One statement rather than a read of head followed by an update of it: this
-/// runs after every init, and every script's init runs at every startup, so
-/// the difference is a round trip per script per boot.
+/// The revision is named by the caller rather than looked up here, and that is
+/// the whole point. This used to update whichever revision was newest, which
+/// is only the same thing when a script serves its newest revision. A pinned
+/// script runs one revision while its head accumulates others, and writing the
+/// outcome to head credited a revision nobody had executed — making it the
+/// answer to `lastGood`, the one place the engine claims to know something
+/// works.
+///
+/// `None` records nothing. A script with no history yet has no revision the
+/// outcome belongs to, and inventing one is worse than leaving the question
+/// open.
 ///
 /// The `IS DISTINCT FROM` guard means a boot that changed nothing writes
 /// nothing — the common case, where a script initialises exactly as it did
 /// last time.
-///
-/// Called after the write has been answered, so there is no one left to tell:
-/// a revision missing its init outcome reads as "not known", which is what it
-/// then is.
-pub async fn annotate_init(script_uri: &str, ok: bool, error: Option<&str>) {
+pub async fn annotate_init(script_uri: &str, revision: Option<i32>, ok: bool, error: Option<&str>) {
+    let Some(revision) = revision else {
+        return;
+    };
     let script_uri_owned = script_uri.to_string();
     let error_owned = error.map(str::to_string);
     let result = with_transaction(move |conn| {
         Box::pin(async move {
             sqlx::query(
-                "UPDATE script_revisions SET init_ok = $2, init_error = $3
+                "UPDATE script_revisions SET init_ok = $3, init_error = $4
                  WHERE script_uri = $1
-                   AND revision = (
-                       SELECT MAX(revision) FROM script_revisions WHERE script_uri = $1
-                   )
-                   AND (init_ok IS DISTINCT FROM $2 OR init_error IS DISTINCT FROM $3)",
+                   AND revision = $2
+                   AND (init_ok IS DISTINCT FROM $3 OR init_error IS DISTINCT FROM $4)",
             )
             .bind(&script_uri_owned)
+            .bind(revision)
             .bind(ok)
             .bind(error_owned.as_deref())
             .execute(conn)
@@ -996,6 +1002,7 @@ pub async fn annotate_init(script_uri: &str, ok: bool, error: Option<&str>) {
     if let Err(e) = result {
         tracing::warn!(
             script = script_uri,
+            revision = revision,
             "Failed to record init outcome on revision: {}",
             e
         );

@@ -93,6 +93,21 @@ fn forget(script_uri: &str) {
     }
 }
 
+/// The revision whose code is running here.
+///
+/// The pin when there is one, and otherwise the newest revision this instance
+/// knows about — which is what an unpinned script runs.
+///
+/// This is the answer to "which version did that?", and it has two callers
+/// that both need it to be right: the outcome of `init()`, which decides where
+/// a rollback can land, and the attribution on every log line. Head is not the
+/// answer. A pinned script's head is a revision nothing has executed, and
+/// crediting it with an outcome it never earned turns `lastGood` into an
+/// assurance the engine cannot back.
+pub fn serving_revision(script_uri: &str) -> Option<i32> {
+    pinned(script_uri).or_else(|| crate::revisions::current(script_uri))
+}
+
 /// The view a script's program is built from here.
 ///
 /// `SourceView::Live` for an unpinned script, which is every script until
