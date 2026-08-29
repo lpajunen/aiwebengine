@@ -66,34 +66,30 @@ pub fn init_test_db() {
                  the database explicitly."
             );
         }
-        let url = config::Config::test_config_postgres(0)
-            .repository
-            .connection_string;
 
-        /// Inner helper that must be called with an active tokio context.
-        fn do_init(url: String) {
-            // connect_lazy requires a tokio context to spawn maintenance tasks.
-            let pool = sqlx::PgPool::connect_lazy(&url)
-                .expect("Failed to create lazy connection pool for the test database");
-            let db = Arc::new(aiwebengine::database::Database::from_pool(pool.clone()));
-            let _ = aiwebengine::database::initialize_global_database(db);
+        /// The globals a test *server* runs against.
+        ///
+        /// Registers a server id, because the server generates one at startup
+        /// and the repository has to stamp its notifications with the same one.
+        async fn do_init() {
+            let Some(pool) = open_database().await else {
+                return;
+            };
             let server_id = aiwebengine::notifications::generate_server_id();
             let _ = aiwebengine::notifications::initialize_server_id(server_id.clone());
-            let repo = aiwebengine::repository::PostgresRepository::new(pool, server_id);
-            let _ = aiwebengine::repository::initialize_repository(repo);
+            let _ = aiwebengine::repository::initialize_repository(
+                aiwebengine::repository::PostgresRepository::new(pool, server_id),
+            );
         }
 
         match tokio::runtime::Handle::try_current() {
-            Ok(_) => {
-                // Already inside a tokio runtime (e.g. called from #[tokio::test]).
-                // block_in_place lets us run sync setup without blocking the runtime thread.
-                tokio::task::block_in_place(|| do_init(url));
-            }
-            Err(_) => {
-                // No active runtime (e.g. called from plain #[test] or from Lazy init).
-                // Use the global persistent runtime so pool tasks outlive this scope.
-                get_db_runtime().block_on(async { do_init(url) });
-            }
+            // Already inside a tokio runtime (e.g. called from `#[tokio::test]`).
+            // `block_in_place` runs the setup without blocking the runtime thread.
+            Ok(handle) => tokio::task::block_in_place(|| handle.block_on(do_init())),
+            // No active runtime (a plain `#[test]`, or lazy init). The global
+            // persistent runtime keeps the pool's maintenance tasks alive past
+            // this scope.
+            Err(_) => get_db_runtime().block_on(do_init()),
         }
     });
 }
@@ -102,6 +98,85 @@ pub fn init_test_db() {
 #[allow(dead_code)]
 pub fn should_skip_integration_tests() -> bool {
     std::env::var("DATABASE_URL").is_err()
+}
+
+/// Bring up the process-global database and repository the suite shares.
+///
+/// Every integration test needs the same three things standing before it can
+/// do anything: a pool, the global database, and the repository built on it.
+/// Each test file used to carry its own copy of that — twenty-seven of them,
+/// identical but for an import prefix — which made the way the suite reaches a
+/// database a thing declared in twenty-seven places rather than one.
+///
+/// Idempotent, and once per test binary: `mod common` is compiled into each
+/// one, so the cell below initialises exactly where the hand-rolled copies did.
+///
+/// This is also the one place the suite names a backend. A second backend
+/// becomes a branch here and a `Repository` to construct, rather than an edit
+/// to every file that touches a table.
+#[allow(dead_code)]
+pub async fn setup_env() {
+    GLOBALS.get_or_init(build_globals).await;
+}
+
+static GLOBALS: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+
+/// Stand up the global database, and hand back the pool to build a repository
+/// on.
+///
+/// The one place the suite opens a connection. Built through `Database::new`
+/// rather than from a bare pool, because that is what carries the session
+/// guards: `lock_timeout`, `statement_timeout` and
+/// `idle_in_transaction_session_timeout` ride in the startup packet, and a
+/// pool assembled without them behaves differently under contention than the
+/// server does. Both entry points below used to build their own, one guarded
+/// and one not, and which a test got came down to which ran first.
+///
+/// `None` when the database will not come up. Callers leave the globals unset
+/// rather than panicking: `should_skip_integration_tests` decides whether a
+/// test runs, and it should get to make that call.
+async fn open_database() -> Option<sqlx::PgPool> {
+    let config = aiwebengine::config::AppConfig::test_config_postgres(0);
+    let db = Arc::new(
+        aiwebengine::database::Database::new(&config.repository)
+            .await
+            .ok()?,
+    );
+    let pool = db.pool().clone();
+    aiwebengine::database::initialize_global_database(db);
+    Some(pool)
+}
+
+/// Construct the globals for a test that drives the engine in-process.
+///
+/// No server id is registered, which is what the hand-rolled fixtures did and
+/// what the tests using them are written against — `stream_registry` skips
+/// sending a notification when there is no id, so registering one here would
+/// quietly turn on cluster chatter in tests that never expected it. The
+/// server-backed path below registers one because a real server does.
+async fn build_globals() {
+    let Some(pool) = open_database().await else {
+        return;
+    };
+    aiwebengine::repository::initialize_repository(
+        aiwebengine::repository::PostgresRepository::new(pool, "test".to_string()),
+    );
+}
+
+/// Serialises the tests in one binary against each other.
+///
+/// Scripts, registrations, the repository and the script caches are all
+/// process-global, so two tests running at once read each other's writes. Take
+/// this at the top of any test that touches them and hold it for the test's
+/// length.
+///
+/// One mutex per test binary, which is the same scope the copies in individual
+/// test files had. It is unrelated to `TEST_SEMAPHORE`, which serialises whole
+/// test *servers* rather than the tests inside one binary.
+#[allow(dead_code)]
+pub fn test_mutex() -> &'static Mutex<()> {
+    static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+    TEST_MUTEX.get_or_init(|| Mutex::new(()))
 }
 
 /// Improved test server with proper shutdown support

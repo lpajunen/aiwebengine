@@ -15,35 +15,9 @@ use axum::Extension;
 use axum::extract::Query;
 use axum::response::Response;
 use base64::Engine as _;
-use common::{TestContext, should_skip_integration_tests, wait_for_server};
+use common::{TestContext, setup_env, should_skip_integration_tests, test_mutex, wait_for_server};
 use serde_json::{Value, json};
 use std::collections::HashSet;
-use std::sync::OnceLock;
-use tokio::sync::{Mutex, OnceCell};
-
-static INIT: OnceCell<()> = OnceCell::const_new();
-static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
-
-/// A batch write runs the script's `init()`, which reaches process-global
-/// registries. One test at a time, so no test reads another's registrations.
-fn test_mutex() -> &'static Mutex<()> {
-    TEST_MUTEX.get_or_init(|| Mutex::new(()))
-}
-
-async fn setup_env() {
-    INIT.get_or_init(|| async {
-        let config = aiwebengine::config::AppConfig::test_config_postgres(0);
-        if let Ok(db) = aiwebengine::database::Database::new(&config.repository).await {
-            let db_arc = std::sync::Arc::new(db);
-            aiwebengine::database::initialize_global_database(db_arc.clone());
-            repository::initialize_repository(repository::PostgresRepository::new(
-                db_arc.pool().clone(),
-                "test".to_string(),
-            ));
-        }
-    })
-    .await;
-}
 
 /// Store a script and clear whatever assets a previous run left under it.
 ///

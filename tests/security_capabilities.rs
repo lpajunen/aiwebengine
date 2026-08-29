@@ -25,32 +25,9 @@ use aiwebengine::security::{
 use base64::{Engine, engine::general_purpose};
 use std::collections::HashMap;
 use std::time::Duration;
-use tokio::sync::OnceCell;
 
 mod common;
-use common::should_skip_integration_tests;
-
-static INIT: OnceCell<()> = OnceCell::const_new();
-
-async fn setup_env() {
-    INIT.get_or_init(|| async {
-        // Initialize DB first
-        let config = aiwebengine::config::AppConfig::test_config_postgres(0);
-        if let Ok(db) = aiwebengine::database::Database::new(&config.repository).await {
-            let db_arc = std::sync::Arc::new(db);
-            aiwebengine::database::initialize_global_database(db_arc.clone());
-
-            // Initialize repository with PostgreSQL
-            aiwebengine::repository::initialize_repository(
-                aiwebengine::repository::PostgresRepository::new(
-                    db_arc.pool().clone(),
-                    "test".to_string(),
-                ),
-            );
-        }
-    })
-    .await;
-}
+use common::{setup_env, should_skip_integration_tests};
 
 // Helper function to create a user with specific capabilities
 fn create_user_with_capabilities(user_id: &str, caps: Vec<Capability>) -> UserContext {

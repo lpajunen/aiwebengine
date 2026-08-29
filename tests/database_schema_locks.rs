@@ -15,41 +15,19 @@
 
 mod common;
 
+use common::{setup_env, test_mutex};
+
 use aiwebengine::repository;
 use aiwebengine::script_eval::{EvalReport, EvalRequest, eval_blocking};
 use aiwebengine::security::UserContext;
 use serde_json::json;
-use std::sync::OnceLock;
 use std::time::Duration;
-use tokio::sync::{Mutex, OnceCell};
-
-static INIT: OnceCell<()> = OnceCell::const_new();
-static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
 
 /// How long a schema change gets before the test calls it wedged.
 ///
 /// Every operation here is milliseconds of work against a table holding a
 /// handful of rows. The margin is for a loaded CI machine, not for the lock.
 const WEDGE_TIMEOUT: Duration = Duration::from_secs(20);
-
-fn test_mutex() -> &'static Mutex<()> {
-    TEST_MUTEX.get_or_init(|| Mutex::new(()))
-}
-
-async fn setup_env() {
-    INIT.get_or_init(|| async {
-        let config = aiwebengine::config::AppConfig::test_config_postgres(0);
-        if let Ok(db) = aiwebengine::database::Database::new(&config.repository).await {
-            let db_arc = std::sync::Arc::new(db);
-            aiwebengine::database::initialize_global_database(db_arc.clone());
-            repository::initialize_repository(repository::PostgresRepository::new(
-                db_arc.pool().clone(),
-                "test".to_string(),
-            ));
-        }
-    })
-    .await;
-}
 
 /// Evaluates `source` with `rollback` deciding whether its writes survive.
 ///

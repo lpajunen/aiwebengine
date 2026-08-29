@@ -25,29 +25,13 @@
 //! HTTP endpoints and the engine MCP tools, covered by `tests/api_http.rs`,
 //! `tests/scripts.rs`, `tests/secrets.rs` and `tests/user_admin.rs`.
 
+mod common;
+
+use common::setup_env;
+
 use aiwebengine::js_engine::execute_script_secure;
 use aiwebengine::security::{Capability, UserContext};
 use aiwebengine::{database, repository};
-use tokio::sync::OnceCell;
-
-static INIT: OnceCell<()> = OnceCell::const_new();
-
-async fn setup_env() {
-    INIT.get_or_init(|| async {
-        let config = aiwebengine::config::AppConfig::test_config_postgres(0);
-        if let Ok(db) = database::Database::new(&config.repository).await {
-            let db_arc = std::sync::Arc::new(db);
-            database::initialize_global_database(db_arc.clone());
-
-            // Initialize repository with PostgreSQL
-            repository::initialize_repository(repository::PostgresRepository::new(
-                db_arc.pool().clone(),
-                "test".to_string(),
-            ));
-        }
-    })
-    .await;
-}
 
 fn create_user_with_capabilities(user_id: &str, caps: Vec<Capability>) -> UserContext {
     UserContext {

@@ -1,3 +1,7 @@
+mod common;
+
+use common::{setup_env, test_mutex};
+
 use aiwebengine::js_engine::{
     RequestExecutionParams, call_init_if_exists, execute_scheduled_handler,
     execute_script_for_request_secure, execute_script_secure,
@@ -9,31 +13,7 @@ use aiwebengine::script_init::InitContext;
 use aiwebengine::security::UserContext;
 use chrono::Utc;
 use std::collections::HashMap;
-use std::sync::OnceLock;
-use tokio::sync::{Mutex, OnceCell};
 use uuid::Uuid;
-
-static INIT: OnceCell<()> = OnceCell::const_new();
-static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
-
-fn test_mutex() -> &'static Mutex<()> {
-    TEST_MUTEX.get_or_init(|| Mutex::new(()))
-}
-
-async fn setup_env() {
-    INIT.get_or_init(|| async {
-        let config = aiwebengine::config::AppConfig::test_config_postgres(0);
-        if let Ok(db) = aiwebengine::database::Database::new(&config.repository).await {
-            let db_arc = std::sync::Arc::new(db);
-            aiwebengine::database::initialize_global_database(db_arc.clone());
-            repository::initialize_repository(repository::PostgresRepository::new(
-                db_arc.pool().clone(),
-                "test".to_string(),
-            ));
-        }
-    })
-    .await;
-}
 
 fn test_asset(script_uri: &str, uri: &str, mimetype: &str, content: &[u8]) -> repository::Asset {
     let now = std::time::SystemTime::now();

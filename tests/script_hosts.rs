@@ -16,36 +16,24 @@ use aiwebengine::hosts::{self, ALL_HOSTS, HostConfig};
 use aiwebengine::mcp;
 use aiwebengine::repository;
 use aiwebengine::security::{Capability, UserContext};
-use common::should_skip_integration_tests;
+use common::{setup_env, should_skip_integration_tests};
 use serde_json::json;
-use tokio::sync::OnceCell;
 
-static INIT: OnceCell<()> = OnceCell::const_new();
+/// The shared globals, plus the hosts this engine serves.
+///
+/// The host configuration is what separates these tests from every other file:
+/// every test here uses the same three hosts, and `hosts::init` keeps the first
+/// configuration set, so ordering does not matter.
+async fn setup_hosts() {
+    setup_env().await;
 
-async fn setup_env() {
-    INIT.get_or_init(|| async {
-        let config = aiwebengine::config::AppConfig::test_config_postgres(0);
-        if let Ok(db) = aiwebengine::database::Database::new(&config.repository).await {
-            let db_arc = std::sync::Arc::new(db);
-            aiwebengine::database::initialize_global_database(db_arc.clone());
-            let repo = aiwebengine::repository::PostgresRepository::new(
-                db_arc.pool().clone(),
-                "test".to_string(),
-            );
-            aiwebengine::repository::initialize_repository(repo);
-        }
-
-        // The hosts this engine serves. Set once per test process; every test
-        // here uses the same three so ordering does not matter.
-        hosts::init(HostConfig::new(
-            "https://softagen.com",
-            &[
-                "https://manage.softagen.com".to_string(),
-                "https://world.softagen.com".to_string(),
-            ],
-        ));
-    })
-    .await;
+    hosts::init(HostConfig::new(
+        "https://softagen.com",
+        &[
+            "https://manage.softagen.com".to_string(),
+            "https://world.softagen.com".to_string(),
+        ],
+    ));
 }
 
 fn admin() -> UserContext {
@@ -64,7 +52,7 @@ async fn unbound_scripts_publish_on_the_default_host() {
     if should_skip_integration_tests() {
         return;
     }
-    setup_env().await;
+    setup_hosts().await;
     let uri = create_script("default");
 
     let (stored, effective) =
@@ -85,7 +73,7 @@ async fn binding_to_one_host_round_trips() {
     if should_skip_integration_tests() {
         return;
     }
-    setup_env().await;
+    setup_hosts().await;
     let uri = create_script("manage");
 
     let (stored, effective) =
@@ -107,7 +95,7 @@ async fn wildcard_binding_resolves_to_every_served_host() {
     if should_skip_integration_tests() {
         return;
     }
-    setup_env().await;
+    setup_hosts().await;
     let uri = create_script("about");
 
     let (stored, effective) = set_script_hosts_authorized(&admin(), &uri, &[ALL_HOSTS.to_string()])
@@ -127,7 +115,7 @@ async fn clearing_a_binding_returns_the_script_to_the_default_host() {
     if should_skip_integration_tests() {
         return;
     }
-    setup_env().await;
+    setup_hosts().await;
     let uri = create_script("cleared");
 
     set_script_hosts_authorized(&admin(), &uri, &["world.softagen.com".to_string()])
@@ -146,7 +134,7 @@ async fn a_host_the_engine_does_not_serve_is_rejected() {
     if should_skip_integration_tests() {
         return;
     }
-    setup_env().await;
+    setup_hosts().await;
     let uri = create_script("unknown-host");
 
     // Storing this would silently take the script's registrations offline.
@@ -173,7 +161,7 @@ async fn binding_an_unknown_script_is_not_found() {
     if should_skip_integration_tests() {
         return;
     }
-    setup_env().await;
+    setup_hosts().await;
 
     assert!(matches!(
         set_script_hosts_authorized(&admin(), "test://no-such-script", &[]),
@@ -186,7 +174,7 @@ async fn host_bindings_are_denied_to_non_administrators() {
     if should_skip_integration_tests() {
         return;
     }
-    setup_env().await;
+    setup_hosts().await;
     let uri = create_script("denied");
 
     for user in [
@@ -221,7 +209,7 @@ async fn host_bindings_reject_an_unauthenticated_holder_of_delete_scripts() {
     if should_skip_integration_tests() {
         return;
     }
-    setup_env().await;
+    setup_hosts().await;
     let uri = create_script("dev-anonymous");
 
     let dev_anonymous = UserContext {
@@ -245,7 +233,7 @@ async fn ownership_alone_does_not_allow_republishing_a_script() {
     if should_skip_integration_tests() {
         return;
     }
-    setup_env().await;
+    setup_hosts().await;
 
     // Owning a script lets you edit it; it must not let you move it onto the
     // management host, which is why this is an administrator's call.
@@ -267,7 +255,7 @@ async fn host_tools_are_exposed_over_mcp() {
     if should_skip_integration_tests() {
         return;
     }
-    setup_env().await;
+    setup_hosts().await;
 
     let names: Vec<&str> = native_mcp_tool_descriptors()
         .into_iter()
@@ -282,7 +270,7 @@ async fn mcp_set_script_hosts_binds_for_an_admin() {
     if should_skip_integration_tests() {
         return;
     }
-    setup_env().await;
+    setup_hosts().await;
     let uri = create_script("mcp");
 
     let result = execute_native_mcp_tool(
@@ -312,7 +300,7 @@ async fn native_mcp_tools_are_listed_only_where_management_is_allowed() {
     if should_skip_integration_tests() {
         return;
     }
-    setup_env().await;
+    setup_hosts().await;
 
     let listed = mcp::list_tools_for_host("manage.softagen.com", true).await;
     assert!(
@@ -346,7 +334,7 @@ async fn native_mcp_tools_are_refused_at_dispatch_off_the_management_host() {
     if should_skip_integration_tests() {
         return;
     }
-    setup_env().await;
+    setup_hosts().await;
 
     // Listing and dispatch must agree; a client that learned the name
     // elsewhere must not get through by naming it.
@@ -378,7 +366,7 @@ async fn a_script_cannot_reopen_a_native_tool_by_registering_its_name() {
     if should_skip_integration_tests() {
         return;
     }
-    setup_env().await;
+    setup_hosts().await;
 
     let uri = create_script("collide");
     aiwebengine::mcp::register_mcp_tool(
@@ -405,7 +393,7 @@ async fn mcp_host_tools_enforce_admin() {
     if should_skip_integration_tests() {
         return;
     }
-    setup_env().await;
+    setup_hosts().await;
     let uri = create_script("mcp-denied");
 
     let caller = UserContext::authenticated("plain-user".to_string());

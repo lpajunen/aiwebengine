@@ -15,33 +15,10 @@ use aiwebengine::{
     js_engine, repository,
     stream_registry::{BroadcastResult, GLOBAL_STREAM_REGISTRY, StreamConnection, StreamRegistry},
 };
-use common::{TestContext, wait_for_server};
+use common::{TestContext, setup_env, wait_for_server};
 use std::time::Duration;
-use tokio::sync::OnceCell;
 use tokio::time::{sleep, timeout};
 use tracing::info;
-
-static INIT: OnceCell<()> = OnceCell::const_new();
-
-async fn setup_env() {
-    INIT.get_or_init(|| async {
-        // Initialize DB first
-        let config = aiwebengine::config::AppConfig::test_config_postgres(0);
-        if let Ok(db) = aiwebengine::database::Database::new(&config.repository).await {
-            let db_arc = std::sync::Arc::new(db);
-            aiwebengine::database::initialize_global_database(db_arc.clone());
-
-            // Initialize repository with PostgreSQL
-            aiwebengine::repository::initialize_repository(
-                aiwebengine::repository::PostgresRepository::new(
-                    db_arc.pool().clone(),
-                    "test".to_string(),
-                ),
-            );
-        }
-    })
-    .await;
-}
 
 // ============================================================================
 // Core Script Streaming Tests

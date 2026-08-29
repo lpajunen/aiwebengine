@@ -14,11 +14,9 @@ mod common;
 use aiwebengine::repository;
 use aiwebengine::script_eval::{EvalReport, EvalRequest, eval_blocking};
 use aiwebengine::security::UserContext;
-use common::should_skip_integration_tests;
+use common::{setup_env, should_skip_integration_tests, test_mutex};
 use sqlx::Row;
-use std::sync::OnceLock;
 use std::time::{Duration, Instant};
-use tokio::sync::{Mutex, OnceCell};
 
 const SCRIPT_URI: &str = "test://host-budget/blocked";
 
@@ -32,31 +30,16 @@ const BUDGET_MS: u64 = 1_000;
 /// from the budget.
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 
-static INIT: OnceCell<()> = OnceCell::const_new();
-static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+/// The shared globals, plus the pool itself — these tests hold a lock on one
+/// connection while a second call waits on it, so they need a handle of their
+/// own rather than going through the repository.
+async fn setup_pool() -> sqlx::PgPool {
+    setup_env().await;
 
-fn test_mutex() -> &'static Mutex<()> {
-    TEST_MUTEX.get_or_init(|| Mutex::new(()))
-}
-
-async fn setup_env() -> sqlx::PgPool {
-    let config = aiwebengine::config::AppConfig::test_config_postgres(0);
-    let db = aiwebengine::database::Database::new(&config.repository)
-        .await
-        .expect("connect");
-    let pool = db.pool().clone();
-
-    INIT.get_or_init(|| async {
-        let db_arc = std::sync::Arc::new(db);
-        aiwebengine::database::initialize_global_database(db_arc.clone());
-        repository::initialize_repository(repository::PostgresRepository::new(
-            db_arc.pool().clone(),
-            "test".to_string(),
-        ));
-    })
-    .await;
-
-    pool
+    aiwebengine::database::get_global_database()
+        .expect("the database should be up")
+        .pool()
+        .clone()
 }
 
 async fn eval(source: &str, timeout_ms: u64) -> EvalReport {
@@ -93,7 +76,7 @@ async fn a_blocked_call_answers_within_the_budget_it_was_given() {
         return;
     }
     let _guard = test_mutex().lock().await;
-    let pool = setup_env().await;
+    let pool = setup_pool().await;
 
     repository::upsert_script(SCRIPT_URI, "function init() {}").expect("script should be stored");
 

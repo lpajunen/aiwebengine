@@ -1,3 +1,7 @@
+mod common;
+
+use common::setup_env;
+
 use aiwebengine::engine_api::{
     SecretAccessError, clear_secrets_authorized, list_secrets_authorized, remove_secret_authorized,
     set_secret_authorized,
@@ -6,26 +10,6 @@ use aiwebengine::js_engine::execute_script_secure;
 use aiwebengine::repository;
 use aiwebengine::security::{Capability, UserContext};
 use std::collections::HashSet;
-use tokio::sync::OnceCell;
-
-static INIT: OnceCell<()> = OnceCell::const_new();
-
-async fn setup_env() {
-    INIT.get_or_init(|| async {
-        // Initialize DB first
-        let config = aiwebengine::config::AppConfig::test_config_postgres(0);
-        if let Ok(db) = aiwebengine::database::Database::new(&config.repository).await {
-            let db_arc = std::sync::Arc::new(db);
-            aiwebengine::database::initialize_global_database(db_arc.clone());
-
-            // Initialize repository with PostgreSQL
-            let repo =
-                repository::PostgresRepository::new(db_arc.pool().clone(), "test".to_string());
-            repository::initialize_repository(repo);
-        }
-    })
-    .await;
-}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_secrets_exists_returns_false_without_manager() {

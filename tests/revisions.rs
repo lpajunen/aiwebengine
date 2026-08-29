@@ -10,6 +10,8 @@
 
 mod common;
 
+use common::setup_env;
+
 use aiwebengine::engine_api::{
     RevertOutcome, RevertRefusal, delete_asset_authorized, revert_authorized,
     upsert_asset_authorized,
@@ -19,24 +21,6 @@ use aiwebengine::revisions;
 use aiwebengine::security::UserContext;
 use aiwebengine::source_view::SourceView;
 use base64::Engine as _;
-use tokio::sync::OnceCell;
-
-static INIT: OnceCell<()> = OnceCell::const_new();
-
-async fn setup_env() {
-    INIT.get_or_init(|| async {
-        let config = aiwebengine::config::AppConfig::test_config_postgres(0);
-        if let Ok(db) = aiwebengine::database::Database::new(&config.repository).await {
-            let db_arc = std::sync::Arc::new(db);
-            aiwebengine::database::initialize_global_database(db_arc.clone());
-            repository::initialize_repository(repository::PostgresRepository::new(
-                db_arc.pool().clone(),
-                "test".to_string(),
-            ));
-        }
-    })
-    .await;
-}
 
 fn stored_text(script_uri: &str, asset_uri: &str) -> String {
     let asset = repository::fetch_asset(script_uri, asset_uri).expect("asset should be stored");

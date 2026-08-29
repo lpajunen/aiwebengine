@@ -8,30 +8,16 @@
 //! cargo nextest run --test prepare_cache_bench --no-capture -- --ignored
 //! ```
 
+mod common;
+
+use common::setup_env;
+
 use aiwebengine::js_engine::{RequestExecutionParams, execute_script_for_request_secure};
 use aiwebengine::module_loader;
 use aiwebengine::repository;
 use aiwebengine::security::UserContext;
 use std::collections::HashMap;
 use std::time::Instant;
-use tokio::sync::OnceCell;
-
-static INIT: OnceCell<()> = OnceCell::const_new();
-
-async fn setup_env() {
-    INIT.get_or_init(|| async {
-        let config = aiwebengine::config::AppConfig::test_config_postgres(0);
-        if let Ok(db) = aiwebengine::database::Database::new(&config.repository).await {
-            let db_arc = std::sync::Arc::new(db);
-            aiwebengine::database::initialize_global_database(db_arc.clone());
-            repository::initialize_repository(repository::PostgresRepository::new(
-                db_arc.pool().clone(),
-                "bench".to_string(),
-            ));
-        }
-    })
-    .await;
-}
 
 fn asset(script_uri: &str, uri: &str, content: String) -> repository::Asset {
     let now = std::time::SystemTime::now();

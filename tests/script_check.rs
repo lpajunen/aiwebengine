@@ -1,6 +1,10 @@
 //! `/engine/check`: findings about a script that only the engine can produce,
 //! and the isolation that makes producing them safe.
 
+mod common;
+
+use common::{setup_env, test_mutex};
+
 use aiwebengine::auth::AuthUser;
 use aiwebengine::engine_api::{
     CheckRefusal, authorize_check, check_route, execute_native_mcp_tool,
@@ -14,17 +18,6 @@ use axum::extract::Query;
 use axum::response::Response;
 use serde_json::{Value, json};
 use std::sync::OnceLock;
-use tokio::sync::{Mutex, OnceCell};
-
-static INIT: OnceCell<()> = OnceCell::const_new();
-static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
-
-/// Checks run a script's `init()`, and `init()` reaches process-global state.
-/// One at a time, so a test asserting that a dry run left a registry alone is
-/// not reading another test's writes.
-fn test_mutex() -> &'static Mutex<()> {
-    TEST_MUTEX.get_or_init(|| Mutex::new(()))
-}
 
 /// Script URIs the running test has stored, drained by its [`Fixtures`] guard.
 static DEPLOYED: OnceLock<std::sync::Mutex<Vec<String>>> = OnceLock::new();
@@ -68,21 +61,6 @@ async fn fixtures() -> Fixtures {
         names.clear();
     }
     Fixtures { _lock: lock }
-}
-
-async fn setup_env() {
-    INIT.get_or_init(|| async {
-        let config = aiwebengine::config::AppConfig::test_config_postgres(0);
-        if let Ok(db) = aiwebengine::database::Database::new(&config.repository).await {
-            let db_arc = std::sync::Arc::new(db);
-            aiwebengine::database::initialize_global_database(db_arc.clone());
-            repository::initialize_repository(repository::PostgresRepository::new(
-                db_arc.pool().clone(),
-                "test".to_string(),
-            ));
-        }
-    })
-    .await;
 }
 
 const INIT_BUDGET_MS: u64 = 5_000;

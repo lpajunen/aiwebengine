@@ -1,3 +1,7 @@
+mod common;
+
+use common::{setup_env, should_skip_integration_tests};
+
 mod mock_server;
 
 use aiwebengine::http_client::{FetchOptions, HttpClient};
@@ -342,19 +346,13 @@ async fn test_fetch_secret_template_syntax() {
         .expect("Failed to start mock server");
     let url = mock.url("/headers");
 
-    // Set up database for secret storage
+    // Secrets are read from the database, so this one test needs it standing.
     use aiwebengine::repository;
-    let config = aiwebengine::config::AppConfig::test_config_postgres(0);
-    if let Ok(db) = aiwebengine::database::Database::new(&config.repository).await {
-        let db_arc = std::sync::Arc::new(db);
-        aiwebengine::database::initialize_global_database(db_arc.clone());
-        let repo = repository::PostgresRepository::new(db_arc.pool().clone(), "test".to_string());
-        repository::initialize_repository(repo);
-    } else {
-        // Skip test if no DB available
+    if should_skip_integration_tests() {
         mock.shutdown().await;
         return;
     }
+    setup_env().await;
 
     // Store the secret in the script_secrets table
     let script_uri = "test://http-fetch";

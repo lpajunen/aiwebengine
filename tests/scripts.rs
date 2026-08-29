@@ -13,30 +13,9 @@ use aiwebengine::js_engine::call_init_if_exists;
 use aiwebengine::repository;
 use aiwebengine::repository::{get_script_metadata, upsert_script};
 use aiwebengine::script_init::{InitContext, ScriptInitializer};
-use common::{TestContext, should_skip_integration_tests};
+use common::{TestContext, setup_env, should_skip_integration_tests};
 use std::time::Duration;
-use tokio::sync::OnceCell;
 use tokio::time::timeout;
-
-static INIT: OnceCell<()> = OnceCell::const_new();
-
-async fn setup_env() {
-    INIT.get_or_init(|| async {
-        // Initialize DB first
-        let config = aiwebengine::config::AppConfig::test_config_postgres(0);
-        if let Ok(db) = aiwebengine::database::Database::new(&config.repository).await {
-            let db_arc = std::sync::Arc::new(db);
-            aiwebengine::database::initialize_global_database(db_arc.clone());
-
-            // Initialize repository with PostgreSQL
-            repository::initialize_repository(repository::PostgresRepository::new(
-                db_arc.pool().clone(),
-                "test".to_string(),
-            ));
-        }
-    })
-    .await;
-}
 
 // ============================================================================
 // QuickJS Integration Tests

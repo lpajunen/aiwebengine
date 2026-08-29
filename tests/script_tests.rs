@@ -1,5 +1,9 @@
 //! Running a script's own test modules: discovery, execution, and reporting.
 
+mod common;
+
+use common::{setup_env, test_mutex};
+
 use aiwebengine::auth::AuthUser;
 use aiwebengine::engine_api::{
     TestRunRefusal, authorize_test_run, execute_native_mcp_tool, native_mcp_tool_descriptors,
@@ -12,30 +16,6 @@ use aiwebengine::script_test::{RunOutcome, TestRunRequest, TestRunResult, TestRu
 use aiwebengine::security::UserContext;
 use axum::Extension;
 use axum::extract::Query;
-use std::sync::OnceLock;
-use tokio::sync::{Mutex, OnceCell};
-
-static INIT: OnceCell<()> = OnceCell::const_new();
-static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
-
-fn test_mutex() -> &'static Mutex<()> {
-    TEST_MUTEX.get_or_init(|| Mutex::new(()))
-}
-
-async fn setup_env() {
-    INIT.get_or_init(|| async {
-        let config = aiwebengine::config::AppConfig::test_config_postgres(0);
-        if let Ok(db) = aiwebengine::database::Database::new(&config.repository).await {
-            let db_arc = std::sync::Arc::new(db);
-            aiwebengine::database::initialize_global_database(db_arc.clone());
-            repository::initialize_repository(repository::PostgresRepository::new(
-                db_arc.pool().clone(),
-                "test".to_string(),
-            ));
-        }
-    })
-    .await;
-}
 
 /// Store a script with the given test modules as its assets, replacing whatever
 /// was there before so a rerun of the suite starts clean.

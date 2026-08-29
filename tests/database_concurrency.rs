@@ -25,34 +25,10 @@ mod common;
 use aiwebengine::repository;
 use aiwebengine::script_eval::{EvalReport, EvalRequest, eval_blocking};
 use aiwebengine::security::UserContext;
-use common::should_skip_integration_tests;
-use std::sync::OnceLock;
-use tokio::sync::{Mutex, OnceCell};
-
-static INIT: OnceCell<()> = OnceCell::const_new();
-static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+use common::{setup_env, should_skip_integration_tests, test_mutex};
 
 /// Enough racers that a lost update is a certainty rather than a coin toss.
 const RACERS: usize = 10;
-
-fn test_mutex() -> &'static Mutex<()> {
-    TEST_MUTEX.get_or_init(|| Mutex::new(()))
-}
-
-async fn setup_env() {
-    INIT.get_or_init(|| async {
-        let config = aiwebengine::config::AppConfig::test_config_postgres(0);
-        if let Ok(db) = aiwebengine::database::Database::new(&config.repository).await {
-            let db_arc = std::sync::Arc::new(db);
-            aiwebengine::database::initialize_global_database(db_arc.clone());
-            repository::initialize_repository(repository::PostgresRepository::new(
-                db_arc.pool().clone(),
-                "test".to_string(),
-            ));
-        }
-    })
-    .await;
-}
 
 fn run(uri: &str, source: &str) -> EvalReport {
     eval_blocking(EvalRequest {

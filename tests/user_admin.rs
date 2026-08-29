@@ -13,27 +13,8 @@ use aiwebengine::engine_api::{
 };
 use aiwebengine::security::{Capability, UserContext};
 use aiwebengine::user_repository::{self, UserRole};
-use common::{TestContext, should_skip_integration_tests, wait_for_server};
+use common::{TestContext, setup_env, should_skip_integration_tests, wait_for_server};
 use serde_json::json;
-use tokio::sync::OnceCell;
-
-static INIT: OnceCell<()> = OnceCell::const_new();
-
-async fn setup_env() {
-    INIT.get_or_init(|| async {
-        let config = aiwebengine::config::AppConfig::test_config_postgres(0);
-        if let Ok(db) = aiwebengine::database::Database::new(&config.repository).await {
-            let db_arc = std::sync::Arc::new(db);
-            aiwebengine::database::initialize_global_database(db_arc.clone());
-            let repo = aiwebengine::repository::PostgresRepository::new(
-                db_arc.pool().clone(),
-                "test".to_string(),
-            );
-            aiwebengine::repository::initialize_repository(repo);
-        }
-    })
-    .await;
-}
 
 /// Create a fresh user and return its id. The email is unique per call so
 /// tests stay independent of each other and of the shared database.
