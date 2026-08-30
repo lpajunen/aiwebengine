@@ -64,9 +64,33 @@ min_password_length = 12
 `config.local.toml` turns all three on, since that is the point of a personal
 install. The staging and production templates leave them off.
 
+## The sign-in page
+
+`/auth/login` shows what is enabled: a username-and-password form when
+`enabled`, a link to a sign-up form when `allow_registration`, a "Continue as
+guest" button when `allow_guests`, and the configured OAuth providers below a
+divider. With nothing internal enabled it is the provider list it always was.
+
+Plain HTML forms, no script — the engine's configured
+`security.content_security_policy` names `script-src 'self'` with no inline
+allowance, and a sign-in page is the last place to depend on that being
+relaxed.
+
+A solution normally builds its own sign-in UI and posts JSON. This page is what
+makes a personal install usable, and what an administrator uses for break-glass
+access.
+
 ## Endpoints
 
-All take and return JSON.
+Each takes JSON or an HTML form, and answers in kind: a JSON body gets JSON, a
+form submission gets a redirect — to the `redirect` field on success, or back
+to `/auth/login?error=<code>` on failure, where the page renders a message
+chosen from a fixed table. Nothing a caller supplies is echoed onto the page.
+
+Form submissions must carry a `csrf_token` from the login page. JSON bodies
+must not and need not: a cross-site page can POST a form anywhere without a
+preflight, which is how login CSRF signs a victim into an attacker's account,
+but it cannot POST `application/json` without one the engine does not grant.
 
 | Endpoint | Requires | Does |
 | --- | --- | --- |
@@ -109,9 +133,10 @@ Each of the first three sets the session cookie on success.
 
 ## Not done yet
 
-- **No browser UI.** `/auth/login` still lists only OAuth providers. A solution
-  builds its own sign-in form and posts JSON; a personal install currently has
-  no engine-provided page for local sign-in.
+- **No claim form on the sign-in page.** The endpoint accepts a form, but the
+  page offers no control for it, because a guest who wants to claim an account
+  is mid-solution rather than at a sign-in screen. A solution prompts for it
+  where it makes sense.
 - **No password change or reset.** An account with a credential cannot rotate
   it. There is no recovery path for a forgotten password, and for a guest there
   cannot be one.

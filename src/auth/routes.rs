@@ -218,6 +218,145 @@ fn safe_redirect_target(candidate: Option<&str>) -> String {
 pub struct LoginPageParams {
     /// Optional redirect URL after successful login
     redirect: Option<String>,
+    /// A code from a failed attempt, set by the engine when it bounces a form
+    /// submission back here. Rendered through a fixed table of messages, never
+    /// echoed, so a crafted link cannot put text on this page.
+    #[serde(default)]
+    error: Option<String>,
+    /// Show the sign-up form rather than the sign-in form.
+    #[serde(default)]
+    signup: Option<String>,
+}
+
+/// The message shown for a failed attempt.
+///
+/// Chosen from a fixed table by code. Unknown codes get the generic message
+/// rather than their own text — this page must not be a way to render
+/// attacker-chosen words next to a password field.
+fn login_error_message(code: &str) -> &'static str {
+    match code {
+        "credentials" => "That username and password do not match an account.",
+        "taken" => "That username is already taken.",
+        "claimed" => "This account already has a username and password.",
+        "username" => "That username is not allowed. Use 3-32 letters, digits, _ . or -.",
+        "password" => "That password is too short.",
+        "disabled" => "Signing in with a username is not enabled here.",
+        "guests_disabled" => "Guest access is not enabled here.",
+        "rate_limit" => "Too many attempts. Wait a moment and try again.",
+        "csrf" => "That form expired. Try again.",
+        _ => "Sign in failed. Try again.",
+    }
+}
+
+/// Render the sign-in, sign-up and guest controls for credentials the engine
+/// holds itself.
+///
+/// Plain forms, no script: the engine's configured Content-Security-Policy
+/// names `script-src 'self'` with no inline allowance, and a sign-in page is
+/// the last place to depend on one being relaxed. Empty when nothing internal
+/// is enabled, which is the default.
+pub fn render_internal_auth_forms(
+    internal: &crate::auth::config::InternalAuthConfig,
+    csrf_token: &str,
+    redirect: &str,
+    encoded_redirect: &str,
+    signing_up: bool,
+) -> String {
+    let mut blocks: Vec<String> = Vec::new();
+
+    if internal.enabled {
+        let (action, heading, button, name_field, switch) = if signing_up {
+            (
+                "/auth/local/register",
+                "Create an account",
+                "Create account",
+                r#"<label for="name">Display name <span class="hint">(optional)</span></label>
+                <input id="name" name="name" type="text" autocomplete="nickname">"#,
+                format!(
+                    r#"<p class="switch">Already have an account? <a href="/auth/login?redirect={}">Sign in</a></p>"#,
+                    encoded_redirect
+                ),
+            )
+        } else {
+            (
+                "/auth/local/login",
+                "Sign in with a username",
+                "Sign in",
+                "",
+                if internal.allow_registration {
+                    format!(
+                        r#"<p class="switch">No account yet? <a href="/auth/login?signup=1&amp;redirect={}">Create one</a></p>"#,
+                        encoded_redirect
+                    )
+                } else {
+                    String::new()
+                },
+            )
+        };
+
+        blocks.push(format!(
+            r#"<form class="credentials" method="post" action="{action}">
+                <h2>{heading}</h2>
+                <input type="hidden" name="csrf_token" value="{csrf}">
+                <input type="hidden" name="redirect" value="{redirect}">
+                <label for="username">Username</label>
+                <input id="username" name="username" type="text" required autocomplete="username"
+                       minlength="3" maxlength="32" autocapitalize="none" spellcheck="false">
+                {name_field}
+                <label for="password">Password</label>
+                <input id="password" name="password" type="password" required
+                       autocomplete="{autocomplete}" minlength="{min_password}">
+                <button type="submit">{button}</button>
+                {switch}
+            </form>"#,
+            action = action,
+            heading = heading,
+            csrf = html_attribute(csrf_token),
+            redirect = html_attribute(redirect),
+            name_field = name_field,
+            autocomplete = if signing_up {
+                "new-password"
+            } else {
+                "current-password"
+            },
+            // The browser should ask for what the engine will accept, so a
+            // password is rejected before it is sent rather than after.
+            min_password = internal
+                .min_password_length
+                .max(crate::auth::local::MIN_PASSWORD_LENGTH),
+            button = button,
+            switch = switch,
+        ));
+    }
+
+    if internal.allow_guests {
+        blocks.push(format!(
+            r#"<form class="guest" method="post" action="/auth/guest">
+                <input type="hidden" name="csrf_token" value="{csrf}">
+                <input type="hidden" name="redirect" value="{redirect}">
+                <button type="submit" class="secondary">Continue as guest</button>
+            </form>"#,
+            csrf = html_attribute(csrf_token),
+            redirect = html_attribute(redirect),
+        ));
+    }
+
+    blocks.join("\n        ")
+}
+
+/// Escape a value being placed inside a double-quoted HTML attribute.
+///
+/// Both of the values this page interpolates are engine-produced — an HMAC
+/// token and a path already reduced by `safe_redirect_target` — so this is a
+/// belt on top of braces rather than the only thing standing between a query
+/// parameter and the page. It is here so that stays true if a third value is
+/// added later.
+fn html_attribute(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 /// Login page handler - displays available providers
@@ -239,6 +378,38 @@ pub async fn login_page(
     let providers = auth_manager.list_providers();
     let redirect_param = safe_redirect_target(params.redirect.as_deref());
     let encoded_redirect = urlencoding::encode(&redirect_param);
+
+    let internal = &auth_manager.config().internal;
+    // One token serves every form on the page; they are all the same origin
+    // and the same short lifetime.
+    let csrf_token = auth_manager
+        .security_context()
+        .csrf
+        .generate_token(None)
+        .await
+        .token;
+
+    let error_block = params
+        .error
+        .as_deref()
+        .map(|code| format!(r#"<div class="notice">{}</div>"#, login_error_message(code)))
+        .unwrap_or_default();
+
+    let signing_up = internal.allow_registration && params.signup.is_some();
+    let internal_block = render_internal_auth_forms(
+        internal,
+        &csrf_token,
+        &redirect_param,
+        &encoded_redirect,
+        signing_up,
+    );
+    let providers_intro = if providers.is_empty() {
+        String::new()
+    } else if internal_block.is_empty() {
+        "<p>Choose a provider to continue:</p>".to_string()
+    } else {
+        r#"<div class="divider"><span>or</span></div>"#.to_string()
+    };
 
     let html = format!(
         r#"<!DOCTYPE html>
@@ -282,6 +453,105 @@ pub async fn login_page(
         .card p {{
             color: #6c757d;
             margin: 0 0 1.5rem 0;
+        }}
+
+        .notice {{
+            padding: 0.6rem 0.75rem;
+            margin-bottom: 1rem;
+            border: 1px solid #f1aeb5;
+            border-radius: 6px;
+            background: #fdf2f3;
+            color: #842029;
+        }}
+
+        .credentials, .guest {{
+            display: block;
+            margin: 0 0 1rem;
+        }}
+
+        .credentials h2 {{
+            margin: 0 0 0.75rem;
+            font-size: 1rem;
+            font-weight: 600;
+        }}
+
+        .credentials label {{
+            display: block;
+            margin-bottom: 0.25rem;
+            font-weight: 500;
+        }}
+
+        .credentials .hint {{
+            font-weight: 400;
+            color: #6c757d;
+        }}
+
+        .credentials input {{
+            display: block;
+            width: 100%;
+            box-sizing: border-box;
+            padding: 0.6rem 0.75rem;
+            margin-bottom: 0.75rem;
+            border: 1px solid #ced4da;
+            border-radius: 6px;
+            font-size: 1rem;
+            font-family: inherit;
+        }}
+
+        .credentials input:focus {{
+            outline: 2px solid #4285f4;
+            outline-offset: 1px;
+            border-color: #4285f4;
+        }}
+
+        .credentials button, .guest button {{
+            display: block;
+            width: 100%;
+            box-sizing: border-box;
+            padding: 0.75rem 1rem;
+            border: none;
+            border-radius: 6px;
+            font-weight: 500;
+            font-size: 1rem;
+            font-family: inherit;
+            cursor: pointer;
+            background-color: #212529;
+            color: #ffffff;
+        }}
+
+        .credentials button:hover, .guest button:hover {{
+            background-color: #343a40;
+        }}
+
+        .guest button.secondary {{
+            background-color: #ffffff;
+            color: #212529;
+            border: 1px solid #ced4da;
+        }}
+
+        .guest button.secondary:hover {{
+            background-color: #f1f3f5;
+        }}
+
+        .switch {{
+            margin: 0.75rem 0 0;
+            font-size: 0.9rem;
+            color: #6c757d;
+        }}
+
+        .divider {{
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin: 1rem 0;
+            color: #6c757d;
+            font-size: 0.9rem;
+        }}
+
+        .divider::before, .divider::after {{
+            content: "";
+            flex: 1;
+            border-top: 1px solid #dee2e6;
         }}
 
         .provider-btn {{
@@ -329,11 +599,16 @@ pub async fn login_page(
 <body>
     <div class="card">
         <h1>Sign In</h1>
-        <p>Choose a provider to continue:</p>
+        {}
+        {}
+        {}
         {}
     </div>
 </body>
 </html>"#,
+        error_block,
+        internal_block,
+        providers_intro,
         {
             let mut sorted_providers = providers.clone();
             sorted_providers.sort();
@@ -514,21 +789,85 @@ pub async fn oauth_callback(
 }
 
 /// Request body for `POST /auth/guest`.
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Default, Deserialize, utoipa::ToSchema)]
 pub struct GuestRequest {
     /// What to call this guest. Not a credential and not unique — a label.
     #[serde(default)]
     pub name: Option<String>,
+    /// Where to send the browser afterwards. Form submissions only.
+    #[serde(default)]
+    pub redirect: Option<String>,
+    /// CSRF token from the login page. Required of form submissions, and of
+    /// nothing else — see [`RequestStyle`].
+    #[serde(default)]
+    pub csrf_token: Option<String>,
 }
 
 /// Request body for `POST /auth/local/register` and `/auth/local/login`.
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Default, Deserialize, utoipa::ToSchema)]
 pub struct LocalCredentialRequest {
+    #[serde(default)]
     pub username: String,
+    #[serde(default)]
     pub password: String,
     /// Display name, for registration only.
     #[serde(default)]
     pub name: Option<String>,
+    /// Where to send the browser afterwards. Form submissions only.
+    #[serde(default)]
+    pub redirect: Option<String>,
+    /// CSRF token from the login page. Required of form submissions, and of
+    /// nothing else — see [`RequestStyle`].
+    #[serde(default)]
+    pub csrf_token: Option<String>,
+}
+
+/// How a request arrived, which decides how the answer is shaped and whether a
+/// CSRF token is demanded.
+///
+/// A form submission is a browser, so it wants a redirect and a rendered error
+/// rather than JSON — and it is the shape an attacker's page can forge, since
+/// a cross-site form POST needs no preflight. A JSON body cannot be sent
+/// cross-origin without a CORS preflight the engine does not grant, so it is
+/// already unforgeable and asking it for a token would only break API callers
+/// that have no page to take one from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RequestStyle {
+    Json,
+    Form,
+}
+
+/// Read a request body as JSON or as an HTML form, reporting which it was.
+///
+/// Mirrors what the engine API does for role changes: two short scalar fields
+/// are worth accepting in either shape rather than making callers guess.
+fn parse_auth_body<T: serde::de::DeserializeOwned + Default>(
+    headers: &HeaderMap,
+    body: &[u8],
+) -> (T, RequestStyle) {
+    let is_form = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(';')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .eq_ignore_ascii_case("application/x-www-form-urlencoded")
+        });
+
+    if is_form {
+        (
+            serde_urlencoded::from_bytes(body).unwrap_or_default(),
+            RequestStyle::Form,
+        )
+    } else {
+        (
+            serde_json::from_slice(body).unwrap_or_default(),
+            RequestStyle::Json,
+        )
+    }
 }
 
 /// JSON answer to an internal-credential flow.
@@ -577,6 +916,98 @@ impl IntoResponse for AuthErrorResponse {
     }
 }
 
+/// Refuse a form submission that did not carry a valid CSRF token.
+///
+/// Only form submissions. A cross-site page can POST a form to any origin
+/// without a preflight, which is how login CSRF logs a victim into an
+/// attacker's account; it cannot POST `application/json` without one the
+/// engine does not grant. Tokens are stateless HMACs, so this works before
+/// there is any session to bind one to.
+async fn require_form_csrf(
+    auth_manager: &AuthManager,
+    style: RequestStyle,
+    token: Option<&str>,
+) -> Result<(), AuthErrorResponse> {
+    if style != RequestStyle::Form {
+        return Ok(());
+    }
+
+    let token = token.ok_or(AuthErrorResponse(
+        crate::auth::error::AuthError::CsrfValidationFailed,
+    ))?;
+
+    auth_manager
+        .security_context()
+        .csrf
+        .validate_token(token, None)
+        .await
+        .map_err(|_| AuthErrorResponse(crate::auth::error::AuthError::CsrfValidationFailed))
+}
+
+/// Short, fixed codes for what a browser is told went wrong.
+///
+/// The login page renders a message chosen from these rather than echoing the
+/// error, so nothing a caller supplies reaches the page — and so the reasons
+/// stay as coarse as [`AuthError::InvalidCredentials`] intends.
+fn error_code_for(error: &crate::auth::error::AuthError) -> &'static str {
+    use crate::auth::error::AuthError as E;
+    match error {
+        E::InvalidCredentials => "credentials",
+        E::UsernameTaken => "taken",
+        E::CredentialAlreadySet => "claimed",
+        E::InvalidUsername(_) => "username",
+        E::WeakPassword(_) => "password",
+        E::LocalAuthDisabled => "disabled",
+        E::GuestAuthDisabled => "guests_disabled",
+        E::RateLimitExceeded => "rate_limit",
+        E::CsrfValidationFailed => "csrf",
+        _ => "failed",
+    }
+}
+
+/// The answer a browser gets: back to the login page, carrying a code.
+fn redirect_to_login_with_error(
+    error: &crate::auth::error::AuthError,
+    redirect: Option<&str>,
+) -> Response {
+    let target = match redirect {
+        Some(value) => format!(
+            "/auth/login?error={}&redirect={}",
+            error_code_for(error),
+            urlencoding::encode(&safe_redirect_target(Some(value)))
+        ),
+        None => format!("/auth/login?error={}", error_code_for(error)),
+    };
+    Redirect::to(&target).into_response()
+}
+
+/// Shape the answer to an internal-credential flow by how the request arrived:
+/// a browser that submitted a form is sent on its way, an API caller gets JSON.
+fn respond_to_style(
+    auth_manager: &AuthManager,
+    style: RequestStyle,
+    token: &str,
+    redirect: Option<&str>,
+    body: InternalAuthResponse,
+) -> Result<Response, AuthErrorResponse> {
+    match style {
+        RequestStyle::Json => respond_with_session(auth_manager, token, body),
+        RequestStyle::Form => {
+            let target = safe_redirect_target(redirect);
+            let cookie = session_cookie_value(auth_manager.config(), token);
+            let response = Redirect::to(&target).into_response();
+            let (mut parts, body) = response.into_parts();
+            let header_value = cookie.parse().map_err(|_| {
+                AuthErrorResponse(crate::auth::error::AuthError::Internal(
+                    "invalid cookie header value".to_string(),
+                ))
+            })?;
+            parts.headers.insert(header::SET_COOKIE, header_value);
+            Ok(Response::from_parts(parts, body))
+        }
+    }
+}
+
 /// Attach a freshly minted session to a JSON response.
 fn respond_with_session(
     auth_manager: &AuthManager,
@@ -610,34 +1041,40 @@ fn respond_with_session(
 pub async fn start_guest(
     State(auth_manager): State<Arc<AuthManager>>,
     headers: HeaderMap,
-    Json(request): Json<GuestRequest>,
+    body: axum::body::Bytes,
 ) -> Result<Response, AuthErrorResponse> {
+    let (request, style) = parse_auth_body::<GuestRequest>(&headers, &body);
     let ip_addr = get_client_ip(&headers);
     let user_agent = get_user_agent(&headers);
+    let host = get_request_host(&headers);
 
-    let token = auth_manager
-        .start_guest_session(
-            request.name,
-            &ip_addr,
-            &user_agent,
-            get_request_host(&headers).as_deref(),
-        )
-        .await?;
+    require_form_csrf(&auth_manager, style, request.csrf_token.as_deref()).await?;
+
+    let token = match auth_manager
+        .start_guest_session(request.name, &ip_addr, &user_agent, host.as_deref())
+        .await
+    {
+        Ok(token) => token,
+        Err(error) if style == RequestStyle::Form => {
+            return Ok(redirect_to_login_with_error(
+                &error,
+                request.redirect.as_deref(),
+            ));
+        }
+        Err(error) => return Err(error.into()),
+    };
 
     let user_id = auth_manager
-        .get_session(
-            &token,
-            &ip_addr,
-            &user_agent,
-            get_request_host(&headers).as_deref(),
-        )
+        .get_session(&token, &ip_addr, &user_agent, host.as_deref())
         .await
         .ok()
         .map(|session| session.user_id);
 
-    respond_with_session(
+    respond_to_style(
         &auth_manager,
+        style,
         &token,
+        request.redirect.as_deref(),
         InternalAuthResponse {
             success: true,
             user_id,
@@ -662,36 +1099,47 @@ pub async fn start_guest(
 pub async fn register_local(
     State(auth_manager): State<Arc<AuthManager>>,
     headers: HeaderMap,
-    Json(request): Json<LocalCredentialRequest>,
+    body: axum::body::Bytes,
 ) -> Result<Response, AuthErrorResponse> {
+    let (request, style) = parse_auth_body::<LocalCredentialRequest>(&headers, &body);
     let ip_addr = get_client_ip(&headers);
     let user_agent = get_user_agent(&headers);
+    let host = get_request_host(&headers);
 
-    let token = auth_manager
+    require_form_csrf(&auth_manager, style, request.csrf_token.as_deref()).await?;
+
+    let token = match auth_manager
         .register_local_account(
             &request.username,
             &request.password,
-            request.name,
+            request.name.clone(),
             &ip_addr,
             &user_agent,
-            get_request_host(&headers).as_deref(),
+            host.as_deref(),
         )
-        .await?;
+        .await
+    {
+        Ok(token) => token,
+        Err(error) if style == RequestStyle::Form => {
+            return Ok(redirect_to_login_with_error(
+                &error,
+                request.redirect.as_deref(),
+            ));
+        }
+        Err(error) => return Err(error.into()),
+    };
 
     let user_id = auth_manager
-        .get_session(
-            &token,
-            &ip_addr,
-            &user_agent,
-            get_request_host(&headers).as_deref(),
-        )
+        .get_session(&token, &ip_addr, &user_agent, host.as_deref())
         .await
         .ok()
         .map(|session| session.user_id);
 
-    respond_with_session(
+    respond_to_style(
         &auth_manager,
+        style,
         &token,
+        request.redirect.as_deref(),
         InternalAuthResponse {
             success: true,
             user_id,
@@ -716,29 +1164,40 @@ pub async fn register_local(
 pub async fn login_local(
     State(auth_manager): State<Arc<AuthManager>>,
     headers: HeaderMap,
-    Json(request): Json<LocalCredentialRequest>,
+    body: axum::body::Bytes,
 ) -> Result<Response, AuthErrorResponse> {
+    let (request, style) = parse_auth_body::<LocalCredentialRequest>(&headers, &body);
     let ip_addr = get_client_ip(&headers);
     let user_agent = get_user_agent(&headers);
+    let host = get_request_host(&headers);
 
-    let token = auth_manager
+    require_form_csrf(&auth_manager, style, request.csrf_token.as_deref()).await?;
+
+    let token = match auth_manager
         .login_local(&request.username, &request.password, &ip_addr, &user_agent)
-        .await?;
+        .await
+    {
+        Ok(token) => token,
+        Err(error) if style == RequestStyle::Form => {
+            return Ok(redirect_to_login_with_error(
+                &error,
+                request.redirect.as_deref(),
+            ));
+        }
+        Err(error) => return Err(error.into()),
+    };
 
     let user_id = auth_manager
-        .get_session(
-            &token,
-            &ip_addr,
-            &user_agent,
-            get_request_host(&headers).as_deref(),
-        )
+        .get_session(&token, &ip_addr, &user_agent, host.as_deref())
         .await
         .ok()
         .map(|session| session.user_id);
 
-    respond_with_session(
+    respond_to_style(
         &auth_manager,
+        style,
         &token,
+        request.redirect.as_deref(),
         InternalAuthResponse {
             success: true,
             user_id,
@@ -772,11 +1231,14 @@ pub async fn login_local(
 pub async fn claim_account(
     State(auth_manager): State<Arc<AuthManager>>,
     headers: HeaderMap,
-    Json(request): Json<LocalCredentialRequest>,
+    body: axum::body::Bytes,
 ) -> Result<Response, AuthErrorResponse> {
+    let (request, style) = parse_auth_body::<LocalCredentialRequest>(&headers, &body);
     let ip_addr = get_client_ip(&headers);
     let user_agent = get_user_agent(&headers);
     let config = auth_manager.config();
+
+    require_form_csrf(&auth_manager, style, request.csrf_token.as_deref()).await?;
 
     let token = session_token_from_headers(&headers, &config.session_cookie_name)
         .ok_or(crate::auth::error::AuthError::AuthenticationRequired)?;
@@ -790,17 +1252,33 @@ pub async fn claim_account(
         .await
         .map_err(|_| crate::auth::error::AuthError::AuthenticationRequired)?;
 
-    let username = auth_manager
+    let username = match auth_manager
         .claim_guest_account(
             &session.user_id,
             &request.username,
             &request.password,
             &ip_addr,
         )
-        .await?;
+        .await
+    {
+        Ok(username) => username,
+        Err(error) if style == RequestStyle::Form => {
+            return Ok(redirect_to_login_with_error(
+                &error,
+                request.redirect.as_deref(),
+            ));
+        }
+        Err(error) => return Err(error.into()),
+    };
 
     // The session already identifies this user and its roles have not changed,
     // so it stays as it is; only the way back in is new.
+    if style == RequestStyle::Form {
+        return Ok(
+            Redirect::to(&safe_redirect_target(request.redirect.as_deref())).into_response(),
+        );
+    }
+
     Ok(Json(InternalAuthResponse {
         success: true,
         user_id: Some(session.user_id),
