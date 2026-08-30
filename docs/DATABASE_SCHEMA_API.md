@@ -8,8 +8,15 @@ Scripts can now dynamically create database tables, add columns of various types
 
 ## Security
 
-- Requires the `ManageScriptDatabase` capability (granted to authenticated users and admins)
-- In development mode, anonymous users also have this capability for testing
+- Schema operations (`createTable`, `ensureTable`, `add*Column`, `dropColumn`,
+  `dropTable`, `addUniqueIndex`, `createLeaseTable`, `generateGraphQLForTable`)
+  require the `ManageScriptDatabase` capability, granted to editors and admins.
+  Changing the shape of a solution's data is authoring, not using.
+- Row operations (`query`, `insert`, `update`, `delete`, `upsert`, `deleteWhere`,
+  `acquireLease`) require `UseScriptDatabase`, which every authenticated user
+  holds — a script serving a request runs under the requesting user's context,
+  so its ordinary data access has to work for the people using the solution.
+- In development mode, anonymous users hold both for testing
 - Each script's tables are isolated using a hash-based prefix
 - Maximum limits: 50 tables per script, 50 columns per table
 

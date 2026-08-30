@@ -59,11 +59,11 @@ async fn list_users_denied_for_anonymous_and_authenticated() {
     }
 }
 
-/// Development mode grants anonymous callers `DeleteScripts`, which is the
-/// engine's usual stand-in for "is an admin". User administration must not
-/// accept that: it requires an authenticated session as well.
+/// Development mode grants anonymous callers `AdministerEngine`, the engine's
+/// admin marker. User administration must not accept that on its own: it
+/// requires an authenticated session as well.
 #[tokio::test(flavor = "multi_thread")]
-async fn list_users_denied_for_unauthenticated_holder_of_delete_scripts() {
+async fn list_users_denied_for_unauthenticated_holder_of_the_admin_capability() {
     if should_skip_integration_tests() {
         return;
     }
@@ -72,7 +72,7 @@ async fn list_users_denied_for_unauthenticated_holder_of_delete_scripts() {
     let dev_anonymous = UserContext {
         user_id: None,
         is_authenticated: false,
-        capabilities: [Capability::DeleteScripts, Capability::ReadScripts]
+        capabilities: [Capability::AdministerEngine, Capability::ReadScripts]
             .into_iter()
             .collect(),
     };

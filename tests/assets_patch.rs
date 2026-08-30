@@ -511,7 +511,11 @@ async fn engine_asset_reads_are_closed_to_anonymous_callers() {
         "nor list what is deployed"
     );
 
-    // An authenticated caller is unaffected.
+    // A signed-in caller who does not own the script is closed out too. They
+    // hold `ReadAssets` because the sandbox needs it to serve their requests,
+    // which is exactly why the capability alone cannot be what opens the
+    // management surface — otherwise every player of a solution could download
+    // the script that runs it.
     let authenticated = UserContext::authenticated("someone".to_string());
     assert!(
         aiwebengine::engine_api::read_asset_authorized(
@@ -520,8 +524,21 @@ async fn engine_asset_reads_are_closed_to_anonymous_callers() {
             "assets_patch_anonymous/secrets.ts",
             &aiwebengine::engine_api::AssetReadOptions::default(),
         )
+        .is_err(),
+        "a signed-in non-owner must not download another script's assets"
+    );
+
+    // An administrator is unaffected.
+    let admin = UserContext::admin("root".to_string());
+    assert!(
+        aiwebengine::engine_api::read_asset_authorized(
+            &admin,
+            uri,
+            "assets_patch_anonymous/secrets.ts",
+            &aiwebengine::engine_api::AssetReadOptions::default(),
+        )
         .is_ok(),
-        "a caller with ReadAssets should still read"
+        "an administrator should still read"
     );
 
     // Development mode is the documented escape hatch, and stays open.

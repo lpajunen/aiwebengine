@@ -72,7 +72,13 @@ impl JsAuthContext {
     pub fn to_user_context(&self) -> UserContext {
         if self.is_authenticated {
             if let Some(user_id) = &self.user_id {
-                UserContext::authenticated(user_id.clone())
+                if self.is_admin {
+                    UserContext::admin(user_id.clone())
+                } else if self.is_editor {
+                    UserContext::editor(user_id.clone())
+                } else {
+                    UserContext::authenticated(user_id.clone())
+                }
             } else {
                 UserContext::anonymous()
             }

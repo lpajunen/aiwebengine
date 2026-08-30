@@ -47,6 +47,17 @@ impl UserContext {
         }
     }
 
+    /// A user who may manage the scripts they own. Ownership itself is checked
+    /// separately (`repository::user_owns_script`); this tier only says the
+    /// user is in the business of authoring solutions at all.
+    pub fn editor(user_id: String) -> Self {
+        Self {
+            user_id: Some(user_id),
+            is_authenticated: true,
+            capabilities: Self::editor_capabilities(),
+        }
+    }
+
     pub fn admin(user_id: String) -> Self {
         Self {
             user_id: Some(user_id),
@@ -71,7 +82,9 @@ impl UserContext {
                 Capability::DeleteLogs,    // Allow log management in dev mode
                 Capability::ManageGraphQL, // Allow GraphQL operations in dev mode
                 Capability::ManageStreams, // Allow stream operations in dev mode
+                Capability::UseScriptDatabase, // Allow database row operations in dev mode
                 Capability::ManageScriptDatabase, // Allow database schema operations in dev mode
+                Capability::AdministerEngine, // Drive a local instance without a login
             ]
             .into_iter()
             .collect()
@@ -86,38 +99,47 @@ impl UserContext {
         }
     }
 
+    /// What someone *using* a solution holds. A script serving a request runs
+    /// under the requesting user's context, so this set has to cover everything
+    /// an ordinary request does — read the script and its assets, log, push
+    /// stream messages, and read and write its own rows — while granting
+    /// nothing that edits the solution itself. Authoring lives in
+    /// [`Self::editor_capabilities`].
     fn authenticated_capabilities() -> HashSet<Capability> {
-        // Authenticated users can read/write most things
         [
             Capability::ReadScripts,
-            Capability::WriteScripts,
             Capability::ReadAssets,
-            Capability::WriteAssets,
             Capability::ViewLogs,
             Capability::ManageStreams,
-            Capability::ManageScriptDatabase,
+            Capability::UseScriptDatabase,
         ]
         .into_iter()
         .collect()
     }
 
-    fn admin_capabilities() -> HashSet<Capability> {
-        // Admins can do everything
-        [
-            Capability::ReadScripts,
+    /// What an author holds: everything a solution's users can do, plus the
+    /// ability to change scripts, assets, and schema. `DeleteScripts` here
+    /// means "delete a script I own" — callers pair it with an ownership check;
+    /// acting on someone else's script needs `AdministerEngine`.
+    fn editor_capabilities() -> HashSet<Capability> {
+        let mut capabilities = Self::authenticated_capabilities();
+        capabilities.extend([
             Capability::WriteScripts,
             Capability::DeleteScripts,
-            Capability::ReadAssets,
             Capability::WriteAssets,
             Capability::DeleteAssets,
             Capability::DeleteLogs,
-            Capability::ViewLogs,
-            Capability::ManageStreams,
             Capability::ManageGraphQL,
             Capability::ManageScriptDatabase,
-        ]
-        .into_iter()
-        .collect()
+        ]);
+        capabilities
+    }
+
+    fn admin_capabilities() -> HashSet<Capability> {
+        // Everything an editor may do, plus acting on what they do not own.
+        let mut capabilities = Self::editor_capabilities();
+        capabilities.insert(Capability::AdministerEngine);
+        capabilities
     }
 
     pub fn has_capability(&self, capability: &Capability) -> bool {
@@ -227,9 +249,41 @@ mod tests {
 
         assert!(user.is_authenticated);
         assert_eq!(user.user_id, Some("user123".to_string()));
-        assert!(user.has_capability(&Capability::WriteScripts));
+
+        // What serving this user's requests needs.
+        assert!(user.has_capability(&Capability::ReadScripts));
+        assert!(user.has_capability(&Capability::ReadAssets));
+        assert!(user.has_capability(&Capability::ViewLogs));
+        assert!(user.has_capability(&Capability::ManageStreams));
+        assert!(user.has_capability(&Capability::UseScriptDatabase));
+
+        // Using a solution is not authoring one.
+        assert!(!user.has_capability(&Capability::WriteScripts));
+        assert!(!user.has_capability(&Capability::WriteAssets));
         assert!(!user.has_capability(&Capability::DeleteScripts));
         assert!(!user.has_capability(&Capability::DeleteLogs));
+        assert!(!user.has_capability(&Capability::ManageScriptDatabase));
+        assert!(!user.has_capability(&Capability::ManageGraphQL));
+        assert!(!user.has_capability(&Capability::AdministerEngine));
+    }
+
+    #[test]
+    fn test_editor_user_capabilities() {
+        let user = UserContext::editor("author".to_string());
+
+        assert!(user.is_authenticated);
+
+        // Everything a solution's users can do, plus authoring.
+        assert!(user.has_capability(&Capability::UseScriptDatabase));
+        assert!(user.has_capability(&Capability::WriteScripts));
+        assert!(user.has_capability(&Capability::DeleteScripts));
+        assert!(user.has_capability(&Capability::WriteAssets));
+        assert!(user.has_capability(&Capability::ManageScriptDatabase));
+        assert!(user.has_capability(&Capability::ManageGraphQL));
+
+        // But nothing that reaches another author's work. `DeleteScripts` here
+        // means "the ones I own"; the ownership check is what bounds it.
+        assert!(!user.has_capability(&Capability::AdministerEngine));
     }
 
     #[test]

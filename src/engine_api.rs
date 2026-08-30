@@ -60,6 +60,7 @@ fn iso_timestamp() -> String {
 fn user_context_from(auth_user: Option<&AuthUser>) -> UserContext {
     match auth_user {
         Some(user) if user.is_admin => UserContext::admin(user.user_id.clone()),
+        Some(user) if user.is_editor => UserContext::editor(user.user_id.clone()),
         Some(user) => UserContext::authenticated(user.user_id.clone()),
         None => UserContext::anonymous(),
     }
@@ -77,10 +78,10 @@ fn user_owns_script(user: &UserContext, script_uri: &str) -> bool {
     }
 }
 
-/// Capability-only admin check: does this caller hold `DeleteScripts`?
+/// Capability-only admin check: does this caller hold `AdministerEngine`?
 ///
 /// **This does not mean the caller is an authenticated administrator.**
-/// Development mode grants `DeleteScripts` to *anonymous* callers
+/// Development mode grants `AdministerEngine` to *anonymous* callers
 /// (`UserContext::anonymous_capabilities`), so this returns true with no
 /// session at all. It is the right check for script and asset operations,
 /// where that elevation is the point of development mode.
@@ -106,7 +107,7 @@ fn may_administer(user: &UserContext) -> bool {
 }
 
 fn has_admin_capability(user: &UserContext) -> bool {
-    user.has_capability(&Capability::DeleteScripts)
+    user.has_capability(&Capability::AdministerEngine)
 }
 
 fn is_admin_or_owner(user: &UserContext, script_uri: &str) -> bool {
@@ -402,7 +403,7 @@ pub fn upsert_script_authorized(
 
     let exists = repository::fetch_script(uri).is_some();
     if exists {
-        let is_admin = user.has_capability(&Capability::DeleteScripts);
+        let is_admin = user.has_capability(&Capability::AdministerEngine);
         if !is_admin && !user_owns_script(user, uri) {
             warn!(
                 user_id = ?user.user_id,
@@ -448,9 +449,10 @@ pub fn upsert_script_authorized(
     Ok((action, revision))
 }
 
-/// Delete a script: DeleteScripts capability required. Returns false when the
-/// capability is missing or the script does not exist. Broadcasts the removal
-/// on success.
+/// Delete a script: `DeleteScripts` capability required, and the script must be
+/// one the caller owns unless they hold `AdministerEngine`. Returns false when
+/// the capability is missing, the caller is neither admin nor owner, or the
+/// script does not exist. Broadcasts the removal on success.
 pub fn delete_script_authorized(user: &UserContext, uri: &str, via: Option<&str>) -> bool {
     if let Err(e) = user.require_capability(&Capability::DeleteScripts) {
         let auditor = auditor();
@@ -470,6 +472,30 @@ pub fn delete_script_authorized(user: &UserContext, uri: &str, via: Option<&str>
             script_name = %uri,
             error = %e,
             "deleteScript capability check failed"
+        );
+        return false;
+    }
+
+    // The capability says the caller deletes scripts; ownership says *which*.
+    // Editors hold `DeleteScripts` for their own work, so without this an
+    // editor could delete every script in the engine.
+    if !is_admin_or_owner(user, uri) {
+        let auditor = auditor();
+        let user_id = user.user_id.clone();
+        tokio::task::spawn(async move {
+            let _ = auditor
+                .log_authz_failure(
+                    user_id,
+                    "script".to_string(),
+                    "delete".to_string(),
+                    "AdministerEngine".to_string(),
+                )
+                .await;
+        });
+        warn!(
+            user_id = ?user.user_id,
+            script_name = %uri,
+            "Permission denied: user is neither admin nor owner"
         );
         return false;
     }
@@ -764,14 +790,14 @@ pub enum UserAdminError {
 /// User administration is restricted to session-verified administrators.
 ///
 /// Deliberately stricter than [`has_admin_capability`], which accepts any holder of
-/// `DeleteScripts` — a capability development mode also grants to *anonymous*
+/// `AdministerEngine` — a capability development mode also grants to *anonymous*
 /// callers. Requiring authentication as well means only a `UserContext::admin`
 /// passes, and that is built solely from a session whose `is_admin` flag is
 /// set (`lib.rs`), for both the HTTP and MCP entry points. So development mode
 /// cannot hand an unauthenticated caller the user directory or the ability to
 /// grant itself a role.
 fn is_user_admin(user: &UserContext) -> bool {
-    user.is_authenticated && user.has_capability(&Capability::DeleteScripts)
+    user.is_authenticated && user.has_capability(&Capability::AdministerEngine)
 }
 
 /// Record an authorization failure against the user-administration surface.
@@ -960,9 +986,8 @@ fn count_administrators() -> Result<usize, UserAdminError> {
 /// capability: capability holders, script owners, and admins all qualify.
 fn can_access_assets(user: &UserContext, script_uri: &str, capability: &Capability) -> bool {
     may_administer(user)
-        && (user.has_capability(capability)
-            || user.has_capability(&Capability::DeleteScripts)
-            || user_owns_script(user, script_uri))
+        && (user.has_capability(&Capability::AdministerEngine)
+            || (user.has_capability(capability) && user_owns_script(user, script_uri)))
 }
 
 /// List asset metadata for a script (empty when access is denied).
@@ -2463,7 +2488,7 @@ pub fn authorize_test_run(user: &UserContext, uri: &str) -> Result<(), TestRunRe
     if user.require_capability(&Capability::WriteScripts).is_err() {
         return Err(TestRunRefusal::AccessDenied);
     }
-    let is_admin = user.has_capability(&Capability::DeleteScripts);
+    let is_admin = user.has_capability(&Capability::AdministerEngine);
     if !is_admin && !user_owns_script(user, uri) {
         warn!(
             user_id = ?user.user_id,
@@ -2621,7 +2646,7 @@ pub fn authorize_check(
         return Err(CheckRefusal::AccessDenied);
     }
     if deployed {
-        let is_admin = user.has_capability(&Capability::DeleteScripts);
+        let is_admin = user.has_capability(&Capability::AdministerEngine);
         if !is_admin && !user_owns_script(user, uri) {
             warn!(
                 user_id = ?user.user_id,
@@ -2925,7 +2950,7 @@ pub fn authorize_eval(user: &UserContext, uri: &str) -> Result<(), CheckRefusal>
     if user.require_capability(&Capability::WriteScripts).is_err() {
         return Err(CheckRefusal::AccessDenied);
     }
-    let is_admin = user.has_capability(&Capability::DeleteScripts);
+    let is_admin = user.has_capability(&Capability::AdministerEngine);
     if !is_admin && !user_owns_script(user, uri) {
         warn!(
             user_id = ?user.user_id,

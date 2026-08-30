@@ -59,7 +59,19 @@ pub enum Capability {
     ViewLogs,
     ManageStreams,
     ManageGraphQL,
+    /// Read and write rows in a script's tables: the data operations a script
+    /// performs while serving an ordinary request, so every authenticated user
+    /// holds it.
+    UseScriptDatabase,
+    /// Change a script's schema — create or drop tables, columns, and indexes.
+    /// Editing the shape of a solution's data, so it belongs to the editor
+    /// tier, not to the people using the solution.
     ManageScriptDatabase,
+    /// Administer the engine: act on scripts, assets, and users the caller does
+    /// not own. This is the administrator marker; `DeleteScripts` used to stand
+    /// in for it, which conflated deleting your own script with administering
+    /// everyone's.
+    AdministerEngine,
 }
 
 /// Comprehensive input validator - ALL VALIDATION IN RUST

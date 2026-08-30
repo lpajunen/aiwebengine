@@ -3408,7 +3408,7 @@ impl SecureGlobalContext {
                 );
 
                 if user_ctx_query
-                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                    .require_capability(&crate::security::Capability::UseScriptDatabase)
                     .is_err()
                 {
                     return Ok(
@@ -3489,7 +3489,7 @@ impl SecureGlobalContext {
                 );
 
                 if user_ctx_insert
-                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                    .require_capability(&crate::security::Capability::UseScriptDatabase)
                     .is_err()
                 {
                     return Ok(
@@ -3534,7 +3534,7 @@ impl SecureGlobalContext {
                 );
 
                 if user_ctx_update
-                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                    .require_capability(&crate::security::Capability::UseScriptDatabase)
                     .is_err()
                 {
                     return Ok(
@@ -3576,7 +3576,7 @@ impl SecureGlobalContext {
                 );
 
                 if user_ctx_delete
-                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                    .require_capability(&crate::security::Capability::UseScriptDatabase)
                     .is_err()
                 {
                     return Ok(
@@ -3610,7 +3610,7 @@ impl SecureGlobalContext {
                 );
 
                 if user_ctx_upsert
-                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                    .require_capability(&crate::security::Capability::UseScriptDatabase)
                     .is_err()
                 {
                     return Ok(
@@ -3673,7 +3673,7 @@ impl SecureGlobalContext {
                 );
 
                 if user_ctx_dw
-                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                    .require_capability(&crate::security::Capability::UseScriptDatabase)
                     .is_err()
                 {
                     return Ok(
@@ -3716,7 +3716,7 @@ impl SecureGlobalContext {
                 );
 
                 if user_ctx_lease
-                    .require_capability(&crate::security::Capability::ManageScriptDatabase)
+                    .require_capability(&crate::security::Capability::UseScriptDatabase)
                     .is_err()
                 {
                     return Ok(

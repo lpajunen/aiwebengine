@@ -518,6 +518,9 @@ fn create_js_auth_context_from_session(session: Option<&auth::AuthSession>) -> a
 fn create_user_context_from_session(session: Option<&auth::AuthSession>) -> security::UserContext {
     match session {
         Some(session) if session.is_admin => security::UserContext::admin(session.user_id.clone()),
+        Some(session) if session.is_editor => {
+            security::UserContext::editor(session.user_id.clone())
+        }
         Some(session) => security::UserContext::authenticated(session.user_id.clone()),
         None => security::UserContext::anonymous(),
     }
@@ -2855,6 +2858,8 @@ async fn handle_dynamic_request(
         let user_context = if let Some(ref auth_user) = auth_user {
             if auth_user.is_admin {
                 security::UserContext::admin(auth_user.user_id.clone())
+            } else if auth_user.is_editor {
+                security::UserContext::editor(auth_user.user_id.clone())
             } else {
                 security::UserContext::authenticated(auth_user.user_id.clone())
             }
