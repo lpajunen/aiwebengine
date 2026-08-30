@@ -885,6 +885,7 @@ fn user_to_json(user: &crate::user_repository::User) -> Value {
         "email": user.email,
         "name": user.name,
         "roles": role_names(user),
+        "realm": user.realm,
         "providers": user.providers
             .iter()
             .map(|p| p.provider_name.clone())
@@ -906,6 +907,35 @@ pub fn list_users_authorized(user: &UserContext) -> Result<Vec<Value>, UserAdmin
     crate::user_repository::list_users()
         .map(|users| users.iter().map(user_to_json).collect())
         .map_err(|e| UserAdminError::Storage(format!("{}", e)))
+}
+
+/// Move a user into a realm; administrators only. Returns the realm as stored.
+///
+/// The realm is the host an account is a principal on, and `*` means every
+/// host. No sign-in path produces `*` — an account anyone can create must not
+/// reach every host by existing — so this is how an administrator who needs to
+/// work across hosts gets there, and it is deliberately a separate act from
+/// granting a role.
+///
+/// Takes effect on the user's next sign-in: sessions carry the realm they were
+/// minted with.
+pub fn set_user_realm_authorized(
+    actor: &UserContext,
+    user_id: &str,
+    realm: &str,
+) -> Result<String, UserAdminError> {
+    if !is_user_admin(actor) {
+        audit_user_admin_denied(actor, "set_realm");
+        return Err(UserAdminError::AccessDenied);
+    }
+    // Establish the user exists before mutating, so a typo'd id reads as 404.
+    lookup_user(user_id)?;
+
+    crate::user_repository::set_user_realm(user_id, realm)
+        .map_err(|e| UserAdminError::Storage(format!("{}", e)))?;
+    audit_role_change(actor, user_id, realm, "set_realm");
+
+    Ok(lookup_user(user_id)?.realm)
 }
 
 /// Grant a role to a user; administrators only. Returns the user's resulting
@@ -5610,6 +5640,7 @@ pub struct UserRoleParams {
     #[serde(alias = "userId")]
     user_id: Option<String>,
     role: Option<String>,
+    realm: Option<String>,
 }
 
 /// Role changes carry two short scalar fields, so accept either a JSON body or
@@ -5983,6 +6014,55 @@ pub async fn user_roles_post_route(
                 "userId": user_id,
                 "role": role,
                 "roles": roles,
+                "timestamp": iso_timestamp(),
+            }),
+        ),
+        Err(error) => user_admin_error_response(Some(&user_id), error),
+    }
+}
+
+/// Move a user into a realm. Administrators only.
+#[utoipa::path(
+    post,
+    path = "/engine/user_realm",
+    tags = ["Users"],
+    request_body(content_type = "application/json",
+        description = "Fields (JSON or form-encoded): user_id (required), realm (required: a host name, or * for every host)"),
+    responses(
+        (status = 200, description = "Realm set; returns the realm as stored"),
+        (status = 400, description = "Missing parameter or empty realm"),
+        (status = 403, description = "Permission denied"),
+        (status = 404, description = "User not found"),
+    )
+)]
+pub async fn user_realm_post_route(
+    auth_user: Option<Extension<AuthUser>>,
+    Query(query): Query<UserRoleParams>,
+    body: axum::body::Bytes,
+) -> Response {
+    let user = user_context_from(auth_user.as_deref());
+    let form = parse_user_role_body(&body);
+    let Some(user_id) = form.user_id.or(query.user_id) else {
+        return missing_param_response("user_id");
+    };
+    let Some(realm) = form.realm.or(query.realm) else {
+        return missing_param_response("realm");
+    };
+
+    let (user_id_cl, realm_cl) = (user_id.clone(), realm.clone());
+    let result = tokio::task::spawn_blocking(move || {
+        set_user_realm_authorized(&user, &user_id_cl, &realm_cl)
+    })
+    .await
+    .unwrap_or_else(|e| Err(UserAdminError::Storage(format!("join error: {}", e))));
+
+    match result {
+        Ok(realm) => json_response(
+            StatusCode::OK,
+            json!({
+                "success": true,
+                "userId": user_id,
+                "realm": realm,
                 "timestamp": iso_timestamp(),
             }),
         ),
@@ -7140,6 +7220,24 @@ fn native_tools() -> &'static [NativeToolEntry] {
                 })
             },
             tool_add_user_role,
+        ),
+        (
+            "set_user_realm",
+            "Move a user into a realm: the host they authenticate on, or * for every host. Administrator privileges required. No sign-in path produces *, so this is how an account is given access across hosts. Takes effect on the user's next sign-in.",
+            || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "user_id": { "type": "string", "description": "Id of the user to modify" },
+                        "realm": {
+                            "type": "string",
+                            "description": "Host name the user authenticates on, or * for every host"
+                        }
+                    },
+                    "required": ["user_id", "realm"]
+                })
+            },
+            tool_set_user_realm,
         ),
         (
             "remove_user_role",
@@ -8705,6 +8803,24 @@ fn tool_add_user_role(args: &Value, user: &UserContext) -> Value {
             "userId": user_id,
             "role": role,
             "roles": roles,
+            "timestamp": iso_timestamp(),
+        }),
+        Err(error) => user_admin_error_json(error),
+    }
+}
+
+fn tool_set_user_realm(args: &Value, user: &UserContext) -> Value {
+    let Some(user_id) = arg_str(args, "user_id") else {
+        return missing_arg("user_id");
+    };
+    let Some(realm) = arg_str(args, "realm") else {
+        return missing_arg("realm");
+    };
+    match set_user_realm_authorized(user, user_id, realm) {
+        Ok(realm) => json!({
+            "success": true,
+            "userId": user_id,
+            "realm": realm,
             "timestamp": iso_timestamp(),
         }),
         Err(error) => user_admin_error_json(error),

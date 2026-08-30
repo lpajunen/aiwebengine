@@ -85,6 +85,15 @@ fn extract_session_token(req: &Request, cookie_name: &str) -> Option<String> {
     None
 }
 
+/// The `Host` header a request arrived on, for realm checking.
+fn extract_host(req: &Request) -> Option<String> {
+    req.headers()
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 /// Extract client IP address from request
 fn extract_client_ip(req: &Request) -> String {
     // Try X-Forwarded-For header first
@@ -153,10 +162,11 @@ pub async fn optional_auth_middleware(
         );
         let ip_addr = extract_client_ip(&req);
         let user_agent = extract_user_agent(&req);
+        let host = extract_host(&req);
 
         // Get full session information
         match auth_manager
-            .get_session(&session_token, &ip_addr, &user_agent)
+            .get_session(&session_token, &ip_addr, &user_agent, host.as_deref())
             .await
         {
             Ok(session) => {
@@ -209,10 +219,11 @@ pub async fn required_auth_middleware(
 
     let ip_addr = extract_client_ip(&req);
     let user_agent = extract_user_agent(&req);
+    let host = extract_host(&req);
 
     // Get full session information
     let session = auth_manager
-        .get_session(&session_token, &ip_addr, &user_agent)
+        .get_session(&session_token, &ip_addr, &user_agent, host.as_deref())
         .await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
 
@@ -253,10 +264,11 @@ pub async fn redirect_to_login_middleware(
     if let Some(session_token) = extract_session_token(&req, cookie_name) {
         let ip_addr = extract_client_ip(&req);
         let user_agent = extract_user_agent(&req);
+        let host = extract_host(&req);
 
         // Get full session information
         match auth_manager
-            .get_session(&session_token, &ip_addr, &user_agent)
+            .get_session(&session_token, &ip_addr, &user_agent, host.as_deref())
             .await
         {
             Ok(session) => {
@@ -323,10 +335,11 @@ pub async fn require_editor_or_admin_middleware(
     if let Some(session_token) = extract_session_token(&req, cookie_name) {
         let ip_addr = extract_client_ip(&req);
         let user_agent = extract_user_agent(&req);
+        let host = extract_host(&req);
 
         // Get full session information
         match auth_manager
-            .get_session(&session_token, &ip_addr, &user_agent)
+            .get_session(&session_token, &ip_addr, &user_agent, host.as_deref())
             .await
         {
             Ok(session) => {

@@ -24,6 +24,26 @@ fn get_bootstrap_admins() -> &'static [String] {
     BOOTSTRAP_ADMINS.get().map(|v| v.as_slice()).unwrap_or(&[])
 }
 
+/// Realm value meaning "a principal on every host this engine serves".
+///
+/// Only ever set deliberately, by an administrator. No sign-in path produces
+/// it, because an account anyone can create must not be able to reach every
+/// host by existing.
+pub const GLOBAL_REALM: &str = "*";
+
+/// Whether an account in `realm` authenticates on `host`.
+///
+/// An empty realm authorizes nothing. It marks a row created before realms
+/// existed, and the next sign-in records the host it happened on — so this is
+/// a re-authentication, not a lockout. Treating it as global instead would
+/// mean a column added to bound accounts shipped defaulting to unbounded.
+pub fn realm_authorizes_host(realm: &str, host: &str) -> bool {
+    if realm.is_empty() {
+        return false;
+    }
+    realm == GLOBAL_REALM || realm.eq_ignore_ascii_case(host)
+}
+
 /// Defines the types of user repository errors that can occur
 #[derive(Debug, thiserror::Error)]
 pub enum UserRepositoryError {
@@ -90,6 +110,9 @@ pub struct User {
     pub updated_at: SystemTime,
     /// Provider information for all providers this user has authenticated with
     pub providers: Vec<ProviderInfo>,
+    /// The host this account is a principal on. [`GLOBAL_REALM`] for every
+    /// host; empty for a row that predates realms and has not signed in since.
+    pub realm: String,
 }
 
 impl User {
@@ -99,6 +122,7 @@ impl User {
         name: Option<String>,
         provider_name: String,
         provider_user_id: String,
+        realm: String,
     ) -> Self {
         let now = SystemTime::now();
         let id = uuid::Uuid::new_v4().to_string();
@@ -116,6 +140,7 @@ impl User {
                 first_auth_at: now,
                 last_auth_at: now,
             }],
+            realm,
         }
     }
 
@@ -192,22 +217,47 @@ fn datetime_to_system_time(dt: chrono::DateTime<chrono::Utc>) -> SystemTime {
 }
 
 /// Database-backed upsert user
-async fn db_upsert_user(
-    pool: &PgPool,
-    email: Option<&str>,
-    name: Option<&str>,
-    provider_name: &str,
-    provider_user_id: &str,
+/// The record a sign-in writes, whoever vouched for it.
+struct UpsertUser<'a> {
+    /// `None` for identities the engine authenticates itself, which have no
+    /// address. An existing address is never erased by one.
+    email: Option<&'a str>,
+    name: Option<&'a str>,
+    provider_name: &'a str,
+    provider_user_id: &'a str,
     is_admin: bool,
     is_editor: bool,
-) -> AppResult<String> {
+    /// The host the sign-in happened on. Recorded on creation, and filled in
+    /// on an existing row only when it is still empty.
+    realm: &'a str,
+}
+
+async fn db_upsert_user(pool: &PgPool, user: UpsertUser<'_>) -> AppResult<String> {
+    let UpsertUser {
+        email,
+        name,
+        provider_name,
+        provider_user_id,
+        is_admin,
+        is_editor,
+        realm,
+    } = user;
     let now = chrono::Utc::now();
 
     // Try to update existing user first (preserve existing roles)
+    //
+    // The realm is filled in only when it is empty — a row from before realms
+    // existed, recording the host of the first sign-in since. It is never
+    // overwritten: signing in on another host must not move an account there,
+    // or re-homing an account would be as easy as visiting a different URL.
     let update_result = sqlx::query(
         r#"
         UPDATE users
-        SET email = COALESCE($1, email), name = $2, updated_at = $3, last_login_at = $3
+        SET email = COALESCE($1, email),
+            name = $2,
+            updated_at = $3,
+            last_login_at = $3,
+            realm = CASE WHEN realm = '' THEN $6 ELSE realm END
         WHERE provider = $4 AND provider_user_id = $5
         RETURNING user_id
         "#,
@@ -217,6 +267,7 @@ async fn db_upsert_user(
     .bind(now)
     .bind(provider_name)
     .bind(provider_user_id)
+    .bind(realm)
     .fetch_optional(pool)
     .await
     .map_err(|e| {
@@ -244,8 +295,8 @@ async fn db_upsert_user(
 
     sqlx::query(
         r#"
-        INSERT INTO users (user_id, email, name, provider, provider_user_id, is_admin, is_editor, created_at, updated_at, last_login_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $8)
+        INSERT INTO users (user_id, email, name, provider, provider_user_id, is_admin, is_editor, realm, created_at, updated_at, last_login_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $9, $8, $8, $8)
         "#,
     )
     .bind(&user_id)
@@ -256,6 +307,7 @@ async fn db_upsert_user(
     .bind(is_admin)
     .bind(is_editor)
     .bind(now)
+    .bind(realm)
     .execute(pool)
     .await
     .map_err(|e| {
@@ -288,7 +340,7 @@ async fn db_delete_user(pool: &PgPool, user_id: &str) -> AppResult<bool> {
 async fn db_get_user(pool: &PgPool, user_id: &str) -> AppResult<User> {
     let row = sqlx::query(
         r#"
-        SELECT user_id, email, name, provider, provider_user_id, is_admin, is_editor, created_at, updated_at
+        SELECT user_id, email, name, provider, provider_user_id, is_admin, is_editor, realm, created_at, updated_at
         FROM users
         WHERE user_id = $1
         "#,
@@ -332,6 +384,10 @@ async fn db_get_user(pool: &PgPool, user_id: &str) -> AppResult<User> {
         message: e.to_string(),
         source: None,
     })?;
+    let realm: String = row.try_get("realm").map_err(|e| AppError::Database {
+        message: e.to_string(),
+        source: None,
+    })?;
     let created_at: chrono::DateTime<chrono::Utc> =
         row.try_get("created_at").map_err(|e| AppError::Database {
             message: e.to_string(),
@@ -366,6 +422,7 @@ async fn db_get_user(pool: &PgPool, user_id: &str) -> AppResult<User> {
         created_at: datetime_to_system_time(created_at),
         updated_at: datetime_to_system_time(updated_at),
         providers,
+        realm,
     })
 }
 
@@ -377,7 +434,7 @@ async fn db_find_user_by_provider(
 ) -> AppResult<Option<User>> {
     let row = sqlx::query(
         r#"
-        SELECT user_id, email, name, provider, provider_user_id, is_admin, is_editor, created_at, updated_at
+        SELECT user_id, email, name, provider, provider_user_id, is_admin, is_editor, realm, created_at, updated_at
         FROM users
         WHERE provider = $1 AND provider_user_id = $2
         "#,
@@ -422,6 +479,10 @@ async fn db_find_user_by_provider(
             message: e.to_string(),
             source: None,
         })?;
+        let realm: String = row.try_get("realm").map_err(|e| AppError::Database {
+            message: e.to_string(),
+            source: None,
+        })?;
         let created_at: chrono::DateTime<chrono::Utc> =
             row.try_get("created_at").map_err(|e| AppError::Database {
                 message: e.to_string(),
@@ -456,6 +517,7 @@ async fn db_find_user_by_provider(
             created_at: datetime_to_system_time(created_at),
             updated_at: datetime_to_system_time(updated_at),
             providers,
+            realm,
         }))
     } else {
         Ok(None)
@@ -480,6 +542,7 @@ pub async fn upsert_user(
     name: Option<String>,
     provider_name: String,
     provider_user_id: String,
+    realm: String,
 ) -> AppResult<String> {
     let bootstrap_admins = get_bootstrap_admins();
     upsert_user_with_bootstrap(
@@ -488,6 +551,7 @@ pub async fn upsert_user(
         provider_name,
         provider_user_id,
         bootstrap_admins,
+        realm,
     )
     .await
 }
@@ -513,6 +577,7 @@ pub async fn upsert_user_with_bootstrap(
     provider_name: String,
     provider_user_id: String,
     bootstrap_admins: &[String],
+    realm: String,
 ) -> AppResult<String> {
     // Validate inputs
     if email.trim().is_empty() {
@@ -556,12 +621,15 @@ pub async fn upsert_user_with_bootstrap(
 
     db_upsert_user(
         db.pool(),
-        Some(&email),
-        name.as_deref(),
-        &provider_name,
-        &provider_user_id,
-        is_admin,
-        is_editor,
+        UpsertUser {
+            email: Some(&email),
+            name: name.as_deref(),
+            provider_name: &provider_name,
+            provider_user_id: &provider_user_id,
+            is_admin,
+            is_editor,
+            realm: &realm,
+        },
     )
     .await
 }
@@ -575,10 +643,15 @@ pub async fn upsert_user_with_bootstrap(
 /// provider has verified it. An internal identity has no verified address and
 /// carries no email at all, so it is created with the Authenticated role and
 /// nothing more; reaching any higher tier takes an administrator granting it.
+///
+/// `realm` is the host the sign-up happened on, and is never
+/// [`GLOBAL_REALM`]. An account anyone can create must not become a principal
+/// everywhere by being created.
 pub async fn upsert_internal_user(
     name: Option<String>,
     provider_name: String,
     provider_user_id: String,
+    realm: String,
 ) -> AppResult<String> {
     if provider_name.trim().is_empty() {
         return Err(AppError::Validation {
@@ -598,12 +671,15 @@ pub async fn upsert_internal_user(
 
     db_upsert_user(
         db.pool(),
-        None,
-        name.as_deref(),
-        &provider_name,
-        &provider_user_id,
-        false,
-        false,
+        UpsertUser {
+            email: None,
+            name: name.as_deref(),
+            provider_name: &provider_name,
+            provider_user_id: &provider_user_id,
+            is_admin: false,
+            is_editor: false,
+            realm: &realm,
+        },
     )
     .await
 }
@@ -698,6 +774,54 @@ pub fn update_user_roles(user_id: &str, roles: Vec<UserRole>) -> AppResult<()> {
     })
 }
 
+/// Move a user into a realm — the host they are a principal on, or
+/// [`GLOBAL_REALM`] for every host.
+///
+/// The only way `*` is ever set. No sign-in path produces it, because an
+/// account anyone can create must not reach every host by existing; an
+/// administrator granting it is a deliberate act, and the audit trail on the
+/// calling side records it as one.
+///
+/// Takes effect on the user's next sign-in. Sessions carry the realm they were
+/// minted with, so narrowing a realm does not retroactively invalidate a
+/// session already issued — revoke it explicitly if that is what you want.
+pub fn set_user_realm(user_id: &str, realm: &str) -> AppResult<()> {
+    let realm = realm.trim().to_lowercase();
+    if realm.is_empty() {
+        return Err(AppError::Validation {
+            field: "realm".to_string(),
+            reason: "Realm cannot be empty".to_string(),
+        });
+    }
+
+    let db = get_db_pool()?;
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            let result =
+                sqlx::query("UPDATE users SET realm = $1, updated_at = $2 WHERE user_id = $3")
+                    .bind(&realm)
+                    .bind(chrono::Utc::now())
+                    .bind(user_id)
+                    .execute(db.pool())
+                    .await
+                    .map_err(|e| {
+                        error!("Database error setting user realm: {}", e);
+                        AppError::Database {
+                            message: format!("Database error: {}", e),
+                            source: None,
+                        }
+                    })?;
+
+            if result.rows_affected() == 0 {
+                return Err(AppError::from(UserRepositoryError::UserNotFound(
+                    user_id.to_string(),
+                )));
+            }
+            Ok(())
+        })
+    })
+}
+
 /// Add a role to a user
 pub fn add_user_role(user_id: &str, role: UserRole) -> AppResult<()> {
     // Get current user to determine new role flags
@@ -740,7 +864,7 @@ pub fn list_users() -> AppResult<Vec<User>> {
             let pool = db.pool();
             let rows = sqlx::query(
                     r#"
-                    SELECT user_id, email, name, provider, provider_user_id, is_admin, is_editor, created_at, updated_at
+                    SELECT user_id, email, name, provider, provider_user_id, is_admin, is_editor, realm, created_at, updated_at
                     FROM users
                     ORDER BY created_at DESC
                     "#,
@@ -789,6 +913,10 @@ fn convert_row_to_user(row: &PgRow) -> AppResult<User> {
         message: e.to_string(),
         source: None,
     })?;
+    let realm: String = row.try_get("realm").map_err(|e| AppError::Database {
+        message: e.to_string(),
+        source: None,
+    })?;
     let created_at: chrono::DateTime<chrono::Utc> =
         row.try_get("created_at").map_err(|e| AppError::Database {
             message: e.to_string(),
@@ -823,6 +951,7 @@ fn convert_row_to_user(row: &PgRow) -> AppResult<User> {
         created_at: datetime_to_system_time(created_at),
         updated_at: datetime_to_system_time(updated_at),
         providers,
+        realm,
     })
 }
 
@@ -905,6 +1034,7 @@ mod tests {
             Some("Test User".to_string()),
             "google".to_string(),
             "google123".to_string(),
+            "test.example.com".to_string(),
         );
 
         assert_eq!(user.email.as_deref(), Some("test@example.com"));
@@ -928,6 +1058,7 @@ mod tests {
                 Some("New User".to_string()),
                 "github".to_string(),
                 "github456".to_string(),
+                "test.example.com".to_string(),
             )
             .await
             .unwrap();
@@ -953,6 +1084,7 @@ mod tests {
                 Some("Existing User".to_string()),
                 "google".to_string(),
                 "google789".to_string(),
+                "test.example.com".to_string(),
             )
             .await
             .unwrap();
@@ -963,6 +1095,7 @@ mod tests {
                 Some("Updated User".to_string()),
                 "google".to_string(),
                 "google789".to_string(),
+                "test.example.com".to_string(),
             )
             .await
             .unwrap();
@@ -991,6 +1124,7 @@ mod tests {
                 None,
                 "google".to_string(),
                 "google_roles".to_string(),
+                "test.example.com".to_string(),
             )
             .await
             .unwrap();
@@ -1046,6 +1180,7 @@ mod tests {
                 None,
                 "google".to_string(),
                 "google_auth".to_string(),
+                "test.example.com".to_string(),
             )
             .await
             .unwrap();
@@ -1069,6 +1204,7 @@ mod tests {
                 None,
                 "github".to_string(),
                 "github_provider".to_string(),
+                "test.example.com".to_string(),
             )
             .await
             .unwrap();
@@ -1097,6 +1233,7 @@ mod tests {
                 None,
                 "google".to_string(),
                 "google_update".to_string(),
+                "test.example.com".to_string(),
             )
             .await
             .unwrap();
@@ -1126,6 +1263,7 @@ mod tests {
                 None,
                 "google".to_string(),
                 "google_delete".to_string(),
+                "test.example.com".to_string(),
             )
             .await
             .unwrap();
@@ -1160,7 +1298,8 @@ mod tests {
                     "".to_string(),
                     None,
                     "google".to_string(),
-                    "user123".to_string()
+                    "user123".to_string(),
+                    "test.example.com".to_string()
                 )
                 .await
                 .is_err()
@@ -1172,7 +1311,8 @@ mod tests {
                     "user@example.com".to_string(),
                     None,
                     "".to_string(),
-                    "user123".to_string()
+                    "user123".to_string(),
+                    "test.example.com".to_string()
                 )
                 .await
                 .is_err()
@@ -1184,7 +1324,8 @@ mod tests {
                     "user@example.com".to_string(),
                     None,
                     "google".to_string(),
-                    "".to_string()
+                    "".to_string(),
+                    "test.example.com".to_string()
                 )
                 .await
                 .is_err()
@@ -1210,6 +1351,7 @@ mod tests {
                 "google".to_string(),
                 "google_admin".to_string(),
                 &bootstrap_admins,
+                "test.example.com".to_string(),
             )
             .await
             .unwrap();
@@ -1226,6 +1368,7 @@ mod tests {
                 "google".to_string(),
                 "google_regular".to_string(),
                 &bootstrap_admins,
+                "test.example.com".to_string(),
             )
             .await
             .unwrap();
@@ -1255,6 +1398,7 @@ mod tests {
                 "google".to_string(),
                 "google_admin_case".to_string(),
                 &bootstrap_admins,
+                "test.example.com".to_string(),
             )
             .await
             .unwrap();

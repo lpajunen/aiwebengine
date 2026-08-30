@@ -67,6 +67,18 @@ pub fn resources_match(audience: &str, requested: &str) -> bool {
     normalize_resource(audience) == normalize_resource(requested)
 }
 
+/// Whether a session established for `realm` authenticates on `host`.
+///
+/// Delegates the rule to [`crate::user_repository::realm_authorizes_host`]; a
+/// session with no realm recorded predates realm scoping and authorizes
+/// nothing.
+pub fn realm_authorizes_host(realm: Option<&str>, host: &str) -> bool {
+    match realm {
+        Some(realm) => crate::user_repository::realm_authorizes_host(realm, host),
+        None => false,
+    }
+}
+
 /// Session-related errors
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
@@ -90,6 +102,9 @@ pub enum SessionError {
 
     #[error("Session is not authorized for this resource")]
     WrongAudience,
+
+    #[error("Session does not authenticate on this host")]
+    WrongRealm,
 
     #[error("Encryption error: {0}")]
     EncryptionError(String),
@@ -119,6 +134,11 @@ pub struct SessionData {
     pub refresh_token: Option<String>,
     /// Target resource URI (for OAuth2 resource indicators)
     pub audience: Option<String>,
+    /// The host this session's account is a principal on, copied from the user
+    /// when the session was minted. `None` marks a session established before
+    /// realms existed, which authorizes nothing — sign in again.
+    #[serde(default)]
+    pub realm: Option<String>,
 }
 
 /// Parameters for creating a new session
@@ -136,6 +156,8 @@ pub struct CreateSessionParams {
     pub refresh_token: Option<String>,
     /// Target resource audience
     pub audience: Option<String>,
+    /// The host the account is a principal on, read from the user record.
+    pub realm: String,
 }
 
 /// Session fingerprint for detecting hijacking attempts
@@ -323,6 +345,7 @@ impl SecureSessionManager {
             ),
             refresh_token: params.refresh_token.clone(),
             audience: params.audience.clone(),
+            realm: Some(params.realm.clone()),
         };
 
         // Encrypt session data
@@ -372,6 +395,7 @@ impl SecureSessionManager {
         token: &str,
         ip_addr: &str,
         user_agent: &str,
+        host: &str,
     ) -> Result<SessionData, SessionError> {
         // Retrieve encrypted session
         let row: (serde_json::Value, DateTime<Utc>) =
@@ -412,6 +436,22 @@ impl SecureSessionManager {
         if self.absolute_expiry_for_created_at(session_data.created_at) < Utc::now() {
             self.invalidate_session(token).await?;
             return Err(SessionError::SessionExpired);
+        }
+
+        // Does this account authenticate on the host the request arrived on?
+        //
+        // Checked here, at the bottom, rather than in each middleware, because
+        // a session token is accepted from an `Authorization: Bearer` header as
+        // readily as from a cookie — and a bearer header carries none of the
+        // host scoping the browser applies to a cookie. Every path that turns a
+        // token into a principal comes through here, so this is the one place
+        // that cannot be forgotten.
+        if !realm_authorizes_host(session_data.realm.as_deref(), host) {
+            debug!(
+                "Session for user {} does not authenticate on host {} (realm {:?})",
+                session_data.user_id, host, session_data.realm
+            );
+            return Err(SessionError::WrongRealm);
         }
 
         // Validate fingerprint
@@ -523,10 +563,13 @@ impl SecureSessionManager {
         token: &str,
         ip_addr: &str,
         user_agent: &str,
+        host: &str,
         resource: Option<&str>,
     ) -> Result<SessionData, SessionError> {
         // First validate the session normally
-        let session_data = self.validate_session(token, ip_addr, user_agent).await?;
+        let session_data = self
+            .validate_session(token, ip_addr, user_agent, host)
+            .await?;
 
         if let Some(requested_resource) = resource {
             let Some(audience) = &session_data.audience else {
@@ -558,6 +601,7 @@ impl SecureSessionManager {
         token: &str,
         ip_addr: &str,
         user_agent: &str,
+        host: &str,
         new_refresh_token: Option<String>,
     ) -> Result<SessionData, SessionError> {
         let mut tx = self
@@ -593,6 +637,19 @@ impl SecureSessionManager {
         }
 
         let _ = (ip_addr, user_agent);
+
+        // Refreshing reads and rewrites the session without going through
+        // `validate_session`, so the realm has to be checked here too. A
+        // session close enough to expiry to be renewed would otherwise be the
+        // one way onto a host it does not authenticate on.
+        if !realm_authorizes_host(session_data.realm.as_deref(), host) {
+            let _ = tx.rollback().await;
+            debug!(
+                "Refusing to refresh session for user {} on host {} (realm {:?})",
+                session_data.user_id, host, session_data.realm
+            );
+            return Err(SessionError::WrongRealm);
+        }
 
         if let Some(token_value) = new_refresh_token {
             session_data.refresh_token = Some(token_value);
@@ -828,12 +885,18 @@ mod tests {
             user_agent: "Mozilla/5.0".to_string(),
             refresh_token: None,
             audience: None,
+            realm: "test.example.com".to_string(),
         };
 
         let token = manager.create_session(params).await.unwrap();
 
         let session = manager
-            .validate_session(&token.token, "192.168.1.1", "Mozilla/5.0")
+            .validate_session(
+                &token.token,
+                "192.168.1.1",
+                "Mozilla/5.0",
+                "test.example.com",
+            )
             .await
             .unwrap();
 
@@ -858,13 +921,19 @@ mod tests {
             user_agent: "Mozilla/5.0".to_string(),
             refresh_token: None,
             audience: None,
+            realm: "test.example.com".to_string(),
         };
 
         let token = manager.create_session(params).await.unwrap();
 
         // Different user agent should fail
         let result = manager
-            .validate_session(&token.token, "192.168.1.1", "Chrome/90.0")
+            .validate_session(
+                &token.token,
+                "192.168.1.1",
+                "Chrome/90.0",
+                "test.example.com",
+            )
             .await;
         assert!(matches!(result, Err(SessionError::FingerprintMismatch)));
     }
@@ -887,6 +956,7 @@ mod tests {
             user_agent: "token-exchange-client/1.0".to_string(),
             refresh_token: None,
             audience: None,
+            realm: "test.example.com".to_string(),
         };
 
         let token = manager.create_session(params).await.unwrap();
@@ -896,6 +966,7 @@ mod tests {
                 &token.token,
                 "192.168.1.1",
                 "claude-code/2.0 (external, cli)",
+                "test.example.com",
             )
             .await
             .unwrap();
@@ -932,6 +1003,7 @@ mod tests {
                     user_agent: "Mozilla/5.0".to_string(),
                     refresh_token: None,
                     audience: None,
+                    realm: "test.example.com".to_string(),
                 };
                 manager.create_session(params).await.unwrap();
             }
@@ -962,13 +1034,19 @@ mod tests {
             user_agent: "Mozilla/5.0".to_string(),
             refresh_token: None,
             audience: None,
+            realm: "test.example.com".to_string(),
         };
 
         let token = manager.create_session(params).await.unwrap();
 
         // Validate session exists
         manager
-            .validate_session(&token.token, "192.168.1.1", "Mozilla/5.0")
+            .validate_session(
+                &token.token,
+                "192.168.1.1",
+                "Mozilla/5.0",
+                "test.example.com",
+            )
             .await
             .unwrap();
 
@@ -977,7 +1055,12 @@ mod tests {
 
         // Should fail after invalidation
         let result = manager
-            .validate_session(&token.token, "192.168.1.1", "Mozilla/5.0")
+            .validate_session(
+                &token.token,
+                "192.168.1.1",
+                "Mozilla/5.0",
+                "test.example.com",
+            )
             .await;
         assert!(matches!(result, Err(SessionError::SessionNotFound)));
     }

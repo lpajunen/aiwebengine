@@ -95,6 +95,12 @@ Each of the first three sets the session cookie on success.
   `SameSite=Lax` to refuse cross-site requests. Keep it a POST.
 - **Passwords are Argon2id PHC strings.** Parameters and salt travel inside the
   hash, so raising the cost later is a code change, not a migration.
+- **An account belongs to one host.** Guests and local accounts are recorded
+  with the host they were created on, and authenticate only there — an account
+  a solution's sign-up form mints is not a principal on your management host.
+  Signing in elsewhere does not move it. An administrator can widen an account
+  to every host with `/engine/user_realm` or the `set_user_realm` MCP tool; no
+  sign-in path produces that value.
 - **A guest or local session is not an API credential.** These flows mint
   browser sessions, which carry no audience, and `/mcp` requires one for the
   host and path being requested. Presenting a session cookie as a Bearer token
@@ -109,10 +115,5 @@ Each of the first three sets the session cookie on success.
 - **No password change or reset.** An account with a credential cannot rotate
   it. There is no recovery path for a forgotten password, and for a guest there
   cannot be one.
-- **No realm scoping.** An account is a principal engine-wide, so an identity
-  registered by a solution on one host is authenticated on every host. What
-  bounds it today is that the authenticated tier holds nothing that reaches
-  another script's work, plus the session cookie being host-scoped by default
-  (`auth.cookie.domain` unset). Scoping identities to a realm is the next piece.
 - **No passkeys.** A good fit here — no email, no password reset, no PII — and
   the credential table's shape leaves room for them.

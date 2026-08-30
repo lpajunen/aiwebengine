@@ -616,11 +616,21 @@ pub async fn start_guest(
     let user_agent = get_user_agent(&headers);
 
     let token = auth_manager
-        .start_guest_session(request.name, &ip_addr, &user_agent)
+        .start_guest_session(
+            request.name,
+            &ip_addr,
+            &user_agent,
+            get_request_host(&headers).as_deref(),
+        )
         .await?;
 
     let user_id = auth_manager
-        .get_session(&token, &ip_addr, &user_agent)
+        .get_session(
+            &token,
+            &ip_addr,
+            &user_agent,
+            get_request_host(&headers).as_deref(),
+        )
         .await
         .ok()
         .map(|session| session.user_id);
@@ -664,11 +674,17 @@ pub async fn register_local(
             request.name,
             &ip_addr,
             &user_agent,
+            get_request_host(&headers).as_deref(),
         )
         .await?;
 
     let user_id = auth_manager
-        .get_session(&token, &ip_addr, &user_agent)
+        .get_session(
+            &token,
+            &ip_addr,
+            &user_agent,
+            get_request_host(&headers).as_deref(),
+        )
         .await
         .ok()
         .map(|session| session.user_id);
@@ -710,7 +726,12 @@ pub async fn login_local(
         .await?;
 
     let user_id = auth_manager
-        .get_session(&token, &ip_addr, &user_agent)
+        .get_session(
+            &token,
+            &ip_addr,
+            &user_agent,
+            get_request_host(&headers).as_deref(),
+        )
         .await
         .ok()
         .map(|session| session.user_id);
@@ -760,7 +781,12 @@ pub async fn claim_account(
     let token = session_token_from_headers(&headers, &config.session_cookie_name)
         .ok_or(crate::auth::error::AuthError::AuthenticationRequired)?;
     let session = auth_manager
-        .get_session(&token, &ip_addr, &user_agent)
+        .get_session(
+            &token,
+            &ip_addr,
+            &user_agent,
+            get_request_host(&headers).as_deref(),
+        )
         .await
         .map_err(|_| crate::auth::error::AuthError::AuthenticationRequired)?;
 
@@ -865,7 +891,12 @@ pub async fn auth_status(
     let session_token = session_token_from_headers(&headers, &config.session_cookie_name);
     if let Some(token) = session_token
         && let Ok(session) = auth_manager
-            .get_session(&token, &ip_addr, &user_agent)
+            .get_session(
+                &token,
+                &ip_addr,
+                &user_agent,
+                get_request_host(&headers).as_deref(),
+            )
             .await
     {
         return Json(AuthResponse {
@@ -919,7 +950,13 @@ pub async fn refresh_session(
 
     match auth_manager
         .session_manager()
-        .refresh_session(&token, &ip_addr, &user_agent, None)
+        .refresh_session(
+            &token,
+            &ip_addr,
+            &user_agent,
+            &crate::hosts::canonical_host(get_request_host(&headers).as_deref()),
+            None,
+        )
         .await
     {
         Ok(session) => {
@@ -1490,6 +1527,7 @@ pub async fn oauth2_token(
         ip_addr: ip_addr.clone(),
         user_agent: user_agent.clone(),
         refresh_token: None,
+        realm: identity.realm,
         // Every token this endpoint issues carries an audience, whether or not
         // the client sent a `resource` parameter. That is what makes "has an
         // audience" mean "was minted for programmatic use", and so what lets
@@ -1545,6 +1583,10 @@ pub struct SessionIdentity {
     pub name: Option<String>,
     pub is_admin: bool,
     pub is_editor: bool,
+    /// The host the account is a principal on. Empty when the user record
+    /// could not be read, which authorizes nothing — the same fail-closed
+    /// answer the roles get.
+    pub realm: String,
 }
 
 /// Look up the roles a session for `user_id` should carry.
@@ -1564,6 +1606,7 @@ pub async fn session_identity_for_user(user_id: &str) -> SessionIdentity {
             is_editor: user
                 .roles
                 .contains(&crate::user_repository::UserRole::Editor),
+            realm: user.realm,
         },
         Err(e) => {
             tracing::warn!(
@@ -1601,7 +1644,12 @@ async fn handle_refresh_token_grant(
     let session_data = match oauth2_state
         .auth_manager
         .session_manager()
-        .get_session_data(provided_refresh_token, &ip_addr, &user_agent)
+        .get_session_data(
+            provided_refresh_token,
+            &ip_addr,
+            &user_agent,
+            &crate::hosts::canonical_host(get_request_host(headers).as_deref()),
+        )
         .await
     {
         Ok(data) => data,
@@ -1657,6 +1705,7 @@ async fn handle_refresh_token_grant(
             provided_refresh_token,
             &ip_addr,
             &user_agent,
+            &crate::hosts::canonical_host(get_request_host(headers).as_deref()),
             rotated_refresh_token,
         )
         .await

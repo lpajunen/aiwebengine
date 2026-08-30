@@ -107,6 +107,7 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
         engine_api::users_get_route,
         engine_api::user_roles_post_route,
         engine_api::user_roles_delete_route,
+        engine_api::user_realm_post_route,
         engine_api::installed_page_route,
         engine_api::openapi_route,
         engine_api::unauthorized_page_route,
@@ -2465,6 +2466,10 @@ async fn setup_routes(
             "/engine/user_roles",
             axum::routing::post(engine_api::user_roles_post_route)
                 .delete(engine_api::user_roles_delete_route),
+        )
+        .route(
+            "/engine/user_realm",
+            axum::routing::post(engine_api::user_realm_post_route),
         )
         .route(
             "/engine/health/cluster",

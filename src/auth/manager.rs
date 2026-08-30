@@ -102,6 +102,18 @@ pub struct AuthManager {
 
 const SESSION_REFRESH_WINDOW_SECONDS: i64 = 300;
 
+/// Resolve a request's `Host` header to the realm name a session is checked
+/// against.
+///
+/// Every entry point hands this its raw header and nothing else, so the
+/// mapping from what a client claims to what the engine recognises happens
+/// once. `canonical_host` folds an unknown host onto the default, which is the
+/// same answer the router gives it — a request the engine will not route
+/// anywhere else must not authenticate anywhere else either.
+fn realm_host(host: Option<&str>) -> String {
+    crate::hosts::canonical_host(host)
+}
+
 /// An identity that has already been established, on its way to becoming a
 /// session. What is left after the provider-specific part of a login is done.
 struct SessionRequest {
@@ -398,6 +410,7 @@ impl AuthManager {
             user_info.name.clone(),
             provider_name.to_string(),
             user_info.provider_user_id.clone(),
+            crate::hosts::canonical_host(host),
         )
         .await
         .map_err(|e| {
@@ -465,6 +478,10 @@ impl AuthManager {
                 user_agent,
                 refresh_token,
                 audience: None, // Will be set for MCP endpoints
+                // Read off the stored user rather than the login request, so a
+                // sign-in on one host cannot mint a session that authenticates
+                // on another.
+                realm: user.realm.clone(),
             })
             .await?;
 
@@ -485,6 +502,7 @@ impl AuthManager {
         display_name: Option<String>,
         ip_addr: &str,
         user_agent: &str,
+        host: Option<&str>,
     ) -> Result<String, AuthError> {
         if !self.config.internal.allow_guests {
             return Err(AuthError::GuestAuthDisabled);
@@ -502,6 +520,7 @@ impl AuthManager {
             display_name,
             crate::auth::local::GUEST_PROVIDER.to_string(),
             guest_id,
+            crate::hosts::canonical_host(host),
         )
         .await
         .map_err(|e| {
@@ -529,6 +548,7 @@ impl AuthManager {
         display_name: Option<String>,
         ip_addr: &str,
         user_agent: &str,
+        host: Option<&str>,
     ) -> Result<String, AuthError> {
         if !self.config.internal.enabled {
             return Err(AuthError::LocalAuthDisabled);
@@ -555,6 +575,7 @@ impl AuthManager {
             display_name,
             crate::auth::local::LOCAL_PROVIDER.to_string(),
             normalized.clone(),
+            crate::hosts::canonical_host(host),
         )
         .await
         .map_err(|e| {
@@ -668,9 +689,10 @@ impl AuthManager {
         session_token: &str,
         ip_addr: &str,
         user_agent: &str,
+        host: Option<&str>,
     ) -> Result<String, AuthError> {
         self.session_manager
-            .get_session(session_token, ip_addr, user_agent)
+            .get_session(session_token, ip_addr, user_agent, &realm_host(host))
             .await
             .map(|session| session.user_id)
     }
@@ -689,10 +711,12 @@ impl AuthManager {
         session_token: &str,
         ip_addr: &str,
         user_agent: &str,
+        host: Option<&str>,
     ) -> Result<crate::auth::session::AuthSession, AuthError> {
+        let host = realm_host(host);
         let session_data = self
             .session_manager
-            .get_session_data(session_token, ip_addr, user_agent)
+            .get_session_data(session_token, ip_addr, user_agent, &host)
             .await?;
 
         let seconds_until_expiry = (session_data.expires_at - Utc::now()).num_seconds();
@@ -708,7 +732,7 @@ impl AuthManager {
         // per-renewal round trip that could destroy an otherwise valid session when a
         // provider expired the refresh token on its own schedule.
         self.session_manager
-            .refresh_session(session_token, ip_addr, user_agent, None)
+            .refresh_session(session_token, ip_addr, user_agent, &host, None)
             .await
     }
 
@@ -727,10 +751,17 @@ impl AuthManager {
         session_token: &str,
         ip_addr: &str,
         user_agent: &str,
+        host: Option<&str>,
         resource: Option<&str>,
     ) -> Result<crate::auth::session::AuthSession, AuthError> {
         self.session_manager
-            .validate_session_with_resource(session_token, ip_addr, user_agent, resource)
+            .validate_session_with_resource(
+                session_token,
+                ip_addr,
+                user_agent,
+                &realm_host(host),
+                resource,
+            )
             .await
     }
 

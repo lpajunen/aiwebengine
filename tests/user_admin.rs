@@ -25,6 +25,7 @@ async fn create_user(label: &str) -> String {
         Some(format!("Test {}", label)),
         "test".to_string(),
         format!("{}-{}", label, unique),
+        "test.example.com".to_string(),
     )
     .await
     .expect("failed to create test user")

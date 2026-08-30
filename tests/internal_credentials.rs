@@ -19,6 +19,10 @@ use common::{setup_env, should_skip_integration_tests};
 /// Password long enough for the default configured minimum.
 const PASSWORD: &str = "a-perfectly-fine-password";
 
+/// The host these accounts are created on. What realm scoping does with it has
+/// its own file; here it only needs to be a host.
+const REALM: &str = "game.example.com";
+
 /// A username that is unique per run and still inside the 32-character limit.
 fn unique(label: &str) -> String {
     let suffix = uuid::Uuid::new_v4().simple().to_string();
@@ -30,6 +34,7 @@ async fn create_guest() -> String {
         Some("Guest".to_string()),
         GUEST_PROVIDER.to_string(),
         uuid::Uuid::new_v4().to_string(),
+        REALM.to_string(),
     )
     .await
     .expect("guest should be created")
@@ -222,6 +227,7 @@ async fn a_local_account_is_recorded_under_the_local_provider() {
         Some("Registered Player".to_string()),
         LOCAL_PROVIDER.to_string(),
         username.clone(),
+        REALM.to_string(),
     )
     .await
     .expect("account should be created");

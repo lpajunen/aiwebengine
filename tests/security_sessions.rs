@@ -20,6 +20,10 @@ use aiwebengine::security::{
 };
 use std::sync::Arc;
 
+/// The host every session in this file is minted for; realm scoping has its
+/// own file, so here it is held constant.
+const TEST_HOST: &str = "test.example.com";
+
 // ============================================================================
 // Session Management Tests
 // ============================================================================
@@ -46,6 +50,7 @@ async fn test_session_lifecycle() {
         user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)".to_string(),
         refresh_token: None,
         audience: None,
+        realm: TEST_HOST.to_string(),
     };
     let token = manager.create_session(params).await.unwrap();
 
@@ -55,6 +60,7 @@ async fn test_session_lifecycle() {
             &token.token,
             "192.168.1.1",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            TEST_HOST,
         )
         .await
         .unwrap();
@@ -72,6 +78,7 @@ async fn test_session_lifecycle() {
             &token.token,
             "192.168.1.1",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            TEST_HOST,
         )
         .await;
 
@@ -99,12 +106,18 @@ async fn test_session_fingerprint_user_agent_mismatch() {
         user_agent: "Mozilla/5.0".to_string(),
         refresh_token: None,
         audience: None,
+        realm: TEST_HOST.to_string(),
     };
     let token = manager.create_session(params).await.unwrap();
 
     // Different user agent should fail
     let result = manager
-        .validate_session(&token.token, "192.168.1.1", "Chrome/90.0")
+        .validate_session(
+            &token.token,
+            "192.168.1.1",
+            "Chrome/90.0",
+            "test.example.com",
+        )
         .await;
 
     assert!(matches!(result, Err(SessionError::FingerprintMismatch)));
@@ -131,12 +144,18 @@ async fn test_session_ip_change_tolerance() {
         user_agent: "Mozilla/5.0".to_string(),
         refresh_token: None,
         audience: None,
+        realm: TEST_HOST.to_string(),
     };
     let token = manager.create_session(params).await.unwrap();
 
     // IP change with same user agent should succeed (mobile-friendly)
     let result = manager
-        .validate_session(&token.token, "192.168.1.2", "Mozilla/5.0")
+        .validate_session(
+            &token.token,
+            "192.168.1.2",
+            "Mozilla/5.0",
+            "test.example.com",
+        )
         .await;
 
     assert!(result.is_ok());
@@ -168,6 +187,7 @@ async fn test_concurrent_session_limit() {
                 user_agent: "Mozilla/5.0".to_string(),
                 refresh_token: None,
                 audience: None,
+                realm: "test.example.com".to_string(),
             };
             manager.create_session(params).await.unwrap();
         }
@@ -206,12 +226,18 @@ async fn test_session_encryption() {
         refresh_token: None,
         audience: None,
         user_agent: "Mozilla/5.0".to_string(),
+        realm: TEST_HOST.to_string(),
     };
     let token = manager.create_session(params).await.unwrap();
 
     // Validate and check data integrity
     let session = manager
-        .validate_session(&token.token, "192.168.1.1", "Mozilla/5.0")
+        .validate_session(
+            &token.token,
+            "192.168.1.1",
+            "Mozilla/5.0",
+            "test.example.com",
+        )
         .await
         .unwrap();
 
@@ -241,13 +267,14 @@ async fn test_refresh_session_extends_expiry() {
         user_agent: "Mozilla/5.0".to_string(),
         refresh_token: None,
         audience: None,
+        realm: TEST_HOST.to_string(),
     };
 
     let token = manager.create_session(params).await.unwrap();
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     let refreshed = manager
-        .refresh_session(&token.token, "192.168.1.10", "Mozilla/5.0", None)
+        .refresh_session(&token.token, "192.168.1.10", "Mozilla/5.0", TEST_HOST, None)
         .await
         .unwrap();
 
@@ -279,13 +306,14 @@ async fn test_refresh_session_rejects_after_absolute_max_age() {
         user_agent: "Mozilla/5.0".to_string(),
         refresh_token: None,
         audience: None,
+        realm: TEST_HOST.to_string(),
     };
 
     let token = manager.create_session(params).await.unwrap();
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     let refresh_result = manager
-        .refresh_session(&token.token, "192.168.1.11", "Mozilla/5.0", None)
+        .refresh_session(&token.token, "192.168.1.11", "Mozilla/5.0", TEST_HOST, None)
         .await;
 
     assert!(
@@ -533,6 +561,7 @@ async fn test_full_auth_flow_simulation() {
         user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)".to_string(),
         refresh_token: None,
         audience: None,
+        realm: TEST_HOST.to_string(),
     };
     let session_token = session_manager.create_session(params).await.unwrap();
     println!("Session created: {}", session_token.token);
@@ -543,6 +572,7 @@ async fn test_full_auth_flow_simulation() {
             &session_token.token,
             "203.0.113.1",
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+            TEST_HOST,
         )
         .await
         .unwrap();
@@ -566,6 +596,7 @@ async fn test_full_auth_flow_simulation() {
             &session_token.token,
             "203.0.113.1",
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+            TEST_HOST,
         )
         .await;
     assert!(result.is_err());
@@ -599,6 +630,7 @@ async fn test_concurrent_users_isolation() {
             user_agent: "Mozilla/5.0".to_string(),
             refresh_token: None,
             audience: None,
+            realm: "test.example.com".to_string(),
         };
         let token = session_manager.create_session(params).await.unwrap();
         tokens.push((user, token));
@@ -611,6 +643,7 @@ async fn test_concurrent_users_isolation() {
                 &token.token,
                 &format!("192.168.1.{}", user.len()),
                 "Mozilla/5.0",
+                TEST_HOST,
             )
             .await
             .unwrap();

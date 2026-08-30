@@ -22,6 +22,8 @@ pub struct CreateAuthSessionParams {
     pub user_agent: String,
     pub refresh_token: Option<String>,
     pub audience: Option<String>,
+    /// The host this account is a principal on, read from the user record.
+    pub realm: String,
 }
 
 /// Authentication session (user-facing)
@@ -81,6 +83,7 @@ impl AuthSessionManager {
             user_agent: params.user_agent,
             refresh_token: params.refresh_token,
             audience: params.audience,
+            realm: params.realm,
         };
 
         let token = self
@@ -98,10 +101,11 @@ impl AuthSessionManager {
         token: &str,
         ip_addr: &str,
         user_agent: &str,
+        host: &str,
     ) -> Result<AuthSession, AuthError> {
         let session_data = self
             .session_manager
-            .validate_session(token, ip_addr, user_agent)
+            .validate_session(token, ip_addr, user_agent, host)
             .await
             .map_err(AuthError::Session)?;
 
@@ -114,9 +118,10 @@ impl AuthSessionManager {
         token: &str,
         ip_addr: &str,
         user_agent: &str,
+        host: &str,
     ) -> Result<SessionData, AuthError> {
         self.session_manager
-            .validate_session(token, ip_addr, user_agent)
+            .validate_session(token, ip_addr, user_agent, host)
             .await
             .map_err(AuthError::Session)
     }
@@ -127,11 +132,12 @@ impl AuthSessionManager {
         token: &str,
         ip_addr: &str,
         user_agent: &str,
+        host: &str,
         new_refresh_token: Option<String>,
     ) -> Result<AuthSession, AuthError> {
         let session_data = self
             .session_manager
-            .refresh_session(token, ip_addr, user_agent, new_refresh_token)
+            .refresh_session(token, ip_addr, user_agent, host, new_refresh_token)
             .await
             .map_err(AuthError::Session)?;
 
@@ -173,11 +179,12 @@ impl AuthSessionManager {
         token: &str,
         ip_addr: &str,
         user_agent: &str,
+        host: &str,
         resource: Option<&str>,
     ) -> Result<AuthSession, AuthError> {
         let session_data = self
             .session_manager
-            .validate_session_with_resource(token, ip_addr, user_agent, resource)
+            .validate_session_with_resource(token, ip_addr, user_agent, host, resource)
             .await
             .map_err(AuthError::Session)?;
 
@@ -227,12 +234,18 @@ mod tests {
                 user_agent: "Mozilla/5.0".to_string(),
                 refresh_token: None,
                 audience: None,
+                realm: "test.example.com".to_string(),
             })
             .await
             .unwrap();
 
         let session = manager
-            .get_session(&token.token, "192.168.1.1", "Mozilla/5.0")
+            .get_session(
+                &token.token,
+                "192.168.1.1",
+                "Mozilla/5.0",
+                "test.example.com",
+            )
             .await
             .unwrap();
 
@@ -259,6 +272,7 @@ mod tests {
                 user_agent: "Mozilla/5.0".to_string(),
                 refresh_token: None,
                 audience: None,
+                realm: "test.example.com".to_string(),
             })
             .await
             .unwrap();
@@ -268,7 +282,12 @@ mod tests {
 
         // Should fail to retrieve
         let result = manager
-            .get_session(&token.token, "192.168.1.1", "Mozilla/5.0")
+            .get_session(
+                &token.token,
+                "192.168.1.1",
+                "Mozilla/5.0",
+                "test.example.com",
+            )
             .await;
 
         assert!(result.is_err());
@@ -305,6 +324,7 @@ mod tests {
                     user_agent: "Mozilla/5.0".to_string(),
                     refresh_token: None,
                     audience: None,
+                    realm: "test.example.com".to_string(),
                 })
                 .await
                 .unwrap();
@@ -333,12 +353,18 @@ mod tests {
                 user_agent: "Mozilla/5.0".to_string(),
                 refresh_token: None,
                 audience: None,
+                realm: "test.example.com".to_string(),
             })
             .await
             .unwrap();
 
         let session = manager
-            .get_session(&token.token, "192.168.1.1", "Mozilla/5.0")
+            .get_session(
+                &token.token,
+                "192.168.1.1",
+                "Mozilla/5.0",
+                "test.example.com",
+            )
             .await
             .unwrap();
 

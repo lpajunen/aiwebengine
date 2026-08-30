@@ -139,12 +139,17 @@ pub async fn mcp_auth_middleware(
 
     let ip_addr = get_client_ip(headers);
     let user_agent = get_user_agent(headers);
+    let host = headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     let requested_resource = requested_resource(headers, request.uri().path());
     let resource = requested_resource.as_deref();
 
     // Validate session with resource indicator
     let session = match auth_manager
-        .validate_session_with_resource(&token, &ip_addr, &user_agent, resource)
+        .validate_session_with_resource(&token, &ip_addr, &user_agent, host.as_deref(), resource)
         .await
     {
         Ok(s) => s,
@@ -210,11 +215,22 @@ pub async fn optional_mcp_auth_middleware(
     if let Some(token) = extract_bearer_token(headers) {
         let ip_addr = get_client_ip(headers);
         let user_agent = get_user_agent(headers);
+        let host = headers
+            .get(header::HOST)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
         let requested_resource = requested_resource(headers, request.uri().path());
         let resource = requested_resource.as_deref();
 
         if let Ok(session) = auth_manager
-            .validate_session_with_resource(&token, &ip_addr, &user_agent, resource)
+            .validate_session_with_resource(
+                &token,
+                &ip_addr,
+                &user_agent,
+                host.as_deref(),
+                resource,
+            )
             .await
         {
             request.extensions_mut().insert(McpAuthSession { session });

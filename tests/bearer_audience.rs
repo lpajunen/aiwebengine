@@ -19,6 +19,9 @@ use std::sync::Arc;
 
 const IP: &str = "192.168.1.1";
 const UA: &str = "test-agent";
+/// The host these sessions belong to. Realm scoping is exercised in
+/// `tests/realms.rs`; here it is held constant so the audience is what varies.
+const HOST: &str = "game.example.com";
 
 async fn manager() -> SecureSessionManager {
     setup_env().await;
@@ -44,6 +47,7 @@ fn params(audience: Option<&str>) -> CreateSessionParams {
         user_agent: UA.to_string(),
         refresh_token: None,
         audience: audience.map(str::to_string),
+        realm: HOST.to_string(),
     }
 }
 
@@ -69,6 +73,7 @@ async fn a_session_with_no_audience_is_not_an_api_credential() {
                 &cookie_session.token,
                 IP,
                 UA,
+                HOST,
                 Some("game.example.com/mcp"),
             )
             .await
@@ -79,7 +84,7 @@ async fn a_session_with_no_audience_is_not_an_api_credential() {
     // It is still a perfectly good session for the browser it was minted for.
     assert!(
         manager
-            .validate_session_with_resource(&cookie_session.token, IP, UA, None)
+            .validate_session_with_resource(&cookie_session.token, IP, UA, HOST, None)
             .await
             .is_ok(),
         "the paths that are not resource-scoped are unaffected"
@@ -100,7 +105,13 @@ async fn a_token_minted_for_one_host_does_not_reach_another() {
 
     assert!(
         manager
-            .validate_session_with_resource(&token.token, IP, UA, Some("game.example.com/mcp"))
+            .validate_session_with_resource(
+                &token.token,
+                IP,
+                UA,
+                HOST,
+                Some("game.example.com/mcp")
+            )
             .await
             .is_ok(),
         "the host it was issued for still works"
@@ -108,7 +119,13 @@ async fn a_token_minted_for_one_host_does_not_reach_another() {
 
     assert!(
         manager
-            .validate_session_with_resource(&token.token, IP, UA, Some("manage.example.com/mcp"))
+            .validate_session_with_resource(
+                &token.token,
+                IP,
+                UA,
+                HOST,
+                Some("manage.example.com/mcp")
+            )
             .await
             .is_err(),
         "the management host is a different resource and must refuse it"
@@ -132,7 +149,13 @@ async fn an_absolute_uri_and_a_host_qualified_path_are_one_resource() {
 
     assert!(
         manager
-            .validate_session_with_resource(&token.token, IP, UA, Some("game.example.com/mcp"))
+            .validate_session_with_resource(
+                &token.token,
+                IP,
+                UA,
+                HOST,
+                Some("game.example.com/mcp")
+            )
             .await
             .is_ok(),
         "scheme, default port and trailing slash are not part of the name"
