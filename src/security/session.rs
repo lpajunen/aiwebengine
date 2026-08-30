@@ -16,6 +16,57 @@ use std::sync::Arc;
 
 use tracing::{debug, info, warn};
 
+/// Reduce a resource indicator to the two things that decide whether two of
+/// them name the same endpoint: the host it lives on, and the path within it.
+///
+/// Callers write these in whatever form their client library favours — an
+/// absolute URI from an RFC 8707 `resource` parameter, or the bare path the
+/// engine defaults to — so comparing the strings as given would reject matching
+/// pairs and, worse, accept differing ones by accident.
+///
+/// The host is kept. Two `/mcp` endpoints on two hosts of the same engine are
+/// two different resources, and collapsing them is what let a token minted on a
+/// solution's host reach the management host.
+pub fn normalize_resource(resource: &str) -> String {
+    // Drop the scheme; https and http reach the same endpoint here, and a
+    // resource indicator is a name rather than a way to connect.
+    let without_scheme = match resource.find("://") {
+        Some(idx) => &resource[idx + 3..],
+        None => resource,
+    };
+
+    // A query or fragment is not part of what is being named.
+    let without_suffix = without_scheme
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(without_scheme);
+
+    let (authority, path) = match without_suffix.find('/') {
+        Some(idx) => (&without_suffix[..idx], &without_suffix[idx..]),
+        None => (without_suffix, ""),
+    };
+
+    // Default ports name the same endpoint as no port at all.
+    let authority = authority
+        .strip_suffix(":443")
+        .or_else(|| authority.strip_suffix(":80"))
+        .unwrap_or(authority)
+        .to_lowercase();
+
+    let path = path.trim_end_matches('/');
+
+    format!("{}{}", authority, path)
+}
+
+/// Whether a session's audience authorizes the resource being requested.
+///
+/// Exact match after normalization. Deliberately not a prefix or suffix test:
+/// a token for `/mcp` must not reach anything nested under it, and a token for
+/// one host must not reach the same path on another.
+pub fn resources_match(audience: &str, requested: &str) -> bool {
+    normalize_resource(audience) == normalize_resource(requested)
+}
+
 /// Session-related errors
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
@@ -36,6 +87,9 @@ pub enum SessionError {
 
     #[error("Session fingerprint mismatch - possible hijacking attempt")]
     FingerprintMismatch,
+
+    #[error("Session is not authorized for this resource")]
+    WrongAudience,
 
     #[error("Encryption error: {0}")]
     EncryptionError(String),
@@ -441,13 +495,26 @@ impl SecureSessionManager {
         Ok(session_data)
     }
 
-    /// Validate session with resource indicator check (RFC 8707)
+    /// Validate a session and check it was issued for the resource being asked
+    /// for (RFC 8707).
+    ///
+    /// A session carries an audience when it was minted for programmatic use —
+    /// the OAuth2 token endpoint sets one on every token it issues. A browser
+    /// login carries none, because it was minted for a browser. So requiring an
+    /// audience here is what separates the two: a session cookie is not an API
+    /// credential, and presenting one as a bearer token is refused.
+    ///
+    /// That distinction matters because a bearer token is not bound by the
+    /// cookie's host scoping. Without this, a session established on one host
+    /// reaches `/mcp` on every host the process serves, including a management
+    /// host the cookie would never have been sent to.
     ///
     /// # Arguments
     /// * `token` - Session token to validate
     /// * `ip_addr` - Client IP address
     /// * `user_agent` - Client user agent
-    /// * `resource` - Optional resource indicator to validate against session audience
+    /// * `resource` - Resource being requested; `None` skips the check, for the
+    ///   ordinary session paths that are not resource-scoped
     ///
     /// # Returns
     /// Session data if valid and authorized for the requested resource
@@ -461,21 +528,22 @@ impl SecureSessionManager {
         // First validate the session normally
         let session_data = self.validate_session(token, ip_addr, user_agent).await?;
 
-        // If a resource is requested, validate audience claim
-        // NOTE: For backward compatibility and MCP spec compliance, we don't enforce
-        // strict audience matching. The session is valid if:
-        // 1. No audience claim in session (backward compatibility)
-        // 2. Audience matches the requested resource
-        // 3. No resource is requested in validation
-        if let Some(requested_resource) = resource
-            && let Some(audience) = &session_data.audience
-            && audience != requested_resource
-        {
-            // Log for debugging but don't reject - MCP clients may not set resource parameter
-            debug!(
-                "Session audience doesn't match resource (non-blocking): session={}, requested={}",
-                audience, requested_resource
-            );
+        if let Some(requested_resource) = resource {
+            let Some(audience) = &session_data.audience else {
+                debug!(
+                    "Session carries no audience and cannot be used for resource {}",
+                    requested_resource
+                );
+                return Err(SessionError::WrongAudience);
+            };
+
+            if !resources_match(audience, requested_resource) {
+                debug!(
+                    "Session audience does not authorize this resource: session={}, requested={}",
+                    audience, requested_resource
+                );
+                return Err(SessionError::WrongAudience);
+            }
         }
 
         Ok(session_data)
@@ -684,6 +752,49 @@ impl SecureSessionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resource_names_survive_the_forms_clients_write_them_in() {
+        // Scheme, default port, trailing slash and case are all noise.
+        for equivalent in [
+            "https://game.example.com/mcp",
+            "http://game.example.com/mcp",
+            "https://game.example.com:443/mcp",
+            "https://GAME.example.com/mcp/",
+            "game.example.com/mcp",
+        ] {
+            assert!(
+                resources_match(equivalent, "game.example.com/mcp"),
+                "{:?} names the same endpoint",
+                equivalent
+            );
+        }
+    }
+
+    #[test]
+    fn the_host_is_part_of_what_a_resource_names() {
+        assert!(
+            !resources_match("https://game.example.com/mcp", "manage.example.com/mcp"),
+            "two hosts of one engine are two resources; collapsing them is what \
+             let a solution's token reach the management surface"
+        );
+        assert!(
+            !resources_match("game.example.com:8443/mcp", "game.example.com/mcp"),
+            "a non-default port is part of the name"
+        );
+    }
+
+    #[test]
+    fn a_resource_does_not_authorize_what_is_nested_under_it() {
+        assert!(!resources_match(
+            "game.example.com/mcp",
+            "game.example.com/mcp/admin"
+        ));
+        assert!(!resources_match(
+            "game.example.com/mcp/admin",
+            "game.example.com/mcp"
+        ));
+    }
 
     fn create_test_auditor() -> Arc<SecurityAuditor> {
         let pool = sqlx::PgPool::connect_lazy(

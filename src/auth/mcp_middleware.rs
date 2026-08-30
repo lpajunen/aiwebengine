@@ -26,6 +26,28 @@ fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
         .and_then(|auth| auth.strip_prefix("Bearer ").map(|s| s.to_string()))
 }
 
+/// Name the resource this request is asking for, in the form a session's
+/// audience is compared against.
+///
+/// Host-qualified on purpose. `/mcp` on one host and `/mcp` on another are two
+/// resources — an engine serving a game and a management surface publishes both
+/// — and a token issued for one must not reach the other. A bearer token is not
+/// bound by cookie host scoping, so this is the only thing that separates them.
+fn requested_resource(headers: &HeaderMap, path: &str) -> Option<String> {
+    if !path.starts_with("/mcp") {
+        return None;
+    }
+
+    let host = headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_default();
+
+    Some(format!("{}{}", host, path))
+}
+
 /// Extract client IP from headers
 fn get_client_ip(headers: &HeaderMap) -> String {
     headers
@@ -117,14 +139,8 @@ pub async fn mcp_auth_middleware(
 
     let ip_addr = get_client_ip(headers);
     let user_agent = get_user_agent(headers);
-    let path = request.uri().path().to_string();
-
-    // Determine resource indicator from request path
-    let resource = if path.starts_with("/mcp") {
-        Some(path.as_str())
-    } else {
-        None
-    };
+    let requested_resource = requested_resource(headers, request.uri().path());
+    let resource = requested_resource.as_deref();
 
     // Validate session with resource indicator
     let session = match auth_manager
@@ -194,12 +210,8 @@ pub async fn optional_mcp_auth_middleware(
     if let Some(token) = extract_bearer_token(headers) {
         let ip_addr = get_client_ip(headers);
         let user_agent = get_user_agent(headers);
-        let path = request.uri().path().to_string();
-        let resource = if path.starts_with("/mcp") {
-            Some(path.as_str())
-        } else {
-            None
-        };
+        let requested_resource = requested_resource(headers, request.uri().path());
+        let resource = requested_resource.as_deref();
 
         if let Ok(session) = auth_manager
             .validate_session_with_resource(&token, &ip_addr, &user_agent, resource)

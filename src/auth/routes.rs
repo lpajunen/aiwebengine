@@ -84,7 +84,6 @@ impl OAuth2State {
 #[derive(Debug, Serialize)]
 pub struct AuthResponse {
     pub success: bool,
-    pub session_token: Option<String>,
     pub user_id: Option<String>,
     pub is_admin: Option<bool>,
     pub is_editor: Option<bool>,
@@ -847,6 +846,12 @@ pub async fn logout(
         (status = 200, description = "Authentication status", body = crate::openapi_schemas::AuthStatusResponse),
     )
 )]
+/// Answers "am I signed in, and as whom" — deliberately not "with what token".
+///
+/// The session cookie is `HttpOnly` so that a script injected into a page
+/// cannot read it. Returning the token here handed it back through a `fetch`
+/// and made that flag decorative, and what leaked is a credential a bearer
+/// header accepts. Do not add it back.
 pub async fn auth_status(
     State(auth_manager): State<Arc<AuthManager>>,
     headers: HeaderMap,
@@ -865,7 +870,6 @@ pub async fn auth_status(
     {
         return Json(AuthResponse {
             success: true,
-            session_token: Some(token.to_string()),
             user_id: Some(session.user_id),
             is_admin: Some(session.is_admin),
             is_editor: Some(session.is_editor),
@@ -875,7 +879,6 @@ pub async fn auth_status(
 
     Json(AuthResponse {
         success: false,
-        session_token: None,
         user_id: None,
         is_admin: None,
         is_editor: None,
@@ -1487,7 +1490,16 @@ pub async fn oauth2_token(
         ip_addr: ip_addr.clone(),
         user_agent: user_agent.clone(),
         refresh_token: None,
-        audience: code_data.resource.clone(),
+        // Every token this endpoint issues carries an audience, whether or not
+        // the client sent a `resource` parameter. That is what makes "has an
+        // audience" mean "was minted for programmatic use", and so what lets
+        // session validation refuse a browser cookie presented as a bearer
+        // token. A client that named a resource keeps its own; one that did not
+        // gets the MCP endpoint on the host it is talking to.
+        audience: Some(code_data.resource.clone().unwrap_or_else(|| {
+            let host = get_request_host(&headers).unwrap_or_default();
+            format!("{}/mcp", host)
+        })),
     };
 
     match oauth2_state

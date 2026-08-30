@@ -95,6 +95,11 @@ Each of the first three sets the session cookie on success.
   `SameSite=Lax` to refuse cross-site requests. Keep it a POST.
 - **Passwords are Argon2id PHC strings.** Parameters and salt travel inside the
   hash, so raising the cost later is a code change, not a migration.
+- **A guest or local session is not an API credential.** These flows mint
+  browser sessions, which carry no audience, and `/mcp` requires one for the
+  host and path being requested. Presenting a session cookie as a Bearer token
+  is refused. A client that needs to reach `/mcp` goes through the OAuth2
+  authorization-code flow, which issues a token with an audience.
 
 ## Not done yet
 
