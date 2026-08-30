@@ -3,6 +3,7 @@ pub mod capabilities;
 pub mod csp;
 pub mod csrf;
 pub mod encryption;
+pub mod headers;
 pub mod operations;
 pub mod rate_limiting;
 pub mod secure_globals;
@@ -12,11 +13,15 @@ pub mod validation;
 
 pub use audit::{SecurityAuditor, SecurityEvent, SecurityEventType, SecuritySeverity};
 pub use capabilities::{UserContext, is_development_mode, set_development_mode};
-pub use csp::{CspDirective, CspManager, CspPolicy, CspSource, CspViolationReport};
+pub use csp::{
+    CspDirective, CspManager, CspPolicy, CspSource, CspViolationReport, engine_page_policy,
+    generate_nonce,
+};
 pub use csrf::{CsrfProtection, CsrfToken, OAuthStateManager};
 pub use encryption::{
     DataEncryption, EncryptedData, EncryptionError, FieldEncryptor, SecureString,
 };
+pub use headers::{SecurityHeadersConfig, security_headers_middleware};
 pub use operations::{OperationResult, SecureOperations, UpsertScriptRequest};
 pub use rate_limiting::{RateLimitConfig, RateLimitKey, RateLimitResult, RateLimiter, TokenBucket};
 pub use secure_globals::{GlobalSecurityConfig, SecureGlobalContext};

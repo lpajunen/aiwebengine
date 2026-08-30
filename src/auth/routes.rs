@@ -374,8 +374,12 @@ fn html_attribute(value: &str) -> String {
 pub async fn login_page(
     State(auth_manager): State<Arc<AuthManager>>,
     Query(params): Query<LoginPageParams>,
-) -> Html<String> {
+) -> Response {
     let providers = auth_manager.list_providers();
+    // Names the one <style> block below and nothing else, so anything injected
+    // into this page stays inert. Fresh per response — a nonce a caller can
+    // predict is not a nonce.
+    let nonce = crate::security::generate_nonce();
     let redirect_param = safe_redirect_target(params.redirect.as_deref());
     let encoded_redirect = urlencoding::encode(&redirect_param);
 
@@ -419,7 +423,7 @@ pub async fn login_page(
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login</title>
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
-    <style>
+    <style nonce="{style_nonce}">
         body {{
             margin: 0;
             padding: 1rem;
@@ -599,17 +603,18 @@ pub async fn login_page(
 <body>
     <div class="card">
         <h1>Sign In</h1>
-        {}
-        {}
-        {}
-        {}
+        {error_block}
+        {internal_block}
+        {providers_intro}
+        {provider_buttons}
     </div>
 </body>
 </html>"#,
-        error_block,
-        internal_block,
-        providers_intro,
-        {
+        style_nonce = html_attribute(&nonce),
+        error_block = error_block,
+        internal_block = internal_block,
+        providers_intro = providers_intro,
+        provider_buttons = {
             let mut sorted_providers = providers.clone();
             sorted_providers.sort();
             sorted_providers
@@ -631,7 +636,31 @@ pub async fn login_page(
         }
     );
 
-    Html(html)
+    html_page_response(html, &nonce)
+}
+
+/// Serve an engine-authored HTML page under a policy naming its own inline
+/// blocks.
+///
+/// Set here rather than by the security-headers layer because only this side
+/// knows the nonce it wrote into the markup. The layer fills in a header a
+/// response did not set, so this wins.
+fn html_page_response(html: String, nonce: &str) -> Response {
+    let mut response = Html(html).into_response();
+    match header::HeaderValue::from_str(&crate::security::engine_page_policy(nonce)) {
+        Ok(value) => {
+            response
+                .headers_mut()
+                .insert(header::CONTENT_SECURITY_POLICY, value);
+        }
+        Err(e) => {
+            // Serving the page without its policy would let an injected inline
+            // block run, which is the thing the nonce exists to prevent.
+            tracing::error!("Could not build a content security policy: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response();
+        }
+    }
+    response
 }
 
 /// Start OAuth2 login flow - redirects to provider
@@ -1734,6 +1763,7 @@ pub async fn oauth2_authorize(
     let js_redirect = serde_json::to_string(&final_redirect)
         .unwrap_or_else(|_| format!("\"{}\"", final_redirect));
 
+    let nonce = crate::security::generate_nonce();
     let html = format!(
         r#"<!DOCTYPE html>
 <html>
@@ -1743,15 +1773,16 @@ pub async fn oauth2_authorize(
 </head>
 <body>
     <p>Redirecting to application... If you are not redirected, <a href="{}">click here</a>.</p>
-    <script>window.location.href = {};</script>
+    <script nonce="{}">window.location.href = {};</script>
 </body>
 </html>"#,
         html_escape::encode_text(&final_redirect),
         html_escape::encode_text(&final_redirect),
+        html_attribute(&nonce),
         js_redirect
     );
 
-    (StatusCode::OK, Html(html)).into_response()
+    html_page_response(html, &nonce)
 }
 
 /// OAuth 2.0 token request parameters (RFC 6749)

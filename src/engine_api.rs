@@ -6121,16 +6121,47 @@ pub async fn user_roles_delete_route(
     }
 }
 
+/// Serve an engine-authored HTML page under a policy naming its own inline
+/// blocks.
+///
+/// Set here rather than by the security-headers layer because only this side
+/// knows the nonce it wrote into the markup. The layer fills in a header a
+/// response did not set, so this wins.
+fn engine_html_response(status: StatusCode, html: String, nonce: &str) -> Response {
+    match axum::http::HeaderValue::from_str(&crate::security::engine_page_policy(nonce)) {
+        Ok(policy) => {
+            let mut response = (
+                status,
+                [(axum::http::header::CONTENT_TYPE, "text/html; charset=UTF-8")],
+                html,
+            )
+                .into_response();
+            response
+                .headers_mut()
+                .insert(axum::http::header::CONTENT_SECURITY_POLICY, policy);
+            response
+        }
+        Err(e) => {
+            // Serving the page without its policy would let an injected inline
+            // block run, which is the thing the nonce exists to prevent.
+            tracing::error!("Could not build a content security policy: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response()
+        }
+    }
+}
+
 /// Installation confirmation page, shown after a fresh install (the root
 /// path redirects here until further routes are registered).
-const INSTALLED_PAGE_HTML: &str = r#"<!DOCTYPE html>
+fn installed_page_html(nonce: &str) -> String {
+    format!(
+        r#"<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>aiwebengine Installed</title>
-  <style>
-    body {
+  <style nonce="{nonce}">
+    body {{
       margin: 0;
       padding: 0;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -6139,28 +6170,28 @@ const INSTALLED_PAGE_HTML: &str = r#"<!DOCTYPE html>
       align-items: center;
       min-height: 100vh;
       background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    }
-    .container {
+    }}
+    .container {{
       text-align: center;
       background: white;
       padding: 3rem 4rem;
       border-radius: 1rem;
       box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-    }
-    h1 {
+    }}
+    h1 {{
       color: #333;
       margin: 0 0 1rem 0;
       font-size: 2.5rem;
-    }
-    p {
+    }}
+    p {{
       color: #666;
       font-size: 1.2rem;
       margin: 0;
-    }
-    .emoji {
+    }}
+    .emoji {{
       font-size: 4rem;
       margin-bottom: 1rem;
-    }
+    }}
   </style>
 </head>
 <body>
@@ -6170,7 +6201,10 @@ const INSTALLED_PAGE_HTML: &str = r#"<!DOCTYPE html>
     <p>Your server is up and running.</p>
   </div>
 </body>
-</html>"#;
+</html>"#,
+        nonce = nonce
+    )
+}
 
 /// Installation confirmation page.
 #[utoipa::path(
@@ -6183,12 +6217,8 @@ const INSTALLED_PAGE_HTML: &str = r#"<!DOCTYPE html>
     )
 )]
 pub async fn installed_page_route() -> Response {
-    (
-        StatusCode::OK,
-        [("content-type", "text/html")],
-        INSTALLED_PAGE_HTML,
-    )
-        .into_response()
+    let nonce = crate::security::generate_nonce();
+    engine_html_response(StatusCode::OK, installed_page_html(&nonce), &nonce)
 }
 
 /// How many rows of lock detail one health check reports.
@@ -6500,6 +6530,12 @@ pub async fn unauthorized_page_route(
         }
     };
 
+    // Names the one <style> block below and nothing else, so anything injected
+    // into this page stays inert. Fresh per response — a nonce a caller can
+    // predict is not a nonce.
+    let nonce = crate::security::generate_nonce();
+    let style_nonce = html_escape(&nonce);
+
     let html = format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -6508,7 +6544,7 @@ pub async fn unauthorized_page_route(
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Insufficient Permissions - aiwebengine</title>
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
-    <style>
+    <style nonce="{style_nonce}">
         /* Self-contained: this page is shown in error situations and must
            not depend on any other resource being served correctly. */
         :root {{
@@ -6738,12 +6774,7 @@ pub async fn unauthorized_page_route(
 </html>"#
     );
 
-    (
-        StatusCode::FORBIDDEN,
-        [("content-type", "text/html; charset=UTF-8")],
-        html,
-    )
-        .into_response()
+    engine_html_response(StatusCode::FORBIDDEN, html, &nonce)
 }
 
 /// Site favicon, served from the engine's bootstrapped assets.

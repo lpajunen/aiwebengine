@@ -2611,6 +2611,17 @@ async fn setup_routes(
 
     app = app.layer(axum::middleware::from_fn(middleware::request_id_middleware));
 
+    // Outermost, so it sees every response — including those produced by
+    // layers inside it, and by scripts. It only ever fills in headers a
+    // response did not set for itself.
+    app = app.layer(axum::middleware::from_fn_with_state(
+        Arc::new(security::SecurityHeadersConfig {
+            enabled: config.security.enable_security_headers,
+            content_security_policy: config.security.content_security_policy.clone(),
+        }),
+        security::security_headers_middleware,
+    ));
+
     app
 }
 

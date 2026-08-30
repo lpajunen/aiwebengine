@@ -87,6 +87,48 @@ impl CspSource {
 }
 
 /// CSP policy configuration
+/// A fresh nonce for one response.
+///
+/// A nonce is only worth anything if it cannot be guessed before the response
+/// carrying it is served, so this must never be derived from anything stable —
+/// not the page, not the session, not the day.
+pub fn generate_nonce() -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(format!(
+        "{}{}",
+        Utc::now().timestamp_nanos_opt().unwrap_or(0),
+        rand::random::<u64>()
+    ));
+    general_purpose::STANDARD.encode(hasher.finalize())
+}
+
+/// The policy for an engine-authored page that carries inline styles or
+/// scripts.
+///
+/// Those pages cannot use the configured default, which names no inline source
+/// at all — and must not be given `'unsafe-inline'`, which would let anything
+/// injected into the page run. A nonce names the specific blocks the engine
+/// wrote and nothing else.
+///
+/// The rest is what an engine page needs and no more: its own origin for
+/// everything, data URIs for images so a favicon can be inlined, forms that
+/// can only submit back here, and no framing at all — a sign-in form inside
+/// someone else's iframe is a clickjacking target.
+pub fn engine_page_policy(nonce: &str) -> String {
+    format!(
+        "default-src 'self'; \
+script-src 'self' 'nonce-{nonce}'; \
+style-src 'self' 'nonce-{nonce}'; \
+img-src 'self' data:; \
+connect-src 'self'; \
+form-action 'self'; \
+frame-ancestors 'none'; \
+base-uri 'none'; \
+object-src 'none'",
+        nonce = nonce
+    )
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CspPolicy {
     pub directives: HashMap<CspDirective, Vec<CspSource>>,
@@ -109,13 +151,7 @@ impl CspPolicy {
 
     /// Generate a secure nonce for this policy
     pub fn generate_nonce(&mut self) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(format!(
-            "{}{}",
-            Utc::now().timestamp_nanos_opt().unwrap_or(0),
-            rand::random::<u64>()
-        ));
-        let nonce = general_purpose::STANDARD.encode(hasher.finalize());
+        let nonce = generate_nonce();
         self.nonce = Some(nonce.clone());
         nonce
     }
