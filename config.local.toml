@@ -217,6 +217,26 @@ same_site = "lax"
 #   APP_AUTH_PROVIDERS_GOOGLE_CLIENT_SECRET
 #   APP_AUTH_PROVIDERS_GOOGLE_REDIRECT_URI
 
+
+# Internal credentials — accounts this engine authenticates itself, with no
+# third-party provider behind them. Everything here is off by default; a
+# personal install turns it on because it is the point of running one.
+#
+# A guest gets an identity and a session with no credential at all: stable
+# storage, ownership and a display name without surrendering an address. They
+# can later claim the account by attaching a username and password, keeping
+# everything the guest built up.
+[auth.internal]
+# Accept username-and-password logins against credentials stored here.
+enabled = true
+# Let anyone create an account. Leave off on a server unless the solutions it
+# hosts want open signup.
+allow_registration = true
+# Let a caller with no credential be issued an identity and a session.
+allow_guests = true
+# Minimum password length. The engine enforces a floor of 8 regardless.
+min_password_length = 12
+
 [auth.providers.google]
 client_id = "${APP_AUTH_PROVIDERS_GOOGLE_CLIENT_ID}"
 client_secret = "${APP_AUTH_PROVIDERS_GOOGLE_CLIENT_SECRET}"

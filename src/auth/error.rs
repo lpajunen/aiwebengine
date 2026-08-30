@@ -85,6 +85,30 @@ pub enum AuthError {
     #[error("Insufficient permissions")]
     InsufficientPermissions,
 
+    // Internal credential errors
+    /// Deliberately one error for "no such username" and "wrong password".
+    /// Telling them apart tells an attacker which usernames exist.
+    #[error("Invalid username or password")]
+    InvalidCredentials,
+
+    #[error("That username is taken")]
+    UsernameTaken,
+
+    #[error("This account already has a credential")]
+    CredentialAlreadySet,
+
+    #[error("Invalid username: {0}")]
+    InvalidUsername(String),
+
+    #[error("Password is not acceptable: {0}")]
+    WeakPassword(String),
+
+    #[error("Internal authentication is not enabled")]
+    LocalAuthDisabled,
+
+    #[error("Guest accounts are not enabled")]
+    GuestAuthDisabled,
+
     // Network/HTTP errors
     #[error("HTTP request failed: {0}")]
     HttpError(String),
@@ -128,9 +152,14 @@ impl AuthError {
             | AuthError::SignatureVerificationFailed
             | AuthError::NoSession
             | AuthError::InvalidSessionCookie
-            | AuthError::AuthenticationRequired => 401,
+            | AuthError::AuthenticationRequired
+            | AuthError::InvalidCredentials => 401,
 
-            AuthError::InsufficientPermissions => 403,
+            AuthError::InsufficientPermissions
+            | AuthError::LocalAuthDisabled
+            | AuthError::GuestAuthDisabled => 403,
+
+            AuthError::UsernameTaken | AuthError::CredentialAlreadySet => 409,
 
             AuthError::RateLimitExceeded => 429,
 

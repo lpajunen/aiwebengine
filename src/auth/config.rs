@@ -40,6 +40,54 @@ pub struct AuthConfig {
     /// Use this to set up the first administrator who can then grant roles to others
     #[serde(default)]
     pub bootstrap_admins: Vec<String>,
+
+    /// Credentials the engine holds itself, rather than delegating to Google,
+    /// Microsoft or Apple.
+    #[serde(default)]
+    pub internal: InternalAuthConfig,
+}
+
+/// Configuration for identities the engine authenticates itself.
+///
+/// Every switch defaults to off. Internal credentials are a password endpoint
+/// on the public internet, which is the most-probed thing an engine can
+/// expose, so a deployment turns each one on deliberately rather than
+/// inheriting it. A personal install's config template turns them all on; a
+/// server hosting solutions for other people turns on only what those
+/// solutions need.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InternalAuthConfig {
+    /// Accept username-and-password logins against credentials stored here.
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+
+    /// Let anyone create an account. Off means accounts exist only because an
+    /// administrator or a guest-claim created them.
+    #[serde(default = "default_false")]
+    pub allow_registration: bool,
+
+    /// Let a caller with no credential at all be issued an identity and a
+    /// session. What makes a solution usable without an account, and what a
+    /// guest later claims by attaching a credential.
+    #[serde(default = "default_false")]
+    pub allow_guests: bool,
+
+    /// Minimum password length. Raised above
+    /// [`crate::auth::local::MIN_PASSWORD_LENGTH`] freely; lowering below it
+    /// has no effect, since that floor is enforced in code.
+    #[serde(default = "default_min_password_length")]
+    pub min_password_length: usize,
+}
+
+impl Default for InternalAuthConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            allow_registration: false,
+            allow_guests: false,
+            min_password_length: default_min_password_length(),
+        }
+    }
 }
 
 impl AuthConfig {
@@ -135,6 +183,7 @@ impl Default for AuthConfig {
             providers: ProvidersConfig::default(),
             enabled: true,
             bootstrap_admins: Vec::new(),
+            internal: InternalAuthConfig::default(),
         }
     }
 }
@@ -376,6 +425,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_min_password_length() -> usize {
+    12
+}
+
 fn default_false() -> bool {
     false
 }
@@ -407,6 +460,7 @@ mod tests {
             providers: ProvidersConfig::default(),
             enabled: true,
             bootstrap_admins: Vec::new(),
+            internal: InternalAuthConfig::default(),
         };
 
         assert!(config.validate().is_ok());

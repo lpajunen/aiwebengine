@@ -76,8 +76,10 @@ pub struct ProviderInfo {
 pub struct User {
     /// Unique internal user ID (UUID)
     pub id: String,
-    /// User's email address
-    pub email: String,
+    /// User's email address. `None` for identities the engine authenticates
+    /// itself — a guest has no address, and a local account is named by its
+    /// username rather than reachable by mail.
+    pub email: Option<String>,
     /// User's display name
     pub name: Option<String>,
     /// User's roles in the system
@@ -93,7 +95,7 @@ pub struct User {
 impl User {
     /// Create a new user with default authenticated role
     pub fn new(
-        email: String,
+        email: Option<String>,
         name: Option<String>,
         provider_name: String,
         provider_user_id: String,
@@ -144,13 +146,16 @@ impl User {
     /// Update user information from a new authentication
     pub fn update_from_auth(
         &mut self,
-        email: String,
+        email: Option<String>,
         name: Option<String>,
         provider_name: String,
         provider_user_id: String,
     ) {
-        // Update email and name if provided
-        self.email = email;
+        // A provider that stops reporting an address must not erase the one we
+        // already have; only an address actually supplied replaces it.
+        if email.is_some() {
+            self.email = email;
+        }
         if name.is_some() {
             self.name = name;
         }
@@ -189,7 +194,7 @@ fn datetime_to_system_time(dt: chrono::DateTime<chrono::Utc>) -> SystemTime {
 /// Database-backed upsert user
 async fn db_upsert_user(
     pool: &PgPool,
-    email: &str,
+    email: Option<&str>,
     name: Option<&str>,
     provider_name: &str,
     provider_user_id: &str,
@@ -202,7 +207,7 @@ async fn db_upsert_user(
     let update_result = sqlx::query(
         r#"
         UPDATE users
-        SET email = $1, name = $2, updated_at = $3, last_login_at = $3
+        SET email = COALESCE($1, email), name = $2, updated_at = $3, last_login_at = $3
         WHERE provider = $4 AND provider_user_id = $5
         RETURNING user_id
         "#,
@@ -301,7 +306,7 @@ async fn db_get_user(pool: &PgPool, user_id: &str) -> AppResult<User> {
         message: e.to_string(),
         source: None,
     })?;
-    let email: String = row.try_get("email").map_err(|e| AppError::Database {
+    let email: Option<String> = row.try_get("email").map_err(|e| AppError::Database {
         message: e.to_string(),
         source: None,
     })?;
@@ -391,7 +396,7 @@ async fn db_find_user_by_provider(
             message: e.to_string(),
             source: None,
         })?;
-        let email: String = row.try_get("email").map_err(|e| AppError::Database {
+        let email: Option<String> = row.try_get("email").map_err(|e| AppError::Database {
             message: e.to_string(),
             source: None,
         })?;
@@ -551,12 +556,54 @@ pub async fn upsert_user_with_bootstrap(
 
     db_upsert_user(
         db.pool(),
-        &email,
+        Some(&email),
         name.as_deref(),
         &provider_name,
         &provider_user_id,
         is_admin,
         is_editor,
+    )
+    .await
+}
+
+/// Create or refresh an identity the engine authenticates itself — a guest, or
+/// a local username-and-password account.
+///
+/// Deliberately not a thin wrapper over [`upsert_user_with_bootstrap`]. That
+/// path grants the Administrator role to any address listed in
+/// `auth.bootstrap_admins`, and matching an address is only meaningful when a
+/// provider has verified it. An internal identity has no verified address and
+/// carries no email at all, so it is created with the Authenticated role and
+/// nothing more; reaching any higher tier takes an administrator granting it.
+pub async fn upsert_internal_user(
+    name: Option<String>,
+    provider_name: String,
+    provider_user_id: String,
+) -> AppResult<String> {
+    if provider_name.trim().is_empty() {
+        return Err(AppError::Validation {
+            field: "provider_name".to_string(),
+            reason: "Provider name cannot be empty".to_string(),
+        });
+    }
+
+    if provider_user_id.trim().is_empty() {
+        return Err(AppError::Validation {
+            field: "provider_user_id".to_string(),
+            reason: "Provider user ID cannot be empty".to_string(),
+        });
+    }
+
+    let db = get_db_pool()?;
+
+    db_upsert_user(
+        db.pool(),
+        None,
+        name.as_deref(),
+        &provider_name,
+        &provider_user_id,
+        false,
+        false,
     )
     .await
 }
@@ -716,7 +763,7 @@ fn convert_row_to_user(row: &PgRow) -> AppResult<User> {
         message: e.to_string(),
         source: None,
     })?;
-    let email: String = row.try_get("email").map_err(|e| AppError::Database {
+    let email: Option<String> = row.try_get("email").map_err(|e| AppError::Database {
         message: e.to_string(),
         source: None,
     })?;
@@ -854,13 +901,13 @@ mod tests {
             return;
         }
         let user = User::new(
-            "test@example.com".to_string(),
+            Some("test@example.com".to_string()),
             Some("Test User".to_string()),
             "google".to_string(),
             "google123".to_string(),
         );
 
-        assert_eq!(user.email, "test@example.com");
+        assert_eq!(user.email.as_deref(), Some("test@example.com"));
         assert_eq!(user.name, Some("Test User".to_string()));
         assert_eq!(user.roles.len(), 1);
         assert_eq!(user.roles[0], UserRole::Authenticated);
@@ -886,7 +933,7 @@ mod tests {
             .unwrap();
 
             let user = get_user(&user_id).unwrap();
-            assert_eq!(user.email, "new@example.com");
+            assert_eq!(user.email.as_deref(), Some("new@example.com"));
             assert_eq!(user.name, Some("New User".to_string()));
         });
     }
@@ -925,7 +972,7 @@ mod tests {
 
             // User info should be updated
             let user = get_user(&user_id1).unwrap();
-            assert_eq!(user.email, "updated@example.com");
+            assert_eq!(user.email.as_deref(), Some("updated@example.com"));
             assert_eq!(user.name, Some("Updated User".to_string()));
         });
     }

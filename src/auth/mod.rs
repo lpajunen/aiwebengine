@@ -5,6 +5,7 @@ pub mod client_registration;
 pub mod config;
 pub mod error;
 pub mod js_api;
+pub mod local;
 pub mod manager;
 pub mod mcp_middleware;
 pub mod metadata;

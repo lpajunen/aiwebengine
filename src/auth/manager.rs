@@ -55,6 +55,9 @@ pub struct AuthManagerConfig {
 
     /// Absolute maximum session age in seconds (30 days default)
     pub max_session_age: u64,
+
+    /// Which internal-credential flows this engine accepts.
+    pub internal: crate::auth::config::InternalAuthConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -75,6 +78,7 @@ impl Default for AuthManagerConfig {
             cookie_same_site: CookieSameSite::Lax,
             session_timeout: 3600 * 24 * 7,  // 7 days
             max_session_age: 3600 * 24 * 30, // 30 days
+            internal: crate::auth::config::InternalAuthConfig::default(),
         }
     }
 }
@@ -97,6 +101,18 @@ pub struct AuthManager {
 }
 
 const SESSION_REFRESH_WINDOW_SECONDS: i64 = 300;
+
+/// An identity that has already been established, on its way to becoming a
+/// session. What is left after the provider-specific part of a login is done.
+struct SessionRequest {
+    user_id: String,
+    provider: String,
+    email: Option<String>,
+    name: Option<String>,
+    ip_addr: String,
+    user_agent: String,
+    refresh_token: Option<String>,
+}
 
 impl AuthManager {
     /// Create a new authentication manager
@@ -389,7 +405,39 @@ impl AuthManager {
             AuthError::Internal(format!("Failed to create/update user: {}", e))
         })?;
 
-        // Get user from repository to check roles
+        self.establish_session(SessionRequest {
+            user_id,
+            provider: provider_name.to_string(),
+            email: Some(user_info.email.clone()),
+            name: user_info.name.clone(),
+            ip_addr: ip_addr.to_string(),
+            user_agent: user_agent.to_string(),
+            refresh_token: tokens.refresh_token.clone(),
+        })
+        .await
+    }
+
+    /// Turn an established identity into a session.
+    ///
+    /// Everything an OAuth callback does after the provider has vouched for
+    /// someone — read the roles that were stored, mint the session, record the
+    /// success — is the same work whoever vouched. Keeping it in one place is
+    /// what lets a guest, a local password and a federated login differ only in
+    /// how the identity was established.
+    ///
+    /// Roles are read from the repository rather than taken from the caller, so
+    /// no entry point can mint a session more privileged than the stored user.
+    async fn establish_session(&self, request: SessionRequest) -> Result<String, AuthError> {
+        let SessionRequest {
+            user_id,
+            provider,
+            email,
+            name,
+            ip_addr,
+            user_agent,
+            refresh_token,
+        } = request;
+
         let user = crate::user_repository::get_user_async(&user_id)
             .await
             .map_err(|e| {
@@ -397,39 +445,213 @@ impl AuthManager {
                 AuthError::Internal("User not found after creation".to_string())
             })?;
 
-        // Check if user has Administrator role
         let is_admin = user
             .roles
             .contains(&crate::user_repository::UserRole::Administrator);
-
-        // Check if user has Editor role
         let is_editor = user
             .roles
             .contains(&crate::user_repository::UserRole::Editor);
 
-        // Create session with correct admin and editor status
         let session_token = self
             .session_manager
             .create_session(crate::auth::session::CreateAuthSessionParams {
                 user_id: user_id.clone(),
-                provider: provider_name.to_string(),
-                email: Some(user_info.email.clone()),
-                name: user_info.name.clone(),
+                provider: provider.clone(),
+                email,
+                name,
                 is_admin,
                 is_editor,
-                ip_addr: ip_addr.to_string(),
-                user_agent: user_agent.to_string(),
-                refresh_token: tokens.refresh_token.clone(),
+                ip_addr: ip_addr.clone(),
+                user_agent,
+                refresh_token,
                 audience: None, // Will be set for MCP endpoints
             })
             .await?;
 
-        // Log successful authentication
         self.security_context
-            .log_auth_success(&user_id, provider_name, Some(ip_addr))
+            .log_auth_success(&user_id, &provider, Some(&ip_addr))
             .await;
 
         Ok(session_token.token)
+    }
+
+    /// Issue an identity and a session to a caller who presents no credential.
+    ///
+    /// The account is real — it owns storage and can be granted roles like any
+    /// other — it simply has no way to be signed into again. That is what
+    /// [`Self::claim_guest_account`] is for.
+    pub async fn start_guest_session(
+        &self,
+        display_name: Option<String>,
+        ip_addr: &str,
+        user_agent: &str,
+    ) -> Result<String, AuthError> {
+        if !self.config.internal.allow_guests {
+            return Err(AuthError::GuestAuthDisabled);
+        }
+
+        if !self.security_context.check_auth_rate_limit(ip_addr).await {
+            return Err(AuthError::RateLimitExceeded);
+        }
+
+        // The guest's provider_user_id is the only thing that identifies the
+        // account, and nothing but the session cookie will ever present it, so
+        // it is generated rather than chosen.
+        let guest_id = uuid::Uuid::new_v4().to_string();
+        let user_id = crate::user_repository::upsert_internal_user(
+            display_name,
+            crate::auth::local::GUEST_PROVIDER.to_string(),
+            guest_id,
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to create guest user: {}", e);
+            AuthError::Internal(format!("Failed to create guest: {}", e))
+        })?;
+
+        self.establish_session(SessionRequest {
+            user_id,
+            provider: crate::auth::local::GUEST_PROVIDER.to_string(),
+            email: None,
+            name: None,
+            ip_addr: ip_addr.to_string(),
+            user_agent: user_agent.to_string(),
+            refresh_token: None,
+        })
+        .await
+    }
+
+    /// Create an account named by a username and protected by a password.
+    pub async fn register_local_account(
+        &self,
+        username: &str,
+        password: &str,
+        display_name: Option<String>,
+        ip_addr: &str,
+        user_agent: &str,
+    ) -> Result<String, AuthError> {
+        if !self.config.internal.enabled {
+            return Err(AuthError::LocalAuthDisabled);
+        }
+        if !self.config.internal.allow_registration {
+            return Err(AuthError::LocalAuthDisabled);
+        }
+
+        if !self.security_context.check_auth_rate_limit(ip_addr).await {
+            return Err(AuthError::RateLimitExceeded);
+        }
+
+        let normalized = crate::auth::local::validate_username(username)?;
+        crate::auth::local::validate_password(password, self.config.internal.min_password_length)?;
+
+        if crate::auth::local::username_exists(&normalized).await? {
+            return Err(AuthError::UsernameTaken);
+        }
+
+        // The user row comes first: the credential references it, and a user
+        // with no credential is a recoverable state (they can claim it) while a
+        // credential pointing at nothing is not.
+        let user_id = crate::user_repository::upsert_internal_user(
+            display_name,
+            crate::auth::local::LOCAL_PROVIDER.to_string(),
+            normalized.clone(),
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to create local user: {}", e);
+            AuthError::Internal(format!("Failed to create account: {}", e))
+        })?;
+
+        crate::auth::local::attach_credential(
+            &user_id,
+            &normalized,
+            password,
+            self.config.internal.min_password_length,
+        )
+        .await?;
+
+        self.establish_session(SessionRequest {
+            user_id,
+            provider: crate::auth::local::LOCAL_PROVIDER.to_string(),
+            email: None,
+            name: None,
+            ip_addr: ip_addr.to_string(),
+            user_agent: user_agent.to_string(),
+            refresh_token: None,
+        })
+        .await
+    }
+
+    /// Sign in against a credential this engine holds.
+    pub async fn login_local(
+        &self,
+        username: &str,
+        password: &str,
+        ip_addr: &str,
+        user_agent: &str,
+    ) -> Result<String, AuthError> {
+        if !self.config.internal.enabled {
+            return Err(AuthError::LocalAuthDisabled);
+        }
+
+        if !self.security_context.check_auth_rate_limit(ip_addr).await {
+            return Err(AuthError::RateLimitExceeded);
+        }
+
+        let user_id = match crate::auth::local::verify_login(username, password).await {
+            Ok(user_id) => user_id,
+            Err(e) => {
+                self.security_context
+                    .log_auth_failure(
+                        crate::auth::local::LOCAL_PROVIDER,
+                        "Invalid username or password",
+                        Some(ip_addr),
+                    )
+                    .await;
+                return Err(e);
+            }
+        };
+
+        self.establish_session(SessionRequest {
+            user_id,
+            provider: crate::auth::local::LOCAL_PROVIDER.to_string(),
+            email: None,
+            name: None,
+            ip_addr: ip_addr.to_string(),
+            user_agent: user_agent.to_string(),
+            refresh_token: None,
+        })
+        .await
+    }
+
+    /// Attach a credential to an account that has none, keeping its `user_id`.
+    ///
+    /// The reason a guest is worth offering at all: whatever they built up
+    /// while anonymous is still theirs once they have a way back in. The caller
+    /// must already hold a session for `user_id` — this grants no new identity,
+    /// it gives an existing one a way to sign in again.
+    pub async fn claim_guest_account(
+        &self,
+        user_id: &str,
+        username: &str,
+        password: &str,
+        ip_addr: &str,
+    ) -> Result<String, AuthError> {
+        if !self.config.internal.enabled {
+            return Err(AuthError::LocalAuthDisabled);
+        }
+
+        if !self.security_context.check_auth_rate_limit(ip_addr).await {
+            return Err(AuthError::RateLimitExceeded);
+        }
+
+        crate::auth::local::attach_credential(
+            user_id,
+            username,
+            password,
+            self.config.internal.min_password_length,
+        )
+        .await
     }
 
     /// Validate session and return user ID

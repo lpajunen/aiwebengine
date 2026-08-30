@@ -191,6 +191,32 @@ same_site = "lax"
 # OAuth Providers Configuration
 # All secrets MUST be set via environment variables
 
+
+# Internal credentials — accounts this engine authenticates itself.
+#
+# All off by default. A password endpoint is the most-probed thing an engine
+# can expose, so each switch is turned on deliberately. Two reasons a server
+# deployment wants some of this anyway:
+#
+#   - solutions whose users should not have to hand a real-world identity to
+#     Google, Microsoft or Apple just to use them, and
+#   - break-glass access for an administrator when the external provider is
+#     down or misconfigured, which is otherwise a way to be locked out of your
+#     own engine.
+#
+# Accounts created this way arrive in the authenticated tier and nothing more;
+# reaching editor or administrator takes an administrator granting the role.
+[auth.internal]
+# Accept username-and-password logins against credentials stored here.
+enabled = false
+# Let anyone create an account. Off means accounts exist only because an
+# administrator or a guest claim created them.
+allow_registration = false
+# Let a caller with no credential be issued an identity and a session.
+allow_guests = false
+# Minimum password length. The engine enforces a floor of 8 regardless.
+min_password_length = 12
+
 [auth.providers.google]
 client_id = "${APP_AUTH_PROVIDERS_GOOGLE_CLIENT_ID}"
 client_secret = "${APP_AUTH_PROVIDERS_GOOGLE_CLIENT_SECRET}"

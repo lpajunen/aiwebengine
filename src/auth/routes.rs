@@ -111,6 +111,43 @@ impl IntoResponse for ErrorResponse {
     }
 }
 
+/// Read the session token out of the request's cookies.
+fn session_token_from_headers(headers: &HeaderMap, cookie_name: &str) -> Option<String> {
+    headers
+        .get(header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|cookies| {
+            cookies.split(';').find_map(|cookie| {
+                let (name, value) = cookie.trim().split_once('=')?;
+                if name == cookie_name {
+                    Some(value.to_string())
+                } else {
+                    None
+                }
+            })
+        })
+}
+
+/// Build the `Set-Cookie` value that carries a session.
+///
+/// Max-Age is the absolute session age rather than the idle timeout, so the
+/// browser keeps the cookie for as long as the session can live.
+///
+/// `SameSite=Lax` is written unconditionally rather than read from
+/// configuration, matching what the OAuth callback has always sent. It is load
+/// bearing: it is what stops a cross-site POST from carrying the session, and
+/// so what protects `/auth/local/claim` — an endpoint that, reached with a
+/// victim's session, would attach an attacker's password to their account.
+fn session_cookie_value(config: &crate::auth::manager::AuthManagerConfig, token: &str) -> String {
+    format!(
+        "{}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}{}",
+        config.session_cookie_name,
+        token,
+        config.max_session_age,
+        if config.cookie_secure { "; Secure" } else { "" }
+    )
+}
+
 /// Extract client IP from headers
 fn get_client_ip(headers: &HeaderMap) -> String {
     headers
@@ -477,6 +514,276 @@ pub async fn oauth_callback(
     Ok(Response::from_parts(parts, body))
 }
 
+/// Request body for `POST /auth/guest`.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct GuestRequest {
+    /// What to call this guest. Not a credential and not unique — a label.
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// Request body for `POST /auth/local/register` and `/auth/local/login`.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct LocalCredentialRequest {
+    pub username: String,
+    pub password: String,
+    /// Display name, for registration only.
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// JSON answer to an internal-credential flow.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct InternalAuthResponse {
+    pub success: bool,
+    pub user_id: Option<String>,
+    /// Present once an account has a username; absent for a guest.
+    pub username: Option<String>,
+}
+
+/// An [`AuthError`] on its way out over HTTP, carrying the status the error
+/// itself decides rather than flattening everything to 400.
+///
+/// The message is the error's own `Display`, which is why
+/// [`AuthError::InvalidCredentials`] is deliberately one variant for "no such
+/// user" and "wrong password" — the response cannot leak a distinction the
+/// error does not draw.
+pub struct AuthErrorResponse(crate::auth::error::AuthError);
+
+impl From<crate::auth::error::AuthError> for AuthErrorResponse {
+    fn from(error: crate::auth::error::AuthError) -> Self {
+        Self(error)
+    }
+}
+
+impl IntoResponse for AuthErrorResponse {
+    fn into_response(self) -> Response {
+        let status =
+            StatusCode::from_u16(self.0.status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        // An internal fault must not describe itself to the caller.
+        let message = if status == StatusCode::INTERNAL_SERVER_ERROR {
+            tracing::error!("internal authentication error: {}", self.0);
+            "Authentication failed".to_string()
+        } else {
+            self.0.to_string()
+        };
+        (
+            status,
+            Json(ErrorResponse {
+                error: "authentication_failed".to_string(),
+                message,
+            }),
+        )
+            .into_response()
+    }
+}
+
+/// Attach a freshly minted session to a JSON response.
+fn respond_with_session(
+    auth_manager: &AuthManager,
+    token: &str,
+    body: InternalAuthResponse,
+) -> Result<Response, AuthErrorResponse> {
+    let cookie = session_cookie_value(auth_manager.config(), token);
+    let response = Json(body).into_response();
+    let (mut parts, body) = response.into_parts();
+    let header_value = cookie.parse().map_err(|_| {
+        AuthErrorResponse(crate::auth::error::AuthError::Internal(
+            "invalid cookie header value".to_string(),
+        ))
+    })?;
+    parts.headers.insert(header::SET_COOKIE, header_value);
+    Ok(Response::from_parts(parts, body))
+}
+
+/// Issue a guest identity and a session.
+#[utoipa::path(
+    post,
+    path = "/auth/guest",
+    tags = ["Authentication"],
+    request_body = GuestRequest,
+    responses(
+        (status = 200, description = "Guest session issued", body = InternalAuthResponse),
+        (status = 403, description = "Guest accounts are not enabled", body = crate::openapi_schemas::ErrorResponse),
+        (status = 429, description = "Rate limit exceeded", body = crate::openapi_schemas::ErrorResponse),
+    )
+)]
+pub async fn start_guest(
+    State(auth_manager): State<Arc<AuthManager>>,
+    headers: HeaderMap,
+    Json(request): Json<GuestRequest>,
+) -> Result<Response, AuthErrorResponse> {
+    let ip_addr = get_client_ip(&headers);
+    let user_agent = get_user_agent(&headers);
+
+    let token = auth_manager
+        .start_guest_session(request.name, &ip_addr, &user_agent)
+        .await?;
+
+    let user_id = auth_manager
+        .get_session(&token, &ip_addr, &user_agent)
+        .await
+        .ok()
+        .map(|session| session.user_id);
+
+    respond_with_session(
+        &auth_manager,
+        &token,
+        InternalAuthResponse {
+            success: true,
+            user_id,
+            username: None,
+        },
+    )
+}
+
+/// Create an account with a username and password held by this engine.
+#[utoipa::path(
+    post,
+    path = "/auth/local/register",
+    tags = ["Authentication"],
+    request_body = LocalCredentialRequest,
+    responses(
+        (status = 200, description = "Account created and session issued", body = InternalAuthResponse),
+        (status = 400, description = "Username or password rejected", body = crate::openapi_schemas::ErrorResponse),
+        (status = 403, description = "Registration is not enabled", body = crate::openapi_schemas::ErrorResponse),
+        (status = 409, description = "Username is taken", body = crate::openapi_schemas::ErrorResponse),
+    )
+)]
+pub async fn register_local(
+    State(auth_manager): State<Arc<AuthManager>>,
+    headers: HeaderMap,
+    Json(request): Json<LocalCredentialRequest>,
+) -> Result<Response, AuthErrorResponse> {
+    let ip_addr = get_client_ip(&headers);
+    let user_agent = get_user_agent(&headers);
+
+    let token = auth_manager
+        .register_local_account(
+            &request.username,
+            &request.password,
+            request.name,
+            &ip_addr,
+            &user_agent,
+        )
+        .await?;
+
+    let user_id = auth_manager
+        .get_session(&token, &ip_addr, &user_agent)
+        .await
+        .ok()
+        .map(|session| session.user_id);
+
+    respond_with_session(
+        &auth_manager,
+        &token,
+        InternalAuthResponse {
+            success: true,
+            user_id,
+            username: Some(crate::auth::local::normalize_username(&request.username)),
+        },
+    )
+}
+
+/// Sign in against a credential held by this engine.
+#[utoipa::path(
+    post,
+    path = "/auth/local/login",
+    tags = ["Authentication"],
+    request_body = LocalCredentialRequest,
+    responses(
+        (status = 200, description = "Session issued", body = InternalAuthResponse),
+        (status = 401, description = "Invalid username or password", body = crate::openapi_schemas::ErrorResponse),
+        (status = 403, description = "Internal authentication is not enabled", body = crate::openapi_schemas::ErrorResponse),
+        (status = 429, description = "Rate limit exceeded", body = crate::openapi_schemas::ErrorResponse),
+    )
+)]
+pub async fn login_local(
+    State(auth_manager): State<Arc<AuthManager>>,
+    headers: HeaderMap,
+    Json(request): Json<LocalCredentialRequest>,
+) -> Result<Response, AuthErrorResponse> {
+    let ip_addr = get_client_ip(&headers);
+    let user_agent = get_user_agent(&headers);
+
+    let token = auth_manager
+        .login_local(&request.username, &request.password, &ip_addr, &user_agent)
+        .await?;
+
+    let user_id = auth_manager
+        .get_session(&token, &ip_addr, &user_agent)
+        .await
+        .ok()
+        .map(|session| session.user_id);
+
+    respond_with_session(
+        &auth_manager,
+        &token,
+        InternalAuthResponse {
+            success: true,
+            user_id,
+            username: Some(crate::auth::local::normalize_username(&request.username)),
+        },
+    )
+}
+
+/// Give the account behind the current session a way to sign in again.
+///
+/// The account is identified by the session, never by the request body: this
+/// endpoint attaches a credential to whoever is calling, so accepting a
+/// `user_id` from the caller would let anyone claim anyone's account.
+///
+/// POST-only, and the session cookie is `SameSite=Lax`, so a cross-site
+/// request arrives without a session and is refused. See
+/// [`session_cookie_value`] — that is the reason this endpoint does not need a
+/// CSRF token of its own, and the reason it must stay a POST.
+#[utoipa::path(
+    post,
+    path = "/auth/local/claim",
+    tags = ["Authentication"],
+    request_body = LocalCredentialRequest,
+    responses(
+        (status = 200, description = "Credential attached to the current account", body = InternalAuthResponse),
+        (status = 400, description = "Username or password rejected", body = crate::openapi_schemas::ErrorResponse),
+        (status = 401, description = "No session to claim", body = crate::openapi_schemas::ErrorResponse),
+        (status = 409, description = "Username taken, or the account already has a credential", body = crate::openapi_schemas::ErrorResponse),
+    )
+)]
+pub async fn claim_account(
+    State(auth_manager): State<Arc<AuthManager>>,
+    headers: HeaderMap,
+    Json(request): Json<LocalCredentialRequest>,
+) -> Result<Response, AuthErrorResponse> {
+    let ip_addr = get_client_ip(&headers);
+    let user_agent = get_user_agent(&headers);
+    let config = auth_manager.config();
+
+    let token = session_token_from_headers(&headers, &config.session_cookie_name)
+        .ok_or(crate::auth::error::AuthError::AuthenticationRequired)?;
+    let session = auth_manager
+        .get_session(&token, &ip_addr, &user_agent)
+        .await
+        .map_err(|_| crate::auth::error::AuthError::AuthenticationRequired)?;
+
+    let username = auth_manager
+        .claim_guest_account(
+            &session.user_id,
+            &request.username,
+            &request.password,
+            &ip_addr,
+        )
+        .await?;
+
+    // The session already identifies this user and its roles have not changed,
+    // so it stays as it is; only the way back in is new.
+    Ok(Json(InternalAuthResponse {
+        success: true,
+        user_id: Some(session.user_id),
+        username: Some(username),
+    })
+    .into_response())
+}
+
 /// Logout handler - destroys session
 #[utoipa::path(
     get,
@@ -498,20 +805,7 @@ pub async fn logout(
     let config = auth_manager.config();
 
     // Extract session token from cookie
-    let session_token = headers
-        .get(header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|cookies| {
-            cookies.split(';').find_map(|cookie| {
-                let trimmed = cookie.trim();
-                let (name, value) = trimmed.split_once('=')?;
-                if name == config.session_cookie_name {
-                    Some(value.to_string())
-                } else {
-                    None
-                }
-            })
-        });
+    let session_token = session_token_from_headers(&headers, &config.session_cookie_name);
 
     if let Some(token) = session_token {
         // Destroy session
@@ -563,20 +857,7 @@ pub async fn auth_status(
     let config = auth_manager.config();
 
     // Extract session token
-    let session_token = headers
-        .get(header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|cookies| {
-            cookies.split(';').find_map(|cookie| {
-                let trimmed = cookie.trim();
-                let (name, value) = trimmed.split_once('=')?;
-                if name == config.session_cookie_name {
-                    Some(value.to_string())
-                } else {
-                    None
-                }
-            })
-        });
+    let session_token = session_token_from_headers(&headers, &config.session_cookie_name);
     if let Some(token) = session_token
         && let Ok(session) = auth_manager
             .get_session(&token, &ip_addr, &user_agent)
@@ -620,20 +901,7 @@ pub async fn refresh_session(
     let ip_addr = get_client_ip(&headers);
     let user_agent = get_user_agent(&headers);
 
-    let session_token = headers
-        .get(header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|cookies| {
-            cookies.split(';').find_map(|cookie| {
-                let trimmed = cookie.trim();
-                let (name, value) = trimmed.split_once('=')?;
-                if name == config.session_cookie_name {
-                    Some(value.to_string())
-                } else {
-                    None
-                }
-            })
-        });
+    let session_token = session_token_from_headers(&headers, &config.session_cookie_name);
 
     let Some(token) = session_token else {
         return (
@@ -1276,7 +1544,7 @@ pub struct SessionIdentity {
 pub async fn session_identity_for_user(user_id: &str) -> SessionIdentity {
     match crate::user_repository::get_user_async(user_id).await {
         Ok(user) => SessionIdentity {
-            email: Some(user.email),
+            email: user.email,
             name: user.name,
             is_admin: user
                 .roles
@@ -1436,6 +1704,10 @@ pub fn create_auth_router(auth_manager: Arc<AuthManager>) -> Router {
         .route("/login", get(login_page))
         .route("/login/{provider}", get(start_login))
         .route("/callback/{provider}", get(oauth_callback))
+        .route("/guest", post(start_guest))
+        .route("/local/register", post(register_local))
+        .route("/local/login", post(login_local))
+        .route("/local/claim", post(claim_account))
         .route("/logout", get(logout).post(logout))
         .route("/refresh", post(refresh_session))
         .route("/status", get(auth_status))
