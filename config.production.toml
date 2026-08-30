@@ -239,12 +239,27 @@ same_site = "strict"
 # reaching editor or administrator takes an administrator granting the role.
 [auth.internal]
 # Accept username-and-password logins against credentials stored here.
-enabled = false
-# Let anyone create an account. Off means accounts exist only because an
-# administrator or a guest claim created them.
-allow_registration = false
+enabled = true
+# Let anyone create an account.
+#
+# This is open sign-up: anybody who can reach this host can make an account.
+# Two things bound what that is worth. It lands in the authenticated tier,
+# which holds nothing that touches scripts, assets or schema — see the tier
+# table in CLAUDE.md. And it is recorded in the realm of the host it was
+# created on, so an account made through a solution's sign-up form is not a
+# principal on a management host.
+#
+# Turn this off if the solutions on this instance do not want their users
+# signing themselves up; accounts then exist only because an administrator or
+# a guest claim created them.
+allow_registration = true
 # Let a caller with no credential be issued an identity and a session.
-allow_guests = false
+#
+# A guest owns storage and can be granted roles like any other account; it
+# simply has no way to be signed into again until it claims a username and
+# password, which keeps the same user_id and everything already attached to
+# it.
+allow_guests = true
 # Minimum password length. The engine enforces a floor of 8 regardless.
 min_password_length = 12
 

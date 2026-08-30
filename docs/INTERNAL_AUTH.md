@@ -45,24 +45,37 @@ See the security sandbox model in `CLAUDE.md` for what each tier holds.
 
 ## Configuration
 
-Every switch is off by default. A password endpoint is the most-probed thing an
-engine can expose, so each is turned on deliberately.
-
 ```toml
 [auth.internal]
 # Accept username-and-password logins against credentials stored here.
-enabled = false
-# Let anyone create an account. Off means accounts exist only because an
-# administrator or a guest claim created them.
-allow_registration = false
+enabled = true
+# Let anyone create an account.
+allow_registration = true
 # Let a caller with no credential be issued an identity and a session.
-allow_guests = false
+allow_guests = true
 # Minimum password length. The engine enforces a floor of 8 regardless.
 min_password_length = 12
 ```
 
-`config.local.toml` turns all three on, since that is the point of a personal
-install. The staging and production templates leave them off.
+All three shipped templates — local, staging and production — turn these on,
+because a solution whose users cannot sign themselves up has no use for
+internal credentials.
+
+**The code defaults are the opposite.** Every field defaults to `false`, so an
+engine whose configuration says nothing about `[auth.internal]` gets nothing:
+no forms on the sign-in page, and every endpoint refusing with 403. That is
+deliberate — an upgrade must not switch on a password endpoint for a
+deployment that never asked — but it is also the thing that surprises people.
+A `config.toml` copied from a template before these fields existed has no
+`[auth.internal]` section, and so behaves as though everything were off. Copy
+the block above into it.
+
+What `allow_registration` is worth is bounded by two things worth knowing
+before enabling it on a public host. A self-registered account lands in the
+authenticated tier, which holds nothing that touches scripts, assets or
+schema. And it is recorded in the realm of the host it was created on, so an
+account made through a solution's sign-up form is not a principal on a
+management host.
 
 ## The sign-in page
 
