@@ -100,9 +100,6 @@ pub struct MetadataConfig {
     /// Whether dynamic client registration is enabled
     pub enable_registration: bool,
 
-    /// Whether PKCE is required
-    pub require_pkce: bool,
-
     /// Whether resource indicators are supported
     pub resource_indicators_supported: bool,
 }
@@ -112,7 +109,6 @@ impl MetadataConfig {
     pub fn new(
         base_urls: &[String],
         enable_registration: bool,
-        require_pkce: bool,
         resource_indicators_supported: bool,
     ) -> Self {
         let mut default_issuer = String::new();
@@ -135,7 +131,6 @@ impl MetadataConfig {
             default_issuer,
             issuers_by_host,
             enable_registration,
-            require_pkce,
             resource_indicators_supported,
         }
     }
@@ -188,11 +183,10 @@ impl MetadataConfig {
                 "client_secret_post".to_string(),
                 "none".to_string(),
             ]),
-            code_challenge_methods_supported: if self.require_pkce {
-                Some(vec!["S256".to_string()])
-            } else {
-                Some(vec!["S256".to_string(), "plain".to_string()])
-            },
+            // S256 only, and unconditionally: the authorization endpoint
+            // requires a challenge and refuses `plain`, so advertising anything
+            // else would be describing a server this is not.
+            code_challenge_methods_supported: Some(vec!["S256".to_string()]),
             resource_indicators_supported: Some(self.resource_indicators_supported),
             service_documentation: None,
             ui_locales_supported: Some(vec!["en".to_string()]),
@@ -274,14 +268,14 @@ pub async fn protected_resource_metadata_handler(
 mod tests {
     use super::*;
 
-    fn config(base_urls: &[&str], enable_registration: bool, require_pkce: bool) -> MetadataConfig {
+    fn config(base_urls: &[&str], enable_registration: bool) -> MetadataConfig {
         let urls: Vec<String> = base_urls.iter().map(|u| u.to_string()).collect();
-        MetadataConfig::new(&urls, enable_registration, require_pkce, true)
+        MetadataConfig::new(&urls, enable_registration, true)
     }
 
     #[test]
     fn test_metadata_generation() {
-        let config = config(&["https://auth.example.com"], true, true);
+        let config = config(&["https://auth.example.com"], true);
 
         let metadata = config.to_metadata(None);
 
@@ -307,23 +301,26 @@ mod tests {
 
     #[test]
     fn test_metadata_without_registration() {
-        let mut config = config(&["https://auth.example.com/"], false, false);
+        let mut config = config(&["https://auth.example.com/"], false);
         config.resource_indicators_supported = false;
 
         let metadata = config.to_metadata(None);
 
         assert_eq!(metadata.issuer, "https://auth.example.com");
         assert_eq!(metadata.registration_endpoint, None);
+        // Never `plain`. The authorization endpoint refuses it, and a discovery
+        // document that offers it describes a server this is not — a client
+        // that believed it would build a request bound to be rejected.
         assert_eq!(
             metadata.code_challenge_methods_supported,
-            Some(vec!["S256".to_string(), "plain".to_string()])
+            Some(vec!["S256".to_string()])
         );
         assert_eq!(metadata.resource_indicators_supported, Some(false));
     }
 
     #[test]
     fn test_issuer_normalization() {
-        let config = config(&["https://auth.example.com///"], false, true);
+        let config = config(&["https://auth.example.com///"], false);
 
         let metadata = config.to_metadata(None);
         assert_eq!(metadata.issuer, "https://auth.example.com");
@@ -335,7 +332,6 @@ mod tests {
     fn additional_host_issues_for_itself() {
         let config = config(
             &["https://softagen.com", "https://manage.softagen.com"],
-            true,
             true,
         );
 
@@ -361,7 +357,6 @@ mod tests {
         let config = config(
             &["https://softagen.com", "https://manage.softagen.com"],
             true,
-            true,
         );
 
         assert_eq!(
@@ -377,7 +372,6 @@ mod tests {
         let config = config(
             &["https://softagen.com", "https://manage.softagen.com"],
             true,
-            true,
         );
 
         for host in [Some("attacker.example.com"), Some("127.0.0.1:3000"), None] {
@@ -389,7 +383,7 @@ mod tests {
     /// arrives on a local or non-standard-port deployment.
     #[test]
     fn host_with_port_is_matched() {
-        let config = config(&["http://localhost:3000"], true, true);
+        let config = config(&["http://localhost:3000"], true);
 
         assert_eq!(
             config.issuer_for_host(Some("localhost:3000")),

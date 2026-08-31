@@ -157,6 +157,45 @@ impl CsrfProtection {
         Ok(())
     }
 
+    /// Validate a token that must have been issued *to* a particular principal.
+    ///
+    /// [`Self::validate_token`] accepts an unbound token against any session,
+    /// which is right for the sign-in forms: they are submitted before there is
+    /// a session to bind one to. It is wrong wherever a form acts on a session
+    /// that already exists. An unbound token is one anybody can obtain by
+    /// asking the engine for a page — including from their own server, with no
+    /// browser and no account — so accepting one there means the token proves
+    /// nothing about who submitted the form, and the only thing left standing
+    /// between the form and a cross-site POST is the cookie's `SameSite=Lax`.
+    /// Which mostly holds, except that browsers permit a cross-site POST to
+    /// carry a Lax cookie for the first couple of minutes after it is set.
+    pub async fn validate_token_for(
+        &self,
+        token: &str,
+        session_id: &str,
+    ) -> Result<(), SecurityError> {
+        self.validate_token(token, Some(session_id)).await?;
+
+        // The signature is verified by the call above, so the payload can be
+        // read: what is left to check is that a binding is present at all.
+        if Self::token_session(token).is_none_or(|session| session.is_empty()) {
+            warn!("CSRF token carries no session binding where one is required");
+            return Err(SecurityError::CsrfValidationFailed);
+        }
+
+        Ok(())
+    }
+
+    /// The session a token was bound to, from its already-verified payload.
+    fn token_session(token: &str) -> Option<String> {
+        let payload_b64 = token.split(':').next()?;
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(payload_b64)
+            .ok()?;
+        let payload = String::from_utf8(payload).ok()?;
+        payload.split(':').nth(1).map(str::to_string)
+    }
+
     /// Invalidate a CSRF token after use (for one-time tokens)
     /// Note: With stateless tokens, this is a no-op but kept for API compatibility
     /// For one-time use, consider using OAuthStateManager which tracks used tokens
@@ -239,6 +278,42 @@ mod tests {
     fn create_test_csrf() -> CsrfProtection {
         let key: [u8; 32] = rand::random();
         CsrfProtection::new(key, 3600)
+    }
+
+    /// An unbound token is one anybody can fetch from the sign-in page, so a
+    /// form acting on an existing session must not accept one. This is the
+    /// difference between the consent form proving who submitted it and
+    /// leaning entirely on `SameSite=Lax`.
+    #[tokio::test]
+    async fn a_form_that_requires_binding_refuses_an_unbound_token() {
+        let csrf = CsrfProtection::new([7u8; 32], 3600);
+
+        let unbound = csrf.generate_token(None).await;
+        assert!(
+            csrf.validate_token(&unbound.token, Some("user-1"))
+                .await
+                .is_ok(),
+            "the lenient check accepts it, which is why the strict one exists"
+        );
+        assert!(
+            csrf.validate_token_for(&unbound.token, "user-1")
+                .await
+                .is_err(),
+            "a token nobody was issued must not stand in for this user's approval"
+        );
+
+        let bound = csrf.generate_token(Some("user-1".to_string())).await;
+        assert!(
+            csrf.validate_token_for(&bound.token, "user-1")
+                .await
+                .is_ok()
+        );
+        assert!(
+            csrf.validate_token_for(&bound.token, "user-2")
+                .await
+                .is_err(),
+            "one person's token is not another's"
+        );
     }
 
     #[tokio::test]

@@ -50,7 +50,7 @@ pub struct LogoutParams {
     redirect: Option<String>,
 }
 
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 
 /// Authorization code data stored temporarily
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -1523,6 +1523,14 @@ pub async fn refresh_session(
 pub(crate) const AUTHORIZE_PATH: &str = "/auth/oauth2/authorize";
 pub(crate) const TOKEN_PATH: &str = "/auth/oauth2/token";
 pub(crate) const REGISTRATION_PATH: &str = "/auth/oauth2/register";
+/// Where the consent page posts its answer. Not advertised in the discovery
+/// metadata: it is part of how this server renders the authorization endpoint,
+/// not an endpoint a client ever calls.
+pub(crate) const CONSENT_PATH: &str = "/auth/oauth2/consent";
+
+/// Cap on a consent form's size. The body is a handful of short fields the
+/// engine wrote into its own page, so anything larger is not a consent form.
+const MAX_CONSENT_BODY_BYTES: usize = 16 * 1024;
 
 /// OAuth 2.0 authorization request parameters (RFC 6749)
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -1592,26 +1600,695 @@ fn authorize_return_url(params: &AuthorizeParams) -> String {
     format!("{}?{}", AUTHORIZE_PATH, query_params.join("&"))
 }
 
+/// Shortest and longest a PKCE code challenge may be (RFC 7636 §4.2). An S256
+/// challenge is base64url of a SHA-256 digest, so it is always 43 characters;
+/// the range is what the spec allows, not what we expect.
+const MIN_CODE_CHALLENGE_LENGTH: usize = 43;
+const MAX_CODE_CHALLENGE_LENGTH: usize = 128;
+
+/// Whether a code challenge is shaped like one, before it is stored.
+///
+/// A malformed challenge would fail verification at the token endpoint anyway,
+/// but failing here means the client learns it at the point it made the
+/// mistake, rather than after a person has been asked to approve something.
+fn code_challenge_is_wellformed(challenge: &str) -> bool {
+    (MIN_CODE_CHALLENGE_LENGTH..=MAX_CODE_CHALLENGE_LENGTH).contains(&challenge.len())
+        && challenge
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~'))
+}
+
+/// Whether this engine is willing to mint a token whose audience is `resource`.
+///
+/// RFC 8707 lets a client name what it wants a token to be good for, and the
+/// token endpoint copies that name onto the session's audience verbatim. Two
+/// rules, both needed:
+///
+/// - the resource must name a host this engine actually serves, or the audience
+///   is just a string somebody typed; and
+/// - it must name *the host the authorization is happening on*. A sign-in
+///   completed on a solution's host must not hand out a credential for the
+///   management host's `/mcp`, and realm scoping only stops that for accounts
+///   whose realm is not `*`.
+fn resource_is_acceptable(resource: &str, request_host: Option<&str>) -> bool {
+    resource_is_acceptable_for(resource, request_host, crate::hosts::config())
+}
+
+/// The rule itself, against an explicit host configuration so it can be
+/// exercised without the process-global one.
+fn resource_is_acceptable_for(
+    resource: &str,
+    request_host: Option<&str>,
+    hosts: &crate::hosts::HostConfig,
+) -> bool {
+    let normalized = crate::security::session::normalize_resource(resource);
+    let authority = normalized.split('/').next().unwrap_or_default();
+    if authority.is_empty() {
+        return false;
+    }
+
+    // Before startup configures hosts there is nothing to check against, and a
+    // deployment with no base URL set would otherwise be unable to issue any
+    // token at all.
+    if hosts.all_hosts().is_empty() {
+        return true;
+    }
+
+    hosts.is_configured(authority) && hosts.canonical_host(request_host) == authority
+}
+
+/// An authorization request that survived validation.
+///
+/// Holding the looked-up client rather than the caller's `client_id` is the
+/// point: everything downstream reads the registration, so there is no path
+/// where an unregistered value is used by accident.
+#[derive(Debug)]
+struct ValidatedAuthorization {
+    client: crate::auth::client_registration::RegisteredClient,
+    redirect_uri: String,
+    scope: Option<String>,
+    state: Option<String>,
+    code_challenge: String,
+    resource: Option<String>,
+}
+
+/// Why an authorization request was refused, and where the answer goes.
+#[derive(Debug)]
+enum AuthorizeRejection {
+    /// Refused before the redirect URI could be trusted, so the answer is shown
+    /// to the browser. Redirecting an error to a URI that has not been matched
+    /// against a registration is the hole itself — it is how an unregistered
+    /// URI gets to hear from this endpoint at all.
+    Direct {
+        status: StatusCode,
+        error: &'static str,
+        description: String,
+    },
+    /// Refused after the client and its redirect URI checked out, so the error
+    /// goes back to the client the way RFC 6749 §4.1.2.1 asks.
+    Redirect {
+        redirect_uri: String,
+        state: Option<String>,
+        error: &'static str,
+        description: String,
+    },
+}
+
+impl AuthorizeRejection {
+    fn into_response(self) -> Response {
+        match self {
+            AuthorizeRejection::Direct {
+                status,
+                error,
+                description,
+            } => (
+                status,
+                Json(ErrorResponse {
+                    error: error.to_string(),
+                    message: description,
+                }),
+            )
+                .into_response(),
+            AuthorizeRejection::Redirect {
+                redirect_uri,
+                state,
+                error,
+                description,
+            } => {
+                let mut url = append_query_param(&redirect_uri, "error", error);
+                url = append_query_param(&url, "error_description", &description);
+                if let Some(state) = state {
+                    url = append_query_param(&url, "state", &state);
+                }
+                redirect_to_client(&url)
+            }
+        }
+    }
+}
+
+/// Append one query parameter to a URL that may or may not already have some.
+fn append_query_param(url: &str, name: &str, value: &str) -> String {
+    let separator = if url.contains('?') { '&' } else { '?' };
+    format!(
+        "{}{}{}={}",
+        url,
+        separator,
+        name,
+        urlencoding::encode(value)
+    )
+}
+
+/// Send the browser on to a client's redirect URI.
+///
+/// A meta refresh plus a scripted assignment rather than a 302, because client
+/// redirect URIs are routinely custom schemes (`vscode://`, `cursor://`) that
+/// `Location` handling treats inconsistently. The URL is escaped for the two
+/// contexts it appears in and the script runs under a per-response nonce.
+fn redirect_to_client(target: &str) -> Response {
+    let js_target = serde_json::to_string(target).unwrap_or_else(|_| "\"/\"".to_string());
+    let nonce = crate::security::generate_nonce();
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="refresh" content="0;url={}" />
+    <title>Redirecting…</title>
+</head>
+<body>
+    <p>Returning to the application. If nothing happens, <a href="{}">continue</a>.</p>
+    <script nonce="{}">window.location.href = {};</script>
+</body>
+</html>"#,
+        html_escape::encode_text(target),
+        html_escape::encode_text(target),
+        html_attribute(&nonce),
+        js_target
+    );
+
+    html_page_response(html, &nonce)
+}
+
+/// Check an authorization request against the client registry and the rules.
+///
+/// This is the whole of the gate, and both the `GET` that shows a consent page
+/// and the `POST` that acts on the answer run it — the second time because a
+/// consent form is a caller-supplied body like any other, and re-deriving the
+/// decision from it is cheaper than trusting it.
+async fn validate_authorize_request(
+    pool: &PgPool,
+    params: &AuthorizeParams,
+    request_host: Option<&str>,
+) -> Result<ValidatedAuthorization, AuthorizeRejection> {
+    let direct =
+        |status: StatusCode, error: &'static str, description: &str| AuthorizeRejection::Direct {
+            status,
+            error,
+            description: description.to_string(),
+        };
+
+    if params.client_id.trim().is_empty() {
+        return Err(direct(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "Missing client_id parameter",
+        ));
+    }
+
+    let client =
+        match crate::auth::client_registration::lookup_client(pool, &params.client_id).await {
+            Ok(Some(client)) => client,
+            Ok(None) => {
+                return Err(direct(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_client",
+                    "Unknown client_id. Register the client before requesting authorization.",
+                ));
+            }
+            Err(e) => {
+                tracing::error!("Client lookup failed: {}", e);
+                return Err(direct(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Could not read the client registry",
+                ));
+            }
+        };
+
+    let redirect_uri = params
+        .redirect_uri
+        .as_deref()
+        .map(str::trim)
+        .filter(|uri| !uri.is_empty());
+    let Some(redirect_uri) = redirect_uri else {
+        return Err(direct(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "redirect_uri is required",
+        ));
+    };
+
+    if !client.redirect_uri_registered(redirect_uri) {
+        return Err(direct(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "redirect_uri does not match a URI this client registered",
+        ));
+    }
+
+    // Past this point the redirect URI is one the client itself registered, so
+    // errors are the client's to handle and go back to it.
+    let redirect = |error: &'static str, description: &str| AuthorizeRejection::Redirect {
+        redirect_uri: redirect_uri.to_string(),
+        state: params.state.clone(),
+        error,
+        description: description.to_string(),
+    };
+
+    if params.response_type != "code" {
+        return Err(redirect(
+            "unsupported_response_type",
+            "Only the 'code' response type is supported",
+        ));
+    }
+
+    if !client.allows_grant("authorization_code") {
+        return Err(redirect(
+            "unauthorized_client",
+            "This client did not register the authorization_code grant",
+        ));
+    }
+
+    // PKCE is required, not merely verified when it happens to be offered.
+    // Checking a challenge only if one arrived means a caller who sends none is
+    // never asked for a verifier, and an authorization code becomes usable by
+    // whoever manages to read it.
+    let code_challenge = params
+        .code_challenge
+        .as_deref()
+        .map(str::trim)
+        .filter(|challenge| !challenge.is_empty());
+    let Some(code_challenge) = code_challenge else {
+        return Err(redirect(
+            "invalid_request",
+            "code_challenge is required (PKCE, RFC 7636)",
+        ));
+    };
+
+    // `plain` is accepted by RFC 7636 and is worth nothing here: the challenge
+    // travels in the same query string as everything else, so a caller who can
+    // read the request can also read the verifier.
+    if params.code_challenge_method.as_deref() != Some("S256") {
+        return Err(redirect(
+            "invalid_request",
+            "code_challenge_method must be S256",
+        ));
+    }
+
+    if !code_challenge_is_wellformed(code_challenge) {
+        return Err(redirect(
+            "invalid_request",
+            "code_challenge is not a well-formed S256 challenge",
+        ));
+    }
+
+    let resource = params
+        .resource
+        .as_deref()
+        .map(str::trim)
+        .filter(|resource| !resource.is_empty());
+    if let Some(resource) = resource
+        && !resource_is_acceptable(resource, request_host)
+    {
+        return Err(redirect(
+            "invalid_target",
+            "resource must name this host's endpoint",
+        ));
+    }
+
+    Ok(ValidatedAuthorization {
+        client,
+        redirect_uri: redirect_uri.to_string(),
+        scope: params.scope.clone().filter(|s| !s.trim().is_empty()),
+        state: params.state.clone(),
+        code_challenge: code_challenge.to_string(),
+        resource: resource.map(str::to_string),
+    })
+}
+
+/// Whether every scope being asked for is one the stored grant already covers.
+///
+/// No scope requested is covered by anything, including a grant that named
+/// none.
+fn scope_is_covered(granted: Option<&str>, requested: Option<&str>) -> bool {
+    let Some(requested) = requested else {
+        return true;
+    };
+    let granted = granted.unwrap_or_default();
+    requested
+        .split_whitespace()
+        .all(|wanted| granted.split_whitespace().any(|held| held == wanted))
+}
+
+/// Whether this user has already agreed to this client doing this.
+///
+/// A stored grant covers a new request only when it is at least as wide.
+/// Anything else — a scope that was not approved last time, a different
+/// resource — is a widening, and widening is the thing that must not happen
+/// without being seen.
+async fn consent_already_given(
+    pool: &PgPool,
+    user_id: &str,
+    validated: &ValidatedAuthorization,
+) -> Result<bool, sqlx::Error> {
+    let row = sqlx::query(
+        "SELECT scope, resource FROM oauth_client_grants WHERE user_id = $1 AND client_id = $2",
+    )
+    .bind(user_id)
+    .bind(&validated.client.client_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(row) = row else {
+        return Ok(false);
+    };
+
+    let granted_scope: Option<String> = row.try_get("scope").unwrap_or(None);
+    let granted_resource: Option<String> = row.try_get("resource").unwrap_or(None);
+
+    Ok(
+        scope_is_covered(granted_scope.as_deref(), validated.scope.as_deref())
+            && granted_resource.as_deref() == validated.resource.as_deref(),
+    )
+}
+
+/// Record what a person just approved, replacing whatever they approved before.
+///
+/// Stored as approved rather than merged with the previous grant: a client that
+/// asks for less next time should be held to less, and a union would quietly
+/// keep privileges nobody re-approved.
+async fn record_consent(
+    pool: &PgPool,
+    user_id: &str,
+    validated: &ValidatedAuthorization,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO oauth_client_grants (user_id, client_id, scope, resource, granted_at)
+         VALUES ($1, $2, $3, $4, NOW())
+         ON CONFLICT (user_id, client_id)
+         DO UPDATE SET scope = EXCLUDED.scope, resource = EXCLUDED.resource, granted_at = NOW()",
+    )
+    .bind(user_id)
+    .bind(&validated.client.client_id)
+    .bind(&validated.scope)
+    .bind(&validated.resource)
+    .execute(pool)
+    .await
+    .map(|_| ())
+}
+
+/// Mint an authorization code and send the browser back to the client with it.
+async fn issue_authorization_code(
+    pool: &PgPool,
+    user_id: &str,
+    validated: &ValidatedAuthorization,
+) -> Response {
+    let auth_code = format!("code_{}", uuid::Uuid::new_v4());
+    let expires_at = Utc::now() + chrono::Duration::minutes(10);
+
+    let stored = sqlx::query(
+        "INSERT INTO oauth_authorization_codes (code, user_id, client_id, redirect_uri, code_challenge, code_challenge_method, scope, resource, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
+    )
+    .bind(&auth_code)
+    .bind(user_id)
+    .bind(&validated.client.client_id)
+    .bind(&validated.redirect_uri)
+    .bind(&validated.code_challenge)
+    .bind("S256")
+    .bind(&validated.scope)
+    .bind(&validated.resource)
+    .bind(expires_at)
+    .execute(pool)
+    .await;
+
+    if let Err(e) = stored {
+        tracing::error!("Failed to store authorization code: {}", e);
+        return AuthorizeRejection::Redirect {
+            redirect_uri: validated.redirect_uri.clone(),
+            state: validated.state.clone(),
+            error: "server_error",
+            description: "Failed to record the authorization".to_string(),
+        }
+        .into_response();
+    }
+
+    tracing::info!(
+        "Issued authorization code to client {} for user {}",
+        validated.client.client_id,
+        user_id
+    );
+
+    let mut target = append_query_param(&validated.redirect_uri, "code", &auth_code);
+    if let Some(state) = validated.state.as_deref() {
+        target = append_query_param(&target, "state", state);
+    }
+
+    redirect_to_client(&target)
+}
+
+/// The page a person sees before a client is given a code in their name.
+///
+/// This is what actually stands between a cross-site navigation and an
+/// authorization code. Registration is open — an attacker can register a client
+/// as easily as anyone else — so validating the client and its redirect URI
+/// narrows the attack without ending it. Someone saying yes, on a page that
+/// names the client and shows where they will be sent, is what ends it.
+///
+/// The form carries the request back rather than the engine holding it: every
+/// field is re-validated on the way in, so a tampered form buys nothing that
+/// forging the original request would not have.
+fn render_consent_page(
+    validated: &ValidatedAuthorization,
+    csrf_token: &str,
+    user_label: &str,
+) -> Response {
+    let nonce = crate::security::generate_nonce();
+
+    let scope_block = match validated.scope.as_deref() {
+        Some(scope) => {
+            let items = scope
+                .split_whitespace()
+                .map(|s| format!("<li><code>{}</code></li>", html_escape::encode_text(s)))
+                .collect::<String>();
+            format!(
+                r#"<div class="detail"><span class="detail-label">Access requested</span><ul class="scopes">{}</ul></div>"#,
+                items
+            )
+        }
+        None => String::new(),
+    };
+
+    let resource_block = match validated.resource.as_deref() {
+        Some(resource) => format!(
+            r#"<div class="detail"><span class="detail-label">For</span><code>{}</code></div>"#,
+            html_escape::encode_text(resource)
+        ),
+        None => String::new(),
+    };
+
+    let hidden = |name: &str, value: &str| {
+        format!(
+            r#"<input type="hidden" name="{}" value="{}">"#,
+            name,
+            html_attribute(value)
+        )
+    };
+
+    let mut hidden_fields = String::new();
+    hidden_fields.push_str(&hidden("csrf_token", csrf_token));
+    hidden_fields.push_str(&hidden("response_type", "code"));
+    hidden_fields.push_str(&hidden("client_id", &validated.client.client_id));
+    hidden_fields.push_str(&hidden("redirect_uri", &validated.redirect_uri));
+    hidden_fields.push_str(&hidden("code_challenge", &validated.code_challenge));
+    hidden_fields.push_str(&hidden("code_challenge_method", "S256"));
+    if let Some(scope) = validated.scope.as_deref() {
+        hidden_fields.push_str(&hidden("scope", scope));
+    }
+    if let Some(state) = validated.state.as_deref() {
+        hidden_fields.push_str(&hidden("state", state));
+    }
+    if let Some(resource) = validated.resource.as_deref() {
+        hidden_fields.push_str(&hidden("resource", resource));
+    }
+
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Authorize {client_title}</title>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <style nonce="{style_nonce}">
+        body {{
+            margin: 0;
+            padding: 1rem;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            font-size: 14px;
+            line-height: 1.5;
+            color: #212529;
+            background: #f8f9fa;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }}
+
+        .card {{
+            width: 100%;
+            max-width: 440px;
+            background: #ffffff;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
+            padding: 2rem;
+        }}
+
+        h1 {{
+            margin: 0 0 0.5rem 0;
+            font-size: 1.4rem;
+            text-align: center;
+        }}
+
+        .who {{
+            margin: 0 0 1.5rem 0;
+            color: #6c757d;
+            text-align: center;
+        }}
+
+        .detail {{
+            padding: 0.75rem 0;
+            border-top: 1px solid #e9ecef;
+        }}
+
+        .detail-label {{
+            display: block;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #6c757d;
+            margin-bottom: 0.25rem;
+        }}
+
+        code {{
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 0.85rem;
+            word-break: break-all;
+        }}
+
+        .scopes {{
+            margin: 0;
+            padding-left: 1.25rem;
+        }}
+
+        .warning {{
+            margin: 1rem 0 0;
+            padding: 0.6rem 0.75rem;
+            border: 1px solid #ffe08a;
+            border-radius: 6px;
+            background: #fff9e6;
+            color: #664d03;
+            font-size: 0.9rem;
+        }}
+
+        .actions {{
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 1.5rem;
+        }}
+
+        button {{
+            flex: 1;
+            padding: 0.75rem 1rem;
+            border-radius: 6px;
+            font-weight: 500;
+            font-size: 1rem;
+            cursor: pointer;
+            border: 1px solid transparent;
+        }}
+
+        .allow {{
+            background-color: #0d6efd;
+            color: #ffffff;
+        }}
+
+        .allow:hover {{
+            background-color: #0b5ed7;
+        }}
+
+        .deny {{
+            background-color: #ffffff;
+            color: #212529;
+            border-color: #ced4da;
+        }}
+
+        .deny:hover {{
+            background-color: #f1f3f5;
+        }}
+
+        button:focus-visible {{
+            outline: 2px solid #0d6efd;
+            outline-offset: 2px;
+        }}
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>Authorize {client_title}</h1>
+        <p class="who">Signed in as {user_label}</p>
+
+        <div class="detail">
+            <span class="detail-label">Application</span>
+            <strong>{client_title}</strong>
+        </div>
+        <div class="detail">
+            <span class="detail-label">Will be sent to</span>
+            <code>{redirect_uri}</code>
+        </div>
+        {scope_block}
+        {resource_block}
+
+        <p class="warning">Anyone can register an application with this engine. Approve this only if you started it yourself and recognise where it sends you.</p>
+
+        <form method="post" action="{consent_path}">
+            {hidden_fields}
+            <div class="actions">
+                <button type="submit" class="deny" name="decision" value="deny">Cancel</button>
+                <button type="submit" class="allow" name="decision" value="allow">Allow</button>
+            </div>
+        </form>
+    </div>
+</body>
+</html>"#,
+        client_title = html_escape::encode_text(validated.client.display_name()),
+        user_label = html_escape::encode_text(user_label),
+        redirect_uri = html_escape::encode_text(&validated.redirect_uri),
+        style_nonce = html_attribute(&nonce),
+        scope_block = scope_block,
+        resource_block = resource_block,
+        consent_path = CONSENT_PATH,
+        hidden_fields = hidden_fields,
+    );
+
+    html_page_response(html, &nonce)
+}
+
 /// OAuth 2.0 authorization endpoint
-/// This endpoint handles authorization requests from OAuth clients
+///
+/// Refuses anything it cannot account for: a `client_id` that was never
+/// registered, a `redirect_uri` that client did not register, a request with no
+/// PKCE challenge, and a `resource` naming somewhere this host does not serve.
+/// What survives that is shown to the person it would act for, and only their
+/// approval produces a code.
 #[utoipa::path(
     get,
     path = "/auth/oauth2/authorize",
     tags = ["Authentication"],
     params(
         ("response_type" = String, Query, description = "Must be 'code' for authorization code flow"),
-        ("client_id" = String, Query, description = "Client identifier"),
-        ("redirect_uri" = Option<String>, Query, description = "Redirection URI where the response will be sent"),
+        ("client_id" = String, Query, description = "Identifier of a registered client"),
+        ("redirect_uri" = String, Query, description = "Must exactly match a URI the client registered"),
         ("scope" = Option<String>, Query, description = "Requested scope"),
-        ("state" = Option<String>, Query, description = "Opaque value for CSRF protection"),
-        ("code_challenge" = Option<String>, Query, description = "PKCE code challenge (RFC 7636)"),
-        ("code_challenge_method" = Option<String>, Query, description = "PKCE code challenge method (S256 or plain)"),
-        ("resource" = Option<String>, Query, description = "Resource indicator (RFC 8707)")
+        ("state" = Option<String>, Query, description = "Opaque value returned with the code"),
+        ("code_challenge" = String, Query, description = "PKCE code challenge (RFC 7636); required"),
+        ("code_challenge_method" = String, Query, description = "Must be S256"),
+        ("resource" = Option<String>, Query, description = "Resource indicator (RFC 8707); must name this host")
     ),
     responses(
-        (status = 200, description = "Authorization granted, returns HTML with redirect to client", content_type = "text/html"),
+        (status = 200, description = "Consent page, or an HTML redirect back to the client", content_type = "text/html"),
         (status = 302, description = "Redirect to login if not authenticated"),
-        (status = 400, description = "Invalid authorization request", body = crate::openapi_schemas::ErrorResponse),
+        (status = 400, description = "Unknown client, unregistered redirect URI, or invalid request", body = crate::openapi_schemas::ErrorResponse),
     )
 )]
 pub async fn oauth2_authorize(
@@ -1619,170 +2296,210 @@ pub async fn oauth2_authorize(
     Query(params): Query<AuthorizeParams>,
     req: axum::extract::Request,
 ) -> Response {
-    // Check if user is already authenticated via middleware
-    let auth_user = req.extensions().get::<crate::auth::AuthUser>().cloned();
-    let is_authenticated = auth_user.is_some();
-    // Validate response_type
-    if params.response_type != "code" {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "unsupported_response_type".to_string(),
-                message: "Only 'code' response type is supported".to_string(),
-            }),
-        )
-            .into_response();
-    }
+    let host = get_request_host(req.headers());
 
-    // Validate client_id (basic validation - in production, check against registered clients)
-    if params.client_id.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "invalid_request".to_string(),
-                message: "Missing client_id parameter".to_string(),
-            }),
-        )
-            .into_response();
-    }
+    // Validated before authentication is considered, so a request that would be
+    // refused anyway does not first cost someone a sign-in.
+    let validated =
+        match validate_authorize_request(&oauth2_state.pool, &params, host.as_deref()).await {
+            Ok(validated) => validated,
+            Err(rejection) => return rejection.into_response(),
+        };
 
-    // If not authenticated, redirect to login with return URL
-    if !is_authenticated {
+    let Some(auth_user) = req.extensions().get::<crate::auth::AuthUser>().cloned() else {
         let return_url = authorize_return_url(&params);
-        let encoded_return = urlencoding::encode(&return_url);
-
-        return Redirect::to(&format!("/auth/login?redirect={}", encoded_return)).into_response();
-    }
-
-    // TODO: In a complete implementation:
-    // 1. Validate the client_id against registered clients
-    // 2. Validate redirect_uri matches registered URIs
-    // 3. Show consent screen if needed
-
-    // For MCP: Generate authorization code and redirect back to client
-    // Since we don't have client validation yet, we'll accept any client_id for development
-
-    // Get authenticated user ID — middleware guarantees authentication before reaching here,
-    // but we handle the None case defensively to avoid panicking.
-    let user_id = match auth_user.as_ref().map(|u| u.user_id.clone()) {
-        Some(id) => id,
-        None => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorResponse {
-                    error: "authentication_required".to_string(),
-                    message: "User must be authenticated".to_string(),
-                }),
-            )
-                .into_response();
-        }
+        return Redirect::to(&format!(
+            "/auth/login?redirect={}",
+            urlencoding::encode(&return_url)
+        ))
+        .into_response();
     };
 
-    // Generate a random authorization code
-    let auth_code = format!("code_{}", uuid::Uuid::new_v4());
-
-    // Store the authorization code with associated data
-    let expires_at = Utc::now() + chrono::Duration::minutes(10); // 10 minute expiry
-
-    let result = sqlx::query(
-        "INSERT INTO oauth_authorization_codes (code, user_id, client_id, redirect_uri, code_challenge, code_challenge_method, scope, resource, expires_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
-    )
-    .bind(&auth_code)
-    .bind(&user_id)
-    .bind(&params.client_id)
-    .bind(params.redirect_uri.clone().unwrap_or_default())
-    .bind(&params.code_challenge)
-    .bind(&params.code_challenge_method)
-    .bind(&params.scope)
-    .bind(&params.resource)
-    .bind(expires_at)
-    .execute(&oauth2_state.pool)
-    .await;
-
-    if let Err(e) = result {
-        tracing::error!("Failed to store authorization code: {}", e);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: "server_error".to_string(),
-                message: "Failed to generate authorization code".to_string(),
-            }),
-        )
+    match consent_already_given(&oauth2_state.pool, &auth_user.user_id, &validated).await {
+        Ok(true) => {}
+        Ok(false) => {
+            // Bound to the user, so a token minted for anyone else — including
+            // one an attacker fetched from their own server — cannot be posted
+            // back as this person's approval.
+            let csrf_token = oauth2_state
+                .auth_manager
+                .security_context()
+                .csrf
+                .generate_token(Some(auth_user.user_id.clone()))
+                .await
+                .token;
+            let label = user_label_for(&auth_user);
+            return render_consent_page(&validated, &csrf_token, &label);
+        }
+        Err(e) => {
+            tracing::error!("Could not read stored consent: {}", e);
+            return AuthorizeRejection::Redirect {
+                redirect_uri: validated.redirect_uri.clone(),
+                state: validated.state.clone(),
+                error: "server_error",
+                description: "Could not read stored consent".to_string(),
+            }
             .into_response();
+        }
     }
 
-    tracing::info!("Stored authorization code for user: {}", user_id);
+    issue_authorization_code(&oauth2_state.pool, &auth_user.user_id, &validated).await
+}
 
-    // Build redirect URI with code
-    let redirect_uri = match params.redirect_uri.as_ref() {
-        Some(uri) => {
-            tracing::info!("Authorization complete, redirect_uri from client: {}", uri);
-            uri
+/// How to name the signed-in person on the consent page.
+fn user_label_for(auth_user: &crate::auth::AuthUser) -> String {
+    auth_user
+        .email
+        .clone()
+        .or_else(|| auth_user.name.clone())
+        .unwrap_or_else(|| auth_user.user_id.clone())
+}
+
+/// The consent form's fields: the authorization request, plus the answer.
+#[derive(Debug, Default, Deserialize)]
+pub struct ConsentForm {
+    #[serde(default)]
+    csrf_token: String,
+    #[serde(default)]
+    decision: String,
+    #[serde(default)]
+    response_type: String,
+    #[serde(default)]
+    client_id: String,
+    #[serde(default)]
+    redirect_uri: Option<String>,
+    #[serde(default)]
+    scope: Option<String>,
+    #[serde(default)]
+    state: Option<String>,
+    #[serde(default)]
+    code_challenge: Option<String>,
+    #[serde(default)]
+    code_challenge_method: Option<String>,
+    #[serde(default)]
+    resource: Option<String>,
+}
+
+impl ConsentForm {
+    /// The authorization request this form carries, so it can be re-validated
+    /// rather than believed.
+    fn to_params(&self) -> AuthorizeParams {
+        AuthorizeParams {
+            response_type: self.response_type.clone(),
+            client_id: self.client_id.clone(),
+            redirect_uri: self.redirect_uri.clone(),
+            scope: self.scope.clone(),
+            state: self.state.clone(),
+            code_challenge: self.code_challenge.clone(),
+            code_challenge_method: self.code_challenge_method.clone(),
+            resource: self.resource.clone(),
         }
-        None => {
+    }
+}
+
+/// Act on the answer to a consent page.
+///
+/// Everything the form carries is re-validated here. The form is a
+/// caller-supplied body like any other, and the only thing it is trusted for is
+/// the answer itself — which is why it must carry a CSRF token: without one,
+/// the page that could not get a code by navigation could get one by posting
+/// this form instead.
+#[utoipa::path(
+    post,
+    path = "/auth/oauth2/consent",
+    tags = ["Authentication"],
+    responses(
+        (status = 200, description = "HTML redirect back to the client, with a code or an error", content_type = "text/html"),
+        (status = 400, description = "Invalid request or CSRF token", body = crate::openapi_schemas::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_schemas::ErrorResponse),
+    )
+)]
+pub async fn oauth2_consent(
+    State(oauth2_state): State<OAuth2State>,
+    req: axum::extract::Request,
+) -> Response {
+    let auth_user = req.extensions().get::<crate::auth::AuthUser>().cloned();
+    let (parts, body) = req.into_parts();
+
+    let bytes = match axum::body::to_bytes(body, MAX_CONSENT_BODY_BYTES).await {
+        Ok(bytes) => bytes,
+        Err(_) => {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
                     error: "invalid_request".to_string(),
-                    message: "redirect_uri is required".to_string(),
+                    message: "Could not read the consent form".to_string(),
                 }),
             )
                 .into_response();
         }
     };
 
-    // Build the redirect URL with code and state parameters
-    // Handle both http(s) URLs and custom schemes like vscode://
-    let redirect_with_code = if redirect_uri.contains('?') {
-        // URL already has query parameters, append with &
-        format!("{}&code={}", redirect_uri, urlencoding::encode(&auth_code))
-    } else {
-        // No existing query parameters, start with ?
-        format!("{}?code={}", redirect_uri, urlencoding::encode(&auth_code))
-    };
+    let form: ConsentForm = serde_urlencoded::from_bytes(&bytes).unwrap_or_default();
 
-    let final_redirect = if let Some(ref state) = params.state {
-        format!(
-            "{}&state={}",
-            redirect_with_code,
-            urlencoding::encode(state)
+    let Some(auth_user) = auth_user else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorResponse {
+                error: "authentication_required".to_string(),
+                message: "User must be authenticated".to_string(),
+            }),
         )
-    } else {
-        redirect_with_code
+            .into_response();
     };
 
-    tracing::info!(
-        "Redirecting to client with authorization code: {}",
-        final_redirect
-    );
+    // A form, so it needs a token — and one issued to this user, on the consent
+    // page this engine rendered for them. An unbound token would not do: those
+    // can be collected from the sign-in page by anyone, with no browser and no
+    // account, which would leave nothing here but the cookie's `SameSite=Lax`.
+    if oauth2_state
+        .auth_manager
+        .security_context()
+        .csrf
+        .validate_token_for(&form.csrf_token, &auth_user.user_id)
+        .await
+        .is_err()
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "invalid_request".to_string(),
+                message: "Missing or invalid CSRF token".to_string(),
+            }),
+        )
+            .into_response();
+    }
 
-    // Return HTML with meta refresh for custom schemes like vscode://
-    // because Redirect::to() doesn't work well with custom URI schemes
-    // Use serde_json to safely encode the URL for JavaScript
-    let js_redirect = serde_json::to_string(&final_redirect)
-        .unwrap_or_else(|_| format!("\"{}\"", final_redirect));
+    let params = form.to_params();
+    let host = get_request_host(&parts.headers);
+    let validated =
+        match validate_authorize_request(&oauth2_state.pool, &params, host.as_deref()).await {
+            Ok(validated) => validated,
+            Err(rejection) => return rejection.into_response(),
+        };
 
-    let nonce = crate::security::generate_nonce();
-    let html = format!(
-        r#"<!DOCTYPE html>
-<html>
-<head>
-    <meta http-equiv="refresh" content="0;url={}" />
-    <title>Redirecting...</title>
-</head>
-<body>
-    <p>Redirecting to application... If you are not redirected, <a href="{}">click here</a>.</p>
-    <script nonce="{}">window.location.href = {};</script>
-</body>
-</html>"#,
-        html_escape::encode_text(&final_redirect),
-        html_escape::encode_text(&final_redirect),
-        html_attribute(&nonce),
-        js_redirect
-    );
+    if form.decision != "allow" {
+        return AuthorizeRejection::Redirect {
+            redirect_uri: validated.redirect_uri.clone(),
+            state: validated.state.clone(),
+            error: "access_denied",
+            description: "The request was declined".to_string(),
+        }
+        .into_response();
+    }
 
-    html_page_response(html, &nonce)
+    if let Err(e) = record_consent(&oauth2_state.pool, &auth_user.user_id, &validated).await {
+        tracing::error!("Could not record consent: {}", e);
+        return AuthorizeRejection::Redirect {
+            redirect_uri: validated.redirect_uri.clone(),
+            state: validated.state.clone(),
+            error: "server_error",
+            description: "Could not record the approval".to_string(),
+        }
+        .into_response();
+    }
+
+    issue_authorization_code(&oauth2_state.pool, &auth_user.user_id, &validated).await
 }
 
 /// OAuth 2.0 token request parameters (RFC 6749)
@@ -1810,6 +2527,95 @@ pub struct TokenParams {
     /// Client identifier
     #[serde(default)]
     client_id: Option<String>,
+
+    /// Client secret, for a confidential client that authenticates in the body
+    /// rather than with an `Authorization: Basic` header.
+    #[serde(default)]
+    client_secret: Option<String>,
+}
+
+/// Client credentials presented at the token endpoint.
+///
+/// RFC 6749 §2.3.1 puts them in an `Authorization: Basic` header and permits
+/// the request body as an alternative; both are read, and the header wins when
+/// a client sends both. A public client presents an identifier and no secret,
+/// which is the normal case here — every MCP client that registers dynamically
+/// is one.
+fn client_credentials(
+    headers: &HeaderMap,
+    params: &TokenParams,
+) -> (Option<String>, Option<String>) {
+    if let Some(encoded) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| {
+            let mut parts = value.splitn(2, ' ');
+            let scheme = parts.next().unwrap_or_default();
+            scheme
+                .eq_ignore_ascii_case("basic")
+                .then(|| parts.next().unwrap_or_default().trim())
+        })
+    {
+        use base64::Engine;
+        if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(encoded)
+            && let Ok(decoded) = String::from_utf8(decoded)
+            && let Some((id, secret)) = decoded.split_once(':')
+        {
+            // Both halves are form-urlencoded before being base64'd.
+            let decode = |value: &str| {
+                urlencoding::decode(value)
+                    .map(|decoded| decoded.into_owned())
+                    .unwrap_or_else(|_| value.to_string())
+            };
+            return (Some(decode(id)), Some(decode(secret)));
+        }
+    }
+
+    (
+        params
+            .client_id
+            .clone()
+            .filter(|value| !value.trim().is_empty()),
+        params
+            .client_secret
+            .clone()
+            .filter(|value| !value.is_empty()),
+    )
+}
+
+/// Whether a PKCE verifier matches the challenge its code was issued with.
+///
+/// S256 only. `plain` is permitted by RFC 7636 and is worth nothing here: the
+/// challenge travels in the same query string the verifier would, so anyone
+/// able to read one can read the other.
+fn pkce_verifier_matches(verifier: &str, challenge: &str, method: Option<&str>) -> bool {
+    if method != Some("S256") {
+        return false;
+    }
+
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+    let computed = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(Sha256::digest(verifier.as_bytes()));
+
+    computed.len() == challenge.len()
+        && computed
+            .bytes()
+            .zip(challenge.bytes())
+            .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+            == 0
+}
+
+/// An OAuth2 error response, in the shape RFC 6749 §5.2 asks for.
+fn oauth_error(status: StatusCode, error: &str, message: &str) -> Response {
+    (
+        status,
+        Json(ErrorResponse {
+            error: error.to_string(),
+            message: message.to_string(),
+        }),
+    )
+        .into_response()
 }
 
 /// OAuth 2.0 token response
@@ -1882,6 +2688,68 @@ pub async fn oauth2_token(
     };
 
     tracing::info!("Exchanging code: {}", code);
+
+    // Who is redeeming this? Established before the code is consumed, so a
+    // client that fails authentication does not burn a code a legitimate one
+    // was about to present.
+    let (presented_client_id, presented_secret) = client_credentials(&headers, &params);
+    let Some(presented_client_id) = presented_client_id else {
+        return oauth_error(
+            StatusCode::UNAUTHORIZED,
+            "invalid_client",
+            "client_id is required",
+        );
+    };
+
+    let client = match crate::auth::client_registration::lookup_client(
+        &oauth2_state.pool,
+        &presented_client_id,
+    )
+    .await
+    {
+        Ok(Some(client)) => client,
+        Ok(None) => {
+            return oauth_error(
+                StatusCode::UNAUTHORIZED,
+                "invalid_client",
+                "Unknown client_id",
+            );
+        }
+        Err(e) => {
+            tracing::error!("Client lookup failed: {}", e);
+            return oauth_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Could not read the client registry",
+            );
+        }
+    };
+
+    // A confidential client proves it is itself. A public client holds no
+    // secret to prove anything with, which is what PKCE below stands in for.
+    if let Some(expected_hash) = client.client_secret_hash.as_deref() {
+        if let Some(expires_at) = client.client_secret_expires_at
+            && expires_at <= Utc::now()
+        {
+            return oauth_error(
+                StatusCode::UNAUTHORIZED,
+                "invalid_client",
+                "Client secret has expired",
+            );
+        }
+
+        let presented_secret = presented_secret.unwrap_or_default();
+        if !crate::auth::client_registration::client_secret_matches(
+            &presented_secret,
+            expected_hash,
+        ) {
+            return oauth_error(
+                StatusCode::UNAUTHORIZED,
+                "invalid_client",
+                "Client authentication failed",
+            );
+        }
+    }
 
     // Retrieve and validate the authorization code
     let mut tx = match oauth2_state.pool.begin().await {
@@ -1962,58 +2830,63 @@ pub async fn oauth2_token(
             .into_response();
     }
 
-    // Verify redirect_uri matches
-    if let Some(ref redirect_uri) = params.redirect_uri
-        && redirect_uri != &code_data.redirect_uri
-    {
-        return (
+    // The code belongs to the client it was issued to. Without this, a code
+    // intercepted from one client is redeemable by any other that can reach
+    // this endpoint.
+    if code_data.client_id != presented_client_id {
+        return oauth_error(
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "invalid_grant".to_string(),
-                message: "redirect_uri does not match authorization request".to_string(),
-            }),
-        )
-            .into_response();
+            "invalid_grant",
+            "Authorization code was not issued to this client",
+        );
     }
 
-    // Verify PKCE code_verifier if code_challenge was provided
-    if let Some(ref challenge) = code_data.code_challenge {
-        match params.code_verifier.as_ref() {
-            Some(verifier) => {
-                // Verify the code_verifier against code_challenge
-                let computed_challenge =
-                    if code_data.code_challenge_method.as_deref() == Some("S256") {
-                        use base64::Engine;
-                        use sha2::{Digest, Sha256};
-                        let hash = Sha256::digest(verifier.as_bytes());
-                        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hash)
-                    } else {
-                        // plain method
-                        verifier.clone()
-                    };
+    // Exact match, and required rather than checked only when offered: a
+    // redirect URI the client declines to repeat is one it cannot be held to.
+    let presented_redirect = params
+        .redirect_uri
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default();
+    if presented_redirect != code_data.redirect_uri {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_grant",
+            "redirect_uri does not match the authorization request",
+        );
+    }
 
-                if &computed_challenge != challenge {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Json(ErrorResponse {
-                            error: "invalid_grant".to_string(),
-                            message: "PKCE verification failed".to_string(),
-                        }),
-                    )
-                        .into_response();
-                }
-            }
-            None => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(ErrorResponse {
-                        error: "invalid_request".to_string(),
-                        message: "code_verifier required for PKCE".to_string(),
-                    }),
-                )
-                    .into_response();
-            }
-        }
+    // PKCE, unconditionally. Verifying a challenge only when one happened to be
+    // stored is what made it optional: a caller who sent none was never asked
+    // for a verifier, so the code alone was enough. The authorization endpoint
+    // now requires a challenge, and a stored code without one predates that and
+    // is refused rather than waved through.
+    let Some(challenge) = code_data.code_challenge.as_deref() else {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_grant",
+            "Authorization code was issued without PKCE and cannot be redeemed",
+        );
+    };
+
+    let Some(verifier) = params.code_verifier.as_deref().filter(|v| !v.is_empty()) else {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "code_verifier is required",
+        );
+    };
+
+    if !pkce_verifier_matches(
+        verifier,
+        challenge,
+        code_data.code_challenge_method.as_deref(),
+    ) {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_grant",
+            "PKCE verification failed",
+        );
     }
 
     // Create a session for the user
@@ -2323,6 +3196,7 @@ pub fn create_oauth2_router(
         // Under the reserved /auth prefix, and advertised in the authorization
         // server metadata. Clients discover these per RFC 8414.
         .route(AUTHORIZE_PATH, get(oauth2_authorize))
+        .route(CONSENT_PATH, post(oauth2_consent))
         .route(TOKEN_PATH, post(oauth2_token))
         .layer(cors)
         .with_state(oauth2_state);
@@ -2495,5 +3369,439 @@ mod tests {
     fn test_safe_redirect_target_defaults_to_root() {
         assert_eq!(safe_redirect_target(None), "/");
         assert_eq!(safe_redirect_target(Some("")), "/");
+    }
+
+    // ---- The authorization endpoint's gate ----
+    //
+    // These cover the finding this endpoint was rebuilt for: it validated
+    // `response_type`, checked that `client_id` was non-empty, and stopped.
+    // Any site could navigate a signed-in browser to it and be handed an
+    // authorization code redirected wherever it asked.
+
+    use crate::auth::client_registration::{ClientRegistrationManager, ClientRegistrationRequest};
+    use crate::hosts::HostConfig;
+
+    fn test_pool() -> PgPool {
+        PgPool::connect_lazy("postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine")
+            .expect("lazy pool should be constructible")
+    }
+
+    /// Register a public client with one redirect URI, the way an MCP client
+    /// does, and return its identifier.
+    async fn register_test_client(redirect_uris: Vec<String>) -> String {
+        let manager = ClientRegistrationManager::new(90, test_pool());
+        let response = manager
+            .register_client(ClientRegistrationRequest {
+                redirect_uris,
+                client_name: Some("Test Client".to_string()),
+                logo_uri: None,
+                client_uri: None,
+                contacts: None,
+                tos_uri: None,
+                policy_uri: None,
+                token_endpoint_auth_method: Some("none".to_string()),
+                grant_types: vec!["authorization_code".to_string()],
+                response_types: vec!["code".to_string()],
+                scope: None,
+            })
+            .await
+            .expect("registration should succeed");
+        response.client_id
+    }
+
+    /// A challenge of the shape a real S256 client sends: base64url of a
+    /// 32-byte digest, so 43 characters.
+    fn valid_challenge() -> String {
+        "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM".to_string()
+    }
+
+    fn valid_params(client_id: &str, redirect_uri: &str) -> AuthorizeParams {
+        AuthorizeParams {
+            response_type: "code".to_string(),
+            client_id: client_id.to_string(),
+            redirect_uri: Some(redirect_uri.to_string()),
+            scope: None,
+            state: Some("opaque-state".to_string()),
+            code_challenge: Some(valid_challenge()),
+            code_challenge_method: Some("S256".to_string()),
+            resource: None,
+        }
+    }
+
+    fn rejection_error(rejection: &AuthorizeRejection) -> &str {
+        match rejection {
+            AuthorizeRejection::Direct { error, .. } => error,
+            AuthorizeRejection::Redirect { error, .. } => error,
+        }
+    }
+
+    fn is_direct(rejection: &AuthorizeRejection) -> bool {
+        matches!(rejection, AuthorizeRejection::Direct { .. })
+    }
+
+    #[tokio::test]
+    async fn a_client_id_that_was_never_registered_is_refused() {
+        let pool = test_pool();
+        let params = valid_params("client_never-registered", "https://example.com/cb");
+
+        let rejection = validate_authorize_request(&pool, &params, None)
+            .await
+            .expect_err("an unregistered client must not reach the consent page");
+
+        assert_eq!(rejection_error(&rejection), "invalid_client");
+        assert!(
+            is_direct(&rejection),
+            "the answer must go to the browser, never to a redirect URI no client registered"
+        );
+    }
+
+    /// The heart of it. A client exists, but the request names a redirect URI
+    /// that client never registered — which is how an authorization code ends
+    /// up at an attacker's server.
+    #[tokio::test]
+    async fn a_redirect_uri_the_client_did_not_register_is_refused() {
+        let client_id =
+            register_test_client(vec!["http://127.0.0.1:6274/callback".to_string()]).await;
+        let pool = test_pool();
+        let params = valid_params(&client_id, "https://attacker.example/cb");
+
+        let rejection = validate_authorize_request(&pool, &params, None)
+            .await
+            .expect_err("an unregistered redirect URI must be refused");
+
+        assert_eq!(rejection_error(&rejection), "invalid_request");
+        assert!(
+            is_direct(&rejection),
+            "refusing by redirecting to the unregistered URI would tell it what it wanted to know"
+        );
+    }
+
+    /// Simple string comparison, per RFC 6749 §3.1.2.3. A URI that differs by a
+    /// trailing slash, a case-folded path, or an extra segment is a different
+    /// URI, and normalising before comparing is how an allowlist develops
+    /// holes.
+    #[tokio::test]
+    async fn redirect_uri_matching_is_exact() {
+        let registered = "http://127.0.0.1:6274/callback";
+        let client_id = register_test_client(vec![registered.to_string()]).await;
+        let pool = test_pool();
+
+        for near_miss in [
+            "http://127.0.0.1:6274/callback/",
+            "http://127.0.0.1:6274/Callback",
+            "http://127.0.0.1:6274/callback/../callback",
+            "http://127.0.0.1:6274/callback?next=https://attacker.example",
+            "https://127.0.0.1:6274/callback",
+        ] {
+            let params = valid_params(&client_id, near_miss);
+            assert!(
+                validate_authorize_request(&pool, &params, None)
+                    .await
+                    .is_err(),
+                "{:?} is not the registered URI and must be refused",
+                near_miss
+            );
+        }
+
+        let params = valid_params(&client_id, registered);
+        assert!(
+            validate_authorize_request(&pool, &params, None)
+                .await
+                .is_ok(),
+            "the registered URI itself must still work"
+        );
+    }
+
+    /// PKCE was verified only when a challenge happened to have been stored, so
+    /// a caller who sent none was never asked for a verifier.
+    #[tokio::test]
+    async fn a_request_without_a_code_challenge_is_refused() {
+        let redirect = "http://127.0.0.1:6274/callback";
+        let client_id = register_test_client(vec![redirect.to_string()]).await;
+        let pool = test_pool();
+
+        let mut params = valid_params(&client_id, redirect);
+        params.code_challenge = None;
+
+        let rejection = validate_authorize_request(&pool, &params, None)
+            .await
+            .expect_err("PKCE is required, not optional");
+
+        assert_eq!(rejection_error(&rejection), "invalid_request");
+        assert!(
+            !is_direct(&rejection),
+            "the client and its redirect URI checked out, so this error is the client's to handle"
+        );
+    }
+
+    #[tokio::test]
+    async fn plain_pkce_is_refused() {
+        let redirect = "http://127.0.0.1:6274/callback";
+        let client_id = register_test_client(vec![redirect.to_string()]).await;
+        let pool = test_pool();
+
+        let mut params = valid_params(&client_id, redirect);
+        params.code_challenge_method = Some("plain".to_string());
+
+        assert!(
+            validate_authorize_request(&pool, &params, None)
+                .await
+                .is_err(),
+            "a plain challenge travels in the same query string as the verifier would"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_client_without_the_authorization_code_grant_is_refused() {
+        let redirect = "http://127.0.0.1:6274/callback";
+        let manager = ClientRegistrationManager::new(90, test_pool());
+        let client_id = manager
+            .register_client(ClientRegistrationRequest {
+                redirect_uris: vec![redirect.to_string()],
+                client_name: Some("Refresh Only".to_string()),
+                logo_uri: None,
+                client_uri: None,
+                contacts: None,
+                tos_uri: None,
+                policy_uri: None,
+                token_endpoint_auth_method: Some("none".to_string()),
+                grant_types: vec!["refresh_token".to_string()],
+                response_types: vec!["code".to_string()],
+                scope: None,
+            })
+            .await
+            .expect("registration should succeed")
+            .client_id;
+
+        let pool = test_pool();
+        let params = valid_params(&client_id, redirect);
+
+        let rejection = validate_authorize_request(&pool, &params, None)
+            .await
+            .expect_err("a client that did not register this grant cannot use it");
+        assert_eq!(rejection_error(&rejection), "unauthorized_client");
+    }
+
+    // ---- Resource indicators ----
+
+    /// The token endpoint copies `resource` onto the session's audience
+    /// verbatim, so an unchecked one makes the audience mean nothing.
+    #[test]
+    fn a_resource_must_name_the_host_the_authorization_is_happening_on() {
+        let hosts = HostConfig::new(
+            "https://game.example.com",
+            &["https://manage.example.com".to_string()],
+        );
+
+        assert!(
+            resource_is_acceptable_for(
+                "https://game.example.com/mcp",
+                Some("game.example.com"),
+                &hosts
+            ),
+            "the host the flow is running on is the one it may mint tokens for"
+        );
+
+        assert!(
+            !resource_is_acceptable_for(
+                "https://manage.example.com/mcp",
+                Some("game.example.com"),
+                &hosts
+            ),
+            "a sign-in on a solution host must not hand out a management-host credential"
+        );
+
+        assert!(
+            !resource_is_acceptable_for(
+                "https://attacker.example/mcp",
+                Some("game.example.com"),
+                &hosts
+            ),
+            "a resource this engine does not serve names nothing"
+        );
+
+        assert!(
+            !resource_is_acceptable_for("", Some("game.example.com"), &hosts),
+            "an empty resource names nothing either"
+        );
+    }
+
+    /// A deployment that never set a base URL has nothing to check against, and
+    /// refusing everything would leave it unable to issue any token at all.
+    #[test]
+    fn an_unconfigured_engine_accepts_any_resource() {
+        let hosts = HostConfig::default();
+        assert!(resource_is_acceptable_for(
+            "https://anything.example/mcp",
+            None,
+            &hosts
+        ));
+    }
+
+    // ---- Challenge and verifier shapes ----
+
+    #[test]
+    fn code_challenge_shapes_are_checked() {
+        assert!(code_challenge_is_wellformed(&valid_challenge()));
+        assert!(
+            !code_challenge_is_wellformed("too-short"),
+            "below the RFC 7636 floor of 43"
+        );
+        assert!(
+            !code_challenge_is_wellformed(&"a".repeat(129)),
+            "above the RFC 7636 ceiling of 128"
+        );
+        assert!(
+            !code_challenge_is_wellformed(&format!("{}+", &valid_challenge()[..42])),
+            "'+' is standard base64, not base64url"
+        );
+    }
+
+    #[test]
+    fn a_verifier_matches_only_its_own_challenge() {
+        // The worked example from RFC 7636 Appendix B.
+        let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+        let challenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
+
+        assert!(pkce_verifier_matches(verifier, challenge, Some("S256")));
+        assert!(!pkce_verifier_matches(
+            "something else",
+            challenge,
+            Some("S256")
+        ));
+        assert!(
+            !pkce_verifier_matches(challenge, challenge, Some("plain")),
+            "plain is refused even when the verifier equals the challenge"
+        );
+        assert!(
+            !pkce_verifier_matches(verifier, challenge, None),
+            "a code stored without a method cannot be verified"
+        );
+    }
+
+    // ---- Consent ----
+
+    #[test]
+    fn a_stored_grant_covers_only_what_it_named() {
+        assert!(scope_is_covered(Some("read write"), Some("read")));
+        assert!(scope_is_covered(Some("read write"), Some("read write")));
+        assert!(scope_is_covered(None, None));
+        assert!(
+            !scope_is_covered(None, Some("read")),
+            "a grant that named no scope covers no scope"
+        );
+        assert!(
+            !scope_is_covered(Some("read"), Some("read write")),
+            "widening must not happen without being seen"
+        );
+    }
+
+    /// Approving once means the client is not re-approved every time — but
+    /// asking for more than was approved sends the person back to the page.
+    #[tokio::test]
+    async fn consent_is_remembered_until_the_request_widens() {
+        let redirect = "http://127.0.0.1:6274/callback";
+        let client_id = register_test_client(vec![redirect.to_string()]).await;
+        let pool = test_pool();
+        let user_id = format!("consent-{}", uuid::Uuid::new_v4());
+
+        let mut params = valid_params(&client_id, redirect);
+        params.scope = Some("read".to_string());
+        let validated = validate_authorize_request(&pool, &params, None)
+            .await
+            .expect("a well-formed request should validate");
+
+        assert!(
+            !consent_already_given(&pool, &user_id, &validated)
+                .await
+                .expect("consent lookup should succeed"),
+            "a client nobody approved must be approved"
+        );
+
+        record_consent(&pool, &user_id, &validated)
+            .await
+            .expect("recording consent should succeed");
+
+        assert!(
+            consent_already_given(&pool, &user_id, &validated)
+                .await
+                .expect("consent lookup should succeed"),
+            "the same request again must not ask twice"
+        );
+
+        let mut wider = valid_params(&client_id, redirect);
+        wider.scope = Some("read write".to_string());
+        let wider = validate_authorize_request(&pool, &wider, None)
+            .await
+            .expect("a well-formed request should validate");
+
+        assert!(
+            !consent_already_given(&pool, &user_id, &wider)
+                .await
+                .expect("consent lookup should succeed"),
+            "asking for a scope nobody approved must go back to the consent page"
+        );
+
+        let _ = sqlx::query("DELETE FROM oauth_client_grants WHERE user_id = $1")
+            .bind(&user_id)
+            .execute(&pool)
+            .await;
+    }
+
+    // ---- Token endpoint client authentication ----
+
+    #[test]
+    fn client_credentials_are_read_from_a_basic_header_or_the_body() {
+        use base64::Engine;
+
+        let body_only = TokenParams {
+            grant_type: "authorization_code".to_string(),
+            code: None,
+            redirect_uri: None,
+            code_verifier: None,
+            refresh_token: None,
+            client_id: Some("from-body".to_string()),
+            client_secret: Some("body-secret".to_string()),
+        };
+        assert_eq!(
+            client_credentials(&HeaderMap::new(), &body_only),
+            (
+                Some("from-body".to_string()),
+                Some("body-secret".to_string())
+            )
+        );
+
+        let mut headers = HeaderMap::new();
+        let encoded = base64::engine::general_purpose::STANDARD.encode("from-header:header-secret");
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_str(&format!("Basic {}", encoded)).expect("valid header"),
+        );
+        assert_eq!(
+            client_credentials(&headers, &body_only),
+            (
+                Some("from-header".to_string()),
+                Some("header-secret".to_string())
+            ),
+            "RFC 6749 §2.3.1 prefers the header when both arrive"
+        );
+    }
+
+    #[test]
+    fn a_client_secret_matches_only_itself() {
+        use sha2::{Digest, Sha256};
+        let hash = hex::encode(Sha256::digest(b"the-secret"));
+
+        assert!(crate::auth::client_registration::client_secret_matches(
+            "the-secret",
+            &hash
+        ));
+        assert!(!crate::auth::client_registration::client_secret_matches(
+            "the-secre",
+            &hash
+        ));
+        assert!(!crate::auth::client_registration::client_secret_matches(
+            "", &hash
+        ));
     }
 }

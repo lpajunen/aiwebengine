@@ -2322,13 +2322,17 @@ async fn setup_routes(
         let metadata_config = Arc::new(auth::MetadataConfig::new(
             &config.server.all_base_urls(),
             true, // enable_registration
-            true, // require_pkce
             true, // resource_indicators_supported
         ));
 
-        let registration_manager = Arc::new(auth::ClientRegistrationManager::new(90)); // 90 day secret expiry
-
         let pool = pool.expect("Database pool required when auth is enabled");
+
+        // Registered clients are stored, because the authorization endpoint
+        // checks every `client_id` and `redirect_uri` against them.
+        let registration_manager = Arc::new(auth::ClientRegistrationManager::new(
+            90, // day secret expiry
+            pool.clone(),
+        ));
 
         let oauth2_router = auth::create_oauth2_router(
             metadata_config,

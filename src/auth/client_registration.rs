@@ -10,6 +10,7 @@ use axum::{
 };
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
+use sqlx::{PgPool, Row};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -114,10 +115,99 @@ pub struct RegisteredClient {
     pub created_at: DateTime<Utc>,
 }
 
+impl RegisteredClient {
+    /// Whether this client registered the exact redirect URI being asked for.
+    ///
+    /// Byte-for-byte comparison, deliberately. Normalising first — resolving
+    /// `.` segments, folding a trailing slash, lower-casing a path — is how a
+    /// redirect allowlist becomes a way to reach a URI the client never
+    /// registered, and RFC 6749 §3.1.2.3 asks for simple string comparison for
+    /// exactly that reason.
+    pub fn redirect_uri_registered(&self, redirect_uri: &str) -> bool {
+        self.metadata
+            .redirect_uris
+            .iter()
+            .any(|registered| registered == redirect_uri)
+    }
+
+    /// Whether this client is allowed to use a grant type at all.
+    pub fn allows_grant(&self, grant_type: &str) -> bool {
+        self.metadata.grant_types.iter().any(|g| g == grant_type)
+    }
+
+    /// A name to show a person on the consent page. Falls back to the
+    /// identifier, which is at least honest about there being nothing else.
+    pub fn display_name(&self) -> &str {
+        match self.metadata.client_name.as_deref() {
+            Some(name) if !name.trim().is_empty() => name,
+            _ => &self.client_id,
+        }
+    }
+}
+
+/// Whether a presented client secret matches the stored hash.
+///
+/// A free function rather than a method, because the token endpoint
+/// authenticates a client without holding a registration manager. Compared in
+/// constant time: the hash is not a password, but a comparison that returns
+/// early on the first differing byte is a habit worth not having.
+pub fn client_secret_matches(presented: &str, stored_hash: &str) -> bool {
+    let computed = hash_client_secret(presented);
+
+    computed.len() == stored_hash.len()
+        && computed
+            .bytes()
+            .zip(stored_hash.bytes())
+            .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+            == 0
+}
+
+/// Look up a client by the identifier an authorization request presented.
+///
+/// `Ok(None)` means no such client. The caller must treat that as a refusal
+/// rather than a reason to fall back on whatever the request supplied — the
+/// absence of this lookup is what let the authorization endpoint accept any
+/// `client_id` and redirect to any URI.
+pub async fn lookup_client(
+    pool: &PgPool,
+    client_id: &str,
+) -> Result<Option<RegisteredClient>, AuthError> {
+    let row = sqlx::query(
+        "SELECT client_id, client_secret_hash, client_secret_expires_at, metadata, created_at
+         FROM oauth_clients WHERE client_id = $1",
+    )
+    .bind(client_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| AuthError::Internal(format!("client lookup failed: {}", e)))?;
+
+    let Some(row) = row else {
+        return Ok(None);
+    };
+
+    let metadata: serde_json::Value = row
+        .try_get("metadata")
+        .map_err(|e| AuthError::Internal(format!("client row is malformed: {}", e)))?;
+    let metadata: RegisteredClientMetadata = serde_json::from_value(metadata)
+        .map_err(|e| AuthError::Internal(format!("client metadata is malformed: {}", e)))?;
+
+    Ok(Some(RegisteredClient {
+        client_id: row
+            .try_get("client_id")
+            .map_err(|e| AuthError::Internal(format!("client row is malformed: {}", e)))?,
+        client_secret_hash: row.try_get("client_secret_hash").ok(),
+        client_secret_expires_at: row.try_get("client_secret_expires_at").ok(),
+        metadata,
+        created_at: row
+            .try_get("created_at")
+            .map_err(|e| AuthError::Internal(format!("client row is malformed: {}", e)))?,
+    }))
+}
+
 /// Dynamic Client Registration Manager
 pub struct ClientRegistrationManager {
-    // TODO: Add database connection for persistent storage
     secret_expiry_days: i64,
+    pool: PgPool,
 }
 
 impl ClientRegistrationManager {
@@ -125,8 +215,14 @@ impl ClientRegistrationManager {
     ///
     /// # Arguments
     /// * `secret_expiry_days` - Number of days until client secrets expire (0 = never)
-    pub fn new(secret_expiry_days: i64) -> Self {
-        Self { secret_expiry_days }
+    /// * `pool` - Where registered clients are stored. Registration that does
+    ///   not persist is registration the authorization endpoint cannot check
+    ///   anything against.
+    pub fn new(secret_expiry_days: i64, pool: PgPool) -> Self {
+        Self {
+            secret_expiry_days,
+            pool,
+        }
     }
 
     /// Register a new OAuth2 client (RFC 7591 Section 3)
@@ -147,8 +243,8 @@ impl ClientRegistrationManager {
         let client_id = format!("client_{}", Uuid::new_v4());
 
         // Generate client_secret for confidential clients
-        let client_secret = self.generate_client_secret();
-        let client_secret_hash = self.hash_client_secret(&client_secret)?;
+        let client_secret = generate_client_secret();
+        let client_secret_hash = hash_client_secret(&client_secret);
 
         // Calculate expiration
         let (expires_at, expires_at_timestamp) = if self.secret_expiry_days > 0 {
@@ -191,20 +287,49 @@ impl ClientRegistrationManager {
             client_id_issued_at: Utc::now().timestamp(),
         };
 
-        // TODO: Store in database
-        let _registered_client = RegisteredClient {
-            client_id: client_id.clone(),
-            client_secret_hash: Some(client_secret_hash),
-            client_secret_expires_at: expires_at,
-            metadata: metadata.clone(),
-            created_at: Utc::now(),
+        // A public client holds no secret. Storing one anyway would be a
+        // credential nobody can present and nothing checks, and handing it back
+        // invites a client to treat itself as confidential when it is not.
+        let is_public = metadata.token_endpoint_auth_method == "none";
+        let stored_secret_hash = if is_public {
+            None
+        } else {
+            Some(client_secret_hash)
         };
+
+        let metadata_json = serde_json::to_value(&metadata)
+            .map_err(|e| AuthError::Internal(format!("client metadata is not encodable: {}", e)))?;
+
+        sqlx::query(
+            "INSERT INTO oauth_clients (
+                 client_id, client_secret_hash, client_secret_expires_at, client_name,
+                 redirect_uris, grant_types, response_types, token_endpoint_auth_method,
+                 scope, metadata
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        )
+        .bind(&client_id)
+        .bind(&stored_secret_hash)
+        .bind(if is_public { None } else { expires_at })
+        .bind(&metadata.client_name)
+        .bind(&metadata.redirect_uris)
+        .bind(&metadata.grant_types)
+        .bind(&metadata.response_types)
+        .bind(&metadata.token_endpoint_auth_method)
+        .bind(&metadata.scope)
+        .bind(&metadata_json)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| AuthError::Internal(format!("storing client failed: {}", e)))?;
 
         // Return response
         Ok(ClientRegistrationResponse {
             client_id,
-            client_secret: Some(client_secret),
-            client_secret_expires_at: expires_at_timestamp,
+            client_secret: if is_public { None } else { Some(client_secret) },
+            client_secret_expires_at: if is_public {
+                None
+            } else {
+                expires_at_timestamp
+            },
             metadata,
         })
     }
@@ -265,33 +390,19 @@ impl ClientRegistrationManager {
 
         Ok(())
     }
+}
 
-    /// Generate a cryptographically secure client secret
-    fn generate_client_secret(&self) -> String {
-        // Generate 32 random bytes
-        let bytes: Vec<u8> = (0..32).map(|_| rand::random::<u8>()).collect();
+/// Generate a cryptographically secure client secret.
+fn generate_client_secret() -> String {
+    let bytes: Vec<u8> = (0..32).map(|_| rand::random::<u8>()).collect();
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    STANDARD.encode(&bytes)
+}
 
-        // Base64 encode
-        use base64::{Engine as _, engine::general_purpose::STANDARD};
-        STANDARD.encode(&bytes)
-    }
-
-    /// Hash client secret for storage
-    fn hash_client_secret(&self, secret: &str) -> Result<String, AuthError> {
-        use sha2::{Digest, Sha256};
-
-        let mut hasher = Sha256::new();
-        hasher.update(secret.as_bytes());
-        let result = hasher.finalize();
-
-        Ok(hex::encode(result))
-    }
-
-    /// Verify client credentials
-    pub fn verify_client_secret(&self, secret: &str, hash: &str) -> Result<bool, AuthError> {
-        let computed_hash = self.hash_client_secret(secret)?;
-        Ok(computed_hash == hash)
-    }
+/// Hash a client secret for storage.
+fn hash_client_secret(secret: &str) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(secret.as_bytes()))
 }
 
 /// Axum handler for client registration endpoint
@@ -327,9 +438,16 @@ pub async fn register_client_handler(
 mod tests {
     use super::*;
 
+    /// Registration writes to Postgres, so these exercise the real insert the
+    /// same way the rest of the suite does.
+    fn test_pool() -> PgPool {
+        PgPool::connect_lazy("postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine")
+            .expect("lazy pool should be constructible")
+    }
+
     #[tokio::test]
     async fn test_client_registration_basic() {
-        let manager = ClientRegistrationManager::new(90);
+        let manager = ClientRegistrationManager::new(90, test_pool());
 
         let request = ClientRegistrationRequest {
             redirect_uris: vec!["https://example.com/callback".to_string()],
@@ -359,7 +477,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_client_registration_validation() {
-        let manager = ClientRegistrationManager::new(90);
+        let manager = ClientRegistrationManager::new(90, test_pool());
 
         // Missing redirect_uris
         let request = ClientRegistrationRequest {
@@ -382,7 +500,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_registration_response_is_rfc7591_compliant() {
-        let manager = ClientRegistrationManager::new(90);
+        let manager = ClientRegistrationManager::new(90, test_pool());
 
         let request = ClientRegistrationRequest {
             redirect_uris: vec!["http://localhost:33418/callback".to_string()],
@@ -423,14 +541,18 @@ mod tests {
 
         // RFC 7591: client_id_issued_at is a numeric Unix timestamp
         assert!(json["client_id_issued_at"].is_i64());
+
+        // A public client holds no secret, so none is minted or returned.
+        assert!(
+            response.client_secret.is_none(),
+            "token_endpoint_auth_method=none must not be handed a client secret"
+        );
     }
 
     #[test]
     fn test_client_secret_generation() {
-        let manager = ClientRegistrationManager::new(0);
-
-        let secret1 = manager.generate_client_secret();
-        let secret2 = manager.generate_client_secret();
+        let secret1 = generate_client_secret();
+        let secret2 = generate_client_secret();
 
         assert_ne!(secret1, secret2);
         assert!(secret1.len() > 32);
@@ -438,12 +560,10 @@ mod tests {
 
     #[test]
     fn test_client_secret_verification() {
-        let manager = ClientRegistrationManager::new(0);
-
         let secret = "test_secret_12345";
-        let hash = manager.hash_client_secret(secret).unwrap();
+        let hash = hash_client_secret(secret);
 
-        assert!(manager.verify_client_secret(secret, &hash).unwrap());
-        assert!(!manager.verify_client_secret("wrong_secret", &hash).unwrap());
+        assert!(client_secret_matches(secret, &hash));
+        assert!(!client_secret_matches("wrong_secret", &hash));
     }
 }
