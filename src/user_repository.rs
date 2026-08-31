@@ -26,9 +26,12 @@ fn get_bootstrap_admins() -> &'static [String] {
 
 /// Realm value meaning "a principal on every host this engine serves".
 ///
-/// Only ever set deliberately, by an administrator. No sign-in path produces
-/// it, because an account anyone can create must not be able to reach every
-/// host by existing.
+/// Only ever set deliberately, and only from a place that already carries the
+/// authority: an administrator calling `/engine/user_realm`, or an address the
+/// operator wrote into `auth.bootstrap_admins`. No sign-in *earns* it — an
+/// account anyone can create must not reach every host by existing — which is
+/// why [`upsert_internal_user`] never sets it and guests and local accounts
+/// stay scoped to the host they were created on.
 pub const GLOBAL_REALM: &str = "*";
 
 /// Whether an account in `realm` authenticates on `host`.
@@ -227,9 +230,15 @@ struct UpsertUser<'a> {
     provider_user_id: &'a str,
     is_admin: bool,
     is_editor: bool,
-    /// The host the sign-in happened on. Recorded on creation, and filled in
-    /// on an existing row only when it is still empty.
+    /// The host the sign-in happened on — or, when `realm_is_authoritative`,
+    /// the realm configuration says this account has. Recorded on creation,
+    /// and on an existing row filled in only when it is still empty.
     realm: &'a str,
+    /// Whether `realm` is asserted by configuration rather than observed from
+    /// the request. An ordinary sign-in observes the host and must not move an
+    /// account that already has a realm; a realm the operator declared is not
+    /// an observation and replaces what is stored.
+    realm_is_authoritative: bool,
 }
 
 async fn db_upsert_user(pool: &PgPool, user: UpsertUser<'_>) -> AppResult<String> {
@@ -241,15 +250,22 @@ async fn db_upsert_user(pool: &PgPool, user: UpsertUser<'_>) -> AppResult<String
         is_admin,
         is_editor,
         realm,
+        realm_is_authoritative,
     } = user;
     let now = chrono::Utc::now();
 
     // Try to update existing user first (preserve existing roles)
     //
     // The realm is filled in only when it is empty — a row from before realms
-    // existed, recording the host of the first sign-in since. It is never
-    // overwritten: signing in on another host must not move an account there,
-    // or re-homing an account would be as easy as visiting a different URL.
+    // existed, recording the host of the first sign-in since. A realm observed
+    // from a request is never overwritten: signing in on another host must not
+    // move an account there, or re-homing an account would be as easy as
+    // visiting a different URL.
+    //
+    // An authoritative realm is different. It comes from configuration rather
+    // than from wherever the browser happened to be pointed, so it replaces
+    // what is stored — including on a row stamped with a single host before the
+    // operator named the address.
     let update_result = sqlx::query(
         r#"
         UPDATE users
@@ -257,7 +273,7 @@ async fn db_upsert_user(pool: &PgPool, user: UpsertUser<'_>) -> AppResult<String
             name = $2,
             updated_at = $3,
             last_login_at = $3,
-            realm = CASE WHEN realm = '' THEN $6 ELSE realm END
+            realm = CASE WHEN $7 THEN $6 WHEN realm = '' THEN $6 ELSE realm END
         WHERE provider = $4 AND provider_user_id = $5
         RETURNING user_id
         "#,
@@ -268,6 +284,7 @@ async fn db_upsert_user(pool: &PgPool, user: UpsertUser<'_>) -> AppResult<String
     .bind(provider_name)
     .bind(provider_user_id)
     .bind(realm)
+    .bind(realm_is_authoritative)
     .fetch_optional(pool)
     .await
     .map_err(|e| {
@@ -559,8 +576,13 @@ pub async fn upsert_user(
 /// Upsert a user with bootstrap admin configuration
 ///
 /// This is the internal implementation that supports bootstrap admins.
-/// If the user's email matches one in the bootstrap_admins list, they automatically
-/// get the Administrator role on creation.
+/// If the user's email matches one in the bootstrap_admins list, they
+/// automatically get the Administrator role on creation, and the
+/// [`GLOBAL_REALM`] — an engine administrator is a principal on every host the
+/// engine serves, including the management host, whichever host they happened
+/// to sign in on first. Both are re-applied on every sign-in, so an account
+/// stamped with a single host before the operator named its address is repaired
+/// the next time it logs in rather than needing the database edited.
 ///
 /// # Arguments
 /// * `email` - User's email address
@@ -617,6 +639,29 @@ pub async fn upsert_user_with_bootstrap(
         );
     }
 
+    // An address the operator named in `auth.bootstrap_admins` is a principal
+    // on every host, not merely on the one it happened to sign in on first.
+    //
+    // Scoping it like any other account defeats the bootstrap path on a
+    // multi-host deployment, and does it silently: the account that exists to
+    // administer the engine gets stamped with whichever host it first touched,
+    // every later request on the management host is refused as
+    // [`realm_authorizes_host`] fails, and the sign-in loops. The way back —
+    // `/engine/user_realm` — is served only on the management host that can no
+    // longer be reached, so the only remaining recovery is editing the database
+    // by hand.
+    //
+    // Widening here is the operator's own declaration rather than something a
+    // sign-in earned: the address is written in configuration, which is exactly
+    // the authority [`GLOBAL_REALM`] is meant to require. An account nobody
+    // named cannot reach this branch, and self-registered identities never
+    // reach this function at all — see [`upsert_internal_user`].
+    let (realm, realm_is_authoritative) = if is_bootstrap_admin {
+        (GLOBAL_REALM.to_string(), true)
+    } else {
+        (realm, false)
+    };
+
     let db = get_db_pool()?;
 
     db_upsert_user(
@@ -629,6 +674,7 @@ pub async fn upsert_user_with_bootstrap(
             is_admin,
             is_editor,
             realm: &realm,
+            realm_is_authoritative,
         },
     )
     .await
@@ -679,6 +725,10 @@ pub async fn upsert_internal_user(
             is_admin: false,
             is_editor: false,
             realm: &realm,
+            // Never. An identity anyone can create for themselves is a
+            // principal exactly where it was created, and nothing about a
+            // sign-up widens that.
+            realm_is_authoritative: false,
         },
     )
     .await
@@ -1377,6 +1427,157 @@ mod tests {
             let regular_user = get_user(&user_id).unwrap();
             assert!(!regular_user.has_role(&UserRole::Administrator));
             assert!(regular_user.has_role(&UserRole::Authenticated));
+        });
+    }
+
+    /// The lockout this closes. An administrator signs in on the main host,
+    /// their account is stamped with it, and every later request on the
+    /// management host is refused — while `/engine/user_realm`, the way to
+    /// widen it, is served only on the host they can no longer reach.
+    #[test]
+    fn a_bootstrap_admin_is_a_principal_on_every_host() {
+        if should_skip_db_tests() {
+            return;
+        }
+        setup_db();
+        let rt = get_runtime();
+
+        rt.block_on(async {
+            let bootstrap_admins = vec!["realm-admin@example.com".to_string()];
+            let provider_user_id = format!("google_realm_admin_{}", uuid::Uuid::new_v4());
+
+            let admin_id = upsert_user_with_bootstrap(
+                "realm-admin@example.com".to_string(),
+                Some("Realm Admin".to_string()),
+                "google".to_string(),
+                provider_user_id.clone(),
+                &bootstrap_admins,
+                "softagen.com".to_string(),
+            )
+            .await
+            .unwrap();
+
+            let admin = get_user(&admin_id).unwrap();
+            assert_eq!(
+                admin.realm, GLOBAL_REALM,
+                "an address named in bootstrap_admins is not scoped to the host it signed in on"
+            );
+            assert!(realm_authorizes_host(&admin.realm, "manage.softagen.com"));
+
+            // Signing in again elsewhere keeps it global rather than re-homing.
+            upsert_user_with_bootstrap(
+                "realm-admin@example.com".to_string(),
+                Some("Realm Admin".to_string()),
+                "google".to_string(),
+                provider_user_id,
+                &bootstrap_admins,
+                "world.softagen.com".to_string(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(get_user(&admin_id).unwrap().realm, GLOBAL_REALM);
+        });
+    }
+
+    /// An account stamped with one host before the operator named its address
+    /// is repaired by signing in, not by editing the database — which matters
+    /// because the endpoint that would repair it is unreachable from where the
+    /// locked-out admin can authenticate.
+    #[test]
+    fn naming_an_existing_account_as_a_bootstrap_admin_widens_it_on_next_sign_in() {
+        if should_skip_db_tests() {
+            return;
+        }
+        setup_db();
+        let rt = get_runtime();
+
+        rt.block_on(async {
+            let provider_user_id = format!("google_promoted_{}", uuid::Uuid::new_v4());
+
+            // Signs in before the operator lists them: scoped to one host.
+            let user_id = upsert_user_with_bootstrap(
+                "promoted@example.com".to_string(),
+                None,
+                "google".to_string(),
+                provider_user_id.clone(),
+                &[],
+                "softagen.com".to_string(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(get_user(&user_id).unwrap().realm, "softagen.com");
+            assert!(!realm_authorizes_host(
+                &get_user(&user_id).unwrap().realm,
+                "manage.softagen.com"
+            ));
+
+            // Operator adds them to auth.bootstrap_admins; next sign-in repairs it.
+            let bootstrap_admins = vec!["promoted@example.com".to_string()];
+            upsert_user_with_bootstrap(
+                "promoted@example.com".to_string(),
+                None,
+                "google".to_string(),
+                provider_user_id,
+                &bootstrap_admins,
+                "softagen.com".to_string(),
+            )
+            .await
+            .unwrap();
+
+            let repaired = get_user(&user_id).unwrap();
+            assert_eq!(repaired.realm, GLOBAL_REALM);
+            assert!(realm_authorizes_host(
+                &repaired.realm,
+                "manage.softagen.com"
+            ));
+        });
+    }
+
+    /// Widening is for addresses the operator named, and nothing else. An
+    /// ordinary sign-in still observes a host, and observing a second one does
+    /// not move the account — otherwise re-homing an account would be as easy
+    /// as visiting a different URL.
+    #[test]
+    fn an_ordinary_account_is_still_pinned_to_the_host_it_signed_in_on() {
+        if should_skip_db_tests() {
+            return;
+        }
+        setup_db();
+        let rt = get_runtime();
+
+        rt.block_on(async {
+            let bootstrap_admins = vec!["someone-else@example.com".to_string()];
+            let provider_user_id = format!("google_ordinary_{}", uuid::Uuid::new_v4());
+
+            let user_id = upsert_user_with_bootstrap(
+                "player@example.com".to_string(),
+                None,
+                "google".to_string(),
+                provider_user_id.clone(),
+                &bootstrap_admins,
+                "world.softagen.com".to_string(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(get_user(&user_id).unwrap().realm, "world.softagen.com");
+
+            upsert_user_with_bootstrap(
+                "player@example.com".to_string(),
+                None,
+                "google".to_string(),
+                provider_user_id,
+                &bootstrap_admins,
+                "manage.softagen.com".to_string(),
+            )
+            .await
+            .unwrap();
+
+            let user = get_user(&user_id).unwrap();
+            assert_eq!(
+                user.realm, "world.softagen.com",
+                "signing in on the management host must not make a player a principal there"
+            );
+            assert!(!realm_authorizes_host(&user.realm, "manage.softagen.com"));
         });
     }
 

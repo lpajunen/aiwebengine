@@ -136,8 +136,10 @@ Each of the first three sets the session cookie on success.
   with the host they were created on, and authenticate only there — an account
   a solution's sign-up form mints is not a principal on your management host.
   Signing in elsewhere does not move it. An administrator can widen an account
-  to every host with `/engine/user_realm` or the `set_user_realm` MCP tool; no
-  sign-in path produces that value.
+  to every host with `/engine/user_realm` or the `set_user_realm` MCP tool. No
+  internal sign-in path produces that value — the one thing that does is an
+  address the operator listed in `auth.bootstrap_admins`, which these accounts
+  cannot match because they carry no address at all.
 - **A guest or local session is not an API credential.** These flows mint
   browser sessions, which carry no audience, and `/mcp` requires one for the
   host and path being requested. Presenting a session cookie as a Bearer token
