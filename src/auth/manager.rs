@@ -29,6 +29,48 @@ pub struct AuthenticatedUser {
     pub tokens: OAuth2TokenResponse,
 }
 
+/// The `__Host-` cookie name prefix.
+///
+/// See [`host_scoped_cookie_name`] for why the engine applies it.
+pub const HOST_COOKIE_PREFIX: &str = "__Host-";
+
+/// Derive the session cookie's real name, applying the `__Host-` prefix when
+/// the browser will accept it.
+///
+/// Cookies are scoped by domain suffix, not by origin: a cookie set with
+/// `Domain=example.com` is sent to every host under it, at any depth, and any
+/// one of those hosts can set it. So on a deployment serving several hosts off
+/// one registrable domain, a host running solution-author scripts can set a
+/// session cookie that a management host would then read as its own — the
+/// sibling never needed to be trusted for this to work. `SameSite` does not
+/// help: every host under one registrable domain is the *same site*, whatever
+/// the policy says.
+///
+/// The engine never sends a `Domain` attribute, so its session cookie is
+/// host-only already. What this prefix adds is that the *browser* enforces it:
+/// a cookie whose name starts with `__Host-` is rejected outright unless it is
+/// `Secure`, has `Path=/`, and carries no `Domain`. A sibling host cannot
+/// shadow it with a domain-wide cookie of the same name, because the browser
+/// will not store what that host tried to set. The convention becomes a
+/// guarantee that does not depend on every future handler remembering it.
+///
+/// The prefix is applied only when the cookie is `Secure`. Over plain HTTP —
+/// local development — a `__Host-` cookie is discarded by the browser, taking
+/// sign-in with it, so an insecure cookie keeps the bare name. That also means
+/// a production config copied to a dev machine still logs in: the prefix is
+/// stripped rather than honoured when `secure` is off.
+pub fn host_scoped_cookie_name(configured: &str, secure: bool) -> String {
+    let bare = configured
+        .strip_prefix(HOST_COOKIE_PREFIX)
+        .unwrap_or(configured);
+
+    if secure {
+        format!("{HOST_COOKIE_PREFIX}{bare}")
+    } else {
+        bare.to_string()
+    }
+}
+
 /// Authentication manager configuration
 #[derive(Debug, Clone)]
 pub struct AuthManagerConfig {
@@ -1029,5 +1071,46 @@ mod tests {
             "unknown host should fall back to the default redirect URI: {}",
             auth_url
         );
+    }
+
+    /// The prefix is what makes the host-only scoping enforceable by the
+    /// browser rather than by every future handler remembering not to set a
+    /// `Domain`.
+    #[test]
+    fn a_secure_cookie_is_host_scoped() {
+        assert_eq!(
+            host_scoped_cookie_name("aiwebengine_session", true),
+            "__Host-aiwebengine_session"
+        );
+    }
+
+    /// Over plain HTTP the browser discards a `__Host-` cookie, so applying the
+    /// prefix there would break sign-in on a development machine instead of
+    /// hardening it.
+    #[test]
+    fn an_insecure_cookie_keeps_the_bare_name() {
+        assert_eq!(
+            host_scoped_cookie_name("aiwebengine_session", false),
+            "aiwebengine_session"
+        );
+    }
+
+    /// A production config copied to a dev machine names the cookie with the
+    /// prefix already on it. Honouring that verbatim over HTTP would leave the
+    /// engine setting a cookie no browser stores.
+    #[test]
+    fn an_insecure_cookie_sheds_a_configured_prefix() {
+        assert_eq!(
+            host_scoped_cookie_name("__Host-aiwebengine_session", false),
+            "aiwebengine_session"
+        );
+    }
+
+    /// Deriving the name twice must not stack prefixes — the cookie the browser
+    /// stores and the one the engine reads back have to be the same string.
+    #[test]
+    fn deriving_the_name_is_idempotent() {
+        let once = host_scoped_cookie_name("aiwebengine_session", true);
+        assert_eq!(host_scoped_cookie_name(&once, true), once);
     }
 }

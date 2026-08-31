@@ -23,7 +23,10 @@ pub use client_registration::{
 pub use config::{AuthConfig, CookieConfig, ProviderConfig, ProvidersConfig, SameSitePolicy};
 pub use error::AuthError;
 pub use js_api::{AuthJsApi, JsAuthContext};
-pub use manager::{AuthManager, AuthManagerConfig, AuthenticatedUser, CookieSameSite};
+pub use manager::{
+    AuthManager, AuthManagerConfig, AuthenticatedUser, CookieSameSite, HOST_COOKIE_PREFIX,
+    host_scoped_cookie_name,
+};
 pub use mcp_middleware::{
     McpAuthSession, mcp_auth_middleware, mcp_require_admin_middleware,
     mcp_require_editor_middleware, optional_mcp_auth_middleware,

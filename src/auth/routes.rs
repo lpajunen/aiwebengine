@@ -1351,10 +1351,13 @@ pub async fn logout(
         tracing::warn!("Logout called but no session token found in cookies");
     }
 
-    // Clear cookie
+    // Clear cookie. `Secure` has to match what the cookie was set with: under
+    // the `__Host-` prefix a browser rejects the whole `Set-Cookie` without it,
+    // and a rejected deletion leaves the stale cookie in place.
     let cookie_value = format!(
-        "{}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
-        config.session_cookie_name
+        "{}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{}",
+        config.session_cookie_name,
+        if config.cookie_secure { "; Secure" } else { "" }
     );
 
     // Redirect to specified location or home

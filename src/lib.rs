@@ -984,10 +984,29 @@ async fn initialize_auth_manager(
     // Get base URL from server config
     let base_url = server_config.get_base_url();
 
+    // `auth.cookie.domain` has never been written into a `Set-Cookie`: the
+    // session cookie is host-only on every path that sets it. Say so, rather
+    // than let the setting read as a domain-wide session that silently is not
+    // one — the `__Host-` prefix below now makes that permanent.
+    if auth_config
+        .cookie
+        .domain
+        .as_deref()
+        .is_some_and(|d| !d.is_empty())
+    {
+        tracing::warn!(
+            "auth.cookie.domain is set but not implemented; the session cookie is host-only \
+             and each host keeps its own sign-in"
+        );
+    }
+
     // Create AuthManager config from auth config
     let manager_config = AuthManagerConfig {
         base_url: base_url.clone(),
-        session_cookie_name: auth_config.cookie.name.clone(),
+        session_cookie_name: auth::host_scoped_cookie_name(
+            &auth_config.cookie.name,
+            auth_config.cookie.secure,
+        ),
         cookie_domain: auth_config.cookie.domain.clone(),
         cookie_secure: auth_config.cookie.secure,
         cookie_http_only: auth_config.cookie.http_only,

@@ -216,7 +216,13 @@ path = "/"
 # MUST use secure cookies in production (requires HTTPS)
 secure = true
 http_only = true
-same_site = "strict"
+# The engine writes SameSite=Lax unconditionally; this key is not read. Lax is
+# deliberate: "strict" would withhold the session on the cross-site top-level
+# navigation an MCP client makes to /auth/oauth2/authorize, forcing a re-login
+# on every authorization. It costs nothing here, because every host under one
+# registrable domain is the same site either way — hosts are separated by the
+# __Host- cookie prefix and the user realm, not by SameSite.
+same_site = "lax"
 
 # OAuth Providers Configuration
 # ALL secrets MUST be set via environment variables
