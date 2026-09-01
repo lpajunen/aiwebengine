@@ -137,6 +137,13 @@ idle_in_transaction_timeout_ms = 300000
 # local development; when false (with auth enabled), the CSRF, session and
 # secret encryption keys below are mandatory at startup.
 development_mode = false
+# Hold every session to the address it was signed in from. Off by default,
+# because a phone changing networks mid-session would be signed out for it; on a
+# deployment whose callers do not move it is cheap, and it makes a stolen
+# session token work only from the place it was stolen from. Meaningful only
+# because server.trusted_proxies establishes the address from the connection
+# rather than from a header the caller wrote.
+strict_ip_validation = false
 # Enable CORS with specific origins
 enable_cors = true
 # Restrict origins in production - MUST be set via environment variables

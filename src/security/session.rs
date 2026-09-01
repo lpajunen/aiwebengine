@@ -174,12 +174,23 @@ pub struct CreateSessionParams {
     pub realm: String,
 }
 
-/// Session fingerprint for detecting hijacking attempts
+/// What a session was minted against, so a token presented from somewhere else
+/// can be noticed.
+///
+/// Two facts and no policy. Deciding what a mismatch *means* belongs to
+/// [`SecureSessionManager`], which knows whether the session is a browser
+/// cookie or an API token and what the operator configured — a fingerprint that
+/// answered that question itself is how the rule ended up stamped into every
+/// stored session and impossible to change afterwards.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionFingerprint {
     pub ip_addr: String,
     pub user_agent_hash: String,
-    /// Allow for IP changes (mobile networks, VPN switches)
+    /// Stamped by versions that decided strictness per session. Read by
+    /// nothing: the manager's configuration decides now, so an operator turning
+    /// strict validation on does not have to wait for every session minted
+    /// under the old setting to age out.
+    #[serde(default)]
     pub strict_ip_validation: bool,
 }
 
@@ -200,22 +211,14 @@ impl SessionFingerprint {
         hex::encode(hasher.finalize())
     }
 
-    /// Validate fingerprint with tolerance for IP changes
-    pub fn validate(&self, ip_addr: &str, user_agent: &str) -> bool {
-        let user_agent_hash = Self::hash_user_agent(user_agent);
+    /// Whether this is the address the session was minted from.
+    pub fn ip_matches(&self, ip_addr: &str) -> bool {
+        ip_addr == self.ip_addr
+    }
 
-        // User-Agent must always match (browsers don't change UA mid-session)
-        if user_agent_hash != self.user_agent_hash {
-            return false;
-        }
-
-        // IP validation depends on strict mode
-        if self.strict_ip_validation {
-            ip_addr == self.ip_addr
-        } else {
-            // In non-strict mode, allow IP changes but log them
-            true
-        }
+    /// Whether this is the client the session was minted for.
+    pub fn user_agent_matches(&self, user_agent: &str) -> bool {
+        Self::hash_user_agent(user_agent) == self.user_agent_hash
     }
 }
 
@@ -280,8 +283,91 @@ impl SecureSessionManager {
             session_timeout: Duration::seconds(session_timeout_seconds),
             max_session_age: Duration::seconds(max_session_age_seconds),
             auditor,
-            strict_ip_validation: false, // Mobile-friendly by default
+            // Mobile-friendly by default; `security.strict_ip_validation` turns
+            // it on for a deployment whose callers do not move.
+            strict_ip_validation: false,
         })
+    }
+
+    /// Hold sessions to the address they were minted from.
+    ///
+    /// Worth having only because an address is now established from the
+    /// connection rather than read out of a header the caller wrote: pinning to
+    /// a claim pins nothing. Costly for a phone, which changes networks
+    /// mid-session and would be signed out for it — and cheap for a personal
+    /// install or an engine reached from fixed addresses, which is where an
+    /// operator would turn it on.
+    pub fn with_strict_ip_validation(mut self, strict: bool) -> Self {
+        self.strict_ip_validation = strict;
+        self
+    }
+
+    /// Whether this presentation of a session matches what it was minted
+    /// against. Answers `true` when the address is new but the session stands.
+    ///
+    /// The old shape of this asked one question and then unpicked the answer
+    /// with exceptions: a User-Agent mismatch was forgiven for a caller whose
+    /// User-Agent *said* it was an editor or an MCP client, and any mismatch at
+    /// all was forgiven once the address had changed — so the more of the
+    /// fingerprint differed, the more likely the session was accepted. Both
+    /// halves are set by whoever holds the token.
+    async fn check_binding(
+        &self,
+        session_data: &SessionData,
+        ip_addr: &str,
+        user_agent: &str,
+    ) -> Result<bool, SessionError> {
+        let ip_matches = session_data.fingerprint.ip_matches(ip_addr);
+        let user_agent_matches = session_data.fingerprint.user_agent_matches(user_agent);
+
+        if ip_matches && user_agent_matches {
+            return Ok(false);
+        }
+
+        self.auditor
+            .log_event(
+                SecurityEvent::new(
+                    SecurityEventType::SuspiciousActivity,
+                    SecuritySeverity::High,
+                    Some(session_data.user_id.clone()),
+                )
+                .with_detail("reason", "Session fingerprint mismatch")
+                .with_detail("ip_addr", ip_addr)
+                .with_detail("expected_ip", &session_data.fingerprint.ip_addr)
+                .with_detail("user_agent_matches", user_agent_matches.to_string()),
+            )
+            .await;
+
+        // The address, when the operator asked for it to be binding. Worth
+        // having now that an address is established from the connection rather
+        // than read out of a header the caller wrote — before that, pinning to
+        // an address pinned to a claim. Off by default, because a phone moving
+        // between networks changes address mid-session and would otherwise be
+        // signed out for it.
+        if self.strict_ip_validation && !ip_matches {
+            debug!(
+                "Session for user {} was minted at {} and presented from {}",
+                session_data.user_id, session_data.fingerprint.ip_addr, ip_addr
+            );
+            return Err(SessionError::FingerprintMismatch);
+        }
+
+        // The client. A browser does not change its User-Agent mid-session, so
+        // for a cookie this is a real binding and a mismatch ends the session.
+        //
+        // An API token is different in kind: an audience says it was minted by
+        // the token endpoint for programmatic use, and such a client does the
+        // OAuth exchange in one HTTP stack and its API calls in another. Pinning
+        // the User-Agent there breaks interop without adding security, since it
+        // is self-reported either way — which is what the removed editor-name
+        // sniffing was groping towards. What bounds an API token is its audience
+        // and its realm, and both are checked on every request.
+        let is_api_token = session_data.audience.is_some();
+        if !user_agent_matches && !is_api_token {
+            return Err(SessionError::FingerprintMismatch);
+        }
+
+        Ok(!ip_matches)
     }
 
     fn absolute_expiry_for_created_at(&self, created_at: DateTime<Utc>) -> DateTime<Utc> {
@@ -468,59 +554,17 @@ impl SecureSessionManager {
             return Err(SessionError::WrongRealm);
         }
 
-        // Validate fingerprint
-        // For MCP endpoints, be more lenient with User Agent since OAuth happens in browser
-        // but MCP requests come from VS Code or other clients
-        let is_mcp_validation = ip_addr == session_data.fingerprint.ip_addr; // Same IP suggests legitimate client
-
-        if !session_data.fingerprint.validate(ip_addr, user_agent) {
-            // Check if this is likely an MCP client using a session created via browser OAuth
-            let user_agent_lower = user_agent.to_lowercase();
-            let is_likely_mcp_client = user_agent_lower.contains("visual studio code")
-                || user_agent_lower.contains("vscode")
-                || user_agent_lower.contains("cursor")
-                || user_agent_lower.contains("mcp");
-
-            // Sessions issued by the OAuth2 token endpoint are bearer tokens: the
-            // User-Agent is self-reported and OAuth clients legitimately use
-            // different HTTP stacks for the token exchange and API requests, so
-            // UA pinning only breaks interop without adding security.
-            let is_oauth2_bearer = session_data.provider == "oauth2";
-
-            if is_mcp_validation && (is_likely_mcp_client || is_oauth2_bearer) {
-                // Allow User Agent change for MCP/OAuth2 bearer clients from same IP
-                debug!(
-                    "Allowing User Agent change for MCP client from same IP: {} -> {}",
-                    session_data.fingerprint.ip_addr, user_agent
-                );
-            } else {
-                self.auditor
-                    .log_event(
-                        SecurityEvent::new(
-                            SecurityEventType::SuspiciousActivity,
-                            SecuritySeverity::High,
-                            Some(session_data.user_id.clone()),
-                        )
-                        .with_detail("reason", "Session fingerprint mismatch")
-                        .with_detail("ip_addr", ip_addr)
-                        .with_detail("expected_ip", &session_data.fingerprint.ip_addr),
-                    )
-                    .await;
-
-                // Don't invalidate session if IP changed but UA matches (mobile networks)
-                if !self.strict_ip_validation && ip_addr != session_data.fingerprint.ip_addr {
-                    warn!(
-                        "IP changed for user {} session (old: {}, new: {})",
-                        session_data.user_id, session_data.fingerprint.ip_addr, ip_addr
-                    );
-
-                    // Update fingerprint with new IP
-                    session_data.fingerprint.ip_addr = ip_addr.to_string();
-                } else {
-                    // Strict mode or UA mismatch - reject
-                    return Err(SessionError::FingerprintMismatch);
-                }
-            }
+        // A new address on a session that is otherwise sound is recorded, so the
+        // fingerprint keeps describing where the session is being used from.
+        if self
+            .check_binding(&session_data, ip_addr, user_agent)
+            .await?
+        {
+            warn!(
+                "IP changed for user {} session (old: {}, new: {})",
+                session_data.user_id, session_data.fingerprint.ip_addr, ip_addr
+            );
+            session_data.fingerprint.ip_addr = ip_addr.to_string();
         }
 
         // Update last access time and slide the expiry window so the user
@@ -650,7 +694,16 @@ impl SecureSessionManager {
             return Err(SessionError::SessionExpired);
         }
 
-        let _ = (ip_addr, user_agent);
+        // The same binding as an ordinary request. Refreshing does not
+        // authenticate anything by itself, but a session that could not be used
+        // from here should not be extended from here either — and without this,
+        // `strict_ip_validation` would hold every request and no renewal.
+        if self
+            .check_binding(&session_data, ip_addr, user_agent)
+            .await?
+        {
+            session_data.fingerprint.ip_addr = ip_addr.to_string();
+        }
 
         // Refreshing reads and rewrites the session without going through
         // `validate_session`, so the realm has to be checked here too. A
@@ -986,13 +1039,19 @@ mod tests {
         assert!(matches!(result, Err(SessionError::FingerprintMismatch)));
     }
 
+    /// A bearer token from the OAuth2 token endpoint: the client that
+    /// exchanged the code is not the one that calls the API, so its
+    /// self-reported User-Agent is not a binding worth keeping.
+    ///
+    /// What identifies such a token is its audience, not the provider string
+    /// beside it — every token that endpoint issues carries one, and a browser
+    /// login carries none. Reading the provider instead was a name check on a
+    /// field that says where an identity came from rather than what the
+    /// credential is for.
     #[tokio::test]
     async fn test_oauth2_bearer_session_allows_user_agent_change() {
         let manager = create_test_manager();
 
-        // Session issued by the OAuth2 token endpoint (bearer token). OAuth
-        // clients use different HTTP stacks for the token exchange and API
-        // requests, so a UA change from the same IP must be accepted.
         let params = CreateSessionParams {
             user_id: "user_oauth2_ua".to_string(),
             provider: "oauth2".to_string(),
@@ -1003,7 +1062,7 @@ mod tests {
             ip_addr: "192.168.1.1".to_string(),
             user_agent: "token-exchange-client/1.0".to_string(),
             refresh_token: None,
-            audience: None,
+            audience: Some("test.example.com/mcp".to_string()),
             realm: "test.example.com".to_string(),
         };
 

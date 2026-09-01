@@ -961,14 +961,17 @@ async fn initialize_auth_manager(
     }
 
     // Create secure session manager
-    let session_manager = Arc::new(SecureSessionManager::new(
-        pool.clone(),
-        &encryption_key,
-        auth_config.session_timeout as i64,
-        auth_config.max_session_age as i64,
-        auth_config.max_concurrent_sessions,
-        Arc::clone(&auditor),
-    )?);
+    let session_manager = Arc::new(
+        SecureSessionManager::new(
+            pool.clone(),
+            &encryption_key,
+            auth_config.session_timeout as i64,
+            auth_config.max_session_age as i64,
+            auth_config.max_concurrent_sessions,
+            Arc::clone(&auditor),
+        )?
+        .with_strict_ip_validation(security_config.strict_ip_validation),
+    );
 
     // Create auth-specific security context
     let security_context = Arc::new(AuthSecurityContext::new(

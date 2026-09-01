@@ -358,6 +358,19 @@ pub struct SecurityConfig {
     /// Maximum request body size in bytes
     pub max_request_body_bytes: usize,
 
+    /// Hold every session to the address it was signed in from.
+    ///
+    /// Off by default: a phone changing networks mid-session would otherwise be
+    /// signed out for it. On a deployment whose callers do not move — a
+    /// personal install, an engine reached from fixed addresses — it is cheap,
+    /// and it turns a stolen session token into one that only works from the
+    /// place it was stolen from.
+    ///
+    /// Only meaningful because `server.trusted_proxies` establishes the address
+    /// from the connection rather than from a header the caller wrote.
+    #[serde(default)]
+    pub strict_ip_validation: bool,
+
     /// Optional base64-encoded 32-byte encryption key used for session encryption
     /// Example (env): APP_SECURITY__SESSION_ENCRYPTION_KEY
     #[serde(default)]
@@ -593,6 +606,7 @@ impl Default for SecurityConfig {
             enable_request_validation: true,
             max_request_body_bytes: 1024 * 1024, // 1MB
             csrf_key: None,
+            strict_ip_validation: false,
             session_encryption_key: None,
             secret_encryption_key: None,
             api_key: None,

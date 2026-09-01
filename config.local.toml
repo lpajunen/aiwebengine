@@ -112,6 +112,13 @@ idle_in_transaction_timeout_ms = 300000
 # Development mode: anonymous users get elevated capabilities (write/delete
 # scripts and assets) for local testing. NEVER enable in production.
 development_mode = true
+# Hold every session to the address it was signed in from. Off by default,
+# because a phone changing networks mid-session would be signed out for it; on a
+# deployment whose callers do not move it is cheap, and it makes a stolen
+# session token work only from the place it was stolen from. Meaningful only
+# because server.trusted_proxies establishes the address from the connection
+# rather than from a header the caller wrote.
+strict_ip_validation = false
 # Relaxed security for development
 enable_cors = true
 # Allow all origins in development
