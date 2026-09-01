@@ -23,6 +23,19 @@ async fn main() -> AppResult<()> {
                 .help("Validate configuration and exit")
                 .action(clap::ArgAction::SetTrue),
         )
+        .arg(
+            Arg::new("grant-role")
+                .long("grant-role")
+                .value_names(["ACCOUNT", "ROLE"])
+                .num_args(2)
+                .help(
+                    "Grant a role to an account and exit, e.g. --grant-role alice administrator. \
+                     ACCOUNT is a local username or an email address; ROLE is administrator or \
+                     editor. Needs the database but no running server, which is what makes it a \
+                     way back into an engine with no administrator left.",
+                )
+                .action(clap::ArgAction::Set),
+        )
         .get_matches();
 
     // Load configuration first to get logging preferences
@@ -121,6 +134,24 @@ async fn main() -> AppResult<()> {
             }
             Err(e) => {
                 eprintln!("✗ Configuration validation failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // Grant a role and exit. Before the startup validation below, so an engine
+    // whose configuration is broken can still have its owner appointed.
+    if let Some(mut arguments) = matches.get_many::<String>("grant-role") {
+        let account = arguments.next().cloned().unwrap_or_default();
+        let role = arguments.next().cloned().unwrap_or_default();
+
+        match aiwebengine::grant_role_command(&config, &account, &role).await {
+            Ok(message) => {
+                println!("{}", message);
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("✗ {}", e);
                 std::process::exit(1);
             }
         }

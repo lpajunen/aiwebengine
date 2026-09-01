@@ -273,6 +273,14 @@ allow_registration = true
 # password, which keeps the same user_id and everything already attached to
 # it.
 allow_guests = true
+# Local usernames that hold the administrator role. The bootstrap_admins of an
+# engine with no OAuth provider: that list matches an email address, which only
+# a provider can verify, so on a personal install it can never name anybody and
+# the owner's own account has no road to the administrator tier at all. Naming a
+# username here is not a credential — reaching the account still takes its
+# password. Applied on every sign-in, so naming an account that already exists
+# works too. Break-glass equivalent: aiwebengine --grant-role <name> administrator
+bootstrap_admin_usernames = []
 # Minimum password length. The engine enforces a floor of 8 regardless.
 min_password_length = 12
 

@@ -633,6 +633,13 @@ impl AuthManager {
         )
         .await?;
 
+        // An account the operator named in configuration is an administrator
+        // from its first moment, which is what gives a personal install an
+        // owner without running the whole engine in development mode.
+        crate::user_repository::apply_bootstrap_admin_username(&user_id, &normalized)
+            .await
+            .map_err(|e| AuthError::Internal(format!("Failed to apply configured role: {}", e)))?;
+
         self.establish_session(SessionRequest {
             user_id,
             provider: crate::auth::local::LOCAL_PROVIDER.to_string(),
@@ -686,8 +693,77 @@ impl AuthManager {
             }
         };
 
+        // On every sign-in, not only at creation: the ordinary case is someone
+        // who made an account first and wrote their username into the config
+        // afterwards, and the account that already exists is exactly the one an
+        // upsert would leave alone.
+        crate::user_repository::apply_bootstrap_admin_username(
+            &user_id,
+            &crate::auth::local::normalize_username(username),
+        )
+        .await
+        .map_err(|e| AuthError::Internal(format!("Failed to apply configured role: {}", e)))?;
+
         self.establish_session(SessionRequest {
             user_id,
+            provider: crate::auth::local::LOCAL_PROVIDER.to_string(),
+            email: None,
+            name: None,
+            ip_addr: ip_addr.to_string(),
+            user_agent: user_agent.to_string(),
+            refresh_token: None,
+        })
+        .await
+    }
+
+    /// Change an account's password, and end every session it had.
+    ///
+    /// Ending them is the point as much as the new password is: a password is
+    /// changed because the old one may be known, and a session minted under the
+    /// old one keeps working for up to `max_session_age` — thirty days by
+    /// default — however good the new password is. The caller gets a fresh
+    /// session back so that changing a password does not sign you out of the
+    /// browser you changed it in.
+    pub async fn change_local_password(
+        &self,
+        user_id: &str,
+        current_password: &str,
+        new_password: &str,
+        ip_addr: &str,
+        user_agent: &str,
+    ) -> Result<String, AuthError> {
+        if !self.config.internal.enabled {
+            return Err(AuthError::LocalAuthDisabled);
+        }
+
+        if !self.security_context.check_auth_rate_limit(ip_addr).await {
+            return Err(AuthError::RateLimitExceeded);
+        }
+
+        crate::auth::local::change_password(
+            user_id,
+            current_password,
+            new_password,
+            self.config.internal.min_password_length,
+        )
+        .await?;
+
+        if let Err(e) = self
+            .session_manager()
+            .delete_all_sessions_for_user(user_id)
+            .await
+        {
+            // The password is already changed. Say so loudly rather than
+            // reporting a failure that would send someone to change it again.
+            tracing::error!(
+                "Password for {} changed but their sessions could not be ended: {}",
+                user_id,
+                e
+            );
+        }
+
+        self.establish_session(SessionRequest {
+            user_id: user_id.to_string(),
             provider: crate::auth::local::LOCAL_PROVIDER.to_string(),
             email: None,
             name: None,

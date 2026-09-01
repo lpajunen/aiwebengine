@@ -403,6 +403,30 @@ pub struct PerformanceConfig {
     pub metrics_interval_secs: u64,
 }
 
+/// Whether a configured secret is one nobody chose.
+///
+/// Two shapes matter: the value shipped in a config template, which is public
+/// and long enough to pass every other check, and an unexpanded `${VAR}`
+/// placeholder, which means the environment the template expected was not
+/// there.
+fn placeholder_secret(secret: &str) -> Option<&'static str> {
+    let trimmed = secret.trim();
+
+    if trimmed.starts_with("${") && trimmed.ends_with('}') {
+        return Some("an unexpanded environment placeholder");
+    }
+
+    let lowered = trimmed.to_lowercase();
+    if ["dev-jwt-secret", "change-me", "changeme", "your-secret"]
+        .iter()
+        .any(|marker| lowered.contains(marker))
+    {
+        return Some("a shipped placeholder value");
+    }
+
+    None
+}
+
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
@@ -820,6 +844,19 @@ impl AppConfig {
         {
             let key_missing =
                 |key: &Option<String>| key.as_deref().map(str::trim).unwrap_or("").is_empty();
+
+            // The three keys below are checked for being absent; this one is
+            // checked for being the value everybody has. It passes the length
+            // rule, ships in `config.local.toml`, and a template copied forward
+            // into something internet-facing therefore starts and signs tokens
+            // with a secret published in the repository.
+            if let Some(placeholder) = placeholder_secret(&auth.jwt_secret) {
+                anyhow::bail!(
+                    "auth.jwt_secret is {} rather than a secret of your own. Set \
+                     APP_AUTH__JWT_SECRET. Generate with: openssl rand -base64 32",
+                    placeholder
+                );
+            }
 
             if key_missing(&self.security.csrf_key) {
                 anyhow::bail!(

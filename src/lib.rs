@@ -1275,6 +1275,78 @@ async fn initialize_script_functions(_config: &config::Config) -> AppResult<()> 
     Ok(())
 }
 
+/// Grant a role to an account from the command line, with no server running.
+///
+/// Break-glass, and the second half of giving a personal install an owner:
+/// `auth.internal.bootstrap_admin_usernames` covers the ordinary case, and this
+/// covers the ones it cannot — an account created under a different name than
+/// the config expects, an administrator who has locked themselves out, a
+/// federated deployment whose only administrator left. Every other road to the
+/// administrator tier is guarded by an administrator, so an engine with none
+/// has no way back in short of editing the database by hand.
+///
+/// Authorized by holding the configuration file and the database it points at,
+/// which is the same authority `bootstrap_admins` already runs on.
+pub async fn grant_role_command(
+    config: &config::Config,
+    account: &str,
+    role: &str,
+) -> AppResult<String> {
+    let parsed = match role {
+        "administrator" | "Administrator" => user_repository::UserRole::Administrator,
+        "editor" | "Editor" => user_repository::UserRole::Editor,
+        other => {
+            return Err(AppError::config(format!(
+                "Unknown role '{}'. Use 'administrator' or 'editor'.",
+                other
+            )));
+        }
+    };
+
+    let db = database::init_database(&config.repository, true).await?;
+    database::initialize_global_database(Arc::new(db));
+
+    // A local username first, because that is what a personal install has; an
+    // address second, for a deployment whose accounts came from a provider.
+    let user = match user_repository::find_user_by_provider(
+        auth::local::LOCAL_PROVIDER,
+        &auth::local::normalize_username(account),
+    )? {
+        Some(user) => user,
+        None => user_repository::find_user_by_email(account)
+            .await?
+            .ok_or_else(|| {
+                AppError::config(format!(
+                    "No account named '{}'. Sign in once to create it, then run this again.",
+                    account
+                ))
+            })?,
+    };
+
+    user_repository::add_user_role(&user.id, parsed.clone())?;
+
+    // An administrator scoped to one host cannot administer the engine: the
+    // management host refuses the session, and the endpoint that would widen
+    // the realm is served only on the host that can no longer be reached. This
+    // command exists to be the way back in, so it makes the account a principal
+    // everywhere — the same thing `bootstrap_admins` does, by the same
+    // authority. An editor is an author of solutions and stays where they are.
+    let realm_note = if matches!(parsed, user_repository::UserRole::Administrator)
+        && user.realm != user_repository::GLOBAL_REALM
+    {
+        user_repository::set_user_realm(&user.id, user_repository::GLOBAL_REALM)?;
+        " They are now a principal on every host this engine serves."
+    } else {
+        ""
+    };
+
+    Ok(format!(
+        "{} ({}) now holds the {} role.{} Any session they held has been ended, \
+         so the change takes effect at their next sign-in.",
+        account, user.id, role, realm_note
+    ))
+}
+
 /// Starts the web server with custom configuration
 pub async fn start_server_with_config(
     config: config::Config,
@@ -1285,10 +1357,30 @@ pub async fn start_server_with_config(
     // explicitly enabled in configuration.
     security::set_development_mode(config.security.development_mode);
     if security::is_development_mode() {
-        warn!(
-            "Development mode is ENABLED: anonymous users receive elevated capabilities \
-             (write/delete scripts and assets). Never enable this in production."
-        );
+        let host = config.server.host.trim();
+        let loopback = matches!(host, "127.0.0.1" | "::1" | "localhost");
+
+        if loopback {
+            warn!(
+                "Development mode is ENABLED: anonymous users receive elevated capabilities \
+                 (write/delete scripts and assets). Never enable this in production."
+            );
+        } else {
+            // Named separately because the combination is the dangerous one and
+            // it is easy to arrive at by accident: a template that enables
+            // development mode beside `host = \"0.0.0.0\"` grants engine
+            // administration to anyone who can reach the port on any interface.
+            // `auth.internal.bootstrap_admin_usernames` and `--grant-role` are
+            // the ways to administer an install without this.
+            warn!(
+                "Development mode is ENABLED and the server is bound to {}, not loopback: \
+                 every anonymous caller that can reach this port administers the engine \
+                 (write/delete scripts and assets, script database). Bind to 127.0.0.1, or \
+                 turn development mode off and appoint an administrator with \
+                 auth.internal.bootstrap_admin_usernames or --grant-role.",
+                host
+            );
+        }
     }
 
     // Apply configured JavaScript limits to every execution path (memory limit,
@@ -1484,6 +1576,19 @@ async fn initialize_auth_if_enabled(
             "Auth config: enabled={}, providers={:?}",
             auth_config.enabled,
             auth_config.providers.enabled_providers()
+        );
+
+        // The same declaration for an engine whose accounts have no verified
+        // address — a personal install's only way to a first administrator.
+        if !auth_config.internal.bootstrap_admin_usernames.is_empty() {
+            info!(
+                "Configuring {} bootstrap admin username(s): {:?}",
+                auth_config.internal.bootstrap_admin_usernames.len(),
+                auth_config.internal.bootstrap_admin_usernames
+            );
+        }
+        user_repository::set_bootstrap_admin_usernames(
+            auth_config.internal.bootstrap_admin_usernames.clone(),
         );
 
         // Configure bootstrap admins for automatic admin role assignment

@@ -75,6 +75,20 @@ pub struct InternalAuthConfig {
     /// Minimum password length. Raised above
     /// [`crate::auth::local::MIN_PASSWORD_LENGTH`] freely; lowering below it
     /// has no effect, since that floor is enforced in code.
+    /// Local usernames that hold the administrator role, whatever else the
+    /// database says.
+    ///
+    /// The `auth.bootstrap_admins` of an engine with no OAuth provider. That
+    /// list matches an email address, which is only meaningful when a provider
+    /// verified it — a local account has none, so on a personal install it can
+    /// never name anybody, and the owner's own account has no road to the
+    /// administrator tier at all: granting a role takes an administrator.
+    ///
+    /// Naming a username here is the same declaration by the same authority.
+    /// It is not a credential: reaching the account still takes its password.
+    #[serde(default)]
+    pub bootstrap_admin_usernames: Vec<String>,
+
     #[serde(default = "default_min_password_length")]
     pub min_password_length: usize,
 }
@@ -85,6 +99,7 @@ impl Default for InternalAuthConfig {
             enabled: false,
             allow_registration: false,
             allow_guests: false,
+            bootstrap_admin_usernames: Vec::new(),
             min_password_length: default_min_password_length(),
         }
     }

@@ -58,6 +58,20 @@ pub fn normalize_resource(resource: &str) -> String {
     format!("{}{}", authority, path)
 }
 
+/// Delete every session belonging to a user.
+///
+/// A free function because the callers that most need it hold a database pool
+/// and no session manager: roles change in the user repository, and a role that
+/// has changed has to reach sessions that were minted before it did.
+pub async fn delete_sessions_for_user(pool: &PgPool, user_id: &str) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+
+    Ok(result.rows_affected())
+}
+
 /// Whether a session's audience authorizes the resource being requested.
 ///
 /// Exact match after normalization. Deliberately not a prefix or suffix test:
@@ -685,6 +699,40 @@ impl SecureSessionManager {
     /// Invalidate a session (logout)
     pub async fn invalidate_session(&self, token: &str) -> Result<(), SessionError> {
         self.invalidate_session_internal(token).await
+    }
+
+    /// Tear down every session this user holds, and answer with how many.
+    ///
+    /// Logging out deletes one token, which is the wrong tool for everything
+    /// that is not a person clicking log out. A role taken away, a password
+    /// changed, an account deleted — each of those is a statement about what
+    /// the account may do from now on, and roles are stamped into a session
+    /// when it is minted rather than read per request. Without this, revoking
+    /// an administrator leaves them administering until their session ages out,
+    /// which is up to `max_session_age` — thirty days by default.
+    pub async fn invalidate_all_sessions_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<u64, SessionError> {
+        let deleted = delete_sessions_for_user(&self.pool, user_id)
+            .await
+            .map_err(|e| SessionError::ValidationFailed(format!("Database error: {}", e)))?;
+
+        if deleted > 0 {
+            self.auditor
+                .log_event(
+                    SecurityEvent::new(
+                        SecurityEventType::SystemSecurityEvent,
+                        SecuritySeverity::Medium,
+                        Some(user_id.to_string()),
+                    )
+                    .with_detail("action", "all_sessions_invalidated")
+                    .with_detail("sessions", deleted.to_string()),
+                )
+                .await;
+        }
+
+        Ok(deleted)
     }
 
     async fn invalidate_session_internal(&self, token: &str) -> Result<(), SessionError> {

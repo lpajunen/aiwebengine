@@ -16,6 +16,7 @@ fn config(enabled: bool, registration: bool, guests: bool) -> InternalAuthConfig
         enabled,
         allow_registration: registration,
         allow_guests: guests,
+        bootstrap_admin_usernames: Vec::new(),
         min_password_length: 12,
     }
 }

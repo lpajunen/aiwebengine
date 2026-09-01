@@ -154,6 +154,18 @@ impl AuthSessionManager {
         Ok(())
     }
 
+    /// End every session this user holds, and answer with how many.
+    ///
+    /// For the events that change what an account may do rather than what one
+    /// browser is doing: a password changed, a role granted or taken away, an
+    /// account deleted.
+    pub async fn delete_all_sessions_for_user(&self, user_id: &str) -> Result<u64, AuthError> {
+        self.session_manager
+            .invalidate_all_sessions_for_user(user_id)
+            .await
+            .map_err(AuthError::Session)
+    }
+
     /// Get session count for a user
     pub async fn get_user_session_count(&self, user_id: &str) -> usize {
         self.session_manager.get_user_session_count(user_id).await

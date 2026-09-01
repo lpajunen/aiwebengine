@@ -219,6 +219,59 @@ pub async fn attach_credential(
     Ok(normalized)
 }
 
+/// Replace an account's password with another, given the one it has now.
+///
+/// The lifecycle piece a personal install cannot do without: the credential is
+/// not one way in among several there, it is the only one, and a password
+/// suspected of exposure had no way to be changed at all — [`attach_credential`]
+/// refuses when a credential exists, by design, and nothing else wrote to the
+/// table.
+///
+/// Takes the current password rather than trusting the session, so a session
+/// someone else has hold of cannot be used to lock the owner out of their own
+/// account.
+pub async fn change_password(
+    user_id: &str,
+    current_password: &str,
+    new_password: &str,
+    min_password_length: usize,
+) -> Result<(), AuthError> {
+    validate_password(new_password, min_password_length)?;
+
+    let pool = pool()?;
+    let row = sqlx::query("SELECT password_hash FROM local_credentials WHERE user_id = $1")
+        .bind(user_id)
+        .fetch_optional(&pool)
+        .await
+        .map_err(|e| AuthError::Internal(format!("credential lookup failed: {}", e)))?;
+
+    let Some(row) = row else {
+        // A guest, or a federated identity: there is no password here to
+        // change, and inventing one would be a way to take an account over
+        // from whatever session happened to be open.
+        let _ = verify_password(current_password, DUMMY_HASH);
+        return Err(AuthError::InvalidCredentials);
+    };
+
+    let stored_hash: String = row
+        .try_get("password_hash")
+        .map_err(|e| AuthError::Internal(format!("credential row is malformed: {}", e)))?;
+
+    if !verify_password(current_password, &stored_hash) {
+        return Err(AuthError::InvalidCredentials);
+    }
+
+    let hash = hash_password(new_password)?;
+    sqlx::query("UPDATE local_credentials SET password_hash = $1 WHERE user_id = $2")
+        .bind(&hash)
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .map_err(|e| AuthError::Internal(format!("storing credential failed: {}", e)))?;
+
+    Ok(())
+}
+
 /// Look up the user a username and password belong to.
 ///
 /// Returns [`AuthError::InvalidCredentials`] for an unknown username and for a

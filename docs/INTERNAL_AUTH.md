@@ -41,6 +41,19 @@ administrator takes an administrator granting the role. `auth.bootstrap_admins`
 matches on email address, and these accounts have none, so no self-registered
 account can arrive as an administrator.
 
+The exception is an account the operator named in
+`auth.internal.bootstrap_admin_usernames`. That is the same declaration
+`bootstrap_admins` makes, by the same authority — the configuration file — for
+an engine whose accounts have no verified address, and it is how a personal
+install gets an owner without running the whole engine in development mode. It
+is applied on every sign-in, so naming an account that already exists works;
+and it is not a credential, since reaching the account still takes its password.
+
+For the cases configuration cannot reach — an account under a different name, an
+administrator locked out, the last administrator gone — there is
+`aiwebengine --grant-role <username-or-email> administrator`, which needs the
+database but no running server.
+
 See the security sandbox model in `CLAUDE.md` for what each tier holds.
 
 ## Configuration
@@ -53,6 +66,8 @@ enabled = true
 allow_registration = true
 # Let a caller with no credential be issued an identity and a session.
 allow_guests = true
+# Local usernames that hold the administrator role, whatever the database says.
+bootstrap_admin_usernames = []
 # Minimum password length. The engine enforces a floor of 8 regardless.
 min_password_length = 12
 ```
@@ -111,8 +126,16 @@ but it cannot POST `application/json` without one the engine does not grant.
 | `POST /auth/local/register` | `enabled` and `allow_registration` | Creates an account and issues a session. Body: `{"username", "password", "name"}`. |
 | `POST /auth/local/login` | `enabled` | Signs in against a stored credential. Body: `{"username", "password"}`. |
 | `POST /auth/local/claim` | `enabled`, plus a session | Attaches a credential to the calling account, keeping its `user_id`. Body: `{"username", "password"}`. |
+| `POST /auth/local/password` | `enabled`, plus a session | Replaces the calling account's password, given the one it has now. Ends every session the account held and issues a fresh one. Body: `{"current_password", "new_password"}`. |
 
-Each of the first three sets the session cookie on success.
+Each of the first three sets the session cookie on success, and so does the
+fourth — the session it replaces is one of the ones it ended.
+
+`POST /auth/local/password` asks for the current password even though the caller
+already holds a session: a session someone else got hold of must not be enough
+to lock the owner out of their own account. Ending the other sessions is the
+other half of it — a password is changed because the old one may be known, and a
+session minted under it otherwise keeps working for up to `max_session_age`.
 
 ## Rules worth knowing
 
@@ -152,8 +175,11 @@ Each of the first three sets the session cookie on success.
   page offers no control for it, because a guest who wants to claim an account
   is mid-solution rather than at a sign-in screen. A solution prompts for it
   where it makes sense.
-- **No password change or reset.** An account with a credential cannot rotate
-  it. There is no recovery path for a forgotten password, and for a guest there
-  cannot be one.
+- **No password reset.** A password can be changed by someone who knows it —
+  `POST /auth/local/password` with `current_password` and `new_password`, which
+  ends every session the account had and issues a fresh one — but there is no
+  recovery path for a password nobody remembers, and for a guest there cannot
+  be one. On a personal install, `--grant-role` is the way back to
+  administration; the credential itself still has to be reset in the database.
 - **No passkeys.** A good fit here — no email, no password reset, no PII — and
   the credential table's shape leaves room for them.

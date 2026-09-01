@@ -24,6 +24,44 @@ fn get_bootstrap_admins() -> &'static [String] {
     BOOTSTRAP_ADMINS.get().map(|v| v.as_slice()).unwrap_or(&[])
 }
 
+/// Local usernames the operator declared administrators.
+static BOOTSTRAP_ADMIN_USERNAMES: OnceLock<Vec<String>> = OnceLock::new();
+
+/// Set the local usernames that are administrators.
+///
+/// The counterpart of [`set_bootstrap_admins`] for an engine with no OAuth
+/// provider. Matching an email address is only meaningful when a provider
+/// verified it, and a local account has no address at all — so on a personal
+/// install the email list can never name anybody, and the account the owner
+/// created for themselves has no way to reach the administrator tier: granting
+/// a role takes an administrator, and there is none.
+///
+/// Naming a username in `auth.internal.bootstrap_admin_usernames` is the same
+/// declaration by the same authority — the configuration file, which only
+/// whoever runs the engine can write — for the accounts a personal install
+/// actually has.
+pub fn set_bootstrap_admin_usernames(usernames: Vec<String>) {
+    let normalized = usernames
+        .iter()
+        .map(|username| username.trim().to_lowercase())
+        .filter(|username| !username.is_empty())
+        .collect();
+
+    if BOOTSTRAP_ADMIN_USERNAMES.set(normalized).is_err() {
+        warn!("Bootstrap admin usernames already set, ignoring duplicate configuration");
+    }
+}
+
+/// Whether the operator named this local username an administrator.
+fn is_bootstrap_admin_username(username: &str) -> bool {
+    let username = username.trim().to_lowercase();
+
+    BOOTSTRAP_ADMIN_USERNAMES
+        .get()
+        .map(|names| names.contains(&username))
+        .unwrap_or(false)
+}
+
 /// Realm value meaning "a principal on every host this engine serves".
 ///
 /// Only ever set deliberately, and only from a place that already carries the
@@ -664,7 +702,7 @@ pub async fn upsert_user_with_bootstrap(
 
     let db = get_db_pool()?;
 
-    db_upsert_user(
+    let user_id = db_upsert_user(
         db.pool(),
         UpsertUser {
             email: Some(&email),
@@ -677,7 +715,80 @@ pub async fn upsert_user_with_bootstrap(
             realm_is_authoritative,
         },
     )
+    .await?;
+
+    // An upsert preserves the roles on a row it finds, so the flag above only
+    // ever reached accounts created after the address was configured. Naming an
+    // existing account has to work too — it is the ordinary case when an
+    // operator adds an administrator.
+    if is_bootstrap_admin {
+        apply_configured_administrator(db.pool(), &user_id).await?;
+    }
+
+    Ok(user_id)
+}
+
+/// Make an account the operator named in configuration what the configuration
+/// says it is: an administrator, and a principal on every host.
+///
+/// Run on every sign-in rather than only at creation, because the interesting
+/// case is the account that already exists. Someone installs the engine, makes
+/// themselves an account, then reads the documentation and writes their
+/// username into the config — and an upsert preserves the roles on a row it
+/// finds, so without this the declaration would apply to everybody except the
+/// person who made it.
+///
+/// Writes only when something is actually different, so an ordinary sign-in by
+/// a configured administrator costs nothing and leaves no audit noise.
+async fn apply_configured_administrator(pool: &PgPool, user_id: &str) -> AppResult<()> {
+    let updated = sqlx::query(
+        r#"
+        UPDATE users
+        SET is_admin = TRUE, realm = $2, updated_at = $3
+        WHERE user_id = $1 AND (is_admin = FALSE OR realm <> $2)
+        "#,
+    )
+    .bind(user_id)
+    .bind(GLOBAL_REALM)
+    .bind(chrono::Utc::now())
+    .execute(pool)
     .await
+    .map_err(|e| AppError::Database {
+        message: format!("Database error granting configured administrator: {}", e),
+        source: None,
+    })?;
+
+    if updated.rows_affected() > 0 {
+        debug!(
+            "User {} is an administrator on every host by configuration",
+            user_id
+        );
+    }
+
+    Ok(())
+}
+
+/// Grant the administrator role to a local account the operator named in
+/// `auth.internal.bootstrap_admin_usernames`, and do nothing for anyone else.
+///
+/// The way a personal install gets an owner. Every other road to the
+/// administrator tier needs an administrator to already exist —
+/// `/engine/user_roles` is guarded by `AdministerEngine`, and
+/// [`upsert_internal_user`] deliberately grants nothing — which on a laptop
+/// with no OAuth provider is a circle with no way in. The remaining workaround
+/// was `security.development_mode`, which hands those capabilities to
+/// *anonymous* callers on every interface the engine binds.
+///
+/// A username is not an identity claim the way a provider-verified address is,
+/// so this grants nothing on its own: it names a local account, and reaching
+/// that account still takes its password.
+pub async fn apply_bootstrap_admin_username(user_id: &str, username: &str) -> AppResult<()> {
+    if !is_bootstrap_admin_username(username) {
+        return Ok(());
+    }
+
+    let db = get_db_pool()?;
+    apply_configured_administrator(db.pool(), user_id).await
 }
 
 /// Create or refresh an identity the engine authenticates itself — a guest, or
@@ -819,8 +930,34 @@ pub fn update_user_roles(user_id: &str, roles: Vec<UserRole>) -> AppResult<()> {
 
     let db = get_db_pool()?;
     tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current()
-            .block_on(async { db_update_user_roles(db.pool(), user_id, is_admin, is_editor).await })
+        tokio::runtime::Handle::current().block_on(async {
+            db_update_user_roles(db.pool(), user_id, is_admin, is_editor).await?;
+
+            // What was granted or taken away has to reach the sessions that
+            // already exist. Roles are read from the repository once, when a
+            // session is minted, and every consumer reads the stamped copy —
+            // so without this, revoking an administrator revokes nothing they
+            // are currently holding, and granting a role does nothing until
+            // the person happens to sign in again.
+            match crate::security::delete_sessions_for_user(db.pool(), user_id).await {
+                Ok(0) => {}
+                Ok(count) => debug!(
+                    "Ended {} session(s) for {} so the new roles take effect",
+                    count, user_id
+                ),
+                Err(e) => {
+                    // The roles are already written. Reporting failure here
+                    // would say the change did not happen when it did, so this
+                    // is loud rather than fatal.
+                    error!(
+                        "Roles for {} changed but their sessions could not be ended: {}",
+                        user_id, e
+                    );
+                }
+            }
+
+            Ok(())
+        })
     })
 }
 
@@ -904,6 +1041,28 @@ pub fn remove_user_role(user_id: &str, role: &UserRole) -> AppResult<()> {
 
     // Update with new roles
     update_user_roles(user_id, new_roles)
+}
+
+/// Find an account by the address a provider gave it.
+///
+/// Only the federated accounts have one; a local account or a guest has no
+/// address at all, and is found by its provider identity instead.
+pub async fn find_user_by_email(email: &str) -> AppResult<Option<User>> {
+    let db = get_db_pool()?;
+    let user_id: Option<String> =
+        sqlx::query_scalar("SELECT user_id FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1")
+            .bind(email.trim())
+            .fetch_optional(db.pool())
+            .await
+            .map_err(|e| AppError::Database {
+                message: format!("Database error finding user by email: {}", e),
+                source: None,
+            })?;
+
+    match user_id {
+        Some(user_id) => db_get_user(db.pool(), &user_id).await.map(Some),
+        None => Ok(None),
+    }
 }
 
 /// List all users (for admin purposes)
@@ -1026,8 +1185,19 @@ pub fn get_user_count() -> AppResult<usize> {
 pub fn delete_user(user_id: &str) -> AppResult<bool> {
     let db = get_db_pool()?;
     let deleted = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current()
-            .block_on(async { db_delete_user(db.pool(), user_id).await })
+        tokio::runtime::Handle::current().block_on(async {
+            // Before the row goes: a session outlives the user it belongs to
+            // otherwise, and it carries the roles and realm that were stamped
+            // into it, so it keeps working for whatever is left of its life.
+            if let Err(e) = crate::security::delete_sessions_for_user(db.pool(), user_id).await {
+                error!(
+                    "Could not end sessions for {} before deletion: {}",
+                    user_id, e
+                );
+            }
+
+            db_delete_user(db.pool(), user_id).await
+        })
     })?;
     if deleted {
         debug!("Deleted user: {}", user_id);

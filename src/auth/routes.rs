@@ -827,6 +827,23 @@ pub struct LocalCredentialRequest {
     pub csrf_token: Option<String>,
 }
 
+/// Request body for `POST /auth/local/password`.
+#[derive(Debug, Default, Deserialize, utoipa::ToSchema)]
+pub struct PasswordChangeRequest {
+    /// The password the account has now. Required even though the caller
+    /// already holds a session: a session someone else got hold of must not be
+    /// enough to lock the owner out of their own account.
+    #[serde(default)]
+    pub current_password: String,
+    #[serde(default)]
+    pub new_password: String,
+    /// Where to send the browser afterwards. Form submissions only.
+    #[serde(default)]
+    pub redirect: Option<String>,
+    #[serde(default)]
+    pub csrf_token: Option<String>,
+}
+
 /// How a request arrived, which decides how the answer is shaped and whether a
 /// CSRF token is demanded.
 ///
@@ -1290,6 +1307,83 @@ pub async fn claim_account(
         username: Some(username),
     })
     .into_response())
+}
+
+/// Change the password of the account behind the current session.
+///
+/// The account comes from the session and the authorization comes from the
+/// current password: one without the other is not enough, which is what keeps
+/// both a stolen session and a guessed password from being a takeover.
+///
+/// Every other session the account had ends here, and the caller is given a
+/// fresh one — so a password changed because it may be known does not leave
+/// sessions minted under it running for another thirty days.
+#[utoipa::path(
+    post,
+    path = "/auth/local/password",
+    tags = ["Authentication"],
+    request_body = PasswordChangeRequest,
+    responses(
+        (status = 200, description = "Password changed and a new session issued", body = InternalAuthResponse),
+        (status = 400, description = "New password rejected", body = crate::openapi_schemas::ErrorResponse),
+        (status = 401, description = "No session, or the current password is wrong", body = crate::openapi_schemas::ErrorResponse),
+    )
+)]
+pub async fn change_password_route(
+    State(auth_manager): State<Arc<AuthManager>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Response, AuthErrorResponse> {
+    let (request, style) = parse_auth_body::<PasswordChangeRequest>(&headers, &body);
+    let ip_addr = client_ip::from_headers(&headers);
+    let user_agent = client_ip::user_agent_from_headers(&headers);
+    let config = auth_manager.config();
+
+    require_form_csrf(&auth_manager, style, request.csrf_token.as_deref()).await?;
+
+    let token = session_token_from_headers(&headers, &config.session_cookie_name)
+        .ok_or(crate::auth::error::AuthError::AuthenticationRequired)?;
+    let session = auth_manager
+        .get_session(
+            &token,
+            &ip_addr,
+            &user_agent,
+            get_request_host(&headers).as_deref(),
+        )
+        .await
+        .map_err(|_| crate::auth::error::AuthError::AuthenticationRequired)?;
+
+    let new_token = match auth_manager
+        .change_local_password(
+            &session.user_id,
+            &request.current_password,
+            &request.new_password,
+            &ip_addr,
+            &user_agent,
+        )
+        .await
+    {
+        Ok(token) => token,
+        Err(error) if style == RequestStyle::Form => {
+            return Ok(redirect_to_login_with_error(
+                &error,
+                request.redirect.as_deref(),
+            ));
+        }
+        Err(error) => return Err(error.into()),
+    };
+
+    respond_to_style(
+        &auth_manager,
+        style,
+        &new_token,
+        request.redirect.as_deref(),
+        InternalAuthResponse {
+            success: true,
+            user_id: Some(session.user_id),
+            username: None,
+        },
+    )
 }
 
 /// Logout handler - destroys session
@@ -3137,6 +3231,7 @@ pub fn create_auth_router(auth_manager: Arc<AuthManager>) -> Router {
         .route("/guest", post(start_guest))
         .route("/local/register", post(register_local))
         .route("/local/login", post(login_local))
+        .route("/local/password", post(change_password_route))
         .route("/local/claim", post(claim_account))
         .route("/logout", get(logout).post(logout))
         .route("/refresh", post(refresh_session))
