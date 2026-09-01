@@ -2634,6 +2634,20 @@ async fn setup_routes(
 
     app = app.layer(axum::middleware::from_fn(middleware::request_id_middleware));
 
+    // Before anything reads an address: this establishes which one the request
+    // actually came from and rewrites the forwarding headers to say so, so no
+    // layer, handler or script below it can be told otherwise. Entries that do
+    // not parse were refused at startup, so an error here would be a bug rather
+    // than a configuration mistake — trusting nothing is the safe reading of
+    // one anyway.
+    let trusted_proxies = Arc::new(
+        security::TrustedProxies::parse(&config.server.trusted_proxies).unwrap_or_default(),
+    );
+    app = app.layer(axum::middleware::from_fn_with_state(
+        trusted_proxies,
+        security::normalize_client_ip,
+    ));
+
     // Outermost, so it sees every response — including those produced by
     // layers inside it, and by scripts. It only ever fills in headers a
     // response did not set for itself.
@@ -3124,7 +3138,9 @@ fn start_server_instance(
     addr: std::net::SocketAddr,
     mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) {
-    let svc = app.into_make_service();
+    // With connection info, so the address a request came from is available to
+    // the layer that decides whether to believe its forwarding headers.
+    let svc = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
     let server = Server::bind(addr).serve(svc);
 
     tokio::spawn(async move {

@@ -11,6 +11,7 @@ use axum::{
 use std::sync::Arc;
 
 use crate::auth::{AuthError, AuthManager, AuthSession};
+use crate::security::client_ip;
 
 /// Extension to store authenticated session in request
 #[derive(Clone, Debug)]
@@ -72,31 +73,6 @@ fn resource_metadata_url(headers: &HeaderMap, path: &str) -> Option<String> {
         crate::auth::metadata::PROTECTED_RESOURCE_PATH,
         path
     ))
-}
-
-/// Extract client IP from headers
-fn get_client_ip(headers: &HeaderMap) -> String {
-    headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .map(|s| s.trim().to_string())
-        .or_else(|| {
-            headers
-                .get("x-real-ip")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string())
-        })
-        .unwrap_or_else(|| "unknown".to_string())
-}
-
-/// Extract user agent from headers
-fn get_user_agent(headers: &HeaderMap) -> String {
-    headers
-        .get(header::USER_AGENT)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("unknown")
-        .to_string()
 }
 
 /// Create WWW-Authenticate challenge header for MCP endpoints
@@ -183,8 +159,8 @@ pub async fn mcp_auth_middleware(
         }
     };
 
-    let ip_addr = get_client_ip(headers);
-    let user_agent = get_user_agent(headers);
+    let ip_addr = client_ip::from_headers(headers);
+    let user_agent = client_ip::user_agent_from_headers(headers);
     let host = headers
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
@@ -265,8 +241,8 @@ pub async fn optional_mcp_auth_middleware(
     let headers = request.headers();
 
     if let Some(token) = extract_bearer_token(headers) {
-        let ip_addr = get_client_ip(headers);
-        let user_agent = get_user_agent(headers);
+        let ip_addr = client_ip::from_headers(headers);
+        let user_agent = client_ip::user_agent_from_headers(headers);
         let host = headers
             .get(header::HOST)
             .and_then(|v| v.to_str().ok())

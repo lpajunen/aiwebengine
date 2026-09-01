@@ -3,6 +3,7 @@
 /// Axum middleware for extracting and validating authentication from requests,
 /// injecting authenticated user context into request extensions.
 use crate::auth::{AuthError, AuthManager};
+use crate::security::client_ip;
 use axum::{
     extract::{Request, State},
     http::{HeaderValue, StatusCode, header},
@@ -94,36 +95,6 @@ fn extract_host(req: &Request) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// Extract client IP address from request
-fn extract_client_ip(req: &Request) -> String {
-    // Try X-Forwarded-For header first
-    if let Some(forwarded) = req.headers().get("x-forwarded-for")
-        && let Ok(forwarded_str) = forwarded.to_str()
-        && let Some(ip) = forwarded_str.split(',').next()
-    {
-        return ip.trim().to_string();
-    }
-
-    // Try X-Real-IP header
-    if let Some(real_ip) = req.headers().get("x-real-ip")
-        && let Ok(ip_str) = real_ip.to_str()
-    {
-        return ip_str.to_string();
-    }
-
-    // Fallback to connection info (would need to be passed through state)
-    "unknown".to_string()
-}
-
-/// Extract user agent from request
-fn extract_user_agent(req: &Request) -> String {
-    req.headers()
-        .get(header::USER_AGENT)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("unknown")
-        .to_string()
-}
-
 fn attach_session_cookie(response: &mut Response, auth_manager: &AuthManager, session_token: &str) {
     let config = auth_manager.config();
     // Use max_session_age so the browser retains the cookie for the full session
@@ -160,8 +131,8 @@ pub async fn optional_auth_middleware(
             path,
             &session_token[..20.min(session_token.len())]
         );
-        let ip_addr = extract_client_ip(&req);
-        let user_agent = extract_user_agent(&req);
+        let ip_addr = client_ip::from_headers(req.headers());
+        let user_agent = client_ip::user_agent_from_headers(req.headers());
         let host = extract_host(&req);
 
         // Get full session information
@@ -217,8 +188,8 @@ pub async fn required_auth_middleware(
     let cookie_name = &auth_manager.config().session_cookie_name;
     let session_token = extract_session_token(&req, cookie_name).ok_or(StatusCode::UNAUTHORIZED)?;
 
-    let ip_addr = extract_client_ip(&req);
-    let user_agent = extract_user_agent(&req);
+    let ip_addr = client_ip::from_headers(req.headers());
+    let user_agent = client_ip::user_agent_from_headers(req.headers());
     let host = extract_host(&req);
 
     // Get full session information
@@ -262,8 +233,8 @@ pub async fn redirect_to_login_middleware(
 
     // Check if user is authenticated
     if let Some(session_token) = extract_session_token(&req, cookie_name) {
-        let ip_addr = extract_client_ip(&req);
-        let user_agent = extract_user_agent(&req);
+        let ip_addr = client_ip::from_headers(req.headers());
+        let user_agent = client_ip::user_agent_from_headers(req.headers());
         let host = extract_host(&req);
 
         // Get full session information
@@ -333,8 +304,8 @@ pub async fn require_editor_or_admin_middleware(
 
     // Check if user is authenticated
     if let Some(session_token) = extract_session_token(&req, cookie_name) {
-        let ip_addr = extract_client_ip(&req);
-        let user_agent = extract_user_agent(&req);
+        let ip_addr = client_ip::from_headers(req.headers());
+        let user_agent = client_ip::user_agent_from_headers(req.headers());
         let host = extract_host(&req);
 
         // Get full session information
@@ -497,26 +468,20 @@ mod tests {
         assert_eq!(token, Some("cookie-token-456".to_string()));
     }
 
+    /// By the time a middleware runs, the edge has already decided which
+    /// address to believe and left exactly that one behind. Reading a chain
+    /// here — which is what this used to do — is reading the claim again.
     #[test]
-    fn test_extract_client_ip_from_forwarded() {
+    fn the_client_ip_is_whatever_the_edge_established() {
         let req = Request::builder()
-            .header("X-Forwarded-For", "192.168.1.1, 10.0.0.1")
+            .header("X-Forwarded-For", "192.168.1.1")
             .body(Body::empty())
             .unwrap();
 
-        let ip = extract_client_ip(&req);
-        assert_eq!(ip, "192.168.1.1");
-    }
+        assert_eq!(client_ip::from_headers(req.headers()), "192.168.1.1");
 
-    #[test]
-    fn test_extract_client_ip_from_real_ip() {
-        let req = Request::builder()
-            .header("X-Real-IP", "192.168.1.100")
-            .body(Body::empty())
-            .unwrap();
-
-        let ip = extract_client_ip(&req);
-        assert_eq!(ip, "192.168.1.100");
+        let req = Request::builder().body(Body::empty()).unwrap();
+        assert_eq!(client_ip::from_headers(req.headers()), "unknown");
     }
 
     #[test]
@@ -526,7 +491,7 @@ mod tests {
             .body(Body::empty())
             .unwrap();
 
-        let ua = extract_user_agent(&req);
+        let ua = client_ip::user_agent_from_headers(req.headers());
         assert_eq!(ua, "Mozilla/5.0 Test Browser");
     }
 
@@ -534,7 +499,7 @@ mod tests {
     fn test_extract_user_agent_missing() {
         let req = Request::builder().body(Body::empty()).unwrap();
 
-        let ua = extract_user_agent(&req);
+        let ua = client_ip::user_agent_from_headers(req.headers());
         assert_eq!(ua, "unknown");
     }
 }

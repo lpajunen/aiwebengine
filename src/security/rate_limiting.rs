@@ -120,6 +120,12 @@ pub enum RateLimitKey {
     IpAddress(String),
     /// Rate limit by user ID
     UserId(String),
+    /// Failed sign-ins against one account, whoever they came from.
+    ///
+    /// Separate from [`RateLimitKey::IpAddress`] because the two answer
+    /// different questions: per-IP limits stop one caller guessing quickly,
+    /// and nothing stops a thousand callers guessing at one account slowly.
+    LoginFailure(String),
     /// Rate limit by endpoint/resource
     Endpoint(String),
     /// Rate limit by user and endpoint combination
@@ -135,6 +141,7 @@ impl RateLimitKey {
         match self {
             RateLimitKey::IpAddress(ip) => format!("ip:{}", ip),
             RateLimitKey::UserId(user_id) => format!("user:{}", user_id),
+            RateLimitKey::LoginFailure(account) => format!("login_failure:{}", account),
             RateLimitKey::Endpoint(endpoint) => format!("endpoint:{}", endpoint),
             RateLimitKey::UserEndpoint(user_id, endpoint) => {
                 format!("user_endpoint:{}:{}", user_id, endpoint)
@@ -202,6 +209,21 @@ impl RateLimiter {
                 refill_rate: 5.0, // 5 requests per second
                 window_duration: Duration::minutes(1),
                 burst_allowance: 50,
+                enabled: true,
+            },
+        );
+
+        // Failed sign-ins per account. Ten wrong guesses, then one more every
+        // five minutes: enough that a person who mistypes their password is
+        // never locked out, and little enough that guessing an account's
+        // password is not a thing you can do from a thousand addresses either.
+        configs.insert(
+            "login_failure".to_string(),
+            RateLimitConfig {
+                max_tokens: 10,
+                refill_rate: 1.0 / 300.0,
+                window_duration: Duration::hours(1),
+                burst_allowance: 0,
                 enabled: true,
             },
         );
@@ -286,6 +308,42 @@ impl RateLimiter {
         result
     }
 
+    /// What a key has left, without spending any of it.
+    ///
+    /// A failure counter has to answer two different questions — "has this
+    /// account failed too often?" before an attempt and "it failed again"
+    /// after one — and spending a token to ask the first would throttle
+    /// precisely the accounts that never fail.
+    pub async fn remaining_tokens(&self, key: &RateLimitKey) -> f64 {
+        let config = self.get_config(key);
+        if !config.enabled {
+            return config.max_tokens as f64;
+        }
+
+        let row = sqlx::query("SELECT tokens, last_refill FROM rate_limits WHERE key = $1")
+            .bind(key.as_string())
+            .fetch_optional(&self.pool)
+            .await;
+
+        let row = match row {
+            Ok(Some(row)) => row,
+            // No row is a key that has never been spent against, and an
+            // unreachable database fails open the way `check_rate_limit` does.
+            Ok(None) => return config.max_tokens as f64,
+            Err(e) => {
+                warn!("Rate limit DB error: {}", e);
+                return config.max_tokens as f64;
+            }
+        };
+
+        let tokens: f64 = row.try_get("tokens").unwrap_or(config.max_tokens as f64);
+        let last_refill: DateTime<Utc> = row.try_get("last_refill").unwrap_or_else(|_| Utc::now());
+        let elapsed = Utc::now().signed_duration_since(last_refill);
+        let elapsed_seconds = elapsed.num_milliseconds() as f64 / 1000.0;
+
+        (tokens + elapsed_seconds.max(0.0) * config.refill_rate).min(config.max_tokens as f64)
+    }
+
     async fn process_rate_limit(
         &self,
         key: &str,
@@ -364,6 +422,7 @@ impl RateLimiter {
         let config_key = match key {
             RateLimitKey::IpAddress(_) => "ip",
             RateLimitKey::UserId(_) => "user",
+            RateLimitKey::LoginFailure(_) => "login_failure",
             RateLimitKey::Endpoint(_) => "endpoint",
             RateLimitKey::UserEndpoint(_, _) => "user",
             RateLimitKey::IpEndpoint(_, _) => "ip",

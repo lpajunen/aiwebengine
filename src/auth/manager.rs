@@ -661,9 +661,20 @@ impl AuthManager {
             return Err(AuthError::RateLimitExceeded);
         }
 
+        // And the account's own budget, which is what a guess spread across
+        // many addresses runs into. Answered before the password is checked so
+        // that an exhausted account costs an attacker an Argon2 hash of
+        // nothing.
+        if !self.security_context.account_login_allowed(username).await {
+            return Err(AuthError::RateLimitExceeded);
+        }
+
         let user_id = match crate::auth::local::verify_login(username, password).await {
             Ok(user_id) => user_id,
             Err(e) => {
+                self.security_context
+                    .record_account_login_failure(username)
+                    .await;
                 self.security_context
                     .log_auth_failure(
                         crate::auth::local::LOCAL_PROVIDER,

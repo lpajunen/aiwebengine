@@ -9,6 +9,13 @@ port = 3000
 # Optional: Base URL for OAuth metadata and redirects
 # If not set, will auto-construct from host and port (e.g., http://localhost:3000)
 # base_url = "http://localhost:3000"
+# Proxies whose X-Forwarded-For and X-Real-IP this engine believes. Entries are
+# addresses or CIDR networks; the Docker bridge range below covers Caddy in the
+# compose stack. A request that does not arrive from one of these is keyed by
+# the address it connected from, whatever its headers claim — which is what
+# stops an attacker rotating one header to get a fresh rate-limit bucket per
+# request. Leave it empty when nothing sits in front of the engine.
+trusted_proxies = ["172.16.0.0/12"]
 # Short timeout for quick feedback during development
 request_timeout_secs = 5
 # Keep-alive timeout in seconds

@@ -15,6 +15,9 @@ anyhow = "1.0"
 thiserror = "2.0"
 futures-util = "0.3"
 axum-server = "0.8"
+# CIDR parsing for server.trusted_proxies: a forwarding header is only
+# evidence when the hop that wrote it is one the operator named.
+ipnet = "2"
 reqwest = { version = "0.13.1", features = ["json", "blocking", "rustls", "multipart", "form"], default-features = false }
 serde_urlencoded = "0.7.1"
 base64 = "0.23"

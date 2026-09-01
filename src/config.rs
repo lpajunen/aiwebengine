@@ -116,6 +116,22 @@ pub struct ServerConfig {
     #[serde(default)]
     pub management_hosts: Vec<String>,
 
+    /// Proxies whose forwarding headers this engine will believe.
+    ///
+    /// Entries are addresses (`127.0.0.1`) or networks (`172.16.0.0/12`).
+    /// `X-Forwarded-For` and `X-Real-IP` are read only when the connection
+    /// itself came from one of these; anything else is keyed by the address it
+    /// connected from, because a forwarding header is written by whoever is
+    /// talking to us and says whatever they like.
+    ///
+    /// Empty — the default — trusts nothing, which is right for an engine
+    /// reached directly and fails closed for one that is not: everybody is
+    /// named by their real peer, which for a proxied deployment is the proxy.
+    /// Set it to the proxy's address as soon as one is in front, or every
+    /// caller shares a rate-limit bucket.
+    #[serde(default)]
+    pub trusted_proxies: Vec<String>,
+
     /// Request timeout in seconds
     pub request_timeout_secs: u64,
 
@@ -395,6 +411,7 @@ impl Default for ServerConfig {
             base_url: None,
             additional_base_urls: Vec::new(),
             management_hosts: Vec::new(),
+            trusted_proxies: Vec::new(),
             request_timeout_secs: 30,
             keep_alive_timeout_secs: 60,
             max_connections: 10000,
@@ -705,6 +722,13 @@ impl AppConfig {
 
         if self.server.max_connections == 0 {
             anyhow::bail!("Max connections must be > 0");
+        }
+
+        // Refused at startup rather than dropped: an unparseable entry would
+        // silently leave the proxy untrusted, and the symptom of that is one
+        // rate-limit bucket shared by everyone rather than an error.
+        if let Err(reason) = crate::security::TrustedProxies::parse(&self.server.trusted_proxies) {
+            anyhow::bail!("Invalid server.trusted_proxies entry: {}", reason);
         }
 
         // Every additional base URL must name a host we can match a request's

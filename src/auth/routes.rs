@@ -7,6 +7,7 @@ use crate::auth::metadata::{
 /// HTTP route handlers for OAuth2 authentication flow including
 /// login initiation, callback processing, and logout.
 use crate::auth::{AuthManager, AuthSecurityContext};
+use crate::security::client_ip;
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
@@ -145,31 +146,6 @@ fn session_cookie_value(config: &crate::auth::manager::AuthManagerConfig, token:
         config.max_session_age,
         if config.cookie_secure { "; Secure" } else { "" }
     )
-}
-
-/// Extract client IP from headers
-fn get_client_ip(headers: &HeaderMap) -> String {
-    headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .map(|s| s.trim().to_string())
-        .or_else(|| {
-            headers
-                .get("x-real-ip")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string())
-        })
-        .unwrap_or_else(|| "unknown".to_string())
-}
-
-/// Extract user agent from headers
-fn get_user_agent(headers: &HeaderMap) -> String {
-    headers
-        .get(header::USER_AGENT)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("unknown")
-        .to_string()
 }
 
 /// Extract the host a request was addressed to, used to pick the OAuth
@@ -683,7 +659,7 @@ pub async fn start_login(
     Query(params): Query<LoginParams>,
     headers: HeaderMap,
 ) -> Result<Redirect, ErrorResponse> {
-    let ip_addr = get_client_ip(&headers);
+    let ip_addr = client_ip::from_headers(&headers);
     // Selects the redirect URI, so the flow returns to the host it began on
     // and sets its session cookie there.
     let host = get_request_host(&headers);
@@ -756,8 +732,8 @@ pub async fn oauth_callback(
         message: "State parameter missing from callback".to_string(),
     })?;
 
-    let ip_addr = get_client_ip(&headers);
-    let user_agent = get_user_agent(&headers);
+    let ip_addr = client_ip::from_headers(&headers);
+    let user_agent = client_ip::user_agent_from_headers(&headers);
     // The callback necessarily lands on the redirect URI's host, so this
     // reselects the provider instance the authorization request used and the
     // token exchange repeats the matching redirect URI.
@@ -1073,8 +1049,8 @@ pub async fn start_guest(
     body: axum::body::Bytes,
 ) -> Result<Response, AuthErrorResponse> {
     let (request, style) = parse_auth_body::<GuestRequest>(&headers, &body);
-    let ip_addr = get_client_ip(&headers);
-    let user_agent = get_user_agent(&headers);
+    let ip_addr = client_ip::from_headers(&headers);
+    let user_agent = client_ip::user_agent_from_headers(&headers);
     let host = get_request_host(&headers);
 
     require_form_csrf(&auth_manager, style, request.csrf_token.as_deref()).await?;
@@ -1131,8 +1107,8 @@ pub async fn register_local(
     body: axum::body::Bytes,
 ) -> Result<Response, AuthErrorResponse> {
     let (request, style) = parse_auth_body::<LocalCredentialRequest>(&headers, &body);
-    let ip_addr = get_client_ip(&headers);
-    let user_agent = get_user_agent(&headers);
+    let ip_addr = client_ip::from_headers(&headers);
+    let user_agent = client_ip::user_agent_from_headers(&headers);
     let host = get_request_host(&headers);
 
     require_form_csrf(&auth_manager, style, request.csrf_token.as_deref()).await?;
@@ -1196,8 +1172,8 @@ pub async fn login_local(
     body: axum::body::Bytes,
 ) -> Result<Response, AuthErrorResponse> {
     let (request, style) = parse_auth_body::<LocalCredentialRequest>(&headers, &body);
-    let ip_addr = get_client_ip(&headers);
-    let user_agent = get_user_agent(&headers);
+    let ip_addr = client_ip::from_headers(&headers);
+    let user_agent = client_ip::user_agent_from_headers(&headers);
     let host = get_request_host(&headers);
 
     require_form_csrf(&auth_manager, style, request.csrf_token.as_deref()).await?;
@@ -1263,8 +1239,8 @@ pub async fn claim_account(
     body: axum::body::Bytes,
 ) -> Result<Response, AuthErrorResponse> {
     let (request, style) = parse_auth_body::<LocalCredentialRequest>(&headers, &body);
-    let ip_addr = get_client_ip(&headers);
-    let user_agent = get_user_agent(&headers);
+    let ip_addr = client_ip::from_headers(&headers);
+    let user_agent = client_ip::user_agent_from_headers(&headers);
     let config = auth_manager.config();
 
     require_form_csrf(&auth_manager, style, request.csrf_token.as_deref()).await?;
@@ -1392,8 +1368,8 @@ pub async fn auth_status(
     State(auth_manager): State<Arc<AuthManager>>,
     headers: HeaderMap,
 ) -> Json<AuthResponse> {
-    let ip_addr = get_client_ip(&headers);
-    let user_agent = get_user_agent(&headers);
+    let ip_addr = client_ip::from_headers(&headers);
+    let user_agent = client_ip::user_agent_from_headers(&headers);
 
     let config = auth_manager.config();
 
@@ -1442,8 +1418,8 @@ pub async fn refresh_session(
     headers: HeaderMap,
 ) -> Response {
     let config = auth_manager.config();
-    let ip_addr = get_client_ip(&headers);
-    let user_agent = get_user_agent(&headers);
+    let ip_addr = client_ip::from_headers(&headers);
+    let user_agent = client_ip::user_agent_from_headers(&headers);
 
     let session_token = session_token_from_headers(&headers, &config.session_cookie_name);
 
@@ -2921,8 +2897,8 @@ pub async fn oauth2_token(
     }
 
     // Create a session for the user
-    let ip_addr = extract_client_ip_from_headers(&headers);
-    let user_agent = extract_user_agent_from_headers(&headers);
+    let ip_addr = client_ip::from_headers(&headers);
+    let user_agent = client_ip::user_agent_from_headers(&headers);
 
     // Carry the user's identity and roles onto the session. Downstream nothing
     // distinguishes a session minted here from a browser login — the
@@ -3055,8 +3031,8 @@ async fn handle_refresh_token_grant(
         }
     };
 
-    let ip_addr = extract_client_ip_from_headers(headers);
-    let user_agent = extract_user_agent_from_headers(headers);
+    let ip_addr = client_ip::from_headers(headers);
+    let user_agent = client_ip::user_agent_from_headers(headers);
 
     let session_data = match oauth2_state
         .auth_manager
@@ -3152,30 +3128,6 @@ async fn handle_refresh_token_grant(
     }
 }
 
-// Helper functions for token endpoint
-fn extract_client_ip_from_headers(headers: &HeaderMap) -> String {
-    headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .map(|s| s.trim().to_string())
-        .or_else(|| {
-            headers
-                .get("x-real-ip")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string())
-        })
-        .unwrap_or_else(|| "unknown".to_string())
-}
-
-fn extract_user_agent_from_headers(headers: &HeaderMap) -> String {
-    headers
-        .get(header::USER_AGENT)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("unknown")
-        .to_string()
-}
-
 /// Create authentication router with all routes
 pub fn create_auth_router(auth_manager: Arc<AuthManager>) -> Router {
     Router::new()
@@ -3259,27 +3211,6 @@ mod tests {
     use axum::http::HeaderValue;
 
     #[test]
-    fn test_get_client_ip_from_forwarded() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "x-forwarded-for",
-            HeaderValue::from_static("192.168.1.1, 10.0.0.1"),
-        );
-
-        let ip = get_client_ip(&headers);
-        assert_eq!(ip, "192.168.1.1");
-    }
-
-    #[test]
-    fn test_get_client_ip_from_real_ip() {
-        let mut headers = HeaderMap::new();
-        headers.insert("x-real-ip", HeaderValue::from_static("192.168.1.100"));
-
-        let ip = get_client_ip(&headers);
-        assert_eq!(ip, "192.168.1.100");
-    }
-
-    #[test]
     fn test_get_user_agent() {
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -3287,7 +3218,7 @@ mod tests {
             HeaderValue::from_static("Mozilla/5.0 Test"),
         );
 
-        let ua = get_user_agent(&headers);
+        let ua = client_ip::user_agent_from_headers(&headers);
         assert_eq!(ua, "Mozilla/5.0 Test");
     }
 

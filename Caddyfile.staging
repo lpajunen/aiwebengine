@@ -4,7 +4,14 @@
 # Staging domain (update with your actual staging domain)
 staging.softagen.com {
     # Reverse proxy to aiwebengine container
-    reverse_proxy aiwebengine:3000
+    reverse_proxy aiwebengine:3000 {
+        # Overwrite rather than append: Caddy adds the peer to whatever the
+        # client sent, so an appended chain still starts with a value the
+        # client wrote. The engine only reads this header from a proxy named
+        # in server.trusted_proxies, and reads it right-to-left, but leaving
+        # an invented chain in place serves no one.
+        header_up X-Forwarded-For {remote_host}
+    }
     
     # Enable gzip compression
     encode gzip

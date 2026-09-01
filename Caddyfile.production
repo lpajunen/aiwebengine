@@ -16,6 +16,12 @@
 # Shared upstream definition for the engine cluster.
 (engine_upstream) {
 	reverse_proxy aiwebengine-1:3000 aiwebengine-2:3000 {
+		# Overwrite rather than append: Caddy adds the peer to whatever the
+		# client sent, so an appended chain still starts with a value the
+		# client wrote. The engine only reads this header from a proxy named
+		# in server.trusted_proxies, and reads it right-to-left, but leaving
+		# an invented chain in place serves no one.
+		header_up X-Forwarded-For {remote_host}
 		# Load balancing policy
 		lb_policy round_robin
 

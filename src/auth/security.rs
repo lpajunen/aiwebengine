@@ -200,6 +200,34 @@ impl AuthSecurityContext {
 
         result.allowed
     }
+
+    /// Whether this account has any wrong guesses left.
+    ///
+    /// Beside the per-IP limit rather than instead of it: an attacker who
+    /// spreads a guess across a thousand addresses meets no per-IP wall at all,
+    /// and one known username is all such an attack needs.
+    pub async fn account_login_allowed(&self, account: &str) -> bool {
+        self.rate_limiter
+            .remaining_tokens(&RateLimitKey::LoginFailure(
+                crate::auth::local::normalize_username(account),
+            ))
+            .await
+            >= 1.0
+    }
+
+    /// Record a wrong guess against an account.
+    ///
+    /// Only failures are counted, so signing in correctly — however often —
+    /// never uses the budget up, and an attacker cannot lock someone out of
+    /// their own account by spending it for them.
+    pub async fn record_account_login_failure(&self, account: &str) {
+        self.rate_limiter
+            .check_rate_limit(
+                RateLimitKey::LoginFailure(crate::auth::local::normalize_username(account)),
+                1,
+            )
+            .await;
+    }
 }
 
 #[cfg(test)]
@@ -287,6 +315,75 @@ mod tests {
             .await
             .unwrap();
         assert!(!invalid);
+    }
+
+    /// The half the per-IP limit cannot cover: one account, guessed at from
+    /// wherever. Ten wrong answers and the eleventh is refused however fresh
+    /// the address it arrives from.
+    #[tokio::test]
+    async fn an_account_runs_out_of_wrong_guesses() {
+        let pool = sqlx::PgPool::connect_lazy(
+            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+        )
+        .unwrap();
+        let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
+        let rate_limiter =
+            Arc::new(RateLimiter::new(pool.clone()).with_security_auditor(Arc::clone(&auditor)));
+        let csrf_key: [u8; 32] = *b"test-csrf-secret-key-32-bytes!!!";
+        let csrf = Arc::new(CsrfProtection::new(csrf_key, 3600));
+        let encryption_key: [u8; 32] = *b"test-encryption-key-32-bytes!!!!";
+        let encryption = Arc::new(DataEncryption::new(&encryption_key));
+
+        let context = AuthSecurityContext::new(auditor, rate_limiter, csrf, encryption);
+
+        // A bucket of its own: the table is shared by every test process.
+        let account = format!("guessed-{}", uuid::Uuid::new_v4());
+
+        assert!(
+            context.account_login_allowed(&account).await,
+            "an account nobody has guessed at yet has its whole budget"
+        );
+
+        for _ in 0..10 {
+            context.record_account_login_failure(&account).await;
+        }
+
+        assert!(
+            !context.account_login_allowed(&account).await,
+            "ten wrong guesses is the budget"
+        );
+
+        // The spelling is not a way around it.
+        assert!(!context.account_login_allowed(&account.to_uppercase()).await);
+
+        let _ = sqlx::query("DELETE FROM rate_limits WHERE key = $1")
+            .bind(format!("login_failure:{}", account))
+            .execute(&pool)
+            .await;
+    }
+
+    /// Signing in correctly, however often, never spends the budget — an
+    /// attacker must not be able to lock someone out of their own account.
+    #[tokio::test]
+    async fn a_successful_sign_in_costs_an_account_nothing() {
+        let pool = sqlx::PgPool::connect_lazy(
+            "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine",
+        )
+        .unwrap();
+        let auditor = Arc::new(SecurityAuditor::new(Some(pool.clone())));
+        let rate_limiter =
+            Arc::new(RateLimiter::new(pool.clone()).with_security_auditor(Arc::clone(&auditor)));
+        let csrf_key: [u8; 32] = *b"test-csrf-secret-key-32-bytes!!!";
+        let csrf = Arc::new(CsrfProtection::new(csrf_key, 3600));
+        let encryption_key: [u8; 32] = *b"test-encryption-key-32-bytes!!!!";
+        let encryption = Arc::new(DataEncryption::new(&encryption_key));
+
+        let context = AuthSecurityContext::new(auditor, rate_limiter, csrf, encryption);
+        let account = format!("steady-{}", uuid::Uuid::new_v4());
+
+        for _ in 0..50 {
+            assert!(context.account_login_allowed(&account).await);
+        }
     }
 
     #[tokio::test]

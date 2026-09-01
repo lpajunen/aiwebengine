@@ -95,6 +95,7 @@ dependencies = [
  "hex",
  "html-escape",
  "indexmap 2.14.0",
+ "ipnet",
  "jsonschema",
  "jsonwebtoken",
  "lazy_static",
