@@ -5,7 +5,7 @@
 use axum::{
     Json,
     extract::State,
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, Uri},
     response::IntoResponse,
 };
 use serde::{Deserialize, Serialize};
@@ -235,6 +235,30 @@ pub struct ProtectedResourceMetadata {
     pub resource_signing_alg_values_supported: Option<Vec<String>>,
 }
 
+/// Where the protected-resource documents are served from.
+pub const PROTECTED_RESOURCE_PATH: &str = "/.well-known/oauth-protected-resource";
+
+/// The resource this document describes, given the URL it was fetched from.
+///
+/// RFC 9728 §3.1 builds that URL by inserting the well-known segment between a
+/// resource's authority and its path, so what follows the segment names the
+/// resource being asked about — `/mcp` for an MCP client, which addresses the
+/// engine's MCP endpoint rather than its origin.
+///
+/// Answering with the bare origin whatever was asked breaks the flow twice
+/// over: a client that checks the document against the URL it built (§3.3)
+/// rejects it, and one that takes the value at its word asks for a token whose
+/// audience names the origin — which `/mcp` then refuses, because an audience
+/// is matched on host *and* path.
+fn resource_identifier(issuer: &str, request_path: &str) -> String {
+    let resource_path = request_path
+        .strip_prefix(PROTECTED_RESOURCE_PATH)
+        .unwrap_or_default()
+        .trim_end_matches('/');
+
+    format!("{}{}", issuer.trim_end_matches('/'), resource_path)
+}
+
 /// Handler for /.well-known/oauth-protected-resource
 #[utoipa::path(
     get,
@@ -246,6 +270,7 @@ pub struct ProtectedResourceMetadata {
 )]
 pub async fn protected_resource_metadata_handler(
     State(config): State<Arc<MetadataConfig>>,
+    uri: Uri,
     headers: HeaderMap,
 ) -> impl IntoResponse {
     // The resource identifier is the host the client actually addressed, not
@@ -253,9 +278,10 @@ pub async fn protected_resource_metadata_handler(
     // the URL it requested rejects it (RFC 9728 §3.3).
     let host = crate::auth::routes::get_request_host(&headers);
     let issuer = config.issuer_for_host(host.as_deref()).to_string();
+    let resource = resource_identifier(&issuer, uri.path());
 
     let metadata = ProtectedResourceMetadata {
-        resource: issuer.clone(),
+        resource,
         authorization_servers: Some(vec![issuer]),
         bearer_methods_supported: Some(vec!["header".to_string(), "body".to_string()]),
         resource_signing_alg_values_supported: None,
@@ -267,6 +293,42 @@ pub async fn protected_resource_metadata_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The failure this fixes: a client builds the document's URL from the MCP
+    /// server's URL (RFC 9728 §3.1), so the document has to describe `/mcp`. A
+    /// bare origin here is what sent MCP clients off to ask for a token whose
+    /// audience the MCP endpoint then refused.
+    #[test]
+    fn the_document_describes_the_resource_it_was_asked_about() {
+        assert_eq!(
+            resource_identifier(
+                "https://softagen.com",
+                "/.well-known/oauth-protected-resource/mcp"
+            ),
+            "https://softagen.com/mcp"
+        );
+    }
+
+    /// The document at the root is still about the origin: a client that built
+    /// that URL checks the value against the identifier it used (§3.3), and
+    /// answering with a path it never asked about fails that check.
+    #[test]
+    fn the_root_document_still_describes_the_origin() {
+        assert_eq!(
+            resource_identifier(
+                "https://softagen.com",
+                "/.well-known/oauth-protected-resource"
+            ),
+            "https://softagen.com"
+        );
+        assert_eq!(
+            resource_identifier(
+                "https://softagen.com/",
+                "/.well-known/oauth-protected-resource/"
+            ),
+            "https://softagen.com"
+        );
+    }
 
     fn config(base_urls: &[&str], enable_registration: bool) -> MetadataConfig {
         let urls: Vec<String> = base_urls.iter().map(|u| u.to_string()).collect();

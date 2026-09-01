@@ -1660,6 +1660,34 @@ fn resource_is_acceptable_for(
     hosts.is_configured(authority) && hosts.canonical_host(request_host) == authority
 }
 
+/// The audience to mint for a `resource` a client asked for.
+///
+/// Reduced to the form audiences are compared in, and pinned to an endpoint. A
+/// client discovers this engine through its protected-resource document and
+/// asks for what that document names; several ask for the origin instead —
+/// `https://example.com/`, the whole site. An audience is matched on host *and*
+/// path, so a token carrying an origin authorizes nothing at all: it would be
+/// minted, handed over, and refused at the only endpoint it exists for.
+///
+/// Naming the MCP endpoint instead narrows the token rather than widening it.
+/// `/mcp` is the only path a bearer token is audience-checked on, so this is
+/// the same reach an origin-wide audience would have had if one were honoured,
+/// and it keeps the host binding that separates two `/mcp` endpoints of the
+/// same engine.
+fn resource_audience(resource: &str) -> String {
+    let normalized = crate::security::session::normalize_resource(resource);
+
+    if normalized.contains('/') {
+        normalized
+    } else {
+        format!(
+            "{}{}",
+            normalized,
+            crate::auth::mcp_middleware::MCP_ENDPOINT_PATH
+        )
+    }
+}
+
 /// An authorization request that survived validation.
 ///
 /// Holding the looked-up client rather than the caller's `client_id` is the
@@ -1915,7 +1943,7 @@ async fn validate_authorize_request(
         scope: params.scope.clone().filter(|s| !s.trim().is_empty()),
         state: params.state.clone(),
         code_challenge: code_challenge.to_string(),
-        resource: resource.map(str::to_string),
+        resource: resource.map(resource_audience),
     })
 }
 
@@ -2920,8 +2948,12 @@ pub async fn oauth2_token(
         // token. A client that named a resource keeps its own; one that did not
         // gets the MCP endpoint on the host it is talking to.
         audience: Some(code_data.resource.clone().unwrap_or_else(|| {
-            let host = get_request_host(&headers).unwrap_or_default();
-            format!("{}/mcp", host)
+            // The canonical host, matching what the MCP endpoint compares
+            // against: a request arriving on an unconfigured name is served the
+            // default host's content, so a token minted there must name the
+            // host it will actually be used against.
+            let host = crate::hosts::resolved_host(get_request_host(&headers).as_deref());
+            format!("{}{}", host, crate::auth::mcp_middleware::MCP_ENDPOINT_PATH)
         })),
     };
 
@@ -3173,11 +3205,14 @@ pub fn create_oauth2_router(
             get(metadata_handler),
         )
         .route(
-            "/.well-known/oauth-protected-resource",
+            crate::auth::metadata::PROTECTED_RESOURCE_PATH,
             get(protected_resource_metadata_handler),
         )
         .route(
-            "/.well-known/oauth-protected-resource/{*resource}",
+            &format!(
+                "{}/{{*resource}}",
+                crate::auth::metadata::PROTECTED_RESOURCE_PATH
+            ),
             get(protected_resource_metadata_handler),
         )
         .with_state(metadata_config);
@@ -3429,6 +3464,41 @@ mod tests {
             code_challenge_method: Some("S256".to_string()),
             resource: None,
         }
+    }
+
+    /// The failure that stopped every MCP client from connecting: the client
+    /// asks for the origin, and an origin authorizes nothing, because an
+    /// audience is matched on host *and* path.
+    #[test]
+    fn a_resource_naming_only_a_host_becomes_that_host_s_mcp_endpoint() {
+        assert_eq!(
+            resource_audience("https://softagen.com/"),
+            "softagen.com/mcp"
+        );
+        assert_eq!(
+            resource_audience("https://softagen.com"),
+            "softagen.com/mcp"
+        );
+        assert_eq!(resource_audience("softagen.com"), "softagen.com/mcp");
+    }
+
+    /// A resource that already names an endpoint is left as it is — narrowing
+    /// is for the case where there is nothing to narrow to, never a way to move
+    /// a token from the endpoint it was asked for.
+    #[test]
+    fn a_resource_that_names_an_endpoint_keeps_it() {
+        assert_eq!(
+            resource_audience("https://softagen.com/mcp"),
+            "softagen.com/mcp"
+        );
+        assert_eq!(
+            resource_audience("https://softagen.com/graphql"),
+            "softagen.com/graphql"
+        );
+        assert_eq!(
+            resource_audience("https://MANAGE.softagen.com:443/mcp/"),
+            "manage.softagen.com/mcp"
+        );
     }
 
     fn rejection_error(rejection: &AuthorizeRejection) -> &str {

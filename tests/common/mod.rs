@@ -22,6 +22,11 @@ static DB_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 /// isolation.
 static TEST_SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
 
+/// A throwaway 32-byte key, base64-encoded, for the tests that run with
+/// authentication on. Never used anywhere a real deployment reads a key from.
+#[allow(dead_code)]
+const TEST_ENCRYPTION_KEY: &str = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
+
 fn get_test_semaphore() -> Arc<Semaphore> {
     TEST_SEMAPHORE
         .get_or_init(|| Arc::new(Semaphore::new(1)))
@@ -210,6 +215,69 @@ impl TestServer {
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
+        let port = start_server_with_config(test_config, shutdown_rx).await?;
+
+        Ok(Self {
+            port,
+            shutdown_tx: Some(shutdown_tx),
+            _permit: permit,
+        })
+    }
+
+    /// Start a test server with authentication on, for tests that walk a
+    /// sign-in or an OAuth2 flow rather than script behaviour.
+    ///
+    /// The port is chosen before startup rather than by binding zero, because
+    /// the engine's base URL has to name the host and port the test addresses
+    /// it by: a token's audience is built from the configured host on one side
+    /// and checked against the request's host on the other, and a base URL
+    /// naming somewhere else makes every such comparison fail for a reason
+    /// that has nothing to do with what is being tested.
+    #[allow(dead_code)]
+    pub async fn start_with_auth() -> anyhow::Result<Self> {
+        use aiwebengine::auth::config::{AuthConfig, CookieConfig, InternalAuthConfig};
+
+        let permit = get_test_semaphore()
+            .acquire_owned()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to acquire test semaphore: {}", e))?;
+
+        let port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+            listener.local_addr()?.port()
+        };
+
+        let mut test_config = config::Config::test_config_postgres(port);
+        test_config.server.base_url = Some(format!("http://127.0.0.1:{}", port));
+        test_config.javascript.execution_timeout_ms = 5000;
+
+        // Not development mode: that tier hands anonymous callers an
+        // administrator's capabilities, which is the opposite of what a test
+        // about authentication should be running under. The keys it stands in
+        // for are supplied instead.
+        test_config.security.development_mode = false;
+        test_config.security.csrf_key = Some(TEST_ENCRYPTION_KEY.to_string());
+        test_config.security.session_encryption_key = Some(TEST_ENCRYPTION_KEY.to_string());
+        test_config.security.secret_encryption_key = Some(TEST_ENCRYPTION_KEY.to_string());
+
+        test_config.auth = Some(AuthConfig {
+            jwt_secret: "test-jwt-secret-of-at-least-32-characters".to_string(),
+            // Served over plain HTTP here, so a `Secure` cookie would never be
+            // sent back and every signed-in step would look signed out.
+            cookie: CookieConfig {
+                secure: false,
+                ..CookieConfig::default()
+            },
+            internal: InternalAuthConfig {
+                enabled: true,
+                allow_registration: true,
+                allow_guests: false,
+                ..InternalAuthConfig::default()
+            },
+            ..AuthConfig::default()
+        });
+
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let port = start_server_with_config(test_config, shutdown_rx).await?;
 
         Ok(Self {

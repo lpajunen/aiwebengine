@@ -198,6 +198,21 @@ pub fn canonical_host(request_host: Option<&str>) -> String {
     config().canonical_host(request_host)
 }
 
+/// The host to name a request by when the name has to survive being compared
+/// later — a token's audience against the endpoint it is presented at.
+///
+/// The configured host a request maps onto, so that a direct IP, a tunnel or a
+/// port-forward is named by the host whose content it is actually served. Falls
+/// back to the header as sent when host binding is not configured at all, where
+/// [`canonical_host`] has no host to offer and would answer with nothing.
+pub fn resolved_host(request_host: Option<&str>) -> String {
+    if is_configured() {
+        canonical_host(request_host)
+    } else {
+        request_host.unwrap_or_default().trim().to_lowercase()
+    }
+}
+
 /// The hosts a script with these stored bindings serves.
 pub fn effective_hosts(stored: &[String]) -> Vec<String> {
     config().effective_hosts(stored)

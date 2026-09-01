@@ -26,6 +26,10 @@ fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
         .and_then(|auth| auth.strip_prefix("Bearer ").map(|s| s.to_string()))
 }
 
+/// The one path a bearer token is audience-checked on, and so the one resource
+/// this engine issues audiences for.
+pub const MCP_ENDPOINT_PATH: &str = "/mcp";
+
 /// Name the resource this request is asking for, in the form a session's
 /// audience is compared against.
 ///
@@ -33,19 +37,41 @@ fn extract_bearer_token(headers: &HeaderMap) -> Option<String> {
 /// resources — an engine serving a game and a management surface publishes both
 /// — and a token issued for one must not reach the other. A bearer token is not
 /// bound by cookie host scoping, so this is the only thing that separates them.
+///
+/// The host is the one the request resolves to rather than the raw header,
+/// because that is the host the audience was minted against: a request arriving
+/// on something unconfigured — a direct IP, a tunnel, a port-forward — is served
+/// the default host's content everywhere else, and naming it by its raw header
+/// here would refuse a token that is otherwise exactly right for what it
+/// reaches.
 fn requested_resource(headers: &HeaderMap, path: &str) -> Option<String> {
-    if !path.starts_with("/mcp") {
+    if !path.starts_with(MCP_ENDPOINT_PATH) {
         return None;
     }
 
-    let host = headers
-        .get(header::HOST)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_default();
+    let host = headers.get(header::HOST).and_then(|v| v.to_str().ok());
 
-    Some(format!("{}{}", host, path))
+    Some(format!("{}{}", crate::hosts::resolved_host(host), path))
+}
+
+/// Where a client that got a 401 here can read what token this endpoint wants.
+///
+/// RFC 9728 §5.1: the challenge carries the protected-resource document's URL,
+/// which is how a client discovers the authorization server and — the part that
+/// matters here — the resource identifier to ask a token for.
+fn resource_metadata_url(headers: &HeaderMap, path: &str) -> Option<String> {
+    let host = headers.get(header::HOST).and_then(|v| v.to_str().ok());
+    let origin = crate::hosts::origin(&crate::hosts::resolved_host(host));
+    if origin.is_empty() {
+        return None;
+    }
+
+    Some(format!(
+        "{}{}{}",
+        origin,
+        crate::auth::metadata::PROTECTED_RESOURCE_PATH,
+        path
+    ))
 }
 
 /// Extract client IP from headers
@@ -79,6 +105,20 @@ fn create_auth_challenge(
     error: Option<&str>,
     error_description: Option<&str>,
 ) -> String {
+    challenge_with_metadata(realm, error, error_description, None)
+}
+
+/// The same challenge, naming where the resource's metadata is published.
+///
+/// A client that has not discovered this engine yet learns from here which
+/// resource identifier to request a token for, so the answer to a 401 is a
+/// token that works rather than another 401.
+fn challenge_with_metadata(
+    realm: &str,
+    error: Option<&str>,
+    error_description: Option<&str>,
+    resource_metadata: Option<&str>,
+) -> String {
     let mut challenge = format!("Bearer realm=\"{}\"", realm);
 
     if let Some(err) = error {
@@ -87,6 +127,10 @@ fn create_auth_challenge(
 
     if let Some(desc) = error_description {
         challenge.push_str(&format!(", error_description=\"{}\"", desc));
+    }
+
+    if let Some(url) = resource_metadata {
+        challenge.push_str(&format!(", resource_metadata=\"{}\"", url));
     }
 
     challenge
@@ -122,10 +166,12 @@ pub async fn mcp_auth_middleware(
         None => {
             tracing::warn!("MCP: No Bearer token found in request headers");
             // No token provided - return 401 with WWW-Authenticate challenge
-            let challenge = create_auth_challenge(
+            let metadata_url = resource_metadata_url(headers, request.uri().path());
+            let challenge = challenge_with_metadata(
                 "MCP API",
                 Some("invalid_token"),
                 Some("Bearer token required for MCP endpoints"),
+                metadata_url.as_deref(),
             );
 
             return (
@@ -186,7 +232,13 @@ pub async fn mcp_auth_middleware(
                 }
             };
 
-            let challenge = create_auth_challenge("MCP API", Some(error), Some(error_desc));
+            let metadata_url = resource_metadata_url(headers, request.uri().path());
+            let challenge = challenge_with_metadata(
+                "MCP API",
+                Some(error),
+                Some(error_desc),
+                metadata_url.as_deref(),
+            );
 
             return (
                 StatusCode::UNAUTHORIZED,
@@ -351,6 +403,43 @@ mod tests {
 
         let token = extract_bearer_token(&headers);
         assert_eq!(token, None);
+    }
+
+    /// The engine's own 401 is a client's first hint about what token to get.
+    /// Without the document's URL the client is left guessing at a resource
+    /// identifier, and guessing wrong mints a token this endpoint refuses.
+    #[test]
+    fn a_challenge_names_where_the_resource_metadata_lives() {
+        let challenge = challenge_with_metadata(
+            "MCP API",
+            Some("invalid_token"),
+            Some("Bearer token required for MCP endpoints"),
+            Some("https://example.com/.well-known/oauth-protected-resource/mcp"),
+        );
+
+        assert!(
+            challenge.ends_with(
+                ", resource_metadata=\"https://example.com/.well-known/oauth-protected-resource/mcp\""
+            ),
+            "challenge should carry the document URL: {}",
+            challenge
+        );
+    }
+
+    /// Host binding is not configured in a unit test, so the header stands as
+    /// sent. What matters here is that the path is part of the name: an
+    /// audience is matched on both, and a token for the host alone is a token
+    /// for nothing.
+    #[test]
+    fn a_requested_resource_names_the_host_and_the_path() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, "game.example.com".parse().unwrap());
+
+        assert_eq!(
+            requested_resource(&headers, "/mcp"),
+            Some("game.example.com/mcp".to_string())
+        );
+        assert_eq!(requested_resource(&headers, "/graphql"), None);
     }
 
     #[test]
