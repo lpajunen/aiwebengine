@@ -5,7 +5,7 @@
 use axum::{
     Json,
     extract::State,
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use chrono::{DateTime, Duration, Utc};
@@ -15,6 +15,8 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::auth::error::AuthError;
+use crate::auth::security::AuthSecurityContext;
+use crate::security::client_ip;
 
 /// Client metadata submitted during registration (RFC 7591 Section 2)
 #[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
@@ -405,8 +407,22 @@ fn hash_client_secret(secret: &str) -> String {
     hex::encode(Sha256::digest(secret.as_bytes()))
 }
 
+/// What the registration endpoint needs: somewhere to write the client, and
+/// the budget that says how many a caller may write.
+#[derive(Clone)]
+pub struct ClientRegistrationState {
+    pub manager: Arc<ClientRegistrationManager>,
+    pub security: Arc<AuthSecurityContext>,
+}
+
 /// Axum handler for client registration endpoint
 /// POST /auth/oauth2/register
+///
+/// Unauthenticated, per RFC 7591 — a client has no credential to present
+/// before it has one, and this is how an MCP client onboards. What consent
+/// bounds is what a registered client can then *do*; what bounds registration
+/// itself is the per-address budget checked here, so `oauth_clients` cannot be
+/// filled by a caller in a loop.
 #[utoipa::path(
     post,
     path = "/auth/oauth2/register",
@@ -415,13 +431,28 @@ fn hash_client_secret(secret: &str) -> String {
     responses(
         (status = 200, description = "Client successfully registered", body = ClientRegistrationResponse),
         (status = 400, description = "Invalid client metadata"),
+        (status = 429, description = "Too many registrations from this address"),
     )
 )]
 pub async fn register_client_handler(
-    State(manager): State<Arc<ClientRegistrationManager>>,
+    State(state): State<ClientRegistrationState>,
+    headers: HeaderMap,
     Json(request): Json<ClientRegistrationRequest>,
 ) -> Result<Json<ClientRegistrationResponse>, Response> {
-    match manager.register_client(request).await {
+    let ip_addr = client_ip::from_headers(&headers);
+    if !state.security.client_registration_allowed(&ip_addr).await {
+        tracing::warn!("Client registration rate limit reached for {}", ip_addr);
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({
+                "error": "invalid_client_metadata",
+                "error_description": "Too many client registrations from this address; try again later",
+            })),
+        )
+            .into_response());
+    }
+
+    match state.manager.register_client(request).await {
         Ok(response) => Ok(Json(response)),
         Err(err) => Err((
             StatusCode::BAD_REQUEST,

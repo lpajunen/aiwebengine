@@ -61,6 +61,19 @@ async fn discover_resource(client: &Client) -> anyhow::Result<String> {
         .to_string())
 }
 
+/// Registration is bounded per address, and the bucket lives in the shared
+/// `rate_limits` table — so a fixed key carries its drained state from one run
+/// into the next. Every test here registers from the loopback address, so each
+/// starts by handing itself a full budget.
+async fn clear_registration_limit() {
+    let Some(db) = aiwebengine::database::get_global_database() else {
+        return;
+    };
+    let _ = sqlx::query("DELETE FROM rate_limits WHERE key LIKE 'client_registration:%'")
+        .execute(db.pool())
+        .await;
+}
+
 async fn register_client(client: &Client) -> anyhow::Result<String> {
     let registration: Value = client
         .http
@@ -159,6 +172,7 @@ fn request_params<'a>(
 /// Walk register → sign in → authorize → consent → token, and hand back what a
 /// client would be holding at the end of it.
 async fn token_for(client: &Client, resource: Option<&str>) -> anyhow::Result<String> {
+    clear_registration_limit().await;
     let client_id = register_client(client).await?;
     let session_cookie = sign_in(client).await?;
     let pkce = PkcePair::generate();
@@ -359,6 +373,68 @@ async fn a_resource_naming_another_host_is_still_refused() -> anyhow::Result<()>
         "a resource naming a host this engine does not serve must be refused"
     );
 
+    server.shutdown().await;
+    Ok(())
+}
+
+/// Registration is unauthenticated — a client has no credential to present
+/// before it has one — so nothing but a per-address budget stops a caller
+/// writing rows into `oauth_clients` in a loop. Consent bounds what a
+/// registered client may *do*; it does not bound how many of them exist.
+#[tokio::test(flavor = "multi_thread")]
+async fn registering_clients_in_a_loop_is_cut_off() -> anyhow::Result<()> {
+    if should_skip_integration_tests() {
+        return Ok(());
+    }
+
+    let server = TestServer::start_with_auth().await?;
+    let client = Client::new(server.port())?;
+    wait_for_server(server.port(), 30).await?;
+    clear_registration_limit().await;
+
+    // The budget is ten, refilling one every ten minutes: a developer wiring up
+    // an MCP client registers once, and a handful while getting it right.
+    //
+    // The cap is far above ten because the bucket is keyed by address and every
+    // test in this file registers from the loopback one, each topping the
+    // budget up as it starts. Enough attempts that a few concurrent top-ups
+    // cannot keep this loop fed.
+    let mut refused = None;
+    for attempt in 1..=80 {
+        let status = client
+            .http
+            .post(client.url("/auth/oauth2/register"))
+            .json(&serde_json::json!({
+                "client_name": format!("flood-{}", attempt),
+                "redirect_uris": [REDIRECT_URI],
+                "token_endpoint_auth_method": "none",
+            }))
+            .send()
+            .await?
+            .status();
+
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            refused = Some(attempt);
+            break;
+        }
+
+        assert!(
+            status.is_success(),
+            "registration {} failed for some other reason: {}",
+            attempt,
+            status
+        );
+    }
+
+    let refused = refused.expect("registering in a loop must eventually be refused");
+    assert!(
+        refused > 1,
+        "and the first registration must still go through — this endpoint is how \
+         a client onboards"
+    );
+
+    // The budget is spent, so leave a full one behind for whatever runs next.
+    clear_registration_limit().await;
     server.shutdown().await;
     Ok(())
 }

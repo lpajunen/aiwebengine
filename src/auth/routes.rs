@@ -3275,6 +3275,10 @@ pub fn create_oauth2_router(
         ])
         .allow_headers(Any);
 
+    // Taken before the manager is moved into the OAuth2 state: registration is
+    // unauthenticated, so its per-address budget is the only thing bounding it.
+    let registration_security = auth_manager.security_context();
+
     let oauth2_state = OAuth2State::new(auth_manager, pool);
 
     let oauth2_protocol_router = Router::new()
@@ -3292,7 +3296,10 @@ pub fn create_oauth2_router(
     if let Some(manager) = registration_manager {
         let registration_router = Router::new()
             .route(REGISTRATION_PATH, post(register_client_handler))
-            .with_state(manager);
+            .with_state(crate::auth::client_registration::ClientRegistrationState {
+                manager,
+                security: registration_security,
+            });
 
         router.merge(registration_router)
     } else {

@@ -126,6 +126,12 @@ pub enum RateLimitKey {
     /// different questions: per-IP limits stop one caller guessing quickly,
     /// and nothing stops a thousand callers guessing at one account slowly.
     LoginFailure(String),
+    /// Dynamic client registrations from one address.
+    ///
+    /// Registration is unauthenticated by design — it is how an MCP client
+    /// onboards — so the only thing bounding how many rows a caller can write
+    /// into `oauth_clients` is this.
+    ClientRegistration(String),
     /// Rate limit by endpoint/resource
     Endpoint(String),
     /// Rate limit by user and endpoint combination
@@ -142,6 +148,7 @@ impl RateLimitKey {
             RateLimitKey::IpAddress(ip) => format!("ip:{}", ip),
             RateLimitKey::UserId(user_id) => format!("user:{}", user_id),
             RateLimitKey::LoginFailure(account) => format!("login_failure:{}", account),
+            RateLimitKey::ClientRegistration(ip) => format!("client_registration:{}", ip),
             RateLimitKey::Endpoint(endpoint) => format!("endpoint:{}", endpoint),
             RateLimitKey::UserEndpoint(user_id, endpoint) => {
                 format!("user_endpoint:{}:{}", user_id, endpoint)
@@ -222,6 +229,21 @@ impl RateLimiter {
             RateLimitConfig {
                 max_tokens: 10,
                 refill_rate: 1.0 / 300.0,
+                window_duration: Duration::hours(1),
+                burst_allowance: 0,
+                enabled: true,
+            },
+        );
+
+        // Dynamic client registrations from one address. Ten to start with,
+        // then one more every ten minutes: an MCP client registers once and a
+        // developer wiring one up registers a handful, while a caller minting
+        // clients in a loop stops being able to after the first few seconds.
+        configs.insert(
+            "client_registration".to_string(),
+            RateLimitConfig {
+                max_tokens: 10,
+                refill_rate: 1.0 / 600.0,
                 window_duration: Duration::hours(1),
                 burst_allowance: 0,
                 enabled: true,
@@ -423,6 +445,7 @@ impl RateLimiter {
             RateLimitKey::IpAddress(_) => "ip",
             RateLimitKey::UserId(_) => "user",
             RateLimitKey::LoginFailure(_) => "login_failure",
+            RateLimitKey::ClientRegistration(_) => "client_registration",
             RateLimitKey::Endpoint(_) => "endpoint",
             RateLimitKey::UserEndpoint(_, _) => "user",
             RateLimitKey::IpEndpoint(_, _) => "ip",

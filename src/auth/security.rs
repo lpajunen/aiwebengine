@@ -201,6 +201,20 @@ impl AuthSecurityContext {
         result.allowed
     }
 
+    /// Whether this address may register another OAuth2 client.
+    ///
+    /// Registration is open — an MCP client has no credential to present
+    /// before it has one — so this is the only thing bounding how many rows a
+    /// caller can write into `oauth_clients`. Spends a token per call, unlike
+    /// the login-failure budget: here every attempt is the thing being bounded,
+    /// not just the failures.
+    pub async fn client_registration_allowed(&self, ip_addr: &str) -> bool {
+        self.rate_limiter
+            .check_rate_limit(RateLimitKey::ClientRegistration(ip_addr.to_string()), 1)
+            .await
+            .allowed
+    }
+
     /// Whether this account has any wrong guesses left.
     ///
     /// Beside the per-IP limit rather than instead of it: an attacker who
