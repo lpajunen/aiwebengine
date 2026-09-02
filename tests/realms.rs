@@ -332,3 +332,74 @@ async fn a_realm_cannot_be_set_to_nothing() {
         .expect("user should be readable");
     assert_eq!(user.realm, GAME, "and the stored realm must be untouched");
 }
+
+// ============================================================================
+// A realm change reaching the sessions that already exist
+// ============================================================================
+
+/// Narrowing a realm has to end the sessions the account is already holding.
+///
+/// The realm is stamped into a session when it is minted and `validate_session`
+/// compares the request's host against that stamped copy, never against the
+/// `users` row. So an `UPDATE` on its own would move an account from `*` to one
+/// host while every session it holds kept authenticating everywhere for the
+/// rest of its life — thirty days, by default. This is the same class the role
+/// revocation closes, and it takes the same statement.
+#[tokio::test(flavor = "multi_thread")]
+async fn narrowing_a_realm_ends_the_sessions_it_already_granted() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    let manager = manager().await;
+
+    let user_id = user_repository::upsert_internal_user(
+        Some("Operator".to_string()),
+        "guest".to_string(),
+        uuid::Uuid::new_v4().to_string(),
+        GAME.to_string(),
+    )
+    .await
+    .expect("account should be created");
+
+    set_user_realm_authorized(
+        &UserContext::admin("root".to_string()),
+        &user_id,
+        GLOBAL_REALM,
+    )
+    .expect("an administrator may widen a realm");
+
+    let session = manager
+        .create_session(CreateSessionParams {
+            user_id: user_id.clone(),
+            realm: GLOBAL_REALM.to_string(),
+            ..params(GLOBAL_REALM)
+        })
+        .await
+        .expect("session should be created");
+
+    assert!(
+        manager
+            .validate_session(&session.token, IP, UA, MANAGE)
+            .await
+            .is_ok(),
+        "the session reaches every host while the realm says it may"
+    );
+
+    set_user_realm_authorized(&UserContext::admin("root".to_string()), &user_id, GAME)
+        .expect("an administrator may narrow a realm");
+
+    assert!(
+        manager
+            .validate_session(&session.token, IP, UA, MANAGE)
+            .await
+            .is_err(),
+        "and the session it granted must not outlive the grant"
+    );
+    assert!(
+        manager
+            .validate_session(&session.token, IP, UA, GAME)
+            .await
+            .is_err(),
+        "the session is ended, not merely re-scoped"
+    );
+}

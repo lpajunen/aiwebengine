@@ -911,8 +911,8 @@ pub fn list_users_authorized(user: &UserContext) -> Result<Vec<Value>, UserAdmin
 /// work across hosts gets there, and it is deliberately a separate act from
 /// granting a role.
 ///
-/// Takes effect on the user's next sign-in: sessions carry the realm they were
-/// minted with.
+/// Takes effect immediately: sessions carry the realm they were minted with, so
+/// the ones the account already holds are ended by the write.
 pub fn set_user_realm_authorized(
     actor: &UserContext,
     user_id: &str,

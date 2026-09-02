@@ -970,9 +970,11 @@ pub fn update_user_roles(user_id: &str, roles: Vec<UserRole>) -> AppResult<()> {
 /// administrator granting it is a deliberate act, and the audit trail on the
 /// calling side records it as one.
 ///
-/// Takes effect on the user's next sign-in. Sessions carry the realm they were
-/// minted with, so narrowing a realm does not retroactively invalidate a
-/// session already issued — revoke it explicitly if that is what you want.
+/// Takes effect immediately. Sessions carry the realm they were minted with
+/// and every consumer reads that stamped copy, so the sessions the account
+/// already holds are ended here — otherwise narrowing an account from `*` to
+/// one host would leave it authenticating everywhere for the rest of those
+/// sessions' lives (up to `max_session_age`, thirty days by default).
 pub fn set_user_realm(user_id: &str, realm: &str) -> AppResult<()> {
     let realm = realm.trim().to_lowercase();
     if realm.is_empty() {
@@ -1005,6 +1007,28 @@ pub fn set_user_realm(user_id: &str, realm: &str) -> AppResult<()> {
                     user_id.to_string(),
                 )));
             }
+
+            // The new realm has to reach the sessions that already exist, for
+            // the same reason a role change does: the realm is stamped in at
+            // mint time and `validate_session` compares the request's host
+            // against that copy, not against the row this just wrote.
+            match crate::security::delete_sessions_for_user(db.pool(), user_id).await {
+                Ok(0) => {}
+                Ok(count) => debug!(
+                    "Ended {} session(s) for {} so the new realm takes effect",
+                    count, user_id
+                ),
+                Err(e) => {
+                    // The realm is already written. Reporting failure here
+                    // would say the change did not happen when it did, so this
+                    // is loud rather than fatal.
+                    error!(
+                        "Realm for {} changed but their sessions could not be ended: {}",
+                        user_id, e
+                    );
+                }
+            }
+
             Ok(())
         })
     })
