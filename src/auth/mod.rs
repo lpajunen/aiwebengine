@@ -12,6 +12,7 @@ pub mod metadata;
 pub mod middleware;
 pub mod pkce;
 pub mod providers;
+pub mod refresh_tokens;
 pub mod routes;
 pub mod security;
 pub mod session;

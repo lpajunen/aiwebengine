@@ -2719,6 +2719,77 @@ fn oauth_error(status: StatusCode, error: &str, message: &str) -> Response {
         .into_response()
 }
 
+/// Establish which registered client is making a token request.
+///
+/// Both grants need the same answer, and both need it before anything is spent:
+/// a client that fails authentication must not burn an authorization code or a
+/// refresh token that the real one was about to present.
+///
+/// A confidential client proves it is itself with its secret. A public client
+/// holds no secret to prove anything with — PKCE stands in for that on the
+/// authorization-code grant, and on the refresh grant what stands in is the
+/// token being single-use and bound to the client it was issued to.
+async fn authenticate_client(
+    pool: &PgPool,
+    headers: &HeaderMap,
+    params: &TokenParams,
+) -> Result<crate::auth::client_registration::RegisteredClient, Response> {
+    let (presented_client_id, presented_secret) = client_credentials(headers, params);
+    let Some(presented_client_id) = presented_client_id else {
+        return Err(oauth_error(
+            StatusCode::UNAUTHORIZED,
+            "invalid_client",
+            "client_id is required",
+        ));
+    };
+
+    let client =
+        match crate::auth::client_registration::lookup_client(pool, &presented_client_id).await {
+            Ok(Some(client)) => client,
+            Ok(None) => {
+                return Err(oauth_error(
+                    StatusCode::UNAUTHORIZED,
+                    "invalid_client",
+                    "Unknown client_id",
+                ));
+            }
+            Err(e) => {
+                tracing::error!("Client lookup failed: {}", e);
+                return Err(oauth_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "Could not read the client registry",
+                ));
+            }
+        };
+
+    if let Some(expected_hash) = client.client_secret_hash.as_deref() {
+        if let Some(expires_at) = client.client_secret_expires_at
+            && expires_at <= Utc::now()
+        {
+            return Err(oauth_error(
+                StatusCode::UNAUTHORIZED,
+                "invalid_client",
+                "Client secret has expired",
+            ));
+        }
+
+        let presented_secret = presented_secret.unwrap_or_default();
+        if !crate::auth::client_registration::client_secret_matches(
+            &presented_secret,
+            expected_hash,
+        ) {
+            return Err(oauth_error(
+                StatusCode::UNAUTHORIZED,
+                "invalid_client",
+                "Client authentication failed",
+            ));
+        }
+    }
+
+    Ok(client)
+}
+
 /// OAuth 2.0 token response
 #[derive(Debug, Serialize)]
 pub struct TokenResponse {
@@ -2793,64 +2864,11 @@ pub async fn oauth2_token(
     // Who is redeeming this? Established before the code is consumed, so a
     // client that fails authentication does not burn a code a legitimate one
     // was about to present.
-    let (presented_client_id, presented_secret) = client_credentials(&headers, &params);
-    let Some(presented_client_id) = presented_client_id else {
-        return oauth_error(
-            StatusCode::UNAUTHORIZED,
-            "invalid_client",
-            "client_id is required",
-        );
+    let client = match authenticate_client(&oauth2_state.pool, &headers, &params).await {
+        Ok(client) => client,
+        Err(response) => return response,
     };
-
-    let client = match crate::auth::client_registration::lookup_client(
-        &oauth2_state.pool,
-        &presented_client_id,
-    )
-    .await
-    {
-        Ok(Some(client)) => client,
-        Ok(None) => {
-            return oauth_error(
-                StatusCode::UNAUTHORIZED,
-                "invalid_client",
-                "Unknown client_id",
-            );
-        }
-        Err(e) => {
-            tracing::error!("Client lookup failed: {}", e);
-            return oauth_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "server_error",
-                "Could not read the client registry",
-            );
-        }
-    };
-
-    // A confidential client proves it is itself. A public client holds no
-    // secret to prove anything with, which is what PKCE below stands in for.
-    if let Some(expected_hash) = client.client_secret_hash.as_deref() {
-        if let Some(expires_at) = client.client_secret_expires_at
-            && expires_at <= Utc::now()
-        {
-            return oauth_error(
-                StatusCode::UNAUTHORIZED,
-                "invalid_client",
-                "Client secret has expired",
-            );
-        }
-
-        let presented_secret = presented_secret.unwrap_or_default();
-        if !crate::auth::client_registration::client_secret_matches(
-            &presented_secret,
-            expected_hash,
-        ) {
-            return oauth_error(
-                StatusCode::UNAUTHORIZED,
-                "invalid_client",
-                "Client authentication failed",
-            );
-        }
-    }
+    let presented_client_id = client.client_id.clone();
 
     // Retrieve and validate the authorization code
     let mut tx = match oauth2_state.pool.begin().await {
@@ -3000,6 +3018,25 @@ pub async fn oauth2_token(
     // roles have to come from the user repository instead of defaulting to none.
     let identity = session_identity_for_user(&code_data.user_id).await;
 
+    // Every token this endpoint issues carries an audience, whether or not the
+    // client sent a `resource` parameter. That is what makes "has an audience"
+    // mean "was minted for programmatic use", and so what lets session
+    // validation refuse a browser cookie presented as a bearer token. A client
+    // that named a resource keeps its own; one that did not gets the MCP
+    // endpoint on the host it is talking to.
+    //
+    // Computed once, because the refresh token records the same audience: a
+    // session minted from it must not reach anywhere the original
+    // authorization did not.
+    let audience = Some(code_data.resource.clone().unwrap_or_else(|| {
+        // The canonical host, matching what the MCP endpoint compares against:
+        // a request arriving on an unconfigured name is served the default
+        // host's content, so a token minted there must name the host it will
+        // actually be used against.
+        let host = crate::hosts::resolved_host(get_request_host(&headers).as_deref());
+        format!("{}{}", host, crate::auth::mcp_middleware::MCP_ENDPOINT_PATH)
+    }));
+
     let session_params = crate::auth::session::CreateAuthSessionParams {
         user_id: code_data.user_id.clone(),
         provider: "oauth2".to_string(),
@@ -3011,20 +3048,7 @@ pub async fn oauth2_token(
         user_agent: user_agent.clone(),
         refresh_token: None,
         realm: identity.realm,
-        // Every token this endpoint issues carries an audience, whether or not
-        // the client sent a `resource` parameter. That is what makes "has an
-        // audience" mean "was minted for programmatic use", and so what lets
-        // session validation refuse a browser cookie presented as a bearer
-        // token. A client that named a resource keeps its own; one that did not
-        // gets the MCP endpoint on the host it is talking to.
-        audience: Some(code_data.resource.clone().unwrap_or_else(|| {
-            // The canonical host, matching what the MCP endpoint compares
-            // against: a request arriving on an unconfigured name is served the
-            // default host's content, so a token minted there must name the
-            // host it will actually be used against.
-            let host = crate::hosts::resolved_host(get_request_host(&headers).as_deref());
-            format!("{}{}", host, crate::auth::mcp_middleware::MCP_ENDPOINT_PATH)
-        })),
+        audience: audience.clone(),
     };
 
     match oauth2_state
@@ -3039,11 +3063,39 @@ pub async fn oauth2_token(
                 code_data.user_id
             );
 
+            let config = oauth2_state.auth_manager.config();
+
+            // A refresh token is a different credential from the session it
+            // mints, which is the whole point: this endpoint used to answer
+            // with the session token in both fields, so rotation was impossible
+            // and a leaked refresh token was a leaked access token.
+            let refresh_token = match crate::auth::refresh_tokens::issue(
+                &oauth2_state.pool,
+                &code_data.user_id,
+                &presented_client_id,
+                audience.as_deref(),
+                code_data.scope.as_deref(),
+                None,
+                chrono::Duration::seconds(config.max_session_age as i64),
+            )
+            .await
+            {
+                Ok(token) => Some(token),
+                Err(e) => {
+                    // The access token is sound and the client can use it; it
+                    // just has to come back through an authorization when the
+                    // session times out. Better than failing an exchange that
+                    // otherwise succeeded.
+                    tracing::error!("Could not issue a refresh token: {}", e);
+                    None
+                }
+            };
+
             let response = TokenResponse {
-                access_token: session_token.token.clone(),
+                access_token: session_token.token,
                 token_type: "Bearer".to_string(),
-                expires_in: Some(3600),
-                refresh_token: Some(session_token.token),
+                expires_in: Some(config.session_timeout),
+                refresh_token,
                 scope: code_data.scope,
             };
 
@@ -3106,120 +3158,131 @@ pub async fn session_identity_for_user(user_id: &str) -> SessionIdentity {
     }
 }
 
+/// The `refresh_token` grant (RFC 6749 §6).
+///
+/// A refresh token is not a session and cannot be presented as one. It is
+/// redeemed here, by the client it was issued to, for a *new* session — which
+/// is why this reads roles and realm from the repository rather than copying
+/// them off whatever the previous session carried. An account that lost the
+/// administrator role does not get it back by refreshing.
+///
+/// Single use: redeeming rotates the token, and presenting a spent one revokes
+/// the whole chain. See [`crate::auth::refresh_tokens`].
 async fn handle_refresh_token_grant(
     oauth2_state: &OAuth2State,
     headers: &HeaderMap,
     params: &TokenParams,
 ) -> Response {
-    let provided_refresh_token = match params.refresh_token.as_deref() {
-        Some(token) if !token.is_empty() => token,
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: "invalid_request".to_string(),
-                    message: "refresh_token is required for refresh_token grant".to_string(),
-                }),
-            )
-                .into_response();
-        }
+    let Some(presented) = params.refresh_token.as_deref().filter(|t| !t.is_empty()) else {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "refresh_token is required for refresh_token grant",
+        );
     };
+
+    // Established before the token is spent, so a client that fails
+    // authentication cannot burn a token the real one was about to present.
+    let client = match authenticate_client(&oauth2_state.pool, headers, params).await {
+        Ok(client) => client,
+        Err(response) => return response,
+    };
+
+    let grant =
+        match crate::auth::refresh_tokens::redeem(&oauth2_state.pool, presented, &client.client_id)
+            .await
+        {
+            Ok(grant) => grant,
+            Err(err) => {
+                tracing::warn!("Refresh token grant rejected: {}", err);
+                // One answer for every reason. Which of "never existed",
+                // "expired", "already spent" and "belongs to another client"
+                // it was is not something the presenter should be able to
+                // learn by asking.
+                return oauth_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_grant",
+                    "Invalid or expired refresh token",
+                );
+            }
+        };
 
     let ip_addr = client_ip::from_headers(headers);
     let user_agent = client_ip::user_agent_from_headers(headers);
 
-    let session_data = match oauth2_state
+    // Read afresh. A session carries the roles and realm it was minted with, so
+    // a refresh is the moment a revocation that happened in between takes
+    // effect — copying them forward would make a refresh token a way to keep
+    // holding a role that was taken away.
+    let identity = session_identity_for_user(&grant.user_id).await;
+
+    let session_params = crate::auth::session::CreateAuthSessionParams {
+        user_id: grant.user_id.clone(),
+        provider: "oauth2".to_string(),
+        email: identity.email,
+        name: identity.name,
+        is_admin: identity.is_admin,
+        is_editor: identity.is_editor,
+        ip_addr,
+        user_agent,
+        refresh_token: None,
+        realm: identity.realm,
+        // The audience the original authorization was for, never re-derived
+        // from this request: refreshing must not widen where a token reaches.
+        audience: grant.audience.clone(),
+    };
+
+    let session_token = match oauth2_state
         .auth_manager
         .session_manager()
-        .get_session_data(
-            provided_refresh_token,
-            &ip_addr,
-            &user_agent,
-            &crate::hosts::canonical_host(get_request_host(headers).as_deref()),
-        )
+        .create_session(session_params)
         .await
     {
-        Ok(data) => data,
+        Ok(token) => token,
         Err(err) => {
-            tracing::warn!("Refresh token grant rejected: {}", err);
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: "invalid_grant".to_string(),
-                    message: "Invalid or expired refresh token".to_string(),
-                }),
-            )
-                .into_response();
+            tracing::error!("Refresh token grant could not mint a session: {:?}", err);
+            return oauth_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "Failed to create session",
+            );
         }
     };
 
-    let mut rotated_refresh_token: Option<String> = None;
-    if let Some(provider_refresh_token) = session_data.refresh_token.clone()
-        && session_data.provider != "oauth2"
-    {
-        match oauth2_state
-            .auth_manager
-            .refresh_token(&session_data.provider, &provider_refresh_token)
-            .await
-        {
-            Ok(provider_response) => {
-                rotated_refresh_token = provider_response
-                    .refresh_token
-                    .or(Some(provider_refresh_token));
-            }
-            Err(err) => {
-                tracing::warn!(
-                    "Provider refresh failed for {}: {}",
-                    session_data.provider,
-                    err
-                );
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(ErrorResponse {
-                        error: "invalid_grant".to_string(),
-                        message: "Refresh token was rejected by provider".to_string(),
-                    }),
-                )
-                    .into_response();
-            }
-        }
-    }
+    let config = oauth2_state.auth_manager.config();
 
-    match oauth2_state
-        .auth_manager
-        .session_manager()
-        .refresh_session(
-            provided_refresh_token,
-            &ip_addr,
-            &user_agent,
-            &crate::hosts::canonical_host(get_request_host(headers).as_deref()),
-            rotated_refresh_token,
-        )
-        .await
+    // Rotation: the spent token's successor, in the same family. If this fails
+    // the client still has a working access token and can re-authorize when it
+    // expires, which is better than refusing a refresh that already happened.
+    let refresh_token = match crate::auth::refresh_tokens::issue(
+        &oauth2_state.pool,
+        &grant.user_id,
+        &grant.client_id,
+        grant.audience.as_deref(),
+        grant.scope.as_deref(),
+        Some(&grant.family_id),
+        chrono::Duration::seconds(config.max_session_age as i64),
+    )
+    .await
     {
-        Ok(_) => {
-            let response = TokenResponse {
-                access_token: provided_refresh_token.to_string(),
-                token_type: "Bearer".to_string(),
-                expires_in: Some(oauth2_state.auth_manager.config().session_timeout),
-                refresh_token: Some(provided_refresh_token.to_string()),
-                scope: None,
-            };
+        Ok(token) => Some(token),
+        Err(e) => {
+            tracing::error!("Could not rotate a refresh token: {}", e);
+            None
+        }
+    };
 
-            (StatusCode::OK, Json(response)).into_response()
-        }
-        Err(err) => {
-            tracing::warn!("Refresh token grant failed: {}", err);
-            (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: "invalid_grant".to_string(),
-                    message: "Failed to refresh session".to_string(),
-                }),
-            )
-                .into_response()
-        }
-    }
+    (
+        StatusCode::OK,
+        Json(TokenResponse {
+            access_token: session_token.token,
+            token_type: "Bearer".to_string(),
+            expires_in: Some(config.session_timeout),
+            refresh_token,
+            scope: grant.scope,
+        }),
+    )
+        .into_response()
 }
 
 /// Create authentication router with all routes

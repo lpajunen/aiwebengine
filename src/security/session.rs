@@ -58,16 +58,24 @@ pub fn normalize_resource(resource: &str) -> String {
     format!("{}{}", authority, path)
 }
 
-/// Delete every session belonging to a user.
+/// Delete every session belonging to a user, and every refresh token that
+/// could mint another one.
 ///
 /// A free function because the callers that most need it hold a database pool
 /// and no session manager: roles change in the user repository, and a role that
 /// has changed has to reach sessions that were minted before it did.
+///
+/// The refresh tokens go with them. Ending the sessions alone would revoke
+/// nothing durable — a client holding a refresh token mints a new session on
+/// its next call, and the role or realm just taken away comes straight back
+/// with it.
 pub async fn delete_sessions_for_user(pool: &PgPool, user_id: &str) -> Result<u64, sqlx::Error> {
     let result = sqlx::query("DELETE FROM sessions WHERE user_id = $1")
         .bind(user_id)
         .execute(pool)
         .await?;
+
+    crate::auth::refresh_tokens::revoke_for_user(pool, user_id).await?;
 
     Ok(result.rows_affected())
 }

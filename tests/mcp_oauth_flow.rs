@@ -98,12 +98,13 @@ async fn register_client(client: &Client) -> anyhow::Result<String> {
 
 /// Sign someone in. A local account, because it needs no OAuth provider and
 /// these tests are about what happens after a person is signed in.
-async fn sign_in(client: &Client) -> anyhow::Result<String> {
+async fn sign_in(client: &Client) -> anyhow::Result<(String, String)> {
+    let username = format!("flow{}", &uuid::Uuid::new_v4().simple().to_string()[..12]);
     let response = client
         .http
         .post(client.url("/auth/local/register"))
         .json(&serde_json::json!({
-            "username": format!("flow{}", &uuid::Uuid::new_v4().simple().to_string()[..12]),
+            "username": username,
             "password": "a-password-long-enough",
         }))
         .send()
@@ -118,7 +119,7 @@ async fn sign_in(client: &Client) -> anyhow::Result<String> {
         .map(str::to_string);
 
     match cookie {
-        Some(cookie) => Ok(cookie),
+        Some(cookie) => Ok((username, cookie)),
         None => Err(anyhow::anyhow!(
             "registration issued no session cookie: {} {}",
             status,
@@ -172,9 +173,30 @@ fn request_params<'a>(
 /// Walk register → sign in → authorize → consent → token, and hand back what a
 /// client would be holding at the end of it.
 async fn token_for(client: &Client, resource: Option<&str>) -> anyhow::Result<String> {
+    let token = token_response_for(client, resource).await?.token;
+
+    token["access_token"]
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("token endpoint returned no access token: {}", token))
+}
+
+/// What one walk of the flow leaves a test holding.
+struct Flow {
+    client_id: String,
+    /// The local account that approved the client. Named so a test can revoke
+    /// exactly the identity this flow signed in as, rather than guessing at the
+    /// shared database.
+    username: String,
+    token: Value,
+}
+
+/// The same walk, handing back everything a test might want to look at rather
+/// than one field of the token response.
+async fn token_response_for(client: &Client, resource: Option<&str>) -> anyhow::Result<Flow> {
     clear_registration_limit().await;
     let client_id = register_client(client).await?;
-    let session_cookie = sign_in(client).await?;
+    let (username, session_cookie) = sign_in(client).await?;
     let pkce = PkcePair::generate();
     let params = request_params(&client_id, &pkce.code_challenge, resource);
 
@@ -236,10 +258,40 @@ async fn token_for(client: &Client, resource: Option<&str>) -> anyhow::Result<St
         .json()
         .await?;
 
-    token["access_token"]
+    Ok(Flow {
+        client_id,
+        username,
+        token,
+    })
+}
+
+/// Redeem a refresh token the way a client does when its access token ages out.
+async fn refresh_with(
+    client: &Client,
+    client_id: &str,
+    refresh_token: &str,
+) -> anyhow::Result<(reqwest::StatusCode, Value)> {
+    let response = client
+        .http
+        .post(client.url("/auth/oauth2/token"))
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token),
+            ("client_id", client_id),
+        ])
+        .send()
+        .await?;
+
+    let status = response.status();
+    let body: Value = response.json().await.unwrap_or(Value::Null);
+    Ok((status, body))
+}
+
+fn field(token: &Value, name: &str) -> anyhow::Result<String> {
+    token[name]
         .as_str()
         .map(str::to_string)
-        .ok_or_else(|| anyhow::anyhow!("token endpoint returned no access token: {}", token))
+        .ok_or_else(|| anyhow::anyhow!("token response carried no {}: {}", name, token))
 }
 
 /// Present the token the way an MCP client does, at the endpoint it was minted
@@ -435,6 +487,212 @@ async fn registering_clients_in_a_loop_is_cut_off() -> anyhow::Result<()> {
 
     // The budget is spent, so leave a full one behind for whatever runs next.
     clear_registration_limit().await;
+    server.shutdown().await;
+    Ok(())
+}
+
+// ============================================================================
+// Refresh tokens
+// ============================================================================
+
+/// The finding this closes: the token endpoint returned the session token in
+/// both fields, so the "refresh token" was the access token. Rotation was
+/// impossible, and a leaked refresh token was a leaked access token carrying
+/// the same audience and the same roles.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refresh_token_is_not_an_access_token() -> anyhow::Result<()> {
+    if should_skip_integration_tests() {
+        return Ok(());
+    }
+
+    let server = TestServer::start_with_auth().await?;
+    let client = Client::new(server.port())?;
+    wait_for_server(server.port(), 30).await?;
+
+    let flow = token_response_for(&client, None).await?;
+    let access_token = field(&flow.token, "access_token")?;
+    let refresh_token = field(&flow.token, "refresh_token")?;
+
+    assert_ne!(
+        access_token, refresh_token,
+        "the two must be different credentials"
+    );
+
+    // And the difference has to mean something: a refresh token authenticates
+    // nothing. It is redeemed at the token endpoint, never presented as one.
+    let refused = call_mcp(&client, &refresh_token).await?;
+    assert_eq!(
+        refused.status(),
+        reqwest::StatusCode::UNAUTHORIZED,
+        "a refresh token must not open an API endpoint"
+    );
+
+    server.shutdown().await;
+    Ok(())
+}
+
+/// Redeeming rotates. The client gets a new access token and a new refresh
+/// token, and the one it spent stops working — which is what makes a stolen
+/// copy detectable rather than permanently useful.
+#[tokio::test(flavor = "multi_thread")]
+async fn redeeming_a_refresh_token_rotates_it() -> anyhow::Result<()> {
+    if should_skip_integration_tests() {
+        return Ok(());
+    }
+
+    let server = TestServer::start_with_auth().await?;
+    let client = Client::new(server.port())?;
+    wait_for_server(server.port(), 30).await?;
+
+    let resource = discover_resource(&client).await?;
+    let flow = token_response_for(&client, Some(&resource)).await?;
+    let first_refresh = field(&flow.token, "refresh_token")?;
+
+    let (status, refreshed) = refresh_with(&client, &flow.client_id, &first_refresh).await?;
+    assert_eq!(
+        status,
+        reqwest::StatusCode::OK,
+        "refreshing should succeed: {}",
+        refreshed
+    );
+
+    let second_access = field(&refreshed, "access_token")?;
+    let second_refresh = field(&refreshed, "refresh_token")?;
+    assert_ne!(
+        first_refresh, second_refresh,
+        "the spent token must be replaced, not handed back"
+    );
+    assert_ne!(
+        second_access, second_refresh,
+        "and the replacement must still not be the access token"
+    );
+
+    // The session it minted is a working one, for the audience the original
+    // authorization named — refreshing must not narrow or widen that.
+    let mcp = call_mcp(&client, &second_access).await?;
+    assert_eq!(
+        mcp.status(),
+        reqwest::StatusCode::OK,
+        "the refreshed token must open the endpoint the first one did: {}",
+        mcp.text().await.unwrap_or_default()
+    );
+
+    server.shutdown().await;
+    Ok(())
+}
+
+/// Presenting a spent token cannot be told apart from a replay, so the whole
+/// rotation chain goes — including the successor, which is the copy the
+/// legitimate client is holding. Losing a session is the right outcome when the
+/// alternative is not knowing who else has one.
+#[tokio::test(flavor = "multi_thread")]
+async fn replaying_a_spent_refresh_token_revokes_the_chain() -> anyhow::Result<()> {
+    if should_skip_integration_tests() {
+        return Ok(());
+    }
+
+    let server = TestServer::start_with_auth().await?;
+    let client = Client::new(server.port())?;
+    wait_for_server(server.port(), 30).await?;
+
+    let flow = token_response_for(&client, None).await?;
+    let first_refresh = field(&flow.token, "refresh_token")?;
+
+    let (_, refreshed) = refresh_with(&client, &flow.client_id, &first_refresh).await?;
+    let second_refresh = field(&refreshed, "refresh_token")?;
+
+    let (replayed, _) = refresh_with(&client, &flow.client_id, &first_refresh).await?;
+    assert_eq!(
+        replayed,
+        reqwest::StatusCode::BAD_REQUEST,
+        "a token that was already spent must not be redeemable again"
+    );
+
+    let (successor, _) = refresh_with(&client, &flow.client_id, &second_refresh).await?;
+    assert_eq!(
+        successor,
+        reqwest::StatusCode::BAD_REQUEST,
+        "and the replay must take the rest of the family with it"
+    );
+
+    server.shutdown().await;
+    Ok(())
+}
+
+/// A refresh token is bound to the client it was issued to. Registration is
+/// open, so anyone can hold a `client_id` — holding someone else's refresh
+/// token must not be enough to redeem it.
+#[tokio::test(flavor = "multi_thread")]
+async fn another_client_cannot_redeem_a_refresh_token() -> anyhow::Result<()> {
+    if should_skip_integration_tests() {
+        return Ok(());
+    }
+
+    let server = TestServer::start_with_auth().await?;
+    let client = Client::new(server.port())?;
+    wait_for_server(server.port(), 30).await?;
+
+    let flow = token_response_for(&client, None).await?;
+    let refresh_token = field(&flow.token, "refresh_token")?;
+
+    clear_registration_limit().await;
+    let other_client_id = register_client(&client).await?;
+
+    let (status, _) = refresh_with(&client, &other_client_id, &refresh_token).await?;
+    assert_eq!(
+        status,
+        reqwest::StatusCode::BAD_REQUEST,
+        "a refresh token presented by a client it was not issued to must be refused"
+    );
+
+    server.shutdown().await;
+    Ok(())
+}
+
+/// Ending someone's sessions has to end what could mint another one. Otherwise
+/// revoking a role revokes nothing: the client refreshes, and the role it just
+/// lost comes back with the new session.
+#[tokio::test(flavor = "multi_thread")]
+async fn revoking_sessions_revokes_the_refresh_tokens_too() -> anyhow::Result<()> {
+    if should_skip_integration_tests() {
+        return Ok(());
+    }
+
+    let server = TestServer::start_with_auth().await?;
+    let client = Client::new(server.port())?;
+    wait_for_server(server.port(), 30).await?;
+
+    let flow = token_response_for(&client, None).await?;
+    let access_token = field(&flow.token, "access_token")?;
+    let refresh_token = field(&flow.token, "refresh_token")?;
+
+    // Exactly the account this flow signed in as. The database is shared with
+    // whatever else the suite is running, so "the newest session" would be a
+    // race rather than an identity.
+    let db =
+        aiwebengine::database::get_global_database().expect("the suite's database should be up");
+    let user = aiwebengine::user_repository::find_user_by_provider(
+        aiwebengine::auth::local::LOCAL_PROVIDER,
+        &aiwebengine::auth::local::normalize_username(&flow.username),
+    )?
+    .expect("the account the flow registered should exist");
+
+    aiwebengine::security::delete_sessions_for_user(db.pool(), &user.id).await?;
+
+    let refused = call_mcp(&client, &access_token).await?;
+    assert_eq!(
+        refused.status(),
+        reqwest::StatusCode::UNAUTHORIZED,
+        "the session is gone"
+    );
+
+    let (status, _) = refresh_with(&client, &flow.client_id, &refresh_token).await?;
+    assert_eq!(
+        status,
+        reqwest::StatusCode::BAD_REQUEST,
+        "and the refresh token must not be a way back in"
+    );
+
     server.shutdown().await;
     Ok(())
 }
