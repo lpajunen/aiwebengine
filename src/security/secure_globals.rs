@@ -4852,6 +4852,9 @@ impl SecureGlobalContext {
         // sendMessage(messageType, messageData)
         // Note: messageData should be a JSON string or will be converted to empty object
         let config_send = self.config.clone();
+        // Whoever is dispatching. A listener is part of serving that caller's
+        // invocation, so it runs as they do — see `execute_message_handler`.
+        let user_ctx_send = self.user_context.clone();
         let send_message = Function::new(
             ctx.clone(),
             move |_ctx: rquickjs::Ctx<'_>,
@@ -4934,6 +4937,7 @@ impl SecureGlobalContext {
                         &listener.handler_name,
                         &message_type,
                         &message_data_json,
+                        user_ctx_send.clone(),
                     ) {
                         Ok(_) => {
                             debug!(
@@ -4989,6 +4993,7 @@ fn execute_message_handler(
     handler_name: &str,
     message_type: &str,
     message_data_json: &str,
+    user_context: UserContext,
 ) -> Result<(), String> {
     use rquickjs::Context;
 
@@ -5004,8 +5009,18 @@ fn execute_message_handler(
     let ctx = Context::full(&rt).map_err(|e| format!("Failed to create context: {}", e))?;
 
     let setup = ctx.with(|ctx| -> Result<(), String> {
-        // Set up minimal secure global functions for handler execution
-        let user_context = UserContext::admin("dispatcher".to_string());
+        // The dispatching caller's own context, not one of the engine's.
+        //
+        // A listener used to run as `UserContext::admin("dispatcher")`, which
+        // made `dispatcher.sendMessage` a way to escalate: it is reachable from
+        // inside any script serving any request, so an anonymous visitor could
+        // set off a handler holding `ManageScriptDatabase`, `WriteAssets` and
+        // `AdministerEngine` — powers they do not have and the sending script
+        // did not have either. A listener is part of serving the invocation
+        // that dispatched to it, and a script serving a request runs under the
+        // requesting user's context, so it holds exactly what the sender held:
+        // no more, and no less.
+
         // A listener is a plain handler invocation: it gets the same globals as
         // any other, and only registration is off. It used to run without
         // `assetStorage`, `secretStorage` or `schedulerService` in scope at all,
