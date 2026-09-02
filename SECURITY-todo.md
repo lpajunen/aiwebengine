@@ -8,36 +8,7 @@ Each item says what is true today, what should be true, and how you would know
 the work is done. Anything finished should leave this file rather than sit here
 marked done.
 
-## 1. CORS
-
-**Today.** The engine applies no CORS policy of its own. The only `CorsLayer`
-in the codebase is on the OAuth2 protocol endpoints (`auth/routes.rs`), where it
-is `allow_origin(Any)` with `allow_headers(Any)` — correct and effectively
-required there, since browser-based MCP clients reach the token endpoint from
-origins the engine cannot enumerate, and no credentials ride on it.
-
-`security.enable_cors` and `security.cors_allowed_origins` are parsed and read
-by nothing. They are kept in the templates, marked as unenforced, because this
-work is what will give them meaning.
-
-**What it should be.** The same split the CSP already uses (`security/headers.rs`):
-the engine speaks only for responses it wrote.
-
-- **Engine-owned paths** (`engine_api::RESERVED_ROUTE_PREFIXES`) get a policy
-  built from `cors_allowed_origins`, defaulting to same-origin only. These carry
-  session cookies and administrative data, so a wildcard is wrong for them.
-- **Script routes** set their own headers, as they already do for CSP. A
-  solution serving a public API knows its callers; the engine does not.
-- **The OAuth endpoints keep what they have.** Narrowing them breaks MCP
-  clients, and the wildcard is safe there precisely because those responses are
-  bearer-token exchanges rather than cookie-authenticated reads.
-
-**Done when.** A cross-origin `fetch` with credentials against `/engine/*` from
-an origin outside the allowlist is refused by the browser, an allowed origin
-works, a script route is untouched by either, and the OAuth token endpoint still
-answers a cross-origin MCP client.
-
-## 2. MCP prompt handlers are the last request path without an owner check
+## 1. MCP prompt handlers are the last request path without an owner check
 
 `execute_mcp_prompt_handler` now runs as its caller. What it does not do is
 check whether that caller may reach *this* script — there is no ownership or
@@ -47,7 +18,7 @@ Worth deciding whether a prompt registered by one solution should be callable
 by anyone who can reach `/mcp` on that host, or only by someone the script's
 owner would recognise.
 
-## 3. Duplicate message-listener registration
+## 2. Duplicate message-listener registration
 
 Re-initialising a script — which happens on every upsert — registers its
 dispatcher listeners again without clearing the previous ones, so one
@@ -60,7 +31,7 @@ number of times that depends on how often the script has been written since the
 engine started. `dispatcher::remove_listeners_for_script` exists and is what the
 re-init path should call first.
 
-## 4. Engine-entered contexts still run as an administrator
+## 3. Engine-entered contexts still run as an administrator
 
 Four invocations construct `UserContext::admin(...)` because there is no caller
 to attribute: startup script execution (`lib.rs`), route discovery, `init()`,
@@ -72,7 +43,7 @@ engine-wide administrator, so that a solution's background work cannot do more
 than the solution itself. This needs a notion of "the script's owner" at
 scheduling time, which the engine does not currently record.
 
-## 5. `security.api_key` is a single shared secret
+## 4. `security.api_key` is a single shared secret
 
 `AuthManager::validate_api_key` compares one configured value in constant time.
 There is no rotation, no per-client key, and no way to revoke one caller without

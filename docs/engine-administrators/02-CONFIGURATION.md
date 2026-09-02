@@ -299,6 +299,35 @@ database_url = "postgresql://user:pass@localhost:5432/aiwebengine"
 max_script_size_bytes = 1048576          # Maximum script size (bytes, 1MB)
 ```
 
+### CORS
+
+`cors_allowed_origins` names the origins allowed to read **engine-owned**
+responses — `/engine`, `/auth`, `/graphql`, `/mcp`, `/health`, `/.well-known`.
+Empty, the default, means same-origin only.
+
+The engine does not apply a policy to script routes. A solution serving a
+public API knows which callers it wants and sets its own headers, exactly as it
+does for the Content-Security-Policy; a policy applied on its behalf would
+either break it or over-permit it.
+
+Entries are matched exactly against the `Origin` a browser sends, after
+lower-casing and dropping a trailing slash. `https://example.com` does not match
+`https://example.com:8443`, `http://example.com` or
+`https://example.com.attacker.test`. An entry that is not an origin — a URL with
+a path, a bare hostname, an unexpanded `${VAR}` — is dropped at startup with a
+warning rather than kept as something that can never match.
+
+**A named origin may send the session cookie; `"*"` may not.** A browser
+refuses to honour `Access-Control-Allow-Origin: *` together with
+`Access-Control-Allow-Credentials: true`, so a wildcard grants only
+unauthenticated reads. Reflecting an arbitrary origin *and* allowing
+credentials would mean every site a signed-in administrator visits could read
+`/engine/*` as them, so the engine will not do it.
+
+The OAuth2 protocol endpoints keep a wide policy of their own. Browser-based
+MCP clients reach the token endpoint from origins nobody can enumerate, and a
+PKCE code exchange carries no cookie.
+
 ### Script execution limits
 
 `max_concurrent_executions` bounds how many scripts run at once. Each one holds
@@ -346,8 +375,8 @@ Controls security features.
 
 ```toml
 [security]
-enable_cors = true                           # Enable CORS
-cors_allowed_origins = ["*"]                 # Allowed origins (use ["*"] for dev only!)
+enable_cors = true                           # Apply a CORS policy to engine paths
+cors_allowed_origins = []                    # Origins allowed to read them; empty = same-origin
 csrf_key = "${APP_SECURITY__CSRF_KEY}"      # Base64-encoded 32-byte CSRF key
 enable_security_headers = true               # Enable security headers
 content_security_policy = "default-src 'self'" # Content Security Policy
@@ -516,7 +545,7 @@ cargo run --release
 - Commit secrets to Git
 - Use development configs in production
 - Hardcode API keys or passwords
-- Use `cors_allowed_origins = ["*"]` in production
+- Use `cors_allowed_origins = ["*"]` in production — a wildcard cannot carry credentials, so it grants unauthenticated reads and nothing an admin UI needs
 - Skip HTTPS for production deployments
 - Use weak or short secrets
 - Ignore security warnings
@@ -600,7 +629,7 @@ Quick lookup for all available settings:
 | `[logs]`        | `keep_per_script`             | integer | 1-10000                     | `100`                 |
 | `[logs]`        | `prune_interval_secs`         | integer | >= 60                       | `3600`                |
 | `[security]`    | `enable_cors`                 | boolean | true/false                  | `true`                |
-| `[security]`    | `cors_allowed_origins`        | array   | URLs                        | `["*"]`               |
+| `[security]`    | `cors_allowed_origins`        | array   | Origins, or `["*"]`         | `[]`                  |
 | `[security]`    | `csrf_key`                    | string  | Base64 key                  | `None`                |
 | `[security]`    | `enable_security_headers`     | boolean | true/false                  | `true`                |
 | `[security]`    | `max_request_body_bytes`      | integer | 1024-104857600              | `1048576`             |

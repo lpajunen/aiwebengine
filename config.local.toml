@@ -93,13 +93,20 @@ idle_in_transaction_timeout_ms = 300000
 # because server.trusted_proxies establishes the address from the connection
 # rather than from a header the caller wrote.
 strict_ip_validation = false
-# NOT YET ENFORCED. Parsed and read by nothing: the engine applies no CORS
-# policy of its own, and the only CORS layer it has is the wide-open one the
-# OAuth endpoints need for browser-based MCP clients. Script routes set their
-# own headers. See SECURITY-todo.md — these two keys are kept because that
-# work will give them meaning, not because they have any today.
+# Origins allowed to read engine-owned responses (/engine, /auth, /graphql,
+# /mcp). Each entry is an origin — scheme://host[:port], no path — matched
+# exactly. Empty means same-origin only, which is the default.
+#
+# A named origin may send the session cookie with its request; "*" cannot, since
+# a browser refuses to pair a wildcard with credentials. So list the front ends
+# you develop against rather than reaching for "*", or a signed-in admin UI on
+# another port will read nothing.
 enable_cors = true
-cors_allowed_origins = ["*"]
+cors_allowed_origins = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "https://localhost",
+]
 # Throwaway keys, so a local install starts without generating any. LOCAL
 # DEVELOPMENT ONLY: they are published in this repository, so anyone can forge a
 # session or read a secret encrypted with them. Generate your own for anything

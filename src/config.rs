@@ -341,10 +341,16 @@ pub struct RepositoryConfig {
 /// Security configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecurityConfig {
-    /// Enable CORS
+    /// Whether the engine applies a CORS policy to its own paths at all.
     pub enable_cors: bool,
 
-    /// CORS allowed origins
+    /// Origins allowed to read engine-owned responses (`/engine`, `/auth`,
+    /// `/graphql`, `/mcp`, …). Empty means same-origin only.
+    ///
+    /// Each entry is an origin — `scheme://host[:port]`, no path — matched
+    /// exactly. `"*"` allows any origin *without credentials*, which is the
+    /// only thing a browser will honour for a wildcard; see
+    /// [`crate::security::cors`].
     pub cors_allowed_origins: Vec<String>,
 
     /// Optional base64-encoded 32-byte CSRF key used to validate tokens across instances
@@ -555,7 +561,11 @@ impl Default for SecurityConfig {
     fn default() -> Self {
         Self {
             enable_cors: true,
-            cors_allowed_origins: vec!["*".to_string()],
+            // Same-origin only until an operator names somebody. The default
+            // used to be `["*"]`, which was harmless while nothing read it and
+            // would have become "any origin may read /engine/*" the moment
+            // something did.
+            cors_allowed_origins: Vec::new(),
             enable_security_headers: true,
             content_security_policy: Some(
                 "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'".to_string()

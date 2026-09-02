@@ -90,11 +90,10 @@ idle_in_transaction_timeout_ms = 300000
 # because server.trusted_proxies establishes the address from the connection
 # rather than from a header the caller wrote.
 strict_ip_validation = false
-# NOT YET ENFORCED. Parsed and read by nothing: the engine applies no CORS
-# policy of its own, and the only CORS layer it has is the wide-open one the
-# OAuth endpoints need for browser-based MCP clients. Script routes set their
-# own headers. See SECURITY-todo.md — these two keys are kept because that
-# work will give them meaning, not because they have any today.
+# Origins allowed to read engine-owned responses (/engine, /auth, /graphql,
+# /mcp). Exact match on scheme://host[:port]; empty means same-origin only. A
+# named origin may send its session cookie, "*" may not — a browser refuses to
+# pair a wildcard with credentials.
 enable_cors = true
 cors_allowed_origins = ["https://staging.yourdomain.com", "http://localhost:3000"]
 # Optional: base64-encoded 32-byte CSRF key (set via APP_SECURITY__CSRF_KEY)

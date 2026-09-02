@@ -117,11 +117,15 @@ idle_in_transaction_timeout_ms = 300000
 # because server.trusted_proxies establishes the address from the connection
 # rather than from a header the caller wrote.
 strict_ip_validation = false
-# NOT YET ENFORCED. Parsed and read by nothing: the engine applies no CORS
-# policy of its own, and the only CORS layer it has is the wide-open one the
-# OAuth endpoints need for browser-based MCP clients. Script routes set their
-# own headers. See SECURITY-todo.md — these two keys are kept because that
-# work will give them meaning, not because they have any today.
+# Origins allowed to read engine-owned responses (/engine, /auth, /graphql,
+# /mcp). Exact match on scheme://host[:port]; empty means same-origin only,
+# which is what a deployment whose admin UI is served from the engine's own
+# host wants. A named origin may send its session cookie, "*" may not — a
+# browser refuses to pair a wildcard with credentials, so a wildcard here would
+# only ever grant unauthenticated reads.
+#
+# An entry whose environment variable is unset is dropped with a warning rather
+# than kept as a literal that matches nothing.
 enable_cors = true
 cors_allowed_origins = ["${APP_SECURITY__CORS_ORIGIN_1}", "${APP_SECURITY__CORS_ORIGIN_2}"]
 # MUST be set via APP_SECURITY__CSRF_KEY environment variable (base64-encoded 32-byte key)

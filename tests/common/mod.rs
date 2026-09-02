@@ -209,6 +209,18 @@ impl TestServer {
     /// is running at a time — avoiding races in `execute_startup_scripts()`.
     #[allow(dead_code)]
     pub async fn start() -> anyhow::Result<Self> {
+        Self::start_customized(|_| {}).await
+    }
+
+    /// The same, with a chance to change the configuration first.
+    ///
+    /// For a test about a setting rather than about script behaviour. The test
+    /// configuration is built in code rather than loaded through figment, so
+    /// an environment variable would not reach it.
+    #[allow(dead_code)]
+    pub async fn start_customized(
+        customize: impl FnOnce(&mut config::Config),
+    ) -> anyhow::Result<Self> {
         // Serialize: wait until no other test server is running.
         let permit = get_test_semaphore()
             .acquire_owned()
@@ -222,6 +234,8 @@ impl TestServer {
 
         // Set faster timeout for tests
         test_config.javascript.execution_timeout_ms = 5000; // 5 second timeout for tests
+
+        customize(&mut test_config);
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
@@ -245,6 +259,14 @@ impl TestServer {
     /// that has nothing to do with what is being tested.
     #[allow(dead_code)]
     pub async fn start_with_auth() -> anyhow::Result<Self> {
+        Self::start_with_auth_customized(|_| {}).await
+    }
+
+    /// The same, with a chance to change the configuration first.
+    #[allow(dead_code)]
+    pub async fn start_with_auth_customized(
+        customize: impl FnOnce(&mut config::Config),
+    ) -> anyhow::Result<Self> {
         use aiwebengine::auth::config::{AuthConfig, CookieConfig, InternalAuthConfig};
 
         let permit = get_test_semaphore()
@@ -288,6 +310,8 @@ impl TestServer {
             },
             ..AuthConfig::default()
         });
+
+        customize(&mut test_config);
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let port = start_server_with_config(test_config, shutdown_rx).await?;
@@ -341,7 +365,16 @@ impl TestContext {
     /// Start a new server and add it to the context
     #[allow(dead_code)]
     pub async fn start_server(&self) -> anyhow::Result<u16> {
-        let server = TestServer::start().await?;
+        self.start_server_customized(|_| {}).await
+    }
+
+    /// The same, with a chance to change the configuration first.
+    #[allow(dead_code)]
+    pub async fn start_server_customized(
+        &self,
+        customize: impl FnOnce(&mut config::Config),
+    ) -> anyhow::Result<u16> {
+        let server = TestServer::start_customized(customize).await?;
         let port = server.port();
         self.servers.lock().await.push(server);
         Ok(port)

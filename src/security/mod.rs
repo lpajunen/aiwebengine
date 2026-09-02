@@ -1,6 +1,7 @@
 pub mod audit;
 pub mod capabilities;
 pub mod client_ip;
+pub mod cors;
 pub mod csp;
 pub mod csrf;
 pub mod encryption;
@@ -15,6 +16,7 @@ pub mod validation;
 pub use audit::{SecurityAuditor, SecurityEvent, SecurityEventType, SecuritySeverity};
 pub use capabilities::UserContext;
 pub use client_ip::{TrustedProxies, normalize_client_ip};
+pub use cors::{CorsConfig, cors_middleware};
 pub use csp::{
     CspDirective, CspManager, CspPolicy, CspSource, CspViolationReport, engine_page_policy,
     generate_nonce,

@@ -2740,6 +2740,18 @@ async fn setup_routes(
         security::normalize_client_ip,
     ));
 
+    // Inside the header layer and outside everything else, because a preflight
+    // must be answered before any middleware that wants a session: a browser
+    // sends it without credentials, so authenticating it would refuse every
+    // cross-origin request before the real one was ever made.
+    app = app.layer(axum::middleware::from_fn_with_state(
+        Arc::new(security::CorsConfig::from_settings(
+            config.security.enable_cors,
+            &config.security.cors_allowed_origins,
+        )),
+        security::cors_middleware,
+    ));
+
     // Outermost, so it sees every response — including those produced by
     // layers inside it, and by scripts. It only ever fills in headers a
     // response did not set for itself.
