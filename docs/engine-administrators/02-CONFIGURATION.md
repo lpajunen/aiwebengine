@@ -312,9 +312,22 @@ Controls database and script storage. PostgreSQL is the only supported storage b
 database_url = "postgresql://user:pass@localhost:5432/aiwebengine"
 max_script_size_bytes = 1048576          # Maximum script size (bytes, 1MB)
 max_asset_size_bytes = 10485760          # Maximum asset size (bytes, 10MB)
-max_log_messages_per_script = 100        # Maximum log messages per script
-log_retention_hours = 24                 # Log retention time in hours
-auto_prune_logs = true                   # Enable automatic log pruning
+```
+
+### Script logs
+
+How much of each script's log survives. Both dials are enforced and either one
+alone is enough to remove a line: the count bounds a script that logs in a
+loop, and the age bounds the dormant scripts that would otherwise sit on their
+full quota forever. A background pass applies them on `prune_interval_secs`;
+in a cluster one instance does the work on any given tick.
+
+```toml
+[logs]
+prune_enabled = true                     # Off means the table grows without bound
+retention_hours = 24                     # Delete lines older than this; 0 disables the age bound
+keep_per_script = 100                    # Keep this many newest lines per script
+prune_interval_secs = 3600               # How often a pass runs
 ```
 
 **Environment overrides:**
@@ -621,9 +634,10 @@ Quick lookup for all available settings:
 | `[repository]`  | `database_url`                | string  | Connection string           | (required)            |
 | `[repository]`  | `max_script_size_bytes`       | integer | 1024-10485760               | `1048576`             |
 | `[repository]`  | `max_asset_size_bytes`        | integer | 1024-104857600              | `10485760`            |
-| `[repository]`  | `max_log_messages_per_script` | integer | 1-10000                     | `100`                 |
-| `[repository]`  | `log_retention_hours`         | integer | 1-720                       | `24`                  |
-| `[repository]`  | `auto_prune_logs`             | boolean | true/false                  | `true`                |
+| `[logs]`        | `prune_enabled`               | boolean | true/false                  | `true`                |
+| `[logs]`        | `retention_hours`             | integer | 0-720 (0 = no age bound)    | `24`                  |
+| `[logs]`        | `keep_per_script`             | integer | 1-10000                     | `100`                 |
+| `[logs]`        | `prune_interval_secs`         | integer | >= 60                       | `3600`                |
 | `[security]`    | `enable_cors`                 | boolean | true/false                  | `true`                |
 | `[security]`    | `cors_allowed_origins`        | array   | URLs                        | `["*"]`               |
 | `[security]`    | `enable_csrf`                 | boolean | true/false                  | `false`               |
@@ -716,9 +730,12 @@ fail_startup_on_init_error = true
 database_url = "${APP_REPOSITORY__DATABASE_URL}"
 max_script_size_bytes = 1048576
 max_asset_size_bytes = 10485760
-max_log_messages_per_script = 1000
-log_retention_hours = 168
-auto_prune_logs = true
+
+[logs]
+prune_enabled = true
+retention_hours = 168
+keep_per_script = 1000
+prune_interval_secs = 3600
 
 [security]
 enable_cors = true

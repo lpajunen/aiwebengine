@@ -592,14 +592,11 @@ pub fn query_log_entries_authorized(
     repository::query_log_messages(query)
 }
 
-/// Number of entries per script that a prune keeps; mirrors the repository's
-/// prune statement so callers can report what happened.
-const PRUNE_KEEPS_PER_SCRIPT: u32 = 20;
-
 /// Delete logs; DeleteLogs capability required.
 ///
-/// With a `uri` this clears that script's logs outright. Without one it prunes
-/// every script back to its newest entries.
+/// With a `uri` this clears that script's logs outright. Without one it applies
+/// the configured retention to every script, which the background pruner also
+/// does on its own schedule.
 pub fn delete_logs_authorized(user: &UserContext, uri: Option<&str>) -> AppResult<Value> {
     user.require_capability(&Capability::DeleteLogs)?;
     match uri {
@@ -612,10 +609,13 @@ pub fn delete_logs_authorized(user: &UserContext, uri: Option<&str>) -> AppResul
             }))
         }
         None => {
-            repository::prune_log_messages()?;
+            let retention = crate::log_retention::configured();
+            let deleted = repository::prune_log_messages(retention)?;
             Ok(json!({
                 "pruned": true,
-                "keptPerScript": PRUNE_KEEPS_PER_SCRIPT,
+                "deleted": deleted,
+                "keptPerScript": retention.keep_per_script,
+                "keptHours": retention.keep_hours,
                 "timestamp": iso_timestamp(),
             }))
         }
@@ -6955,7 +6955,7 @@ fn native_tools() -> &'static [NativeToolEntry] {
         ),
         (
             "prune_logs",
-            "Delete log messages. Clears one script's logs when uri is given, otherwise prunes every script back to its 20 newest entries.",
+            "Delete log messages. Clears one script's logs when uri is given, otherwise applies the configured retention to every script.",
             || {
                 json!({
                     "type": "object",

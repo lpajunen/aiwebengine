@@ -8,6 +8,7 @@
 
 mod common;
 
+use aiwebengine::log_retention::LogRetention;
 use aiwebengine::repository;
 use common::{TestContext, wait_for_server};
 use serde_json::{Value, json};
@@ -127,7 +128,7 @@ async fn test_insert_and_list_log_messages() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_prune_keeps_latest_20_logs() {
+async fn test_prune_keeps_newest_per_script() {
     if std::env::var("DATABASE_URL").is_err() {
         return;
     }
@@ -138,7 +139,7 @@ async fn test_prune_keeps_latest_20_logs() {
         .expect("Server failed to start");
     wait_for_server(port, 20).await.expect("Server not ready");
 
-    let test_uri = "test_prune_keeps_latest_20_logs";
+    let test_uri = "test_prune_keeps_newest_per_script";
 
     // Clear any existing logs for this URI
     let _ = repository::clear_log_messages(test_uri);
@@ -148,7 +149,15 @@ async fn test_prune_keeps_latest_20_logs() {
         repository::insert_log_message(test_uri, &format!("prune-test-{}", i), "INFO");
     }
 
-    let _ = repository::prune_log_messages();
+    // Age bound disabled, so only the count decides what survives.
+    let retention = LogRetention {
+        keep_per_script: 20,
+        keep_hours: 0,
+    };
+    repository::prune_log_messages_async(retention)
+        .await
+        .expect("prune should succeed");
+
     let msgs = repository::fetch_log_messages(test_uri);
     assert!(msgs.len() <= 20, "prune should keep at most 20 messages");
 
@@ -161,6 +170,61 @@ async fn test_prune_keeps_latest_20_logs() {
     } else {
         panic!("no messages after prune");
     }
+
+    context.cleanup().await.expect("Failed to cleanup");
+}
+
+/// The age bound is what keeps a script that logged once a year ago from
+/// sitting on its full quota forever, so it has to delete lines the count
+/// would have kept.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_prune_drops_lines_past_the_retention_window() {
+    if std::env::var("DATABASE_URL").is_err() {
+        return;
+    }
+    let context = TestContext::new();
+    let port = context
+        .start_server()
+        .await
+        .expect("Server failed to start");
+    wait_for_server(port, 20).await.expect("Server not ready");
+
+    let test_uri = "test_prune_drops_lines_past_the_retention_window";
+    let _ = repository::clear_log_messages(test_uri);
+
+    repository::insert_log_message(test_uri, "stale-line", "INFO");
+    repository::insert_log_message(test_uri, "fresh-line", "INFO");
+
+    // Backdate the first line past the window. Only the age bound can remove
+    // it: two lines are well inside any per-script count.
+    let db = repository::get_db_pool().expect("database pool");
+    sqlx::query("UPDATE logs SET created_at = now() - interval '48 hours' WHERE script_uri = $1 AND message = $2")
+        .bind(test_uri)
+        .bind("stale-line")
+        .execute(db.pool())
+        .await
+        .expect("backdating the stale line should succeed");
+
+    let retention = LogRetention {
+        keep_per_script: 1000,
+        keep_hours: 24,
+    };
+    repository::prune_log_messages_async(retention)
+        .await
+        .expect("prune should succeed");
+
+    let messages: Vec<String> = repository::fetch_log_messages(test_uri)
+        .into_iter()
+        .map(|m| m.message)
+        .collect();
+    assert!(
+        !messages.iter().any(|m| m.contains("stale-line")),
+        "a line older than the window should be pruned even well inside the count: {messages:?}"
+    );
+    assert!(
+        messages.iter().any(|m| m.contains("fresh-line")),
+        "a line inside the window should survive: {messages:?}"
+    );
 
     context.cleanup().await.expect("Failed to cleanup");
 }

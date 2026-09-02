@@ -26,6 +26,7 @@ pub mod graphql_ws;
 pub mod hosts;
 pub mod http_client;
 pub mod js_engine;
+pub mod log_retention;
 pub mod mcp;
 pub mod mcp_client;
 pub mod middleware;
@@ -1376,6 +1377,12 @@ pub async fn start_server_with_config(
         debug!("Script init timeout was already configured");
     }
 
+    // Recorded so the engine API reports the same retention the background
+    // pruner enforces.
+    if !log_retention::configure(log_retention::LogRetention::from_config(&config.logs)) {
+        debug!("Log retention was already configured");
+    }
+
     // Test budgets: one per test module, one for a whole run.
     let test_timeout_ms = config
         .javascript
@@ -1428,14 +1435,17 @@ pub async fn start_server_with_config(
     let (server_shutdown_tx, server_shutdown_rx) = tokio::sync::oneshot::channel();
     let (scheduler_shutdown_tx, scheduler_shutdown_rx) = tokio::sync::oneshot::channel();
     let (pruner_shutdown_tx, pruner_shutdown_rx) = tokio::sync::oneshot::channel();
+    let (log_pruner_shutdown_tx, log_pruner_shutdown_rx) = tokio::sync::oneshot::channel();
 
     scheduler::spawn_worker(scheduler_shutdown_rx);
     revisions::spawn_pruner(config.revisions.clone(), pruner_shutdown_rx);
+    log_retention::spawn_pruner(config.logs.clone(), log_pruner_shutdown_rx);
 
     tokio::spawn(async move {
         let _ = shutdown_rx.await;
         let _ = scheduler_shutdown_tx.send(());
         let _ = pruner_shutdown_tx.send(());
+        let _ = log_pruner_shutdown_tx.send(());
         let _ = server_shutdown_tx.send(());
     });
 

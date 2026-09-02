@@ -38,6 +38,14 @@ pub struct AppConfig {
     /// would.
     #[serde(default)]
     pub revisions: RevisionsConfig,
+
+    /// Script log retention.
+    ///
+    /// Defaulted for the same reason `revisions` is: a configuration written
+    /// before this section existed keeps loading, and gets the policy a new
+    /// one would.
+    #[serde(default)]
+    pub logs: LogsConfig,
 }
 
 /// How much of a script's history to keep.
@@ -70,6 +78,51 @@ impl Default for RevisionsConfig {
             keep_per_script: 50,
             // Hourly. The pass is a pair of indexed deletes behind an advisory
             // lock, and nothing downstream depends on it being prompt.
+            prune_interval_secs: 3600,
+        }
+    }
+}
+
+/// How much of a script's log to keep.
+///
+/// Logs are written by scripts, in whatever volume a script cares to write
+/// them, and nothing downstream depends on an old line still being there.
+/// That makes retention here a question of bounding a shared table rather
+/// than of preserving history, which is why both dials are enforced and
+/// either one alone is enough to delete a row — unlike [`RevisionsConfig`],
+/// where a revision has to fall outside *both* before it goes.
+///
+/// The two bound different things and neither bounds the table alone: a count
+/// per script leaves a thousand dormant scripts holding a hundred lines each,
+/// and an age window leaves one script logging in a loop to fill it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogsConfig {
+    /// Whether to prune at all. Off means the `logs` table grows until
+    /// somebody empties it by hand.
+    pub prune_enabled: bool,
+
+    /// Delete log lines older than this many hours.
+    pub retention_hours: u64,
+
+    /// Keep at most this many of the newest lines per script, whatever their
+    /// age.
+    pub keep_per_script: u32,
+
+    /// How often to run a pruning pass, in seconds.
+    pub prune_interval_secs: u64,
+}
+
+impl Default for LogsConfig {
+    fn default() -> Self {
+        Self {
+            prune_enabled: true,
+            retention_hours: 24,
+            // Was hardcoded at 20 for as long as pruning was a manual action.
+            // A background pass makes a larger window affordable, and 20 is
+            // too few to debug anything that logs more than a line per step.
+            keep_per_script: 100,
+            // Hourly, matching the revision pruner: one indexed delete behind
+            // an advisory lock, and nothing waits on it.
             prune_interval_secs: 3600,
         }
     }
@@ -252,15 +305,6 @@ pub struct RepositoryConfig {
 
     /// Maximum asset size in bytes
     pub max_asset_size_bytes: usize,
-
-    /// Maximum number of log messages per script
-    pub max_log_messages_per_script: usize,
-
-    /// Log message retention time in hours
-    pub log_retention_hours: u64,
-
-    /// Enable automatic log pruning
-    pub auto_prune_logs: bool,
 
     /// Maximum upload file size in bytes
     pub max_upload_size_bytes: usize,
@@ -569,11 +613,8 @@ impl Default for RepositoryConfig {
         Self {
             connection_string: "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine"
                 .to_string(),
-            max_script_size_bytes: 1024 * 1024,     // 1MB
-            max_asset_size_bytes: 10 * 1024 * 1024, // 10MB
-            max_log_messages_per_script: 100,
-            log_retention_hours: 24,
-            auto_prune_logs: true,
+            max_script_size_bytes: 1024 * 1024,      // 1MB
+            max_asset_size_bytes: 10 * 1024 * 1024,  // 10MB
             max_upload_size_bytes: 10 * 1024 * 1024, // 10MB
             max_connections: default_db_max_connections(),
             lock_timeout_ms: default_lock_timeout_ms(),
@@ -914,11 +955,6 @@ impl AppConfig {
     /// Get JavaScript execution timeout as Duration
     pub fn js_execution_timeout(&self) -> Duration {
         Duration::from_millis(self.javascript.execution_timeout_ms)
-    }
-
-    /// Get log retention duration
-    pub fn log_retention_duration(&self) -> Duration {
-        Duration::from_secs(self.repository.log_retention_hours * 3600)
     }
 }
 
@@ -1295,9 +1331,45 @@ mod tests {
         // Test duration conversion methods
         assert_eq!(config.request_timeout().as_secs(), 30);
         assert_eq!(config.js_execution_timeout().as_millis(), 5000);
+    }
 
-        // Test log retention duration
-        let retention = config.log_retention_duration();
-        assert_eq!(retention.as_secs(), 24 * 3600); // 24 hours in seconds
+    #[test]
+    fn test_logs_config_defaults() {
+        let config = AppConfig::default();
+
+        assert!(config.logs.prune_enabled);
+        assert_eq!(config.logs.retention_hours, 24);
+        assert_eq!(config.logs.keep_per_script, 100);
+        assert_eq!(config.logs.prune_interval_secs, 3600);
+    }
+
+    /// A configuration written before `[logs]` existed still loads, and gets
+    /// the policy a new one would.
+    #[test]
+    fn test_logs_config_defaults_when_section_absent() {
+        let rendered =
+            toml::to_string(&AppConfig::default()).expect("default config should serialize");
+
+        // Drop the [logs] table, leaving a file shaped like one written before
+        // the section existed.
+        let mut without_logs = String::new();
+        let mut skipping = false;
+        for line in rendered.lines() {
+            if line.starts_with('[') {
+                skipping = line.starts_with("[logs]");
+            }
+            if !skipping {
+                without_logs.push_str(line);
+                without_logs.push('\n');
+            }
+        }
+        assert!(!without_logs.contains("[logs]"));
+
+        let config: AppConfig =
+            toml::from_str(&without_logs).expect("config without a [logs] section should load");
+
+        assert!(config.logs.prune_enabled);
+        assert_eq!(config.logs.retention_hours, 24);
+        assert_eq!(config.logs.keep_per_script, 100);
     }
 }

@@ -1,4 +1,5 @@
 use crate::error::{AppError, AppResult};
+use crate::log_retention::LogRetention;
 use crate::scheduler;
 use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgPool, Row};
@@ -37,6 +38,10 @@ const RETIRED_BOOTSTRAP_SCRIPTS: &[&str] = &[
     "https://example.com/cli",
     "https://example.com/auth",
 ];
+
+/// Advisory lock key for the log pruning pass, so that in a multi-instance
+/// cluster one instance does the work on any given tick.
+const LOG_PRUNE_LOCK: &str = "log-prune";
 
 /// Helper to run async code in a blocking context, handling different runtime scenarios
 fn run_blocking<F, R>(future: F) -> R
@@ -2413,25 +2418,66 @@ where
 }
 
 /// Database-backed prune log messages (keep only latest 20 per script)
-async fn db_prune_log_messages<'e, E>(executor: E) -> AppResult<()>
-where
-    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
-{
-    // For each script_uri, keep only the 20 most recent messages
-    sqlx::query(
+async fn db_prune_log_messages(pool: &PgPool, retention: LogRetention) -> AppResult<u64> {
+    // Both dials are enforced, and either one alone is enough to delete a
+    // line: the count bounds a script that logs in a loop, and the age bounds
+    // the thousand dormant scripts the count would let sit on their quota
+    // forever. Revisions deliberately require both, because a revision is
+    // history someone may still need; a log line is a diagnostic.
+    //
+    // Recency is by `seq`, not `created_at`: two lines written in the same
+    // microsecond tie on the timestamp and the tie breaks differently on every
+    // query, so a count-based cut would keep a different hundred each pass.
+    // `seq` is also what the log view orders by, so "the newest hundred" means
+    // the same hundred here and there.
+    let mut tx = pool.begin().await.map_err(|e| {
+        error!("Database error starting log prune: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
+    })?;
+
+    // One instance prunes per tick. The delete is idempotent, so two at once
+    // would be correct but would scan the same rows to reach the same answer.
+    let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(hashtext($1))")
+        .bind(LOG_PRUNE_LOCK)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| {
+            error!("Database error locking for log prune: {}", e);
+            AppError::Database {
+                message: format!("Database error: {}", e),
+                source: None,
+            }
+        })?;
+
+    if !acquired {
+        debug!("Another instance is pruning logs; skipping this pass");
+        return Ok(0);
+    }
+
+    let deleted = sqlx::query(
         r#"
+        WITH ranked AS (
+            SELECT id,
+                   created_at,
+                   row_number() OVER (
+                       PARTITION BY script_uri ORDER BY seq DESC
+                   ) AS recency
+            FROM logs
+        )
         DELETE FROM logs
         WHERE id IN (
-            SELECT id FROM (
-                SELECT id,
-                       ROW_NUMBER() OVER (PARTITION BY script_uri ORDER BY created_at DESC) as rn
-                FROM logs
-            ) ranked
-            WHERE rn > 20
+            SELECT id FROM ranked
+            WHERE recency > $1
+               OR ($2 > 0 AND created_at < now() - make_interval(hours => $2))
         )
         "#,
     )
-    .execute(executor)
+    .bind(retention.keep_per_script)
+    .bind(retention.keep_hours)
+    .execute(&mut *tx)
     .await
     .map_err(|e| {
         error!("Database error pruning log messages: {}", e);
@@ -2439,10 +2485,27 @@ where
             message: format!("Database error: {}", e),
             source: None,
         }
+    })?
+    .rows_affected();
+
+    tx.commit().await.map_err(|e| {
+        error!("Database error committing log prune: {}", e);
+        AppError::Database {
+            message: format!("Database error: {}", e),
+            source: None,
+        }
     })?;
 
-    debug!("Pruned log messages in database, keeping 20 entries per script");
-    Ok(())
+    if deleted > 0 {
+        debug!(
+            deleted = deleted,
+            keep_per_script = retention.keep_per_script,
+            keep_hours = retention.keep_hours,
+            "Pruned log messages"
+        );
+    }
+
+    Ok(deleted)
 }
 
 /// Database-backed upsert asset
@@ -5236,10 +5299,23 @@ pub fn clear_log_messages(script_uri: &str) -> AppResult<()> {
     run_bounded(async { repo.clear_logs(script_uri).await })
 }
 
-/// Keep only the latest `limit` log messages (default 20) for each script URI and remove older ones
-pub fn prune_log_messages() -> AppResult<()> {
+/// Applies `retention` to every script's log, returning the number of lines
+/// removed.
+///
+/// The async form is what the background pruner uses; the blocking wrapper is
+/// for callers already on a blocking thread, which must not block on a runtime
+/// they are running inside.
+pub async fn prune_log_messages_async(retention: LogRetention) -> AppResult<u64> {
+    let Some(repo) = get_repository_opt() else {
+        return Ok(0);
+    };
+    repo.prune_logs(retention).await
+}
+
+/// The same, for a blocking caller.
+pub fn prune_log_messages(retention: LogRetention) -> AppResult<u64> {
     let repo = get_repository();
-    run_bounded(async { repo.prune_logs().await })
+    run_bounded(async move { repo.prune_logs(retention).await })
 }
 
 /// Upsert script with error handling
@@ -6352,7 +6428,7 @@ pub trait Repository: Send + Sync {
     async fn fetch_all_logs(&self) -> AppResult<Vec<LogEntry>>;
     async fn query_logs(&self, query: &LogQuery) -> AppResult<Vec<LogEntry>>;
     async fn clear_logs(&self, script_uri: &str) -> AppResult<()>;
-    async fn prune_logs(&self) -> AppResult<()>;
+    async fn prune_logs(&self, retention: LogRetention) -> AppResult<u64>;
 
     // Script storage operations
     async fn get_script_properties(&self, script_uri: &str, key: &str)
@@ -6966,14 +7042,11 @@ impl Repository for PostgresRepository {
         }
     }
 
-    async fn prune_logs(&self) -> AppResult<()> {
-        let executor = crate::database::get_current_executor(&self.pool);
-        match executor {
-            crate::database::TransactionExecutor::Transaction(tx) => {
-                db_prune_log_messages(&mut **tx).await
-            }
-            crate::database::TransactionExecutor::Pool(pool) => db_prune_log_messages(pool).await,
-        }
+    /// Always on the pool rather than any ambient transaction: the pass takes
+    /// an advisory lock for its own transaction's lifetime, which only means
+    /// anything if that transaction is the prune's own.
+    async fn prune_logs(&self, retention: LogRetention) -> AppResult<u64> {
+        db_prune_log_messages(&self.pool, retention).await
     }
 
     async fn get_script_properties(
