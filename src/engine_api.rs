@@ -592,34 +592,36 @@ pub fn query_log_entries_authorized(
     repository::query_log_messages(query)
 }
 
-/// Delete logs; DeleteLogs capability required.
+/// Clear one script's logs; `DeleteLogs` and ownership of the script, or an
+/// administrator.
 ///
-/// With a `uri` this clears that script's logs outright. Without one it applies
-/// the configured retention to every script, which the background pruner also
-/// does on its own schedule.
-pub fn delete_logs_authorized(user: &UserContext, uri: Option<&str>) -> AppResult<Value> {
+/// Naming the script is required. This used to accept no `uri` as "prune every
+/// script back to its newest entries", which is now what the background pruner
+/// does on its own schedule — and which, reachable here, let anyone holding
+/// the editor-tier `DeleteLogs` truncate the logs of every script in the
+/// engine, on hosts they had nothing to do with. Acting on what you do not own
+/// is what `AdministerEngine` marks.
+pub fn delete_logs_authorized(user: &UserContext, uri: &str) -> AppResult<Value> {
     user.require_capability(&Capability::DeleteLogs)?;
-    match uri {
-        Some(uri) => {
-            repository::clear_log_messages(uri)?;
-            Ok(json!({
-                "uri": uri,
-                "cleared": true,
-                "timestamp": iso_timestamp(),
-            }))
-        }
-        None => {
-            let retention = crate::log_retention::configured();
-            let deleted = repository::prune_log_messages(retention)?;
-            Ok(json!({
-                "pruned": true,
-                "deleted": deleted,
-                "keptPerScript": retention.keep_per_script,
-                "keptHours": retention.keep_hours,
-                "timestamp": iso_timestamp(),
-            }))
-        }
+    if !is_admin_or_owner(user, uri) {
+        warn!(
+            user_id = ?user.user_id,
+            script_name = %uri,
+            "Permission denied: only an administrator or owner may clear a script's logs"
+        );
+        return Err(crate::error::AppError::AuthorizationFailed {
+            message: format!(
+                "You must be an administrator or owner to clear the logs of script '{}'",
+                uri
+            ),
+        });
     }
+    repository::clear_log_messages(uri)?;
+    Ok(json!({
+        "uri": uri,
+        "cleared": true,
+        "timestamp": iso_timestamp(),
+    }))
 }
 
 /// Init status for one script; an authenticated caller with the ReadScripts
@@ -3605,15 +3607,18 @@ pub async fn script_logs_stream_route(
         .into_response()
 }
 
-/// Delete logs for one script, or prune every script back to its newest
-/// entries when `uri` is omitted.
+/// Clear one script's logs.
+///
+/// `uri` is required. Retention across every script is the background pruner's
+/// job (`[logs]`), not something a caller reaches through here.
 #[utoipa::path(
     delete,
     path = "/engine/script_logs",
     tags = ["Logging"],
-    params(("uri" = Option<String>, Query, description = "Script URI to clear; omit to prune every script")),
+    params(("uri" = String, Query, description = "Script URI whose logs to clear")),
     responses(
-        (status = 200, description = "Logs cleared or pruned"),
+        (status = 200, description = "Logs cleared"),
+        (status = 400, description = "No script URI given"),
         (status = 403, description = "Access denied"),
     )
 )]
@@ -3622,10 +3627,16 @@ pub async fn script_logs_delete_route(
     Query(params): Query<ScriptParams>,
 ) -> Response {
     let user = user_context_from(auth_user.as_deref());
-    let uri = params.uri.clone();
+    let Some(uri) = params.uri.clone() else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "A script URI is required: pass ?uri=<script>. Retention across every script is \
+             applied by the engine's own pruner, configured under [logs]."
+                .to_string(),
+        );
+    };
 
-    let result =
-        tokio::task::spawn_blocking(move || delete_logs_authorized(&user, uri.as_deref())).await;
+    let result = tokio::task::spawn_blocking(move || delete_logs_authorized(&user, &uri)).await;
 
     match result {
         Ok(Ok(body)) => json_response(StatusCode::OK, body),
@@ -6954,17 +6965,18 @@ fn native_tools() -> &'static [NativeToolEntry] {
             tool_read_logs,
         ),
         (
-            "prune_logs",
-            "Delete log messages. Clears one script's logs when uri is given, otherwise applies the configured retention to every script.",
+            "clear_logs",
+            "Delete one script's log messages. Retention across every script is applied by the engine's own pruner and is not something a caller triggers.",
             || {
                 json!({
                     "type": "object",
                     "properties": {
-                        "uri": { "type": "string", "description": "Optional script URI whose logs to clear; omit to prune every script" }
-                    }
+                        "uri": { "type": "string", "description": "Script URI whose logs to clear" }
+                    },
+                    "required": ["uri"]
                 })
             },
-            tool_prune_logs,
+            tool_clear_logs,
         ),
         (
             "list_routes",
@@ -8287,8 +8299,11 @@ fn tool_read_logs(args: &Value, user: &UserContext) -> Value {
     }
 }
 
-fn tool_prune_logs(args: &Value, user: &UserContext) -> Value {
-    match delete_logs_authorized(user, arg_str(args, "uri")) {
+fn tool_clear_logs(args: &Value, user: &UserContext) -> Value {
+    let Some(uri) = arg_str(args, "uri") else {
+        return json!({ "error": "uri is required: name the script whose logs to clear" });
+    };
+    match delete_logs_authorized(user, uri) {
         Ok(body) => body,
         Err(e) => json!({ "error": format!("Failed to delete logs: {}", e) }),
     }

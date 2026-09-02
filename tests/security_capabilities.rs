@@ -796,13 +796,34 @@ async fn engine_log_deletes_refuse_without_capability() {
     setup_env().await;
 
     let denied = create_user_with_capabilities("no-delete-logs", vec![Capability::ViewLogs]);
-    let error = aiwebengine::engine_api::delete_logs_authorized(&denied, None)
-        .expect_err("prune without DeleteLogs should be refused");
-    assert_eq!(error.status_code(), 403, "expected a forbidden status");
-
-    let error = aiwebengine::engine_api::delete_logs_authorized(&denied, Some("some-script"))
+    let error = aiwebengine::engine_api::delete_logs_authorized(&denied, "some-script")
         .expect_err("clear without DeleteLogs should be refused");
     assert_eq!(error.status_code(), 403, "expected a forbidden status");
+}
+
+/// `DeleteLogs` is editor-tier, and an editor is not licensed to act on a
+/// script they do not own — that is what `AdministerEngine` marks.
+#[tokio::test(flavor = "multi_thread")]
+async fn engine_log_clear_refuses_a_script_the_caller_does_not_own() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    setup_env().await;
+
+    let editor =
+        create_user_with_capabilities("editor-without-ownership", vec![Capability::DeleteLogs]);
+    let error =
+        aiwebengine::engine_api::delete_logs_authorized(&editor, "a-script-owned-by-nobody-here")
+            .expect_err("clearing another owner's logs should be refused");
+    assert_eq!(error.status_code(), 403, "expected a forbidden status");
+
+    // An administrator acts on what they do not own.
+    let admin = create_user_with_capabilities(
+        "admin-clearing-logs",
+        vec![Capability::DeleteLogs, Capability::AdministerEngine],
+    );
+    aiwebengine::engine_api::delete_logs_authorized(&admin, "a-script-owned-by-nobody-here")
+        .expect("an administrator may clear any script's logs");
 }
 
 #[tokio::test(flavor = "multi_thread")]

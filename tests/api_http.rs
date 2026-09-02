@@ -296,7 +296,7 @@ async fn test_script_logs_all_scripts_and_filters() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn test_script_logs_delete_clears_and_prunes() {
+async fn test_script_logs_delete_clears_one_named_script() {
     if should_skip_integration_tests() {
         return;
     }
@@ -326,19 +326,19 @@ async fn test_script_logs_delete_clears_and_prunes() {
     assert!(repository::fetch_log_messages(cleared).is_empty());
     assert!(!repository::fetch_log_messages(kept).is_empty());
 
-    // Without a uri it prunes every script back to its newest entries.
-    for i in 0..25 {
-        repository::insert_log_message(cleared, &format!("prune-{}", i), "INFO");
-    }
+    // Without a uri there is nothing to do: retention across every script is
+    // the background pruner's job, not a request anyone makes.
+    repository::insert_log_message(kept, "still-here", "INFO");
     let response = client
         .delete(format!("{}/engine/script_logs", base))
         .send()
         .await
-        .expect("prune logs request failed");
-    assert_eq!(response.status(), 200);
-    let body: serde_json::Value = response.json().await.expect("prune response not JSON");
-    assert_eq!(body["pruned"], true);
-    assert!(repository::fetch_log_messages(cleared).len() <= 20);
+        .expect("unscoped delete request failed");
+    assert_eq!(response.status(), 400);
+    assert!(
+        !repository::fetch_log_messages(kept).is_empty(),
+        "a refused delete must not have touched anything"
+    );
 
     let _ = repository::clear_log_messages(cleared);
     let _ = repository::clear_log_messages(kept);

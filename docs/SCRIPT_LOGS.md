@@ -173,6 +173,11 @@ The `read_logs` tool takes the same filters as the listing, including
 equivalent — MCP is request/response — but polling `read_logs` with `after_seq`
 returns only what is new, which is the same loop a tail runs.
 
-`prune_logs` clears one script's logs, or prunes every script back to its 20
-newest entries when no `uri` is given. `DELETE /engine/script_logs` does the
-same over HTTP.
+`clear_logs` clears one script's logs, and `DELETE /engine/script_logs?uri=…`
+does the same over HTTP. Both require `DeleteLogs` and ownership of the script,
+or an administrator.
+
+Neither prunes across scripts. Keeping the `logs` table bounded is the engine's
+own job: a background pass applies the retention configured under `[logs]` —
+so many newest lines per script, and nothing older than the window — without
+anyone asking.
