@@ -4,7 +4,7 @@ use figment::{
     providers::{Env, Format, Serialized, Toml, Yaml},
 };
 use serde::{Deserialize, Serialize};
-use std::{net::SocketAddr, path::PathBuf, time::Duration};
+use std::{net::SocketAddr, time::Duration};
 
 /// Application configuration with comprehensive settings for all components
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -23,9 +23,6 @@ pub struct AppConfig {
 
     /// Security configuration
     pub security: SecurityConfig,
-
-    /// Performance configuration
-    pub performance: PerformanceConfig,
 
     /// Authentication configuration (optional)
     #[serde(default)]
@@ -185,15 +182,6 @@ pub struct ServerConfig {
     #[serde(default)]
     pub trusted_proxies: Vec<String>,
 
-    /// Request timeout in seconds
-    pub request_timeout_secs: u64,
-
-    /// Keep-alive timeout in seconds
-    pub keep_alive_timeout_secs: u64,
-
-    /// Maximum number of concurrent connections
-    pub max_connections: usize,
-
     /// Enable graceful shutdown
     pub graceful_shutdown: bool,
 
@@ -209,21 +197,6 @@ pub struct LoggingConfig {
 
     /// Log format (json, pretty, compact)
     pub format: String,
-
-    /// Enable file logging
-    pub file_enabled: bool,
-
-    /// Log file path
-    pub file_path: Option<PathBuf>,
-
-    /// Log file rotation size in MB
-    pub file_max_size_mb: u64,
-
-    /// Number of rotated log files to keep
-    pub file_max_files: usize,
-
-    /// Enable console logging
-    pub console_enabled: bool,
 }
 
 /// Stack a script may use before QuickJS throws, when nothing says otherwise.
@@ -251,12 +224,6 @@ pub struct JavaScriptConfig {
 
     /// Maximum number of concurrent script executions
     pub max_concurrent_executions: usize,
-
-    /// Enable script compilation caching
-    pub enable_compilation_cache: bool,
-
-    /// Maximum number of cached compiled scripts
-    pub max_cached_scripts: usize,
 
     /// Script execution stack size in bytes
     pub stack_size_bytes: usize,
@@ -316,9 +283,6 @@ pub struct RepositoryConfig {
 
     /// Maximum script size in bytes
     pub max_script_size_bytes: usize,
-
-    /// Maximum asset size in bytes
-    pub max_asset_size_bytes: usize,
 
     /// Maximum upload file size in bytes
     pub max_upload_size_bytes: usize,
@@ -383,28 +347,16 @@ pub struct SecurityConfig {
     /// CORS allowed origins
     pub cors_allowed_origins: Vec<String>,
 
-    /// Enable CSRF protection
-    pub enable_csrf: bool,
-
     /// Optional base64-encoded 32-byte CSRF key used to validate tokens across instances
     /// Example (env): APP_SECURITY__CSRF_KEY
     #[serde(default)]
     pub csrf_key: Option<String>,
-
-    /// Enable rate limiting
-    pub enable_rate_limiting: bool,
-
-    /// Rate limit: requests per minute per IP
-    pub rate_limit_per_minute: u32,
 
     /// Enable security headers
     pub enable_security_headers: bool,
 
     /// Content Security Policy header value
     pub content_security_policy: Option<String>,
-
-    /// Enable request validation
-    pub enable_request_validation: bool,
 
     /// Maximum request body size in bytes
     pub max_request_body_bytes: usize,
@@ -437,34 +389,6 @@ pub struct SecurityConfig {
     /// Example (env): APP_SECURITY__API_KEY
     #[serde(default)]
     pub api_key: Option<String>,
-}
-
-/// Performance configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PerformanceConfig {
-    /// Enable response compression
-    pub enable_compression: bool,
-
-    /// Compression level (1-9)
-    pub compression_level: u32,
-
-    /// Enable response caching
-    pub enable_response_cache: bool,
-
-    /// Response cache TTL in seconds
-    pub response_cache_ttl_secs: u64,
-
-    /// Maximum number of cached responses
-    pub max_cached_responses: usize,
-
-    /// Worker thread pool size
-    pub worker_threads: Option<usize>,
-
-    /// Enable metrics collection
-    pub enable_metrics: bool,
-
-    /// Metrics collection interval in seconds
-    pub metrics_interval_secs: u64,
 }
 
 /// Whether a configured secret is one nobody chose.
@@ -500,9 +424,6 @@ impl Default for ServerConfig {
             additional_base_urls: Vec::new(),
             management_hosts: Vec::new(),
             trusted_proxies: Vec::new(),
-            request_timeout_secs: 30,
-            keep_alive_timeout_secs: 60,
-            max_connections: 10000,
             graceful_shutdown: true,
             shutdown_timeout_secs: 30,
         }
@@ -595,11 +516,6 @@ impl Default for LoggingConfig {
         Self {
             level: "info".to_string(),
             format: "pretty".to_string(),
-            file_enabled: false,
-            file_path: None,
-            file_max_size_mb: 100,
-            file_max_files: 10,
-            console_enabled: true,
         }
     }
 }
@@ -610,8 +526,6 @@ impl Default for JavaScriptConfig {
             execution_timeout_ms: 5000,
             max_memory_bytes: 10 * 1024 * 1024, // 10MB
             max_concurrent_executions: 100,
-            enable_compilation_cache: true,
-            max_cached_scripts: 1000,
             stack_size_bytes: DEFAULT_STACK_SIZE_BYTES,
             enable_init_functions: true,
             init_timeout_ms: None,     // Use execution_timeout_ms by default
@@ -628,7 +542,6 @@ impl Default for RepositoryConfig {
             connection_string: "postgresql://aiwebengine:devpassword@localhost:5432/aiwebengine"
                 .to_string(),
             max_script_size_bytes: 1024 * 1024,      // 1MB
-            max_asset_size_bytes: 10 * 1024 * 1024,  // 10MB
             max_upload_size_bytes: 10 * 1024 * 1024, // 10MB
             max_connections: default_db_max_connections(),
             lock_timeout_ms: default_lock_timeout_ms(),
@@ -643,35 +556,16 @@ impl Default for SecurityConfig {
         Self {
             enable_cors: true,
             cors_allowed_origins: vec!["*".to_string()],
-            enable_csrf: false,
-            enable_rate_limiting: true,
-            rate_limit_per_minute: 100,
             enable_security_headers: true,
             content_security_policy: Some(
                 "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'".to_string()
             ),
-            enable_request_validation: true,
             max_request_body_bytes: 1024 * 1024, // 1MB
             csrf_key: None,
             strict_ip_validation: false,
             session_encryption_key: None,
             secret_encryption_key: None,
             api_key: None,
-        }
-    }
-}
-
-impl Default for PerformanceConfig {
-    fn default() -> Self {
-        Self {
-            enable_compression: true,
-            compression_level: 6,
-            enable_response_cache: false,
-            response_cache_ttl_secs: 300,
-            max_cached_responses: 1000,
-            worker_threads: None, // Use Tokio default
-            enable_metrics: true,
-            metrics_interval_secs: 60,
         }
     }
 }
@@ -798,14 +692,6 @@ impl AppConfig {
 
         // Port range is validated by u16 type, no need to check upper bound
 
-        if self.server.request_timeout_secs == 0 {
-            anyhow::bail!("Request timeout must be > 0");
-        }
-
-        if self.server.max_connections == 0 {
-            anyhow::bail!("Max connections must be > 0");
-        }
-
         // Refused at startup rather than dropped: an unparseable entry would
         // silently leave the proxy untrusted, and the symptom of that is one
         // rate-limit bucket shared by everyone rather than an error.
@@ -851,10 +737,6 @@ impl AppConfig {
                 "Invalid log format: {}. Must be one of: json, pretty, compact",
                 self.logging.format
             ),
-        }
-
-        if self.logging.file_enabled && self.logging.file_path.is_none() {
-            anyhow::bail!("File logging is enabled but no file path specified");
         }
 
         // Validate JavaScript configuration
@@ -952,15 +834,6 @@ impl AppConfig {
             }
         }
 
-        // Validate performance configuration
-        if self.performance.compression_level < 1 || self.performance.compression_level > 9 {
-            anyhow::bail!("Compression level must be between 1 and 9");
-        }
-
-        if self.performance.metrics_interval_secs == 0 {
-            anyhow::bail!("Metrics interval must be > 0");
-        }
-
         Ok(())
     }
 
@@ -969,11 +842,6 @@ impl AppConfig {
         format!("{}:{}", self.server.host, self.server.port)
             .parse()
             .context("Invalid server address")
-    }
-
-    /// Get request timeout as Duration
-    pub fn request_timeout(&self) -> Duration {
-        Duration::from_secs(self.server.request_timeout_secs)
     }
 
     /// Get JavaScript execution timeout as Duration
@@ -1197,7 +1065,6 @@ mod tests {
     #[test]
     fn test_timeout_conversions() {
         let config = AppConfig::default();
-        assert_eq!(config.request_timeout(), Duration::from_secs(30));
         assert_eq!(config.js_execution_timeout(), Duration::from_millis(5000));
     }
 
@@ -1289,35 +1156,6 @@ mod tests {
         // Test CORS origins validation
         config.security.cors_allowed_origins = vec!["invalid-origin".to_string()];
         assert!(config.validate().is_ok());
-
-        // Test rate limiting validation - zero rate limit means disabled (allowed)
-        config.security.rate_limit_per_minute = 0;
-        assert!(config.validate().is_ok());
-
-        config.security.rate_limit_per_minute = 100;
-        assert!(config.validate().is_ok());
-    }
-
-    #[test]
-    fn test_performance_validation() {
-        let mut config = AppConfig::default();
-
-        // Test compression level validation
-        config.performance.compression_level = 0;
-        assert!(config.validate().is_err());
-
-        config.performance.compression_level = 10;
-        assert!(config.validate().is_err());
-
-        config.performance.compression_level = 5;
-        assert!(config.validate().is_ok());
-
-        // Test metrics interval validation
-        config.performance.metrics_interval_secs = 0;
-        assert!(config.validate().is_err());
-
-        config.performance.metrics_interval_secs = 60;
-        assert!(config.validate().is_ok());
     }
 
     #[test]
@@ -1352,8 +1190,6 @@ mod tests {
     fn test_duration_helpers() {
         let config = AppConfig::default();
 
-        // Test duration conversion methods
-        assert_eq!(config.request_timeout().as_secs(), 30);
         assert_eq!(config.js_execution_timeout().as_millis(), 5000);
     }
 

@@ -21,12 +21,11 @@ pub use client_registration::{
     ClientRegistrationManager, ClientRegistrationRequest, ClientRegistrationResponse,
     RegisteredClient, RegisteredClientMetadata,
 };
-pub use config::{AuthConfig, CookieConfig, ProviderConfig, ProvidersConfig, SameSitePolicy};
+pub use config::{AuthConfig, CookieConfig, ProviderConfig, ProvidersConfig};
 pub use error::AuthError;
 pub use js_api::{AuthJsApi, JsAuthContext};
 pub use manager::{
-    AuthManager, AuthManagerConfig, AuthenticatedUser, CookieSameSite, HOST_COOKIE_PREFIX,
-    host_scoped_cookie_name,
+    AuthManager, AuthManagerConfig, AuthenticatedUser, HOST_COOKIE_PREFIX, host_scoped_cookie_name,
 };
 pub use mcp_middleware::{
     McpAuthSession, mcp_auth_middleware, mcp_require_admin_middleware,

@@ -188,11 +188,11 @@ async fn main() -> AppResult<()> {
         config.javascript.max_memory_bytes
     );
     tracing::info!("Storage: PostgreSQL");
-    tracing::info!("CORS enabled: {}", config.security.enable_cors);
-    tracing::info!(
-        "Rate limiting: {} requests/minute",
-        config.security.rate_limit_per_minute
-    );
+    // Neither CORS nor rate limiting was ever reported from what the engine
+    // does — both lines printed a configured value that nothing enforced, so
+    // an operator reading the startup log was told the opposite of the truth
+    // about two protections. Rate limiting is on, with per-key budgets rather
+    // than one number; CORS is in SECURITY-todo.md.
     tracing::info!("Auth configuration present: {}", config.auth.is_some());
     if let Some(ref auth_cfg) = config.auth {
         tracing::info!("Auth enabled: {}", auth_cfg.enabled);

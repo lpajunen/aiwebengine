@@ -206,28 +206,13 @@ impl Default for AuthConfig {
 /// Cookie configuration for session management
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CookieConfig {
-    /// Cookie domain (None = current domain)
-    pub domain: Option<String>,
-
     /// Secure flag (HTTPS only) - should be true in production
     #[serde(default = "default_false")]
     pub secure: bool,
 
-    /// HttpOnly flag (prevent JavaScript access)
-    #[serde(default = "default_true")]
-    pub http_only: bool,
-
-    /// SameSite policy
-    #[serde(default = "default_same_site")]
-    pub same_site: SameSitePolicy,
-
     /// Cookie name
     #[serde(default = "default_cookie_name")]
     pub name: String,
-
-    /// Cookie path
-    #[serde(default = "default_cookie_path")]
-    pub path: String,
 }
 
 impl CookieConfig {
@@ -246,22 +231,10 @@ impl CookieConfig {
 impl Default for CookieConfig {
     fn default() -> Self {
         Self {
-            domain: None,
             secure: false, // Development default
-            http_only: true,
-            same_site: SameSitePolicy::Lax,
             name: default_cookie_name(),
-            path: default_cookie_path(),
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum SameSitePolicy {
-    Strict,
-    Lax,
-    None,
 }
 
 /// OAuth2 providers configuration
@@ -436,10 +409,6 @@ fn default_max_sessions() -> usize {
     3
 }
 
-fn default_true() -> bool {
-    true
-}
-
 fn default_min_password_length() -> usize {
     12
 }
@@ -448,16 +417,12 @@ fn default_false() -> bool {
     false
 }
 
-fn default_same_site() -> SameSitePolicy {
-    SameSitePolicy::Lax
+fn default_true() -> bool {
+    true
 }
 
 fn default_cookie_name() -> String {
     "aiwebengine_session".to_string()
-}
-
-fn default_cookie_path() -> String {
-    "/".to_string()
 }
 
 #[cfg(test)]

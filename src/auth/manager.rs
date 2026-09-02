@@ -80,17 +80,8 @@ pub struct AuthManagerConfig {
     /// Session cookie name
     pub session_cookie_name: String,
 
-    /// Session cookie domain
-    pub cookie_domain: Option<String>,
-
     /// Session cookie secure flag
     pub cookie_secure: bool,
-
-    /// Session cookie http-only flag
-    pub cookie_http_only: bool,
-
-    /// Session cookie same-site policy
-    pub cookie_same_site: CookieSameSite,
 
     /// Session timeout in seconds
     pub session_timeout: u64,
@@ -102,22 +93,12 @@ pub struct AuthManagerConfig {
     pub internal: crate::auth::config::InternalAuthConfig,
 }
 
-#[derive(Debug, Clone)]
-pub enum CookieSameSite {
-    Strict,
-    Lax,
-    None,
-}
-
 impl Default for AuthManagerConfig {
     fn default() -> Self {
         Self {
             base_url: "http://localhost:3000".to_string(),
             session_cookie_name: "auth_session".to_string(),
-            cookie_domain: None,
             cookie_secure: true,
-            cookie_http_only: true,
-            cookie_same_site: CookieSameSite::Lax,
             session_timeout: 3600 * 24 * 7,  // 7 days
             max_session_age: 3600 * 24 * 30, // 30 days
             internal: crate::auth::config::InternalAuthConfig::default(),

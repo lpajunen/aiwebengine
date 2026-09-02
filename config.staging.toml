@@ -15,12 +15,6 @@ base_url = "https://staging.softagen.com"
 # stops an attacker rotating one header to get a fresh rate-limit bucket per
 # request. Leave it empty when nothing sits in front of the engine.
 trusted_proxies = ["172.16.0.0/12"]
-# Moderate timeout for staging testing
-request_timeout_secs = 15
-# Keep-alive timeout in seconds
-keep_alive_timeout_secs = 60
-# Maximum concurrent connections
-max_connections = 5000
 # Enable graceful shutdown
 graceful_shutdown = true
 # Shutdown timeout in seconds
@@ -31,16 +25,6 @@ shutdown_timeout_secs = 30
 level = "info"
 # Log format (json, pretty, compact)
 format = "json"
-# Enable file logging
-file_enabled = true
-# Log file path
-file_path = "./logs/aiwebengine-staging.log"
-# Log file rotation size in MB
-file_max_size_mb = 100
-# Number of rotated log files to keep
-file_max_files = 14
-# Enable console logging
-console_enabled = true
 
 [javascript]
 # Moderate timeout for staging testing (milliseconds)
@@ -52,10 +36,6 @@ max_memory_bytes = 67108864  # 64 MB
 # are the engine's memory ceiling. A caller past the limit waits for a slot
 # rather than being refused, inside the timeout it already had.
 max_concurrent_executions = 100
-# Enable script compilation caching
-enable_compilation_cache = true
-# Maximum number of cached compiled scripts
-max_cached_scripts = 1000
 # Stack a script may use before QuickJS throws, in bytes. A JavaScript frame
 # costs on the order of a kilobyte, so this is about 500 frames of recursion;
 # 64 KB would be about 59, which a recursive walk over any real structure
@@ -70,8 +50,6 @@ enable_init_functions = true
 test_timeout_ms = 30000
 # Ceiling on a whole test run in milliseconds; the run then reports what it has
 test_run_timeout_ms = 120000
-# Fail server startup if any script init fails
-fail_startup_on_init_error = false
 
 [repository]
 # PostgreSQL is the only supported storage backend
@@ -80,8 +58,6 @@ fail_startup_on_init_error = false
 
 # Maximum script size in bytes (1 MB)
 max_script_size_bytes = 1048576
-# Maximum asset size in bytes (10 MB)
-max_asset_size_bytes = 10485760
 # Maximum upload file size in bytes (10 MB)
 max_upload_size_bytes = 10485760
 
@@ -114,23 +90,19 @@ idle_in_transaction_timeout_ms = 300000
 # because server.trusted_proxies establishes the address from the connection
 # rather than from a header the caller wrote.
 strict_ip_validation = false
+# NOT YET ENFORCED. Parsed and read by nothing: the engine applies no CORS
+# policy of its own, and the only CORS layer it has is the wide-open one the
+# OAuth endpoints need for browser-based MCP clients. Script routes set their
+# own headers. See SECURITY-todo.md — these two keys are kept because that
+# work will give them meaning, not because they have any today.
 enable_cors = true
-# Allow staging and development origins
 cors_allowed_origins = ["https://staging.yourdomain.com", "http://localhost:3000"]
-# Enable CSRF protection in staging
-enable_csrf = true
 # Optional: base64-encoded 32-byte CSRF key (set via APP_SECURITY__CSRF_KEY)
 csrf_key = "${APP_SECURITY__CSRF_KEY}"
-# Enable rate limiting in staging
-enable_rate_limiting = true
-# Moderate rate limiting for staging
-rate_limit_per_minute = 500
 # Security headers
 enable_security_headers = true
 # Content Security Policy
 content_security_policy = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
-# Request validation
-enable_request_validation = true
 # Maximum request body size in bytes (5 MB)
 max_request_body_bytes = 5242880
 # Optional: base64-encoded 32-byte session encryption key (set via APP_SECURITY__SESSION_ENCRYPTION_KEY)
@@ -139,24 +111,6 @@ session_encryption_key = "${APP_SECURITY__SESSION_ENCRYPTION_KEY}"
 secret_encryption_key = "${APP_SECURITY__SECRET_ENCRYPTION_KEY}"
 # Set via APP_SECURITY__API_KEY environment variable
 api_key = "${APP_SECURITY__API_KEY}"
-
-[performance]
-# Enable compression in staging
-enable_compression = true
-# Compression level (1-9)
-compression_level = 6
-# Response caching (enabled in staging)
-enable_response_cache = true
-# Response cache TTL in seconds (30 minutes)
-response_cache_ttl_secs = 1800
-# Maximum number of cached responses
-max_cached_responses = 500
-# Worker thread pool size (None = use Tokio default)
-# worker_threads = 4
-# Enable metrics collection
-enable_metrics = true
-# Metrics collection interval in seconds
-metrics_interval_secs = 60
 
 # Authentication Configuration
 
@@ -205,15 +159,11 @@ bootstrap_admins = []
 
 [auth.cookie]
 name = "aiwebengine_session"
-path = "/"
 # Use secure cookies in staging if HTTPS is available
 secure = true
-http_only = true
-same_site = "lax"
 
 # OAuth Providers Configuration
 # All secrets MUST be set via environment variables
-
 
 # Internal credentials — accounts this engine authenticates itself.
 #

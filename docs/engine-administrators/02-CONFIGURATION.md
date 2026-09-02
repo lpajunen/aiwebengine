@@ -154,7 +154,6 @@ export APP_SERVER__PORT="8080"
 export APP_SERVER__BASE_URL="https://yourdomain.com"
 
 # Request timeout (seconds)
-export APP_SERVER__REQUEST_TIMEOUT_SECS="30"
 
 # Keep-alive timeout (seconds)
 export APP_SERVER__KEEP_ALIVE_TIMEOUT_SECS="75"
@@ -238,9 +237,6 @@ Controls the HTTP server behavior.
 host = "127.0.0.1"                    # Bind address (0.0.0.0 for all interfaces)
 port = 3000                            # Listen port (1-65535)
 base_url = "http://localhost:3000"    # Base URL for OAuth and redirects
-request_timeout_secs = 30              # Request timeout in seconds
-keep_alive_timeout_secs = 60          # Keep-alive timeout in seconds
-max_connections = 10000                # Maximum concurrent connections
 graceful_shutdown = true               # Enable graceful shutdown
 shutdown_timeout_secs = 30            # Shutdown timeout in seconds
 ```
@@ -262,11 +258,6 @@ Controls application logging.
 [logging]
 level = "info"                   # trace | debug | info | warn | error
 format = "pretty"                # json | pretty | compact
-file_enabled = true              # Enable file logging
-file_path = "./logs/app.log"    # Log file path
-file_max_size_mb = 100          # Log file rotation size in MB
-file_max_files = 10             # Number of rotated log files to keep
-console_enabled = true           # Enable console logging
 ```
 
 **Environment overrides:**
@@ -274,7 +265,6 @@ console_enabled = true           # Enable console logging
 ```bash
 export APP_LOGGING__LEVEL="debug"
 export APP_LOGGING__FORMAT="json"
-export APP_LOGGING__FILE_PATH="/var/log/aiwebengine.log"
 export RUST_LOG="aiwebengine=debug"  # Additional Rust logging control
 ```
 
@@ -287,12 +277,9 @@ Controls the JavaScript engine (QuickJS).
 execution_timeout_ms = 5000              # Script execution timeout (milliseconds)
 max_memory_bytes = 10485760              # Max memory per script (bytes, 10MB)
 max_concurrent_executions = 100          # Scripts running at once; the rest queue
-enable_compilation_cache = true          # Enable script compilation caching
-max_cached_scripts = 1000                # Maximum number of cached compiled scripts
 stack_size_bytes = 524288                # Script stack (bytes); ~1KB per JS frame
 enable_init_functions = true             # Enable script init() function calls
 init_timeout_ms = 5000                   # Init function timeout (defaults to execution_timeout_ms)
-fail_startup_on_init_error = false       # Fail server startup if any script init fails
 ```
 
 **Environment overrides:**
@@ -300,7 +287,6 @@ fail_startup_on_init_error = false       # Fail server startup if any script ini
 ```bash
 export APP_JAVASCRIPT__MAX_MEMORY_BYTES="33554432"  # 32 MB
 export APP_JAVASCRIPT__EXECUTION_TIMEOUT_MS="10000"
-export APP_JAVASCRIPT__FAIL_STARTUP_ON_INIT_ERROR="true"  # Recommended for production
 ```
 
 ### [repository]
@@ -311,7 +297,6 @@ Controls database and script storage. PostgreSQL is the only supported storage b
 [repository]
 database_url = "postgresql://user:pass@localhost:5432/aiwebengine"
 max_script_size_bytes = 1048576          # Maximum script size (bytes, 1MB)
-max_asset_size_bytes = 10485760          # Maximum asset size (bytes, 10MB)
 ```
 
 ### Script execution limits
@@ -363,13 +348,9 @@ Controls security features.
 [security]
 enable_cors = true                           # Enable CORS
 cors_allowed_origins = ["*"]                 # Allowed origins (use ["*"] for dev only!)
-enable_csrf = false                          # Enable CSRF protection
 csrf_key = "${APP_SECURITY__CSRF_KEY}"      # Base64-encoded 32-byte CSRF key
-enable_rate_limiting = true                  # Enable rate limiting
-rate_limit_per_minute = 100                  # Requests per minute per IP
 enable_security_headers = true               # Enable security headers
 content_security_policy = "default-src 'self'" # Content Security Policy
-enable_request_validation = true             # Enable request validation
 max_request_body_bytes = 1048576            # Max request body size (bytes, 1MB)
 session_encryption_key = "${APP_SECURITY__SESSION_ENCRYPTION_KEY}"  # Base64-encoded 32-byte key
 api_key = "${APP_SECURITY__API_KEY}"        # API key (override with env var!)
@@ -389,34 +370,8 @@ export APP_SECURITY__MAX_REQUEST_BODY_BYTES="10485760"  # 10 MB
 **⚠️ Production:**
 
 - Never hardcode secrets in config files - always use environment variables!
-- Enable CSRF protection (`enable_csrf = true`)
-- Use strong encryption keys for CSRF and session encryption
+- Enable CSRF protection (`- Use strong encryption keys for CSRF and session encryption
 - All server instances must use the same CSRF and session encryption keys
-
-### [performance]
-
-Controls performance optimizations.
-
-```toml
-[performance]
-enable_compression = true                # Enable response compression
-compression_level = 6                    # Compression level (1-9)
-enable_response_cache = false            # Enable response caching
-response_cache_ttl_secs = 300           # Response cache TTL in seconds
-max_cached_responses = 1000             # Maximum number of cached responses
-worker_threads = 4                       # Worker thread pool size (None = Tokio default)
-enable_metrics = true                    # Enable metrics collection
-metrics_interval_secs = 60              # Metrics collection interval in seconds
-```
-
-**Environment overrides:**
-
-```bash
-export APP_PERFORMANCE__ENABLE_COMPRESSION="true"
-export APP_PERFORMANCE__COMPRESSION_LEVEL="6"
-export APP_PERFORMANCE__ENABLE_RESPONSE_CACHE="true"
-export APP_PERFORMANCE__WORKER_THREADS="8"
-```
 
 ### [auth]
 
@@ -434,11 +389,14 @@ bootstrap_admins = [             # Auto-grant admin role to these emails
 
 [auth.cookie]
 name = "aiwebengine_session"     # Session cookie name
-path = "/"                       # Cookie path
 secure = false                   # HTTPS only (true in production!)
-http_only = true                 # No JavaScript access
-same_site = "lax"               # lax | strict | none
 ```
+
+The cookie is host-only and `SameSite=Lax` unconditionally, and `HttpOnly`
+always. There are no settings for those: a `Domain` would defeat the per-host
+sign-in the `__Host-` prefix enforces, `Strict` would withhold the session on
+the cross-site navigation an MCP client makes into `/auth/oauth2/authorize`,
+and a cookie readable from JavaScript is not a session cookie.
 
 **Environment overrides:**
 
@@ -626,39 +584,24 @@ Quick lookup for all available settings:
 | `[server]`      | `host`                        | string  | IP address                  | `127.0.0.1`           |
 | `[server]`      | `port`                        | integer | 1-65535                     | `8080`                |
 | `[server]`      | `base_url`                    | string  | URL                         | `None`                |
-| `[server]`      | `request_timeout_secs`        | integer | 1-300                       | `30`                  |
-| `[server]`      | `keep_alive_timeout_secs`     | integer | 1-600                       | `60`                  |
-| `[server]`      | `max_connections`             | integer | 1-100000                    | `10000`               |
 | `[server]`      | `graceful_shutdown`           | boolean | true/false                  | `true`                |
 | `[server]`      | `shutdown_timeout_secs`       | integer | 1-300                       | `30`                  |
 | `[logging]`     | `level`                       | string  | trace/debug/info/warn/error | `info`                |
 | `[logging]`     | `format`                      | string  | json/pretty/compact         | `pretty`              |
-| `[logging]`     | `file_enabled`                | boolean | true/false                  | `false`               |
-| `[logging]`     | `file_path`                   | string  | Path                        | `None`                |
-| `[logging]`     | `file_max_size_mb`            | integer | 1-1000                      | `100`                 |
-| `[logging]`     | `file_max_files`              | integer | 1-100                       | `10`                  |
-| `[logging]`     | `console_enabled`             | boolean | true/false                  | `true`                |
 | `[javascript]`  | `execution_timeout_ms`        | integer | 100-60000                   | `5000`                |
 | `[javascript]`  | `max_memory_bytes`            | integer | 1048576-1073741824          | `10485760`            |
 | `[javascript]`  | `max_concurrent_executions`   | integer | 1-1000                      | `100`                 |
-| `[javascript]`  | `enable_compilation_cache`    | boolean | true/false                  | `true`                |
-| `[javascript]`  | `max_cached_scripts`          | integer | 1-10000                     | `1000`                |
 | `[javascript]`  | `stack_size_bytes`            | integer | 65536-10485760              | `524288`              |
 | `[javascript]`  | `enable_init_functions`       | boolean | true/false                  | `true`                |
-| `[javascript]`  | `fail_startup_on_init_error`  | boolean | true/false                  | `false`               |
 | `[repository]`  | `database_url`                | string  | Connection string           | (required)            |
 | `[repository]`  | `max_script_size_bytes`       | integer | 1024-10485760               | `1048576`             |
-| `[repository]`  | `max_asset_size_bytes`        | integer | 1024-104857600              | `10485760`            |
 | `[logs]`        | `prune_enabled`               | boolean | true/false                  | `true`                |
 | `[logs]`        | `retention_hours`             | integer | 0-720 (0 = no age bound)    | `24`                  |
 | `[logs]`        | `keep_per_script`             | integer | 1-10000                     | `100`                 |
 | `[logs]`        | `prune_interval_secs`         | integer | >= 60                       | `3600`                |
 | `[security]`    | `enable_cors`                 | boolean | true/false                  | `true`                |
 | `[security]`    | `cors_allowed_origins`        | array   | URLs                        | `["*"]`               |
-| `[security]`    | `enable_csrf`                 | boolean | true/false                  | `false`               |
 | `[security]`    | `csrf_key`                    | string  | Base64 key                  | `None`                |
-| `[security]`    | `enable_rate_limiting`        | boolean | true/false                  | `true`                |
-| `[security]`    | `rate_limit_per_minute`       | integer | 0-10000                     | `100`                 |
 | `[security]`    | `enable_security_headers`     | boolean | true/false                  | `true`                |
 | `[security]`    | `max_request_body_bytes`      | integer | 1024-104857600              | `1048576`             |
 | `[security]`    | `session_encryption_key`      | string  | Base64 key                  | `None`                |
@@ -669,18 +612,7 @@ Quick lookup for all available settings:
 | `[auth]`        | `max_concurrent_sessions`     | integer | 1-10                        | `3`                   |
 | `[auth]`        | `bootstrap_admins`            | array   | Email addresses             | `[]`                  |
 | `[auth.cookie]` | `name`                        | string  | Cookie name                 | `aiwebengine_session` |
-| `[auth.cookie]` | `path`                        | string  | Path                        | `/`                   |
 | `[auth.cookie]` | `secure`                      | boolean | true/false                  | `false`               |
-| `[auth.cookie]` | `http_only`                   | boolean | true/false                  | `true`                |
-| `[auth.cookie]` | `same_site`                   | string  | strict/lax/none             | `lax`                 |
-| `[performance]` | `enable_compression`          | boolean | true/false                  | `true`                |
-| `[performance]` | `compression_level`           | integer | 1-9                         | `6`                   |
-| `[performance]` | `enable_response_cache`       | boolean | true/false                  | `false`               |
-| `[performance]` | `response_cache_ttl_secs`     | integer | 1-86400                     | `300`                 |
-| `[performance]` | `max_cached_responses`        | integer | 1-100000                    | `1000`                |
-| `[performance]` | `worker_threads`              | integer | 1-32 (or None)              | `None`                |
-| `[performance]` | `enable_metrics`              | boolean | true/false                  | `true`                |
-| `[performance]` | `metrics_interval_secs`       | integer | 1-3600                      | `60`                  |
 
 ---
 
@@ -716,8 +648,6 @@ redirect_uri = "http://localhost:3000/auth/callback/google"
 host = "0.0.0.0"
 port = 3000
 base_url = "https://yourdomain.com"
-request_timeout_secs = 30
-keep_alive_timeout_secs = 75
 max_connections = 10000
 graceful_shutdown = true
 shutdown_timeout_secs = 30
@@ -725,26 +655,17 @@ shutdown_timeout_secs = 30
 [logging]
 level = "info"
 format = "json"
-file_enabled = true
-file_path = "/var/log/aiwebengine/app.log"
-file_max_size_mb = 100
-file_max_files = 30
-console_enabled = false
 
 [javascript]
 execution_timeout_ms = 10000
 max_memory_bytes = 134217728  # 128 MB
 max_concurrent_executions = 200
-enable_compilation_cache = true
-max_cached_scripts = 2000
 stack_size_bytes = 524288
 enable_init_functions = true
-fail_startup_on_init_error = true
 
 [repository]
 database_url = "${APP_REPOSITORY__DATABASE_URL}"
 max_script_size_bytes = 1048576
-max_asset_size_bytes = 10485760
 
 [logs]
 prune_enabled = true
@@ -755,26 +676,12 @@ prune_interval_secs = 3600
 [security]
 enable_cors = true
 cors_allowed_origins = ["https://yourdomain.com"]
-enable_csrf = true
 csrf_key = "${APP_SECURITY__CSRF_KEY}"
-enable_rate_limiting = true
-rate_limit_per_minute = 1000
 enable_security_headers = true
 content_security_policy = "default-src 'self'; script-src 'self'; style-src 'self'"
-enable_request_validation = true
 max_request_body_bytes = 10485760
 session_encryption_key = "${APP_SECURITY__SESSION_ENCRYPTION_KEY}"
 api_key = "${APP_SECURITY__API_KEY}"
-
-[performance]
-enable_compression = true
-compression_level = 6
-enable_response_cache = true
-response_cache_ttl_secs = 3600
-max_cached_responses = 2000
-# worker_threads = 8
-enable_metrics = true
-metrics_interval_secs = 60
 
 [auth]
 jwt_secret = "${APP_AUTH__JWT_SECRET}"
@@ -786,8 +693,6 @@ bootstrap_admins = ["admin@yourdomain.com"]
 name = "aiwebengine_session"
 path = "/"
 secure = true
-http_only = true
-same_site = "strict"
 
 [auth.providers.google]
 client_id = "${APP_AUTH__PROVIDERS__GOOGLE__CLIENT_ID}"
@@ -797,7 +702,6 @@ scopes = ["openid", "email", "profile"]
 
 [secrets]
 # All secrets via environment variables in production!
-rate_limit_per_minute = 100
 api_key = "${APP_SECURITY__API_KEY}"
 require_https = true
 
@@ -808,18 +712,12 @@ bootstrap_admins = ["admin@yourdomain.com"]
 
 [auth.cookie]
 secure = true
-http_only = true
-same_site = "strict"
 
 [auth.providers.google]
 client_id = "${APP_AUTH__PROVIDERS__GOOGLE__CLIENT_ID}"
 client_secret = "${APP_AUTH__PROVIDERS__GOOGLE__CLIENT_SECRET}"
 redirect_uri = "https://yourdomain.com/auth/callback/google"
 
-[performance]
-cache_size_mb = 256
-enable_compression = true
-worker_pool_size = 8
 ```
 
 ---
