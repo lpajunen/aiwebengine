@@ -2522,10 +2522,14 @@ pub fn execute_mcp_prompt_handler(
     script_uri: &str,
     handler_function: &str,
     arguments: serde_json::Value,
+    auth_context: Option<crate::auth::JsAuthContext>,
+    user_context: UserContext,
 ) -> Result<serde_json::Value, String> {
     let script_uri_owned = script_uri.to_string();
     let handler_function_owned = handler_function.to_string();
     let arguments_owned = arguments.clone();
+    let auth_context_owned = auth_context;
+    let user_context_owned = user_context;
 
     // Fetch and bundle before arming the runtime's interrupt deadline (see
     // `execute_script_for_request_secure`).
@@ -2549,14 +2553,15 @@ pub fn execute_mcp_prompt_handler(
             ..Default::default()
         };
 
-        // MCP prompt handlers run with admin context (similar to GraphQL resolvers)
+        // The caller's own context, as the tool path already did. A prompt is
+        // answered for whoever asked for it.
         setup_secure_global_functions(
             &ctx,
             &script_uri_owned,
-            UserContext::admin("mcp-prompt".to_string()),
+            user_context_owned.clone(),
             &config,
             None,
-            None,
+            auth_context_owned.clone(),
         )?;
 
         // Execute the script (fetched and bundled above)

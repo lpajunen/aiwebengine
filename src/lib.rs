@@ -2255,7 +2255,15 @@ async fn setup_routes(
 
                 let arguments = params.arguments.unwrap_or(serde_json::json!({}));
 
-                match mcp::execute_mcp_prompt(&params.name, arguments) {
+                // The caller's own identity, built the same way the tools
+                // branch builds it. A prompt handler is script code answering
+                // a request, so it runs as whoever made it.
+                let auth_context = mcp_session
+                    .as_ref()
+                    .map(|session| create_js_auth_context_from_session(Some(session)));
+                let user_context = create_user_context_from_session(mcp_session.as_ref());
+
+                match mcp::execute_mcp_prompt(&params.name, arguments, auth_context, user_context) {
                     Ok(result) => {
                         // The handler should return an object with a "messages" array
                         axum::response::Json(serde_json::json!({
@@ -2359,11 +2367,18 @@ async fn setup_routes(
 
                 let context_arguments = params.context.and_then(|c| c.arguments);
 
+                let auth_context = mcp_session
+                    .as_ref()
+                    .map(|session| create_js_auth_context_from_session(Some(session)));
+                let user_context = create_user_context_from_session(mcp_session.as_ref());
+
                 match mcp::execute_mcp_completion(
                     &prompt_name,
                     &params.argument.name,
                     &params.argument.value,
                     context_arguments,
+                    auth_context,
+                    user_context,
                 ) {
                     Ok(result) => {
                         // The handler should return an object with "values", optional "total", and optional "hasMore"

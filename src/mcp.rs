@@ -354,6 +354,8 @@ pub fn get_prompt(name: &str) -> Option<McpPrompt> {
 pub fn execute_mcp_prompt(
     prompt_name: &str,
     arguments: serde_json::Value,
+    auth_context: Option<crate::auth::JsAuthContext>,
+    user_context: crate::security::UserContext,
 ) -> Result<serde_json::Value, String> {
     debug!(
         "Executing MCP prompt: {} with args: {:?}",
@@ -381,8 +383,13 @@ pub fn execute_mcp_prompt(
     });
 
     // Execute the JavaScript handler
-    let result =
-        crate::js_engine::execute_mcp_prompt_handler(&script_uri, &handler_function, context)?;
+    let result = crate::js_engine::execute_mcp_prompt_handler(
+        &script_uri,
+        &handler_function,
+        context,
+        auth_context,
+        user_context,
+    )?;
 
     debug!("MCP prompt '{}' executed successfully", prompt_name);
     Ok(result)
@@ -394,6 +401,8 @@ pub fn execute_mcp_completion(
     argument_name: &str,
     argument_value: &str,
     context_arguments: Option<serde_json::Value>,
+    auth_context: Option<crate::auth::JsAuthContext>,
+    user_context: crate::security::UserContext,
 ) -> Result<serde_json::Value, String> {
     debug!(
         "Executing MCP completion for prompt: {}, argument: {}, value: '{}'",
@@ -423,8 +432,13 @@ pub fn execute_mcp_completion(
     });
 
     // Execute the JavaScript handler in completion mode
-    let result =
-        crate::js_engine::execute_mcp_prompt_handler(&script_uri, &handler_function, context)?;
+    let result = crate::js_engine::execute_mcp_prompt_handler(
+        &script_uri,
+        &handler_function,
+        context,
+        auth_context,
+        user_context,
+    )?;
 
     debug!(
         "MCP completion for prompt '{}' executed successfully",

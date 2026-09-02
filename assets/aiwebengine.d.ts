@@ -990,17 +990,19 @@ interface McpRegistry {
    * Register an MCP prompt
    * @param name - Prompt name (1-100 characters)
    * @param description - Prompt description (1-1000 characters)
-   * @param argumentsJson - JSON string defining prompt arguments
+   * @param argumentsJson - JSON string: an **array** of argument descriptors,
+   *   each `{ name, description, required }`. An object keyed by argument name
+   *   is rejected — the engine parses this into a sequence.
    * @param handlerFunction - Name of handler function to call (1-100 characters)
    * @returns Registration result message
    * @example
    * mcpRegistry.registerPrompt(
    *   "generateCode",
    *   "Generates code based on requirements",
-   *   JSON.stringify({
-   *     language: { type: "string", description: "Programming language" },
-   *     task: { type: "string", description: "Task description" }
-   *   }),
+   *   JSON.stringify([
+   *     { name: "language", description: "Programming language", required: true },
+   *     { name: "task", description: "Task description", required: true }
+   *   ]),
    *   "handleGenerateCode"
    * );
    *
