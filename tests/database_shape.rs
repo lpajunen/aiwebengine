@@ -11,7 +11,7 @@ mod common;
 use aiwebengine::repository;
 use aiwebengine::script_eval::{EvalReport, EvalRequest, eval_blocking};
 use aiwebengine::security::UserContext;
-use common::{TestContext, setup_env, should_skip_integration_tests, test_mutex, wait_for_server};
+use common::{AdminServer, setup_env, should_skip_integration_tests, test_mutex};
 use serde_json::json;
 
 /// Creates a table with one row, then evaluates `source` against it.
@@ -259,7 +259,9 @@ async fn a_result_can_be_returned_as_a_response_body() {
         return;
     }
     let _guard = test_mutex().lock().await;
-    let context = TestContext::new();
+    // The script is written before the server starts, so startup registers its
+    // routes — which means the database has to be up before the write.
+    setup_env().await;
 
     // A result is a `String` object, not a primitive, so the engine takes its
     // object branch when shaping the response and converts it with `toString`.
@@ -288,13 +290,11 @@ async fn a_result_can_be_returned_as_a_response_body() {
     "#;
     let _ = repository::upsert_script("test_db_body", script);
 
-    let port = context
-        .start_server()
-        .await
-        .expect("server failed to start");
-    wait_for_server(port, 20).await.expect("Server not ready");
-    let base = format!("http://127.0.0.1:{}", port);
-    let client = reqwest::Client::new();
+    // Signed in: a handler that reads the script database is called by
+    // somebody, and `UseScriptDatabase` belongs to a solution's users.
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let base = format!("http://127.0.0.1:{}", engine.port());
+    let client = engine.client();
 
     assert_eq!(
         client
@@ -319,5 +319,5 @@ async fn a_result_can_be_returned_as_a_response_body() {
         body
     );
 
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }

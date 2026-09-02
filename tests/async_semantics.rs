@@ -8,7 +8,21 @@
 mod common;
 
 use aiwebengine::repository;
-use common::{TestContext, should_skip_integration_tests, wait_for_server};
+use common::{AdminServer, TestContext, should_skip_integration_tests, wait_for_server};
+
+/// Deploys `script` and serves it to an administrator.
+///
+/// For the handlers that touch the script database. `UseScriptDatabase` belongs
+/// to a solution's users rather than to anonymous callers, and a script runs
+/// under the context of whoever made the request — so a test that exercises
+/// storage has to make its requests as somebody.
+async fn serve_signed_in(script_uri: &str, script: &str) -> AdminServer {
+    // The script is written before the server starts, so startup registers its
+    // routes — which means the database has to be up before the write.
+    common::setup_env().await;
+    let _ = repository::upsert_script(script_uri, script);
+    AdminServer::start().await.expect("server failed to start")
+}
 
 /// Deploys `script` and serves it, returning the running server's base URL.
 async fn serve(context: &TestContext, script_uri: &str, script: &str) -> String {
@@ -215,13 +229,11 @@ async fn writes_made_after_an_await_are_committed() {
     if should_skip_integration_tests() {
         return;
     }
-    let context = TestContext::new();
 
     // The commit happens after the queue is drained. Committing when the
     // handler first returned would close the transaction while the write below
     // had not been made yet, losing it silently.
-    let base = serve(
-        &context,
+    let engine = serve_signed_in(
         "test_async_commit",
         r#"
         function prepare(context) {
@@ -251,8 +263,9 @@ async fn writes_made_after_an_await_are_committed() {
         "#,
     )
     .await;
+    let base = format!("http://127.0.0.1:{}", engine.port());
+    let client = engine.client();
 
-    let client = reqwest::Client::new();
     assert_eq!(
         client
             .post(format!("{}/async/commit/prepare", base))
@@ -289,7 +302,7 @@ async fn writes_made_after_an_await_are_committed() {
         rows
     );
 
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -383,13 +396,11 @@ async fn a_transaction_left_open_does_not_leak_into_the_next_request() {
     if should_skip_integration_tests() {
         return;
     }
-    let context = TestContext::new();
 
     // A handler that opens a transaction and returns without finishing it is
     // committed at the boundary, so the thread it ran on must be left clean for
     // whatever request lands there next.
-    let base = serve(
-        &context,
+    let engine = serve_signed_in(
         "test_tx_no_leak",
         r#"
         function prepare(context) {
@@ -424,8 +435,9 @@ async fn a_transaction_left_open_does_not_leak_into_the_next_request() {
         "#,
     )
     .await;
+    let base = format!("http://127.0.0.1:{}", engine.port());
+    let client = engine.client();
 
-    let client = reqwest::Client::new();
     for path in ["prepare", "open", "follow"] {
         let response = client
             .post(format!("{}/leak/{}", base, path))
@@ -450,5 +462,5 @@ async fn a_transaction_left_open_does_not_leak_into_the_next_request() {
         rows
     );
 
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }

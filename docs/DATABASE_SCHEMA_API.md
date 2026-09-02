@@ -16,7 +16,6 @@ Scripts can now dynamically create database tables, add columns of various types
   `acquireLease`) require `UseScriptDatabase`, which every authenticated user
   holds — a script serving a request runs under the requesting user's context,
   so its ordinary data access has to work for the people using the solution.
-- In development mode, anonymous users hold both for testing
 - Each script's tables are isolated using a hash-based prefix
 - Maximum limits: 50 tables per script, 50 columns per table
 

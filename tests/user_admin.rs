@@ -13,7 +13,7 @@ use aiwebengine::engine_api::{
 };
 use aiwebengine::security::{Capability, UserContext};
 use aiwebengine::user_repository::{self, UserRole};
-use common::{TestContext, setup_env, should_skip_integration_tests, wait_for_server};
+use common::{AdminServer, setup_env, should_skip_integration_tests};
 use serde_json::json;
 
 /// Create a fresh user and return its id. The email is unique per call so
@@ -317,14 +317,10 @@ async fn user_endpoints_reject_unauthenticated_callers() {
     if should_skip_integration_tests() {
         return;
     }
-    let context = TestContext::new();
-    let port = context
-        .start_server()
-        .await
-        .expect("server failed to start");
-    wait_for_server(port, 20).await.expect("Server not ready");
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let port = engine.port();
 
-    let client = reqwest::Client::new();
+    let client = engine.anonymous().clone();
     let base = format!("http://127.0.0.1:{}", port);
 
     let response = client
@@ -356,7 +352,7 @@ async fn user_endpoints_reject_unauthenticated_callers() {
         .expect("user_roles delete failed");
     assert_eq!(response.status(), 403);
 
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -364,14 +360,10 @@ async fn user_role_endpoint_reports_missing_parameters() {
     if should_skip_integration_tests() {
         return;
     }
-    let context = TestContext::new();
-    let port = context
-        .start_server()
-        .await
-        .expect("server failed to start");
-    wait_for_server(port, 20).await.expect("Server not ready");
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let port = engine.port();
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
     let base = format!("http://127.0.0.1:{}", port);
 
     // Parameter validation precedes the authorization check, same as the
@@ -398,7 +390,7 @@ async fn user_role_endpoint_reports_missing_parameters() {
         .expect("user_roles delete failed");
     assert_eq!(response.status(), 400);
 
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -406,12 +398,8 @@ async fn user_endpoints_are_documented_in_openapi() {
     if should_skip_integration_tests() {
         return;
     }
-    let context = TestContext::new();
-    let port = context
-        .start_server()
-        .await
-        .expect("server failed to start");
-    wait_for_server(port, 20).await.expect("Server not ready");
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let port = engine.port();
 
     let spec: serde_json::Value =
         reqwest::get(format!("http://127.0.0.1:{}/engine/openapi.json", port))
@@ -426,7 +414,7 @@ async fn user_endpoints_are_documented_in_openapi() {
     assert!(paths["/engine/user_roles"].get("post").is_some());
     assert!(paths["/engine/user_roles"].get("delete").is_some());
 
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 // ============================================================================

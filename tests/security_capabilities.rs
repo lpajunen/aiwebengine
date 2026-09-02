@@ -343,11 +343,6 @@ async fn test_anonymous_user_has_minimal_capabilities() {
     if should_skip_integration_tests() {
         return;
     }
-    // Set production mode to test strict anonymous user capabilities
-    unsafe {
-        std::env::set_var("AIWEBENGINE_MODE", "production");
-    }
-
     let anon_user = UserContext::anonymous();
 
     // Anonymous users should not have write capabilities in production mode
@@ -371,11 +366,6 @@ async fn test_anonymous_user_has_minimal_capabilities() {
             .require_capability(&Capability::ManageStreams)
             .is_err()
     );
-
-    // Cleanup - restore development mode for other tests
-    unsafe {
-        std::env::set_var("AIWEBENGINE_MODE", "development");
-    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -106,10 +106,6 @@ statement_timeout_ms = 30000
 idle_in_transaction_timeout_ms = 300000
 
 [security]
-# Anonymous users get minimal read-only capabilities. Must stay false outside
-# local development; when false (with auth enabled), the CSRF, session and
-# secret encryption keys below are mandatory at startup.
-development_mode = false
 # Hold every session to the address it was signed in from. Off by default,
 # because a phone changing networks mid-session would be signed out for it; on a
 # deployment whose callers do not move it is cheap, and it makes a stolen

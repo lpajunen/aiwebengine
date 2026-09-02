@@ -1355,37 +1355,6 @@ pub async fn start_server_with_config(
     config: config::Config,
     shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) -> AppResult<u16> {
-    // Apply the capability mode before any script runs. Fail closed: anonymous
-    // users get minimal read-only capabilities unless development mode is
-    // explicitly enabled in configuration.
-    security::set_development_mode(config.security.development_mode);
-    if security::is_development_mode() {
-        let host = config.server.host.trim();
-        let loopback = matches!(host, "127.0.0.1" | "::1" | "localhost");
-
-        if loopback {
-            warn!(
-                "Development mode is ENABLED: anonymous users receive elevated capabilities \
-                 (write/delete scripts and assets). Never enable this in production."
-            );
-        } else {
-            // Named separately because the combination is the dangerous one and
-            // it is easy to arrive at by accident: a template that enables
-            // development mode beside `host = \"0.0.0.0\"` grants engine
-            // administration to anyone who can reach the port on any interface.
-            // `auth.internal.bootstrap_admin_usernames` and `--grant-role` are
-            // the ways to administer an install without this.
-            warn!(
-                "Development mode is ENABLED and the server is bound to {}, not loopback: \
-                 every anonymous caller that can reach this port administers the engine \
-                 (write/delete scripts and assets, script database). Bind to 127.0.0.1, or \
-                 turn development mode off and appoint an administrator with \
-                 auth.internal.bootstrap_admin_usernames or --grant-role.",
-                host
-            );
-        }
-    }
-
     // Apply configured JavaScript limits to every execution path (memory limit,
     // stack size, and the interrupt-handler deadline) before any script runs.
     let js_limits = js_engine::ExecutionLimits {

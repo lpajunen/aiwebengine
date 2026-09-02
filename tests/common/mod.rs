@@ -22,6 +22,16 @@ static DB_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 /// isolation.
 static TEST_SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
 
+/// The administrator the engine-API tests act as. Named in the test server's
+/// `bootstrap_admin_usernames`, so signing in as it is signing in as an
+/// administrator.
+#[allow(dead_code)]
+pub const TEST_ADMIN_USERNAME: &str = "test-admin";
+
+/// Its password. A test fixture, not a secret.
+#[allow(dead_code)]
+pub const TEST_ADMIN_PASSWORD: &str = "test-administrator-password";
+
 /// A throwaway 32-byte key, base64-encoded, for the tests that run with
 /// authentication on. Never used anywhere a real deployment reads a key from.
 #[allow(dead_code)]
@@ -251,11 +261,7 @@ impl TestServer {
         test_config.server.base_url = Some(format!("http://127.0.0.1:{}", port));
         test_config.javascript.execution_timeout_ms = 5000;
 
-        // Not development mode: that tier hands anonymous callers an
-        // administrator's capabilities, which is the opposite of what a test
-        // about authentication should be running under. The keys it stands in
-        // for are supplied instead.
-        test_config.security.development_mode = false;
+        // Authentication needs its keys; throwaway ones, per test process.
         test_config.security.csrf_key = Some(TEST_ENCRYPTION_KEY.to_string());
         test_config.security.session_encryption_key = Some(TEST_ENCRYPTION_KEY.to_string());
         test_config.security.secret_encryption_key = Some(TEST_ENCRYPTION_KEY.to_string());
@@ -272,6 +278,12 @@ impl TestServer {
                 enabled: true,
                 allow_registration: true,
                 allow_guests: false,
+                // The fixed administrator. Engine APIs are guarded by
+                // AdministerEngine, and this is how a test holds it: by being
+                // an administrator, the way a person is, rather than by running
+                // the engine in a mode that hands the capability to anonymous
+                // callers.
+                bootstrap_admin_usernames: vec![TEST_ADMIN_USERNAME.to_string()],
                 ..InternalAuthConfig::default()
             },
             ..AuthConfig::default()
@@ -379,6 +391,153 @@ pub async fn wait_for_server(port: u16, max_attempts: u32) -> anyhow::Result<()>
         "Server not ready after {} attempts",
         max_attempts
     ))
+}
+
+/// A running engine and an administrator signed into it.
+///
+/// What the engine's own APIs need, and what replaced development mode: those
+/// endpoints are guarded by `AdministerEngine`, and a test now holds that
+/// capability by being an administrator rather than by running the engine in a
+/// mode that hands it to anonymous callers. The requests a test makes are then
+/// the requests a real administrator makes, through the middleware a real
+/// deployment runs.
+pub struct AdminServer {
+    server: TestServer,
+    http: reqwest::Client,
+    cookie: String,
+    base: String,
+}
+
+#[allow(dead_code)]
+impl AdminServer {
+    /// Start the server and sign in as [`TEST_ADMIN_USERNAME`].
+    pub async fn start() -> anyhow::Result<Self> {
+        let server = TestServer::start_with_auth().await?;
+        let port = server.port();
+        wait_for_server(port, 30).await?;
+
+        let http = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(30))
+            .build()?;
+        let base = format!("http://127.0.0.1:{}", port);
+        let cookie = admin_session(&http, &base).await?;
+
+        Ok(Self {
+            server,
+            http,
+            cookie,
+            base,
+        })
+    }
+
+    pub fn port(&self) -> u16 {
+        self.server.port()
+    }
+
+    /// The engine's address, for a request this helper does not shape.
+    pub fn url(&self, path: &str) -> String {
+        format!("{}{}", self.base, path)
+    }
+
+    /// A client that carries the administrator's session on every request.
+    ///
+    /// Handed out whole rather than wrapped, so a test that was written against
+    /// a bare `reqwest::Client` keeps its requests exactly as they were and
+    /// only changes where the client comes from. What changes is that the
+    /// requests now arrive as somebody.
+    pub fn client(&self) -> reqwest::Client {
+        self.client_builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .unwrap_or_else(|_| self.http.clone())
+    }
+
+    /// The same session, for a test that wants its own redirect or timeout
+    /// policy on top.
+    pub fn client_builder(&self) -> reqwest::ClientBuilder {
+        let mut headers = reqwest::header::HeaderMap::new();
+        if let Ok(value) = reqwest::header::HeaderValue::from_str(&self.cookie) {
+            headers.insert(reqwest::header::COOKIE, value);
+        }
+
+        reqwest::Client::builder().default_headers(headers)
+    }
+
+    /// A request carrying the administrator's session.
+    pub fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
+        self.http
+            .request(method, self.url(path))
+            .header(reqwest::header::COOKIE, &self.cookie)
+    }
+
+    pub fn get(&self, path: &str) -> reqwest::RequestBuilder {
+        self.request(reqwest::Method::GET, path)
+    }
+
+    pub fn post(&self, path: &str) -> reqwest::RequestBuilder {
+        self.request(reqwest::Method::POST, path)
+    }
+
+    pub fn delete(&self, path: &str) -> reqwest::RequestBuilder {
+        self.request(reqwest::Method::DELETE, path)
+    }
+
+    pub fn patch(&self, path: &str) -> reqwest::RequestBuilder {
+        self.request(reqwest::Method::PATCH, path)
+    }
+
+    /// A caller with no session at all, for the assertions that are about
+    /// being refused.
+    pub fn anonymous(&self) -> &reqwest::Client {
+        &self.http
+    }
+
+    pub async fn shutdown(self) {
+        self.server.shutdown().await;
+    }
+}
+
+/// Sign the fixed administrator in, creating the account the first time.
+///
+/// Every test process shares one database, so the account usually exists
+/// already; registration and sign-in both end in the same place, which is a
+/// session cookie for an account the configuration names an administrator.
+async fn admin_session(http: &reqwest::Client, base: &str) -> anyhow::Result<String> {
+    let credentials = serde_json::json!({
+        "username": TEST_ADMIN_USERNAME,
+        "password": TEST_ADMIN_PASSWORD,
+    });
+
+    let registered = http
+        .post(format!("{}/auth/local/register", base))
+        .json(&credentials)
+        .send()
+        .await?;
+
+    let response = if registered.status().is_success() {
+        registered
+    } else {
+        http.post(format!("{}/auth/local/login", base))
+            .json(&credentials)
+            .send()
+            .await?
+    };
+
+    let status = response.status();
+    let cookie = response
+        .headers()
+        .get(reqwest::header::SET_COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .map(str::to_string);
+
+    cookie.ok_or_else(|| {
+        anyhow::anyhow!(
+            "signing the test administrator in issued no session: {}",
+            status
+        )
+    })
 }
 
 /// Macro for running tests with automatic server management

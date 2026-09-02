@@ -269,8 +269,8 @@ mod tests {
         assert!(!result.success);
         assert!(result.error.as_ref().unwrap().contains("Access denied"));
 
-        // Test that a context holding WriteScripts (e.g. an anonymous user in
-        // development mode) CAN write
+        // A context holding WriteScripts can write, whatever tier it came
+        // from: this layer authorizes on the capability, not on the tier.
         let writer = UserContext {
             user_id: None,
             is_authenticated: false,

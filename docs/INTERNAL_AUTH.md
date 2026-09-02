@@ -45,7 +45,7 @@ The exception is an account the operator named in
 `auth.internal.bootstrap_admin_usernames`. That is the same declaration
 `bootstrap_admins` makes, by the same authority — the configuration file — for
 an engine whose accounts have no verified address, and it is how a personal
-install gets an owner without running the whole engine in development mode. It
+install gets an owner at all — there is no development mode to fall back on. It
 is applied on every sign-in, so naming an account that already exists works;
 and it is not a credential, since reaching the account still takes its password.
 

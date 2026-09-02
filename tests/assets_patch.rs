@@ -451,12 +451,6 @@ async fn engine_asset_reads_are_closed_to_anonymous_callers() {
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
-    // The production rule. Development mode grants anonymous callers elevated
-    // capabilities by design, and is checked separately below.
-    unsafe {
-        std::env::set_var("AIWEBENGINE_MODE", "production");
-    }
-
     let uri = "test://assets-patch/anonymous";
     deploy(uri, "function init() {}");
     store_asset(
@@ -540,25 +534,6 @@ async fn engine_asset_reads_are_closed_to_anonymous_callers() {
         .is_ok(),
         "an administrator should still read"
     );
-
-    // Development mode is the documented escape hatch, and stays open.
-    unsafe {
-        std::env::set_var("AIWEBENGINE_MODE", "development");
-    }
-    let dev_anonymous = UserContext::anonymous();
-    assert!(
-        aiwebengine::engine_api::read_asset_authorized(
-            &dev_anonymous,
-            uri,
-            "assets_patch_anonymous/secrets.ts",
-            &aiwebengine::engine_api::AssetReadOptions::default(),
-        )
-        .is_ok(),
-        "development mode drives a local instance without a login"
-    );
-    unsafe {
-        std::env::remove_var("AIWEBENGINE_MODE");
-    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

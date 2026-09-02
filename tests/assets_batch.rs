@@ -15,7 +15,7 @@ use axum::Extension;
 use axum::extract::Query;
 use axum::response::Response;
 use base64::Engine as _;
-use common::{TestContext, setup_env, should_skip_integration_tests, test_mutex, wait_for_server};
+use common::{AdminServer, setup_env, should_skip_integration_tests, test_mutex};
 use serde_json::{Value, json};
 use std::collections::HashSet;
 
@@ -613,26 +613,17 @@ async fn a_batch_over_the_management_body_limit_is_still_accepted() {
     let _guard = test_mutex().lock().await;
     setup_env().await;
 
-    // The harness serves with auth off, so requests arrive anonymous; in
-    // development mode that carries the capabilities this write needs.
-    unsafe {
-        std::env::set_var("AIWEBENGINE_MODE", "development");
-    }
-
     let uri = "test://assets-batch/large";
     deploy(uri, "function init() {}");
 
-    let context = TestContext::new();
-    let port = context
-        .start_server()
-        .await
-        .expect("server failed to start");
-    wait_for_server(port, 20).await.expect("Server not ready");
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let port = engine.port();
 
     // Over the 1MB default before base64 even widens it.
     let source = format!("export const filler = \"{}\";", "x".repeat(1_500_000));
 
-    let response = reqwest::Client::new()
+    let response = engine
+        .client()
         .post(format!(
             "http://127.0.0.1:{}/engine/assets/batch?script={}",
             port, uri
@@ -659,5 +650,5 @@ async fn a_batch_over_the_management_body_limit_is_still_accepted() {
         source.len()
     );
 
-    context.cleanup().await.expect("servers should shut down");
+    engine.shutdown().await;
 }

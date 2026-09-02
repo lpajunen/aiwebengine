@@ -8,7 +8,7 @@
 
 mod common;
 
-use common::{TestContext, wait_for_server};
+use common::AdminServer;
 use serde_json::Value;
 
 const OPENAPI_3_0_SCHEMA: &str = r#"{
@@ -71,13 +71,10 @@ const OPENAPI_3_0_SCHEMA: &str = r#"{
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_openapi_spec_is_valid_json() {
-    let ctx = TestContext::new();
-    let port = ctx.start_server().await.expect("Failed to start server");
-    wait_for_server(port, 30)
-        .await
-        .expect("Server failed to start");
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let port = engine.port();
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
     let url = format!("http://localhost:{}/engine/openapi.json", port);
 
     let response = client
@@ -104,13 +101,10 @@ async fn test_openapi_spec_is_valid_json() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_openapi_spec_structure() {
-    let ctx = TestContext::new();
-    let port = ctx.start_server().await.expect("Failed to start server");
-    wait_for_server(port, 30)
-        .await
-        .expect("Server failed to start");
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let port = engine.port();
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
     let url = format!("http://localhost:{}/engine/openapi.json", port);
 
     let response = client
@@ -140,13 +134,10 @@ async fn test_openapi_spec_structure() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_openapi_contains_rust_endpoints() {
-    let ctx = TestContext::new();
-    let port = ctx.start_server().await.expect("Failed to start server");
-    wait_for_server(port, 30)
-        .await
-        .expect("Server failed to start");
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let port = engine.port();
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
     let url = format!("http://localhost:{}/engine/openapi.json", port);
 
     let response = client
@@ -184,13 +175,10 @@ async fn test_openapi_contains_rust_endpoints() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_openapi_has_security_schemes() {
-    let ctx = TestContext::new();
-    let port = ctx.start_server().await.expect("Failed to start server");
-    wait_for_server(port, 30)
-        .await
-        .expect("Server failed to start");
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let port = engine.port();
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
     let url = format!("http://localhost:{}/engine/openapi.json", port);
 
     let response = client
@@ -231,13 +219,10 @@ async fn test_openapi_has_security_schemes() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_openapi_has_schemas() {
-    let ctx = TestContext::new();
-    let port = ctx.start_server().await.expect("Failed to start server");
-    wait_for_server(port, 30)
-        .await
-        .expect("Server failed to start");
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let port = engine.port();
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
     let url = format!("http://localhost:{}/engine/openapi.json", port);
 
     let response = client
@@ -279,13 +264,10 @@ async fn test_openapi_has_schemas() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_openapi_no_duplicate_paths() {
-    let ctx = TestContext::new();
-    let port = ctx.start_server().await.expect("Failed to start server");
-    wait_for_server(port, 30)
-        .await
-        .expect("Server failed to start");
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let port = engine.port();
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
     let url = format!("http://localhost:{}/engine/openapi.json", port);
 
     let response = client
@@ -320,13 +302,10 @@ async fn test_openapi_no_duplicate_paths() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_openapi_has_tags() {
-    let ctx = TestContext::new();
-    let port = ctx.start_server().await.expect("Failed to start server");
-    wait_for_server(port, 30)
-        .await
-        .expect("Server failed to start");
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let port = engine.port();
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
     let url = format!("http://localhost:{}/engine/openapi.json", port);
 
     let response = client
@@ -360,13 +339,10 @@ async fn test_openapi_has_tags() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_openapi_graphql_endpoints_have_x_protocol() {
-    let ctx = TestContext::new();
-    let port = ctx.start_server().await.expect("Failed to start server");
-    wait_for_server(port, 30)
-        .await
-        .expect("Server failed to start");
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let port = engine.port();
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
     let url = format!("http://localhost:{}/engine/openapi.json", port);
 
     let response = client
@@ -413,7 +389,7 @@ async fn test_openapi_graphql_endpoints_have_x_protocol() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_openapi_javascript_routes_included() {
-    let ctx = TestContext::new();
+    let engine = AdminServer::start().await.expect("server failed to start");
 
     // The built-in scripts no longer register HTTP routes (engine endpoints
     // are native Rust), so load a script that registers routes via
@@ -423,12 +399,9 @@ async fn test_openapi_javascript_routes_included() {
         include_str!("../scripts/test_scripts/method_test.js"),
     );
 
-    let port = ctx.start_server().await.expect("Failed to start server");
-    wait_for_server(port, 30)
-        .await
-        .expect("Server failed to start");
+    let port = engine.port();
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
     let url = format!("http://localhost:{}/engine/openapi.json", port);
 
     // JS script init() runs asynchronously after the server becomes ready.
@@ -483,7 +456,7 @@ async fn test_openapi_javascript_routes_included() {
 /// `/engine/script_updates` (stream) with no tags.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_openapi_asset_and_stream_default_groups() {
-    let ctx = TestContext::new();
+    let engine = AdminServer::start().await.expect("server failed to start");
 
     // core.js no longer registers asset routes; load a script that does.
     // registerAssetRoute requires the asset to exist and be owned by the
@@ -503,12 +476,9 @@ async fn test_openapi_asset_and_stream_default_groups() {
         include_str!("../scripts/test_scripts/method_test.js"),
     );
 
-    let port = ctx.start_server().await.expect("Failed to start server");
-    wait_for_server(port, 30)
-        .await
-        .expect("Server failed to start");
+    let port = engine.port();
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
     let url = format!("http://localhost:{}/engine/openapi.json", port);
 
     // Returns the "tags" array for GET on `path` if the operation is present.
@@ -565,13 +535,10 @@ async fn test_openapi_asset_and_stream_default_groups() {
 /// the same way it can for the GraphQL subscription endpoints.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_openapi_log_tail_is_marked_as_an_event_stream() {
-    let ctx = TestContext::new();
-    let port = ctx.start_server().await.expect("Failed to start server");
-    wait_for_server(port, 30)
-        .await
-        .expect("Server failed to start");
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let port = engine.port();
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
     let url = format!("http://localhost:{}/engine/openapi.json", port);
 
     let response = client

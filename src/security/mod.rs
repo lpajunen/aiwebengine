@@ -13,7 +13,7 @@ pub mod threat_detection;
 pub mod validation;
 
 pub use audit::{SecurityAuditor, SecurityEvent, SecurityEventType, SecuritySeverity};
-pub use capabilities::{UserContext, is_development_mode, set_development_mode};
+pub use capabilities::UserContext;
 pub use client_ip::{TrustedProxies, normalize_client_ip};
 pub use csp::{
     CspDirective, CspManager, CspPolicy, CspSource, CspViolationReport, engine_page_policy,

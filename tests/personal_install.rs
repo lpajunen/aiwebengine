@@ -4,8 +4,9 @@
 //! granted through `/engine/user_roles`, which is guarded by `AdministerEngine`,
 //! and `auth.bootstrap_admins` matches an email address that only a provider can
 //! verify. On a laptop with no OAuth client that is a circle with no way in, and
-//! the only workaround was development mode — which grants engine administration
-//! to *anonymous* callers on every interface the engine binds.
+//! the only workaround was a development mode that granted engine
+//! administration to _anonymous_ callers on every interface the engine binds,
+//! and which this replaced.
 //!
 //! The other half is that a role, once granted, is stamped into a session and
 //! read from there. Taking it away therefore has to reach the sessions that

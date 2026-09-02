@@ -2,7 +2,7 @@ mod common;
 
 use aiwebengine::{notifications, scheduler};
 use chrono::Utc;
-use common::{TestContext, should_skip_integration_tests, wait_for_server};
+use common::{AdminServer, should_skip_integration_tests};
 
 /// Test notification message structure includes timestamp and server_id
 #[test]
@@ -263,14 +263,12 @@ async fn cluster_health_requires_admin_and_no_longer_serves_the_old_path() {
     if should_skip_integration_tests() {
         return;
     }
-    let context = TestContext::new();
-    let port = context
-        .start_server()
-        .await
-        .expect("server failed to start");
-    wait_for_server(port, 20).await.expect("Server not ready");
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let port = engine.port();
 
-    let client = reqwest::Client::new();
+    // Deliberately not the administrator: this is about what a caller
+    // without a session is refused.
+    let client = engine.anonymous().clone();
     let base = format!("http://127.0.0.1:{}", port);
 
     let response = client
@@ -303,5 +301,5 @@ async fn cluster_health_requires_admin_and_no_longer_serves_the_old_path() {
         .expect("health request failed");
     assert_eq!(response.status(), 200);
 
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }

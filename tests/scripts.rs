@@ -13,7 +13,7 @@ use aiwebengine::js_engine::call_init_if_exists;
 use aiwebengine::repository;
 use aiwebengine::repository::{get_script_metadata, upsert_script};
 use aiwebengine::script_init::{InitContext, ScriptInitializer};
-use common::{TestContext, setup_env, should_skip_integration_tests};
+use common::{AdminServer, setup_env, should_skip_integration_tests};
 use std::time::Duration;
 use tokio::time::timeout;
 
@@ -26,17 +26,11 @@ async fn test_js_registered_route_returns_expected() {
     if should_skip_integration_tests() {
         return;
     }
-    let context = TestContext::new();
-    let port = context
-        .start_server()
-        .await
-        .expect("Server failed to start");
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let port = engine.port();
 
-    common::wait_for_server(port, 40)
-        .await
-        .expect("Server not ready");
-
-    let client = reqwest::Client::builder()
+    let client = engine
+        .client_builder()
         .redirect(reqwest::redirect::Policy::none()) // Don't follow redirects
         .timeout(Duration::from_secs(5))
         .build()
@@ -85,7 +79,7 @@ async fn test_js_registered_route_returns_expected() {
         location
     );
 
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 // ============================================================================
@@ -104,24 +98,17 @@ async fn js_write_log() {
         include_str!("../scripts/test_scripts/js_log_test.js"),
     );
 
-    // Use the new TestContext pattern for proper server lifecycle management
-    let context = common::TestContext::new();
-    let port = context
-        .start_server()
-        .await
-        .expect("Server failed to start");
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let port = engine.port();
 
     // Wait for server to be ready and scripts to be executed
-    common::wait_for_server(port, 40)
-        .await
-        .expect("Server not ready");
 
     // Give extra time for JavaScript scripts to execute and register routes
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     println!("Server started on port: {}", port);
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
 
     // Call the route which should call writeLog with timeout
     let log_request = client
@@ -155,7 +142,7 @@ async fn js_write_log() {
     );
 
     // Proper cleanup
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 // ============================================================================
@@ -167,24 +154,17 @@ async fn test_upsert_script_endpoint() {
     if should_skip_integration_tests() {
         return;
     }
-    // Use the new TestContext pattern for proper server lifecycle management
-    let context = common::TestContext::new();
-    let port = context
-        .start_server()
-        .await
-        .expect("Server failed to start");
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let port = engine.port();
 
     // Wait for server to be ready and scripts to be executed
-    common::wait_for_server(port, 40)
-        .await
-        .expect("Server not ready");
 
     // Give extra time for JavaScript scripts to execute and register routes
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     println!("Server started on port: {}", port);
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
 
     // Test the upsert_script endpoint
     let test_script_content = r#"
@@ -265,7 +245,7 @@ function init(context) {
     );
 
     // Proper cleanup
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -273,24 +253,17 @@ async fn test_delete_script_endpoint() {
     if should_skip_integration_tests() {
         return;
     }
-    // Use the new TestContext pattern for proper server lifecycle management
-    let context = common::TestContext::new();
-    let port = context
-        .start_server()
-        .await
-        .expect("Server failed to start");
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let port = engine.port();
 
     // Wait for server to be ready and scripts to be executed
-    common::wait_for_server(port, 40)
-        .await
-        .expect("Server not ready");
 
     // Give extra time for JavaScript scripts to execute and register routes
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     println!("Server started on port: {}", port);
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
 
     // First, upsert a test script
     let test_script_content = r#"
@@ -436,7 +409,7 @@ function init(context) {
     );
 
     // Proper cleanup
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -444,24 +417,17 @@ async fn test_script_lifecycle_via_http_api() {
     if should_skip_integration_tests() {
         return;
     }
-    // Use the new TestContext pattern for proper server lifecycle management
-    let context = common::TestContext::new();
-    let port = context
-        .start_server()
-        .await
-        .expect("Server failed to start");
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let port = engine.port();
 
     // Wait for server to be ready and scripts to be executed
-    common::wait_for_server(port, 40)
-        .await
-        .expect("Server not ready");
 
     // Give extra time for JavaScript scripts to execute and register routes
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     println!("Server started on port: {}", port);
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
 
     // Test script content
     let script_content = r#"
@@ -564,7 +530,7 @@ function init(context) {
     );
 
     // Proper cleanup
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -572,24 +538,17 @@ async fn test_read_script_endpoint() {
     if should_skip_integration_tests() {
         return;
     }
-    // Use the new TestContext pattern for proper server lifecycle management
-    let context = common::TestContext::new();
-    let port = context
-        .start_server()
-        .await
-        .expect("Server failed to start");
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let port = engine.port();
 
     // Wait for server to be ready and scripts to be executed
-    common::wait_for_server(port, 40)
-        .await
-        .expect("Server not ready");
 
     // Give extra time for JavaScript scripts to execute and register routes
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     println!("Server started on port: {}", port);
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
 
     // First, upsert a test script
     let test_script_content = r#"
@@ -728,7 +687,7 @@ function init(context) {
     );
 
     // Proper cleanup
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 // ============================================================================

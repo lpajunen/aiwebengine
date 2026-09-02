@@ -10,7 +10,7 @@
 mod common;
 
 use aiwebengine::repository;
-use common::{TestContext, should_skip_integration_tests, wait_for_server};
+use common::{AdminServer, should_skip_integration_tests};
 
 // ============================================================================
 // Health Endpoint Tests
@@ -21,18 +21,14 @@ async fn test_health_endpoint() {
     if should_skip_integration_tests() {
         return;
     }
-    let context = TestContext::new();
+    let engine = AdminServer::start().await.expect("server failed to start");
 
     // Start server with proper shutdown support
-    let port = context
-        .start_server()
-        .await
-        .expect("server failed to start");
+    let port = engine.port();
 
     // Wait for server to be ready
-    wait_for_server(port, 20).await.expect("Server not ready");
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
 
     // Test health endpoint
     let health_response = client
@@ -59,7 +55,7 @@ async fn test_health_endpoint() {
     assert_eq!(health_json["database"], "ok");
 
     // Cleanup
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -67,16 +63,12 @@ async fn test_health_endpoint_content_type() {
     if should_skip_integration_tests() {
         return;
     }
-    let context = TestContext::new();
+    let engine = AdminServer::start().await.expect("server failed to start");
 
     // Start server
-    let port = context
-        .start_server()
-        .await
-        .expect("server failed to start");
-    wait_for_server(port, 20).await.expect("Server not ready");
+    let port = engine.port();
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
 
     // Test that the health endpoint returns correct content type
     let response = client
@@ -95,7 +87,7 @@ async fn test_health_endpoint_content_type() {
     assert_eq!(content_type, "application/json");
 
     // Cleanup
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -103,15 +95,11 @@ async fn test_script_logs_endpoint() {
     if should_skip_integration_tests() {
         return;
     }
-    let context = TestContext::new();
+    let engine = AdminServer::start().await.expect("server failed to start");
 
-    let port = context
-        .start_server()
-        .await
-        .expect("server failed to start");
-    wait_for_server(port, 20).await.expect("Server not ready");
+    let port = engine.port();
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
 
     // Test script_logs endpoint with a valid URI parameter
     let logs_response = client
@@ -126,7 +114,7 @@ async fn test_script_logs_endpoint() {
     assert_eq!(logs_response.status(), 200);
 
     // Cleanup
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -134,13 +122,9 @@ async fn test_script_logs_all_scripts_and_filters() {
     if should_skip_integration_tests() {
         return;
     }
-    let context = TestContext::new();
+    let engine = AdminServer::start().await.expect("server failed to start");
 
-    let port = context
-        .start_server()
-        .await
-        .expect("server failed to start");
-    wait_for_server(port, 20).await.expect("Server not ready");
+    let port = engine.port();
 
     let first = "test_script_logs_filters_one";
     let second = "test_script_logs_filters_two";
@@ -150,7 +134,7 @@ async fn test_script_logs_all_scripts_and_filters() {
     repository::insert_log_message(first, "first-error", "ERROR");
     repository::insert_log_message(second, "second-info", "INFO");
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
     let base = format!("http://127.0.0.1:{}", port);
 
     // Omitting uri spans every script, and each entry names the script that
@@ -308,7 +292,7 @@ async fn test_script_logs_all_scripts_and_filters() {
 
     let _ = repository::clear_log_messages(first);
     let _ = repository::clear_log_messages(second);
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -316,13 +300,9 @@ async fn test_script_logs_delete_clears_and_prunes() {
     if should_skip_integration_tests() {
         return;
     }
-    let context = TestContext::new();
+    let engine = AdminServer::start().await.expect("server failed to start");
 
-    let port = context
-        .start_server()
-        .await
-        .expect("server failed to start");
-    wait_for_server(port, 20).await.expect("Server not ready");
+    let port = engine.port();
 
     let cleared = "test_script_logs_delete_cleared";
     let kept = "test_script_logs_delete_kept";
@@ -331,7 +311,7 @@ async fn test_script_logs_delete_clears_and_prunes() {
     repository::insert_log_message(cleared, "to-be-cleared", "INFO");
     repository::insert_log_message(kept, "to-be-kept", "INFO");
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
     let base = format!("http://127.0.0.1:{}", port);
 
     // A uri clears that script's logs and leaves every other script alone.
@@ -362,7 +342,7 @@ async fn test_script_logs_delete_clears_and_prunes() {
 
     let _ = repository::clear_log_messages(cleared);
     let _ = repository::clear_log_messages(kept);
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -370,15 +350,11 @@ async fn test_routes_endpoint() {
     if should_skip_integration_tests() {
         return;
     }
-    let context = TestContext::new();
+    let engine = AdminServer::start().await.expect("server failed to start");
 
-    let port = context
-        .start_server()
-        .await
-        .expect("server failed to start");
-    wait_for_server(port, 20).await.expect("Server not ready");
+    let port = engine.port();
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
     let base = format!("http://127.0.0.1:{}", port);
 
     let body: serde_json::Value = client
@@ -410,7 +386,7 @@ async fn test_routes_endpoint() {
         assert!(route["tags"].is_array(), "route without tags: {}", route);
     }
 
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 // ============================================================================
@@ -422,15 +398,11 @@ async fn test_engine_management_endpoints() {
     if should_skip_integration_tests() {
         return;
     }
-    let context = TestContext::new();
+    let engine = AdminServer::start().await.expect("server failed to start");
 
-    let port = context
-        .start_server()
-        .await
-        .expect("server failed to start");
-    wait_for_server(port, 20).await.expect("Server not ready");
+    let port = engine.port();
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
     let base = format!("http://127.0.0.1:{}", port);
 
     // /engine/script_logs is the canonical alias of /script_logs
@@ -488,7 +460,7 @@ async fn test_engine_management_endpoints() {
     }
 
     // Cleanup
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -496,15 +468,11 @@ async fn test_favicon_default_served_when_unregistered() {
     if should_skip_integration_tests() {
         return;
     }
-    let context = TestContext::new();
+    let engine = AdminServer::start().await.expect("server failed to start");
 
-    let port = context
-        .start_server()
-        .await
-        .expect("server failed to start");
-    wait_for_server(port, 20).await.expect("Server not ready");
+    let port = engine.port();
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
 
     // No script registers /favicon.ico, so the engine default is served.
     let response = client
@@ -514,7 +482,7 @@ async fn test_favicon_default_served_when_unregistered() {
         .expect("favicon request failed");
     assert_eq!(response.status(), 200);
 
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 // ============================================================================
@@ -526,7 +494,7 @@ async fn test_different_http_methods() {
     if should_skip_integration_tests() {
         return;
     }
-    let context = TestContext::new();
+    let engine = AdminServer::start().await.expect("server failed to start");
 
     // Dynamically load the method test script
     let _ = repository::upsert_script(
@@ -535,13 +503,9 @@ async fn test_different_http_methods() {
     );
 
     // Start server
-    let port = context
-        .start_server()
-        .await
-        .expect("Server failed to start");
-    wait_for_server(port, 20).await.expect("Server not ready");
+    let port = engine.port();
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
 
     // Test GET request to /api/test
     let get_response = client
@@ -630,7 +594,7 @@ async fn test_different_http_methods() {
     assert_eq!(not_found_response.status(), 404);
 
     // Cleanup
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -638,20 +602,16 @@ async fn test_head_request_falls_back_to_get_with_empty_body() {
     if should_skip_integration_tests() {
         return;
     }
-    let context = TestContext::new();
+    let engine = AdminServer::start().await.expect("server failed to start");
 
     let _ = repository::upsert_script(
         "https://example.com/method_test",
         include_str!("../scripts/test_scripts/method_test.js"),
     );
 
-    let port = context
-        .start_server()
-        .await
-        .expect("Server failed to start");
-    wait_for_server(port, 20).await.expect("Server not ready");
+    let port = engine.port();
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
 
     // No HEAD handler is registered for /api/test, only GET - HEAD should
     // transparently run the GET handler and come back with an empty body.
@@ -680,7 +640,7 @@ async fn test_head_request_falls_back_to_get_with_empty_body() {
         .expect("HEAD request to nonexistent path failed");
     assert_eq!(head_not_found_response.status(), 404);
 
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -688,7 +648,7 @@ async fn test_head_request_on_asset_route_strips_body() {
     if should_skip_integration_tests() {
         return;
     }
-    let context = TestContext::new();
+    let engine = AdminServer::start().await.expect("server failed to start");
 
     let script_uri = "https://example.com/head_asset_test";
     let _ = repository::upsert_script(script_uri, "function init() {}");
@@ -711,13 +671,9 @@ async fn test_head_request_on_asset_route_strips_body() {
     "#;
     let _ = repository::upsert_script(script_uri, script);
 
-    let port = context
-        .start_server()
-        .await
-        .expect("Server failed to start");
-    wait_for_server(port, 20).await.expect("Server not ready");
+    let port = engine.port();
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
 
     let get_response = client
         .get(format!("http://127.0.0.1:{}/head-test.css", port))
@@ -751,7 +707,7 @@ async fn test_head_request_on_asset_route_strips_body() {
         head_body
     );
 
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -759,7 +715,7 @@ async fn test_explicit_head_handler_overrides_get_fallback() {
     if should_skip_integration_tests() {
         return;
     }
-    let context = TestContext::new();
+    let engine = AdminServer::start().await.expect("server failed to start");
 
     let script = r#"
         function get_handler(context) {
@@ -776,11 +732,7 @@ async fn test_explicit_head_handler_overrides_get_fallback() {
     "#;
     let _ = repository::upsert_script("https://example.com/explicit_head_test", script);
 
-    let port = context
-        .start_server()
-        .await
-        .expect("Server failed to start");
-    wait_for_server(port, 20).await.expect("Server not ready");
+    let port = engine.port();
 
     // Check what the script actually registered before asking what the router
     // does with it.
@@ -810,7 +762,7 @@ async fn test_explicit_head_handler_overrides_get_fallback() {
         registered.init_error
     );
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
 
     let head_response = client
         .head(format!("http://127.0.0.1:{}/api/explicit-head", port))
@@ -828,7 +780,7 @@ async fn test_explicit_head_handler_overrides_get_fallback() {
         "Explicitly registered HEAD handler should run instead of falling back to GET"
     );
 
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 // ============================================================================
@@ -840,7 +792,7 @@ async fn test_query_parameters() {
     if should_skip_integration_tests() {
         return;
     }
-    let context = TestContext::new();
+    let engine = AdminServer::start().await.expect("server failed to start");
 
     // Dynamically load the query test script
     let _ = repository::upsert_script(
@@ -849,13 +801,9 @@ async fn test_query_parameters() {
     );
 
     // Start server
-    let port = context
-        .start_server()
-        .await
-        .expect("Server failed to start");
-    wait_for_server(port, 20).await.expect("Server not ready");
+    let port = engine.port();
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
 
     // Test GET request without query parameters
     let response_no_query = client
@@ -915,7 +863,7 @@ async fn test_query_parameters() {
     );
 
     // Cleanup
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 // ============================================================================
@@ -927,7 +875,7 @@ async fn test_form_data() {
     if should_skip_integration_tests() {
         return;
     }
-    let context = TestContext::new();
+    let engine = AdminServer::start().await.expect("server failed to start");
 
     // Dynamically load the form test script
     let _ = repository::upsert_script(
@@ -936,13 +884,9 @@ async fn test_form_data() {
     );
 
     // Start server
-    let port = context
-        .start_server()
-        .await
-        .expect("Server failed to start");
-    wait_for_server(port, 20).await.expect("Server not ready");
+    let port = engine.port();
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
 
     // Test simple GET request to root
     let root_response = client
@@ -1027,7 +971,7 @@ async fn test_form_data() {
     );
 
     // Cleanup
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 // ============================================================================
@@ -1039,7 +983,7 @@ async fn test_graphql_endpoints() {
     if should_skip_integration_tests() {
         return;
     }
-    let context = TestContext::new();
+    let engine = AdminServer::start().await.expect("server failed to start");
 
     // Load the GraphQL test script (a script that registers its own
     // queries, mutations, and subscriptions via graphQLRegistry)
@@ -1049,13 +993,9 @@ async fn test_graphql_endpoints() {
     );
 
     // Start server
-    let port = context
-        .start_server()
-        .await
-        .expect("Server failed to start");
-    wait_for_server(port, 20).await.expect("Server not ready");
+    let port = engine.port();
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
 
     // Test GraphQL POST endpoint with introspection query
     let introspection_query = r#"{__schema{queryType{name fields{name type{name kind}}}}}"#;
@@ -1172,7 +1112,7 @@ async fn test_graphql_endpoints() {
     assert_eq!(cache_control, "no-cache");
 
     // Cleanup
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1180,7 +1120,7 @@ async fn test_graphql_script_defined_mutations() {
     if should_skip_integration_tests() {
         return;
     }
-    let context = TestContext::new();
+    let engine = AdminServer::start().await.expect("server failed to start");
 
     // Load the GraphQL test script, which registers its own mutations
     // via graphQLRegistry (script-provided GraphQL is supported; engine
@@ -1191,13 +1131,9 @@ async fn test_graphql_script_defined_mutations() {
     );
 
     // Start server
-    let port = context
-        .start_server()
-        .await
-        .expect("Server failed to start");
-    wait_for_server(port, 20).await.expect("Server not ready");
+    let port = engine.port();
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
 
     // Execute the script-defined createUser mutation
     let create_user_body = serde_json::json!({
@@ -1254,7 +1190,7 @@ async fn test_graphql_script_defined_mutations() {
     }
 
     // Cleanup
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1342,15 +1278,11 @@ async fn test_oversized_request_body_is_rejected() {
     if should_skip_integration_tests() {
         return;
     }
-    let context = TestContext::new();
+    let engine = AdminServer::start().await.expect("server failed to start");
 
-    let port = context
-        .start_server()
-        .await
-        .expect("server failed to start");
-    wait_for_server(port, 20).await.expect("Server not ready");
+    let port = engine.port();
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
 
     // Default security.max_request_body_bytes is 1 MB; send a larger body
     let oversized = "x".repeat(1024 * 1024 + 100 * 1024);
@@ -1380,7 +1312,7 @@ async fn test_oversized_request_body_is_rejected() {
         body
     );
 
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 /// A request's log lines can be pulled out of the shared stream by the request
@@ -1391,7 +1323,7 @@ async fn test_script_logs_correlate_with_the_request_that_emitted_them() {
     if should_skip_integration_tests() {
         return;
     }
-    let context = TestContext::new();
+    let engine = AdminServer::start().await.expect("server failed to start");
 
     let script_uri = "test_script_logs_correlation";
     let _ = repository::clear_log_messages(script_uri);
@@ -1408,13 +1340,9 @@ async fn test_script_logs_correlate_with_the_request_that_emitted_them() {
     "#;
     let _ = repository::upsert_script(script_uri, script);
 
-    let port = context
-        .start_server()
-        .await
-        .expect("server failed to start");
-    wait_for_server(port, 20).await.expect("Server not ready");
+    let port = engine.port();
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
     let base = format!("http://127.0.0.1:{}", port);
 
     // Two calls to the same route, so filtering has something to separate.
@@ -1498,7 +1426,7 @@ async fn test_script_logs_correlate_with_the_request_that_emitted_them() {
     assert_eq!(logs.len(), 2, "expected one failure line per call");
 
     let _ = repository::clear_log_messages(script_uri);
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 /// Reads SSE events from a streaming response until `stop` says enough has
@@ -1539,7 +1467,7 @@ async fn test_script_logs_stream_tails_entries_as_they_are_written() {
     if should_skip_integration_tests() {
         return;
     }
-    let context = TestContext::new();
+    let engine = AdminServer::start().await.expect("server failed to start");
 
     let script_uri = "test_script_logs_stream";
     let _ = repository::clear_log_messages(script_uri);
@@ -1556,13 +1484,9 @@ async fn test_script_logs_stream_tails_entries_as_they_are_written() {
     "#;
     let _ = repository::upsert_script(script_uri, script);
 
-    let port = context
-        .start_server()
-        .await
-        .expect("server failed to start");
-    wait_for_server(port, 20).await.expect("Server not ready");
+    let port = engine.port();
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
     let base = format!("http://127.0.0.1:{}", port);
 
     let mut tail = client
@@ -1741,7 +1665,7 @@ async fn test_script_logs_stream_tails_entries_as_they_are_written() {
     assert_eq!(response.status(), 400);
 
     let _ = repository::clear_log_messages(script_uri);
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 /// What the engine writes about a request has to be filed under that request
@@ -1755,7 +1679,7 @@ async fn test_script_logs_correlate_what_the_engine_reports_about_a_request() {
     if should_skip_integration_tests() {
         return;
     }
-    let context = TestContext::new();
+    let engine = AdminServer::start().await.expect("server failed to start");
 
     let script_uri = "test_script_logs_engine_reported";
     let _ = repository::clear_log_messages(script_uri);
@@ -1789,13 +1713,9 @@ async fn test_script_logs_correlate_what_the_engine_reports_about_a_request() {
     })
     .expect("asset should be stored");
 
-    let port = context
-        .start_server()
-        .await
-        .expect("server failed to start");
-    wait_for_server(port, 20).await.expect("Server not ready");
+    let port = engine.port();
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
     let base = format!("http://127.0.0.1:{}", port);
 
     let response = client
@@ -1867,5 +1787,5 @@ async fn test_script_logs_correlate_what_the_engine_reports_about_a_request() {
     );
 
     let _ = repository::clear_log_messages(script_uri);
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }

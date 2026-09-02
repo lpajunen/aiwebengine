@@ -4,25 +4,18 @@ mod common;
 
 #[cfg(test)]
 mod script_error_detection_tests {
-    use super::common;
+    use super::common::AdminServer;
     use std::time::Duration;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_upsert_script_error_detection() {
-        let context = common::TestContext::new();
-        let port = context
-            .start_server()
-            .await
-            .expect("Server failed to start");
-
-        common::wait_for_server(port, 40)
-            .await
-            .expect("Server not ready");
+        let engine = AdminServer::start().await.expect("server failed to start");
+        let port = engine.port();
 
         // Give extra time for scripts to initialize
         tokio::time::sleep(Duration::from_millis(500)).await;
 
-        let client = reqwest::Client::new();
+        let client = engine.client();
 
         // Test 1: Try to update a script that should fail (if permissions are correctly enforced)
         // We'll create a script, then try to update it with an invalid scenario

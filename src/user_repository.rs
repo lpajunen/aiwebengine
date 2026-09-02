@@ -776,8 +776,9 @@ async fn apply_configured_administrator(pool: &PgPool, user_id: &str) -> AppResu
 /// `/engine/user_roles` is guarded by `AdministerEngine`, and
 /// [`upsert_internal_user`] deliberately grants nothing — which on a laptop
 /// with no OAuth provider is a circle with no way in. The remaining workaround
-/// was `security.development_mode`, which hands those capabilities to
-/// *anonymous* callers on every interface the engine binds.
+/// was a development mode that handed those capabilities to *anonymous*
+/// callers on every interface the engine binds; it is gone, and this is what
+/// replaced it.
 ///
 /// A username is not an identity claim the way a provider-verified address is,
 /// so this grants nothing on its own: it names a local account, and reaching

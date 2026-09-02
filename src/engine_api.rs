@@ -81,13 +81,10 @@ fn user_owns_script(user: &UserContext, script_uri: &str) -> bool {
 /// Capability-only admin check: does this caller hold `AdministerEngine`?
 ///
 /// **This does not mean the caller is an authenticated administrator.**
-/// Development mode grants `AdministerEngine` to *anonymous* callers
-/// (`UserContext::anonymous_capabilities`), so this returns true with no
-/// session at all. It is the right check for script and asset operations,
-/// where that elevation is the point of development mode.
-///
-/// For anything that exposes user data, engine topology, or role changes, use
-/// [`is_user_admin`], which additionally requires an authenticated session.
+/// Capability alone. No tier grants `AdministerEngine` without a session any
+/// more, so in practice this and [`is_user_admin`] agree — the two are kept
+/// apart because they answer different questions, and the stricter one is what
+/// anything exposing user data, engine topology or role changes should ask.
 /// Whether a caller may reach the engine's administration surface at all.
 ///
 /// Capabilities alone do not answer this. An anonymous caller holds
@@ -100,10 +97,8 @@ fn user_owns_script(user: &UserContext, script_uri: &str) -> bool {
 /// every script's files, and a script that carries an embedded credential
 /// carries it in public.
 ///
-/// Development mode stays open: it grants anonymous callers elevated
-/// capabilities by design, so a local instance can be driven without a login.
 fn may_administer(user: &UserContext) -> bool {
-    user.is_authenticated || crate::security::is_development_mode()
+    user.is_authenticated
 }
 
 fn has_admin_capability(user: &UserContext) -> bool {
@@ -789,13 +784,12 @@ pub enum UserAdminError {
 
 /// User administration is restricted to session-verified administrators.
 ///
-/// Deliberately stricter than [`has_admin_capability`], which accepts any holder of
-/// `AdministerEngine` — a capability development mode also grants to *anonymous*
-/// callers. Requiring authentication as well means only a `UserContext::admin`
-/// passes, and that is built solely from a session whose `is_admin` flag is
-/// set (`lib.rs`), for both the HTTP and MCP entry points. So development mode
-/// cannot hand an unauthenticated caller the user directory or the ability to
-/// grant itself a role.
+/// Deliberately stricter than [`has_admin_capability`], which accepts any
+/// holder of `AdministerEngine` however it was obtained. Requiring
+/// authentication as well means only a `UserContext::admin` passes, and that is
+/// built solely from a session whose `is_admin` flag is set (`lib.rs`), for both
+/// the HTTP and MCP entry points — so no future widening of what an anonymous
+/// caller holds can reach the user directory or role changes.
 fn is_user_admin(user: &UserContext) -> bool {
     user.is_authenticated && user.has_capability(&Capability::AdministerEngine)
 }
@@ -6347,9 +6341,8 @@ pub async fn lock_diagnostics(pool: &sqlx::PgPool) -> Value {
 pub async fn cluster_health_route(auth_user: Option<Extension<AuthUser>>) -> Response {
     let user = user_context_from(auth_user.as_deref());
     // Deliberately the stricter `is_user_admin` check, not
-    // `has_admin_capability`: the latter passes on capability alone, which
-    // development mode grants to anonymous callers. Topology diagnostics
-    // require a real admin session.
+    // `has_admin_capability`: the latter passes on capability alone. Topology
+    // diagnostics require a real admin session.
     if !is_user_admin(&user) {
         return error_response(
             StatusCode::FORBIDDEN,

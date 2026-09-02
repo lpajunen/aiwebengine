@@ -635,7 +635,7 @@ impl AuthManager {
 
         // An account the operator named in configuration is an administrator
         // from its first moment, which is what gives a personal install an
-        // owner without running the whole engine in development mode.
+        // owner at all.
         crate::user_repository::apply_bootstrap_admin_username(&user_id, &normalized)
             .await
             .map_err(|e| AuthError::Internal(format!("Failed to apply configured role: {}", e)))?;

@@ -15,7 +15,7 @@ use aiwebengine::{
     js_engine, repository,
     stream_registry::{BroadcastResult, GLOBAL_STREAM_REGISTRY, StreamConnection, StreamRegistry},
 };
-use common::{TestContext, setup_env, wait_for_server};
+use common::{AdminServer, setup_env};
 use std::time::Duration;
 use tokio::time::{sleep, timeout};
 use tracing::info;
@@ -27,10 +27,6 @@ use tracing::info;
 #[tokio::test(flavor = "multi_thread")]
 async fn test_native_script_update_streaming() {
     setup_env().await;
-    // The native engine API is driven with an anonymous user context here;
-    // anonymous script writes require development mode (which a test server
-    // config would normally enable at startup).
-    aiwebengine::security::set_development_mode(true);
 
     info!("Testing native /engine/script_updates streaming functionality");
 
@@ -66,7 +62,9 @@ async fn test_native_script_update_streaming() {
     // the update to the engine script-updates stream
     info!("Testing script upsert through the native engine API...");
 
-    let user = aiwebengine::security::UserContext::anonymous();
+    // An administrator, because writing a script is administering the engine.
+    // This used to be an anonymous context that development mode elevated.
+    let user = aiwebengine::security::UserContext::admin("streaming-test-admin".to_string());
     let upsert_result = aiwebengine::engine_api::upsert_script_authorized(
         &user,
         "test_streaming.js",
@@ -407,20 +405,13 @@ async fn test_script_update_streaming_integration() {
     );
 
     // Start server using TestContext
-    let context = common::TestContext::new();
-    let port = context
-        .start_server()
-        .await
-        .expect("Server failed to start");
-
-    common::wait_for_server(port, 40)
-        .await
-        .expect("Server not ready");
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let port = engine.port();
 
     // Give extra time for scripts to execute
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
 
     // Note: consuming the SSE stream would require a more complex setup.
     // For now, we verify that upserts via /engine/upsert_script succeed and
@@ -461,7 +452,7 @@ async fn test_script_update_streaming_integration() {
     assert_eq!(update_response.status(), 200, "Update should succeed");
 
     // Cleanup
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -531,20 +522,13 @@ async fn test_script_update_message_format() {
         .expect("Failed to initialize message format test script");
 
     // Start server using TestContext
-    let context = common::TestContext::new();
-    let port = context
-        .start_server()
-        .await
-        .expect("Server failed to start");
-
-    common::wait_for_server(port, 40)
-        .await
-        .expect("Server not ready");
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let port = engine.port();
 
     // Give extra time for scripts to execute
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    let client = reqwest::Client::new();
+    let client = engine.client();
 
     // Trigger the message format test via HTTP
     let test_request = client
@@ -564,25 +548,20 @@ async fn test_script_update_message_format() {
     );
 
     // Cleanup
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 // ============================================================================
 // Stream Integration Tests
 // ============================================================================
 
-use reqwest::Client;
 #[tokio::test(flavor = "multi_thread")]
 async fn test_stream_endpoints() {
     setup_env().await;
-    let context = TestContext::new();
+    let engine = AdminServer::start().await.expect("server failed to start");
 
     // Start server
-    let port = context
-        .start_server()
-        .await
-        .expect("Server failed to start");
-    wait_for_server(port, 20).await.expect("Server not ready");
+    let port = engine.port();
 
     let base_url = format!("http://127.0.0.1:{}", port);
 
@@ -633,7 +612,7 @@ async fn test_stream_endpoints() {
     let is_registered = GLOBAL_STREAM_REGISTRY.is_stream_registered("/test-stream");
     println!("Is /test-stream registered: {}", is_registered);
 
-    let client = Client::new();
+    let client = engine.client();
 
     // Test 1: Regular endpoint should work normally
     let response = client
@@ -679,20 +658,16 @@ async fn test_stream_endpoints() {
     assert_eq!(response.status(), 404);
 
     // Cleanup
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_stream_messaging() {
     setup_env().await;
-    let context = TestContext::new();
+    let engine = AdminServer::start().await.expect("server failed to start");
 
     // Start server
-    let port = context
-        .start_server()
-        .await
-        .expect("Server failed to start");
-    wait_for_server(port, 20).await.expect("Server not ready");
+    let port = engine.port();
 
     let base_url = format!("http://127.0.0.1:{}", port);
 
@@ -779,7 +754,7 @@ async fn test_stream_messaging() {
     // Give a moment for registration to complete
     sleep(Duration::from_millis(50)).await;
 
-    let client = Client::new();
+    let client = engine.client();
 
     // Start listening to the stream (this would normally be done in a separate task)
     // For this test, we'll just verify the endpoints are working
@@ -811,7 +786,7 @@ async fn test_stream_messaging() {
     );
 
     // Cleanup
-    context.cleanup().await.expect("Failed to cleanup");
+    engine.shutdown().await;
 }
 
 // ============================================================================
