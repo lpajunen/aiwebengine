@@ -199,6 +199,26 @@ pub(crate) fn create_sandboxed_runtime(
     Ok((rt, crate::database::bound_host_calls(deadline)))
 }
 
+/// What a request-driven invocation runs as: the calling user, or nobody.
+///
+/// GraphQL resolvers and stream customization functions used to run as
+/// `UserContext::admin(...)` while the caller's own identity was passed
+/// alongside for the JavaScript `auth` object to read — so `auth.isAdmin`
+/// could say false in the same invocation that held `AdministerEngine`. Both
+/// are entered by a request, and a script serving a request runs under the
+/// requesting user's context.
+///
+/// `JsAuthContext::to_user_context` already mapped an identity onto its tier
+/// and had no caller anywhere in the engine. Absent identity means anonymous:
+/// every GraphQL path inserts a context and an unauthenticated one is already
+/// `JsAuthContext::anonymous`, so `None` is the stream connection that arrived
+/// with no session.
+fn caller_context(auth_context: Option<&crate::auth::JsAuthContext>) -> UserContext {
+    auth_context
+        .map(|identity| identity.to_user_context())
+        .unwrap_or_else(UserContext::anonymous)
+}
+
 /// Upper bound on microtasks drained for one invocation.
 ///
 /// The runtime's interrupt handler is the real guard: it stops a chain that
@@ -2356,12 +2376,10 @@ pub fn execute_graphql_resolver(params: GraphqlResolverExecutionParams) -> Resul
             ..Default::default()
         };
 
-        // GraphQL resolvers run with admin context to allow script management operations
-        // In production, this should be secured via GraphQL-level authentication/authorization
         setup_secure_global_functions(
             &ctx,
             &script_uri_owned,
-            UserContext::admin("graphql-resolver".to_string()),
+            caller_context(auth_context.as_ref()),
             &config,
             None,
             auth_context.clone(),
@@ -2828,7 +2846,7 @@ pub fn execute_stream_customization_function(
         setup_secure_global_functions(
             &ctx,
             &script_uri_owned,
-            UserContext::admin("stream-customization".to_string()),
+            caller_context(auth_context.as_ref()),
             &config,
             None,
             auth_context.clone(),
