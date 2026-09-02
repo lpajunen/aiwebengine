@@ -182,13 +182,19 @@ fn request_profiling_enabled() -> bool {
 /// The returned guard must outlive the runtime: dropping it early leaves the
 /// script running with its host calls unbounded again.
 #[must_use = "the host-call budget ends when its guard is dropped"]
-fn create_sandboxed_runtime(
+pub(crate) fn create_sandboxed_runtime(
     limits: &ExecutionLimits,
 ) -> Result<(Runtime, crate::database::HostCallBudget), String> {
     let rt = Runtime::new().map_err(|e| format!("Failed to create runtime: {}", e))?;
     rt.set_memory_limit(limits.max_memory_mb * 1024 * 1024);
     rt.set_max_stack_size(limits.stack_size_bytes);
-    let deadline = Instant::now() + Duration::from_millis(limits.timeout_ms);
+    // Never longer than what the execution this one is nested inside has left.
+    // At the top level nothing is armed and the budget is the configured one
+    // untouched; nested — one script dispatching a message to the next — a
+    // fresh full budget would let a chain of listeners outlive the request
+    // that started it, one handler at a time.
+    let budget = crate::database::within_host_budget(Duration::from_millis(limits.timeout_ms));
+    let deadline = Instant::now() + budget;
     rt.set_interrupt_handler(Some(Box::new(move || Instant::now() >= deadline)));
     Ok((rt, crate::database::bound_host_calls(deadline)))
 }

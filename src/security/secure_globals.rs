@@ -4990,10 +4990,17 @@ fn execute_message_handler(
     message_type: &str,
     message_data_json: &str,
 ) -> Result<(), String> {
-    use rquickjs::{Context, Runtime};
+    use rquickjs::Context;
 
-    // Create a new runtime and context for handler execution
-    let rt = Runtime::new().map_err(|e| format!("Failed to create runtime: {}", e))?;
+    // The same runtime every other entry point gets. Built bare, a listener ran
+    // with no memory limit, no stack limit and no interrupt handler — so the
+    // one execution path a script reaches by dispatching a message was the one
+    // path where `javascript.max_memory_bytes`, `stack_size_bytes` and
+    // `execution_timeout_ms` did not apply, and a listener that looped never
+    // stopped. The budget guard has to outlive the runtime; dropping it early
+    // would leave the handler's host calls unbounded again.
+    let (rt, _budget) =
+        crate::js_engine::create_sandboxed_runtime(&crate::js_engine::current_execution_limits())?;
     let ctx = Context::full(&rt).map_err(|e| format!("Failed to create context: {}", e))?;
 
     let setup = ctx.with(|ctx| -> Result<(), String> {
