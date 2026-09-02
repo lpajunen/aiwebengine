@@ -118,6 +118,12 @@ pub struct ExecutionLimits {
     pub timeout_ms: u64,
     pub max_memory_mb: usize,
     pub max_script_size_bytes: usize,
+    /// Stack a script may use before QuickJS throws, in bytes.
+    ///
+    /// The guard against unbounded recursion: QuickJS raises a JavaScript
+    /// error the script can see, where an unbounded stack takes the process
+    /// down with it. Configured as `javascript.stack_size_bytes`.
+    pub stack_size_bytes: usize,
 }
 
 impl Default for ExecutionLimits {
@@ -126,6 +132,7 @@ impl Default for ExecutionLimits {
             timeout_ms: 2000,
             max_memory_mb: 50,
             max_script_size_bytes: 1_000_000, // 1MB
+            stack_size_bytes: 512 * 1024,
         }
     }
 }
@@ -180,7 +187,7 @@ fn create_sandboxed_runtime(
 ) -> Result<(Runtime, crate::database::HostCallBudget), String> {
     let rt = Runtime::new().map_err(|e| format!("Failed to create runtime: {}", e))?;
     rt.set_memory_limit(limits.max_memory_mb * 1024 * 1024);
-    rt.set_max_stack_size(512 * 1024);
+    rt.set_max_stack_size(limits.stack_size_bytes);
     let deadline = Instant::now() + Duration::from_millis(limits.timeout_ms);
     rt.set_interrupt_handler(Some(Box::new(move || Instant::now() >= deadline)));
     Ok((rt, crate::database::bound_host_calls(deadline)))

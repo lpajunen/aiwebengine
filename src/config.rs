@@ -226,6 +226,20 @@ pub struct LoggingConfig {
     pub console_enabled: bool,
 }
 
+/// Stack a script may use before QuickJS throws, when nothing says otherwise.
+///
+/// What `js_engine` hardcoded for as long as `stack_size_bytes` was read by
+/// nothing, kept as the default so honouring the setting does not quietly
+/// change what an engine that never set it does.
+pub const DEFAULT_STACK_SIZE_BYTES: usize = 512 * 1024;
+
+/// Below this a script has too little stack to be worth running.
+///
+/// Measured against QuickJS, a JavaScript frame costs on the order of a
+/// kilobyte: 64 KB buys about 59 frames of recursion, 512 KB about 500. The
+/// floor is where a script can still do something; it is not a recommendation.
+pub const MIN_STACK_SIZE_BYTES: usize = 64 * 1024;
+
 /// JavaScript engine configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JavaScriptConfig {
@@ -598,7 +612,7 @@ impl Default for JavaScriptConfig {
             max_concurrent_executions: 100,
             enable_compilation_cache: true,
             max_cached_scripts: 1000,
-            stack_size_bytes: 1024 * 1024, // 1MB
+            stack_size_bytes: DEFAULT_STACK_SIZE_BYTES,
             enable_init_functions: true,
             init_timeout_ms: None,     // Use execution_timeout_ms by default
             test_timeout_ms: None,     // Use execution_timeout_ms by default
@@ -854,6 +868,16 @@ impl AppConfig {
 
         if self.javascript.max_concurrent_executions == 0 {
             anyhow::bail!("JavaScript max concurrent executions must be > 0");
+        }
+
+        // A stack too small to run anything fails every script with a stack
+        // overflow rather than with something that names the cause, so the
+        // floor is checked here where it can say so.
+        if self.javascript.stack_size_bytes < MIN_STACK_SIZE_BYTES {
+            anyhow::bail!(
+                "JavaScript stack size must be at least {} bytes",
+                MIN_STACK_SIZE_BYTES
+            );
         }
 
         if self.javascript.test_timeout_ms == Some(0) {

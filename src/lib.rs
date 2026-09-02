@@ -1357,11 +1357,17 @@ pub async fn start_server_with_config(
     shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) -> AppResult<u16> {
     // Apply configured JavaScript limits to every execution path (memory limit,
-    // stack size, and the interrupt-handler deadline) before any script runs.
+    // stack size, script size, and the interrupt-handler deadline) before any
+    // script runs.
     let js_limits = js_engine::ExecutionLimits {
         timeout_ms: config.javascript.execution_timeout_ms,
         max_memory_mb: (config.javascript.max_memory_bytes / (1024 * 1024)).max(1),
-        ..js_engine::ExecutionLimits::default()
+        // `ExecutionLimits` has carried this field and checked it at
+        // `js_engine::validate_script_size` all along; what it never had was
+        // the configured value, so `repository.max_script_size_bytes` set a
+        // limit nothing consulted.
+        max_script_size_bytes: config.repository.max_script_size_bytes,
+        stack_size_bytes: config.javascript.stack_size_bytes,
     };
     if !js_engine::configure_execution_limits(js_limits) {
         debug!("JavaScript execution limits were already configured");

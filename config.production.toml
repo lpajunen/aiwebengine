@@ -78,8 +78,12 @@ max_concurrent_executions = 200
 enable_compilation_cache = true
 # Maximum number of cached compiled scripts
 max_cached_scripts = 2000
-# Larger stack size for production (bytes)
-stack_size_bytes = 262144
+# Stack a script may use before QuickJS throws, in bytes. A JavaScript frame
+# costs on the order of a kilobyte, so this is about 500 frames of recursion;
+# 64 KB would be about 59, which a recursive walk over any real structure
+# exceeds. QuickJS raises an error the script can catch rather than taking
+# the process down, so the cost of setting it too low is failed scripts.
+stack_size_bytes = 524288
 # Enable script init() function calls
 enable_init_functions = true
 # Init function timeout in milliseconds (defaults to execution_timeout_ms if not set)

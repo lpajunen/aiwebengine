@@ -56,6 +56,36 @@ fn eval_with(script_uri: &str, source: &str, rollback: bool) -> EvalReport {
     })
 }
 
+/// The shipped stack has to be deep enough for ordinary recursive code.
+///
+/// A JavaScript frame costs on the order of a kilobyte, so the setting is only
+/// meaningful as a frame count: the 64 KB the templates carried while nothing
+/// read `javascript.stack_size_bytes` buys about 59 frames, which a recursive
+/// walk over any real structure exceeds. This asserts a floor well under what
+/// the default allows and far above what that would have.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_default_stack_allows_ordinary_recursion() {
+    let _guard = test_mutex().lock().await;
+    setup_env().await;
+
+    let uri = "test://eval/stack";
+    deploy(uri, "function init() {}");
+
+    let report = eval(
+        uri,
+        r#"
+        function depth(n) { return n === 0 ? 0 : 1 + depth(n - 1); }
+        depth(200)
+        "#,
+    );
+    assert!(
+        report.ok,
+        "200 frames must not exhaust the stack: {:?}",
+        report.outcome.error
+    );
+    assert_eq!(report.outcome.value, Some(json!(200)));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_snippet_returns_its_value_and_its_type() {
     let _guard = test_mutex().lock().await;
