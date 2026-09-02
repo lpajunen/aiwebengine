@@ -72,7 +72,10 @@ console_enabled = false
 execution_timeout_ms = 10000
 # Larger memory limit for production workloads (bytes)
 max_memory_bytes = 134217728  # 128 MB
-# Maximum concurrent script executions
+# How many scripts may run at once. Each one holds a blocking thread and a
+# QuickJS runtime allowed max_memory_bytes, so this and that setting together
+# are the engine's memory ceiling. A caller past the limit waits for a slot
+# rather than being refused, inside the timeout it already had.
 max_concurrent_executions = 200
 # Enable script compilation caching
 enable_compilation_cache = true

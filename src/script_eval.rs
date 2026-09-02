@@ -99,7 +99,13 @@ impl ScriptEvaluator {
     pub async fn run(request: EvalRequest) -> EvalReport {
         let script_uri = request.script_uri.clone();
 
-        match tokio::task::spawn_blocking(move || eval_blocking(request)).await {
+        let permit = crate::execution_slots::acquire().await;
+        match tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            eval_blocking(request)
+        })
+        .await
+        {
             Ok(report) => report,
             Err(join_error) => EvalReport {
                 script_uri,

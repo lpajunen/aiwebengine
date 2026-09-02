@@ -286,10 +286,10 @@ Controls the JavaScript engine (QuickJS).
 [javascript]
 execution_timeout_ms = 5000              # Script execution timeout (milliseconds)
 max_memory_bytes = 10485760              # Max memory per script (bytes, 10MB)
-max_concurrent_executions = 100          # Maximum concurrent script executions
+max_concurrent_executions = 100          # Scripts running at once; the rest queue
 enable_compilation_cache = true          # Enable script compilation caching
 max_cached_scripts = 1000                # Maximum number of cached compiled scripts
-stack_size_bytes = 1048576               # Script execution stack size (bytes, 1MB)
+stack_size_bytes = 524288                # Script stack (bytes); ~1KB per JS frame
 enable_init_functions = true             # Enable script init() function calls
 init_timeout_ms = 5000                   # Init function timeout (defaults to execution_timeout_ms)
 fail_startup_on_init_error = false       # Fail server startup if any script init fails
@@ -313,6 +313,21 @@ database_url = "postgresql://user:pass@localhost:5432/aiwebengine"
 max_script_size_bytes = 1048576          # Maximum script size (bytes, 1MB)
 max_asset_size_bytes = 10485760          # Maximum asset size (bytes, 10MB)
 ```
+
+### Script execution limits
+
+`max_concurrent_executions` bounds how many scripts run at once. Each one holds
+a blocking thread and a QuickJS runtime allowed `max_memory_bytes`, so the two
+settings together are the engine's memory ceiling. A caller past the limit
+waits for a slot rather than being refused, and the wait happens inside the
+timeout the call already had — so a saturated engine answers slowly and then
+times out, rather than returning an error of its own kind.
+
+`stack_size_bytes` is where QuickJS stops a runaway recursion. A JavaScript
+frame costs on the order of a kilobyte, so the number is only meaningful as a
+frame count: 512 KB is about 500 frames, 64 KB about 59 — fewer than a
+recursive walk over any real structure needs. Exceeding it raises an error the
+script can catch; it does not take the process down.
 
 ### Script logs
 
@@ -628,7 +643,7 @@ Quick lookup for all available settings:
 | `[javascript]`  | `max_concurrent_executions`   | integer | 1-1000                      | `100`                 |
 | `[javascript]`  | `enable_compilation_cache`    | boolean | true/false                  | `true`                |
 | `[javascript]`  | `max_cached_scripts`          | integer | 1-10000                     | `1000`                |
-| `[javascript]`  | `stack_size_bytes`            | integer | 8192-10485760               | `1048576`             |
+| `[javascript]`  | `stack_size_bytes`            | integer | 65536-10485760              | `524288`              |
 | `[javascript]`  | `enable_init_functions`       | boolean | true/false                  | `true`                |
 | `[javascript]`  | `fail_startup_on_init_error`  | boolean | true/false                  | `false`               |
 | `[repository]`  | `database_url`                | string  | Connection string           | (required)            |
@@ -722,7 +737,7 @@ max_memory_bytes = 134217728  # 128 MB
 max_concurrent_executions = 200
 enable_compilation_cache = true
 max_cached_scripts = 2000
-stack_size_bytes = 262144
+stack_size_bytes = 524288
 enable_init_functions = true
 fail_startup_on_init_error = true
 

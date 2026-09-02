@@ -20,6 +20,7 @@ pub mod deployments;
 pub mod dispatcher;
 pub mod engine_api;
 pub mod error;
+pub mod execution_slots;
 pub mod graphql;
 pub mod graphql_schema_gen;
 pub mod graphql_ws;
@@ -1373,6 +1374,12 @@ pub async fn start_server_with_config(
         debug!("JavaScript execution limits were already configured");
     }
 
+    // How many of those runtimes may exist at once. Without this the ceiling
+    // is Tokio's default blocking pool rather than anything configured.
+    if !execution_slots::configure(config.javascript.max_concurrent_executions) {
+        debug!("JavaScript execution slots were already configured");
+    }
+
     // The init() budget every re-initialization path uses: startup, a local
     // upsert, and a peer instance's upsert notification.
     let init_timeout_ms = config
@@ -2107,13 +2114,15 @@ async fn setup_routes(
                     std::time::Duration::from_millis(mcp::tool_call_backstop_ms(&tool_name));
                 let tool_name_for_error = tool_name.clone();
                 let (ticket, watch) = worker_census::watch(format!("mcp tool {}", tool_name));
-                let execution = match tokio::time::timeout(
-                    backstop,
+                let execution = match tokio::time::timeout(backstop, async move {
+                    let permit = execution_slots::acquire().await;
                     tokio::task::spawn_blocking(move || {
+                        let _permit = permit;
                         let _ticket = ticket;
                         mcp::execute_mcp_tool(&tool_name, arguments, auth_context, user_context)
-                    }),
-                )
+                    })
+                    .await
+                })
                 .await
                 {
                     Ok(joined) => joined.unwrap_or_else(|join_error| {
@@ -3058,12 +3067,21 @@ async fn handle_dynamic_request(
     // pool is empty.
     let (ticket, watch) = worker_census::watch(format!("{} {}", method_for_census, route_pattern));
 
+    // The wait for a slot is inside the timeout on purpose: a request that
+    // cannot get one within its budget fails as a slow request rather than as
+    // a distinct kind of error, and the permit rides into the closure so an
+    // abandoned worker keeps holding the slot it is still using.
     let timed = match tokio::time::timeout(
         std::time::Duration::from_millis(script_timeout_ms),
-        tokio::task::spawn_blocking(move || {
-            let _ticket = ticket;
-            worker()
-        }),
+        async move {
+            let permit = execution_slots::acquire().await;
+            tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                let _ticket = ticket;
+                worker()
+            })
+            .await
+        },
     )
     .await
     {

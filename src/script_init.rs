@@ -231,9 +231,10 @@ impl ScriptInitializer {
         debug!("Spawning blocking task for {}", script_uri);
         let init_timeout_ms = self.timeout_ms;
         let (ticket, watch) = crate::worker_census::watch(format!("init {}", script_uri));
-        let result = timeout(
-            timeout_duration,
+        let result = timeout(timeout_duration, async move {
+            let permit = crate::execution_slots::acquire().await;
             tokio::task::spawn_blocking(move || {
+                let _permit = permit;
                 let _ticket = ticket;
                 debug!("Inside spawn_blocking for {}", script_uri_clone);
                 crate::js_engine::call_init_if_exists_with_timeout(
@@ -242,8 +243,9 @@ impl ScriptInitializer {
                     context,
                     init_timeout_ms,
                 )
-            }),
-        )
+            })
+            .await
+        })
         .await;
         debug!("Blocking task finished for {}", script_uri);
 

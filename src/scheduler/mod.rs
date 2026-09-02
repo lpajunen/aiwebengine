@@ -830,7 +830,9 @@ impl Scheduler {
             "Acquired lock for job execution"
         );
 
+        let permit = crate::execution_slots::acquire().await;
         let execution = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
             js_engine::execute_scheduled_handler(&script_uri, &handler_name, &invocation_for_engine)
         })
         .await;

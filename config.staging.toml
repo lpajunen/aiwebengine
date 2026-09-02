@@ -47,7 +47,10 @@ console_enabled = true
 execution_timeout_ms = 5000
 # Medium memory limit for staging (bytes)
 max_memory_bytes = 67108864  # 64 MB
-# Maximum concurrent script executions
+# How many scripts may run at once. Each one holds a blocking thread and a
+# QuickJS runtime allowed max_memory_bytes, so this and that setting together
+# are the engine's memory ceiling. A caller past the limit waits for a slot
+# rather than being refused, inside the timeout it already had.
 max_concurrent_executions = 100
 # Enable script compilation caching
 enable_compilation_cache = true

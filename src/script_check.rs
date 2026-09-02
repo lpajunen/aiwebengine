@@ -267,12 +267,17 @@ impl ScriptChecker {
 
         let started = std::time::Instant::now();
         let backstop = Duration::from_millis(ceiling_ms.saturating_add(CHECK_BACKSTOP_GRACE_MS));
-        let checked = tokio::time::timeout(
-            backstop,
+        // Waiting for an execution slot happens inside the backstop, so a
+        // check made while the engine is saturated reports a timeout rather
+        // than hanging on the queue for as long as traffic lasts.
+        let checked = tokio::time::timeout(backstop, async move {
+            let permit = crate::execution_slots::acquire().await;
             tokio::task::spawn_blocking(move || {
+                let _permit = permit;
                 check_blocking_into(request, budget_ms, sink_for_run)
-            }),
-        )
+            })
+            .await
+        })
         .await;
 
         match checked {

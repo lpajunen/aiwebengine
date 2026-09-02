@@ -286,9 +286,12 @@ impl TestRunner {
         );
 
         let (ticket, watch) = crate::worker_census::watch(format!("tests {}", script_uri));
-        let outcome = tokio::time::timeout(
-            backstop,
+        // Inside the backstop, as in `script_check`: a run that cannot get an
+        // execution slot in time is a timeout, not an indefinite wait.
+        let outcome = tokio::time::timeout(backstop, async move {
+            let permit = crate::execution_slots::acquire().await;
             tokio::task::spawn_blocking(move || {
+                let _permit = permit;
                 let _ticket = ticket;
                 let modules = crate::module_loader::discover_test_modules_in(
                     &params.script_uri,
@@ -300,8 +303,9 @@ impl TestRunner {
                     "Running script tests"
                 );
                 crate::js_engine::execute_test_run(&params, &modules)
-            }),
-        )
+            })
+            .await
+        })
         .await;
 
         let duration_ms = started.elapsed().as_millis() as u64;
