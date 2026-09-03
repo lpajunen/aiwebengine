@@ -77,16 +77,14 @@ WORKDIR /app
 # Copy binary from builder
 COPY --from=builder /app/target/release/aiwebengine /usr/local/bin/aiwebengine
 
-# Create necessary directories
-RUN mkdir -p /app/logs /app/scripts /app/assets /app/docs /app/data && \
-    chown -R aiwebengine:aiwebengine /app
-
-# Copy default configuration (use production config as base)
+# The configuration file is the only thing this image reads from disk. Engine
+# assets — favicon, stylesheet, logo, the TypeScript declarations — are embedded
+# in the binary by include_bytes!, scripts and their assets live in Postgres,
+# migrations are compiled in by sqlx::migrate!, and logs go to stdout. The
+# /app/logs, /app/scripts, /app/assets, /app/docs and /app/data directories this
+# replaced were created and populated for a runtime that never opened them.
 COPY config.production.toml /app/config.toml
-
-# Copy assets and docs if they exist
-COPY assets /app/assets/
-COPY docs /app/docs/
+RUN chown aiwebengine:aiwebengine /app /app/config.toml
 
 # Switch to non-root user
 USER aiwebengine

@@ -81,10 +81,10 @@ services:
       - ./assets:/app/assets:ro
       # Mount docs for development
       - ./docs:/app/docs:ro
-      # Persist logs
-      - ./logs:/app/logs
-      # Persist database
-      - ./data:/app/data
+      # No ./logs or ./data: logging goes to stdout and the repository lives in
+      # Postgres. The source, migrations and assets above are mounted because
+      # this container compiles the crate — include_str! resolves them at build
+      # time — not because anything reads them at runtime.
       # Cache cargo registry and target to speed up builds
       - cargo-registry:/usr/local/cargo/registry
       - cargo-git:/usr/local/cargo/git
@@ -174,10 +174,10 @@ services:
       - ./assets:/app/assets:ro
       # Mount docs for development
       - ./docs:/app/docs:ro
-      # Persist logs
-      - ./logs:/app/logs
-      # Persist database
-      - ./data:/app/data
+      # No ./logs or ./data: logging goes to stdout and the repository lives in
+      # Postgres. The source, migrations and assets above are mounted because
+      # this container compiles the crate — include_str! resolves them at build
+      # time — not because anything reads them at runtime.
       # Cache cargo registry and target to speed up builds
       - cargo-registry:/usr/local/cargo/registry
       - cargo-git:/usr/local/cargo/git

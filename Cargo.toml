@@ -29,7 +29,6 @@ async-graphql-axum = "7.0"
 lazy_static = "1.4"
 utoipa = { version = "5.0", features = ["chrono"] }
 clap = { version = "4.0", features = ["derive"] }
-notify = "8.2"
 toml = "1.0"
 figment = { version = "0.10", features = ["toml", "yaml", "env"] }
 regex = "1.5"
