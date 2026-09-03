@@ -320,7 +320,7 @@ warning rather than kept as something that can never match.
 **A named origin may send the session cookie; `"*"` may not.** A browser
 refuses to honour `Access-Control-Allow-Origin: *` together with
 `Access-Control-Allow-Credentials: true`, so a wildcard grants only
-unauthenticated reads. Reflecting an arbitrary origin *and* allowing
+unauthenticated reads. Reflecting an arbitrary origin _and_ allowing
 credentials would mean every site a signed-in administrator visits could read
 `/engine/*` as them, so the engine will not do it.
 
@@ -608,40 +608,40 @@ export APP_LOGGING__LEVEL="debug"
 
 Quick lookup for all available settings:
 
-| Section         | Key                           | Type    | Range/Options               | Default               |
-| --------------- | ----------------------------- | ------- | --------------------------- | --------------------- |
-| `[server]`      | `host`                        | string  | IP address                  | `127.0.0.1`           |
-| `[server]`      | `port`                        | integer | 1-65535                     | `8080`                |
-| `[server]`      | `base_url`                    | string  | URL                         | `None`                |
-| `[server]`      | `graceful_shutdown`           | boolean | true/false                  | `true`                |
-| `[server]`      | `shutdown_timeout_secs`       | integer | 1-300                       | `30`                  |
-| `[logging]`     | `level`                       | string  | trace/debug/info/warn/error | `info`                |
-| `[logging]`     | `format`                      | string  | json/pretty/compact         | `pretty`              |
-| `[javascript]`  | `execution_timeout_ms`        | integer | 100-60000                   | `5000`                |
-| `[javascript]`  | `max_memory_bytes`            | integer | 1048576-1073741824          | `10485760`            |
-| `[javascript]`  | `max_concurrent_executions`   | integer | 1-1000                      | `100`                 |
-| `[javascript]`  | `stack_size_bytes`            | integer | 65536-10485760              | `524288`              |
-| `[javascript]`  | `enable_init_functions`       | boolean | true/false                  | `true`                |
-| `[repository]`  | `database_url`                | string  | Connection string           | (required)            |
-| `[repository]`  | `max_script_size_bytes`       | integer | 1024-10485760               | `1048576`             |
-| `[logs]`        | `prune_enabled`               | boolean | true/false                  | `true`                |
-| `[logs]`        | `retention_hours`             | integer | 0-720 (0 = no age bound)    | `24`                  |
-| `[logs]`        | `keep_per_script`             | integer | 1-10000                     | `100`                 |
-| `[logs]`        | `prune_interval_secs`         | integer | >= 60                       | `3600`                |
-| `[security]`    | `enable_cors`                 | boolean | true/false                  | `true`                |
-| `[security]`    | `cors_allowed_origins`        | array   | Origins, or `["*"]`         | `[]`                  |
-| `[security]`    | `csrf_key`                    | string  | Base64 key                  | `None`                |
-| `[security]`    | `enable_security_headers`     | boolean | true/false                  | `true`                |
-| `[security]`    | `max_request_body_bytes`      | integer | 1024-104857600              | `1048576`             |
-| `[security]`    | `session_encryption_key`      | string  | Base64 key                  | `None`                |
-| `[security]`    | `api_key`                     | string  | API key                     | `None`                |
-| `[auth]`        | `enabled`                     | boolean | true/false                  | `true`                |
-| `[auth]`        | `jwt_secret`                  | string  | Min 32 chars                | Required              |
-| `[auth]`        | `session_timeout`             | integer | 60-604800                   | `3600`                |
-| `[auth]`        | `max_concurrent_sessions`     | integer | 1-10                        | `3`                   |
-| `[auth]`        | `bootstrap_admins`            | array   | Email addresses             | `[]`                  |
-| `[auth.cookie]` | `name`                        | string  | Cookie name                 | `aiwebengine_session` |
-| `[auth.cookie]` | `secure`                      | boolean | true/false                  | `false`               |
+| Section         | Key                         | Type    | Range/Options               | Default               |
+| --------------- | --------------------------- | ------- | --------------------------- | --------------------- |
+| `[server]`      | `host`                      | string  | IP address                  | `127.0.0.1`           |
+| `[server]`      | `port`                      | integer | 1-65535                     | `8080`                |
+| `[server]`      | `base_url`                  | string  | URL                         | `None`                |
+| `[server]`      | `graceful_shutdown`         | boolean | true/false                  | `true`                |
+| `[server]`      | `shutdown_timeout_secs`     | integer | 1-300                       | `30`                  |
+| `[logging]`     | `level`                     | string  | trace/debug/info/warn/error | `info`                |
+| `[logging]`     | `format`                    | string  | json/pretty/compact         | `pretty`              |
+| `[javascript]`  | `execution_timeout_ms`      | integer | 100-60000                   | `5000`                |
+| `[javascript]`  | `max_memory_bytes`          | integer | 1048576-1073741824          | `10485760`            |
+| `[javascript]`  | `max_concurrent_executions` | integer | 1-1000                      | `100`                 |
+| `[javascript]`  | `stack_size_bytes`          | integer | 65536-10485760              | `524288`              |
+| `[javascript]`  | `enable_init_functions`     | boolean | true/false                  | `true`                |
+| `[repository]`  | `database_url`              | string  | Connection string           | (required)            |
+| `[repository]`  | `max_script_size_bytes`     | integer | 1024-10485760               | `1048576`             |
+| `[logs]`        | `prune_enabled`             | boolean | true/false                  | `true`                |
+| `[logs]`        | `retention_hours`           | integer | 0-720 (0 = no age bound)    | `24`                  |
+| `[logs]`        | `keep_per_script`           | integer | 1-10000                     | `100`                 |
+| `[logs]`        | `prune_interval_secs`       | integer | >= 60                       | `3600`                |
+| `[security]`    | `enable_cors`               | boolean | true/false                  | `true`                |
+| `[security]`    | `cors_allowed_origins`      | array   | Origins, or `["*"]`         | `[]`                  |
+| `[security]`    | `csrf_key`                  | string  | Base64 key                  | `None`                |
+| `[security]`    | `enable_security_headers`   | boolean | true/false                  | `true`                |
+| `[security]`    | `max_request_body_bytes`    | integer | 1024-104857600              | `1048576`             |
+| `[security]`    | `session_encryption_key`    | string  | Base64 key                  | `None`                |
+| `[security]`    | `api_key`                   | string  | API key                     | `None`                |
+| `[auth]`        | `enabled`                   | boolean | true/false                  | `true`                |
+| `[auth]`        | `jwt_secret`                | string  | Min 32 chars                | Required              |
+| `[auth]`        | `session_timeout`           | integer | 60-604800                   | `3600`                |
+| `[auth]`        | `max_concurrent_sessions`   | integer | 1-10                        | `3`                   |
+| `[auth]`        | `bootstrap_admins`          | array   | Email addresses             | `[]`                  |
+| `[auth.cookie]` | `name`                      | string  | Cookie name                 | `aiwebengine_session` |
+| `[auth.cookie]` | `secure`                    | boolean | true/false                  | `false`               |
 
 ---
 

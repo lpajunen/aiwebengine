@@ -120,13 +120,13 @@ must not and need not: a cross-site page can POST a form anywhere without a
 preflight, which is how login CSRF signs a victim into an attacker's account,
 but it cannot POST `application/json` without one the engine does not grant.
 
-| Endpoint | Requires | Does |
-| --- | --- | --- |
-| `POST /auth/guest` | `allow_guests` | Issues an identity and a session to a caller with no credential. Body: `{"name": "..."}` (optional). |
-| `POST /auth/local/register` | `enabled` and `allow_registration` | Creates an account and issues a session. Body: `{"username", "password", "name"}`. |
-| `POST /auth/local/login` | `enabled` | Signs in against a stored credential. Body: `{"username", "password"}`. |
-| `POST /auth/local/claim` | `enabled`, plus a session | Attaches a credential to the calling account, keeping its `user_id`. Body: `{"username", "password"}`. |
-| `POST /auth/local/password` | `enabled`, plus a session | Replaces the calling account's password, given the one it has now. Ends every session the account held and issues a fresh one. Body: `{"current_password", "new_password"}`. |
+| Endpoint                    | Requires                           | Does                                                                                                                                                                         |
+| --------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /auth/guest`          | `allow_guests`                     | Issues an identity and a session to a caller with no credential. Body: `{"name": "..."}` (optional).                                                                         |
+| `POST /auth/local/register` | `enabled` and `allow_registration` | Creates an account and issues a session. Body: `{"username", "password", "name"}`.                                                                                           |
+| `POST /auth/local/login`    | `enabled`                          | Signs in against a stored credential. Body: `{"username", "password"}`.                                                                                                      |
+| `POST /auth/local/claim`    | `enabled`, plus a session          | Attaches a credential to the calling account, keeping its `user_id`. Body: `{"username", "password"}`.                                                                       |
+| `POST /auth/local/password` | `enabled`, plus a session          | Replaces the calling account's password, given the one it has now. Ends every session the account held and issues a fresh one. Body: `{"current_password", "new_password"}`. |
 
 Each of the first three sets the session cookie on success, and so does the
 fourth — the session it replaces is one of the ones it ended.
