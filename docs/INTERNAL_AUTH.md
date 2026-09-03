@@ -52,7 +52,9 @@ and it is not a credential, since reaching the account still takes its password.
 For the cases configuration cannot reach — an account under a different name, an
 administrator locked out, the last administrator gone — there is
 `aiwebengine --grant-role <username-or-email> administrator`, which needs the
-database but no running server.
+database but no running server. Its counterpart is
+`aiwebengine --set-password <username-or-email>`, for the account nobody
+remembers the password to.
 
 See the security sandbox model in `CLAUDE.md` for what each tier holds.
 
@@ -108,6 +110,49 @@ A solution normally builds its own sign-in UI and posts JSON. This page is what
 makes a personal install usable, and what an administrator uses for break-glass
 access.
 
+It also links to `/auth/account`, because the sign-in page is where someone
+goes looking when they are thinking about their password. It is a link and not
+a form: everything on that page needs a session, and changing a password needs
+the current one, neither of which a person looking at a sign-in page has.
+
+## The account page
+
+`/auth/account` is what a signed-in person can do about their own way in. It
+offers exactly one of two forms, because they are different acts:
+
+- **Change your password**, when the account holds a credential. Posts to
+  `/auth/local/password`, so it asks for the current one and ends every other
+  session on success.
+- **Add a username and password**, when it holds none. Posts to
+  `/auth/local/claim` — the control that endpoint shipped without. A guest is
+  told what it is for in the terms that matter to a guest: the account is gone
+  when the browser is. A federated account is told the other thing it is for: a
+  way in that does not depend on the provider being reachable.
+
+Signed out, the page redirects to `/auth/login?redirect=/auth/account` and
+comes back, so the link works for someone whose session has aged out. It is
+served `Cache-Control: no-store`, since it names the account it belongs to.
+
+Its forms carry a CSRF token **bound to the session** — `generate_token(Some(
+user_id))`, validated with `validate_token_for`. The sign-in forms take an
+unbound token, which is right for them: they are submitted before there is a
+session to bind one to. It is wrong for a form that changes an account, because
+an unbound token is one anybody can fetch from `/auth/login` with no browser and
+no account, leaving `SameSite=Lax` as the only thing between the password form
+and a cross-site POST — and a browser will carry a Lax cookie on a cross-site
+POST for the first couple of minutes after it is set. `/auth/local/password`
+demands a bound token; `/auth/local/claim` accepts either, because solutions
+have been posting it a token from the sign-in page since it shipped.
+
+A form whose token has expired — the page sat open long enough — comes back to
+the page with `?error=csrf` and a fresh token, rather than the JSON an API
+caller would get. A failed submission comes back to the page it was submitted
+from. The endpoints
+decide which page that is from the redirect the form carries: one landing on
+`/auth/account` was submitted there, and its message belongs there rather than
+on a sign-in page telling a signed-in person that their username and password
+do not match.
+
 ## Endpoints
 
 Each takes JSON or an HTML form, and answers in kind: a JSON body gets JSON, a
@@ -136,6 +181,43 @@ already holds a session: a session someone else got hold of must not be enough
 to lock the owner out of their own account. Ending the other sessions is the
 other half of it — a password is changed because the old one may be known, and a
 session minted under it otherwise keeps working for up to `max_session_age`.
+
+## Resetting a password from the command line
+
+```bash
+# Interactive: asks twice, because the password is echoed and a typo here locks
+# the account it was meant to open.
+aiwebengine --set-password alice
+
+# Scripted:
+printf '%s' "$NEW_PASSWORD" | aiwebengine --set-password alice
+```
+
+The new password is read from standard input rather than taken as an argument:
+an argument is visible in `ps` and in shell history, and this is the one command
+whose whole job is to write a credential. Only the line ending is stripped, so a
+password may begin or end with a space.
+
+`ACCOUNT` is a local username or an email address, resolved the way
+`--grant-role` resolves one. The username is looked up in `local_credentials`
+rather than on the `users` row, because a guest that later claimed a name still
+carries `guest` as its provider.
+
+Like `--grant-role`, it needs the database and no running server, and is
+authorized by holding the configuration file and the database it points at —
+the same authority `auth.bootstrap_admins` runs on. Two things follow from what
+it is:
+
+- **It ends every session the account held.** A password is reset because the
+  old one may be known, and a session minted under it otherwise keeps working
+  for up to `max_session_age` — thirty days by default.
+- **It refuses an account with no credential.** Attaching a first one needs a
+  username, and choosing somebody's username for them is not a thing a password
+  reset should do. `/auth/account` is where an account without a credential gets
+  one.
+
+`min_password_length` still applies. Being the operator is not a reason to write
+a password the sign-in page would then refuse.
 
 ## Rules worth knowing
 
@@ -171,15 +253,18 @@ session minted under it otherwise keeps working for up to `max_session_age`.
 
 ## Not done yet
 
-- **No claim form on the sign-in page.** The endpoint accepts a form, but the
-  page offers no control for it, because a guest who wants to claim an account
-  is mid-solution rather than at a sign-in screen. A solution prompts for it
-  where it makes sense.
-- **No password reset.** A password can be changed by someone who knows it —
-  `POST /auth/local/password` with `current_password` and `new_password`, which
-  ends every session the account had and issues a fresh one — but there is no
-  recovery path for a password nobody remembers, and for a guest there cannot
-  be one. On a personal install, `--grant-role` is the way back to
-  administration; the credential itself still has to be reset in the database.
+- **No self-service recovery.** `--set-password` needs the machine the engine
+  runs on, so it answers a personal install and a deployment with an operator,
+  and nothing else: someone who forgot their password on a solution they merely
+  use has to ask whoever runs it. What would close that is recovery codes —
+  one-time codes issued when an account is created or claimed, hashed beside
+  the password, redeemable for a reset. They fit this design where an email
+  reset does not, because these accounts deliberately have no verified address.
+  For a guest there can be no recovery at all: no secret, nothing to recover.
+- **No session visibility.** A person cannot list the sessions their account
+  holds or end one of them. Changing a password ends them all, and an
+  administrator's role change ends them all, and those are the only two
+  controls that exist. The data is there — `sessions.data` carries when each
+  was created, when it was last used, and what it was minted against.
 - **No passkeys.** A good fit here — no email, no password reset, no PII — and
   the credential table's shape leaves room for them.

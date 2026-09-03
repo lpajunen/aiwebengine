@@ -338,3 +338,114 @@ async fn every_session_a_user_holds_can_be_ended_at_once() {
         );
     }
 }
+
+/// The other half of the break-glass path. `--grant-role` could appoint an
+/// administrator; nothing could get them back into an account whose password
+/// nobody remembers, and the documented answer was to edit `local_credentials`
+/// by hand. The endpoint cannot cover this case, because it asks for the
+/// current password on purpose.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_password_can_be_reset_without_the_one_nobody_remembers() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    setup_env().await;
+
+    let username = unique("forgot");
+    let user_id = create_local_account(&username).await;
+    let replacement = "a-replacement-password";
+
+    local::set_password(&user_id, replacement, 12)
+        .await
+        .expect("an operator holding the database should be able to reset it");
+
+    assert!(
+        local::verify_login(&username, replacement).await.is_ok(),
+        "the new password should sign in"
+    );
+    assert!(
+        local::verify_login(&username, PASSWORD).await.is_err(),
+        "the old one should not"
+    );
+}
+
+/// Being the operator is not a reason to write a password the sign-in page
+/// would refuse — the account would be no more reachable than before.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reset_still_obeys_the_configured_minimum() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    setup_env().await;
+
+    let username = unique("floor");
+    let user_id = create_local_account(&username).await;
+
+    assert!(
+        local::set_password(&user_id, "short", 12).await.is_err(),
+        "the configured minimum applies to a reset as much as to a change"
+    );
+    assert!(
+        local::verify_login(&username, PASSWORD).await.is_ok(),
+        "and a refused reset leaves the credential as it was"
+    );
+}
+
+/// An account with no credential has no password to reset. Inventing one would
+/// need a username, and choosing somebody's username for them is not a thing a
+/// password reset should do.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_account_with_no_credential_gets_no_password() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    setup_env().await;
+
+    let user_id = user_repository::upsert_internal_user(
+        None,
+        "guest".to_string(),
+        uuid::Uuid::new_v4().to_string(),
+        REALM.to_string(),
+    )
+    .await
+    .expect("guest should be created");
+
+    assert!(
+        local::set_password(&user_id, "a-perfectly-fine-password", 12)
+            .await
+            .is_err()
+    );
+}
+
+/// The lookup a reset starts from. A guest that later claimed a name still
+/// carries `guest` as its provider, so the credential table is the only place
+/// that can answer "which account is this username".
+#[tokio::test(flavor = "multi_thread")]
+async fn a_username_finds_its_account_whatever_the_provider_says() {
+    if should_skip_integration_tests() {
+        return;
+    }
+    setup_env().await;
+
+    let user_id = user_repository::upsert_internal_user(
+        None,
+        "guest".to_string(),
+        uuid::Uuid::new_v4().to_string(),
+        REALM.to_string(),
+    )
+    .await
+    .expect("guest should be created");
+
+    let username = unique("claimed");
+    local::attach_credential(&user_id, &username, PASSWORD, 12)
+        .await
+        .expect("a guest should be able to claim a name");
+
+    assert_eq!(
+        local::user_id_for_username(&username.to_uppercase())
+            .await
+            .expect("the lookup should succeed"),
+        Some(user_id),
+        "and it should fold the spelling, the way signing in does"
+    );
+}

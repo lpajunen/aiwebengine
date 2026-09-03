@@ -115,6 +115,7 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
         engine_api::unauthorized_page_route,
         engine_api::favicon_route,
         auth::routes::login_page,
+        auth::routes::account_page,
         auth::routes::start_login,
         auth::routes::oauth_callback,
         auth::routes::logout,
@@ -1324,6 +1325,113 @@ pub async fn grant_role_command(
         "{} ({}) now holds the {} role.{} Any session they held has been ended, \
          so the change takes effect at their next sign-in.",
         account, user.id, role, realm_note
+    ))
+}
+
+/// Reset an account's password from the command line, with no server running.
+///
+/// The other half of what `--grant-role` started. Reaching the administrator
+/// tier had a break-glass path; getting back into the account itself did not,
+/// and a forgotten password on a personal install meant editing
+/// `local_credentials` by hand — the one lifecycle step the engine asked people
+/// to do in SQL. `POST /auth/local/password` cannot cover this case, because it
+/// asks for the current password on purpose.
+///
+/// Authorized the same way `--grant-role` is: by holding the configuration file
+/// and the database it points at. That is why it takes no password over the
+/// wire and no session — there is nothing here for a remote caller to reach.
+///
+/// The account is named the way `--grant-role` names one: a local username
+/// first, an email address second. It must already hold a credential, since
+/// attaching one needs a username and choosing somebody's username for them is
+/// not a thing a password reset should do — `/auth/account` is where an account
+/// with no credential gets one.
+pub async fn set_password_command(
+    config: &config::Config,
+    account: &str,
+    new_password: &str,
+) -> AppResult<String> {
+    // The floor in `auth::local` applies whatever this says, so a config with
+    // no `[auth.internal]` section still cannot produce a two-character
+    // password.
+    let min_password_length = config
+        .auth
+        .as_ref()
+        .map_or(auth::local::MIN_PASSWORD_LENGTH, |auth| {
+            auth.internal.min_password_length
+        });
+
+    let db = database::init_database(&config.repository, true).await?;
+    database::initialize_global_database(Arc::new(db));
+
+    let user_id = match auth::local::user_id_for_username(account)
+        .await
+        .map_err(|e| AppError::config(e.to_string()))?
+    {
+        Some(user_id) => user_id,
+        None => {
+            let user = user_repository::find_user_by_email(account)
+                .await?
+                .ok_or_else(|| {
+                    AppError::config(format!(
+                        "No account named '{}'. Give the username it signs in with, \
+                         or the email address it registered.",
+                        account
+                    ))
+                })?;
+
+            if !auth::local::user_has_credential(&user.id)
+                .await
+                .map_err(|e| AppError::config(e.to_string()))?
+            {
+                return Err(AppError::config(format!(
+                    "'{}' has no username and password to reset — it signs in through a \
+                     provider. Sign in as that account and add one at /auth/account.",
+                    account
+                )));
+            }
+
+            user.id
+        }
+    };
+
+    auth::local::set_password(&user_id, new_password, min_password_length)
+        .await
+        .map_err(|e| AppError::config(e.to_string()))?;
+
+    // The same reasoning as `AuthManager::change_local_password`: a password is
+    // reset because the old one may be known, and a session minted under it
+    // otherwise keeps working for up to `max_session_age` — thirty days by
+    // default — however good the new password is.
+    let ended = match database::get_global_database() {
+        Some(db) => security::delete_sessions_for_user(db.pool(), &user_id)
+            .await
+            .unwrap_or_else(|e| {
+                // The password is already changed. Say so loudly rather than
+                // reporting a failure that would send someone to reset it again.
+                error!(
+                    "Password for {} was reset but their sessions could not be ended: {}",
+                    user_id, e
+                );
+                0
+            }),
+        None => 0,
+    };
+
+    let internal_enabled = config
+        .auth
+        .as_ref()
+        .is_some_and(|auth| auth.internal.enabled);
+    let disabled_note = if internal_enabled {
+        ""
+    } else {
+        " Note that `auth.internal.enabled` is off in this configuration, so the sign-in \
+          page will refuse the new password until it is turned on."
+    };
+
+    Ok(format!(
+        "The password for {} ({}) has been reset. {} session(s) it held were ended.{}",
+        account, user_id, ended, disabled_note
     ))
 }
 

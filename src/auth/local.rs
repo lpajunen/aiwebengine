@@ -272,6 +272,71 @@ pub async fn change_password(
     Ok(())
 }
 
+/// Replace an account's password without presenting the one it has now.
+///
+/// The break-glass half of [`change_password`], and the reason a forgotten
+/// password no longer means editing the database by hand. Nothing reachable
+/// over HTTP calls this: the only caller is `--set-password`, which runs with
+/// no server up and is authorized by holding the configuration file and the
+/// database it points at — the same authority `--grant-role` and
+/// `auth.bootstrap_admins` already run on.
+///
+/// The configured minimum still applies. An operator resetting a password is
+/// not a reason to write one the sign-in page would refuse.
+///
+/// Ending the account's sessions is the caller's job, not this function's: a
+/// password is reset because the old one may be known, and a session minted
+/// under it otherwise keeps working for up to `max_session_age`.
+pub async fn set_password(
+    user_id: &str,
+    new_password: &str,
+    min_password_length: usize,
+) -> Result<(), AuthError> {
+    validate_password(new_password, min_password_length)?;
+
+    let hash = hash_password(new_password)?;
+    let pool = pool()?;
+
+    let result = sqlx::query("UPDATE local_credentials SET password_hash = $1 WHERE user_id = $2")
+        .bind(&hash)
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .map_err(|e| AuthError::Internal(format!("storing credential failed: {}", e)))?;
+
+    // No row means the account holds no credential to replace. Inventing one
+    // here would need a username, and choosing somebody's username on their
+    // behalf is not a thing a password reset should do.
+    if result.rows_affected() == 0 {
+        return Err(AuthError::InvalidCredentials);
+    }
+
+    Ok(())
+}
+
+/// The account a username belongs to, if any.
+///
+/// Reads the credential table rather than the `users` row, because that is
+/// where a username is unique: an account that claimed a name after starting
+/// as a guest still carries `guest` as its provider.
+pub async fn user_id_for_username(username: &str) -> Result<Option<String>, AuthError> {
+    let normalized = normalize_username(username);
+    let pool = pool()?;
+    let row = sqlx::query("SELECT user_id FROM local_credentials WHERE username = $1")
+        .bind(&normalized)
+        .fetch_optional(&pool)
+        .await
+        .map_err(|e| AuthError::Internal(format!("credential lookup failed: {}", e)))?;
+
+    match row {
+        Some(row) => row
+            .try_get::<String, _>("user_id")
+            .map(Some)
+            .map_err(|e| AuthError::Internal(format!("credential row is malformed: {}", e))),
+        None => Ok(None),
+    }
+}
+
 /// Look up the user a username and password belong to.
 ///
 /// Returns [`AuthError::InvalidCredentials`] for an unknown username and for a

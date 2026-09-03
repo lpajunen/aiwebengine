@@ -36,6 +36,20 @@ async fn main() -> AppResult<()> {
                 )
                 .action(clap::ArgAction::Set),
         )
+        .arg(
+            Arg::new("set-password")
+                .long("set-password")
+                .value_name("ACCOUNT")
+                .num_args(1)
+                .help(
+                    "Reset an account's password and exit, e.g. --set-password alice. ACCOUNT is \
+                     a local username or an email address; the new password is read from standard \
+                     input, so it is never an argument other processes can see. Needs the \
+                     database but no running server, which is what makes it the way back into an \
+                     account whose password nobody remembers.",
+                )
+                .action(clap::ArgAction::Set),
+        )
         .get_matches();
 
     // Load configuration first to get logging preferences
@@ -157,6 +171,30 @@ async fn main() -> AppResult<()> {
         }
     }
 
+    // Reset a password and exit. Beside `--grant-role`, and before the startup
+    // validation for the same reason: an engine whose configuration is broken
+    // is exactly when someone needs to get back into an account.
+    if let Some(account) = matches.get_one::<String>("set-password") {
+        let password = match read_new_password(account) {
+            Ok(password) => password,
+            Err(e) => {
+                eprintln!("✗ {}", e);
+                std::process::exit(1);
+            }
+        };
+
+        match aiwebengine::set_password_command(&config, account, &password).await {
+            Ok(message) => {
+                println!("{}", message);
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("✗ {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+
     // Validate configuration during startup
     if let Err(e) = config.validate() {
         eprintln!("Configuration error: {}", e);
@@ -235,4 +273,72 @@ async fn main() -> AppResult<()> {
     }
 
     Ok(())
+}
+
+/// Read the password `--set-password` will store, from standard input.
+///
+/// Standard input rather than an argument: an argument is visible in `ps` and
+/// in shell history, and this is the one command whose whole job is to write a
+/// credential. A pipe (`printf '%s' "$PASSWORD" | aiwebengine --set-password
+/// alice`) is the scripted form; typing it in is the interactive one.
+///
+/// Only the line ending is stripped. A password may legitimately begin or end
+/// with a space, and trimming one off would store something other than what the
+/// operator meant — which they would discover at the sign-in page, locked out.
+///
+/// At a terminal the password is echoed, so it is asked for twice: nothing here
+/// can suppress the echo without a platform-specific dependency, and a typo in
+/// a password being reset because nobody remembers the old one is the failure
+/// this command exists to end.
+fn read_new_password(account: &str) -> AppResult<String> {
+    use std::io::{BufRead, IsTerminal, Write};
+
+    let interactive = std::io::stdin().is_terminal();
+    let mut stdin = std::io::stdin().lock();
+
+    let mut read_line = |prompt: &str| -> AppResult<String> {
+        if interactive {
+            eprint!("{}", prompt);
+            let _ = std::io::stderr().flush();
+        }
+        let mut line = String::new();
+        let read = stdin.read_line(&mut line).map_err(|e| {
+            aiwebengine::AppError::config(format!("Could not read a password: {}", e))
+        })?;
+        if read == 0 {
+            return Err(aiwebengine::AppError::config(
+                "No password on standard input. Pipe one in, or run this at a terminal."
+                    .to_string(),
+            ));
+        }
+        Ok(line
+            .trim_end_matches('\n')
+            .trim_end_matches('\r')
+            .to_string())
+    };
+
+    if interactive {
+        eprintln!(
+            "Setting a new password for {}. It will be visible as you type.",
+            account
+        );
+    }
+
+    let password = read_line("New password: ")?;
+    if password.is_empty() {
+        return Err(aiwebengine::AppError::config(
+            "An empty password is not one anybody can sign in with.".to_string(),
+        ));
+    }
+
+    if interactive {
+        let again = read_line("Again: ")?;
+        if again != password {
+            return Err(aiwebengine::AppError::config(
+                "Those two passwords are not the same. Nothing was changed.".to_string(),
+            ));
+        }
+    }
+
+    Ok(password)
 }

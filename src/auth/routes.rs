@@ -189,6 +189,217 @@ fn safe_redirect_target(candidate: Option<&str>) -> String {
     target.to_string()
 }
 
+/// Where the account page lives. Named once because the sign-in page links to
+/// it, the page redirects back through it, and both forms on it post a redirect
+/// target built from it.
+const ACCOUNT_PATH: &str = "/auth/account";
+
+/// The look of the engine's own sign-in and account pages.
+///
+/// One block for both, because they are one surface: a person moves between
+/// them and should not be able to tell they changed pages. Inline rather than a
+/// stylesheet, and carried under a per-response nonce, so the pages keep
+/// working under a `style-src 'self'` policy with no inline allowance.
+const AUTH_PAGE_STYLES: &str = r#"        body {
+            margin: 0;
+            padding: 1rem;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            font-size: 14px;
+            line-height: 1.5;
+            color: #212529;
+            background: #f8f9fa;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .card {
+            width: 100%;
+            max-width: 400px;
+            background: #ffffff;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
+            padding: 2rem;
+            text-align: center;
+        }
+
+        .card h1 {
+            margin: 0 0 1rem 0;
+            font-size: 1.75rem;
+        }
+
+        .card p {
+            color: #6c757d;
+            margin: 0 0 1.5rem 0;
+        }
+
+        .notice {
+            padding: 0.6rem 0.75rem;
+            margin-bottom: 1rem;
+            border: 1px solid #f1aeb5;
+            border-radius: 6px;
+            background: #fdf2f3;
+            color: #842029;
+        }
+
+        .credentials, .guest {
+            display: block;
+            margin: 0 0 1rem;
+        }
+
+        .credentials h2 {
+            margin: 0 0 0.75rem;
+            font-size: 1rem;
+            font-weight: 600;
+        }
+
+        .credentials label {
+            display: block;
+            margin-bottom: 0.25rem;
+            font-weight: 500;
+        }
+
+        .credentials .hint {
+            font-weight: 400;
+            color: #6c757d;
+        }
+
+        .credentials input {
+            display: block;
+            width: 100%;
+            box-sizing: border-box;
+            padding: 0.6rem 0.75rem;
+            margin-bottom: 0.75rem;
+            border: 1px solid #ced4da;
+            border-radius: 6px;
+            font-size: 1rem;
+            font-family: inherit;
+        }
+
+        .credentials input:focus {
+            outline: 2px solid #4285f4;
+            outline-offset: 1px;
+            border-color: #4285f4;
+        }
+
+        .credentials button, .guest button {
+            display: block;
+            width: 100%;
+            box-sizing: border-box;
+            padding: 0.75rem 1rem;
+            border: none;
+            border-radius: 6px;
+            font-weight: 500;
+            font-size: 1rem;
+            font-family: inherit;
+            cursor: pointer;
+            background-color: #212529;
+            color: #ffffff;
+        }
+
+        .credentials button:hover, .guest button:hover {
+            background-color: #343a40;
+        }
+
+        .guest button.secondary {
+            background-color: #ffffff;
+            color: #212529;
+            border: 1px solid #ced4da;
+        }
+
+        .guest button.secondary:hover {
+            background-color: #f1f3f5;
+        }
+
+        .switch {
+            margin: 0.75rem 0 0;
+            font-size: 0.9rem;
+            color: #6c757d;
+        }
+
+        .divider {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin: 1rem 0;
+            color: #6c757d;
+            font-size: 0.9rem;
+        }
+
+        .divider::before, .divider::after {
+            content: "";
+            flex: 1;
+            border-top: 1px solid #dee2e6;
+        }
+
+        .provider-btn {
+            display: block;
+            width: 100%;
+            box-sizing: border-box;
+            padding: 0.75rem 1rem;
+            margin-bottom: 0.5rem;
+            border: none;
+            border-radius: 6px;
+            font-weight: 500;
+            font-size: 1rem;
+            text-decoration: none;
+            transition: all 0.2s ease;
+        }
+
+        .provider-google {
+            background-color: #4285f4;
+            color: white;
+        }
+
+        .provider-google:hover {
+            background-color: #3367d6;
+        }
+
+        .provider-microsoft {
+            background-color: #00a4ef;
+            color: white;
+        }
+
+        .provider-microsoft:hover {
+            background-color: #0078d4;
+        }
+
+        .provider-apple {
+            background-color: #000000;
+            color: white;
+        }
+
+        .provider-apple:hover {
+            background-color: #333333;
+        }
+
+        .identity {
+            margin: 0 0 1.5rem;
+            color: #212529;
+        }
+
+        .identity .provider {
+            display: block;
+            font-size: 0.9rem;
+            color: #6c757d;
+        }
+
+        .notice.ok {
+            border-color: #a3cfbb;
+            background: #f0f9f4;
+            color: #0f5132;
+        }
+
+        .explain {
+            margin: 0 0 0.75rem;
+            font-size: 0.9rem;
+            color: #6c757d;
+            text-align: left;
+        }
+"#;
+
 /// Login page parameters
 #[derive(Debug, Deserialize)]
 pub struct LoginPageParams {
@@ -305,6 +516,18 @@ pub fn render_internal_auth_forms(
         ));
     }
 
+    // The way someone signed in finds the page that manages their credential.
+    // It is a link rather than a form because everything on that page needs a
+    // session and a current password, neither of which a sign-in page has —
+    // and it is here because the sign-in page is where a person goes looking
+    // when they are thinking about their password.
+    if internal.enabled && !signing_up {
+        blocks.push(format!(
+            r#"<p class="switch"><a href="{}">Change your password</a></p>"#,
+            ACCOUNT_PATH
+        ));
+    }
+
     if internal.allow_guests {
         blocks.push(format!(
             r#"<form class="guest" method="post" action="/auth/guest">
@@ -399,182 +622,7 @@ pub async fn login_page(
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login</title>
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
-    <style nonce="{style_nonce}">
-        body {{
-            margin: 0;
-            padding: 1rem;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            font-size: 14px;
-            line-height: 1.5;
-            color: #212529;
-            background: #f8f9fa;
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }}
-
-        .card {{
-            width: 100%;
-            max-width: 400px;
-            background: #ffffff;
-            border: 1px solid #dee2e6;
-            border-radius: 8px;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
-            padding: 2rem;
-            text-align: center;
-        }}
-
-        .card h1 {{
-            margin: 0 0 1rem 0;
-            font-size: 1.75rem;
-        }}
-
-        .card p {{
-            color: #6c757d;
-            margin: 0 0 1.5rem 0;
-        }}
-
-        .notice {{
-            padding: 0.6rem 0.75rem;
-            margin-bottom: 1rem;
-            border: 1px solid #f1aeb5;
-            border-radius: 6px;
-            background: #fdf2f3;
-            color: #842029;
-        }}
-
-        .credentials, .guest {{
-            display: block;
-            margin: 0 0 1rem;
-        }}
-
-        .credentials h2 {{
-            margin: 0 0 0.75rem;
-            font-size: 1rem;
-            font-weight: 600;
-        }}
-
-        .credentials label {{
-            display: block;
-            margin-bottom: 0.25rem;
-            font-weight: 500;
-        }}
-
-        .credentials .hint {{
-            font-weight: 400;
-            color: #6c757d;
-        }}
-
-        .credentials input {{
-            display: block;
-            width: 100%;
-            box-sizing: border-box;
-            padding: 0.6rem 0.75rem;
-            margin-bottom: 0.75rem;
-            border: 1px solid #ced4da;
-            border-radius: 6px;
-            font-size: 1rem;
-            font-family: inherit;
-        }}
-
-        .credentials input:focus {{
-            outline: 2px solid #4285f4;
-            outline-offset: 1px;
-            border-color: #4285f4;
-        }}
-
-        .credentials button, .guest button {{
-            display: block;
-            width: 100%;
-            box-sizing: border-box;
-            padding: 0.75rem 1rem;
-            border: none;
-            border-radius: 6px;
-            font-weight: 500;
-            font-size: 1rem;
-            font-family: inherit;
-            cursor: pointer;
-            background-color: #212529;
-            color: #ffffff;
-        }}
-
-        .credentials button:hover, .guest button:hover {{
-            background-color: #343a40;
-        }}
-
-        .guest button.secondary {{
-            background-color: #ffffff;
-            color: #212529;
-            border: 1px solid #ced4da;
-        }}
-
-        .guest button.secondary:hover {{
-            background-color: #f1f3f5;
-        }}
-
-        .switch {{
-            margin: 0.75rem 0 0;
-            font-size: 0.9rem;
-            color: #6c757d;
-        }}
-
-        .divider {{
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-            margin: 1rem 0;
-            color: #6c757d;
-            font-size: 0.9rem;
-        }}
-
-        .divider::before, .divider::after {{
-            content: "";
-            flex: 1;
-            border-top: 1px solid #dee2e6;
-        }}
-
-        .provider-btn {{
-            display: block;
-            width: 100%;
-            box-sizing: border-box;
-            padding: 0.75rem 1rem;
-            margin-bottom: 0.5rem;
-            border: none;
-            border-radius: 6px;
-            font-weight: 500;
-            font-size: 1rem;
-            text-decoration: none;
-            transition: all 0.2s ease;
-        }}
-
-        .provider-google {{
-            background-color: #4285f4;
-            color: white;
-        }}
-
-        .provider-google:hover {{
-            background-color: #3367d6;
-        }}
-
-        .provider-microsoft {{
-            background-color: #00a4ef;
-            color: white;
-        }}
-
-        .provider-microsoft:hover {{
-            background-color: #0078d4;
-        }}
-
-        .provider-apple {{
-            background-color: #000000;
-            color: white;
-        }}
-
-        .provider-apple:hover {{
-            background-color: #333333;
-        }}
-    </style>
+    <style nonce="{style_nonce}">{styles}    </style>
 </head>
 <body>
     <div class="card">
@@ -587,6 +635,7 @@ pub async fn login_page(
 </body>
 </html>"#,
         style_nonce = html_attribute(&nonce),
+        styles = AUTH_PAGE_STYLES,
         error_block = error_block,
         internal_block = internal_block,
         providers_intro = providers_intro,
@@ -636,6 +685,256 @@ fn html_page_response(html: String, nonce: &str) -> Response {
             return (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response();
         }
     }
+    response
+}
+
+/// Account page parameters. Both are engine-written codes, rendered through a
+/// fixed table rather than echoed — the same rule the sign-in page follows.
+#[derive(Debug, Deserialize)]
+pub struct AccountPageParams {
+    /// What just succeeded, set by the engine when it sends a form submission
+    /// back here.
+    #[serde(default)]
+    notice: Option<String>,
+    /// What just failed.
+    #[serde(default)]
+    error: Option<String>,
+}
+
+/// The message shown for something that just worked.
+fn account_notice_message(code: &str) -> &'static str {
+    match code {
+        "password" => {
+            "Your password has been changed. Every other session this account had is signed out."
+        }
+        "claimed" => "Your username and password are set. You can sign in with them from now on.",
+        _ => "Done.",
+    }
+}
+
+/// The message shown for something that just failed.
+///
+/// Delegates to the sign-in page's table for everything the two pages share,
+/// and differs where the same error means something else here: on this page
+/// [`AuthError::InvalidCredentials`] can only have come from the current
+/// password field, and "that username and password do not match an account" is
+/// the wrong sentence to read beside it.
+fn account_error_message(code: &str) -> &'static str {
+    match code {
+        "credentials" => "That is not your current password.",
+        "password" => "That new password is too short.",
+        other => login_error_message(other),
+    }
+}
+
+/// Render what an account can do about its own credential.
+///
+/// Empty when internal authentication is off: every form here posts to an
+/// endpoint that would refuse, and offering a control that cannot work is worse
+/// than offering none.
+///
+/// Which form appears is decided by whether the account already holds a
+/// credential, because the two are different acts. Replacing a password takes
+/// the current one; attaching a first one takes a username, and cannot
+/// overwrite anything.
+pub fn render_account_forms(
+    internal: &crate::auth::config::InternalAuthConfig,
+    csrf_token: &str,
+    username: Option<&str>,
+    provider: &str,
+) -> String {
+    if !internal.enabled {
+        return String::new();
+    }
+
+    let min_password = internal
+        .min_password_length
+        .max(crate::auth::local::MIN_PASSWORD_LENGTH);
+
+    match username {
+        Some(username) => format!(
+            r#"<form class="credentials" method="post" action="/auth/local/password">
+                <h2>Change your password</h2>
+                <input type="hidden" name="csrf_token" value="{csrf}">
+                <input type="hidden" name="redirect" value="/auth/account?notice=password">
+                <input type="text" name="username" value="{username}" autocomplete="username"
+                       readonly hidden>
+                <label for="current_password">Current password</label>
+                <input id="current_password" name="current_password" type="password" required
+                       autocomplete="current-password">
+                <label for="new_password">New password</label>
+                <input id="new_password" name="new_password" type="password" required
+                       autocomplete="new-password" minlength="{min_password}">
+                <button type="submit">Change password</button>
+                <p class="switch">Changing it signs out every other session this account has.</p>
+            </form>"#,
+            csrf = html_attribute(csrf_token),
+            username = html_attribute(username),
+            min_password = min_password,
+        ),
+        None => {
+            let explain = if provider == crate::auth::local::GUEST_PROVIDER {
+                "This account has no way to sign in again — close this browser and it is gone. \
+                 A username and password keep it, along with everything it already has."
+            } else {
+                "This account signs in through a provider and holds no password here. \
+                 Adding one is a way in that does not depend on that provider being reachable."
+            };
+
+            format!(
+                r#"<form class="credentials" method="post" action="/auth/local/claim">
+                <h2>Add a username and password</h2>
+                <p class="explain">{explain}</p>
+                <input type="hidden" name="csrf_token" value="{csrf}">
+                <input type="hidden" name="redirect" value="/auth/account?notice=claimed">
+                <label for="username">Username</label>
+                <input id="username" name="username" type="text" required autocomplete="username"
+                       minlength="3" maxlength="32" autocapitalize="none" spellcheck="false">
+                <label for="password">Password</label>
+                <input id="password" name="password" type="password" required
+                       autocomplete="new-password" minlength="{min_password}">
+                <button type="submit">Save</button>
+            </form>"#,
+                explain = explain,
+                csrf = html_attribute(csrf_token),
+                min_password = min_password,
+            )
+        }
+    }
+}
+
+/// The account page: what the signed-in person can do about their own way in.
+///
+/// The sign-in page cannot hold this. Everything here needs a session, and
+/// changing a password needs the current one — neither is something a person
+/// looking at a sign-in page has. What the sign-in page gets is a link.
+///
+/// Signed out, this redirects to the sign-in page and comes back, so the link
+/// works for someone whose session has aged out.
+#[utoipa::path(
+    get,
+    path = "/auth/account",
+    tags = ["Authentication"],
+    responses(
+        (status = 200, description = "Account page HTML", content_type = "text/html"),
+        (status = 302, description = "No session; redirected to the sign-in page"),
+    )
+)]
+pub async fn account_page(
+    State(auth_manager): State<Arc<AuthManager>>,
+    Query(params): Query<AccountPageParams>,
+    headers: HeaderMap,
+) -> Response {
+    let config = auth_manager.config();
+    let ip_addr = client_ip::from_headers(&headers);
+    let user_agent = client_ip::user_agent_from_headers(&headers);
+    let host = get_request_host(&headers);
+
+    let session = match session_token_from_headers(&headers, &config.session_cookie_name) {
+        Some(token) => auth_manager
+            .get_session(&token, &ip_addr, &user_agent, host.as_deref())
+            .await
+            .ok(),
+        None => None,
+    };
+
+    let Some(session) = session else {
+        return Redirect::to(&format!(
+            "/auth/login?redirect={}",
+            urlencoding::encode(ACCOUNT_PATH)
+        ))
+        .into_response();
+    };
+
+    // Whether there is a credential decides which form the page offers, so a
+    // lookup that failed must not be read as "there is none" — that would show
+    // someone with a password the form for setting a first one.
+    let username = match crate::auth::local::username_for_user(&session.user_id).await {
+        Ok(username) => username,
+        Err(e) => {
+            tracing::error!("Could not read the credential for an account page: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response();
+        }
+    };
+
+    let nonce = crate::security::generate_nonce();
+    // Bound to the user, so a token minted for anybody else — including one an
+    // attacker fetched from their own server, with no browser and no account —
+    // cannot be posted back as this person's password change.
+    let csrf_token = auth_manager
+        .security_context()
+        .csrf
+        .generate_token(Some(session.user_id.clone()))
+        .await
+        .token;
+
+    let label = username
+        .clone()
+        .or_else(|| session.email.clone())
+        .or_else(|| session.name.clone())
+        .unwrap_or_else(|| session.user_id.clone());
+
+    let notice_block = match (params.error.as_deref(), params.notice.as_deref()) {
+        (Some(code), _) => format!(
+            r#"<div class="notice">{}</div>"#,
+            account_error_message(code)
+        ),
+        (None, Some(code)) => format!(
+            r#"<div class="notice ok">{}</div>"#,
+            account_notice_message(code)
+        ),
+        (None, None) => String::new(),
+    };
+
+    let forms = render_account_forms(
+        &config.internal,
+        &csrf_token,
+        username.as_deref(),
+        &session.provider,
+    );
+    let forms = if forms.is_empty() {
+        r#"<p class="explain">This engine holds no credentials of its own, so there is nothing to change here.</p>"#
+            .to_string()
+    } else {
+        forms
+    };
+
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Your account</title>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <style nonce="{style_nonce}">{styles}    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>Your account</h1>
+        {notice_block}
+        <p class="identity">Signed in as <strong>{label}</strong>
+            <span class="provider">via {provider}</span></p>
+        {forms}
+        <p class="switch"><a href="/auth/logout">Sign out</a></p>
+    </div>
+</body>
+</html>"#,
+        style_nonce = html_attribute(&nonce),
+        styles = AUTH_PAGE_STYLES,
+        notice_block = notice_block,
+        label = html_escape::encode_text(&label),
+        provider = html_escape::encode_text(&session.provider),
+        forms = forms,
+    );
+
+    let mut response = html_page_response(html, &nonce);
+    // The page names the account it belongs to. A shared cache holding it would
+    // hand one person's to the next.
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("no-store"),
+    );
     response
 }
 
@@ -966,6 +1265,48 @@ async fn require_form_csrf(
         .map_err(|_| AuthErrorResponse(crate::auth::error::AuthError::CsrfValidationFailed))
 }
 
+/// Refuse a form submission that acts on a session, unless its token was issued
+/// to that session.
+///
+/// [`require_form_csrf`] accepts a token bound to nobody, which is right for
+/// the sign-in forms: they are submitted before there is a session to bind one
+/// to. It is wrong for a form that changes an account, because an unbound token
+/// is one anybody can fetch from `/auth/login` with no browser and no account,
+/// leaving only the cookie's `SameSite=Lax` between the form and a cross-site
+/// POST — and a browser will carry a Lax cookie on a cross-site POST for the
+/// first couple of minutes after it is set.
+///
+/// `binding_required` is the difference between the two endpoints this guards.
+/// The password form is new, so nothing was ever submitting an unbound token to
+/// it and it can demand a bound one. `/auth/local/claim` has been reachable
+/// from solutions' own pages since it shipped, taking a token from the sign-in
+/// page, so it accepts either — a bound token must match the session, an
+/// unbound one is still allowed.
+async fn require_session_form_csrf(
+    auth_manager: &AuthManager,
+    style: RequestStyle,
+    token: Option<&str>,
+    user_id: &str,
+    binding_required: bool,
+) -> Result<(), AuthErrorResponse> {
+    if style != RequestStyle::Form {
+        return Ok(());
+    }
+
+    let token = token.ok_or(AuthErrorResponse(
+        crate::auth::error::AuthError::CsrfValidationFailed,
+    ))?;
+
+    let csrf = &auth_manager.security_context().csrf;
+    let outcome = if binding_required {
+        csrf.validate_token_for(token, user_id).await
+    } else {
+        csrf.validate_token(token, Some(user_id)).await
+    };
+
+    outcome.map_err(|_| AuthErrorResponse(crate::auth::error::AuthError::CsrfValidationFailed))
+}
+
 /// Short, fixed codes for what a browser is told went wrong.
 ///
 /// The login page renders a message chosen from these rather than echoing the
@@ -1001,6 +1342,34 @@ fn redirect_to_login_with_error(
         None => format!("/auth/login?error={}", error_code_for(error)),
     };
     Redirect::to(&target).into_response()
+}
+
+/// The answer a browser gets when a form submitted from the account page fails.
+///
+/// Which page that is comes from where the submission was going: a form whose
+/// success lands on the account page was submitted from the account page, and
+/// its error message belongs there rather than on the sign-in page. Sending a
+/// signed-in person to a sign-in page to read "that is not your current
+/// password" hides both the message and the thing they were doing.
+///
+/// Everything else keeps going back to the sign-in page, which is where a
+/// solution posting these forms from its own UI has always been sent.
+fn redirect_to_form_with_error(
+    error: &crate::auth::error::AuthError,
+    redirect: Option<&str>,
+) -> Response {
+    let from_account_page = redirect
+        .map(|value| safe_redirect_target(Some(value)))
+        .is_some_and(|target| {
+            target == ACCOUNT_PATH || target.starts_with(&format!("{}?", ACCOUNT_PATH))
+        });
+
+    if from_account_page {
+        return Redirect::to(&format!("{}?error={}", ACCOUNT_PATH, error_code_for(error)))
+            .into_response();
+    }
+
+    redirect_to_login_with_error(error, redirect)
 }
 
 /// Shape the answer to an internal-credential flow by how the request arrived:
@@ -1260,8 +1629,9 @@ pub async fn claim_account(
     let user_agent = client_ip::user_agent_from_headers(&headers);
     let config = auth_manager.config();
 
-    require_form_csrf(&auth_manager, style, request.csrf_token.as_deref()).await?;
-
+    // The session is read before the token is checked, because the token is
+    // checked against it: a token bound to this account is what the account
+    // page hands out, and one bound to somebody else must not pass.
     let token = session_token_from_headers(&headers, &config.session_cookie_name)
         .ok_or(crate::auth::error::AuthError::AuthenticationRequired)?;
     let session = auth_manager
@@ -1274,6 +1644,26 @@ pub async fn claim_account(
         .await
         .map_err(|_| crate::auth::error::AuthError::AuthenticationRequired)?;
 
+    if require_session_form_csrf(
+        &auth_manager,
+        style,
+        request.csrf_token.as_deref(),
+        &session.user_id,
+        false,
+    )
+    .await
+    .is_err()
+    {
+        // Only a form submission can fail this, and a browser gets a page
+        // rather than JSON: a token that timed out because the page sat open is
+        // the ordinary outcome of leaving it open, and the page it goes back to
+        // carries a fresh one.
+        return Ok(redirect_to_form_with_error(
+            &crate::auth::error::AuthError::CsrfValidationFailed,
+            request.redirect.as_deref(),
+        ));
+    }
+
     let username = match auth_manager
         .claim_guest_account(
             &session.user_id,
@@ -1285,7 +1675,7 @@ pub async fn claim_account(
     {
         Ok(username) => username,
         Err(error) if style == RequestStyle::Form => {
-            return Ok(redirect_to_login_with_error(
+            return Ok(redirect_to_form_with_error(
                 &error,
                 request.redirect.as_deref(),
             ));
@@ -1339,8 +1729,9 @@ pub async fn change_password_route(
     let user_agent = client_ip::user_agent_from_headers(&headers);
     let config = auth_manager.config();
 
-    require_form_csrf(&auth_manager, style, request.csrf_token.as_deref()).await?;
-
+    // Session first, then a token issued to that session. The only page that
+    // submits this form is the account page, which mints a bound token, so
+    // nothing here ever depended on an unbound one being accepted.
     let token = session_token_from_headers(&headers, &config.session_cookie_name)
         .ok_or(crate::auth::error::AuthError::AuthenticationRequired)?;
     let session = auth_manager
@@ -1352,6 +1743,24 @@ pub async fn change_password_route(
         )
         .await
         .map_err(|_| crate::auth::error::AuthError::AuthenticationRequired)?;
+
+    if require_session_form_csrf(
+        &auth_manager,
+        style,
+        request.csrf_token.as_deref(),
+        &session.user_id,
+        true,
+    )
+    .await
+    .is_err()
+    {
+        // As in [`claim_account`]: a form gets the page back, carrying a code
+        // the page renders as "that form expired".
+        return Ok(redirect_to_form_with_error(
+            &crate::auth::error::AuthError::CsrfValidationFailed,
+            request.redirect.as_deref(),
+        ));
+    }
 
     let new_token = match auth_manager
         .change_local_password(
@@ -1365,7 +1774,7 @@ pub async fn change_password_route(
     {
         Ok(token) => token,
         Err(error) if style == RequestStyle::Form => {
-            return Ok(redirect_to_login_with_error(
+            return Ok(redirect_to_form_with_error(
                 &error,
                 request.redirect.as_deref(),
             ));
@@ -3289,6 +3698,7 @@ async fn handle_refresh_token_grant(
 pub fn create_auth_router(auth_manager: Arc<AuthManager>) -> Router {
     Router::new()
         .route("/login", get(login_page))
+        .route("/account", get(account_page))
         .route("/login/{provider}", get(start_login))
         .route("/callback/{provider}", get(oauth_callback))
         .route("/guest", post(start_guest))

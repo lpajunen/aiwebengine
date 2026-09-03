@@ -95,8 +95,42 @@ fn extract_host(req: &Request) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// Re-send the session cookie on the way out, so its `Max-Age` slides forward
+/// while someone is using the engine.
+///
+/// Never over a session cookie the handler already wrote. A handler that set
+/// one has decided what the browser should hold — a session it just minted, or
+/// an empty value that signs the browser out — and this runs afterwards holding
+/// the token the request arrived with, which by then may name a session that no
+/// longer exists. Replacing it is how `POST /auth/local/password` came to sign
+/// people out of the browser they changed their password in: it ends every
+/// session the account had and issues a fresh one, and the fresh cookie was
+/// overwritten with the dead token on the way out. Logging out had the same
+/// shape — the cookie it cleared was reinstated before the response left.
+///
+/// Any other cookie on the response is left alone and this one is added beside
+/// it, rather than the whole header being replaced: a script route may set
+/// cookies of its own, and they are not this layer's to discard.
 fn attach_session_cookie(response: &mut Response, auth_manager: &AuthManager, session_token: &str) {
     let config = auth_manager.config();
+
+    let already_written = response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .any(|value| {
+            value
+                .split('=')
+                .next()
+                .map(str::trim)
+                .is_some_and(|name| name == config.session_cookie_name)
+        });
+
+    if already_written {
+        return;
+    }
+
     // Use max_session_age so the browser retains the cookie for the full session
     // lifetime (up to 30 days) rather than expiring it after one sliding hour.
     let cookie_value = format!(
@@ -110,7 +144,7 @@ fn attach_session_cookie(response: &mut Response, auth_manager: &AuthManager, se
     if let Ok(cookie_header) = HeaderValue::from_str(&cookie_value) {
         response
             .headers_mut()
-            .insert(header::SET_COOKIE, cookie_header);
+            .append(header::SET_COOKIE, cookie_header);
     }
 }
 
