@@ -10,7 +10,11 @@ node_modules/
 
 # Documentation and markdown files
 # *.md
-# docs/  # Removed - needed for containerized docs serving
+# Neither stage copies these: nothing includes a file from docs/ at compile
+# time, the routes that once served it are gone, and a release build of the lib
+# and bin does not compile test targets.
+docs/
+tests/
 archive/
 
 # Rust build artifacts
@@ -71,7 +75,8 @@ config.*.yaml
 !config.staging.toml
 !config.local.toml
 
-# Scripts (mounted as volume in production)
+# Scripts are a build input, not runtime data: src reads several of them with
+# include_str!, so the build context must carry them. Deliberately not excluded.
 # scripts/
 
 # Makefile

@@ -30,13 +30,17 @@ RUN mkdir -p src && \
     cargo build --release && \
     rm -rf src
 
-# Copy source code and compile-time assets
+# Copy source code and compile-time assets. Each of these is an input to
+# `cargo build --release`, not runtime data: migrations are embedded by
+# sqlx::migrate!, and assets/ and scripts/ are read by include_bytes! and
+# include_str! from non-test code — hiding any one of them fails the lib build
+# with "couldn't read". docs/ and tests/ were copied and never read: nothing
+# includes a file from docs/, and a release build of the lib and bin does not
+# compile test targets.
 COPY src ./src
 COPY migrations ./migrations
 COPY scripts ./scripts
 COPY assets ./assets
-COPY docs ./docs
-COPY tests ./tests
 
 # Copy build script for capturing build metadata
 COPY build.rs ./build.rs
