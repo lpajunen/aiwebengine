@@ -28,7 +28,13 @@ services:
       aiwebengine-2:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/"]
+      # Caddy's admin API, not a request through the proxy: every port-80 probe
+      # gets the automatic HTTP->HTTPS redirect, and following it means a TLS
+      # handshake for a name Caddy holds no certificate for ("localhost"),
+      # which resets the connection and reports a healthy proxy as unhealthy.
+      # 127.0.0.1 rather than localhost because the admin endpoint binds IPv4
+      # only, while localhost resolves to ::1 first inside the image.
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:2019/config/"]
       interval: 30s
       timeout: 3s
       retries: 3

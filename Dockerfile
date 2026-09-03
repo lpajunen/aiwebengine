@@ -95,8 +95,13 @@ USER aiwebengine
 EXPOSE 3000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:3000/health || exit 1
+# A TCP connect rather than a request to /health: the runtime stage installs
+# ca-certificates and libssl3 only, so neither curl nor wget exists here and the
+# HTTP probe this replaced reported every container unhealthy unless a compose
+# file overrode it. The database-aware /health probe lives at the proxy, in
+# Caddy's active health checks.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=30s --retries=3 \
+    CMD timeout 2 bash -c '</dev/tcp/localhost/3000' || exit 1
 
 # Set environment variables
 ENV RUST_LOG=info

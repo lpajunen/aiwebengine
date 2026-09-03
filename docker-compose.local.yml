@@ -34,6 +34,16 @@ services:
     depends_on:
       - aiwebengine-dev-1
       - aiwebengine-dev-2
+    healthcheck:
+      # Caddy's admin API rather than a request through the proxy — a port-80
+      # probe gets the automatic HTTP->HTTPS redirect and then fails the TLS
+      # handshake for a name held by no certificate. 127.0.0.1 because the
+      # admin endpoint binds IPv4 only while localhost resolves to ::1 first.
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:2019/config/"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
 
   # Development server with hot-reload - Instance 1
   aiwebengine-dev-1:
@@ -117,6 +127,17 @@ services:
     depends_on:
       postgres-dev:
         condition: service_healthy
+    healthcheck:
+      # curl is present in the development image, so this can be the real probe
+      # /health rather than a TCP connect: it runs a SELECT 1 and answers 503
+      # when Postgres is unreachable. The long start_period is the compile — a
+      # cold container builds the whole crate before it listens, and until that
+      # finishes the container reports "starting" rather than unhealthy.
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 900s
     stdin_open: true
     tty: true
 
@@ -199,6 +220,17 @@ services:
     depends_on:
       postgres-dev:
         condition: service_healthy
+    healthcheck:
+      # curl is present in the development image, so this can be the real probe
+      # /health rather than a TCP connect: it runs a SELECT 1 and answers 503
+      # when Postgres is unreachable. The long start_period is the compile — a
+      # cold container builds the whole crate before it listens, and until that
+      # finishes the container reports "starting" rather than unhealthy.
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 900s
     stdin_open: true
     tty: true
 
