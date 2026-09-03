@@ -80,7 +80,12 @@ services:
       - cargo-git:/usr/local/cargo/git
       - target-cache:/app/target
     environment:
-      - RUST_LOG=debug
+      # Two instances at `debug` with sqlx's statement logging on makes the
+      # foreground `docker-compose up` unreadable — every query is printed with
+      # its full SQL. The default below keeps engine-level debug without the
+      # crates behind it; a RUST_LOG in the shell or in .env wins over it, which
+      # is what the hardcoded `debug` this replaced was quietly overriding.
+      - RUST_LOG=${RUST_LOG:-info,aiwebengine=debug,sqlx=warn}
       - RUST_BACKTRACE=1
       # Verify the query! macros against ./.sqlx rather than a live database.
       - SQLX_OFFLINE=true
@@ -157,7 +162,12 @@ services:
       - cargo-git:/usr/local/cargo/git
       - target-cache-2:/app/target
     environment:
-      - RUST_LOG=debug
+      # Two instances at `debug` with sqlx's statement logging on makes the
+      # foreground `docker-compose up` unreadable — every query is printed with
+      # its full SQL. The default below keeps engine-level debug without the
+      # crates behind it; a RUST_LOG in the shell or in .env wins over it, which
+      # is what the hardcoded `debug` this replaced was quietly overriding.
+      - RUST_LOG=${RUST_LOG:-info,aiwebengine=debug,sqlx=warn}
       - RUST_BACKTRACE=1
       # Verify the query! macros against ./.sqlx rather than a live database.
       - SQLX_OFFLINE=true
