@@ -118,6 +118,8 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
         auth::routes::account_page,
         auth::routes::recovery_codes_route,
         auth::routes::recover_account,
+        auth::routes::list_sessions_route,
+        auth::routes::revoke_session_route,
         auth::routes::start_login,
         auth::routes::oauth_callback,
         auth::routes::logout,

@@ -414,6 +414,52 @@ const AUTH_PAGE_STYLES: &str = r#"        body {
         .codes li {
             padding: 0.15rem 0;
         }
+
+        .sessions {
+            list-style: none;
+            margin: 0 0 1rem;
+            padding: 0;
+            text-align: left;
+        }
+
+        .sessions li {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            padding: 0.6rem 0;
+            border-top: 1px solid #dee2e6;
+        }
+
+        .sessions .where {
+            font-weight: 500;
+        }
+
+        .sessions .when {
+            display: block;
+            font-size: 0.85rem;
+            color: #6c757d;
+        }
+
+        .sessions form {
+            margin: 0;
+        }
+
+        .sessions button {
+            width: auto;
+            padding: 0.35rem 0.75rem;
+            font-size: 0.85rem;
+            background: #ffffff;
+            color: #842029;
+            border: 1px solid #f1aeb5;
+            border-radius: 6px;
+            font-family: inherit;
+            cursor: pointer;
+        }
+
+        .sessions button:hover {
+            background: #fdf2f3;
+        }
 "#;
 
 /// Login page parameters
@@ -851,6 +897,11 @@ fn account_notice_message(code: &str) -> &'static str {
             "Your password was set with a recovery code. That code is spent; the rest \
                         of the set still works."
         }
+        "session_ended" => "That session is over. Whoever was using it has to sign in again.",
+        "sessions_ended" => {
+            "Every other session is over, and so is every refresh token that could have \
+             minted one."
+        }
         _ => "Done.",
     }
 }
@@ -865,6 +916,7 @@ fn account_notice_message(code: &str) -> &'static str {
 fn account_error_message(code: &str) -> &'static str {
     match code {
         "credentials" => "That is not your current password.",
+        "session" => "That session is not one of yours to end. It may already be over.",
         "password" => "That new password is too short.",
         other => login_error_message(other),
     }
@@ -1001,6 +1053,108 @@ fn render_recovery_codes_form(
     )
 }
 
+/// A timestamp, in the one spelling this page uses.
+///
+/// UTC and absolute rather than "three minutes ago". A relative time reads
+/// better and is the wrong tool here: the question a person is answering is
+/// whether *they* were signed in at that moment, and "yesterday at 03:11" is
+/// something you can check against your own day.
+fn page_timestamp(at: chrono::DateTime<chrono::Utc>) -> String {
+    at.format("%Y-%m-%d %H:%M UTC").to_string()
+}
+
+/// Where an account is signed in, and the controls for ending any of it.
+///
+/// Rendered for every account, not only ones with a password: a session is a
+/// session however it was minted, and somebody signed in through Google has the
+/// same reason to want a look at this.
+///
+/// There is no device name in the list because the engine does not keep one —
+/// the fingerprint holds a *hash* of the User-Agent, enough to notice it
+/// changed and not enough to say what it was. What a session is recognised by
+/// is the address it started from and when it was last used, and the page says
+/// so rather than leaving a person wondering which of the two Chromes is which.
+fn render_sessions(csrf_token: &str, sessions: &[crate::security::SessionSummary]) -> String {
+    if sessions.is_empty() {
+        return String::new();
+    }
+
+    let rows = sessions
+        .iter()
+        .map(|session| {
+            let label = if session.current {
+                "This session".to_string()
+            } else if let Some(audience) = session.audience.as_deref() {
+                format!("API token for {}", html_escape::encode_text(audience))
+            } else {
+                format!(
+                    "Signed in via {}",
+                    html_escape::encode_text(&session.provider)
+                )
+            };
+
+            // The current session is not offered a button: ending it is what
+            // "Sign out" does, and a button here that silently signed somebody
+            // out would read as one that had failed.
+            let control = if session.current {
+                String::new()
+            } else {
+                format!(
+                    r#"<form method="post" action="/auth/sessions/revoke">
+                    <input type="hidden" name="csrf_token" value="{csrf}">
+                    <input type="hidden" name="session" value="{id}">
+                    <button type="submit">End</button>
+                </form>"#,
+                    csrf = html_attribute(csrf_token),
+                    id = session.id,
+                )
+            };
+
+            format!(
+                r#"<li>
+                <div>
+                    <span class="where">{label}</span>
+                    <span class="when">from {ip} · started {started} · last used {used}</span>
+                </div>
+                {control}
+            </li>"#,
+                label = label,
+                ip = html_escape::encode_text(&session.ip_addr),
+                started = page_timestamp(session.created_at),
+                used = page_timestamp(session.last_access),
+                control = control,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n            ");
+
+    // Offered only when there is something else to end, so the button is never
+    // one that does nothing.
+    let end_others = if sessions.len() > 1 {
+        format!(
+            r#"<form class="guest" method="post" action="/auth/sessions/revoke">
+                <input type="hidden" name="csrf_token" value="{csrf}">
+                <button type="submit" class="secondary">Sign out everywhere else</button>
+            </form>"#,
+            csrf = html_attribute(csrf_token),
+        )
+    } else {
+        String::new()
+    };
+
+    format!(
+        r#"<h2>Where you are signed in</h2>
+        <p class="explain">The engine keeps only a hash of the browser that started a session, so
+        these are named by the address they came from rather than by device.</p>
+        <ul class="sessions">
+            {rows}
+        </ul>
+        {end_others}"#,
+        rows = rows,
+        end_others = end_others,
+    )
+}
+
 /// The account page: what the signed-in person can do about their own way in.
 ///
 /// The sign-in page cannot hold this. Everything here needs a session, and
@@ -1028,12 +1182,18 @@ pub async fn account_page(
     let user_agent = client_ip::user_agent_from_headers(&headers);
     let host = get_request_host(&headers);
 
-    let session = match session_token_from_headers(&headers, &config.session_cookie_name) {
-        Some(token) => auth_manager
+    // The token is kept as well as the session it names: the session listing
+    // below marks which row is this one, and comparing them is the only way to
+    // know.
+    let token =
+        session_token_from_headers(&headers, &config.session_cookie_name).unwrap_or_default();
+    let session = if token.is_empty() {
+        None
+    } else {
+        auth_manager
             .get_session(&token, &ip_addr, &user_agent, host.as_deref())
             .await
-            .ok(),
-        None => None,
+            .ok()
     };
 
     let Some(session) = session else {
@@ -1113,6 +1273,18 @@ pub async fn account_page(
         forms
     };
 
+    // Not gated on internal credentials: a session is a session however it was
+    // minted, and somebody signed in through a provider has the same reason to
+    // want a look at this. A listing that fails is left out rather than failing
+    // the page, so the credential controls above it still work.
+    let sessions = match auth_manager.list_sessions(&session.user_id, &token).await {
+        Ok(sessions) => render_sessions(&csrf_token, &sessions),
+        Err(e) => {
+            tracing::error!("Could not list sessions for an account page: {}", e);
+            String::new()
+        }
+    };
+
     let html = format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -1130,6 +1302,7 @@ pub async fn account_page(
         <p class="identity">Signed in as <strong>{label}</strong>
             <span class="provider">via {provider}</span></p>
         {forms}
+        {sessions}
         <p class="switch"><a href="/auth/logout">Sign out</a></p>
     </div>
 </body>
@@ -1140,6 +1313,7 @@ pub async fn account_page(
         label = html_escape::encode_text(&label),
         provider = html_escape::encode_text(&session.provider),
         forms = forms,
+        sessions = sessions,
     );
 
     let mut response = html_page_response(html, &nonce);
@@ -1393,6 +1567,27 @@ pub struct RecoverRequest {
     pub redirect: Option<String>,
     #[serde(default)]
     pub csrf_token: Option<String>,
+}
+
+/// Request body for `POST /auth/sessions/revoke`.
+#[derive(Debug, Default, Deserialize, utoipa::ToSchema)]
+pub struct RevokeSessionRequest {
+    /// Which session to end, by the id the listing gave it. Absent means every
+    /// session but the one asking — the control for a lost device, where the
+    /// point is not having to know which row it is.
+    #[serde(default)]
+    pub session: Option<String>,
+    #[serde(default)]
+    pub redirect: Option<String>,
+    #[serde(default)]
+    pub csrf_token: Option<String>,
+}
+
+/// What `GET /auth/sessions` answers with.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct SessionListResponse {
+    #[schema(value_type = Vec<Object>)]
+    pub sessions: Vec<crate::security::SessionSummary>,
 }
 
 /// How a request arrived, which decides how the answer is shaped and whether a
@@ -2264,6 +2459,185 @@ pub async fn recover_account(
             username: Some(crate::auth::local::normalize_username(&request.username)),
         },
     )
+}
+
+/// The sessions the calling account holds.
+///
+/// Its own sessions and nobody else's: the account comes from the session the
+/// request arrived on, never from a parameter. Nothing in the answer
+/// authenticates — a session is named by a surrogate key, and the token that
+/// would let somebody use it stays where it is.
+#[utoipa::path(
+    get,
+    path = "/auth/sessions",
+    tags = ["Authentication"],
+    responses(
+        (status = 200, description = "The account's sessions, newest use first", body = SessionListResponse),
+        (status = 401, description = "No session", body = crate::openapi_schemas::ErrorResponse),
+    )
+)]
+pub async fn list_sessions_route(
+    State(auth_manager): State<Arc<AuthManager>>,
+    headers: HeaderMap,
+) -> Result<Response, AuthErrorResponse> {
+    let config = auth_manager.config();
+    let ip_addr = client_ip::from_headers(&headers);
+    let user_agent = client_ip::user_agent_from_headers(&headers);
+
+    let token = session_token_from_headers(&headers, &config.session_cookie_name)
+        .ok_or(crate::auth::error::AuthError::AuthenticationRequired)?;
+    let session = auth_manager
+        .get_session(
+            &token,
+            &ip_addr,
+            &user_agent,
+            get_request_host(&headers).as_deref(),
+        )
+        .await
+        .map_err(|_| crate::auth::error::AuthError::AuthenticationRequired)?;
+
+    let sessions = auth_manager.list_sessions(&session.user_id, &token).await?;
+
+    let mut response = Json(SessionListResponse { sessions }).into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
+}
+
+/// End one of the calling account's sessions, or all but this one.
+///
+/// A POST rather than a `DELETE` on the session's own path because the control
+/// is a button on a page, and a browser form cannot send anything but GET and
+/// POST.
+#[utoipa::path(
+    post,
+    path = "/auth/sessions/revoke",
+    tags = ["Authentication"],
+    request_body = RevokeSessionRequest,
+    responses(
+        (status = 200, description = "The session, or every other session, is gone"),
+        (status = 401, description = "No session", body = crate::openapi_schemas::ErrorResponse),
+        (status = 404, description = "This account has no such session", body = crate::openapi_schemas::ErrorResponse),
+    )
+)]
+pub async fn revoke_session_route(
+    State(auth_manager): State<Arc<AuthManager>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Response, AuthErrorResponse> {
+    let (request, style) = parse_auth_body::<RevokeSessionRequest>(&headers, &body);
+    let ip_addr = client_ip::from_headers(&headers);
+    let user_agent = client_ip::user_agent_from_headers(&headers);
+    let config = auth_manager.config();
+
+    let token = session_token_from_headers(&headers, &config.session_cookie_name)
+        .ok_or(crate::auth::error::AuthError::AuthenticationRequired)?;
+    let session = auth_manager
+        .get_session(
+            &token,
+            &ip_addr,
+            &user_agent,
+            get_request_host(&headers).as_deref(),
+        )
+        .await
+        .map_err(|_| crate::auth::error::AuthError::AuthenticationRequired)?;
+
+    if require_session_form_csrf(
+        &auth_manager,
+        style,
+        request.csrf_token.as_deref(),
+        &session.user_id,
+        true,
+    )
+    .await
+    .is_err()
+    {
+        // Defaulting to the account page rather than the sign-in page, the way
+        // the success path does: these controls exist on one page, and a caller
+        // that named no redirect came from it.
+        return Ok(redirect_to_form_with_error(
+            &crate::auth::error::AuthError::CsrfValidationFailed,
+            request.redirect.as_deref().or(Some(ACCOUNT_PATH)),
+        ));
+    }
+
+    let named = request
+        .session
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    let notice = match named {
+        Some(value) => {
+            // An id that is not a UUID and an id belonging to somebody else are
+            // the same answer, because they are the same thing: this account
+            // has no such session. Not a 401 — the caller's own session is
+            // fine, and saying otherwise would send them off to sign in again
+            // over somebody else's row.
+            let ended = match value.parse::<uuid::Uuid>() {
+                Ok(id) => {
+                    auth_manager
+                        .revoke_session(&session.user_id, id, &token)
+                        .await?
+                }
+                Err(_) => false,
+            };
+
+            if !ended {
+                return Ok(no_such_session(style, request.redirect.as_deref()));
+            }
+
+            "session_ended"
+        }
+        None => {
+            auth_manager
+                .revoke_other_sessions(&session.user_id, &token)
+                .await?;
+            "sessions_ended"
+        }
+    };
+
+    if style == RequestStyle::Form {
+        let target = match request.redirect.as_deref() {
+            Some(value) if !value.trim().is_empty() => safe_redirect_target(Some(value)),
+            _ => format!("{}?notice={}", ACCOUNT_PATH, notice),
+        };
+        return Ok(Redirect::to(&target).into_response());
+    }
+
+    Ok(Json(InternalAuthResponse {
+        success: true,
+        user_id: Some(session.user_id),
+        username: None,
+    })
+    .into_response())
+}
+
+/// What a caller is told when the session they named is not one of theirs.
+///
+/// A browser gets the page back with a message, because the row it was looking
+/// at is simply gone — somebody ended it from another tab, or it aged out. An
+/// API caller gets a 404, which is what "no such session" is; a 401 would say
+/// the caller's own session was the problem.
+fn no_such_session(style: RequestStyle, redirect: Option<&str>) -> Response {
+    if style == RequestStyle::Form {
+        let target = match redirect {
+            Some(value) if !value.trim().is_empty() => safe_redirect_target(Some(value)),
+            _ => format!("{}?error=session", ACCOUNT_PATH),
+        };
+        return Redirect::to(&target).into_response();
+    }
+
+    (
+        StatusCode::NOT_FOUND,
+        Json(ErrorResponse {
+            error: "not_found".to_string(),
+            message: "No such session for this account".to_string(),
+        }),
+    )
+        .into_response()
 }
 
 /// Logout handler - destroys session
@@ -4179,6 +4553,8 @@ pub fn create_auth_router(auth_manager: Arc<AuthManager>) -> Router {
         .route("/local/claim", post(claim_account))
         .route("/local/recovery_codes", post(recovery_codes_route))
         .route("/local/recover", post(recover_account))
+        .route("/sessions", get(list_sessions_route))
+        .route("/sessions/revoke", post(revoke_session_route))
         .route("/logout", get(logout).post(logout))
         .route("/refresh", post(refresh_session))
         .route("/status", get(auth_status))

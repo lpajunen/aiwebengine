@@ -31,7 +31,7 @@ pub use rate_limiting::{RateLimitConfig, RateLimitKey, RateLimitResult, RateLimi
 pub use secure_globals::{GlobalSecurityConfig, SecureGlobalContext};
 pub use session::{
     CreateSessionParams, SecureSessionManager, SessionData, SessionError, SessionFingerprint,
-    SessionToken, delete_sessions_for_user,
+    SessionSummary, SessionToken, delete_sessions_for_user,
 };
 pub use threat_detection::{ThreatAssessment, ThreatDetectionConfig, ThreatDetector, ThreatLevel};
 pub use validation::{Capability, InputValidator, SecurityError};

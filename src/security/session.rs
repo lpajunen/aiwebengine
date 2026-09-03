@@ -163,6 +163,36 @@ pub struct SessionData {
     pub realm: Option<String>,
 }
 
+/// One of an account's sessions, as its owner is allowed to see it.
+///
+/// Deliberately not [`SessionData`]. That carries the session token in
+/// `session_id`, and a list of a person's sessions that hands back their tokens
+/// would be a way to escalate one stolen session into all of them. What
+/// identifies a row here is the `sessions.id` surrogate key, which is useless
+/// to anyone who cannot already authenticate as this account.
+///
+/// There is no device name because the engine does not keep one: the fingerprint
+/// stores a *hash* of the User-Agent, enough to notice it changed and not enough
+/// to say what it was. What a person recognises a session by is the address it
+/// was started from and when it was last used.
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionSummary {
+    /// Surrogate key. Names the session for revocation, authenticates nothing.
+    pub id: uuid::Uuid,
+    pub provider: String,
+    /// Where it was minted from.
+    pub ip_addr: String,
+    pub created_at: DateTime<Utc>,
+    pub last_access: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    /// Present on an API token and absent on a browser session, which is the
+    /// difference worth showing: one is a program acting as you, the other is a
+    /// browser you signed in with.
+    pub audience: Option<String>,
+    /// The session the request asking for this list arrived on.
+    pub current: bool,
+}
+
 /// Parameters for creating a new session
 #[derive(Debug, Clone)]
 pub struct CreateSessionParams {
@@ -760,6 +790,130 @@ impl SecureSessionManager {
     /// Invalidate a session (logout)
     pub async fn invalidate_session(&self, token: &str) -> Result<(), SessionError> {
         self.invalidate_session_internal(token).await
+    }
+
+    /// Every session an account currently holds, newest use first.
+    ///
+    /// The rows are decrypted to read them, because everything worth showing —
+    /// where a session was started from, whether it is an API token — lives
+    /// inside the encrypted blob and not in the columns. A row that will not
+    /// decrypt is skipped rather than failing the list: one unreadable session
+    /// must not stop somebody seeing the other four and ending the one they do
+    /// not recognise.
+    ///
+    /// `current_token` is the session the request arrived on, so the list can
+    /// say which one that is. It is compared and never returned.
+    pub async fn list_sessions_for_user(
+        &self,
+        user_id: &str,
+        current_token: &str,
+    ) -> Result<Vec<SessionSummary>, SessionError> {
+        let rows: Vec<(uuid::Uuid, String, serde_json::Value, DateTime<Utc>)> = sqlx::query_as(
+            "SELECT id, session_id, data, expires_at FROM sessions
+             WHERE user_id = $1 AND expires_at > NOW()
+             ORDER BY last_accessed_at DESC",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| SessionError::ValidationFailed(format!("Database error: {}", e)))?;
+
+        let mut sessions = Vec::with_capacity(rows.len());
+        for (id, session_id, encrypted_json, expires_at) in rows {
+            let encrypted: EncryptedSessionData = match serde_json::from_value(encrypted_json) {
+                Ok(encrypted) => encrypted,
+                Err(e) => {
+                    warn!("Skipping an unreadable session row for {}: {}", user_id, e);
+                    continue;
+                }
+            };
+
+            let data = match self.decrypt_session(&encrypted) {
+                Ok(data) => data,
+                Err(e) => {
+                    warn!(
+                        "Skipping an undecryptable session row for {}: {}",
+                        user_id, e
+                    );
+                    continue;
+                }
+            };
+
+            sessions.push(SessionSummary {
+                id,
+                provider: data.provider,
+                ip_addr: data.fingerprint.ip_addr,
+                created_at: data.created_at,
+                last_access: data.last_access,
+                // The column rather than the copy inside the blob: sliding
+                // expiry is written to the row, and the two disagree by design.
+                expires_at,
+                audience: data.audience,
+                current: session_id == current_token,
+            });
+        }
+
+        Ok(sessions)
+    }
+
+    /// End one of an account's sessions, named by the surrogate key its owner
+    /// was shown.
+    ///
+    /// Scoped to `user_id` in the statement itself rather than by checking
+    /// first: an id belonging to somebody else deletes nothing, and cannot be
+    /// made to by a race between the check and the delete.
+    ///
+    /// Answers with what the revoked session was — nothing that authenticates,
+    /// but including its audience, which is what decides whether a refresh
+    /// token has to go with it. `None` means this account has no such session.
+    pub async fn delete_session_for_user(
+        &self,
+        user_id: &str,
+        id: uuid::Uuid,
+        current_token: &str,
+    ) -> Result<Option<SessionSummary>, SessionError> {
+        let Some(session) = self
+            .list_sessions_for_user(user_id, current_token)
+            .await?
+            .into_iter()
+            .find(|session| session.id == id)
+        else {
+            return Ok(None);
+        };
+
+        let result = sqlx::query("DELETE FROM sessions WHERE id = $1 AND user_id = $2")
+            .bind(id)
+            .bind(user_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| SessionError::ValidationFailed(format!("Database error: {}", e)))?;
+
+        if result.rows_affected() == 0 {
+            return Ok(None);
+        }
+
+        info!("Session {} ended by its owner {}", id, user_id);
+        Ok(Some(session))
+    }
+
+    /// End every session an account holds except the one asking.
+    ///
+    /// The control somebody reaches for when they have lost a device rather
+    /// than a password: it does not need them to know which session is which,
+    /// and it does not sign them out of the browser they are using to do it.
+    pub async fn delete_other_sessions_for_user(
+        &self,
+        user_id: &str,
+        current_token: &str,
+    ) -> Result<u64, SessionError> {
+        let result = sqlx::query("DELETE FROM sessions WHERE user_id = $1 AND session_id <> $2")
+            .bind(user_id)
+            .bind(current_token)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| SessionError::ValidationFailed(format!("Database error: {}", e)))?;
+
+        Ok(result.rows_affected())
     }
 
     /// Tear down every session this user holds, and answer with how many.

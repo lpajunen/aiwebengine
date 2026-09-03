@@ -188,6 +188,10 @@ struct Flow {
     /// exactly the identity this flow signed in as, rather than guessing at the
     /// shared database.
     username: String,
+    /// The browser session that approved the client, which is a different
+    /// session from the one the token carries — and the one a person would be
+    /// looking at their account page from.
+    session_cookie: String,
     token: Value,
 }
 
@@ -261,6 +265,7 @@ async fn token_response_for(client: &Client, resource: Option<&str>) -> anyhow::
     Ok(Flow {
         client_id,
         username,
+        session_cookie,
         token,
     })
 }
@@ -692,6 +697,85 @@ async fn revoking_sessions_revokes_the_refresh_tokens_too() -> anyhow::Result<()
         reqwest::StatusCode::BAD_REQUEST,
         "and the refresh token must not be a way back in"
     );
+
+    server.shutdown().await;
+    Ok(())
+}
+
+/// The same coupling from the other end: a person ending one API session on
+/// their account page. Deleting the session alone would buy the length of one
+/// access token, after which the client mints another from its refresh token
+/// and is signed in again — so the audience's refresh tokens go with it.
+#[tokio::test(flavor = "multi_thread")]
+async fn ending_an_api_session_ends_what_would_mint_another() -> anyhow::Result<()> {
+    if should_skip_integration_tests() {
+        return Ok(());
+    }
+
+    let server = TestServer::start_with_auth().await?;
+    let client = Client::new(server.port())?;
+    wait_for_server(server.port(), 30).await?;
+
+    let flow = token_response_for(&client, None).await?;
+    let access_token = field(&flow.token, "access_token")?;
+    let refresh_token = field(&flow.token, "refresh_token")?;
+
+    let listing: Value = client
+        .http
+        .get(client.url("/auth/sessions"))
+        .header(reqwest::header::COOKIE, &flow.session_cookie)
+        .send()
+        .await?
+        .json()
+        .await?;
+
+    let api_session = listing["sessions"]
+        .as_array()
+        .and_then(|sessions| {
+            sessions
+                .iter()
+                .find(|session| session["audience"].is_string())
+        })
+        .and_then(|session| session["id"].as_str())
+        .ok_or_else(|| anyhow::anyhow!("the token's session should be listed: {}", listing))?
+        .to_string();
+
+    let revoked = client
+        .http
+        .post(client.url("/auth/sessions/revoke"))
+        .header(reqwest::header::COOKIE, &flow.session_cookie)
+        .json(&serde_json::json!({ "session": api_session }))
+        .send()
+        .await?;
+    anyhow::ensure!(
+        revoked.status() == reqwest::StatusCode::OK,
+        "ending your own session should work, got {}",
+        revoked.status()
+    );
+
+    let refused = call_mcp(&client, &access_token).await?;
+    assert_eq!(
+        refused.status(),
+        reqwest::StatusCode::UNAUTHORIZED,
+        "the session is gone"
+    );
+
+    let (status, _) = refresh_with(&client, &flow.client_id, &refresh_token).await?;
+    assert_eq!(
+        status,
+        reqwest::StatusCode::BAD_REQUEST,
+        "and the client must not be able to mint itself back in"
+    );
+
+    // The browser session that did the revoking is untouched, which is the
+    // difference between this and changing a password.
+    let still_here = client
+        .http
+        .get(client.url("/auth/sessions"))
+        .header(reqwest::header::COOKIE, &flow.session_cookie)
+        .send()
+        .await?;
+    assert_eq!(still_here.status(), reqwest::StatusCode::OK);
 
     server.shutdown().await;
     Ok(())

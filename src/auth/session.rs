@@ -166,6 +166,43 @@ impl AuthSessionManager {
             .map_err(AuthError::Session)
     }
 
+    /// The sessions an account holds, as its owner may see them.
+    pub async fn list_sessions_for_user(
+        &self,
+        user_id: &str,
+        current_token: &str,
+    ) -> Result<Vec<crate::security::SessionSummary>, AuthError> {
+        self.session_manager
+            .list_sessions_for_user(user_id, current_token)
+            .await
+            .map_err(AuthError::Session)
+    }
+
+    /// End one of them, named by the id its owner was shown.
+    pub async fn delete_session_for_user(
+        &self,
+        user_id: &str,
+        id: uuid::Uuid,
+        current_token: &str,
+    ) -> Result<Option<crate::security::SessionSummary>, AuthError> {
+        self.session_manager
+            .delete_session_for_user(user_id, id, current_token)
+            .await
+            .map_err(AuthError::Session)
+    }
+
+    /// End every session but the one asking.
+    pub async fn delete_other_sessions_for_user(
+        &self,
+        user_id: &str,
+        current_token: &str,
+    ) -> Result<u64, AuthError> {
+        self.session_manager
+            .delete_other_sessions_for_user(user_id, current_token)
+            .await
+            .map_err(AuthError::Session)
+    }
+
     /// Get session count for a user
     pub async fn get_user_session_count(&self, user_id: &str) -> usize {
         self.session_manager.get_user_session_count(user_id).await

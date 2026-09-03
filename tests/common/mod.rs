@@ -543,12 +543,34 @@ impl AdminServer {
     }
 }
 
+/// Give this test's sign-ins a fresh per-address budget.
+///
+/// The auth rate limiter is database-backed and keyed by address, and every
+/// test in the suite arrives from 127.0.0.1 — so one bucket is shared by
+/// hundreds of registrations and sign-ins that a real deployment would spread
+/// over hundreds of clients. Left alone it empties partway through a run and
+/// the rest of the suite gets 429s that say nothing about the code under test.
+///
+/// The same trick `tests/mcp_oauth_flow.rs` uses on the registration budget,
+/// and for the same reason.
+async fn clear_auth_rate_limit() {
+    let Some(db) = aiwebengine::database::get_global_database() else {
+        return;
+    };
+    let _ =
+        sqlx::query("DELETE FROM rate_limits WHERE key LIKE 'ip:%' OR key LIKE 'login_failure:%'")
+            .execute(db.pool())
+            .await;
+}
+
 /// Sign the fixed administrator in, creating the account the first time.
 ///
 /// Every test process shares one database, so the account usually exists
 /// already; registration and sign-in both end in the same place, which is a
 /// session cookie for an account the configuration names an administrator.
 async fn admin_session(http: &reqwest::Client, base: &str) -> anyhow::Result<String> {
+    clear_auth_rate_limit().await;
+
     let credentials = serde_json::json!({
         "username": TEST_ADMIN_USERNAME,
         "password": TEST_ADMIN_PASSWORD,

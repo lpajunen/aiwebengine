@@ -176,6 +176,8 @@ but it cannot POST `application/json` without one the engine does not grant.
 | `POST /auth/local/password`       | `enabled`, plus a session                         | Replaces the calling account's password, given the one it has now. Ends every session the account held and issues a fresh one. Body: `{"current_password", "new_password"}`. |
 | `POST /auth/local/recovery_codes` | `enabled`, `allow_recovery_codes`, plus a session | Issues a fresh set of recovery codes and answers with them, once. Replaces any set the account had. Body: `{"current_password"}`.                                            |
 | `POST /auth/local/recover`        | `enabled` and `allow_recovery_codes`              | Spends a recovery code: sets a new password, ends every session the account held, issues one. Body: `{"username", "code", "new_password"}`.                                  |
+| `GET /auth/sessions`              | A session                                         | The calling account's sessions, newest use first. Nothing in the answer authenticates.                                                                                       |
+| `POST /auth/sessions/revoke`      | A session                                         | Ends one session by the id the listing gave it, or — with no `session` field — every session but the one asking. Body: `{"session"}` (optional).                             |
 
 `/auth/guest`, `/auth/local/register` and `/auth/local/login` set the session
 cookie on success, and so do `/auth/local/password` and `/auth/local/recover` —
@@ -286,6 +288,50 @@ it is:
 `min_password_length` still applies. Being the operator is not a reason to write
 a password the sign-in page would then refuse.
 
+## Sessions
+
+`GET /auth/sessions` lists the sessions an account holds, and
+`POST /auth/sessions/revoke` ends one of them or all but the current one. Both
+are on `/auth/account` as a list with a button per row. Neither depends on
+`[auth.internal]`: a session is a session however it was minted, and somebody
+signed in through Google has the same reason to look.
+
+Before this, the only thing a person could do about a session they did not
+recognise was change their password, which ends every session they have —
+including the four they wanted to keep — and which an account with no password
+cannot do at all.
+
+What a listing may say, and what it may not:
+
+- **Never a session token.** `sessions.session_id` _is_ the token, so a listing
+  that returned it would turn one stolen session into every session the account
+  has. Rows are named by the `sessions.id` surrogate key, which authenticates
+  nothing and is scoped to the caller's own account in the delete statement
+  itself — an id belonging to somebody else deletes nothing and is answered the
+  same way as one that does not exist.
+- **No device name**, because the engine does not keep one. The fingerprint
+  holds a _hash_ of the User-Agent — enough to notice it changed, not enough to
+  say what it was — so a session is named by the address it started from and
+  when it was last used, and the page says as much rather than leaving somebody
+  guessing which of two Chromes is which.
+- **API tokens are marked as such.** A session carrying an audience came from
+  the token endpoint and is a program acting as you; one without is a browser
+  you signed in with. They are worth telling apart.
+
+Ending a session ends what would mint another one. A session with an audience
+usually has a refresh token behind it, so revoking one drops that audience's
+refresh tokens too — scoped to the audience, since ending one API session should
+not take down a client acting for a different resource. "Sign out everywhere
+else" drops all of them, because everywhere else has to include the ways back in
+that no session list shows.
+
+The current session gets no button: ending it is what `/auth/logout` does, and a
+button here that silently signed somebody out would read as one that had failed.
+
+A list shorter than someone expects is usually `auth.max_concurrent_sessions`,
+which has been dropping an account's oldest session on each sign-in past the
+limit since long before there was anywhere to see it happen.
+
 ## Rules worth knowing
 
 - **Usernames are case-insensitive** and stored folded to lower case. Two
@@ -330,10 +376,5 @@ a password the sign-in page would then refuse.
   access has nowhere to go. An administrator can already reach `--set-password`
   on the machine, but there is no endpoint that lets them issue a reset for an
   account in their realm.
-- **No session visibility.** A person cannot list the sessions their account
-  holds or end one of them. Changing a password ends them all, and an
-  administrator's role change ends them all, and those are the only two
-  controls that exist. The data is there — `sessions.data` carries when each
-  was created, when it was last used, and what it was minted against.
 - **No passkeys.** A good fit here — no email, no password reset, no PII — and
   the credential table's shape leaves room for them.

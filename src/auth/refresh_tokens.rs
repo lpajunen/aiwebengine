@@ -201,6 +201,33 @@ pub async fn revoke_family(pool: &PgPool, family_id: &str) -> Result<u64, sqlx::
     Ok(result.rows_affected())
 }
 
+/// Drop the refresh tokens a user holds for one audience.
+///
+/// What makes revoking a single API session mean anything. A session carrying
+/// an audience was minted at the token endpoint, and the client that got it
+/// usually holds a refresh token too — so ending the session alone buys the
+/// length of one access token, after which the client mints another and the
+/// person who pressed the button is still signed in where they wanted not to
+/// be.
+///
+/// Scoped to the audience rather than the user, because the two are different
+/// statements: ending one API session should not take down a client acting for
+/// a different resource.
+pub async fn revoke_for_user_audience(
+    pool: &PgPool,
+    user_id: &str,
+    audience: &str,
+) -> Result<u64, sqlx::Error> {
+    let result =
+        sqlx::query("DELETE FROM oauth_refresh_tokens WHERE user_id = $1 AND audience = $2")
+            .bind(user_id)
+            .bind(audience)
+            .execute(pool)
+            .await?;
+
+    Ok(result.rows_affected())
+}
+
 /// Drop every refresh token belonging to a user.
 ///
 /// Ending someone's sessions would otherwise revoke nothing: a client holding a

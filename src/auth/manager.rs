@@ -755,6 +755,109 @@ impl AuthManager {
         .await
     }
 
+    /// The sessions this account holds, newest use first.
+    ///
+    /// Nothing here authenticates: a session is named by a surrogate key, and
+    /// the token stays where it is. Without this, the only thing a person could
+    /// do about a session they did not recognise was change their password and
+    /// end all of them, including the ones they wanted to keep.
+    pub async fn list_sessions(
+        &self,
+        user_id: &str,
+        current_token: &str,
+    ) -> Result<Vec<crate::security::SessionSummary>, AuthError> {
+        self.session_manager()
+            .list_sessions_for_user(user_id, current_token)
+            .await
+    }
+
+    /// End one session, and the refresh token that would mint it again.
+    ///
+    /// The second half is what makes this mean something for an API session. A
+    /// session carrying an audience came from the token endpoint, and the
+    /// client that holds it usually holds a refresh token too — deleting the
+    /// session alone buys the length of one access token before the client
+    /// quietly mints another. A browser session has no audience and no refresh
+    /// family, so nothing else goes with it.
+    ///
+    /// `false` means this account has no such session, which is also the answer
+    /// for an id belonging to somebody else.
+    pub async fn revoke_session(
+        &self,
+        user_id: &str,
+        id: uuid::Uuid,
+        current_token: &str,
+    ) -> Result<bool, AuthError> {
+        let Some(session) = self
+            .session_manager()
+            .delete_session_for_user(user_id, id, current_token)
+            .await?
+        else {
+            return Ok(false);
+        };
+
+        if let Some(audience) = session.audience.as_deref() {
+            self.revoke_refresh_tokens(user_id, Some(audience)).await;
+        }
+
+        Ok(true)
+    }
+
+    /// End every session but the one asking, and every refresh token the
+    /// account holds.
+    ///
+    /// "Everywhere else" has to include the ways back in that no session list
+    /// shows. A refresh token is one of those: it is not a session, it does not
+    /// appear in the list, and it mints sessions on demand. A client acting for
+    /// this account will have to be authorized again, which is the point.
+    pub async fn revoke_other_sessions(
+        &self,
+        user_id: &str,
+        current_token: &str,
+    ) -> Result<u64, AuthError> {
+        let ended = self
+            .session_manager()
+            .delete_other_sessions_for_user(user_id, current_token)
+            .await?;
+
+        self.revoke_refresh_tokens(user_id, None).await;
+
+        Ok(ended)
+    }
+
+    /// Drop refresh tokens, for one audience or for the whole account.
+    ///
+    /// Failure is logged rather than returned: the sessions are already gone,
+    /// and answering with an error would tell somebody their sessions are still
+    /// alive when they are not.
+    async fn revoke_refresh_tokens(&self, user_id: &str, audience: Option<&str>) {
+        let Some(db) = crate::database::get_global_database() else {
+            tracing::error!(
+                "Could not revoke refresh tokens for {}: no database",
+                user_id
+            );
+            return;
+        };
+
+        let revoked = match audience {
+            Some(audience) => {
+                crate::auth::refresh_tokens::revoke_for_user_audience(db.pool(), user_id, audience)
+                    .await
+            }
+            None => crate::auth::refresh_tokens::revoke_for_user(db.pool(), user_id).await,
+        };
+
+        match revoked {
+            Ok(0) => {}
+            Ok(count) => tracing::info!("Revoked {} refresh token(s) for {}", count, user_id),
+            Err(e) => tracing::error!(
+                "Sessions for {} were ended but their refresh tokens were not: {}",
+                user_id,
+                e
+            ),
+        }
+    }
+
     /// Issue a fresh set of recovery codes, returning the only copy of them.
     ///
     /// Asks for the current password even though the caller holds a session,
