@@ -2641,8 +2641,10 @@ fn no_such_session(style: RequestStyle, redirect: Option<&str>) -> Response {
 }
 
 /// Logout handler - destroys session
+///
+/// Served on both methods: a link signs out by GET, a form by POST.
 #[utoipa::path(
-    get,
+    method(get, post),
     path = "/auth/logout",
     tags = ["Authentication"],
     params(

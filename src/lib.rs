@@ -116,6 +116,11 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
         engine_api::favicon_route,
         auth::routes::login_page,
         auth::routes::account_page,
+        auth::routes::start_guest,
+        auth::routes::register_local,
+        auth::routes::login_local,
+        auth::routes::claim_account,
+        auth::routes::change_password_route,
         auth::routes::recovery_codes_route,
         auth::routes::recover_account,
         auth::routes::list_sessions_route,
@@ -126,6 +131,7 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, OAuth2, SecuritySch
         auth::routes::auth_status,
         auth::routes::refresh_session,
         auth::routes::oauth2_authorize,
+        auth::routes::oauth2_consent,
         auth::routes::oauth2_token,
         auth::metadata::metadata_handler,
         auth::metadata::protected_resource_metadata_handler,
@@ -422,6 +428,78 @@ pub fn get_rust_openapi_spec() -> String {
                         "security": [{"bearerAuth": []}]
                     }
                 }));
+
+                // The protected-resource document is served on a second,
+                // resource-suffixed path as well (RFC 9728 §3.1): a client
+                // builds it out of the MCP server's URL, so `/mcp` is asked
+                // about at `/.well-known/oauth-protected-resource/mcp`. Its
+                // route is registered from a formatted string rather than a
+                // handler attribute, so it is described here.
+                paths.insert(
+                    format!("{}/{{resource}}", crate::auth::metadata::PROTECTED_RESOURCE_PATH),
+                    serde_json::json!({
+                        "get": {
+                            "tags": ["Authentication"],
+                            "summary": "Protected resource metadata for one resource path",
+                            "description": "OAuth 2.0 protected resource metadata (RFC 9728) for the resource named by the path suffix, e.g. `/.well-known/oauth-protected-resource/mcp` describes `/mcp`. The `resource` identifier in the response names the host the request was addressed to.",
+                            "parameters": [
+                                {
+                                    "name": "resource",
+                                    "in": "path",
+                                    "required": true,
+                                    "schema": {"type": "string"},
+                                    "description": "Path of the protected resource, without a leading slash (e.g. `mcp`)"
+                                }
+                            ],
+                            "responses": {
+                                "200": {
+                                    "description": "OAuth 2.0 protected resource metadata (RFC 9728)",
+                                    "content": {
+                                        "application/json": {
+                                            "schema": {"$ref": "#/components/schemas/ProtectedResourceMetadata"}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }),
+                );
+
+                // Microsoft identity association document, served from a
+                // closure with a constant body.
+                paths.insert(
+                    "/.well-known/microsoft-identity-association.json".to_string(),
+                    serde_json::json!({
+                        "get": {
+                            "tags": ["Authentication"],
+                            "summary": "Microsoft identity association",
+                            "description": "Publisher domain verification document read by Microsoft Entra ID when a Microsoft sign-in application is bound to this domain.",
+                            "responses": {
+                                "200": {
+                                    "description": "Association document",
+                                    "content": {
+                                        "application/json": {
+                                            "schema": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "associatedApplications": {
+                                                        "type": "array",
+                                                        "items": {
+                                                            "type": "object",
+                                                            "properties": {
+                                                                "applicationId": {"type": "string"}
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }),
+                );
 
                 // TypeScript type definitions
                 let version = env!("CARGO_PKG_VERSION");

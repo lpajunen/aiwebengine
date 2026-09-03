@@ -162,6 +162,28 @@ async fn test_openapi_contains_rust_endpoints() {
         "/graphql/ws",
         "/graphql/sse",
         "/mcp",
+        // Every way in, federated or internal. These are handlers a client
+        // has to be able to find, and each of them carried a `utoipa::path`
+        // annotation while being absent from the generated document.
+        "/auth/login",
+        "/auth/account",
+        "/auth/guest",
+        "/auth/local/register",
+        "/auth/local/login",
+        "/auth/local/password",
+        "/auth/local/claim",
+        "/auth/local/recovery_codes",
+        "/auth/local/recover",
+        "/auth/sessions",
+        "/auth/sessions/revoke",
+        "/auth/oauth2/authorize",
+        "/auth/oauth2/consent",
+        "/auth/oauth2/token",
+        "/auth/oauth2/register",
+        "/.well-known/oauth-authorization-server",
+        "/.well-known/oauth-protected-resource",
+        "/.well-known/oauth-protected-resource/{resource}",
+        "/.well-known/microsoft-identity-association.json",
     ];
 
     for endpoint in required_endpoints {
@@ -169,6 +191,33 @@ async fn test_openapi_contains_rust_endpoints() {
             paths.contains_key(endpoint),
             "OpenAPI spec should contain Rust endpoint: {}",
             endpoint
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_openapi_documents_both_logout_methods() {
+    let engine = AdminServer::start().await.expect("server failed to start");
+    let port = engine.port();
+
+    let client = engine.client();
+    let url = format!("http://localhost:{}/engine/openapi.json", port);
+
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .expect("Failed to fetch OpenAPI spec");
+
+    let spec: Value = response.json().await.expect("Failed to parse JSON");
+
+    // A link signs out by GET and a form by POST; the route serves both, so a
+    // document naming only one of them describes a smaller API than exists.
+    for method in ["get", "post"] {
+        assert!(
+            spec["paths"]["/auth/logout"][method].is_object(),
+            "OpenAPI spec should document {} /auth/logout",
+            method.to_uppercase()
         );
     }
 }
