@@ -54,13 +54,12 @@ services:
     # Use this if you want direct access for debugging (not recommended in production)
     # ports:
     #   - "127.0.0.1:3000:3000"
-    volumes:
-      # Persist logs (instance-specific)
-      - ./logs/instance-1:/app/logs
-      # Persist scripts
-      - ./scripts:/app/scripts:ro
-      # Migration files (read-only)
-      - ./data:/app/data:ro
+    # No volumes: this service reads nothing from disk but its configuration,
+    # which the image carries. Scripts and assets live in Postgres, migrations
+    # are embedded in the binary by sqlx::migrate!, and logs go to stdout for
+    # Docker to collect — the ./scripts, ./data and ./logs mounts this replaced
+    # were bind mounts onto directories no code has opened since the repository
+    # moved into the database.
     environment:
       - RUST_LOG=info
       # Extra hostnames served alongside server.base_url are configured in
@@ -118,13 +117,12 @@ services:
     # Expose port only to internal network (not to host)
     expose:
       - "3000"
-    volumes:
-      # Persist logs (instance-specific)
-      - ./logs/instance-2:/app/logs
-      # Persist scripts
-      - ./scripts:/app/scripts:ro
-      # Migration files (read-only)
-      - ./data:/app/data:ro
+    # No volumes: this service reads nothing from disk but its configuration,
+    # which the image carries. Scripts and assets live in Postgres, migrations
+    # are embedded in the binary by sqlx::migrate!, and logs go to stdout for
+    # Docker to collect — the ./scripts, ./data and ./logs mounts this replaced
+    # were bind mounts onto directories no code has opened since the repository
+    # moved into the database.
     environment:
       - RUST_LOG=info
       # Extra hostnames served alongside server.base_url are configured in

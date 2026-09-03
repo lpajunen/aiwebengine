@@ -44,13 +44,12 @@ services:
     # Use this if you want direct access for debugging
     ports:
       - "127.0.0.1:3000:3000"
-    volumes:
-      # Persist logs
-      - ./logs:/app/logs
-      # Persist scripts
-      - ./scripts:/app/scripts:ro
-      # Persist database
-      - ./data:/app/data
+    # No volumes: this service reads nothing from disk but its configuration,
+    # which the image carries. Scripts and assets live in Postgres, migrations
+    # are embedded in the binary by sqlx::migrate!, and logs go to stdout for
+    # Docker to collect — the ./scripts, ./data and ./logs mounts this replaced
+    # were bind mounts onto directories no code has opened since the repository
+    # moved into the database.
     environment:
       - RUST_LOG=info
       # Auth configuration
